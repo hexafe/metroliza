@@ -10,7 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 from functools import lru_cache
+import hashlib
 from io import BytesIO
+import json
+import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import sqlite3
@@ -26,6 +29,7 @@ from metroliza.parsing.parser_plugin_contracts import infer_source_format
 from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.reports.db import sqlite_readonly_connection_scope
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
+from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 
 
 _REPORT_EXTENSIONS_BY_SOURCE_FORMAT = {
@@ -44,6 +48,7 @@ _MAX_ARCHIVE_MEMBER_BYTES = 1024 * 1024 * 1024
 _MAX_ARCHIVE_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_ARCHIVE_COMPRESSION_RATIO = 500
 _ARCHIVE_RATIO_CHECK_MIN_BYTES = 64 * 1024 * 1024
+_CURRENT_PARSE_PREFLIGHT_VERSION = "parse-preflight-v1"
 _TAR_ARCHIVE_EXTENSIONS_BY_COMPRESSION = {
     "tar": frozenset({".tar"}),
     "gz": frozenset({".tar.gz", ".tgz"}),
@@ -385,12 +390,19 @@ class ParseFilePreflight:
     competing_parser_ids: tuple[str, ...] = ()
     registry_generation_id: int | None = None
     diagnostic_detail: str = ""
+    occurrence_id: str = ""
 
     @property
     def is_importable(self) -> bool:
         """Return whether this exact content/parser resolution may be imported."""
 
         return self.status is ParsePreflightStatus.READY
+
+    @property
+    def stable_occurrence_id(self) -> str:
+        """Return the source-relative identity used across archive extraction runs."""
+
+        return self.occurrence_id or _normalize_occurrence_id(self.display_name)
 
 
 @dataclass(frozen=True)
@@ -402,6 +414,7 @@ class ParsePreflightResult:
     metadata_parsing_mode: str
     files: tuple[ParseFilePreflight, ...]
     cancelled: bool = False
+    version: str = _CURRENT_PARSE_PREFLIGHT_VERSION
 
     def files_with_status(self, status: ParsePreflightStatus) -> tuple[ParseFilePreflight, ...]:
         return tuple(item for item in self.files if item.status is status)
@@ -447,6 +460,31 @@ class ParsePreflightResult:
     def status_counts(self) -> dict[ParsePreflightStatus, int]:
         return {status: self.count(status) for status in ParsePreflightStatus}
 
+    @property
+    def result_id(self) -> str:
+        """Return a deterministic identity for this exact reviewed result."""
+
+        payload = {
+            "version": self.version,
+            "source_path": str(Path(self.source_path).resolve(strict=False)),
+            "database_path": str(Path(self.database_path).resolve(strict=False)),
+            "metadata_parsing_mode": self.metadata_parsing_mode,
+            "cancelled": self.cancelled,
+            "files": [
+                {
+                    "occurrence_id": item.stable_occurrence_id,
+                    "status": item.status.value,
+                    "source_format": item.source_format,
+                    "fingerprint": item.fingerprint,
+                    "parser_id": item.parser_id,
+                    "registry_generation_id": item.registry_generation_id,
+                }
+                for item in self.files
+            ],
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
     def matches_request(
         self,
         *,
@@ -463,6 +501,187 @@ class ParsePreflightResult:
             == Path(database_path).resolve(strict=False)
             and self.metadata_parsing_mode == str(metadata_parsing_mode)
         )
+
+
+@dataclass(frozen=True)
+class SelectedReportIdentity:
+    """Content and occurrence identity approved for one selected READY report."""
+
+    occurrence_id: str
+    fingerprint: str
+    parser_id: str
+    registry_generation_id: int
+
+
+@dataclass(frozen=True)
+class ImportPlan:
+    """Immutable destination-bound plan for an explicit reviewed report subset."""
+
+    source_path: str
+    database_path: str
+    metadata_parsing_mode: str
+    run_background_metadata_enrichment: bool
+    preflight_result: ParsePreflightResult
+    preflight_version: str
+    preflight_result_id: str
+    selected_reports: tuple[SelectedReportIdentity, ...]
+
+    @classmethod
+    def from_preflight(
+        cls,
+        request: ParseRequest,
+        preflight_result: ParsePreflightResult,
+        *,
+        selected_occurrence_ids: Iterable[str],
+    ) -> ImportPlan:
+        """Build a plan from an explicit set of reviewed occurrence identities."""
+
+        validated_request = validate_parse_request(request)
+        if not preflight_result.matches_request(
+            source_path=validated_request.source_directory,
+            database_path=validated_request.db_file,
+            metadata_parsing_mode=validated_request.metadata_parsing_mode,
+        ):
+            raise ValueError("Import plan inputs do not match the reviewed preflight result.")
+        selected_ids = tuple(
+            sorted(
+                (str(value) for value in selected_occurrence_ids),
+                key=lambda value: (value.casefold(), value),
+            )
+        )
+        if len(selected_ids) != len(set(selected_ids)):
+            raise ValueError("Selected report occurrence identities must be unique.")
+
+        files_by_occurrence = _preflight_files_by_occurrence(preflight_result)
+        selected_reports: list[SelectedReportIdentity] = []
+        for occurrence_id in selected_ids:
+            item = files_by_occurrence.get(occurrence_id)
+            if item is None:
+                raise ValueError(f"Selected report identity is missing from preflight: {occurrence_id}")
+            if not item.is_importable:
+                raise ValueError(f"Selected report is not READY: {occurrence_id}")
+            if not item.fingerprint or not item.parser_id or item.registry_generation_id is None:
+                raise ValueError(f"Selected READY report has incomplete approval evidence: {occurrence_id}")
+            selected_reports.append(
+                SelectedReportIdentity(
+                    occurrence_id=occurrence_id,
+                    fingerprint=item.fingerprint,
+                    parser_id=item.parser_id,
+                    registry_generation_id=item.registry_generation_id,
+                )
+            )
+
+        plan = cls(
+            source_path=preflight_result.source_path,
+            database_path=preflight_result.database_path,
+            metadata_parsing_mode=validated_request.metadata_parsing_mode,
+            run_background_metadata_enrichment=(
+                validated_request.run_background_metadata_enrichment
+            ),
+            preflight_result=preflight_result,
+            preflight_version=preflight_result.version,
+            preflight_result_id=preflight_result.result_id,
+            selected_reports=tuple(selected_reports),
+        )
+        return validate_import_plan(plan)
+
+    @classmethod
+    def all_ready(
+        cls,
+        request: ParseRequest,
+        preflight_result: ParsePreflightResult,
+    ) -> ImportPlan:
+        """Compatibility adapter that explicitly selects every READY occurrence."""
+
+        return cls.from_preflight(
+            request,
+            preflight_result,
+            selected_occurrence_ids=(
+                item.stable_occurrence_id for item in preflight_result.ready_files
+            ),
+        )
+
+
+def _normalize_occurrence_id(value: str) -> str:
+    normalized = PurePosixPath(str(value).replace(os.sep, "/")).as_posix()
+    if normalized in {"", "."} or normalized.startswith("../") or normalized.startswith("/"):
+        raise ValueError("Report occurrence identity must be a non-empty relative path.")
+    return normalized
+
+
+def _preflight_files_by_occurrence(
+    preflight_result: ParsePreflightResult,
+) -> dict[str, ParseFilePreflight]:
+    files_by_occurrence: dict[str, ParseFilePreflight] = {}
+    for item in preflight_result.files:
+        occurrence_id = item.stable_occurrence_id
+        if occurrence_id in files_by_occurrence:
+            raise ValueError(f"Preflight occurrence identity is not unique: {occurrence_id}")
+        files_by_occurrence[occurrence_id] = item
+    return files_by_occurrence
+
+
+def validate_import_plan(plan: ImportPlan) -> ImportPlan:
+    """Fail closed unless a plan exactly binds a current non-cancelled preflight."""
+
+    if not isinstance(plan, ImportPlan):
+        raise ValueError("Import plan must be provided as an ImportPlan instance.")
+    _validate_import_plan_context(plan)
+    _validate_selected_reports(plan)
+    return plan
+
+
+def _validate_import_plan_context(plan: ImportPlan) -> None:
+    preflight = plan.preflight_result
+    if not isinstance(preflight, ParsePreflightResult):
+        raise ValueError("Import plan must bind a ParsePreflightResult instance.")
+    if not isinstance(preflight.files, tuple):
+        raise ValueError("Preflight files must be an immutable tuple.")
+    if preflight.cancelled:
+        raise ValueError("A cancelled preflight result cannot be imported.")
+    if (
+        plan.preflight_version != _CURRENT_PARSE_PREFLIGHT_VERSION
+        or preflight.version != _CURRENT_PARSE_PREFLIGHT_VERSION
+    ):
+        raise ValueError("Import plan uses an unsupported preflight version.")
+    if plan.preflight_result_id != preflight.result_id:
+        raise ValueError("Import plan does not match its reviewed preflight result.")
+    if not isinstance(plan.run_background_metadata_enrichment, bool):
+        raise ValueError("run_background_metadata_enrichment must be a boolean.")
+    if not isinstance(plan.selected_reports, tuple):
+        raise ValueError("Import plan selected_reports must be an immutable tuple.")
+    if not preflight.matches_request(
+        source_path=plan.source_path,
+        database_path=plan.database_path,
+        metadata_parsing_mode=plan.metadata_parsing_mode,
+    ):
+        raise ValueError("Import plan inputs do not match the reviewed preflight result.")
+
+
+def _validate_selected_reports(plan: ImportPlan) -> None:
+    files_by_occurrence = _preflight_files_by_occurrence(plan.preflight_result)
+    selected_occurrences: set[str] = set()
+    for identity in plan.selected_reports:
+        if not isinstance(identity, SelectedReportIdentity):
+            raise ValueError("Import plan contains an invalid selected report identity.")
+        if identity.occurrence_id in selected_occurrences:
+            raise ValueError("Import plan contains duplicate selected report identities.")
+        selected_occurrences.add(identity.occurrence_id)
+        item = files_by_occurrence.get(identity.occurrence_id)
+        if item is None:
+            raise ValueError(
+                f"Selected report identity is missing from preflight: {identity.occurrence_id}"
+            )
+        approved_identity = SelectedReportIdentity(
+            occurrence_id=item.stable_occurrence_id,
+            fingerprint=item.fingerprint or "",
+            parser_id=item.parser_id or "",
+            registry_generation_id=item.registry_generation_id or 0,
+        )
+        if not item.is_importable or identity != approved_identity:
+            raise ValueError(
+                f"Selected report identity is not an exact READY approval: {identity.occurrence_id}"
+            )
 
 
 def supported_report_file_extensions() -> set[str]:
@@ -589,6 +808,7 @@ def _unreadable_entry(display_name: str, source_path: Path, detail: str) -> Pars
         fingerprint=None,
         reason_codes=("source_unreadable",),
         diagnostic_detail=str(detail),
+        occurrence_id=_normalize_occurrence_id(display_name),
     )
 
 
@@ -604,8 +824,8 @@ class ParsePreflightService:
         should_cancel: Callable[[], bool] = lambda: False,
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> ParsePreflightResult:
-        source = Path(source_path)
-        database = Path(database_path)
+        source = Path(source_path).resolve(strict=False)
+        database = Path(database_path).resolve(strict=False)
         existing_fingerprints = load_existing_report_fingerprints(
             database,
             metadata_parsing_mode=metadata_parsing_mode,
@@ -714,7 +934,7 @@ class ParsePreflightService:
                 discovered.append((path, display_name))
         except OSError as exc:
             failures.append(_unreadable_entry(scan_root.name or str(scan_root), scan_root, str(exc)))
-        discovered.sort(key=lambda item: item[1].casefold())
+        discovered.sort(key=lambda item: (item[1].casefold(), item[1]))
         return discovered, failures
 
     @staticmethod
@@ -749,6 +969,7 @@ class ParsePreflightService:
                 competing_parser_ids=tuple(exc.plugin_ids),
                 registry_generation_id=diagnostics.registry_generation_id,
                 diagnostic_detail=str(exc),
+                occurrence_id=_normalize_occurrence_id(display_name),
             )
         except Exception as exc:
             return ParseFilePreflight(
@@ -759,6 +980,7 @@ class ParsePreflightService:
                 fingerprint=fingerprint,
                 reason_codes=("parser_inspection_exception",),
                 diagnostic_detail=f"{type(exc).__name__}: {exc}",
+                occurrence_id=_normalize_occurrence_id(display_name),
             )
 
         evidence = _candidate_evidence(diagnostics)
@@ -779,6 +1001,7 @@ class ParsePreflightService:
                 candidates=evidence,
                 competing_parser_ids=tuple(diagnostics.ambiguous_plugin_ids),
                 registry_generation_id=diagnostics.registry_generation_id,
+                occurrence_id=_normalize_occurrence_id(display_name),
             )
 
         selected = diagnostics.selected
@@ -798,4 +1021,5 @@ class ParsePreflightService:
             reason_codes=reason_codes,
             candidates=evidence,
             registry_generation_id=diagnostics.registry_generation_id,
+            occurrence_id=_normalize_occurrence_id(display_name),
         )
