@@ -156,4 +156,3 @@ def test_structured_output_is_bounded_by_closed_field_limits():
 
     output = serialize_diagnostic_event(event)
     assert len(output) < 700
-
