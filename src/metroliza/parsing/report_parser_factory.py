@@ -106,6 +106,34 @@ class ParserAmbiguityError(ValueError):
         )
 
 
+class ParserApprovalMismatchError(ValueError):
+    """Raised when parser resolution no longer matches reviewed approval."""
+
+    def __init__(
+        self,
+        diagnostics: ResolverDiagnostics,
+        *,
+        expected_plugin_id: str | None,
+        expected_registry_generation_id: int | None,
+    ) -> None:
+        self.diagnostics = diagnostics
+        self.expected_plugin_id = expected_plugin_id
+        self.expected_registry_generation_id = expected_registry_generation_id
+        self.resolved_plugin_id = (
+            diagnostics.selected.plugin_id
+            if diagnostics.selected is not None
+            else None
+        )
+        self.resolved_registry_generation_id = diagnostics.registry_generation_id
+        super().__init__(
+            "Parser approval changed after review: "
+            f"expected plugin={expected_plugin_id!r}, "
+            f"generation={expected_registry_generation_id!r}; "
+            f"resolved plugin={self.resolved_plugin_id!r}, "
+            f"generation={self.resolved_registry_generation_id!r}"
+        )
+
+
 class ParserRegistrationError(ValueError):
     """Base error for invalid parser registry mutations."""
 
@@ -143,6 +171,16 @@ class ParserRegistration:
     detector: DetectorType | None
     origin: ParserOrigin
     origin_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class ParserResolutionEvidence:
+    """Exact resolver result used to construct one parser instance."""
+
+    plugin_id: str
+    registry_generation_id: int
+    registration: ParserRegistration = field(compare=False, repr=False)
+    diagnostics: ResolverDiagnostics = field(compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -1333,14 +1371,37 @@ def get_parser(
     connection=None,
     metadata_parsing_mode=None,
     source_inspection: SourceInspectionContext | None = None,
+    expected_plugin_id: str | None = None,
+    expected_registry_generation_id: int | None = None,
 ):
-    """Construct parser instance for a given file path."""
+    """Resolve once, validate optional reviewed approval, and construct a parser."""
 
     normalized_path = _as_file_path(file_path)
     diagnostics, registration = _resolve_parser_with_registration(
         normalized_path,
         source_inspection=source_inspection,
     )
+    resolved_plugin_id = (
+        diagnostics.selected.plugin_id
+        if diagnostics.selected is not None
+        else None
+    )
+    approval_expected = (
+        expected_plugin_id is not None
+        or expected_registry_generation_id is not None
+    )
+    if approval_expected and (
+        resolved_plugin_id != expected_plugin_id
+        or diagnostics.registry_generation_id
+        != expected_registry_generation_id
+        or registration is None
+        or registration.plugin_id != expected_plugin_id
+    ):
+        raise ParserApprovalMismatchError(
+            diagnostics,
+            expected_plugin_id=expected_plugin_id,
+            expected_registry_generation_id=expected_registry_generation_id,
+        )
     if diagnostics.selected is None or registration is None:
         if diagnostics.rejected_reason == "parser_inspection_failed":
             raise ParserInspectionError(diagnostics)
@@ -1365,18 +1426,25 @@ def get_parser(
 
     parser = parser_cls(normalized_path, database, **constructor_kwargs)
     parser.source_inspection_context = diagnostics.source_inspection
+    parser.parser_resolution_evidence = ParserResolutionEvidence(
+        plugin_id=registration.plugin_id,
+        registry_generation_id=diagnostics.registry_generation_id,
+        registration=registration,
+        diagnostics=diagnostics,
+    )
 
     if metadata_parsing_mode is not None and hasattr(parser, "metadata_parsing_mode"):
         parser.metadata_parsing_mode = metadata_parsing_mode
 
     return parser
 
-
 def invoke_parser_factory(
     parser_factory,
     file_path: str | Path,
     *args,
     source_inspection: SourceInspectionContext | None = None,
+    expected_plugin_id: str | None = None,
+    expected_registry_generation_id: int | None = None,
     **kwargs,
 ):
     """Invoke old or context-aware parser factories without masking callback errors."""
@@ -1387,6 +1455,18 @@ def invoke_parser_factory(
         "source_inspection",
     ):
         factory_kwargs["source_inspection"] = source_inspection
+    if expected_plugin_id is not None and _callable_accepts_keyword(
+        parser_factory,
+        "expected_plugin_id",
+    ):
+        factory_kwargs["expected_plugin_id"] = expected_plugin_id
+    if expected_registry_generation_id is not None and _callable_accepts_keyword(
+        parser_factory,
+        "expected_registry_generation_id",
+    ):
+        factory_kwargs["expected_registry_generation_id"] = (
+            expected_registry_generation_id
+        )
     parser = parser_factory(file_path, *args, **factory_kwargs)
     if source_inspection is not None and getattr(parser, "source_inspection_context", None) is None:
         try:
@@ -1394,7 +1474,6 @@ def invoke_parser_factory(
         except (AttributeError, TypeError):
             pass
     return parser
-
 
 def _default_cmm_detector(
     file_path: str,

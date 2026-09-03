@@ -10,7 +10,9 @@ import zipfile
 import pytest
 
 from metroliza.parsing import report_parser_factory
+from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.parse_reports_thread import ParseReportsThread, parse_new_reports
+from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.parsing.preflight import (
     ImportPlan,
     ParsePreflightService,
@@ -57,6 +59,23 @@ def _stored_source_hashes(database: Path) -> set[str]:
             str(row[0])
             for row in connection.execute("SELECT sha256 FROM source_files").fetchall()
         }
+
+
+def _track_completed_import_plan_filter(monkeypatch):
+    state = {"completed": False}
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+
+    def tracked_filter(thread, report_paths, plan):
+        result = original_filter(thread, report_paths, plan)
+        state["completed"] = True
+        return result
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        tracked_filter,
+    )
+    return state
 
 
 def test_selected_two_of_five_persists_exactly_two_and_reports_exclusions(tmp_path):
@@ -319,6 +338,225 @@ def test_destination_becoming_duplicate_before_import_remains_safe(tmp_path):
     assert duplicate_recheck.last_parse_result.selected_files == 1
     assert duplicate_recheck.last_parse_result.imported_files == 0
     assert duplicate_recheck.last_parse_result.already_present_files == 1
+
+
+def test_sequential_source_drift_after_filter_rejects_only_late_report(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "sequential-source-drift.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_persist = CMMReportParser.open_database_and_check_filename
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def persist_a_then_change_b(parser):
+        result = original_persist(parser)
+        if parser.file_name == reports[0].name:
+            assert filter_state["completed"]
+            reports[1].write_bytes(reports[1].read_bytes() + b"\n% changed-after-a\n")
+        return result
+
+    monkeypatch.delenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", raising=False)
+    monkeypatch.setattr(
+        CMMReportParser,
+        "open_database_and_check_filename",
+        persist_a_then_change_b,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    assert thread.last_parse_result.imported_files == 1
+    assert thread.last_parse_result.preflight_changed_files == 1
+    assert thread.last_parse_result.failed_files == 0
+    assert thread.last_parse_result.intentionally_excluded_files == 0
+
+
+@pytest.mark.parametrize("drift", ("parser", "generation"))
+def test_sequential_parser_approval_drift_after_filter_is_changed_not_failed(
+    tmp_path,
+    monkeypatch,
+    drift,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / f"sequential-{drift}-drift.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_resolver = report_parser_factory._resolve_parser_with_registration
+    original_persist = CMMReportParser.open_database_and_check_filename
+    drift_state = {"active": False}
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def drifting_resolver(*args, **kwargs):
+        diagnostics, registration = original_resolver(*args, **kwargs)
+        if not drift_state["active"]:
+            return diagnostics, registration
+        if drift == "parser":
+            diagnostics = replace(
+                diagnostics,
+                selected=replace(diagnostics.selected, plugin_id="drifted-parser"),
+            )
+        else:
+            diagnostics = replace(
+                diagnostics,
+                registry_generation_id=diagnostics.registry_generation_id + 1,
+            )
+        return diagnostics, registration
+
+    def persist_a_then_enable_drift(parser):
+        result = original_persist(parser)
+        if parser.file_name == reports[0].name:
+            assert filter_state["completed"]
+            drift_state["active"] = True
+        return result
+
+    monkeypatch.delenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", raising=False)
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        drifting_resolver,
+    )
+    monkeypatch.setattr(
+        CMMReportParser,
+        "open_database_and_check_filename",
+        persist_a_then_enable_drift,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    assert thread.last_parse_result.imported_files == 1
+    assert thread.last_parse_result.preflight_changed_files == 1
+    assert thread.last_parse_result.failed_files == 0
+    assert thread.last_parse_result.intentionally_excluded_files == 0
+
+
+def test_get_parser_validates_the_single_resolution_used_for_construction(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "single-resolution.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+    calls = []
+
+    class ApprovedParser:
+        def __init__(self, file_path, database, connection=None):
+            self.file_path = file_path
+            self.database = database
+            self.connection = connection
+
+    registration = SimpleNamespace(plugin_id="approved", parser_cls=ApprovedParser)
+    diagnostics = SimpleNamespace(
+        selected=SimpleNamespace(plugin_id="approved"),
+        registry_generation_id=17,
+        source_inspection=inspection,
+    )
+
+    def resolve_once(*args, **kwargs):
+        calls.append((args, kwargs))
+        return diagnostics, registration
+
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        resolve_once,
+    )
+
+    parser = report_parser_factory.get_parser(
+        report,
+        database=":memory:",
+        source_inspection=inspection,
+        expected_plugin_id="approved",
+        expected_registry_generation_id=17,
+    )
+
+    assert len(calls) == 1
+    assert type(parser) is ApprovedParser
+    assert parser.source_inspection_context is inspection
+    assert parser.parser_resolution_evidence.plugin_id == "approved"
+    assert parser.parser_resolution_evidence.registry_generation_id == 17
+    assert parser.parser_resolution_evidence.registration is registration
+
+
+def test_get_parser_rejects_identity_drift_from_the_same_resolution(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "identity-drift.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+
+    class DriftedParser:
+        def __init__(self, file_path, database, connection=None):
+            pytest.fail("approval drift must reject before parser construction")
+
+    registration = SimpleNamespace(plugin_id="drifted", parser_cls=DriftedParser)
+    diagnostics = SimpleNamespace(
+        selected=SimpleNamespace(plugin_id="drifted"),
+        registry_generation_id=23,
+        source_inspection=inspection,
+    )
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        lambda *_args, **_kwargs: (diagnostics, registration),
+    )
+
+    with pytest.raises(report_parser_factory.ParserApprovalMismatchError):
+        report_parser_factory.get_parser(
+            report,
+            database=":memory:",
+            source_inspection=inspection,
+            expected_plugin_id="approved",
+            expected_registry_generation_id=23,
+        )
+
+
+def test_two_stage_late_source_drift_is_changed_and_keeps_identity_pairing(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "two-stage-source-drift.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_prepare = CMMReportParser.prepare_for_two_stage_pipeline
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def prepare_then_change_selected_source(parser):
+        result = original_prepare(parser)
+        if parser.file_name == reports[1].name:
+            assert filter_state["completed"]
+            reports[1].write_bytes(reports[1].read_bytes() + b"\n% late-two-stage-change\n")
+        return result
+
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", "1")
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_WORKERS", "2")
+    monkeypatch.setattr(
+        CMMReportParser,
+        "prepare_for_two_stage_pipeline",
+        prepare_then_change_selected_source,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    assert thread.last_parse_result.imported_files == 1
+    assert thread.last_parse_result.preflight_changed_files == 1
+    assert thread.last_parse_result.failed_files == 0
+    assert thread.last_parse_result.intentionally_excluded_files == 0
 
 
 def test_identical_content_has_deterministic_occurrence_identity(tmp_path):
