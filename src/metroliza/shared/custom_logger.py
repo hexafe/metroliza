@@ -1,6 +1,11 @@
 import logging
 from typing import Literal
 
+from metroliza.shared.diagnostic_events import (
+    DiagnosticOperation,
+    build_exception_diagnostic_event,
+)
+
 
 LOG_ONLY = "log_only"
 LOG_AND_DIALOG = "log_and_dialog"
@@ -9,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def log_exception(exception, *, logger_name=None, context="operation"):
-    """Log an exception with traceback and operation context, without UI side effects."""
+    """Log closed exception structure without exception- or caller-controlled text."""
     active_logger = logging.getLogger(logger_name) if logger_name else logger
     active_logger.error(
-        "Unhandled exception during %s: %s",
-        context,
-        exception,
-        exc_info=(type(exception), exception, exception.__traceback__),
+        build_exception_diagnostic_event(
+            exception,
+            operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+        )
     )
 
 
@@ -25,9 +30,10 @@ def notify_user(*, message, title="Error", parent=None):
         from PyQt6.QtWidgets import QMessageBox
     except (ImportError, OSError, RuntimeError) as exc:
         logger.error(
-            "Could not show error dialog because Qt failed to import: %s",
-            exc,
-            exc_info=True,
+            build_exception_diagnostic_event(
+                exc,
+                operation=DiagnosticOperation.QT_DIALOG_IMPORT_FAILURE,
+            )
         )
         return
 

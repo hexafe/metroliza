@@ -1,17 +1,26 @@
-"""Utilities for resolving and applying application-wide logging configuration.
+"""Safe managed logging configuration for Metroliza."""
 
-This module centralizes environment-driven log level resolution and handler setup
-for Metroliza's root logger, including rotating file sinks and optional console
-output.
-"""
+from __future__ import annotations
 
+import datetime as dt
 import logging
 import logging.handlers
+import math
 import os
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from metroliza.shared.diagnostic_events import (
+    DiagnosticEventValidationError,
+    ExceptionDiagnosticEvent,
+    InvalidDiagnosticEvent,
+    LegacyLogSuppressedEvent,
+    SourceClass,
+    serialize_diagnostic_event,
+)
 from metroliza.shared.env_utils import parse_bool
 
 
@@ -22,22 +31,101 @@ _CONSOLE_LEVEL_ENV = "METROLIZA_CONSOLE_LOG_LEVEL"
 _SUPPORT_BUILD_ENV = "METROLIZA_SUPPORT_BUILD"
 _FILE_MAX_BYTES = 10 * 1024 * 1024
 _FILE_BACKUP_COUNT = 7
+_LOGGING_SETUP_LOCK = threading.RLock()
+_LEVEL_NAMES = {
+    logging.NOTSET: "NOTSET",
+    logging.DEBUG: "DEBUG",
+    logging.INFO: "INFO",
+    logging.WARNING: "WARNING",
+    logging.ERROR: "ERROR",
+    logging.CRITICAL: "CRITICAL",
+}
+_APP_LOGGER_PREFIXES = ("metroliza", "modules")
+_STRUCTURED_EVENT_TYPES = (
+    LegacyLogSuppressedEvent,
+    InvalidDiagnosticEvent,
+    ExceptionDiagnosticEvent,
+)
 
 
 @dataclass(frozen=True)
 class LoggingConfig:
-    """Resolved logging levels for global, file, and console handlers.
-
-    Attributes:
-        global_level: Root logger level that gates all log records.
-        file_level: Per-file-handler threshold for persisted logs.
-        console_level: Stream handler threshold, or ``None`` to disable
-            console logging.
-    """
+    """Resolved root, file, and optional console logging levels."""
 
     global_level: int
     file_level: int
     console_level: int | None
+
+
+def _record_attribute(record: logging.LogRecord, name: str, default: object) -> object:
+    try:
+        return object.__getattribute__(record, name)
+    except BaseException:
+        return default
+
+
+def _safe_timestamp(record: logging.LogRecord) -> str:
+    created = _record_attribute(record, "created", None)
+    try:
+        finite_created = type(created) in (int, float) and math.isfinite(created)
+    except (OverflowError, TypeError, ValueError):
+        finite_created = False
+    if not finite_created:
+        created = time.time()
+    try:
+        timestamp = dt.datetime.fromtimestamp(created, tz=dt.UTC)
+    except (OverflowError, OSError, ValueError):
+        timestamp = dt.datetime.fromtimestamp(time.time(), tz=dt.UTC)
+    milliseconds = timestamp.microsecond // 1000
+    return f"{timestamp:%Y-%m-%dT%H:%M:%S}.{milliseconds:03d}Z"
+
+
+def _safe_level(record: logging.LogRecord) -> str:
+    level = _record_attribute(record, "levelno", None)
+    return _LEVEL_NAMES.get(level, "UNKNOWN") if type(level) is int else "UNKNOWN"
+
+
+def _source_class(record: logging.LogRecord) -> SourceClass:
+    name = _record_attribute(record, "name", None)
+    if type(name) is not str or not name:
+        return SourceClass.UNKNOWN
+    for prefix in _APP_LOGGER_PREFIXES:
+        if name == prefix or name.startswith(f"{prefix}."):
+            return SourceClass.APPLICATION
+    return SourceClass.EXTERNAL
+
+
+def _has_empty_arguments(record: logging.LogRecord) -> bool:
+    arguments = _record_attribute(record, "args", None)
+    return arguments is None or (type(arguments) is tuple and len(arguments) == 0)
+
+
+def _safe_event(record: logging.LogRecord) -> object:
+    source_class = _source_class(record)
+    message = _record_attribute(record, "msg", None)
+    if type(message) not in _STRUCTURED_EVENT_TYPES:
+        return LegacyLogSuppressedEvent(source_class)
+    if not _has_empty_arguments(record):
+        return InvalidDiagnosticEvent(source_class)
+    try:
+        serialize_diagnostic_event(message)
+    except DiagnosticEventValidationError:
+        return InvalidDiagnosticEvent(source_class)
+    return message
+
+
+class ManagedSafeFormatter(logging.Formatter):
+    """Render only closed diagnostic events and fixed legacy suppression output."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = _safe_timestamp(record)
+        level = _safe_level(record)
+        event = _safe_event(record)
+        try:
+            serialized = serialize_diagnostic_event(event)
+        except DiagnosticEventValidationError:
+            serialized = serialize_diagnostic_event(InvalidDiagnosticEvent(SourceClass.UNKNOWN))
+        return f"{timestamp} {level} {serialized}"
 
 
 def _is_truthy(raw_value: str | None) -> bool:
@@ -47,192 +135,247 @@ def _is_truthy(raw_value: str | None) -> bool:
 def _parse_level(raw_value: str | None, *, fallback: int) -> int:
     if raw_value is None or str(raw_value).strip() == "":
         return fallback
-
     normalized = str(raw_value).strip().upper()
     if normalized.isdigit() or (normalized.startswith("-") and normalized[1:].isdigit()):
         return int(normalized)
-
     level_value = logging.getLevelName(normalized)
-    if isinstance(level_value, int):
-        return level_value
-    return fallback
+    return level_value if isinstance(level_value, int) else fallback
 
 
 def _parse_optional_level(raw_value: str | None) -> int | None:
-    """Parse a potentially disabled log level for optional console logging.
-
-    Args:
-        raw_value: Raw environment value.
-
-    Returns:
-        An integer logging level, or ``None`` when logging should be disabled.
-
-    Notes:
-        Values ``off``, ``none``, ``disable``, ``disabled``, and ``null`` are
-        treated as explicit disablement signals.
-    """
-
     if raw_value is None:
         return None
-
     stripped = str(raw_value).strip()
-    if stripped == "":
+    if not stripped or stripped.lower() in {"off", "none", "disable", "disabled", "null"}:
         return None
-
-    if stripped.lower() in {"off", "none", "disable", "disabled", "null"}:
-        return None
-
     return _parse_level(stripped, fallback=logging.INFO)
 
 
 def resolve_logging_config() -> LoggingConfig:
-    """Resolve effective logging configuration from environment variables.
-
-    Returns:
-        A :class:`LoggingConfig` with resolved global, file, and console levels.
-
-    Notes:
-        Precedence is:
-
-        1. ``METROLIZA_LOG_LEVEL`` for the root logger level.
-        2. ``METROLIZA_FILE_LOG_LEVEL`` for file handlers, falling back to the
-           resolved global level.
-        3. ``METROLIZA_CONSOLE_LOG_LEVEL`` for console handlers, where
-           ``off/none/disable/disabled/null`` disables console output.
-
-        When ``METROLIZA_LOG_LEVEL`` is unset, support builds
-        (``METROLIZA_SUPPORT_BUILD`` truthy) default to ``DEBUG`` and other
-        builds default to ``INFO``.
-    """
-
+    """Resolve the existing environment-driven logging level contract."""
     default_global = logging.DEBUG if _is_truthy(os.getenv(_SUPPORT_BUILD_ENV)) else logging.INFO
     global_level = _parse_level(os.getenv(_GLOBAL_LEVEL_ENV), fallback=default_global)
     file_level = _parse_level(os.getenv(_FILE_LEVEL_ENV), fallback=global_level)
     console_level = _parse_optional_level(os.getenv(_CONSOLE_LEVEL_ENV))
-    return LoggingConfig(global_level=global_level, file_level=file_level, console_level=console_level)
+    return LoggingConfig(global_level, file_level, console_level)
 
 
-def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatter, file_level: int) -> None:
-    """Ensure managed file handlers exist and use expected rotation settings.
+def _prepare_managed_handler(
+    handler: logging.Handler,
+    *,
+    marker: str,
+    level: int,
+    formatter: ManagedSafeFormatter,
+) -> None:
+    setattr(handler, marker, True)
+    handler.setLevel(level)
+    handler.setFormatter(formatter)
 
-    Existing Metroliza-managed handlers that target unexpected paths are removed.
-    Handlers at target paths are replaced when they are not rotating handlers or
-    when their rotation parameters differ from expected values.
-    """
 
-    fallback_log_path = Path(tempfile.gettempdir()) / 'metroliza' / LOG_FILE_NAME
-    target_paths = [
-        Path.home() / '.metroliza' / LOG_FILE_NAME,
-        Path.cwd() / LOG_FILE_NAME,
-    ]
-    target_resolved_paths = {path.resolve() for path in target_paths}
+def _add_managed_handler(
+    logger: logging.Logger,
+    handler: logging.Handler,
+    *,
+    marker: str,
+    level: int,
+    formatter: ManagedSafeFormatter,
+) -> None:
+    _prepare_managed_handler(handler, marker=marker, level=level, formatter=formatter)
+    logger.addHandler(handler)
 
-    existing_file_handlers = {
-        Path(handler.baseFilename).resolve(): handler
-        for handler in logger.handlers
-        if isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', None)
-    }
 
-    for handler in list(logger.handlers):
-        if not isinstance(handler, logging.FileHandler) or not getattr(handler, 'baseFilename', None):
+def _harden_attached_handler(
+    logger: logging.Logger,
+    handler: logging.Handler,
+    *,
+    marker: str,
+    level: int,
+    formatter: ManagedSafeFormatter,
+) -> None:
+    if type(handler.formatter) is ManagedSafeFormatter:
+        setattr(handler, marker, True)
+        handler.setLevel(level)
+        return
+    handler.acquire()
+    try:
+        logger.removeHandler(handler)
+        _prepare_managed_handler(handler, marker=marker, level=level, formatter=formatter)
+        logger.addHandler(handler)
+    finally:
+        handler.release()
+
+
+def _remove_and_close_handler(
+    logger: logging.Logger,
+    handler: logging.Handler,
+    formatter: ManagedSafeFormatter,
+) -> None:
+    handler.acquire()
+    try:
+        logger.removeHandler(handler)
+        handler.setFormatter(formatter)
+        handler.close()
+    finally:
+        handler.release()
+
+
+def _has_expected_rotation(handler: logging.Handler | None) -> bool:
+    return (
+        isinstance(handler, logging.handlers.RotatingFileHandler)
+        and handler.maxBytes == _FILE_MAX_BYTES
+        and handler.backupCount == _FILE_BACKUP_COUNT
+    )
+
+
+def _collect_managed_file_handlers(
+    logger: logging.Logger,
+    allowed_paths: set[Path],
+    formatter: ManagedSafeFormatter,
+) -> dict[Path, logging.FileHandler]:
+    by_path: dict[Path, logging.FileHandler] = {}
+    for handler in tuple(logger.handlers):
+        if not isinstance(handler, logging.FileHandler) or not getattr(
+            handler, "baseFilename", None
+        ):
             continue
+        resolved = Path(handler.baseFilename).resolve()
+        managed = getattr(handler, "_metroliza_file_handler", False) or (
+            resolved.name == LOG_FILE_NAME
+        )
+        if not managed:
+            continue
+        if resolved not in allowed_paths:
+            _remove_and_close_handler(logger, handler, formatter)
+            continue
+        previous = by_path.get(resolved)
+        if previous is None:
+            by_path[resolved] = handler
+        elif _has_expected_rotation(handler) and not _has_expected_rotation(previous):
+            _remove_and_close_handler(logger, previous, formatter)
+            by_path[resolved] = handler
+        else:
+            _remove_and_close_handler(logger, handler, formatter)
+    return by_path
 
-        resolved_path = Path(handler.baseFilename).resolve()
-        is_metroliza_handler = getattr(handler, '_metroliza_file_handler', False) or resolved_path.name == LOG_FILE_NAME
-        if is_metroliza_handler and resolved_path not in target_resolved_paths:
-            logger.removeHandler(handler)
-            handler.close()
 
-    configured_handlers = 0
-    for index, log_path in enumerate([*target_paths, fallback_log_path]):
-        if index >= len(target_paths) and configured_handlers > 0:
-            break
+def _ensure_file_handler(
+    logger: logging.Logger,
+    path: Path,
+    handler: logging.FileHandler | None,
+    formatter: ManagedSafeFormatter,
+    level: int,
+) -> bool:
+    if not _has_expected_rotation(handler):
+        if handler is not None:
+            _remove_and_close_handler(logger, handler, formatter)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handler = logging.handlers.RotatingFileHandler(
+                path,
+                maxBytes=_FILE_MAX_BYTES,
+                backupCount=_FILE_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        except OSError:
+            return False
+        _add_managed_handler(
+            logger,
+            handler,
+            marker="_metroliza_file_handler",
+            level=level,
+            formatter=formatter,
+        )
+        return True
+    assert handler is not None
+    _harden_attached_handler(
+        logger,
+        handler,
+        marker="_metroliza_file_handler",
+        level=level,
+        formatter=formatter,
+    )
+    return True
 
-        resolved_path = log_path.resolve()
-        handler = existing_file_handlers.get(resolved_path)
-        requires_rotation_handler = not isinstance(handler, logging.handlers.RotatingFileHandler)
-        has_expected_rotation = (
-            isinstance(handler, logging.handlers.RotatingFileHandler)
-            and handler.maxBytes == _FILE_MAX_BYTES
-            and handler.backupCount == _FILE_BACKUP_COUNT
+
+def _configure_file_handlers(
+    logger: logging.Logger,
+    formatter: ManagedSafeFormatter,
+    level: int,
+) -> None:
+    fallback = Path(tempfile.gettempdir()) / "metroliza" / LOG_FILE_NAME
+    primary_paths = [Path.home() / ".metroliza" / LOG_FILE_NAME, Path.cwd() / LOG_FILE_NAME]
+    primary_by_resolved = {path.resolve(): path for path in primary_paths}
+    fallback_resolved = fallback.resolve()
+    existing = _collect_managed_file_handlers(
+        logger,
+        set(primary_by_resolved) | {fallback_resolved},
+        formatter,
+    )
+    configured = 0
+    for resolved, path in primary_by_resolved.items():
+        if _ensure_file_handler(logger, path, existing.get(resolved), formatter, level):
+            configured += 1
+    fallback_handler = existing.get(fallback_resolved)
+    if configured:
+        if fallback_handler is not None and fallback_resolved not in primary_by_resolved:
+            _remove_and_close_handler(logger, fallback_handler, formatter)
+    else:
+        _ensure_file_handler(logger, fallback, fallback_handler, formatter, level)
+
+
+def _configure_console_handler(
+    logger: logging.Logger,
+    formatter: ManagedSafeFormatter,
+    level: int | None,
+) -> None:
+    handlers = [
+        handler
+        for handler in tuple(logger.handlers)
+        if isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+        and getattr(handler, "_metroliza_console_handler", False)
+    ]
+    if level is None:
+        for handler in handlers:
+            _remove_and_close_handler(logger, handler, formatter)
+        return
+    selected = next(
+        (handler for handler in handlers if type(handler.formatter) is ManagedSafeFormatter),
+        handlers[0] if handlers else None,
+    )
+    for duplicate in handlers:
+        if duplicate is not selected:
+            _remove_and_close_handler(logger, duplicate, formatter)
+    if selected is None:
+        _add_managed_handler(
+            logger,
+            logging.StreamHandler(),
+            marker="_metroliza_console_handler",
+            level=level,
+            formatter=formatter,
+        )
+    else:
+        _harden_attached_handler(
+            logger,
+            selected,
+            marker="_metroliza_console_handler",
+            level=level,
+            formatter=formatter,
         )
 
-        if handler is None or requires_rotation_handler or not has_expected_rotation:
-            if handler is not None:
-                logger.removeHandler(handler)
-                handler.close()
-            try:
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                handler = logging.handlers.RotatingFileHandler(
-                    str(log_path),
-                    maxBytes=_FILE_MAX_BYTES,
-                    backupCount=_FILE_BACKUP_COUNT,
-                    encoding='utf-8',
-                )
-            except OSError:
-                continue
-            setattr(handler, '_metroliza_file_handler', True)
-            logger.addHandler(handler)
-        else:
-            setattr(handler, '_metroliza_file_handler', True)
 
-        handler.setLevel(file_level)
-        handler.setFormatter(formatter)
-        configured_handlers += 1
-
-
-def _configure_console_handler(logger: logging.Logger, formatter: logging.Formatter, console_level: int | None) -> None:
-    """Ensure a managed console handler matches the requested configuration.
-
-    Args:
-        logger: Logger to modify.
-        formatter: Formatter to apply to the managed console handler.
-        console_level: Desired console threshold, or ``None`` to remove the
-            managed console handler.
-    """
-
-    console_handler = next((
-        handler
-        for handler in logger.handlers
-        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler)
-        and getattr(handler, '_metroliza_console_handler', False)
-    ), None)
-
-    if console_level is None:
-        if console_handler is not None:
-            logger.removeHandler(console_handler)
-        return
-
-    if console_handler is None:
-        console_handler = logging.StreamHandler()
-        setattr(console_handler, '_metroliza_console_handler', True)
-        logger.addHandler(console_handler)
-
-    console_handler.setLevel(console_level)
-    console_handler.setFormatter(formatter)
-
-
-def ensure_application_logging(config: LoggingConfig | None = None, level: int | None = None):
-    """Apply resolved logging configuration to the root logger.
-
-    Args:
-        config: Optional pre-resolved logging configuration. When omitted,
-            :func:`resolve_logging_config` is used.
-        level: Optional override for root and file levels when ``config`` is not
-            provided. Console level still follows resolved environment behavior.
-
-    Returns:
-        The effective :class:`LoggingConfig` applied to logging.
-    """
-    logger = logging.getLogger()
-    formatter = logging.Formatter('%(asctime)s %(levelname)s [%(name)s] [%(threadName)s] %(message)s')
-
-    resolved_config = config or resolve_logging_config()
-    if level is not None and config is None:
-        resolved_config = LoggingConfig(global_level=level, file_level=level, console_level=resolved_config.console_level)
-    logger.setLevel(resolved_config.global_level)
-
-    _configure_file_handlers(logger, formatter, resolved_config.file_level)
-    _configure_console_handler(logger, formatter, resolved_config.console_level)
-
-    return resolved_config
+def ensure_application_logging(
+    config: LoggingConfig | None = None,
+    level: int | None = None,
+) -> LoggingConfig:
+    """Attach only fully prepared managed handlers and preserve unmanaged handlers."""
+    with _LOGGING_SETUP_LOCK:
+        logger = logging.getLogger()
+        resolved = config or resolve_logging_config()
+        if level is not None and config is None:
+            resolved = LoggingConfig(level, level, resolved.console_level)
+        logger.setLevel(resolved.global_level)
+        formatter = ManagedSafeFormatter()
+        _configure_file_handlers(logger, formatter, resolved.file_level)
+        _configure_console_handler(logger, formatter, resolved.console_level)
+        return resolved
