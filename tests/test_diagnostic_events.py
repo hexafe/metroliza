@@ -16,6 +16,27 @@ from metroliza.shared.diagnostic_events import (
 )
 
 
+def _forged_enum_member(enum_type, equal_value, marker):
+    forged = str.__new__(enum_type, equal_value)
+    object.__setattr__(forged, "_name_", marker)
+    object.__setattr__(forged, "_value_", marker)
+    return forged
+
+
+def _exception_event_fields():
+    return {
+        "operation": DiagnosticOperation.UNHANDLED_EXCEPTION,
+        "exception_kind": diagnostic_events.ExceptionKind.RUNTIME_ERROR,
+        "has_traceback": False,
+        "traceback_frames": 0,
+        "cause_count": 0,
+        "context_count": 0,
+        "group_count": 0,
+        "group_member_count": 0,
+        "structure_truncated": False,
+    }
+
+
 def test_closed_events_serialize_with_fixed_schema_and_key_order(monkeypatch):
     correlation_id = uuid.UUID("12345678-1234-5678-1234-567812345678")
     monkeypatch.setattr(diagnostic_events.uuid, "uuid4", lambda: correlation_id)
@@ -177,6 +198,100 @@ def test_exception_kind_rejects_caller_text_and_forgery_without_rendering():
     object.__setattr__(event, "exception_kind", HostileKind())
     with pytest.raises(DiagnosticEventValidationError):
         serialize_diagnostic_event(event)
+
+
+def test_noncanonical_enum_instances_are_rejected_at_public_boundaries():
+    marker = f"generated-{uuid.uuid4().hex}"
+    operation = _forged_enum_member(
+        DiagnosticOperation,
+        DiagnosticOperation.UNHANDLED_EXCEPTION.value,
+        marker,
+    )
+    exception_kind = _forged_enum_member(
+        diagnostic_events.ExceptionKind,
+        diagnostic_events.ExceptionKind.RUNTIME_ERROR.value,
+        marker,
+    )
+    source_class = _forged_enum_member(
+        SourceClass,
+        SourceClass.APPLICATION.value,
+        marker,
+    )
+
+    assert operation == DiagnosticOperation.UNHANDLED_EXCEPTION.value
+    assert exception_kind == diagnostic_events.ExceptionKind.RUNTIME_ERROR.value
+    assert source_class == SourceClass.APPLICATION.value
+
+    fields = _exception_event_fields()
+    with pytest.raises(DiagnosticEventValidationError):
+        ExceptionDiagnosticEvent(**{**fields, "operation": operation})
+    with pytest.raises(DiagnosticEventValidationError):
+        build_exception_diagnostic_event(RuntimeError(marker), operation=operation)
+    with pytest.raises(DiagnosticEventValidationError):
+        ExceptionDiagnosticEvent(**{**fields, "exception_kind": exception_kind})
+    with pytest.raises(DiagnosticEventValidationError):
+        LegacyLogSuppressedEvent(source_class)
+    with pytest.raises(DiagnosticEventValidationError):
+        InvalidDiagnosticEvent(source_class)
+
+
+def test_noncanonical_enum_mutations_fail_closed_during_serialization():
+    marker = f"generated-{uuid.uuid4().hex}"
+    operation = _forged_enum_member(
+        DiagnosticOperation,
+        DiagnosticOperation.UNHANDLED_EXCEPTION.value,
+        marker,
+    )
+    exception_kind = _forged_enum_member(
+        diagnostic_events.ExceptionKind,
+        diagnostic_events.ExceptionKind.RUNTIME_ERROR.value,
+        marker,
+    )
+    source_class = _forged_enum_member(
+        SourceClass,
+        SourceClass.APPLICATION.value,
+        marker,
+    )
+    operation_event = ExceptionDiagnosticEvent(**_exception_event_fields())
+    kind_event = ExceptionDiagnosticEvent(**_exception_event_fields())
+    source_event = LegacyLogSuppressedEvent(SourceClass.APPLICATION)
+    object.__setattr__(operation_event, "operation", operation)
+    object.__setattr__(kind_event, "exception_kind", exception_kind)
+    object.__setattr__(source_event, "source_class", source_class)
+
+    for event in (operation_event, kind_event, source_event):
+        with pytest.raises(DiagnosticEventValidationError):
+            serialize_diagnostic_event(event)
+
+
+def test_hostile_noncanonical_enum_internals_are_not_converted():
+    class HostileValue:
+        def __eq__(self, _other):
+            raise AssertionError("forged enum value was compared")
+
+        def __hash__(self):
+            raise AssertionError("forged enum value was hashed")
+
+        def __str__(self):
+            raise AssertionError("forged enum value was stringified")
+
+        def __repr__(self):
+            raise AssertionError("forged enum value was represented")
+
+    operation = str.__new__(DiagnosticOperation, "unhandled_exception")
+    exception_kind = str.__new__(diagnostic_events.ExceptionKind, "runtime_error")
+    source_class = str.__new__(SourceClass, "application")
+    for forged in (operation, exception_kind, source_class):
+        object.__setattr__(forged, "_name_", HostileValue())
+        object.__setattr__(forged, "_value_", HostileValue())
+
+    fields = _exception_event_fields()
+    with pytest.raises(DiagnosticEventValidationError):
+        ExceptionDiagnosticEvent(**{**fields, "operation": operation})
+    with pytest.raises(DiagnosticEventValidationError):
+        ExceptionDiagnosticEvent(**{**fields, "exception_kind": exception_kind})
+    with pytest.raises(DiagnosticEventValidationError):
+        LegacyLogSuppressedEvent(source_class)
 
 
 def test_exception_kind_uses_only_exact_allowlisted_builtin_identity():

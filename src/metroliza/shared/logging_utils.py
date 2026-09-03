@@ -132,6 +132,20 @@ class _ManagedTerminalHandler(logging.NullHandler):
     """Consume records without rendering when no managed sink is available."""
 
 
+class _ManagedRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """Rotating file sink with a fixed non-rendering error path."""
+
+    def handleError(self, _record: logging.LogRecord) -> None:
+        return
+
+
+class _ManagedStreamHandler(logging.StreamHandler):
+    """Console sink with a fixed non-rendering error path."""
+
+    def handleError(self, _record: logging.LogRecord) -> None:
+        return
+
+
 def _is_truthy(raw_value: str | None) -> bool:
     return parse_bool(raw_value, default=False)
 
@@ -225,7 +239,7 @@ def _remove_and_close_handler(
 
 def _has_expected_rotation(handler: logging.Handler | None) -> bool:
     return (
-        isinstance(handler, logging.handlers.RotatingFileHandler)
+        type(handler) is _ManagedRotatingFileHandler
         and handler.maxBytes == _FILE_MAX_BYTES
         and handler.backupCount == _FILE_BACKUP_COUNT
     )
@@ -274,7 +288,7 @@ def _ensure_file_handler(
             _remove_and_close_handler(logger, handler, formatter)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            handler = logging.handlers.RotatingFileHandler(
+            handler = _ManagedRotatingFileHandler(
                 path,
                 maxBytes=_FILE_MAX_BYTES,
                 backupCount=_FILE_BACKUP_COUNT,
@@ -344,8 +358,13 @@ def _configure_console_handler(
             _remove_and_close_handler(logger, handler, formatter)
         return False
     selected = next(
-        (handler for handler in handlers if type(handler.formatter) is ManagedSafeFormatter),
-        handlers[0] if handlers else None,
+        (
+            handler
+            for handler in handlers
+            if type(handler) is _ManagedStreamHandler
+            and type(handler.formatter) is ManagedSafeFormatter
+        ),
+        next((handler for handler in handlers if type(handler) is _ManagedStreamHandler), None),
     )
     for duplicate in handlers:
         if duplicate is not selected:
@@ -353,7 +372,7 @@ def _configure_console_handler(
     if selected is None:
         _add_managed_handler(
             logger,
-            logging.StreamHandler(),
+            _ManagedStreamHandler(),
             marker="_metroliza_console_handler",
             level=level,
             formatter=formatter,

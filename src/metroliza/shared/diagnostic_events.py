@@ -85,18 +85,57 @@ class SourceClass(str, Enum):
     UNKNOWN = "unknown"
 
 
-@dataclass(frozen=True, slots=True)
+_CANONICAL_DIAGNOSTIC_OPERATIONS = (
+    DiagnosticOperation.UNHANDLED_EXCEPTION,
+    DiagnosticOperation.QT_DIALOG_IMPORT_FAILURE,
+)
+_CANONICAL_EXCEPTION_KINDS = (
+    ExceptionKind.UNKNOWN_EXCEPTION,
+    ExceptionKind.BASE_EXCEPTION_GROUP,
+    ExceptionKind.EXCEPTION_GROUP,
+    ExceptionKind.IMPORT_ERROR,
+    ExceptionKind.KEY_ERROR,
+    ExceptionKind.OS_ERROR,
+    ExceptionKind.RUNTIME_ERROR,
+    ExceptionKind.TYPE_ERROR,
+    ExceptionKind.VALUE_ERROR,
+)
+_CANONICAL_SOURCE_CLASSES = (
+    SourceClass.APPLICATION,
+    SourceClass.EXTERNAL,
+    SourceClass.UNKNOWN,
+)
+
+
+def _is_canonical_member(value: object, canonical_members: tuple[object, ...]) -> bool:
+    for member in canonical_members:
+        if value is member:
+            return True
+    return False
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class LegacyLogSuppressedEvent:
     """Fixed event emitted instead of an arbitrary legacy log payload."""
 
     source_class: SourceClass
 
+    def __init__(self, source_class: SourceClass) -> None:
+        if not _is_canonical_member(source_class, _CANONICAL_SOURCE_CLASSES):
+            raise DiagnosticEventValidationError("unsupported source class")
+        object.__setattr__(self, "source_class", source_class)
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(frozen=True, slots=True, init=False)
 class InvalidDiagnosticEvent:
     """Fixed event emitted when a typed event fails validation."""
 
     source_class: SourceClass
+
+    def __init__(self, source_class: SourceClass) -> None:
+        if not _is_canonical_member(source_class, _CANONICAL_SOURCE_CLASSES):
+            raise DiagnosticEventValidationError("unsupported source class")
+        object.__setattr__(self, "source_class", source_class)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -127,7 +166,9 @@ class ExceptionDiagnosticEvent:
         group_member_count: int,
         structure_truncated: bool,
     ) -> None:
-        if type(exception_kind) is not ExceptionKind:
+        if not _is_canonical_member(operation, _CANONICAL_DIAGNOSTIC_OPERATIONS):
+            raise DiagnosticEventValidationError("unsupported diagnostic operation")
+        if not _is_canonical_member(exception_kind, _CANONICAL_EXCEPTION_KINDS):
             raise DiagnosticEventValidationError("unsupported exception kind")
         object.__setattr__(self, "operation", operation)
         object.__setattr__(self, "exception_kind", exception_kind)
@@ -273,7 +314,7 @@ def build_exception_diagnostic_event(
     operation: DiagnosticOperation,
 ) -> ExceptionDiagnosticEvent:
     """Build a structural exception event without reading exception payload text."""
-    if type(operation) is not DiagnosticOperation:
+    if not _is_canonical_member(operation, _CANONICAL_DIAGNOSTIC_OPERATIONS):
         raise DiagnosticEventValidationError("unsupported diagnostic operation")
     if not isinstance(exception, BaseException):
         return ExceptionDiagnosticEvent(
@@ -378,9 +419,9 @@ def _exception_payload(event: ExceptionDiagnosticEvent) -> dict[str, object]:
     except BaseException:
         raise DiagnosticEventValidationError("malformed exception event") from None
 
-    if type(operation) is not DiagnosticOperation:
+    if not _is_canonical_member(operation, _CANONICAL_DIAGNOSTIC_OPERATIONS):
         raise DiagnosticEventValidationError("invalid diagnostic operation")
-    if type(exception_kind) is not ExceptionKind:
+    if not _is_canonical_member(exception_kind, _CANONICAL_EXCEPTION_KINDS):
         raise DiagnosticEventValidationError("invalid exception kind")
     if type(has_traceback) is not bool or type(structure_truncated) is not bool:
         raise DiagnosticEventValidationError("invalid diagnostic boolean")
@@ -414,7 +455,7 @@ def _source_payload(event: DiagnosticEvent) -> dict[str, object]:
         source_class = event.source_class
     except BaseException:
         raise DiagnosticEventValidationError("malformed source event") from None
-    if type(source_class) is not SourceClass:
+    if not _is_canonical_member(source_class, _CANONICAL_SOURCE_CLASSES):
         raise DiagnosticEventValidationError("invalid source class")
     code = (
         DiagnosticEventCode.LEGACY_LOG_SUPPRESSED

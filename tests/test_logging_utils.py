@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from metroliza.shared import diagnostic_events
+from metroliza.shared import diagnostic_events, logging_utils
 from metroliza.shared.diagnostic_events import (
     DiagnosticOperation,
     ExceptionDiagnosticEvent,
@@ -87,6 +87,50 @@ def _outputs(sinks):
 def _assert_marker_absent(marker, outputs):
     if any(marker in output for output in outputs):
         pytest.fail("generated marker reached managed output")
+
+
+def _forged_enum_member(enum_type, equal_value, marker):
+    forged = str.__new__(enum_type, equal_value)
+    object.__setattr__(forged, "_name_", marker)
+    object.__setattr__(forged, "_value_", marker)
+    return forged
+
+
+def _hostile_record(marker, conversions):
+    class Hostile:
+        def __str__(self):
+            conversions.append("str")
+            raise AssertionError("hostile record value was stringified")
+
+        def __repr__(self):
+            conversions.append("repr")
+            raise AssertionError("hostile record value was represented")
+
+    class HostileException(Exception):
+        def __str__(self):
+            conversions.append("exception_str")
+            raise AssertionError("hostile exception was stringified")
+
+        def __repr__(self):
+            conversions.append("exception_repr")
+            raise AssertionError("hostile exception was represented")
+
+    exception = HostileException(marker)
+    record = logging.LogRecord(
+        f"external.{marker}",
+        logging.ERROR,
+        f"/{marker}/source.py",
+        1,
+        Hostile(),
+        (Hostile(), Hostile()),
+        (HostileException, exception, None),
+        func=marker,
+    )
+    record.threadName = Hostile()
+    record.exc_text = Hostile()
+    record.stack_info = Hostile()
+    setattr(record, f"unknown_{marker}", Hostile())
+    return record
 
 
 def test_managed_sinks_suppress_unknown_legacy_payload(tmp_path):
@@ -297,6 +341,53 @@ def test_malformed_and_forged_events_fail_closed_without_stringification():
     _assert_marker_absent(marker, (malformed_output, forged_output))
 
 
+def test_noncanonical_enum_events_format_as_fixed_invalid_diagnostic():
+    marker = f"generated-{uuid.uuid4().hex}"
+    operation = _forged_enum_member(
+        DiagnosticOperation,
+        DiagnosticOperation.UNHANDLED_EXCEPTION.value,
+        marker,
+    )
+    exception_kind = _forged_enum_member(
+        diagnostic_events.ExceptionKind,
+        diagnostic_events.ExceptionKind.RUNTIME_ERROR.value,
+        marker,
+    )
+    source_class = _forged_enum_member(
+        SourceClass,
+        SourceClass.APPLICATION.value,
+        marker,
+    )
+    fields = {
+        "operation": DiagnosticOperation.UNHANDLED_EXCEPTION,
+        "exception_kind": diagnostic_events.ExceptionKind.RUNTIME_ERROR,
+        "has_traceback": False,
+        "traceback_frames": 0,
+        "cause_count": 0,
+        "context_count": 0,
+        "group_count": 0,
+        "group_member_count": 0,
+        "structure_truncated": False,
+    }
+    operation_event = ExceptionDiagnosticEvent(**fields)
+    kind_event = ExceptionDiagnosticEvent(**fields)
+    source_event = diagnostic_events.LegacyLogSuppressedEvent(SourceClass.APPLICATION)
+    object.__setattr__(operation_event, "operation", operation)
+    object.__setattr__(kind_event, "exception_kind", exception_kind)
+    object.__setattr__(source_event, "source_class", source_class)
+
+    outputs = []
+    formatter = ManagedSafeFormatter()
+    for event in (operation_event, kind_event, source_event):
+        record = logging.LogRecord(
+            "metroliza.application", logging.ERROR, __file__, 1, event, (), None
+        )
+        outputs.append(formatter.format(record))
+
+    assert all("invalid_diagnostic_event" in output for output in outputs)
+    _assert_marker_absent(marker, outputs)
+
+
 def test_formatter_does_not_mutate_shared_record():
     marker = f"generated-{uuid.uuid4().hex}"
     message = object()
@@ -340,6 +431,8 @@ def test_rotation_levels_and_fallback_behavior_are_preserved(tmp_path):
         ]
         assert len(files) == 2
         assert len(consoles) == 1
+        assert all(type(handler) is logging_utils._ManagedRotatingFileHandler for handler in files)
+        assert type(consoles[0]) is logging_utils._ManagedStreamHandler
         assert all(handler.maxBytes == 10 * 1024 * 1024 for handler in files)
         assert all(handler.backupCount == 7 for handler in files)
         assert all(handler.level == logging.ERROR for handler in files)
@@ -363,7 +456,100 @@ def test_rotation_levels_and_fallback_behavior_are_preserved(tmp_path):
             if getattr(handler, "_metroliza_file_handler", False)
         ]
         assert len(handlers) == 1
+        assert type(handlers[0]) is logging_utils._ManagedRotatingFileHandler
         assert Path(handlers[0].baseFilename) == fallback / "metroliza" / "metroliza.log"
+
+
+@pytest.mark.parametrize("raise_exceptions", (True, False))
+def test_managed_console_errors_never_render_original_record(tmp_path, raise_exceptions):
+    marker = f"generated-{uuid.uuid4().hex}"
+    conversions = []
+    base_error_calls = []
+    stderr = io.StringIO()
+    stdout = io.StringIO()
+
+    class FailingFormatter(logging.Formatter):
+        def format(self, _record):
+            raise OSError("formatter unavailable")
+
+    class FailingStream:
+        def write(self, _value):
+            raise OSError("stream unavailable")
+
+        def flush(self):
+            raise OSError("stream unavailable")
+
+    def fail_base_handle_error(_handler, _record):
+        base_error_calls.append(True)
+        raise AssertionError("stdlib Handler.handleError was invoked")
+
+    with _managed_sinks(tmp_path) as sinks:
+        handler = next(
+            handler
+            for handler in sinks.logger.handlers
+            if getattr(handler, "_metroliza_console_handler", False)
+        )
+        record = _hostile_record(marker, conversions)
+        with patch.object(logging, "raiseExceptions", raise_exceptions), patch.object(
+            logging.Handler, "handleError", fail_base_handle_error
+        ), patch.object(sys, "stderr", stderr), patch.object(sys, "stdout", stdout):
+            handler.setFormatter(FailingFormatter())
+            handler.handle(record)
+            handler.setFormatter(ManagedSafeFormatter())
+            handler.stream = FailingStream()
+            handler.handle(record)
+
+    assert not base_error_calls
+    assert not conversions
+    _assert_marker_absent(marker, (stderr.getvalue(), stdout.getvalue()))
+
+
+@pytest.mark.parametrize("raise_exceptions", (True, False))
+def test_managed_file_write_and_rotation_errors_never_render_record(tmp_path, raise_exceptions):
+    marker = f"generated-{uuid.uuid4().hex}"
+    conversions = []
+    base_error_calls = []
+    stderr = io.StringIO()
+    stdout = io.StringIO()
+
+    class FailingStream:
+        def write(self, _value):
+            raise OSError("file unavailable")
+
+        def flush(self):
+            raise OSError("file unavailable")
+
+    def fail_base_handle_error(_handler, _record):
+        base_error_calls.append(True)
+        raise AssertionError("stdlib Handler.handleError was invoked")
+
+    with _managed_sinks(tmp_path) as sinks:
+        handler = next(
+            handler
+            for handler in sinks.logger.handlers
+            if getattr(handler, "_metroliza_file_handler", False)
+        )
+        record = _hostile_record(marker, conversions)
+        original_stream = handler.stream
+        original_max_bytes = handler.maxBytes
+        with patch.object(logging, "raiseExceptions", raise_exceptions), patch.object(
+            logging.Handler, "handleError", fail_base_handle_error
+        ), patch.object(sys, "stderr", stderr), patch.object(sys, "stdout", stdout):
+            try:
+                handler.maxBytes = 0
+                handler.stream = FailingStream()
+                handler.handle(record)
+            finally:
+                handler.stream = original_stream
+                handler.maxBytes = original_max_bytes
+            with patch.object(handler, "shouldRollover", return_value=True), patch.object(
+                handler, "doRollover", side_effect=OSError("rotation unavailable")
+            ):
+                handler.handle(record)
+
+    assert not base_error_calls
+    assert not conversions
+    _assert_marker_absent(marker, (stderr.getvalue(), stdout.getvalue()))
 
 
 def test_total_sink_failure_installs_one_non_rendering_terminal_fallback(tmp_path):
@@ -392,7 +578,7 @@ def test_total_sink_failure_installs_one_non_rendering_terminal_fallback(tmp_pat
         ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
             "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
         ), patch(
-            "metroliza.shared.logging_utils.logging.handlers.RotatingFileHandler",
+            "metroliza.shared.logging_utils._ManagedRotatingFileHandler",
             FailingRotatingFileHandler,
         ), patch.object(logging, "lastResort", last_resort), patch.object(sys, "stderr", stderr):
             config = LoggingConfig(logging.DEBUG, logging.DEBUG, None)
@@ -481,10 +667,10 @@ def test_new_handlers_are_safe_before_attachment(tmp_path):
 
     def observe_add(handler):
         observed.append(
-                (
-                    getattr(handler, "_metroliza_file_handler", False)
-                    or getattr(handler, "_metroliza_console_handler", False)
-                    or getattr(handler, "_metroliza_terminal_handler", False),
+            (
+                getattr(handler, "_metroliza_file_handler", False)
+                or getattr(handler, "_metroliza_console_handler", False)
+                or getattr(handler, "_metroliza_terminal_handler", False),
                 type(handler.formatter),
             )
         )
@@ -505,7 +691,7 @@ def test_new_handlers_are_safe_before_attachment(tmp_path):
         _close_handlers(logger)
 
 
-def test_unsafe_attached_handlers_are_detached_before_formatter_change(tmp_path):
+def test_matching_stdlib_file_handler_is_replaced_with_safe_managed_class(tmp_path):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     fake_cwd = tmp_path / "project"
@@ -522,24 +708,64 @@ def test_unsafe_attached_handlers_are_detached_before_formatter_change(tmp_path)
         encoding="utf-8",
     )
     setattr(unsafe, "_metroliza_file_handler", True)
-    unsafe.setFormatter(logging.Formatter("%(message)s"))
+    unsafe.setFormatter(ManagedSafeFormatter())
     logger.addHandler(unsafe)
-    reachability = []
-    original_set = unsafe.setFormatter
-
-    def observe_set(formatter):
-        reachability.append(unsafe in logger.handlers)
-        original_set(formatter)
 
     try:
         with patch(
             "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
         ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
             "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
-        ), patch.object(unsafe, "setFormatter", side_effect=observe_set):
+        ):
             ensure_application_logging(config=LoggingConfig(logging.INFO, logging.INFO, None))
-        assert reachability and not any(reachability)
-        assert type(unsafe.formatter) is ManagedSafeFormatter
+        replacements = [
+            handler
+            for handler in logger.handlers
+            if getattr(handler, "_metroliza_file_handler", False)
+            and Path(handler.baseFilename) == home_log
+        ]
+        assert unsafe not in logger.handlers
+        assert unsafe._closed is True
+        assert len(replacements) == 1
+        assert type(replacements[0]) is logging_utils._ManagedRotatingFileHandler
+    finally:
+        _close_handlers(logger)
+
+
+def test_marked_stdlib_console_handler_is_replaced_without_touching_unmanaged(tmp_path):
+    fake_home = tmp_path / "home"
+    fake_cwd = tmp_path / "project"
+    fake_home.mkdir()
+    fake_cwd.mkdir()
+    logger = logging.getLogger(f"metroliza.console.replace.{uuid.uuid4().hex}")
+    _close_handlers(logger)
+    logger.propagate = False
+    marked = logging.StreamHandler(io.StringIO())
+    marked.setFormatter(ManagedSafeFormatter())
+    setattr(marked, "_metroliza_console_handler", True)
+    unmanaged = logging.StreamHandler(io.StringIO())
+    logger.addHandler(marked)
+    logger.addHandler(unmanaged)
+
+    try:
+        with patch(
+            "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+        ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+            "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+        ):
+            ensure_application_logging(
+                config=LoggingConfig(logging.INFO, logging.INFO, logging.INFO)
+            )
+        consoles = [
+            handler
+            for handler in logger.handlers
+            if getattr(handler, "_metroliza_console_handler", False)
+        ]
+        assert marked not in logger.handlers
+        assert marked._closed is True
+        assert unmanaged in logger.handlers
+        assert len(consoles) == 1
+        assert type(consoles[0]) is logging_utils._ManagedStreamHandler
     finally:
         _close_handlers(logger)
 
