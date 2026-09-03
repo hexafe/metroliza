@@ -159,6 +159,46 @@ def _append_link(
     return False
 
 
+def _linked_exception_shape(
+    exception: BaseException,
+    *,
+    depth: int,
+) -> tuple[list[tuple[BaseException, int]], int, int, bool]:
+    cause = _exception_attribute(exception, "__cause__", None)
+    context = _exception_attribute(exception, "__context__", None)
+    suppressed = _exception_attribute(exception, "__suppress_context__", False) is True
+    linked: list[tuple[BaseException, int]] = []
+    if isinstance(cause, BaseException):
+        truncated = _append_link(linked, cause, depth=depth)
+        return linked, 1, 0, truncated
+    if not suppressed and isinstance(context, BaseException):
+        truncated = _append_link(linked, context, depth=depth)
+        return linked, 0, 1, truncated
+    return linked, 0, 0, False
+
+
+def _exception_group_shape(
+    exception: BaseException,
+    *,
+    depth: int,
+    remaining_members: int,
+) -> tuple[list[tuple[BaseException, int]], int, int, bool]:
+    if not isinstance(exception, BaseExceptionGroup):
+        return [], 0, 0, False
+    children = _exception_attribute(exception, "exceptions", ())
+    if type(children) is not tuple:
+        return [], 1, 0, True
+    accepted = children[:remaining_members]
+    pending: list[tuple[BaseException, int]] = []
+    truncated = len(accepted) != len(children)
+    for child in accepted:
+        if not isinstance(child, BaseException) or depth >= _MAX_EXCEPTION_DEPTH:
+            truncated = True
+        else:
+            pending.append((child, depth + 1))
+    return pending, 1, len(accepted), truncated
+
+
 def build_exception_diagnostic_event(
     exception: BaseException,
     *,
@@ -207,33 +247,24 @@ def build_exception_diagnostic_event(
         traceback_frames += frames
         truncated = truncated or traceback_truncated
 
-        cause = _exception_attribute(current, "__cause__", None)
-        context = _exception_attribute(current, "__context__", None)
-        suppressed = _exception_attribute(current, "__suppress_context__", False) is True
-        if isinstance(cause, BaseException):
-            cause_count = min(_MAX_EXCEPTION_NODES, cause_count + 1)
-            truncated = _append_link(pending, cause, depth=depth) or truncated
-        elif not suppressed and isinstance(context, BaseException):
-            context_count = min(_MAX_EXCEPTION_NODES, context_count + 1)
-            truncated = _append_link(pending, context, depth=depth) or truncated
+        linked, causes, contexts, linked_truncated = _linked_exception_shape(
+            current,
+            depth=depth,
+        )
+        pending.extend(linked)
+        cause_count = min(_MAX_EXCEPTION_NODES, cause_count + causes)
+        context_count = min(_MAX_EXCEPTION_NODES, context_count + contexts)
+        truncated = truncated or linked_truncated
 
-        if isinstance(current, BaseExceptionGroup):
-            group_count = min(_MAX_EXCEPTION_NODES, group_count + 1)
-            children = _exception_attribute(current, "exceptions", ())
-            if type(children) is not tuple:
-                truncated = True
-                continue
-            remaining = _MAX_EXCEPTION_NODES - group_member_count
-            accepted = children[:remaining]
-            group_member_count += len(accepted)
-            truncated = truncated or len(accepted) != len(children)
-            for child in accepted:
-                if not isinstance(child, BaseException):
-                    truncated = True
-                elif depth >= _MAX_EXCEPTION_DEPTH:
-                    truncated = True
-                else:
-                    pending.append((child, depth + 1))
+        children, groups, members, group_truncated = _exception_group_shape(
+            current,
+            depth=depth,
+            remaining_members=_MAX_EXCEPTION_NODES - group_member_count,
+        )
+        pending.extend(children)
+        group_count = min(_MAX_EXCEPTION_NODES, group_count + groups)
+        group_member_count += members
+        truncated = truncated or group_truncated
 
     return ExceptionDiagnosticEvent(
         operation=operation,
