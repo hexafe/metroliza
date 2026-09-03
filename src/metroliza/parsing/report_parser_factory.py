@@ -1365,6 +1365,33 @@ def detect_format(file_path: str | Path) -> str:
     return diagnostics.selected.plugin_id if diagnostics.selected else "unknown"
 
 
+def _resolve_parser_for_construction(
+    normalized_path: str,
+    *,
+    source_inspection: SourceInspectionContext | None,
+    expected_plugin_id: str | None,
+    expected_registry_generation_id: int | None,
+) -> tuple[ResolverDiagnostics, ParserRegistration | None]:
+    """Resolve once and translate only reviewed late ambiguity to approval drift."""
+
+    try:
+        return _resolve_parser_with_registration(
+            normalized_path,
+            source_inspection=source_inspection,
+        )
+    except ParserAmbiguityError as exc:
+        if (
+            expected_plugin_id is None
+            and expected_registry_generation_id is None
+        ):
+            raise
+        raise ParserApprovalMismatchError(
+            exc.diagnostics,
+            expected_plugin_id=expected_plugin_id,
+            expected_registry_generation_id=expected_registry_generation_id,
+        ) from exc
+
+
 def get_parser(
     file_path: str | Path,
     database: str,
@@ -1377,18 +1404,20 @@ def get_parser(
     """Resolve once, validate optional reviewed approval, and construct a parser."""
 
     normalized_path = _as_file_path(file_path)
-    diagnostics, registration = _resolve_parser_with_registration(
+    approval_expected = (
+        expected_plugin_id is not None
+        or expected_registry_generation_id is not None
+    )
+    diagnostics, registration = _resolve_parser_for_construction(
         normalized_path,
         source_inspection=source_inspection,
+        expected_plugin_id=expected_plugin_id,
+        expected_registry_generation_id=expected_registry_generation_id,
     )
     resolved_plugin_id = (
         diagnostics.selected.plugin_id
         if diagnostics.selected is not None
         else None
-    )
-    approval_expected = (
-        expected_plugin_id is not None
-        or expected_registry_generation_id is not None
     )
     if approval_expected and (
         resolved_plugin_id != expected_plugin_id

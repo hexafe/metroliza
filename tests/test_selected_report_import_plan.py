@@ -521,6 +521,211 @@ def test_get_parser_rejects_identity_drift_from_the_same_resolution(
         )
 
 
+def test_get_parser_translates_late_ambiguity_with_exact_approval_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "late-ambiguity.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+    diagnostics = SimpleNamespace(
+        source_path=str(report),
+        selected=None,
+        registry_generation_id=31,
+        source_inspection=inspection,
+    )
+    ambiguity = report_parser_factory.ParserAmbiguityError(
+        diagnostics,
+        ("approved", "new-parser"),
+    )
+    resolver_calls = []
+
+    def raise_ambiguity(*args, **kwargs):
+        resolver_calls.append((args, kwargs))
+        raise ambiguity
+
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        raise_ambiguity,
+    )
+    monkeypatch.setattr(
+        report_parser_factory.inspect,
+        "signature",
+        lambda *_args, **_kwargs: pytest.fail(
+            "parser construction must not be reached after late ambiguity"
+        ),
+    )
+
+    with pytest.raises(report_parser_factory.ParserApprovalMismatchError) as exc_info:
+        report_parser_factory.get_parser(
+            report,
+            database=":memory:",
+            source_inspection=inspection,
+            expected_plugin_id="approved",
+            expected_registry_generation_id=31,
+        )
+
+    mismatch = exc_info.value
+    assert resolver_calls == [
+        ((str(report),), {"source_inspection": inspection})
+    ]
+    assert mismatch.__cause__ is ambiguity
+    assert mismatch.diagnostics is diagnostics
+    assert mismatch.expected_plugin_id == "approved"
+    assert mismatch.expected_registry_generation_id == 31
+    assert mismatch.resolved_plugin_id is None
+    assert mismatch.resolved_registry_generation_id == 31
+
+
+def test_get_parser_without_expected_approval_preserves_ambiguity(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "first-time-ambiguity.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+    diagnostics = SimpleNamespace(
+        source_path=str(report),
+        selected=None,
+        registry_generation_id=37,
+        source_inspection=inspection,
+    )
+    ambiguity = report_parser_factory.ParserAmbiguityError(
+        diagnostics,
+        ("parser-a", "parser-b"),
+    )
+    resolver_calls = 0
+
+    def raise_ambiguity(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        raise ambiguity
+
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        raise_ambiguity,
+    )
+
+    with pytest.raises(report_parser_factory.ParserAmbiguityError) as exc_info:
+        report_parser_factory.get_parser(
+            report,
+            database=":memory:",
+            source_inspection=inspection,
+        )
+
+    assert resolver_calls == 1
+    assert exc_info.value is ambiguity
+    assert exc_info.value.diagnostics is diagnostics
+
+
+def test_sequential_late_ambiguity_is_changed_not_failed(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "sequential-late-ambiguity.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_resolver = report_parser_factory._resolve_parser_with_registration
+    original_persist = CMMReportParser.open_database_and_check_filename
+    state = {"report_a_persisted": False}
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def late_ambiguity_resolver(file_path, **kwargs):
+        diagnostics, registration = original_resolver(file_path, **kwargs)
+        if Path(file_path) == reports[1] and filter_state["completed"]:
+            assert state["report_a_persisted"]
+            ambiguous_diagnostics = replace(
+                diagnostics,
+                selected=None,
+                rejected_reason="ambiguous_parser_match",
+                ambiguous_plugin_ids=("cmm", "new-parser"),
+            )
+            raise report_parser_factory.ParserAmbiguityError(
+                ambiguous_diagnostics,
+                ambiguous_diagnostics.ambiguous_plugin_ids,
+            )
+        return diagnostics, registration
+
+    def persist_a(parser):
+        result = original_persist(parser)
+        if parser.file_name == reports[0].name:
+            state["report_a_persisted"] = True
+        return result
+
+    monkeypatch.delenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", raising=False)
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        late_ambiguity_resolver,
+    )
+    monkeypatch.setattr(
+        CMMReportParser,
+        "open_database_and_check_filename",
+        persist_a,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert state["report_a_persisted"]
+    assert _stored_source_hashes(database) == {report_a_hash}
+    assert thread.last_parse_result.imported_files == 1
+    assert thread.last_parse_result.preflight_changed_files == 1
+    assert thread.last_parse_result.failed_files == 0
+    assert thread.last_parse_result.intentionally_excluded_files == 0
+
+
+def test_two_stage_late_ambiguity_is_changed_not_failed(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "two-stage-late-ambiguity.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_resolver = report_parser_factory._resolve_parser_with_registration
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def late_ambiguity_resolver(file_path, **kwargs):
+        diagnostics, registration = original_resolver(file_path, **kwargs)
+        if Path(file_path) == reports[1] and filter_state["completed"]:
+            ambiguous_diagnostics = replace(
+                diagnostics,
+                selected=None,
+                rejected_reason="ambiguous_parser_match",
+                ambiguous_plugin_ids=("cmm", "new-parser"),
+            )
+            raise report_parser_factory.ParserAmbiguityError(
+                ambiguous_diagnostics,
+                ambiguous_diagnostics.ambiguous_plugin_ids,
+            )
+        return diagnostics, registration
+
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", "1")
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_WORKERS", "2")
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        late_ambiguity_resolver,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    assert thread.last_parse_result.imported_files == 1
+    assert thread.last_parse_result.preflight_changed_files == 1
+    assert thread.last_parse_result.failed_files == 0
+    assert thread.last_parse_result.intentionally_excluded_files == 0
+
+
 def test_two_stage_late_source_drift_is_changed_and_keeps_identity_pairing(
     tmp_path,
     monkeypatch,
