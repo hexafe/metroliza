@@ -197,7 +197,7 @@ def test_valid_structured_event_has_deterministic_output(monkeypatch):
     monkeypatch.setattr(diagnostic_events.uuid, "uuid4", lambda: correlation_id)
     event = ExceptionDiagnosticEvent(
         operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
-        exception_type="builtins.RuntimeError",
+        exception_kind=diagnostic_events.ExceptionKind.RUNTIME_ERROR,
         has_traceback=False,
         traceback_frames=0,
         cause_count=0,
@@ -217,7 +217,7 @@ def test_valid_structured_event_has_deterministic_output(monkeypatch):
         "1970-01-01T00:00:00.000Z ERROR "
         '{"event_code":"exception_diagnostic",'
         '"operation":"unhandled_exception",'
-        '"exception_type":"builtins.RuntimeError",'
+        '"exception_kind":"runtime_error",'
         '"correlation_id":"12345678123456781234567812345678",'
         '"has_traceback":false,"traceback_frames":0,'
         '"cause_count":0,"context_count":0,"group_count":0,'
@@ -240,7 +240,7 @@ def test_malformed_and_forged_events_fail_closed_without_stringification():
 
     malformed = ExceptionDiagnosticEvent(
         operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
-        exception_type="builtins.RuntimeError",
+        exception_kind=diagnostic_events.ExceptionKind.RUNTIME_ERROR,
         has_traceback=False,
         traceback_frames=0,
         cause_count=0,
@@ -249,13 +249,13 @@ def test_malformed_and_forged_events_fail_closed_without_stringification():
         group_member_count=0,
         structure_truncated=False,
     )
-    object.__setattr__(malformed, "exception_type", Hostile())
+    object.__setattr__(malformed, "exception_kind", Hostile())
     malformed_record = logging.LogRecord(
         "metroliza.application", logging.ERROR, __file__, 1, malformed, (), None
     )
     malformed_uuid = ExceptionDiagnosticEvent(
         operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
-        exception_type="builtins.RuntimeError",
+        exception_kind=diagnostic_events.ExceptionKind.RUNTIME_ERROR,
         has_traceback=False,
         traceback_frames=0,
         cause_count=0,
@@ -274,7 +274,7 @@ def test_malformed_and_forged_events_fail_closed_without_stringification():
 
     forged = ForgedEvent(
         operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
-        exception_type="builtins.RuntimeError",
+        exception_kind=diagnostic_events.ExceptionKind.RUNTIME_ERROR,
         has_traceback=False,
         traceback_frames=0,
         cause_count=0,
@@ -366,6 +366,92 @@ def test_rotation_levels_and_fallback_behavior_are_preserved(tmp_path):
         assert Path(handlers[0].baseFilename) == fallback / "metroliza" / "metroliza.log"
 
 
+def test_total_sink_failure_installs_one_non_rendering_terminal_fallback(tmp_path):
+    marker = f"generated-{uuid.uuid4().hex}"
+    fake_home = tmp_path / "home"
+    fake_cwd = tmp_path / "project"
+    fake_home.mkdir()
+    fake_cwd.mkdir()
+    logger = logging.Logger(f"metroliza.root.{uuid.uuid4().hex}", logging.DEBUG)
+    child = logging.Logger(f"metroliza.child.{uuid.uuid4().hex}", logging.DEBUG)
+    child.parent = logger
+    child.propagate = True
+    unmanaged = logging.NullHandler()
+    last_resort_calls = []
+    last_resort = logging.Handler()
+    last_resort.emit = lambda record: last_resort_calls.append(record)
+    stderr = io.StringIO()
+
+    class FailingRotatingFileHandler(logging.handlers.RotatingFileHandler):
+        def __init__(self, *args, **kwargs):
+            raise OSError("sink unavailable")
+
+    try:
+        with patch(
+            "metroliza.shared.logging_utils.logging.getLogger", return_value=logger
+        ), patch("metroliza.shared.logging_utils.Path.home", return_value=fake_home), patch(
+            "metroliza.shared.logging_utils.Path.cwd", return_value=fake_cwd
+        ), patch(
+            "metroliza.shared.logging_utils.logging.handlers.RotatingFileHandler",
+            FailingRotatingFileHandler,
+        ), patch.object(logging, "lastResort", last_resort), patch.object(sys, "stderr", stderr):
+            config = LoggingConfig(logging.DEBUG, logging.DEBUG, None)
+            ensure_application_logging(config=config)
+            terminal = [
+                handler
+                for handler in logger.handlers
+                if getattr(handler, "_metroliza_terminal_handler", False)
+            ]
+            assert len(terminal) == 1
+            assert isinstance(terminal[0], logging.NullHandler)
+            assert type(terminal[0].formatter) is ManagedSafeFormatter
+
+            first = tuple(logger.handlers)
+            ensure_application_logging(config=config)
+            assert tuple(logger.handlers) == first
+
+            record = logging.LogRecord(
+                f"external.{marker}",
+                logging.ERROR,
+                f"/{marker}/source.py",
+                1,
+                "novel=%s",
+                (marker,),
+                None,
+            )
+            get_message_calls = []
+
+            def fail_get_message():
+                get_message_calls.append(True)
+                raise AssertionError("terminal fallback rendered a legacy record")
+
+            record.getMessage = fail_get_message
+            child.handle(record)
+
+            logger.addHandler(unmanaged)
+            ensure_application_logging(
+                config=LoggingConfig(logging.DEBUG, logging.DEBUG, logging.INFO)
+            )
+
+        assert not last_resort_calls
+        assert not get_message_calls
+        assert marker not in stderr.getvalue()
+        assert unmanaged in logger.handlers
+        assert not any(
+            getattr(handler, "_metroliza_terminal_handler", False)
+            for handler in logger.handlers
+        )
+        assert len(
+            [
+                handler
+                for handler in logger.handlers
+                if getattr(handler, "_metroliza_console_handler", False)
+            ]
+        ) == 1
+    finally:
+        _close_handlers(logger)
+
+
 def test_unmanaged_handler_is_independent(tmp_path):
     stream = io.StringIO()
     with _managed_sinks(tmp_path) as sinks:
@@ -395,9 +481,10 @@ def test_new_handlers_are_safe_before_attachment(tmp_path):
 
     def observe_add(handler):
         observed.append(
-            (
-                getattr(handler, "_metroliza_file_handler", False)
-                or getattr(handler, "_metroliza_console_handler", False),
+                (
+                    getattr(handler, "_metroliza_file_handler", False)
+                    or getattr(handler, "_metroliza_console_handler", False)
+                    or getattr(handler, "_metroliza_terminal_handler", False),
                 type(handler.formatter),
             )
         )
@@ -412,7 +499,7 @@ def test_new_handlers_are_safe_before_attachment(tmp_path):
             ensure_application_logging(
                 config=LoggingConfig(logging.INFO, logging.INFO, logging.INFO)
             )
-        assert len(observed) == 3
+        assert len(observed) == 4
         assert all(managed and formatter is ManagedSafeFormatter for managed, formatter in observed)
     finally:
         _close_handlers(logger)

@@ -128,6 +128,10 @@ class ManagedSafeFormatter(logging.Formatter):
         return f"{timestamp} {level} {serialized}"
 
 
+class _ManagedTerminalHandler(logging.NullHandler):
+    """Consume records without rendering when no managed sink is available."""
+
+
 def _is_truthy(raw_value: str | None) -> bool:
     return parse_bool(raw_value, default=False)
 
@@ -301,7 +305,7 @@ def _configure_file_handlers(
     logger: logging.Logger,
     formatter: ManagedSafeFormatter,
     level: int,
-) -> None:
+) -> bool:
     fallback = Path(tempfile.gettempdir()) / "metroliza" / LOG_FILE_NAME
     primary_paths = [Path.home() / ".metroliza" / LOG_FILE_NAME, Path.cwd() / LOG_FILE_NAME]
     primary_by_resolved = {path.resolve(): path for path in primary_paths}
@@ -319,15 +323,15 @@ def _configure_file_handlers(
     if configured:
         if fallback_handler is not None and fallback_resolved not in primary_by_resolved:
             _remove_and_close_handler(logger, fallback_handler, formatter)
-    else:
-        _ensure_file_handler(logger, fallback, fallback_handler, formatter, level)
+        return True
+    return _ensure_file_handler(logger, fallback, fallback_handler, formatter, level)
 
 
 def _configure_console_handler(
     logger: logging.Logger,
     formatter: ManagedSafeFormatter,
     level: int | None,
-) -> None:
+) -> bool:
     handlers = [
         handler
         for handler in tuple(logger.handlers)
@@ -338,7 +342,7 @@ def _configure_console_handler(
     if level is None:
         for handler in handlers:
             _remove_and_close_handler(logger, handler, formatter)
-        return
+        return False
     selected = next(
         (handler for handler in handlers if type(handler.formatter) is ManagedSafeFormatter),
         handlers[0] if handlers else None,
@@ -362,6 +366,47 @@ def _configure_console_handler(
             level=level,
             formatter=formatter,
         )
+    return True
+
+
+def _configure_terminal_handler(
+    logger: logging.Logger,
+    formatter: ManagedSafeFormatter,
+    *,
+    enabled: bool,
+) -> None:
+    handlers = [
+        handler
+        for handler in tuple(logger.handlers)
+        if getattr(handler, "_metroliza_terminal_handler", False)
+    ]
+    selected = next(
+        (handler for handler in handlers if type(handler) is _ManagedTerminalHandler),
+        None,
+    )
+    for duplicate in handlers:
+        if duplicate is not selected:
+            _remove_and_close_handler(logger, duplicate, formatter)
+    if not enabled:
+        if selected is not None:
+            _remove_and_close_handler(logger, selected, formatter)
+        return
+    if selected is None:
+        _add_managed_handler(
+            logger,
+            _ManagedTerminalHandler(),
+            marker="_metroliza_terminal_handler",
+            level=logging.NOTSET,
+            formatter=formatter,
+        )
+    else:
+        _harden_attached_handler(
+            logger,
+            selected,
+            marker="_metroliza_terminal_handler",
+            level=logging.NOTSET,
+            formatter=formatter,
+        )
 
 
 def ensure_application_logging(
@@ -376,6 +421,12 @@ def ensure_application_logging(
             resolved = LoggingConfig(level, level, resolved.console_level)
         logger.setLevel(resolved.global_level)
         formatter = ManagedSafeFormatter()
-        _configure_file_handlers(logger, formatter, resolved.file_level)
-        _configure_console_handler(logger, formatter, resolved.console_level)
+        _configure_terminal_handler(logger, formatter, enabled=True)
+        file_available = _configure_file_handlers(logger, formatter, resolved.file_level)
+        console_available = _configure_console_handler(logger, formatter, resolved.console_level)
+        _configure_terminal_handler(
+            logger,
+            formatter,
+            enabled=not (file_available or console_available),
+        )
         return resolved

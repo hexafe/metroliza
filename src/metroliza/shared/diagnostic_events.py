@@ -12,8 +12,14 @@ from enum import Enum
 _MAX_EXCEPTION_NODES = 32
 _MAX_EXCEPTION_DEPTH = 8
 _MAX_TRACEBACK_FRAMES = 64
-_MAX_IDENTIFIER_LENGTH = 200
 _UNKNOWN_EXCEPTION = "unknown_exception"
+
+_BASE_EXCEPTION_TRACEBACK_DESCRIPTOR = BaseException.__dict__.get("__traceback__")
+_BASE_EXCEPTION_CAUSE_DESCRIPTOR = BaseException.__dict__.get("__cause__")
+_BASE_EXCEPTION_CONTEXT_DESCRIPTOR = BaseException.__dict__.get("__context__")
+_BASE_EXCEPTION_SUPPRESSION_DESCRIPTOR = BaseException.__dict__.get("__suppress_context__")
+_BASE_EXCEPTION_GROUP_EXCEPTIONS_DESCRIPTOR = BaseExceptionGroup.__dict__.get("exceptions")
+_SAFE_EXCEPTION_DESCRIPTOR_TYPES = (types.GetSetDescriptorType, types.MemberDescriptorType)
 
 
 class DiagnosticEventValidationError(ValueError):
@@ -33,6 +39,42 @@ class DiagnosticOperation(str, Enum):
 
     UNHANDLED_EXCEPTION = "unhandled_exception"
     QT_DIALOG_IMPORT_FAILURE = "qt_dialog_import_failure"
+
+
+class ExceptionKind(str, Enum):
+    """Closed exception identities approved for persistent diagnostics."""
+
+    UNKNOWN_EXCEPTION = _UNKNOWN_EXCEPTION
+    BASE_EXCEPTION_GROUP = "base_exception_group"
+    EXCEPTION_GROUP = "exception_group"
+    IMPORT_ERROR = "import_error"
+    KEY_ERROR = "key_error"
+    OS_ERROR = "os_error"
+    RUNTIME_ERROR = "runtime_error"
+    TYPE_ERROR = "type_error"
+    VALUE_ERROR = "value_error"
+
+
+_KNOWN_EXCEPTION_KINDS = (
+    (BaseExceptionGroup, ExceptionKind.BASE_EXCEPTION_GROUP),
+    (ExceptionGroup, ExceptionKind.EXCEPTION_GROUP),
+    (ImportError, ExceptionKind.IMPORT_ERROR),
+    (KeyError, ExceptionKind.KEY_ERROR),
+    (OSError, ExceptionKind.OS_ERROR),
+    (RuntimeError, ExceptionKind.RUNTIME_ERROR),
+    (TypeError, ExceptionKind.TYPE_ERROR),
+    (ValueError, ExceptionKind.VALUE_ERROR),
+)
+_LEGACY_EXCEPTION_TYPES = (
+    (ExceptionKind.BASE_EXCEPTION_GROUP, "builtins.BaseExceptionGroup"),
+    (ExceptionKind.EXCEPTION_GROUP, "builtins.ExceptionGroup"),
+    (ExceptionKind.IMPORT_ERROR, "builtins.ImportError"),
+    (ExceptionKind.KEY_ERROR, "builtins.KeyError"),
+    (ExceptionKind.OS_ERROR, "builtins.OSError"),
+    (ExceptionKind.RUNTIME_ERROR, "builtins.RuntimeError"),
+    (ExceptionKind.TYPE_ERROR, "builtins.TypeError"),
+    (ExceptionKind.VALUE_ERROR, "builtins.ValueError"),
+)
 
 
 class SourceClass(str, Enum):
@@ -62,7 +104,7 @@ class ExceptionDiagnosticEvent:
     """Bounded exception type and shape without exception-controlled text."""
 
     operation: DiagnosticOperation
-    exception_type: str
+    exception_kind: ExceptionKind
     correlation_id: uuid.UUID
     has_traceback: bool
     traceback_frames: int
@@ -76,7 +118,7 @@ class ExceptionDiagnosticEvent:
         self,
         *,
         operation: DiagnosticOperation,
-        exception_type: str,
+        exception_kind: ExceptionKind,
         has_traceback: bool,
         traceback_frames: int,
         cause_count: int,
@@ -85,8 +127,10 @@ class ExceptionDiagnosticEvent:
         group_member_count: int,
         structure_truncated: bool,
     ) -> None:
+        if type(exception_kind) is not ExceptionKind:
+            raise DiagnosticEventValidationError("unsupported exception kind")
         object.__setattr__(self, "operation", operation)
-        object.__setattr__(self, "exception_type", exception_type)
+        object.__setattr__(self, "exception_kind", exception_kind)
         object.__setattr__(self, "correlation_id", uuid.uuid4())
         object.__setattr__(self, "has_traceback", has_traceback)
         object.__setattr__(self, "traceback_frames", traceback_frames)
@@ -96,43 +140,47 @@ class ExceptionDiagnosticEvent:
         object.__setattr__(self, "group_member_count", group_member_count)
         object.__setattr__(self, "structure_truncated", structure_truncated)
 
+    @property
+    def exception_type(self) -> str:
+        """Return the former source-controlled identifier for in-process compatibility."""
+        for kind, identifier in _LEGACY_EXCEPTION_TYPES:
+            if self.exception_kind is kind:
+                return identifier
+        return _UNKNOWN_EXCEPTION
+
 
 DiagnosticEvent = LegacyLogSuppressedEvent | InvalidDiagnosticEvent | ExceptionDiagnosticEvent
 
 
-def _is_identifier(value: object) -> bool:
-    if type(value) is not str or not 1 <= len(value) <= _MAX_IDENTIFIER_LENGTH:
-        return False
-    for part in value.split("."):
-        if not part or not (part[0].isascii() and (part[0].isalpha() or part[0] == "_")):
-            return False
-        if any(not (character.isascii() and (character.isalnum() or character == "_")) for character in part[1:]):
-            return False
-    return True
-
-
-def _exception_identifier(exception: BaseException) -> str:
+def _exception_kind(exception: BaseException) -> ExceptionKind:
     exception_class = type(exception)
-    try:
-        module = type.__getattribute__(exception_class, "__module__")
-        qualname = type.__getattribute__(exception_class, "__qualname__")
-    except BaseException:
-        return _UNKNOWN_EXCEPTION
-    if not _is_identifier(module) or not _is_identifier(qualname):
-        return _UNKNOWN_EXCEPTION
-    identifier = f"{module}.{qualname}"
-    return identifier if len(identifier) <= _MAX_IDENTIFIER_LENGTH else _UNKNOWN_EXCEPTION
+    for known_class, kind in _KNOWN_EXCEPTION_KINDS:
+        if exception_class is known_class:
+            return kind
+    return ExceptionKind.UNKNOWN_EXCEPTION
 
 
-def _exception_attribute(exception: BaseException, name: str, default: object) -> object:
+def _base_exception_slot(
+    exception: BaseException,
+    descriptor: object,
+    owner: type[BaseException],
+) -> tuple[object, bool]:
+    if type(descriptor) not in _SAFE_EXCEPTION_DESCRIPTOR_TYPES:
+        return None, False
     try:
-        return object.__getattribute__(exception, name)
+        return descriptor.__get__(exception, owner), True
     except BaseException:
-        return default
+        return None, False
 
 
 def _traceback_shape(exception: BaseException, remaining: int) -> tuple[int, bool]:
-    traceback = _exception_attribute(exception, "__traceback__", None)
+    traceback, available = _base_exception_slot(
+        exception,
+        _BASE_EXCEPTION_TRACEBACK_DESCRIPTOR,
+        BaseException,
+    )
+    if not available:
+        return 0, True
     frames = 0
     seen: set[int] = set()
     while isinstance(traceback, types.TracebackType) and frames < remaining:
@@ -164,10 +212,24 @@ def _linked_exception_shape(
     *,
     depth: int,
 ) -> tuple[list[tuple[BaseException, int]], int, int, bool]:
-    cause = _exception_attribute(exception, "__cause__", None)
-    context = _exception_attribute(exception, "__context__", None)
-    suppressed = _exception_attribute(exception, "__suppress_context__", False) is True
+    cause, cause_available = _base_exception_slot(
+        exception,
+        _BASE_EXCEPTION_CAUSE_DESCRIPTOR,
+        BaseException,
+    )
+    context, context_available = _base_exception_slot(
+        exception,
+        _BASE_EXCEPTION_CONTEXT_DESCRIPTOR,
+        BaseException,
+    )
+    suppressed, suppression_available = _base_exception_slot(
+        exception,
+        _BASE_EXCEPTION_SUPPRESSION_DESCRIPTOR,
+        BaseException,
+    )
     linked: list[tuple[BaseException, int]] = []
+    if not (cause_available and context_available and suppression_available):
+        return linked, 0, 0, True
     if isinstance(cause, BaseException):
         truncated = _append_link(linked, cause, depth=depth)
         return linked, 1, 0, truncated
@@ -185,9 +247,15 @@ def _exception_group_shape(
 ) -> tuple[list[tuple[BaseException, int]], int, int, bool]:
     if not isinstance(exception, BaseExceptionGroup):
         return [], 0, 0, False
-    children = _exception_attribute(exception, "exceptions", ())
+    children, available = _base_exception_slot(
+        exception,
+        _BASE_EXCEPTION_GROUP_EXCEPTIONS_DESCRIPTOR,
+        BaseExceptionGroup,
+    )
+    if not available:
+        return [], 0, 0, True
     if type(children) is not tuple:
-        return [], 1, 0, True
+        return [], 0, 0, True
     accepted = children[:remaining_members]
     pending: list[tuple[BaseException, int]] = []
     truncated = len(accepted) != len(children)
@@ -210,7 +278,7 @@ def build_exception_diagnostic_event(
     if not isinstance(exception, BaseException):
         return ExceptionDiagnosticEvent(
             operation=operation,
-            exception_type=_UNKNOWN_EXCEPTION,
+            exception_kind=ExceptionKind.UNKNOWN_EXCEPTION,
             has_traceback=False,
             traceback_frames=0,
             cause_count=0,
@@ -268,7 +336,7 @@ def build_exception_diagnostic_event(
 
     return ExceptionDiagnosticEvent(
         operation=operation,
-        exception_type=_exception_identifier(exception),
+        exception_kind=_exception_kind(exception),
         has_traceback=traceback_frames > 0,
         traceback_frames=traceback_frames,
         cause_count=cause_count,
@@ -298,7 +366,7 @@ def _uuid_hex(value: object) -> str:
 def _exception_payload(event: ExceptionDiagnosticEvent) -> dict[str, object]:
     try:
         operation = event.operation
-        exception_type = event.exception_type
+        exception_kind = event.exception_kind
         correlation_id = event.correlation_id
         has_traceback = event.has_traceback
         traceback_frames = event.traceback_frames
@@ -312,10 +380,8 @@ def _exception_payload(event: ExceptionDiagnosticEvent) -> dict[str, object]:
 
     if type(operation) is not DiagnosticOperation:
         raise DiagnosticEventValidationError("invalid diagnostic operation")
-    if type(exception_type) is not str or (
-        exception_type != _UNKNOWN_EXCEPTION and not _is_identifier(exception_type)
-    ):
-        raise DiagnosticEventValidationError("invalid exception identifier")
+    if type(exception_kind) is not ExceptionKind:
+        raise DiagnosticEventValidationError("invalid exception kind")
     if type(has_traceback) is not bool or type(structure_truncated) is not bool:
         raise DiagnosticEventValidationError("invalid diagnostic boolean")
     bounds = (
@@ -331,7 +397,7 @@ def _exception_payload(event: ExceptionDiagnosticEvent) -> dict[str, object]:
     return {
         "event_code": DiagnosticEventCode.EXCEPTION_DIAGNOSTIC.value,
         "operation": operation.value,
-        "exception_type": exception_type,
+        "exception_kind": exception_kind.value,
         "correlation_id": _uuid_hex(correlation_id),
         "has_traceback": has_traceback,
         "traceback_frames": traceback_frames,

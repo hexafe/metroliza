@@ -22,7 +22,7 @@ def test_closed_events_serialize_with_fixed_schema_and_key_order(monkeypatch):
 
     event = ExceptionDiagnosticEvent(
         operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
-        exception_type="builtins.RuntimeError",
+        exception_kind=diagnostic_events.ExceptionKind.RUNTIME_ERROR,
         has_traceback=False,
         traceback_frames=0,
         cause_count=0,
@@ -35,7 +35,7 @@ def test_closed_events_serialize_with_fixed_schema_and_key_order(monkeypatch):
     assert serialize_diagnostic_event(event) == (
         '{"event_code":"exception_diagnostic",'
         '"operation":"unhandled_exception",'
-        '"exception_type":"builtins.RuntimeError",'
+        '"exception_kind":"runtime_error",'
         '"correlation_id":"12345678123456781234567812345678",'
         '"has_traceback":false,"traceback_frames":0,'
         '"cause_count":0,"context_count":0,"group_count":0,'
@@ -73,7 +73,7 @@ def test_exception_builder_keeps_only_bounded_structure(monkeypatch):
     parsed = json.loads(output)
     if marker in output:
         pytest.fail("exception payload reached structured diagnostic output")
-    assert parsed["exception_type"] == "builtins.ExceptionGroup"
+    assert parsed["exception_kind"] == "exception_group"
     assert parsed["has_traceback"] is True
     assert 1 <= parsed["traceback_frames"] <= 64
     assert parsed["cause_count"] == 1
@@ -90,7 +90,7 @@ def test_event_constructors_reject_unknown_fields():
     with pytest.raises(TypeError):
         ExceptionDiagnosticEvent(
             operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
-            exception_type="builtins.RuntimeError",
+            exception_kind=diagnostic_events.ExceptionKind.RUNTIME_ERROR,
             has_traceback=False,
             traceback_frames=0,
             cause_count=0,
@@ -126,10 +126,13 @@ def test_malformed_and_unknown_event_instances_fail_closed():
         serialize_diagnostic_event(object())
 
 
-def test_invalid_dynamic_exception_identifier_becomes_unknown(monkeypatch):
+def test_dynamic_exception_identity_becomes_closed_unknown():
     marker = f"generated-{uuid.uuid4().hex}"
-    exception_type = type(f"Invalid-{marker}", (RuntimeError,), {})
-    exception_type.__module__ = f"invalid-{marker}"
+    exception_type = type(
+        f"Dynamic_{marker}",
+        (RuntimeError,),
+        {"__module__": f"package_{marker}", "__qualname__": f"Dynamic_{marker}"},
+    )
     event = build_exception_diagnostic_event(
         exception_type(marker),
         operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
@@ -137,14 +140,183 @@ def test_invalid_dynamic_exception_identifier_becomes_unknown(monkeypatch):
 
     output = serialize_diagnostic_event(event)
     if marker in output:
-        pytest.fail("invalid dynamic exception identifier reached output")
-    assert event.exception_type == "unknown_exception"
+        pytest.fail("dynamic exception identity reached output")
+    assert event.exception_kind is diagnostic_events.ExceptionKind.UNKNOWN_EXCEPTION
+
+
+def test_exception_kind_rejects_caller_text_and_forgery_without_rendering():
+    marker = f"generated-{uuid.uuid4().hex}"
+    fields = {
+        "operation": DiagnosticOperation.UNHANDLED_EXCEPTION,
+        "has_traceback": False,
+        "traceback_frames": 0,
+        "cause_count": 0,
+        "context_count": 0,
+        "group_count": 0,
+        "group_member_count": 0,
+        "structure_truncated": False,
+    }
+
+    with pytest.raises(TypeError):
+        ExceptionDiagnosticEvent(exception_type=marker, **fields)
+    with pytest.raises(DiagnosticEventValidationError):
+        ExceptionDiagnosticEvent(exception_kind=marker, **fields)
+
+    event = ExceptionDiagnosticEvent(
+        exception_kind=diagnostic_events.ExceptionKind.RUNTIME_ERROR,
+        **fields,
+    )
+
+    class HostileKind:
+        def __str__(self):
+            raise AssertionError("forged kind was stringified")
+
+        def __repr__(self):
+            raise AssertionError("forged kind was represented")
+
+    object.__setattr__(event, "exception_kind", HostileKind())
+    with pytest.raises(DiagnosticEventValidationError):
+        serialize_diagnostic_event(event)
+
+
+def test_exception_kind_uses_only_exact_allowlisted_builtin_identity():
+    exact = build_exception_diagnostic_event(
+        RuntimeError("not persisted"),
+        operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+    )
+
+    class RuntimeErrorSubclass(RuntimeError):
+        pass
+
+    subclassed = build_exception_diagnostic_event(
+        RuntimeErrorSubclass("not persisted"),
+        operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+    )
+
+    assert exact.exception_kind is diagnostic_events.ExceptionKind.RUNTIME_ERROR
+    assert subclassed.exception_kind is diagnostic_events.ExceptionKind.UNKNOWN_EXCEPTION
+
+
+def test_hostile_exception_metaclass_identity_hooks_are_not_invoked():
+    marker = f"generated-{uuid.uuid4().hex}"
+    invoked = []
+
+    class HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name in {"__module__", "__qualname__", "__name__"}:
+                invoked.append(name)
+                raise AssertionError("exception class metadata was read")
+            return type.__getattribute__(cls, name)
+
+        def __str__(cls):
+            invoked.append("str")
+            raise AssertionError("exception class was stringified")
+
+        def __repr__(cls):
+            invoked.append("repr")
+            raise AssertionError("exception class was represented")
+
+    exception_type = HostileMeta(
+        f"Dynamic_{marker}",
+        (RuntimeError,),
+        {"__module__": f"package_{marker}", "__qualname__": f"Dynamic_{marker}"},
+    )
+    event = build_exception_diagnostic_event(
+        exception_type(marker),
+        operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+    )
+    output = serialize_diagnostic_event(event)
+
+    assert not invoked
+    assert event.exception_kind is diagnostic_events.ExceptionKind.UNKNOWN_EXCEPTION
+    if marker in output:
+        pytest.fail("hostile exception class metadata reached output")
+
+
+def test_exception_structure_uses_only_base_descriptors():
+    marker = f"generated-{uuid.uuid4().hex}"
+    invoked = []
+
+    class HostileException(RuntimeError):
+        @property
+        def __traceback__(self):
+            invoked.append("traceback")
+            raise AssertionError("subclass traceback descriptor was invoked")
+
+        @property
+        def __cause__(self):
+            invoked.append("cause")
+            raise AssertionError("subclass cause descriptor was invoked")
+
+        @property
+        def __context__(self):
+            invoked.append("context")
+            raise AssertionError("subclass context descriptor was invoked")
+
+        @property
+        def __suppress_context__(self):
+            invoked.append("suppress")
+            raise AssertionError("subclass suppression descriptor was invoked")
+
+    try:
+        raise HostileException(marker)
+    except HostileException as exception:
+        event = build_exception_diagnostic_event(
+            exception,
+            operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+        )
+
+    output = serialize_diagnostic_event(event)
+    assert not invoked
+    assert event.has_traceback is True
+    if marker in output:
+        pytest.fail("hostile exception payload reached output")
+
+
+def test_exception_group_structure_uses_base_descriptor():
+    marker = f"generated-{uuid.uuid4().hex}"
+    invoked = []
+
+    class HostileGroup(ExceptionGroup):
+        @property
+        def exceptions(self):
+            invoked.append("exceptions")
+            raise AssertionError("subclass group descriptor was invoked")
+
+    event = build_exception_diagnostic_event(
+        HostileGroup(marker, [RuntimeError(marker)]),
+        operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+    )
+    output = serialize_diagnostic_event(event)
+
+    assert not invoked
+    assert event.group_count == 1
+    assert event.group_member_count == 1
+    if marker in output:
+        pytest.fail("hostile exception-group payload reached output")
+
+
+def test_base_descriptor_access_failure_marks_structure_truncated(monkeypatch):
+    marker = f"generated-{uuid.uuid4().hex}"
+    monkeypatch.setattr(diagnostic_events, "_BASE_EXCEPTION_TRACEBACK_DESCRIPTOR", object())
+
+    event = build_exception_diagnostic_event(
+        RuntimeError(marker),
+        operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+    )
+    output = serialize_diagnostic_event(event)
+
+    assert event.has_traceback is False
+    assert event.traceback_frames == 0
+    assert event.structure_truncated is True
+    if marker in output:
+        pytest.fail("exception payload reached truncated output")
 
 
 def test_structured_output_is_bounded_by_closed_field_limits():
     event = ExceptionDiagnosticEvent(
         operation=DiagnosticOperation.QT_DIALOG_IMPORT_FAILURE,
-        exception_type=f"package.{'A' * 80}",
+        exception_kind=diagnostic_events.ExceptionKind.UNKNOWN_EXCEPTION,
         has_traceback=True,
         traceback_frames=64,
         cause_count=32,
