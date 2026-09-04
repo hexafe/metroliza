@@ -35,7 +35,15 @@ from metroliza.reports.report_repository import (
 )
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
-from metroliza.parsing.parser_plugin_contracts import infer_source_format
+from metroliza.parsing.parse_result_v2_persistence import (
+    build_persistence_payload,
+    import_parse_result_v2_payload_if_absent,
+)
+from metroliza.parsing.parser_plugin_contracts import (
+    BaseReportParserPlugin,
+    ParseResultV2,
+    infer_source_format,
+)
 from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.parsing.preflight import (
     ParsePreflightResult,
@@ -73,6 +81,90 @@ class MetadataEnrichmentBatchResult:
 
 
 PARSE_TELEMETRY_BATCH_SIZE = 25
+
+
+class _StablePluginAtomicImportAdapter:
+    """Add owner-thread atomic persistence to a standalone stable plugin."""
+
+    def __init__(
+        self,
+        plugin,
+        *,
+        source_inspection: SourceInspectionContext,
+        database,
+        connection,
+        manifest,
+        import_policy: ReportImportPolicy,
+    ):
+        self._plugin = plugin
+        self._source_inspection = source_inspection
+        self._database = database
+        self._connection = connection
+        self._manifest = manifest
+        self._import_policy = import_policy
+        self._prepared_parse_result_v2 = None
+        self._prepared_persistence_payload = None
+
+    @property
+    def stage_timings_s(self):
+        return getattr(self._plugin, "stage_timings_s", None)
+
+    @property
+    def parse_backend_used(self):
+        return getattr(self._plugin, "parse_backend_used", "unknown")
+
+    @property
+    def persistence_backend_used(self):
+        return getattr(
+            self._plugin,
+            "persistence_backend_used",
+            "parse_result_v2_atomic",
+        )
+
+    def _prepare_parse_result_v2(self):
+        if self._prepared_parse_result_v2 is not None:
+            return self._prepared_parse_result_v2
+
+        parse_result = self._plugin.parse_to_v2()
+        if not isinstance(parse_result, ParseResultV2):
+            raise TypeError(
+                "Standalone stable parser plugin parse_to_v2() must return "
+                f"ParseResultV2, got {type(parse_result).__name__}"
+            )
+        payload = build_persistence_payload(
+            parse_result,
+            source_path=self._source_inspection.source_path,
+            manifest=self._manifest,
+            expected_source_format=self._source_inspection.source_format,
+        )
+        self._prepared_parse_result_v2 = parse_result
+        self._prepared_persistence_payload = payload
+        return parse_result
+
+    def prepare_for_two_stage_pipeline(self):
+        return self._prepare_parse_result_v2()
+
+    def _import_prepared_parse_result_v2(self):
+        parse_result = self._prepared_parse_result_v2
+        payload = self._prepared_persistence_payload
+        if parse_result is None or payload is None:
+            parse_result = self._prepare_parse_result_v2()
+            payload = self._prepared_persistence_payload
+        return import_parse_result_v2_payload_if_absent(
+            payload,
+            parse_result=parse_result,
+            source_path=self._source_inspection.source_path,
+            database=self._database,
+            connection=self._connection,
+            source_inspection=self._source_inspection,
+            import_policy=self._import_policy,
+        )
+
+    def import_report_if_absent(self):
+        return self._import_prepared_parse_result_v2()
+
+    def import_prepared_report_if_absent(self):
+        return self._import_prepared_parse_result_v2()
 
 
 def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
@@ -1413,11 +1505,29 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         metadata_parsing_mode=self.metadata_parsing_mode,
                         source_inspection=source_inspection,
                     )
-                    parser.report_import_policy = ReportImportPolicy(
+                    import_policy = ReportImportPolicy(
                         metadata_parsing_mode=self.metadata_parsing_mode,
                         refreshable_parser_id=_CURRENT_CMM_METADATA_PARSER_ID,
                         refreshable_parser_version=_CURRENT_CMM_PARSER_VERSION,
                     )
+                    if (
+                        isinstance(parser, BaseReportParserPlugin)
+                        and not callable(getattr(parser, "import_report_if_absent", None))
+                    ):
+                        if not isinstance(source_inspection, SourceInspectionContext):
+                            raise TypeError(
+                                "Standalone stable parser plugin requires the bound "
+                                "SourceInspectionContext"
+                            )
+                        return _StablePluginAtomicImportAdapter(
+                            parser,
+                            source_inspection=source_inspection,
+                            database=self.db_file,
+                            connection=connection,
+                            manifest=parser.manifest,
+                            import_policy=import_policy,
+                        )
+                    parser.report_import_policy = import_policy
                     return parser
 
                 result = parse_new_reports(
