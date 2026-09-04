@@ -1,5 +1,7 @@
 """Parsing dialog for selecting input sources and running report ingestion."""
 
+from metroliza.parsing import report_parser_factory
+
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
 from metroliza.parsing.preflight import ParsePreflightStatus
@@ -324,8 +326,8 @@ class ParsingDialog(QDialog):
         self.review_scan_button.clicked.connect(self.show_preflight_details)
         self.review_scan_button.setEnabled(False)
 
-        self.parse_button = QPushButton("Import ready reports")
-        self.parse_button.clicked.connect(self.show_loading_screen)
+        self.parse_button = QPushButton("Import / verify reports")
+        self.parse_button.clicked.connect(self._import_reviewed_reports)
         self.parse_button.setEnabled(False)
         self.parse_button.setToolTip(
             "Import only the exact report contents approved by the latest scan."
@@ -419,7 +421,7 @@ class ParsingDialog(QDialog):
         configure_accessibility(self.metadata_mode_combo, name="Metadata mode")
         configure_accessibility(self.scan_button, name="Scan report contents")
         configure_accessibility(self.review_scan_button, name="Review parser scan")
-        configure_accessibility(self.parse_button, name="Import ready reports")
+        configure_accessibility(self.parse_button, name="Import / verify reports")
         apply_metroliza_theme(self)
 
     def _selected_metadata_request_fields(self):
@@ -471,12 +473,14 @@ class ParsingDialog(QDialog):
         inputs_ready = bool(self.directory and self.db_file)
         self.scan_button.setEnabled(inputs_ready)
         preflight_current = self._preflight_is_current()
-        ready_count = (
-            self._preflight_result.count(ParsePreflightStatus.READY)
-            if preflight_current
-            else 0
-        )
+        ready_count = len(self._atomic_import_candidates())
         self.parse_button.setEnabled(preflight_current and ready_count > 0)
+        self.parse_button.setToolTip(
+            f"Import or verify {ready_count} reviewed report files; destination matches "
+            "are checked atomically before any write."
+            if ready_count else
+            "No eligible reviewed reports. Select a source and database, then scan again."
+        )
         self.review_scan_button.setEnabled(bool(self._preflight_result or self._preflight_error_detail))
         configure_dialog_button_roles(
             primary=self.parse_button if preflight_current and ready_count > 0 else self.scan_button,
@@ -489,7 +493,10 @@ class ParsingDialog(QDialog):
             quiet=(self.review_scan_button,),
         )
         if preflight_current:
-            self.readiness_label.setText(self._preflight_summary_text(self._preflight_result))
+            self.readiness_label.setText(
+                self._preflight_summary_text(self._preflight_result)
+                + f" {ready_count} eligible for import / verification."
+            )
             has_review_items = any(
                 self._preflight_result.count(status)
                 for status in (
@@ -513,6 +520,17 @@ class ParsingDialog(QDialog):
         else:
             self.readiness_label.setText("Select a source and database to scan report contents.")
             set_status_variant(self.readiness_label, "warning")
+
+    def _atomic_import_candidates(self):
+        if self._preflight_result is None:
+            return ()
+        metadata_mode, _background, _modeless = self._build_parse_request_fields()
+        return self._preflight_result.atomic_import_candidates(
+            source_path=self.directory,
+            database_path=self.db_file,
+            metadata_parsing_mode=metadata_mode,
+            registry_generation_id=report_parser_factory.get_registry_snapshot().generation_id,
+        )
 
     def _preflight_is_current(self):
         if self._preflight_result is None or self._preflight_result.cancelled:
@@ -760,6 +778,14 @@ class ParsingDialog(QDialog):
                 detail_lines.append("  diagnostic: " + item.diagnostic_detail)
         dialog.setDetailedText("\n".join(detail_lines) or "No report files were discovered.")
         dialog.exec()
+
+    @pyqtSlot()
+    def _import_reviewed_reports(self):
+        """Recheck eligibility at the explicit import/verification click."""
+        if not self._atomic_import_candidates():
+            self._sync_readiness_state()
+            return
+        self.show_loading_screen()
 
     @pyqtSlot()
     def show_loading_screen(self):

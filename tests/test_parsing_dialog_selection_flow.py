@@ -1,4 +1,13 @@
 import unittest
+from contextlib import closing
+from pathlib import Path
+import shutil
+import sqlite3
+import time
+
+import pytest
+
+from metroliza.parsing import report_parser_factory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -289,6 +298,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
                     fingerprint='sha256:abc',
                     parser_id='cmm',
                     confidence=90,
+                    registry_generation_id=report_parser_factory.get_registry_snapshot().generation_id,
                 ),
             ),
         )
@@ -809,3 +819,197 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.mark.parametrize("source_copy", [False, True], ids=["singleton", "excluded-copy-first"])
+@pytest.mark.parametrize("accepted", [False, True], ids=["incomplete", "accepted"])
+def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monkeypatch, accepted, source_copy, request):
+    # The complete suite shares Qt application/window state. Exercise the real
+    # modal click/worker flow in a fresh Qt process, as in an application launch.
+    import os
+    import subprocess
+    import sys
+
+    if os.environ.get("METROLIZA_ATOMIC_UI_TEST_CHILD") != "1":
+        environment = dict(os.environ, METROLIZA_ATOMIC_UI_TEST_CHILD="1", QT_QPA_PLATFORM="offscreen")
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", request.node.nodeid, "-q"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        return
+
+    from PyQt6.QtTest import QTest
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+    from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
+    from metroliza.reports.report_repository import ReportImportDisposition, ReportRepository
+    from metroliza.ui.parsing_dialog import ParsingDialog
+
+    app = QApplication.instance() or QApplication([])
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "synthetic.pdf"
+    shutil.copyfile(Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf", source)
+    if source_copy:
+        shutil.copyfile(source, source_dir / "z-copy.pdf")
+    database = tmp_path / "reports.sqlite3"
+    repository = ReportRepository(str(database))
+    repository.replace_existing_report(
+        source_path=source,
+        parser_id="cmm_pdf_header_box", parser_version="1.1.0",
+        template_family="synthetic", parse_status="parsed" if accepted else "failed",
+        metadata={"reference": "accepted", "metadata_json": {}},
+        candidates=(), warnings=(),
+        measurements=({"row_order": 1, "header": "accepted", "status_code": "ok"},)
+        if accepted else (),
+        metadata_version="synthetic-v1",
+    )
+
+    def graph():
+        with closing(sqlite3.connect(database)) as connection:
+            tables = ("source_files", "source_file_locations", "parsed_reports", "report_metadata",
+                      "report_measurements", "report_metadata_candidates", "report_metadata_warnings",
+                      "report_parse_state")
+            return {table: connection.execute(f"SELECT * FROM {table}").fetchall() for table in tables}
+
+    workers, outcomes, feedback = [], [], []
+    original_import = ReportRepository.import_report_if_absent
+
+    def record_import(self, **kwargs):
+        result = original_import(self, **kwargs)
+        outcomes.append(result)
+        return result
+
+    def create_thread(request):
+        worker = ParseReportsThread(request)
+        discover = worker.get_list_of_reports
+        worker.get_list_of_reports = lambda: sorted(discover(), reverse=True)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr(ReportRepository, "import_report_if_absent", record_import)
+    monkeypatch.setattr("metroliza.ui.parsing_dialog.ParseReportsThread", create_thread)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: feedback.append(args[2]))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: feedback.append(args[2]))
+    dialog = ParsingDialog(directory=str(source_dir), db_file=str(database))
+    dialog.show()
+    snapshots = []
+    try:
+        for attempt in range(2):
+            review = ParsePreflightService().scan_source(
+                source_path=source_dir, database_path=database, metadata_parsing_mode="light"
+            )
+            assert len(review.files) == 1 + source_copy
+            assert review.count(ParsePreflightStatus.READY) == 0
+            assert review.count(ParsePreflightStatus.DUPLICATE) == 1 + source_copy
+            dialog._preflight_result = review
+            dialog._sync_readiness_state()
+            before = graph()
+            assert dialog.parse_button.isEnabled()
+            QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
+            assert len(workers) == attempt + 1, feedback
+            deadline = time.monotonic() + 15
+            while (len(feedback) <= attempt or workers[-1].isRunning()) and time.monotonic() < deadline:
+                app.processEvents()
+                QTest.qWait(5)
+            assert len(workers) == attempt + 1
+            assert not workers[-1].isRunning()
+            assert len(feedback) == attempt + 1
+            result = workers[-1].last_parse_result
+            assert result.parsed_files == result.imported_files + result.already_present_files == 1
+            assert result.preflight_duplicate_files == 1 + source_copy
+            assert "Import outcome" in feedback[-1]
+            assert "Review snapshot" in feedback[-1]
+            if accepted or attempt:
+                assert outcomes[-1] is ReportImportDisposition.ALREADY_PRESENT
+                assert graph() == before
+                assert "Already present" in feedback[-1]
+            else:
+                assert outcomes[-1] is ReportImportDisposition.IMPORTED
+                assert graph()["parsed_reports"][0][6] in ("parsed", "parsed_with_warnings")
+                assert graph()["report_measurements"]
+                assert "Saved: 1 report file" in feedback[-1]
+            assert {row[4] for row in graph()["source_file_locations"]} == {source.name}
+            snapshots.append(graph())
+        assert snapshots[0] == snapshots[1]
+    finally:
+        for worker in workers:
+            worker.wait(15000)
+        dialog.close()
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("ready", True), ("destination", True), ("source-copy", False),
+    ("unsupported", False), ("ambiguous", False), ("unreadable", False),
+    ("cancelled", False), ("stale-source", False), ("stale-database", False),
+    ("stale-mode", False), ("stale-generation", False), ("no-generation", False),
+    ("no-parser", False), ("no-fingerprint", False),
+    ("no-source", False), ("no-database", False),
+])
+def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expected):
+    from dataclasses import replace
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+    from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
+    from metroliza.shared.parse_contracts import ParseRequest
+    from metroliza.ui.parsing_dialog import ParsingDialog
+
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / "synthetic.pdf"
+    shutil.copyfile(Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf", source)
+    database = tmp_path / "new.sqlite3"
+    review = ParsePreflightService().scan_source(
+        source_path=source, database_path=database, metadata_parsing_mode="light"
+    )
+    item = review.files[0]
+    assert item.status is ParsePreflightStatus.READY
+    item_changes = {
+        "destination": {"status": ParsePreflightStatus.DUPLICATE},
+        "source-copy": {"status": ParsePreflightStatus.DUPLICATE,
+                        "reason_codes": ("duplicate_in_selected_source",)},
+        "unsupported": {"status": ParsePreflightStatus.UNSUPPORTED},
+        "ambiguous": {"status": ParsePreflightStatus.AMBIGUOUS},
+        "unreadable": {"status": ParsePreflightStatus.UNREADABLE},
+        "stale-generation": {"registry_generation_id": item.registry_generation_id - 1},
+        "no-generation": {"registry_generation_id": None},
+        "no-parser": {"parser_id": None}, "no-fingerprint": {"fingerprint": None},
+    }
+    item = replace(item, **item_changes.get(case, {}))
+    review = replace(review, files=(item,))
+    review_changes = {
+        "cancelled": {"cancelled": True}, "stale-source": {"source_path": str(tmp_path / "other")},
+        "stale-database": {"database_path": str(tmp_path / "other.db")},
+        "stale-mode": {"metadata_parsing_mode": "complete"},
+    }
+    review = replace(review, **review_changes.get(case, {}))
+    dialog = ParsingDialog(directory=str(source), db_file=str(database))
+    worker = ParseReportsThread(ParseRequest(
+        source_directory=str(source), db_file=str(database), metadata_parsing_mode="light"
+    ))
+    if case == "no-source":
+        dialog.directory = worker.directory = ""
+    if case == "no-database":
+        dialog.db_file = worker.db_file = ""
+    dialog._preflight_result = worker.preflight_result = review
+    try:
+        dialog._sync_readiness_state()
+        assert dialog.parse_button.isEnabled() is expected
+        approved, _changed = worker._filter_reports_for_preflight([source])
+        assert approved == ([source] if expected else [])
+        assert review.files == (item,)
+        assert not database.exists()
+        if not expected:
+            starts = []
+            monkeypatch.setattr("metroliza.ui.parsing_dialog.ParseReportsThread", starts.append)
+            dialog.parse_button.click()
+            dialog._import_reviewed_reports()  # Recheck the dispatch seam, too.
+            app.processEvents()
+            assert starts == []
+            assert "No eligible reviewed reports" in dialog.parse_button.toolTip()
+        else:
+            assert "1 eligible for import / verification" in dialog.readiness_label.text()
+    finally:
+        dialog.close()
