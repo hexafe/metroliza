@@ -6,6 +6,8 @@ import tempfile
 import threading
 import types
 import unittest
+
+import pytest
 from contextlib import closing
 from pathlib import Path
 from unittest import mock
@@ -5709,3 +5711,62 @@ class TestExportBackendSmoke(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.mark.parametrize("container", ["directory", "zip"])
+@pytest.mark.parametrize("change", ["reversed", "missing-approved", "renamed-approved"])
+def test_preflight_approval_preserves_source_occurrence(tmp_path, container, change):
+    import shutil
+    import zipfile
+
+    from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
+    from metroliza.reports.report_repository import ReportRepository
+
+    folder = tmp_path / "source"
+    folder.mkdir()
+    approved = folder / "a-reviewed.pdf"
+    copy_dir = folder / "nested"
+    copy_dir.mkdir()
+    excluded = copy_dir / "a-reviewed.pdf"
+    fixture = Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf"
+    shutil.copyfile(fixture, approved)
+    shutil.copyfile(fixture, excluded)
+    database = tmp_path / "reports.sqlite3"
+    ReportRepository(str(database)).replace_existing_report(
+        source_path=approved, parser_id="cmm_pdf_header_box", parser_version="1.1.0",
+        template_family="synthetic", parse_status="failed", metadata={"metadata_json": {}},
+        candidates=(), warnings=(), measurements=(), metadata_version="synthetic-v1",
+    )
+    source = folder
+    if container == "zip":
+        source = tmp_path / "source.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.write(excluded, "nested/a-reviewed.pdf")
+            archive.write(approved, "a-reviewed.pdf")
+    review = ParsePreflightService().scan_source(
+        source_path=source, database_path=database, metadata_parsing_mode="light"
+    )
+    assert review.files[0].display_name == "a-reviewed.pdf"
+    assert all(item.status is ParsePreflightStatus.DUPLICATE for item in review.files)
+    assert "duplicate_in_selected_source" in review.files[1].reason_codes
+    thread = parse_thread_module.ParseReportsThread(ParseRequest(
+        source_directory=str(source), db_file=str(database), metadata_parsing_mode="light"
+    ))
+    thread.preflight_result = review
+    try:
+        reports = sorted(thread.get_list_of_reports(), key=lambda p: len(p.parts), reverse=True)
+        assert reports[0].parent.name == "nested"
+        approved_path = reports[1]
+        if change == "missing-approved":
+            approved_path.unlink()
+            reports = reports[:1]
+        elif change == "renamed-approved":
+            renamed = approved_path.with_name("renamed.pdf")
+            approved_path.rename(renamed)
+            reports[1] = renamed
+        filtered, changed = thread._filter_reports_for_preflight(reports)
+        assert filtered == ([approved_path] if change == "reversed" else [])
+        assert changed == (0 if change == "reversed" else 1)
+    finally:
+        if thread._extracted_archive_dir is not None:
+            thread._extracted_archive_dir.cleanup()
