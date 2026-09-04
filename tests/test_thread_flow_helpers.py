@@ -502,6 +502,57 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(result.already_present_files, 0)
         self.assertEqual(result.failed_files, 1)
 
+    def test_preflight_destination_duplicate_reaches_atomic_import_filter(self):
+        import shutil
+
+        from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
+        from metroliza.parsing.parse_reports_thread import ParseReportsThread
+        from metroliza.reports.report_repository import ReportRepository
+        from metroliza.shared.parse_contracts import ParseRequest
+
+        fixture = Path(__file__).parent / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            report = root / "incomplete.pdf"
+            database = root / "reports.sqlite"
+            shutil.copyfile(fixture, report)
+            repository = ReportRepository(str(database))
+            repository.replace_existing_report(
+                source_path=report,
+                parser_id="cmm_pdf_header_box",
+                parser_version="1.1.0",
+                template_family="synthetic",
+                parse_status="failed",
+                metadata={"metadata_json": {}},
+                candidates=(),
+                warnings=(),
+                measurements=(),
+                metadata_version="synthetic-v1",
+            )
+            preflight = ParsePreflightService().scan_source(
+                source_path=report,
+                database_path=database,
+                metadata_parsing_mode="light",
+            )
+            self.assertIs(preflight.files[0].status, ParsePreflightStatus.DUPLICATE)
+            self.assertNotIn(
+                "duplicate_in_selected_source",
+                preflight.files[0].reason_codes,
+            )
+            thread = ParseReportsThread(
+                ParseRequest(
+                    source_directory=str(report),
+                    db_file=str(database),
+                    metadata_parsing_mode="light",
+                )
+            )
+            thread.preflight_result = preflight
+
+            approved, changed_count = thread._filter_reports_for_preflight([report])
+
+            self.assertEqual(approved, [report])
+            self.assertEqual(changed_count, 0)
+
     def test_parse_thread_propagates_typed_outcomes_on_owner_thread(self):
         from modules.contracts import ParseRequest
         from modules.parse_reports_thread import ParseReportsThread

@@ -964,12 +964,25 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         expected_fingerprint_counts = Counter(
             item.fingerprint for item in preflight.files if item.fingerprint
         )
-        ready_fingerprint_counts = Counter(
-            item.fingerprint for item in preflight.ready_files if item.fingerprint
+        atomic_import_items = tuple(
+            item
+            for item in preflight.files
+            if item.status is ParsePreflightStatus.READY
+            or (
+                item.status is ParsePreflightStatus.DUPLICATE
+                and "duplicate_in_selected_source" not in item.reason_codes
+            )
         )
-        parser_approval_by_fingerprint = preflight.parser_approval_by_ready_fingerprint
+        atomic_import_fingerprint_counts = Counter(
+            item.fingerprint for item in atomic_import_items if item.fingerprint
+        )
+        parser_approval_by_fingerprint = {
+            item.fingerprint: (item.parser_id, item.registry_generation_id)
+            for item in atomic_import_items
+            if item.fingerprint and item.parser_id
+        }
         observed_fingerprint_counts: Counter[str] = Counter()
-        used_ready_fingerprint_counts: Counter[str] = Counter()
+        used_atomic_import_fingerprint_counts: Counter[str] = Counter()
         approved: list[Path] = []
         changed_observed_files = 0
         for report in report_paths:
@@ -992,12 +1005,15 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
             parser_approval = parser_approval_by_fingerprint.get(fingerprint)
             if parser_approval is None:
-                # Duplicate/unsupported/ambiguous/unreadable entries are review
-                # evidence, not approved import work.
+                # Selected-source duplicates and rejected entries are review
+                # evidence, not separate persistence work. Destination matches
+                # must reach the repository so it can distinguish an accepted
+                # graph from an incomplete identity inside the transaction.
                 continue
-            if used_ready_fingerprint_counts[fingerprint] >= ready_fingerprint_counts[fingerprint]:
-                # A reviewed duplicate is expected input, but it is not a
-                # second persistence operation.
+            if (
+                used_atomic_import_fingerprint_counts[fingerprint]
+                >= atomic_import_fingerprint_counts[fingerprint]
+            ):
                 continue
             approved_parser_id, approved_registry_generation_id = parser_approval
             try:
@@ -1026,13 +1042,13 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 changed_observed_files += 1
                 continue
             approved.append(report)
-            used_ready_fingerprint_counts[fingerprint] += 1
+            used_atomic_import_fingerprint_counts[fingerprint] += 1
 
-        missing_ready_files = sum(
+        missing_approved_files = sum(
             max(0, expected_count - observed_fingerprint_counts[fingerprint])
-            for fingerprint, expected_count in ready_fingerprint_counts.items()
+            for fingerprint, expected_count in atomic_import_fingerprint_counts.items()
         )
-        changed_files = max(changed_observed_files, missing_ready_files)
+        changed_files = max(changed_observed_files, missing_approved_files)
         return approved, changed_files
 
     def get_report_fingerprints_in_database(self, connection=None):
