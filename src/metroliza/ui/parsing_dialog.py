@@ -877,11 +877,15 @@ class ParsingDialog(QDialog):
             if not close_requested:
                 if self.parse_error_message:
                     QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
-                elif self.parsing_canceled and getattr(
-                    self.parse_thread,
-                    "last_parse_result",
-                    None,
-                ) is None:
+                elif self.parsing_canceled and (
+                    getattr(self.parse_thread, "last_parse_result", None) is None
+                    or getattr(
+                        self.parse_thread.last_parse_result,
+                        "cancelled_files",
+                        _MISSING_RESULT_FIELD,
+                    )
+                    is _MISSING_RESULT_FIELD
+                ):
                     QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
                 elif not should_request_modeless_enrichment:
                     severity, title, message = self._build_parse_completion_feedback()

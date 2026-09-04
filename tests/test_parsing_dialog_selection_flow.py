@@ -726,6 +726,30 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(parent.enrichment_launches, 0)
         self.assertFalse(dialog._pending_modeless_metadata_enrichment)
 
+    def test_legacy_result_without_cancelled_count_keeps_cancellation_status(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.loading_dialog = _ProgressDialog()
+        dialog.parsing_canceled = True
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(
+                total_files=2,
+                parsed_files=1,
+                failed_files=0,
+            ),
+        )
+
+        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+                dialog.on_parse_finished()
+
+        warning_mock.assert_not_called()
+        information_mock.assert_called_once_with(
+            dialog,
+            "Parsing canceled",
+            "Parsing has been canceled",
+        )
+        self.assertFalse(dialog.parsing_canceled)
+
     def test_partial_cancellation_uses_truthful_result_summary(self):
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
         dialog.loading_dialog = _ProgressDialog()
