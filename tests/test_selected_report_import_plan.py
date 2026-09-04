@@ -78,6 +78,44 @@ def _track_completed_import_plan_filter(monkeypatch):
     return state
 
 
+def _assert_selected_result_counts(
+    result,
+    *,
+    parsed,
+    selected,
+    imported,
+    already_present,
+    changed,
+    failed,
+    skipped,
+    cancelled,
+    excluded,
+):
+    assert result.parsed_files == parsed
+    assert result.selected_files == selected
+    assert result.imported_files == imported
+    assert result.already_present_files == already_present
+    assert result.preflight_changed_files == changed
+    assert result.failed_files == failed
+    assert result.skipped_files == skipped
+    assert result.cancelled_files == cancelled
+    assert result.intentionally_excluded_files == excluded
+
+
+def _track_database_opens(monkeypatch):
+    database_opens = []
+
+    def unexpected_database_open(*args, **kwargs):
+        database_opens.append((args, kwargs))
+        raise AssertionError("filter-stage cancellation must not open SQLite")
+
+    monkeypatch.setattr(
+        "metroliza.parsing.parse_reports_thread.sqlite_connection_scope",
+        unexpected_database_open,
+    )
+    return database_opens
+
+
 def test_selected_two_of_five_persists_exactly_two_and_reports_exclusions(tmp_path):
     source = tmp_path / "reports"
     reports = _write_unique_reports(source, 5)
@@ -100,11 +138,18 @@ def test_selected_two_of_five_persists_exactly_two_and_reports_exclusions(tmp_pa
         if report.name in selected_names
     }
     assert _stored_source_hashes(database) == expected_hashes
-    assert thread.last_parse_result.selected_files == 2
-    assert thread.last_parse_result.imported_files == 2
-    assert thread.last_parse_result.already_present_files == 0
-    assert thread.last_parse_result.intentionally_excluded_files == 3
-    assert thread.last_parse_result.preflight_changed_files == 0
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=2,
+        selected=2,
+        imported=2,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=3,
+    )
 
 
 def test_empty_plan_is_immutable_and_performs_zero_writes(tmp_path):
@@ -125,9 +170,18 @@ def test_empty_plan_is_immutable_and_performs_zero_writes(tmp_path):
     thread.run()
 
     assert not database.exists()
-    assert thread.last_parse_result.selected_files == 0
-    assert thread.last_parse_result.imported_files == 0
-    assert thread.last_parse_result.intentionally_excluded_files == 2
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=0,
+        imported=0,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=2,
+    )
 
 
 def test_explicit_all_ready_adapter_preserves_current_behavior(tmp_path):
@@ -141,9 +195,18 @@ def test_explicit_all_ready_adapter_preserves_current_behavior(tmp_path):
     thread.run()
 
     assert len(_stored_source_hashes(database)) == 3
-    assert thread.last_parse_result.selected_files == 3
-    assert thread.last_parse_result.imported_files == 3
-    assert thread.last_parse_result.intentionally_excluded_files == 0
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=3,
+        selected=3,
+        imported=3,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_core_executor_rejects_a_missing_plan_before_database_write(tmp_path):
@@ -239,7 +302,11 @@ def test_non_ready_missing_or_tampered_identity_cannot_enter_a_valid_plan(tmp_pa
 
 
 @pytest.mark.parametrize("change", ("changed", "deleted"))
-def test_selected_file_changed_or_deleted_after_review_is_rejected(tmp_path, change):
+def test_selected_file_changed_or_deleted_after_review_is_rejected(
+    tmp_path,
+    monkeypatch,
+    change,
+):
     source = tmp_path / "reports"
     report = _write_unique_reports(source, 1)[0]
     database = tmp_path / f"{change}.db"
@@ -249,13 +316,215 @@ def test_selected_file_changed_or_deleted_after_review_is_rejected(tmp_path, cha
         report.write_bytes(b"changed after review")
     else:
         report.unlink()
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    filter_results = []
+
+    def capture_filter_result(thread, report_paths, import_plan):
+        result = original_filter(thread, report_paths, import_plan)
+        filter_results.append(result)
+        return result
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        capture_filter_result,
+    )
 
     thread = ParseReportsThread(plan)
     thread.run()
 
     assert not database.exists()
-    assert thread.last_parse_result.imported_files == 0
-    assert thread.last_parse_result.preflight_changed_files == 1
+    assert filter_results[0].selected_changed_files == 1
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=1,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_filter_stage_cancellation_keeps_changed_selected_report_out_of_cancelled(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 3)
+    database = tmp_path / "filter-cancel-changed.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    reports[1].write_bytes(b"changed after review")
+    thread = ParseReportsThread(plan)
+    original_from_path = SourceInspectionContext.from_path
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    inspected_reports = []
+    filter_results = []
+
+    def inspect_and_cancel_on_changed_report(cls, source_path, *, source_format=None):
+        inspection = original_from_path(source_path, source_format=source_format)
+        inspected_reports.append(Path(source_path).name)
+        if Path(source_path) == reports[1]:
+            assert inspection.sha256 is not None
+            thread.stop_parsing()
+        return inspection
+
+    def capture_filter_result(thread, report_paths, import_plan):
+        result = original_filter(thread, report_paths, import_plan)
+        filter_results.append(result)
+        return result
+
+    monkeypatch.setattr(
+        SourceInspectionContext,
+        "from_path",
+        classmethod(inspect_and_cancel_on_changed_report),
+    )
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        capture_filter_result,
+    )
+    database_opens = _track_database_opens(monkeypatch)
+
+    thread.run()
+
+    assert inspected_reports == [reports[0].name, reports[1].name]
+    assert filter_results[0].selected_changed_files == 1
+    assert database_opens == []
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=3,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
+
+
+def test_filter_stage_cancellation_before_classification_cancels_every_selected_report(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 3)
+    database = tmp_path / "filter-cancel-before-classification.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    thread = ParseReportsThread(plan)
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    inspection_calls = []
+
+    def cancel_before_filtering(thread, report_paths, import_plan):
+        thread.stop_parsing()
+        result = original_filter(thread, report_paths, import_plan)
+        filter_results.append(result)
+        return result
+
+    original_from_path = SourceInspectionContext.from_path
+    filter_results = []
+
+    def track_inspection(cls, source_path, *, source_format=None):
+        inspection_calls.append(Path(source_path))
+        return original_from_path(source_path, source_format=source_format)
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        cancel_before_filtering,
+    )
+    monkeypatch.setattr(
+        SourceInspectionContext,
+        "from_path",
+        classmethod(track_inspection),
+    )
+    database_opens = _track_database_opens(monkeypatch)
+
+    thread.run()
+
+    assert inspection_calls == []
+    assert filter_results[0].selected_changed_files == 0
+    assert database_opens == []
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=3,
+        imported=0,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=3,
+        excluded=0,
+    )
+
+
+def test_new_unreviewed_file_does_not_reduce_selected_cancellation_count(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 2)
+    database = tmp_path / "filter-cancel-new-file.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    new_report = source / "000-new-unreviewed.pdf"
+    new_report.write_bytes(FIXTURE.read_bytes() + b"\n% new-unreviewed\n")
+    thread = ParseReportsThread(plan)
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    original_occurrence_id = ParseReportsThread._occurrence_id_for_report
+    state = {"filtering": False}
+
+    def track_filtering(thread, report_paths, import_plan):
+        state["filtering"] = True
+        try:
+            result = original_filter(thread, report_paths, import_plan)
+            state["result"] = result
+            return result
+        finally:
+            state["filtering"] = False
+
+    def cancel_while_classifying_new_report(thread, report):
+        occurrence_id = original_occurrence_id(thread, report)
+        if state["filtering"] and Path(report) == new_report:
+            thread.stop_parsing()
+        return occurrence_id
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        track_filtering,
+    )
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_occurrence_id_for_report",
+        cancel_while_classifying_new_report,
+    )
+    database_opens = _track_database_opens(monkeypatch)
+
+    thread.run()
+
+    assert state["result"].selected_changed_files == 0
+    assert database_opens == []
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=2,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
 
 
 def test_new_file_is_rejected_and_unselected_ready_is_an_intentional_exclusion(tmp_path):
@@ -276,9 +545,18 @@ def test_new_file_is_rejected_and_unselected_ready_is_an_intentional_exclusion(t
     thread.run()
 
     assert len(_stored_source_hashes(database)) == 1
-    assert thread.last_parse_result.imported_files == 1
-    assert thread.last_parse_result.intentionally_excluded_files == 1
-    assert thread.last_parse_result.preflight_changed_files == 1
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=1,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=1,
+    )
 
 
 @pytest.mark.parametrize("drift", ("parser", "generation"))
@@ -316,8 +594,18 @@ def test_parser_identity_or_registry_generation_drift_rejects_selected_item(
     thread.run()
 
     assert not database.exists()
-    assert thread.last_parse_result.imported_files == 0
-    assert thread.last_parse_result.preflight_changed_files == 1
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=1,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_destination_becoming_duplicate_before_import_remains_safe(tmp_path):
@@ -335,9 +623,18 @@ def test_destination_becoming_duplicate_before_import_remains_safe(tmp_path):
     duplicate_recheck.run()
 
     assert _stored_source_hashes(database) == source_hashes_after_first_import
-    assert duplicate_recheck.last_parse_result.selected_files == 1
-    assert duplicate_recheck.last_parse_result.imported_files == 0
-    assert duplicate_recheck.last_parse_result.already_present_files == 1
+    _assert_selected_result_counts(
+        duplicate_recheck.last_parse_result,
+        parsed=1,
+        selected=1,
+        imported=0,
+        already_present=1,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_sequential_source_drift_after_filter_rejects_only_late_report(
@@ -371,10 +668,18 @@ def test_sequential_source_drift_after_filter_rejects_only_late_report(
     thread.run()
 
     assert _stored_source_hashes(database) == {report_a_hash}
-    assert thread.last_parse_result.imported_files == 1
-    assert thread.last_parse_result.preflight_changed_files == 1
-    assert thread.last_parse_result.failed_files == 0
-    assert thread.last_parse_result.intentionally_excluded_files == 0
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 @pytest.mark.parametrize("drift", ("parser", "generation"))
@@ -433,10 +738,18 @@ def test_sequential_parser_approval_drift_after_filter_is_changed_not_failed(
     thread.run()
 
     assert _stored_source_hashes(database) == {report_a_hash}
-    assert thread.last_parse_result.imported_files == 1
-    assert thread.last_parse_result.preflight_changed_files == 1
-    assert thread.last_parse_result.failed_files == 0
-    assert thread.last_parse_result.intentionally_excluded_files == 0
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_get_parser_validates_the_single_resolution_used_for_construction(
@@ -674,10 +987,18 @@ def test_sequential_late_ambiguity_is_changed_not_failed(
 
     assert state["report_a_persisted"]
     assert _stored_source_hashes(database) == {report_a_hash}
-    assert thread.last_parse_result.imported_files == 1
-    assert thread.last_parse_result.preflight_changed_files == 1
-    assert thread.last_parse_result.failed_files == 0
-    assert thread.last_parse_result.intentionally_excluded_files == 0
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_two_stage_late_ambiguity_is_changed_not_failed(
@@ -720,10 +1041,18 @@ def test_two_stage_late_ambiguity_is_changed_not_failed(
     thread.run()
 
     assert _stored_source_hashes(database) == {report_a_hash}
-    assert thread.last_parse_result.imported_files == 1
-    assert thread.last_parse_result.preflight_changed_files == 1
-    assert thread.last_parse_result.failed_files == 0
-    assert thread.last_parse_result.intentionally_excluded_files == 0
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_two_stage_late_source_drift_is_changed_and_keeps_identity_pairing(
@@ -758,10 +1087,18 @@ def test_two_stage_late_source_drift_is_changed_and_keeps_identity_pairing(
     thread.run()
 
     assert _stored_source_hashes(database) == {report_a_hash}
-    assert thread.last_parse_result.imported_files == 1
-    assert thread.last_parse_result.preflight_changed_files == 1
-    assert thread.last_parse_result.failed_files == 0
-    assert thread.last_parse_result.intentionally_excluded_files == 0
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_identical_content_has_deterministic_occurrence_identity(tmp_path):
@@ -810,7 +1147,18 @@ def test_archive_selection_survives_reextraction_without_temporary_path_identity
     thread.run()
 
     assert _stored_source_hashes(database) == {hashlib.sha256(selected_bytes).hexdigest()}
-    assert thread.last_parse_result.intentionally_excluded_files == 1
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=1,
+        imported=1,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=1,
+    )
 
 
 def test_cancellation_keeps_completed_atomic_report_and_truthful_counts(tmp_path):
@@ -837,9 +1185,70 @@ def test_cancellation_keeps_completed_atomic_report_and_truthful_counts(tmp_path
         completed = connection.execute("SELECT name FROM completed").fetchall()
 
     assert completed == [(reports[0].name,)]
-    assert result.selected_files == 3
-    assert result.imported_files == 1
-    assert result.cancelled_files == 2
+    _assert_selected_result_counts(
+        result,
+        parsed=1,
+        selected=3,
+        imported=1,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
+
+
+def test_two_stage_cancellation_keeps_completed_atomic_report_and_exact_counts(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 3)
+    database = tmp_path / "two-stage-cancelled.db"
+    cancel_requested = False
+    caller_thread_id = get_ident()
+    persistence_thread_ids = []
+
+    monkeypatch.setattr(
+        "metroliza.parsing.parse_reports_thread.as_completed",
+        lambda futures: iter(futures),
+    )
+
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE completed (name TEXT PRIMARY KEY)")
+
+        def persist_report(parser):
+            nonlocal cancel_requested
+            persistence_thread_ids.append(get_ident())
+            with connection:
+                connection.execute("INSERT INTO completed (name) VALUES (?)", (parser.name,))
+            cancel_requested = True
+
+        result = parse_new_reports(
+            reports,
+            set(),
+            parser_factory=lambda report, **_kwargs: SimpleNamespace(name=report.name),
+            persist_report=persist_report,
+            should_cancel=lambda: cancel_requested,
+            enable_two_stage_pipeline=True,
+            worker_count=1,
+        )
+        completed = connection.execute("SELECT name FROM completed").fetchall()
+
+    assert completed == [(reports[0].name,)]
+    assert persistence_thread_ids == [caller_thread_id]
+    _assert_selected_result_counts(
+        result,
+        parsed=1,
+        selected=3,
+        imported=1,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
 
 
 def test_two_stage_parsing_keeps_all_sqlite_writes_on_the_caller_thread(tmp_path):
@@ -866,9 +1275,20 @@ def test_two_stage_parsing_keeps_all_sqlite_writes_on_the_caller_thread(tmp_path
         )
         stored_count = connection.execute("SELECT COUNT(*) FROM completed").fetchone()[0]
 
-    assert result.imported_files == 3
     assert stored_count == 3
     assert persistence_thread_ids == [caller_thread_id] * 3
+    _assert_selected_result_counts(
+        result,
+        parsed=3,
+        selected=3,
+        imported=3,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
 
 
 def test_cancelled_preflight_cannot_build_a_plan(tmp_path):

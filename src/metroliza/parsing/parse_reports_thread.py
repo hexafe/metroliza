@@ -86,6 +86,7 @@ class _PreparedReportWorkItem:
 class _ImportPlanFilterResult:
     approved_reports: tuple[_SelectedReportWorkItem, ...]
     changed_files: int = 0
+    selected_changed_files: int = 0
 
     @property
     def approved_paths(self) -> tuple[Path, ...]:
@@ -1221,6 +1222,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         handled_selected_occurrences: set[str] = set()
         approved: list[_SelectedReportWorkItem] = []
         changed_files = 0
+        selected_changed_files = 0
 
         for report in report_paths:
             if self.parsing_canceled:
@@ -1246,6 +1248,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             fingerprint = f"sha256:{sha256_value}" if sha256_value else None
             if fingerprint != selected_identity.fingerprint:
                 changed_files += 1
+                selected_changed_files += 1
                 continue
 
             try:
@@ -1255,6 +1258,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 )
             except Exception:
                 changed_files += 1
+                selected_changed_files += 1
                 continue
             selected_parser_id = (
                 diagnostics.selected.plugin_id if diagnostics.selected is not None else None
@@ -1269,6 +1273,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 or resolved_registry_generation_id != selected_identity.registry_generation_id
             ):
                 changed_files += 1
+                selected_changed_files += 1
                 continue
             approved.append(
                 _SelectedReportWorkItem(
@@ -1281,9 +1286,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         if not self.parsing_canceled:
             missing_count = len(missing_selected_occurrences)
             changed_files += missing_count
+            selected_changed_files += missing_count
         return _ImportPlanFilterResult(
             approved_reports=tuple(approved),
             changed_files=changed_files,
+            selected_changed_files=selected_changed_files,
         )
 
     def _filter_reports_for_preflight(self, report_paths):
@@ -1564,7 +1571,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     selected_files=selected_files,
                     intentionally_excluded_files=intentionally_excluded_files,
                     cancelled_files=(
-                        selected_files
+                        max(
+                            0,
+                            selected_files - filter_result.selected_changed_files,
+                        )
                         if self.parsing_canceled
                         else 0
                     ),
