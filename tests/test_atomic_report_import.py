@@ -365,3 +365,43 @@ def test_locked_import_retry_is_bounded(tmp_path, monkeypatch):
             )
 
     assert retry_delays == [0.05, 0.05]
+
+
+def test_atomic_import_migrates_legacy_active_owners_before_duplicate_noop(tmp_path):
+    source = tmp_path / "synthetic.report"
+    source.write_bytes(b"legacy-owners")
+    database = tmp_path / "reports.sqlite3"
+    repository = ReportRepository(str(database))
+    repository.import_report_if_absent(source_path=source, **_payload("accepted"))
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("DROP INDEX idx_source_file_locations_active_path_unique")
+        connection.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
+        connection.execute(
+            "INSERT INTO source_files (sha256, source_format, discovered_at) "
+            "VALUES ('synthetic-old-owner', 'pdf', '2000-01-01')"
+        )
+        connection.execute(
+            "INSERT INTO source_file_locations "
+            "(source_file_id, absolute_path, directory_path, file_name, file_extension, "
+            "discovered_at) SELECT last_insert_rowid(), absolute_path, directory_path, "
+            "file_name, file_extension, '2000-01-01' FROM source_file_locations LIMIT 1"
+        )
+        connection.commit()
+    before = _normalized_snapshot(database)
+    for _ in range(2):
+        assert repository.import_report_if_absent(
+            source_path=source, **_payload("duplicate")
+        ) is ReportImportDisposition.ALREADY_PRESENT
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute(
+                "SELECT value FROM app_schema WHERE key = 'source_location_ownership_version'"
+            ).fetchone() == ("1",)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM source_file_locations WHERE is_active = 1"
+            ).fetchone() == (1,)
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute("UPDATE source_file_locations SET is_active = 1")
+        after = _normalized_snapshot(database)
+        assert {k: v for k, v in after.items() if k != "source_file_locations"} == {
+            k: v for k, v in before.items() if k != "source_file_locations"
+        }
