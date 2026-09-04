@@ -68,6 +68,13 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
             raise unittest.SkipTest(f'PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}')
         cls.app = QApplication.instance() or QApplication([])
 
+    def _completion_feedback(self, **result_fields):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(**result_fields),
+        )
+        return dialog._build_parse_completion_feedback()
+
     def test_cancel_directory_and_decline_archive_keeps_selection_empty(self):
         dialog = ParsingDialog(parent=None, directory=None, db_file=None)
 
@@ -366,8 +373,342 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         information_mock.assert_not_called()
         warning_mock.assert_called_once()
         self.assertEqual(warning_mock.call_args.args[1], "Parsing completed with warnings")
-        self.assertIn("2 of 3 report files completed successfully", warning_mock.call_args.args[2])
-        self.assertIn("1 report file could not be parsed", warning_mock.call_args.args[2])
+        message = warning_mock.call_args.args[2]
+        self.assertIn("Completed and available in the destination: 2 report files", message)
+        self.assertIn("1 report file could not be parsed", message)
+        self.assertNotIn("2 of 3", message)
+
+    def test_completion_keeps_historical_unsupported_with_changed_evidence(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(
+                total_files=2,
+                parsed_files=1,
+                failed_files=0,
+                preflight_unsupported_files=1,
+                preflight_changed_files=1,
+            ),
+        )
+
+        severity, title, message = dialog._build_parse_completion_feedback()
+
+        self.assertIn("Import outcome:", message)
+        self.assertIn("Completed and available in the destination: 1 report file", message)
+        self.assertIn("Review snapshot:", message)
+        self.assertIn("Unsupported during review: 1 report file", message)
+        self.assertIn("Changed since review:", message)
+        self.assertEqual((severity, title), ("warning", "Parsing completed with warnings"))
+        self.assertLess(message.index("Import outcome:"), message.index("Review snapshot:"))
+        self.assertLess(message.index("Review snapshot:"), message.index("Changed since review:"))
+
+    def test_completion_keeps_historical_destination_match_with_changed_evidence(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(
+                total_files=2,
+                parsed_files=0,
+                failed_files=0,
+                preflight_duplicate_files=1,
+                preflight_changed_files=1,
+            ),
+        )
+
+        severity, title, message = dialog._build_parse_completion_feedback()
+
+        self.assertIn("Review snapshot:", message)
+        self.assertIn("Matched the destination during review: 1 report file", message)
+        self.assertIn("Changed since review:", message)
+        self.assertEqual((severity, title), ("warning", "No reports imported"))
+
+    def test_completion_shows_repaired_destination_overlap_as_two_domains(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(
+                total_files=1,
+                parsed_files=1,
+                imported_files=1,
+                already_present_files=0,
+                failed_files=0,
+                preflight_duplicate_files=1,
+                preflight_changed_files=0,
+            ),
+        )
+
+        severity, title, message = dialog._build_parse_completion_feedback()
+
+        self.assertIn("Saved: 1 report file", message)
+        self.assertIn("Matched the destination during review: 1 report file", message)
+        self.assertNotIn("omission", message.lower())
+        self.assertNotIn("already imported", message.lower())
+        self.assertNotIn("of 1", message.lower())
+        self.assertEqual((severity, title), ("info", "Import successful"))
+
+    def test_completion_shows_unchanged_destination_overlap_without_double_counting(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(
+                total_files=1,
+                parsed_files=1,
+                imported_files=0,
+                already_present_files=1,
+                failed_files=0,
+                preflight_duplicate_files=1,
+            ),
+        )
+
+        severity, title, message = dialog._build_parse_completion_feedback()
+
+        self.assertIn("Already present at import time: 1 report file", message)
+        self.assertIn("Matched the destination during review: 1 report file", message)
+        self.assertIn("Nothing new was saved", message)
+        self.assertNotIn("of 1", message.lower())
+        self.assertEqual((severity, title), ("info", "No new reports saved"))
+
+    def test_completion_result_contract_matrix(self):
+        cases = (
+            (
+                "legacy success",
+                dict(total_files=1, parsed_files=1, failed_files=0),
+                ("info", "Parsing successful"),
+                ("Completed and available in the destination: 1 report file",),
+                ("Saved:", "Already present at import time:"),
+            ),
+            (
+                "typed success",
+                dict(
+                    total_files=1,
+                    parsed_files=1,
+                    imported_files=1,
+                    already_present_files=0,
+                ),
+                ("info", "Import successful"),
+                ("Saved: 1 report file",),
+                ("Completed and available in the destination",),
+            ),
+            (
+                "partial failure",
+                dict(
+                    total_files=2,
+                    parsed_files=1,
+                    imported_files=1,
+                    already_present_files=0,
+                    failed_files=1,
+                ),
+                ("warning", "Parsing completed with warnings"),
+                ("Saved: 1 report file", "Failed: 1 report file could not be parsed"),
+                (),
+            ),
+            (
+                "partial changed",
+                dict(
+                    total_files=2,
+                    parsed_files=1,
+                    imported_files=1,
+                    already_present_files=0,
+                    preflight_changed_files=1,
+                ),
+                ("warning", "Parsing completed with warnings"),
+                ("Saved: 1 report file", "Changed since review:"),
+                (),
+            ),
+            (
+                "all historical attention categories",
+                dict(
+                    total_files=4,
+                    parsed_files=0,
+                    preflight_duplicate_files=1,
+                    preflight_unsupported_files=1,
+                    preflight_ambiguous_files=1,
+                    preflight_unreadable_files=1,
+                ),
+                ("warning", "No compatible reports parsed"),
+                (
+                    "Matched the destination during review: 1 report file",
+                    "Unsupported during review: 1 report file",
+                    "Ambiguous during review: 1 report file",
+                    "Unreadable during review: 1 report file",
+                ),
+                ("Already imported",),
+            ),
+            (
+                "all already present",
+                dict(
+                    total_files=2,
+                    parsed_files=2,
+                    imported_files=0,
+                    already_present_files=2,
+                ),
+                ("info", "No new reports saved"),
+                (
+                    "Already present at import time: 2 report files",
+                    "Nothing new was saved",
+                ),
+                ("Completed and available in the destination",),
+            ),
+            (
+                "cancelled before completion",
+                dict(
+                    total_files=2,
+                    parsed_files=0,
+                    selected_files=2,
+                    imported_files=0,
+                    already_present_files=0,
+                    cancelled_files=2,
+                ),
+                ("warning", "Import cancelled"),
+                ("Cancelled: 2 report files", "Nothing new was saved"),
+                (),
+            ),
+            (
+                "partial cancellation",
+                dict(
+                    total_files=2,
+                    parsed_files=1,
+                    selected_files=2,
+                    imported_files=1,
+                    already_present_files=0,
+                    cancelled_files=1,
+                ),
+                ("warning", "Parsing completed with warnings"),
+                ("Saved: 1 report file", "Cancelled: 1 report file"),
+                (),
+            ),
+            (
+                "reviewed but none selected",
+                dict(
+                    total_files=2,
+                    parsed_files=0,
+                    selected_files=0,
+                    imported_files=0,
+                    already_present_files=0,
+                ),
+                ("info", "No reports selected"),
+                ("none were selected or approved for import", "Nothing new was saved"),
+                (),
+            ),
+            (
+                "intentional empty plan",
+                dict(
+                    total_files=2,
+                    parsed_files=0,
+                    selected_files=0,
+                    imported_files=0,
+                    already_present_files=0,
+                    intentionally_excluded_files=2,
+                ),
+                ("info", "No reports selected"),
+                ("Intentionally not selected: 2 report files", "Nothing new was saved"),
+                ("Failed",),
+            ),
+            (
+                "mixed typed outcomes",
+                dict(
+                    total_files=3,
+                    parsed_files=2,
+                    selected_files=2,
+                    imported_files=1,
+                    already_present_files=1,
+                    intentionally_excluded_files=1,
+                ),
+                ("info", "Import successful"),
+                (
+                    "Saved: 1 report file",
+                    "Already present at import time: 1 report file",
+                    "Intentionally not selected: 1 report file",
+                ),
+                (),
+            ),
+            (
+                "all failed",
+                dict(
+                    total_files=2,
+                    parsed_files=0,
+                    selected_files=2,
+                    imported_files=0,
+                    already_present_files=0,
+                    failed_files=2,
+                ),
+                ("warning", "No reports imported"),
+                ("Failed: 2 report files could not be parsed", "Nothing new was saved"),
+                (),
+            ),
+            (
+                "typed zeros do not use legacy parsed count",
+                dict(
+                    total_files=2,
+                    parsed_files=2,
+                    selected_files=2,
+                    imported_files=0,
+                    already_present_files=0,
+                ),
+                ("info", "No new reports saved"),
+                ("Nothing new was saved",),
+                ("Completed and available in the destination", "Saved:"),
+            ),
+            (
+                "runtime skip and historical unsupported stay separate",
+                dict(
+                    total_files=2,
+                    parsed_files=0,
+                    skipped_files=1,
+                    preflight_unsupported_files=1,
+                ),
+                ("warning", "No compatible reports parsed"),
+                (
+                    "Runtime-skipped. Unsupported based on file contents and skipped: 1 report file",
+                    "Unsupported during review: 1 report file",
+                ),
+                ("Unsupported during review: 2",),
+            ),
+            (
+                "overlapping historical and changed evidence",
+                dict(
+                    total_files=2,
+                    parsed_files=1,
+                    imported_files=1,
+                    already_present_files=0,
+                    preflight_duplicate_files=1,
+                    preflight_unsupported_files=1,
+                    preflight_ambiguous_files=1,
+                    preflight_unreadable_files=1,
+                    preflight_changed_files=1,
+                ),
+                ("warning", "Parsing completed with warnings"),
+                (
+                    "Saved: 1 report file",
+                    "Matched the destination during review: 1 report file",
+                    "Unsupported during review: 1 report file",
+                    "Ambiguous during review: 1 report file",
+                    "Unreadable during review: 1 report file",
+                    "Changed since review:",
+                ),
+                (),
+            ),
+        )
+
+        for name, fields, expected_heading, expected, forbidden in cases:
+            with self.subTest(name=name):
+                severity, title, message = self._completion_feedback(**fields)
+                self.assertEqual((severity, title), expected_heading)
+                for fragment in expected:
+                    self.assertIn(fragment, message)
+                for fragment in forbidden:
+                    self.assertNotIn(fragment, message)
+                self.assertNotRegex(message, r"\b\d+ of \d+\b")
+
+    def test_scan_summary_labels_destination_matches_as_review_snapshot(self):
+        from metroliza.parsing.preflight import ParsePreflightStatus
+
+        counts = {status: 0 for status in ParsePreflightStatus}
+        counts[ParsePreflightStatus.READY] = 1
+        counts[ParsePreflightStatus.DUPLICATE] = 1
+
+        message = ParsingDialog._preflight_summary_text(
+            SimpleNamespace(status_counts=counts),
+        )
+
+        self.assertIn("1 matched destination during review", message)
+        self.assertNotIn("already imported", message.lower())
 
     def test_canceled_parse_does_not_request_modeless_metadata_enrichment(self):
         parent = _DummyParent()
@@ -384,6 +725,32 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(emitted, [])
         self.assertEqual(parent.enrichment_launches, 0)
         self.assertFalse(dialog._pending_modeless_metadata_enrichment)
+
+    def test_partial_cancellation_uses_truthful_result_summary(self):
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        dialog.loading_dialog = _ProgressDialog()
+        dialog.parsing_canceled = True
+        dialog.parse_thread = SimpleNamespace(
+            last_parse_result=SimpleNamespace(
+                total_files=2,
+                parsed_files=1,
+                selected_files=2,
+                imported_files=1,
+                already_present_files=0,
+                cancelled_files=1,
+            ),
+        )
+
+        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+                dialog.on_parse_finished()
+
+        information_mock.assert_not_called()
+        warning_mock.assert_called_once()
+        self.assertEqual(warning_mock.call_args.args[1], "Parsing completed with warnings")
+        self.assertIn("Saved: 1 report file", warning_mock.call_args.args[2])
+        self.assertIn("Cancelled: 1 report file", warning_mock.call_args.args[2])
+        self.assertFalse(dialog.parsing_canceled)
 
     def test_failed_parse_does_not_request_modeless_metadata_enrichment(self):
         parent = _DummyParent()
