@@ -15,7 +15,7 @@ from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_con
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_schema import (
-    SCHEMA_VERSION,
+    is_report_schema_ready,
     ensure_report_schema,
     upsert_report_parse_state,
 )
@@ -290,44 +290,23 @@ class ReportRepository:
     def ensure_schema(self) -> None:
         ensure_report_schema(self.database, connection=self.connection)
 
-    @staticmethod
-    def _has_current_report_schema(connection) -> bool:
-        required_tables = {
-            "app_schema",
-            "source_files",
-            "source_file_locations",
-            "parsed_reports",
-            "report_metadata",
-            "report_parse_state",
-            "report_metadata_candidates",
-            "report_metadata_warnings",
-            "report_measurements",
-        }
-        try:
-            table_rows = connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-            if not required_tables.issubset(str(row[0]) for row in table_rows):
-                return False
-            version_row = connection.execute(
-                "SELECT value FROM app_schema WHERE key = 'schema_version'"
-            ).fetchone()
-        except Exception:
-            return False
-        return version_row is not None and version_row[0] == SCHEMA_VERSION
-
-    def _ensure_import_schema(self) -> None:
+    def _import_schema_is_ready(self) -> bool:
         if self.connection is not None:
-            if self._has_current_report_schema(self.connection):
-                return
-        elif Path(self.database).is_file():
+            return is_report_schema_ready(self.connection)
+        if Path(self.database).is_file():
             try:
                 with sqlite_readonly_connection_scope(self.database) as connection:
-                    if self._has_current_report_schema(connection):
-                        return
+                    return is_report_schema_ready(connection)
             except OSError:
                 pass
+        return False
+
+    def _ensure_import_schema(self) -> None:
+        if self._import_schema_is_ready():
+            return
         self.ensure_schema()
+        if not self._import_schema_is_ready():
+            raise RuntimeError("Report schema is not ready after the existing migration")
 
     @staticmethod
     def _source_file_observation(

@@ -6,6 +6,8 @@ import sqlite3
 import time
 
 import pytest
+
+from metroliza.parsing import report_parser_factory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -296,6 +298,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
                     fingerprint='sha256:abc',
                     parser_id='cmm',
                     confidence=90,
+                    registry_generation_id=report_parser_factory.get_registry_snapshot().generation_id,
                 ),
             ),
         )
@@ -910,4 +913,77 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
     finally:
         for worker in workers:
             worker.wait(15000)
+        dialog.close()
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("ready", True), ("destination", True), ("source-copy", False),
+    ("unsupported", False), ("ambiguous", False), ("unreadable", False),
+    ("cancelled", False), ("stale-source", False), ("stale-database", False),
+    ("stale-mode", False), ("stale-generation", False), ("no-generation", False),
+    ("no-parser", False), ("no-fingerprint", False),
+    ("no-source", False), ("no-database", False),
+])
+def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expected):
+    from dataclasses import replace
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+    from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
+    from metroliza.shared.parse_contracts import ParseRequest
+    from metroliza.ui.parsing_dialog import ParsingDialog
+
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / "synthetic.pdf"
+    shutil.copyfile(Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf", source)
+    database = tmp_path / "new.sqlite3"
+    review = ParsePreflightService().scan_source(
+        source_path=source, database_path=database, metadata_parsing_mode="light"
+    )
+    item = review.files[0]
+    assert item.status is ParsePreflightStatus.READY
+    item_changes = {
+        "destination": {"status": ParsePreflightStatus.DUPLICATE},
+        "source-copy": {"status": ParsePreflightStatus.DUPLICATE,
+                        "reason_codes": ("duplicate_in_selected_source",)},
+        "unsupported": {"status": ParsePreflightStatus.UNSUPPORTED},
+        "ambiguous": {"status": ParsePreflightStatus.AMBIGUOUS},
+        "unreadable": {"status": ParsePreflightStatus.UNREADABLE},
+        "stale-generation": {"registry_generation_id": item.registry_generation_id - 1},
+        "no-generation": {"registry_generation_id": None},
+        "no-parser": {"parser_id": None}, "no-fingerprint": {"fingerprint": None},
+    }
+    item = replace(item, **item_changes.get(case, {}))
+    review = replace(review, files=(item,))
+    review_changes = {
+        "cancelled": {"cancelled": True}, "stale-source": {"source_path": str(tmp_path / "other")},
+        "stale-database": {"database_path": str(tmp_path / "other.db")},
+        "stale-mode": {"metadata_parsing_mode": "complete"},
+    }
+    review = replace(review, **review_changes.get(case, {}))
+    dialog = ParsingDialog(directory=str(source), db_file=str(database))
+    worker = ParseReportsThread(ParseRequest(
+        source_directory=str(source), db_file=str(database), metadata_parsing_mode="light"
+    ))
+    if case == "no-source":
+        dialog.directory = worker.directory = ""
+    if case == "no-database":
+        dialog.db_file = worker.db_file = ""
+    dialog._preflight_result = worker.preflight_result = review
+    try:
+        dialog._sync_readiness_state()
+        assert dialog.parse_button.isEnabled() is expected
+        approved, _changed = worker._filter_reports_for_preflight([source])
+        assert approved == ([source] if expected else [])
+        assert review.files == (item,)
+        assert not database.exists()
+        if not expected:
+            starts = []
+            monkeypatch.setattr("metroliza.ui.parsing_dialog.ParseReportsThread", starts.append)
+            dialog.parse_button.click()
+            dialog._import_reviewed_reports()  # Recheck the dispatch seam, too.
+            app.processEvents()
+            assert starts == []
+            assert "No eligible reviewed reports" in dialog.parse_button.toolTip()
+        else:
+            assert "1 eligible for import / verification" in dialog.readiness_label.text()
+    finally:
         dialog.close()

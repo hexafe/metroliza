@@ -1056,14 +1056,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         expected_fingerprint_counts = Counter(
             item.fingerprint for item in preflight.files if item.fingerprint
         )
-        atomic_import_items = tuple(
-            item
-            for item in preflight.files
-            if item.status is ParsePreflightStatus.READY
-            or (
-                item.status is ParsePreflightStatus.DUPLICATE
-                and "duplicate_in_selected_source" not in item.reason_codes
-            )
+        atomic_import_items = preflight.atomic_import_candidates(
+            source_path=self.directory,
+            database_path=self.db_file,
+            metadata_parsing_mode=self.metadata_parsing_mode,
+            registry_generation_id=report_parser_factory.get_registry_snapshot().generation_id,
         )
         atomic_import_fingerprint_counts = Counter(
             item.fingerprint for item in atomic_import_items if item.fingerprint

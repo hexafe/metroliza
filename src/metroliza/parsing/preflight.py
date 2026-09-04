@@ -447,6 +447,42 @@ class ParsePreflightResult:
     def status_counts(self) -> dict[ParsePreflightStatus, int]:
         return {status: self.count(status) for status in ParsePreflightStatus}
 
+    def atomic_import_candidates(
+        self,
+        *,
+        source_path: str,
+        database_path: str,
+        metadata_parsing_mode: str,
+        registry_generation_id: int | None,
+    ) -> tuple[ParseFilePreflight, ...]:
+        """Return approved candidates for verification, without reading or writing data.
+
+        DUPLICATE is historical destination evidence, not a complete-graph or
+        write decision. Only the atomic repository can make that decision.
+        A selected-plan adapter must additionally intersect its selected set.
+        """
+
+        if (
+            self.cancelled
+            or not source_path
+            or not database_path
+            or registry_generation_id is None
+            or not self.matches_request(
+                source_path=source_path,
+                database_path=database_path,
+                metadata_parsing_mode=metadata_parsing_mode,
+            )
+        ):
+            return ()
+        return tuple(
+            item for item in self.files
+            if item.status in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
+            and "duplicate_in_selected_source" not in item.reason_codes
+            and item.fingerprint
+            and item.parser_id
+            and item.registry_generation_id == registry_generation_id
+        )
+
     def matches_request(
         self,
         *,

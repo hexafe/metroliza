@@ -405,3 +405,82 @@ def test_atomic_import_migrates_legacy_active_owners_before_duplicate_noop(tmp_p
         assert {k: v for k, v in after.items() if k != "source_file_locations"} == {
             k: v for k, v in before.items() if k != "source_file_locations"
         }
+
+
+@pytest.mark.parametrize("damage", [
+    "current", "missing-marker", "stale-marker", "missing-index", "old-main-version",
+    "wrong-nonunique", "wrong-column", "wrong-predicate",
+])
+@pytest.mark.parametrize("shared_connection", [False, True])
+def test_schema_readiness_is_readonly_and_existing_migration_is_idempotent(
+    tmp_path, monkeypatch, damage, shared_connection
+):
+    from metroliza.reports.report_schema import is_report_schema_ready
+
+    source = tmp_path / "synthetic.report"
+    source.write_bytes(b"schema-readiness")
+    database = tmp_path / "reports.sqlite3"
+    ReportRepository(str(database)).import_report_if_absent(source_path=source, **_payload("accepted"))
+    with closing(connect_sqlite(str(database))) as connection:
+        if damage == "missing-marker":
+            connection.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
+        elif damage in ("stale-marker", "old-main-version"):
+            key = "schema_version" if damage == "old-main-version" else "source_location_ownership_version"
+            connection.execute("UPDATE app_schema SET value = '0' WHERE key = ?", (key,))
+        elif damage != "current":
+            connection.execute("DROP INDEX idx_source_file_locations_active_path_unique")
+            wrong_statements = {
+                "wrong-nonunique": "CREATE INDEX idx_source_file_locations_active_path_unique "
+                                   "ON source_file_locations(absolute_path) WHERE is_active = 1",
+                "wrong-column": "CREATE UNIQUE INDEX idx_source_file_locations_active_path_unique "
+                                "ON source_file_locations(file_name) WHERE is_active = 1",
+                "wrong-predicate": "CREATE UNIQUE INDEX idx_source_file_locations_active_path_unique "
+                                   "ON source_file_locations(absolute_path) WHERE is_active = 0",
+            }
+            if damage in wrong_statements:
+                connection.execute(wrong_statements[damage])
+        connection.commit()
+        before = _normalized_snapshot(database)
+        statements = []
+        connection.set_trace_callback(statements.append)
+        assert is_report_schema_ready(connection) is (damage == "current")
+        assert not connection.in_transaction
+        assert all(sql.startswith(("SELECT", "PRAGMA")) for sql in statements)
+        repository = ReportRepository(str(database), connection=connection if shared_connection else None)
+        ensure_calls = []
+        original_ensure = repository.ensure_schema
+
+        def record_ensure():
+            ensure_calls.append(True)
+            original_ensure()
+
+        monkeypatch.setattr(repository, "ensure_schema", record_ensure)
+        for _ in range(2):
+            if damage.startswith("wrong-"):
+                with pytest.raises(RuntimeError, match="schema is not ready"):
+                    repository.import_report_if_absent(source_path=source, **_payload("duplicate"))
+                assert not is_report_schema_ready(connection)
+            else:
+                assert repository.import_report_if_absent(
+                    source_path=source, **_payload("duplicate")
+                ) is ReportImportDisposition.ALREADY_PRESENT
+                assert is_report_schema_ready(connection)
+            assert _normalized_snapshot(database) == before
+        assert len(ensure_calls) == (2 if damage.startswith("wrong-") else int(damage != "current"))
+
+
+def test_digest_mismatch_precedes_schema_probe_and_database_creation(tmp_path, monkeypatch):
+    source = tmp_path / "synthetic.report"
+    source.write_bytes(b"current")
+    database = tmp_path / "absent.sqlite3"
+    repository = ReportRepository(str(database))
+
+    def forbidden_schema_probe():
+        raise AssertionError("digest rejection must precede all schema work")
+
+    monkeypatch.setattr(repository, "_ensure_import_schema", forbidden_schema_probe)
+    with pytest.raises(ValueError, match="digest"):
+        repository.import_report_if_absent(
+            source_path=source, source_sha256="0" * 64, **_payload("stale")
+        )
+    assert not database.exists()
