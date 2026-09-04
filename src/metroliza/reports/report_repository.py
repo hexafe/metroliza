@@ -73,6 +73,41 @@ MEASUREMENT_EDITABLE_FIELDS = frozenset(
 MEASUREMENT_FLOAT_FIELDS = frozenset({"nominal", "tol_plus", "tol_minus", "bonus", "meas", "dev", "outtol"})
 MEASUREMENT_INT_FIELDS = frozenset({"page_number", "row_order"})
 MEASUREMENT_STATUS_CODES = frozenset({"ok", "nok", "unknown"})
+REPORT_METADATA_FIELD_UPDATE_SQL = {
+    "reference": "UPDATE report_metadata SET reference = ? WHERE report_id = ?",
+    "report_date": "UPDATE report_metadata SET report_date = ? WHERE report_id = ?",
+    "report_time": "UPDATE report_metadata SET report_time = ? WHERE report_id = ?",
+    "part_name": "UPDATE report_metadata SET part_name = ? WHERE report_id = ?",
+    "revision": "UPDATE report_metadata SET revision = ? WHERE report_id = ?",
+    "sample_number": "UPDATE report_metadata SET sample_number = ? WHERE report_id = ?",
+    "operator_name": "UPDATE report_metadata SET operator_name = ? WHERE report_id = ?",
+    "comment": "UPDATE report_metadata SET comment = ? WHERE report_id = ?",
+    "stats_count_raw": "UPDATE report_metadata SET stats_count_raw = ? WHERE report_id = ?",
+    "stats_count_int": "UPDATE report_metadata SET stats_count_int = ? WHERE report_id = ?",
+}
+MEASUREMENT_FIELD_UPDATE_SQL = {
+    "header": "UPDATE report_measurements SET header = ? WHERE id = ?",
+    "section_name": "UPDATE report_measurements SET section_name = ? WHERE id = ?",
+    "feature_label": "UPDATE report_measurements SET feature_label = ? WHERE id = ?",
+    "characteristic_name": "UPDATE report_measurements SET characteristic_name = ? WHERE id = ?",
+    "characteristic_family": "UPDATE report_measurements SET characteristic_family = ? WHERE id = ?",
+    "description": "UPDATE report_measurements SET description = ? WHERE id = ?",
+    "ax": "UPDATE report_measurements SET ax = ? WHERE id = ?",
+    "nominal": "UPDATE report_measurements SET nominal = ? WHERE id = ?",
+    "tol_plus": "UPDATE report_measurements SET tol_plus = ? WHERE id = ?",
+    "tol_minus": "UPDATE report_measurements SET tol_minus = ? WHERE id = ?",
+    "bonus": "UPDATE report_measurements SET bonus = ? WHERE id = ?",
+    "meas": "UPDATE report_measurements SET meas = ? WHERE id = ?",
+    "dev": "UPDATE report_measurements SET dev = ? WHERE id = ?",
+    "outtol": "UPDATE report_measurements SET outtol = ? WHERE id = ?",
+    "page_number": "UPDATE report_measurements SET page_number = ? WHERE id = ?",
+    "row_order": "UPDATE report_measurements SET row_order = ? WHERE id = ?",
+    "status_code": "UPDATE report_measurements SET status_code = ? WHERE id = ?",
+    "is_nok": "UPDATE report_measurements SET is_nok = ? WHERE id = ?",
+    "raw_measurement_json": (
+        "UPDATE report_measurements SET raw_measurement_json = ? WHERE id = ?"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -822,29 +857,30 @@ class ReportRepository:
             self._replace_metadata_candidates(cursor, report_id, candidates)
             self._replace_metadata_warnings(cursor, report_id, warnings)
 
-            parsed_report_updates = ["updated_at = ?"]
-            parsed_report_params: list[Any] = [now]
-            if parse_status is not None:
-                parsed_report_updates.append("parse_status = ?")
-                parsed_report_params.append(parse_status)
-            if metadata_confidence is not None:
-                parsed_report_updates.append("metadata_confidence = ?")
-                parsed_report_params.append(float(metadata_confidence))
-            if identity_hash is not _UNSET:
-                parsed_report_updates.append("identity_hash = ?")
-                parsed_report_params.append(identity_hash)
-            if raw_report_json is not _UNSET:
-                parsed_report_updates.append("raw_report_json = ?")
-                parsed_report_params.append(_to_json(raw_report_json))
-            parsed_report_params.append(int(report_id))
             cursor.execute(
-                f"""
-                UPDATE parsed_reports
-                SET {", ".join(parsed_report_updates)}
-                WHERE id = ?
-                """,
-                tuple(parsed_report_params),
+                "UPDATE parsed_reports SET updated_at = ? WHERE id = ?",
+                (now, int(report_id)),
             )
+            if parse_status is not None:
+                cursor.execute(
+                    "UPDATE parsed_reports SET parse_status = ? WHERE id = ?",
+                    (parse_status, int(report_id)),
+                )
+            if metadata_confidence is not None:
+                cursor.execute(
+                    "UPDATE parsed_reports SET metadata_confidence = ? WHERE id = ?",
+                    (float(metadata_confidence), int(report_id)),
+                )
+            if identity_hash is not _UNSET:
+                cursor.execute(
+                    "UPDATE parsed_reports SET identity_hash = ? WHERE id = ?",
+                    (identity_hash, int(report_id)),
+                )
+            if raw_report_json is not _UNSET:
+                cursor.execute(
+                    "UPDATE parsed_reports SET raw_report_json = ? WHERE id = ?",
+                    (_to_json(raw_report_json), int(report_id)),
+                )
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
@@ -1073,18 +1109,14 @@ class ReportRepository:
             metadata_json["field_sources"] = field_sources
             metadata_json["manual_overrides"] = manual_overrides
 
-            assignments = [f"{field_name} = ?" for field_name in normalized_fields]
-            assignments.append("metadata_json = ?")
-            params = [normalized_fields[field_name] for field_name in normalized_fields]
-            params.append(_to_json(metadata_json))
-            params.append(int(report_id))
+            for field_name, value in normalized_fields.items():
+                cursor.execute(
+                    REPORT_METADATA_FIELD_UPDATE_SQL[field_name],
+                    (value, int(report_id)),
+                )
             cursor.execute(
-                f"""
-                UPDATE report_metadata
-                SET {", ".join(assignments)}
-                WHERE report_id = ?
-                """,
-                tuple(params),
+                "UPDATE report_metadata SET metadata_json = ? WHERE report_id = ?",
+                (_to_json(metadata_json), int(report_id)),
             )
             upsert_report_parse_state(cursor, int(report_id), metadata_json)
 
@@ -1255,17 +1287,11 @@ class ReportRepository:
         measurement_id: int,
         update_values: dict[str, Any],
     ) -> None:
-        assignments = [f"{field_name} = ?" for field_name in update_values]
-        params = [update_values[field_name] for field_name in update_values]
-        params.append(int(measurement_id))
-        cursor.execute(
-            f"""
-            UPDATE report_measurements
-            SET {", ".join(assignments)}
-            WHERE id = ?
-            """,
-            tuple(params),
-        )
+        for field_name, value in update_values.items():
+            cursor.execute(
+                MEASUREMENT_FIELD_UPDATE_SQL[field_name],
+                (value, int(measurement_id)),
+            )
 
     def update_measurement_fields(
         self,
