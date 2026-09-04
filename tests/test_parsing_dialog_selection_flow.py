@@ -822,7 +822,26 @@ if __name__ == '__main__':
 
 
 @pytest.mark.parametrize("accepted", [False, True], ids=["incomplete", "accepted"])
-def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monkeypatch, accepted):
+def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monkeypatch, accepted, request):
+    # The complete suite shares Qt application/window state. Exercise the real
+    # modal click/worker flow in a fresh Qt process, as in an application launch.
+    import os
+    import subprocess
+    import sys
+
+    if os.environ.get("METROLIZA_ATOMIC_UI_TEST_CHILD") != "1":
+        environment = dict(os.environ, METROLIZA_ATOMIC_UI_TEST_CHILD="1", QT_QPA_PLATFORM="offscreen")
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", request.node.nodeid, "-q"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        return
+
     from PyQt6.QtTest import QTest
     from metroliza.parsing.parse_reports_thread import ParseReportsThread
     from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
@@ -887,6 +906,7 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
             before = graph()
             assert dialog.parse_button.isEnabled()
             QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
+            assert len(workers) == attempt + 1, feedback
             deadline = time.monotonic() + 15
             while (len(feedback) <= attempt or workers[-1].isRunning()) and time.monotonic() < deadline:
                 app.processEvents()
