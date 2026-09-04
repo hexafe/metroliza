@@ -10,7 +10,11 @@ from metroliza.parsing.parser_plugin_contracts import ParseResultV2
 from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata, MetadataWarning
-from metroliza.reports.report_repository import ReportRepository
+from metroliza.reports.report_repository import (
+    ReportImportDisposition,
+    ReportImportPolicy,
+    ReportRepository,
+)
 
 
 MAX_RAW_PROVENANCE_DIAGNOSTICS = 50
@@ -446,6 +450,39 @@ def persist_parse_result_v2(
     )
 
 
+def import_parse_result_v2_if_absent(
+    parse_result: ParseResultV2,
+    *,
+    source_path: str | Path,
+    database: str,
+    connection=None,
+    manifest: Any = None,
+    source_sha256: str | None = None,
+    source_inspection: SourceInspectionContext | None = None,
+    import_policy: ReportImportPolicy | None = None,
+) -> ReportImportDisposition:
+    """Build and atomically import a generic plugin result without clobbering."""
+
+    payload = build_persistence_payload(
+        parse_result,
+        source_path=source_path,
+        manifest=manifest,
+        expected_source_format=(
+            source_inspection.source_format if source_inspection is not None else None
+        ),
+    )
+    return import_parse_result_v2_payload_if_absent(
+        payload,
+        parse_result=parse_result,
+        source_path=source_path,
+        database=database,
+        connection=connection,
+        source_sha256=source_sha256,
+        source_inspection=source_inspection,
+        import_policy=import_policy,
+    )
+
+
 def persist_parse_result_v2_payload(
     payload: ParseResultV2PersistencePayload,
     *,
@@ -484,6 +521,56 @@ def persist_parse_result_v2_payload(
     return repository.persist_parsed_report(
         source_path=source_path,
         source_sha256=verified_source_sha256,
+        parser_id=payload.metadata.parser_id,
+        parser_version=parse_result.meta.plugin_version,
+        template_family=payload.metadata.template_family,
+        template_variant=payload.metadata.template_variant,
+        parse_status=payload.parse_status,
+        metadata=payload.metadata,
+        candidates=(),
+        warnings=payload.warnings,
+        measurements=payload.measurements,
+        metadata_version="parse_result_v2",
+        metadata_confidence=payload.metadata.metadata_confidence,
+        identity_hash=payload.identity_hash,
+        raw_report_json=payload.raw_report_json,
+        measurement_count=payload.measurement_count,
+        has_nok=payload.has_nok,
+        nok_count=payload.nok_count,
+    )
+
+
+def import_parse_result_v2_payload_if_absent(
+    payload: ParseResultV2PersistencePayload,
+    *,
+    parse_result: ParseResultV2,
+    source_path: str | Path,
+    database: str,
+    connection=None,
+    source_sha256: str | None = None,
+    source_inspection: SourceInspectionContext | None = None,
+    import_policy: ReportImportPolicy | None = None,
+) -> ReportImportDisposition:
+    """Atomically import a prebuilt V2 payload and return its typed disposition."""
+
+    if payload.measurement_count <= 0 or not payload.measurements:
+        raise EmptyParseResultError(
+            source_path,
+            plugin_id=parse_result.meta.plugin_id,
+        )
+
+    inspected_sha256 = source_sha256
+    source_digest_verifier = None
+    if source_inspection is not None:
+        inspected_sha256 = source_inspection.sha256
+        source_digest_verifier = source_inspection.verified_sha256
+
+    repository = ReportRepository(database, connection=connection)
+    return repository.import_report_if_absent(
+        source_path=source_path,
+        source_sha256=inspected_sha256,
+        source_digest_verifier=source_digest_verifier,
+        import_policy=import_policy,
         parser_id=payload.metadata.parser_id,
         parser_version=parse_result.meta.plugin_version,
         template_family=payload.metadata.template_family,

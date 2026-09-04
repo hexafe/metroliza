@@ -61,6 +61,7 @@ from metroliza.parsing.source_inspection import SourceInspectionContext
 
 
 logger = logging.getLogger(__name__)
+_REPORT_SCHEMA_OWNER = ensure_report_schema
 HEADER_OCR_THREADS_ENV = "METROLIZA_HEADER_OCR_THREADS"
 DEFAULT_HEADER_OCR_MAX_THREADS = 4
 METADATA_PARSING_MODE_LIGHT = "light"
@@ -379,21 +380,32 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """
 
         try:
-            ensure_report_schema(
-                self.database,
-                connection=self.connection,
-                retries=4,
-                retry_delay_s=1,
-            )
-
             self.open_report()
             self.split_text_to_blocks()
             self.add_tolerances()
             self.extract_metadata()
-            self.to_sqlite()
+            return self.replace_existing_report()
         except Exception as e:
             self.log_and_exit(e)
             raise
+
+    def import_report_if_absent(self):
+        """Parse and atomically import this report without replacing an accepted graph."""
+
+        try:
+            self.open_report()
+            self.split_text_to_blocks()
+            self.add_tolerances()
+            self.extract_metadata()
+            return self.to_sqlite(import_if_absent=True)
+        except Exception as e:
+            self.log_and_exit(e)
+            raise
+
+    def replace_existing_report(self):
+        """Deliberately replace this report's existing persisted graph."""
+
+        return self.to_sqlite(import_if_absent=False)
 
     def _require_pdf_backend(self):
         return _load_pdf_backend()
@@ -1209,7 +1221,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self._metadata_identity_hash = build_report_identity_hash(self._metadata_selection_result.metadata)
         return self._metadata_identity_hash
 
-    def to_sqlite(self):
+    def to_sqlite(self, *, import_if_absent=False):
         """Handle `to_sqlite` for `CMMReportParser`.
 
         Args:
@@ -1242,15 +1254,17 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             warnings = metadata.warnings
             identity_hash = self._metadata_identity_hash or self.build_report_identity_hash()
             source_inspection = getattr(self, "source_inspection_context", None)
-            source_sha256 = (
-                source_inspection.verified_sha256()
-                if source_inspection is not None
-                else None
-            )
+            source_sha256 = None
+            if source_inspection is not None:
+                source_sha256 = (
+                    source_inspection.sha256
+                    if import_if_absent
+                    else source_inspection.verified_sha256()
+                )
 
             db_write_start = perf_counter()
             repository = ReportRepository(self.database, connection=self.connection)
-            repository.persist_parsed_report(
+            persistence_arguments = dict(
                 source_path=Path(self.file_path) / self.file_name,
                 source_sha256=source_sha256,
                 parser_id=metadata.parser_id,
@@ -1276,10 +1290,23 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                     "measurement_blocks": len(self.blocks_text),
                 },
             )
+            if import_if_absent:
+                persistence_arguments.update(
+                    source_digest_verifier=(
+                        source_inspection.verified_sha256
+                        if source_inspection is not None
+                        else None
+                    ),
+                    import_policy=self.report_import_policy,
+                )
+            if import_if_absent:
+                outcome = repository.import_report_if_absent(**persistence_arguments)
+            else:
+                outcome = repository.persist_parsed_report(**persistence_arguments)
             self.persistence_backend_used = "python"
             self.stage_timings_s["db_write_runtime"] = perf_counter() - db_write_start
             logger.info("Report '%s' measurements inserted into the database.", self.file_name)
-            return
+            return outcome
         except Exception as e:
             self.log_and_exit(e)
             raise
@@ -1319,6 +1346,13 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             return self.open_database_and_check_filename()
 
         return self.to_sqlite()
+
+    def import_prepared_report_if_absent(self):
+        """Persist prepared state through the repository no-clobber import API."""
+
+        if not self.blocks_text:
+            return self.import_report_if_absent()
+        return self.to_sqlite(import_if_absent=True)
 
     def show_df(self):
         """Handle `show_df` for `CMMReportParser`.

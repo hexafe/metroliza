@@ -7,6 +7,7 @@ import os
 import time
 import traceback
 from collections import Counter
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
@@ -16,8 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
-from metroliza.reports.cmm_schema import ensure_cmm_report_schema
-from metroliza.reports.db import execute_with_retry, sqlite_connection_scope
+from metroliza.reports.db import execute_with_retry
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
 from metroliza.shared.progress_status import (
@@ -27,7 +27,12 @@ from metroliza.shared.progress_status import (
 )
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
-from metroliza.reports.report_repository import ReportRepository, compute_sha256
+from metroliza.reports.report_repository import (
+    ReportImportDisposition,
+    ReportImportPolicy,
+    ReportRepository,
+    compute_sha256,
+)
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
@@ -55,6 +60,8 @@ class ParseBatchResult:
     preflight_ambiguous_files: int = 0
     preflight_unreadable_files: int = 0
     preflight_changed_files: int = 0
+    imported_files: int = 0
+    already_present_files: int = 0
 
 
 @dataclass(frozen=True)
@@ -223,11 +230,29 @@ def parse_new_reports(
     enable_two_stage_pipeline=False,
     worker_count=None,
     log_file_failures=True,
+    require_typed_persistence_outcome=False,
 ):
     parsed_files = 0
+    imported_files = 0
+    already_present_files = 0
     failed_files = 0
     skipped_files = 0
     total_files = len(report_paths)
+
+    def _record_persistence_outcome(outcome):
+        nonlocal parsed_files, imported_files, already_present_files
+        if require_typed_persistence_outcome:
+            if outcome is ReportImportDisposition.IMPORTED:
+                imported_files += 1
+            elif outcome is ReportImportDisposition.ALREADY_PRESENT:
+                already_present_files += 1
+            else:
+                raise TypeError(
+                    "Normal report import persistence must return ReportImportDisposition"
+                )
+        else:
+            imported_files += 1
+        parsed_files = imported_files + already_present_files
 
     def _emit_processed_progress():
         if on_progress:
@@ -303,7 +328,11 @@ def parse_new_reports(
                     source_format=infer_source_format(report),
                 )
                 fingerprint = build_source_file_fingerprint(report, source_inspection)
-                if fingerprint in report_fingerprints:
+                if (
+                    not require_typed_persistence_outcome
+                    and fingerprint in report_fingerprints
+                ):
+                    already_present_files += 1
                     parsed_files += 1
                     _emit_processed_progress()
                     continue
@@ -346,15 +375,18 @@ def parse_new_reports(
                 if isinstance(stage_timings, dict):
                     stage_timings["stage2_queue_wait_s"] = max(0.0, time.perf_counter() - stage1_completed_at)
 
-                if fingerprint not in report_fingerprints:
+                if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
                     try:
-                        persist_report(parser)
+                        outcome = persist_report(parser)
+                        _record_persistence_outcome(outcome)
                     except Exception as exc:
                         _record_file_failure(report, "persistence", exc)
                         continue
                     report_fingerprints.add(fingerprint)
 
-                parsed_files += 1
+                else:
+                    already_present_files += 1
+                    parsed_files = imported_files + already_present_files
                 parse_duration_s = time.perf_counter() - report_parse_start
 
                 if on_file_parsed:
@@ -374,6 +406,8 @@ def parse_new_reports(
             total_files=total_files,
             failed_files=failed_files,
             skipped_files=skipped_files,
+            imported_files=imported_files,
+            already_present_files=already_present_files,
         )
 
     for report in report_paths:
@@ -386,7 +420,7 @@ def parse_new_reports(
             source_format=infer_source_format(report),
         )
         fingerprint = build_source_file_fingerprint(report, source_inspection)
-        if fingerprint not in report_fingerprints:
+        if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
             try:
                 parser = report_parser_factory.invoke_parser_factory(
                     parser_factory,
@@ -401,14 +435,16 @@ def parse_new_reports(
                 continue
 
             try:
-                persist_report(parser)
+                outcome = persist_report(parser)
+                _record_persistence_outcome(outcome)
             except Exception as exc:
                 _record_file_failure(report, "persistence", exc)
                 continue
             report_fingerprints.add(fingerprint)
         else:
             parser = None
-        parsed_files += 1
+            already_present_files += 1
+            parsed_files = imported_files + already_present_files
         parse_duration_s = time.perf_counter() - report_parse_start
 
         if on_file_parsed:
@@ -421,6 +457,8 @@ def parse_new_reports(
         total_files=total_files,
         failed_files=failed_files,
         skipped_files=skipped_files,
+        imported_files=imported_files,
+        already_present_files=already_present_files,
     )
 
 
@@ -1241,14 +1279,9 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 else {}
             )
 
-            with sqlite_connection_scope(self.db_file) as connection:
-                ensure_cmm_report_schema(
-                    self.db_file,
-                    connection=connection,
-                    retries=5,
-                    retry_delay_s=1,
-                )
-                report_fingerprints = self.get_report_fingerprints_in_database(connection)
+            with nullcontext(None) as connection:
+                report_fingerprints = set()
+                self._emit_stage_progress('load_existing_reports', 1.0)
 
                 logger.info(
                     "Parse processing started",
@@ -1350,18 +1383,26 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     two_stage_workers = None
 
                 def _persist_report(parser):
-                    if two_stage_enabled and callable(getattr(parser, "persist_prepared_report", None)):
-                        return parser.persist_prepared_report()
-                    return parser.open_database_and_check_filename()
+                    if two_stage_enabled and callable(
+                        getattr(parser, "import_prepared_report_if_absent", None)
+                    ):
+                        return parser.import_prepared_report_if_absent()
+                    return parser.import_report_if_absent()
 
                 def _parser_factory(report, *, source_inspection=None):
-                    return get_parser(
+                    parser = get_parser(
                         report,
                         self.db_file,
                         connection=connection,
                         metadata_parsing_mode=self.metadata_parsing_mode,
                         source_inspection=source_inspection,
                     )
+                    parser.report_import_policy = ReportImportPolicy(
+                        metadata_parsing_mode=self.metadata_parsing_mode,
+                        refreshable_parser_id=_CURRENT_CMM_METADATA_PARSER_ID,
+                        refreshable_parser_version=_CURRENT_CMM_PARSER_VERSION,
+                    )
+                    return parser
 
                 result = parse_new_reports(
                     reports_to_parse,
@@ -1393,6 +1434,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     enable_two_stage_pipeline=two_stage_enabled,
                     worker_count=two_stage_workers,
                     log_file_failures=False,
+                    require_typed_persistence_outcome=True,
                 )
                 if preflight is not None:
                     result = ParseBatchResult(
@@ -1417,10 +1459,16 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                             0,
                         ),
                         preflight_changed_files=preflight_changed_files,
+                        imported_files=result.imported_files,
+                        already_present_files=result.already_present_files,
                     )
                 self.last_parse_result = result
 
-                if not self.parsing_canceled and self.run_background_metadata_enrichment:
+                if (
+                    not self.parsing_canceled
+                    and self.run_background_metadata_enrichment
+                    and Path(self.db_file).is_file()
+                ):
                     self._run_background_metadata_enrichment(reports_to_parse, connection)
 
             if result.total_files == 0:

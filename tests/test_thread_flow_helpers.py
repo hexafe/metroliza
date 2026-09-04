@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import types
 import unittest
 from contextlib import closing
@@ -29,7 +30,7 @@ from metroliza.exporting.export_logging_service import (
     log_google_issue,
 )
 from metroliza.exporting.google_drive_export import GoogleDriveConversionResult
-from metroliza.parsing.cmm_report_parser import EmptyCMMReportError
+from metroliza.parsing.cmm_report_parser import CMMReportParser, EmptyCMMReportError
 from metroliza.parsing.parse_reports_thread import (
     build_report_fingerprints_from_rows,
     build_source_file_fingerprint,
@@ -38,6 +39,7 @@ from metroliza.parsing.parse_reports_thread import (
     parse_new_reports,
 )
 from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
+from metroliza.reports.report_repository import ReportImportDisposition
 import metroliza.parsing.parse_reports_thread as parse_thread_module
 
 
@@ -428,6 +430,216 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(result.parsed_files, 2)
             self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
             self.assertEqual(progress_updates, [(1, 3), (2, 3)])
+
+    def test_typed_import_outcomes_propagate_in_sequential_and_two_stage_paths(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ("imported.pdf", "duplicate.pdf"):
+                path = os.path.join(tmpdir, name)
+                with open(path, "wb") as report_file:
+                    report_file.write(name.encode("utf-8"))
+                reports.append(path)
+
+            for two_stage in (False, True):
+                with self.subTest(two_stage=two_stage):
+                    persisted = []
+
+                    def persist_report(parser):
+                        name = os.path.basename(parser.FILE_PATH)
+                        persisted.append(name)
+                        if name == "imported.pdf":
+                            return ReportImportDisposition.IMPORTED
+                        return ReportImportDisposition.ALREADY_PRESENT
+
+                    result = parse_new_reports(
+                        reports,
+                        {build_source_file_fingerprint(path) for path in reports},
+                        parser_factory=DummyParser,
+                        persist_report=persist_report,
+                        enable_two_stage_pipeline=two_stage,
+                        worker_count=2,
+                        require_typed_persistence_outcome=True,
+                    )
+
+                    self.assertEqual(result.parsed_files, 2)
+                    self.assertEqual(result.imported_files, 1)
+                    self.assertEqual(result.already_present_files, 1)
+                    self.assertEqual(
+                        result.parsed_files,
+                        result.imported_files + result.already_present_files,
+                    )
+                    self.assertCountEqual(persisted, ["imported.pdf", "duplicate.pdf"])
+
+    def test_typed_import_rejects_untyped_persistence_success(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, "untyped.pdf")
+            with open(report, "wb") as report_file:
+                report_file.write(b"untyped")
+
+            result = parse_new_reports(
+                [report],
+                set(),
+                parser_factory=DummyParser,
+                persist_report=lambda _parser: None,
+                require_typed_persistence_outcome=True,
+                log_file_failures=False,
+            )
+
+        self.assertEqual(result.parsed_files, 0)
+        self.assertEqual(result.imported_files, 0)
+        self.assertEqual(result.already_present_files, 0)
+        self.assertEqual(result.failed_files, 1)
+
+    def test_parse_thread_propagates_typed_outcomes_on_owner_thread(self):
+        from modules.contracts import ParseRequest
+        from modules.parse_reports_thread import ParseReportsThread
+
+        owner_thread = threading.get_ident()
+
+        class DummyParser:
+            def __init__(self, disposition):
+                self.disposition = disposition
+                self.stage_timings_s = {}
+                self.persistence_backend_used = "synthetic"
+                self.parse_backend_used = "synthetic"
+                self.persistence_threads = []
+                self.preparation_threads = []
+
+            def prepare_for_two_stage_pipeline(self):
+                self.preparation_threads.append(threading.get_ident())
+
+            def import_report_if_absent(self):
+                self.persistence_threads.append(threading.get_ident())
+                return self.disposition
+
+            def import_prepared_report_if_absent(self):
+                return self.import_report_if_absent()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, "synthetic.pdf")
+            with open(report, "wb") as report_file:
+                report_file.write(b"synthetic")
+
+            for two_stage, disposition in (
+                (False, ReportImportDisposition.IMPORTED),
+                (True, ReportImportDisposition.ALREADY_PRESENT),
+            ):
+                with self.subTest(two_stage=two_stage, disposition=disposition):
+                    database = os.path.join(tmpdir, f"{two_stage}.sqlite3")
+                    parser = DummyParser(disposition)
+                    thread = ParseReportsThread(
+                        ParseRequest(source_directory=tmpdir, db_file=database)
+                    )
+                    thread.get_list_of_reports = lambda: [report]
+                    thread._filter_reports_for_preflight = lambda reports: (reports, 0)
+                    with mock.patch.object(
+                        parse_thread_module,
+                        "get_parser",
+                        return_value=parser,
+                    ), mock.patch.dict(
+                        os.environ,
+                        {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1" if two_stage else "0"},
+                    ):
+                        thread.run()
+
+                    self.assertEqual(thread.last_parse_result.parsed_files, 1)
+                    self.assertEqual(
+                        thread.last_parse_result.imported_files,
+                        int(disposition is ReportImportDisposition.IMPORTED),
+                    )
+                    self.assertEqual(
+                        thread.last_parse_result.already_present_files,
+                        int(disposition is ReportImportDisposition.ALREADY_PRESENT),
+                    )
+                    self.assertEqual(parser.persistence_threads, [owner_thread])
+                    if two_stage:
+                        self.assertEqual(len(parser.preparation_threads), 1)
+                        self.assertNotEqual(parser.preparation_threads[0], owner_thread)
+
+    def test_parse_thread_parser_failure_creates_no_database_artifact(self):
+        from modules.contracts import ParseRequest
+        from modules.parse_reports_thread import ParseReportsThread
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, "broken.pdf")
+            database = os.path.join(tmpdir, "reports.sqlite3")
+            with open(report, "wb") as report_file:
+                report_file.write(b"broken")
+            thread = ParseReportsThread(
+                ParseRequest(source_directory=tmpdir, db_file=database)
+            )
+            thread.get_list_of_reports = lambda: [report]
+            thread._filter_reports_for_preflight = lambda reports: (reports, 0)
+
+            with mock.patch.object(
+                parse_thread_module,
+                "get_parser",
+                side_effect=RuntimeError("synthetic parser failure"),
+            ):
+                thread.run()
+
+            self.assertEqual(thread.last_parse_result.failed_files, 1)
+            self.assertFalse(os.path.exists(database))
+
+    def test_cmm_import_entrypoint_propagates_repository_disposition(self):
+        from metroliza.parsing.source_inspection import SourceInspectionContext
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "synthetic.pdf"
+            report.write_bytes(b"synthetic")
+            parser = CMMReportParser(str(report), str(Path(tmpdir) / "reports.sqlite3"))
+            parser.blocks_text = [(["Feature"], [["X", 1, 0.1, -0.1, 0, 1, 0, 0]])]
+            parser._metadata_selection_result = types.SimpleNamespace(
+                metadata=types.SimpleNamespace(
+                    parser_id="cmm_pdf_header_box",
+                    template_family="cmm_pdf_header_box",
+                    template_variant="synthetic",
+                    warnings=(),
+                    page_count=1,
+                    metadata_confidence=1.0,
+                ),
+                candidates=(),
+            )
+            parser._normalized_rows_for_persistence = lambda: [
+                {"row_order": 1, "header": "Feature", "ax": "X", "status_code": "ok"}
+            ]
+            parser.build_report_identity_hash = lambda: "synthetic-identity"
+            parser.source_inspection_context = SourceInspectionContext.from_path(
+                report,
+                source_format="pdf",
+            )
+
+            class FakeRepository:
+                calls = []
+
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
+                def import_report_if_absent(self, **kwargs):
+                    self.calls.append(kwargs)
+                    return ReportImportDisposition.ALREADY_PRESENT
+
+            with mock.patch.dict(
+                CMMReportParser.to_sqlite.__globals__,
+                {"ReportRepository": FakeRepository},
+            ):
+                outcome = parser.to_sqlite(import_if_absent=True)
+
+            self.assertIs(outcome, ReportImportDisposition.ALREADY_PRESENT)
+            self.assertEqual(len(FakeRepository.calls), 1)
+            self.assertTrue(callable(FakeRepository.calls[0]["source_digest_verifier"]))
 
     def test_parse_new_reports_does_not_count_failed_persistence_as_success(self):
         class DummyParser:

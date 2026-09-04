@@ -67,6 +67,7 @@ class BaseReportParser(ABC):
         self.database = database
         self.connection = connection
         self.source_inspection_context = None
+        self.report_import_policy = None
 
     @property
     def source_path(self):
@@ -391,10 +392,49 @@ class BaseReportParser(ABC):
             source_inspection=self.source_inspection_context,
         )
 
+    def _import_parse_result_v2_if_absent(self, parse_result):
+        """Import V2 output through the repository-owned no-clobber transaction."""
+
+        from metroliza.parsing.parse_result_v2_persistence import (
+            build_persistence_payload,
+            import_parse_result_v2_payload_if_absent,
+        )
+
+        payload = build_persistence_payload(
+            parse_result,
+            source_path=self.source_path,
+            manifest=getattr(self, "manifest", None),
+            expected_source_format=getattr(
+                self.source_inspection_context,
+                "source_format",
+                None,
+            ),
+        )
+        self.canonical_metadata = payload.metadata
+        return import_parse_result_v2_payload_if_absent(
+            payload,
+            parse_result=parse_result,
+            source_path=self.source_path,
+            database=self.database,
+            connection=self.connection,
+            source_inspection=self.source_inspection_context,
+            import_policy=self.report_import_policy,
+        )
+
+    def replace_existing_report(self):
+        """Deliberately replace the existing report graph for this source."""
+
+        return self._persist_parse_result_v2(self._parse_result_v2_for_persistence())
+
+    def import_report_if_absent(self):
+        """Atomically import this source and return a typed repository disposition."""
+
+        return self._import_parse_result_v2_if_absent(self._parse_result_v2_for_persistence())
+
     def open_database_and_check_filename(self):
         """Compatibility entrypoint used by the report import thread."""
 
-        return self._persist_parse_result_v2(self._parse_result_v2_for_persistence())
+        return self.replace_existing_report()
 
     def prepare_for_two_stage_pipeline(self):
         """Prepare generic plugin output for delayed persistence."""
@@ -410,6 +450,14 @@ class BaseReportParser(ABC):
         if parse_result is None:
             parse_result = self._parse_result_v2_for_persistence()
         return self._persist_parse_result_v2(parse_result)
+
+    def import_prepared_report_if_absent(self):
+        """Atomically import previously prepared V2 output without replacing a duplicate."""
+
+        parse_result = getattr(self, "_prepared_parse_result_v2", None)
+        if parse_result is None:
+            parse_result = self._parse_result_v2_for_persistence()
+        return self._import_parse_result_v2_if_absent(parse_result)
 
     def to_sqlite(self):
         return self.open_database_and_check_filename()

@@ -6,6 +6,7 @@ from metroliza.parsing.parse_result_v2_persistence import (
     EmptyParseResultError,
     ParseResultContractError,
     build_persistence_payload,
+    import_parse_result_v2_if_absent,
 )
 from metroliza.parsing.parser_plugin_contracts import (
     MeasurementBlockV2,
@@ -16,6 +17,11 @@ from metroliza.parsing.parser_plugin_contracts import (
     ParseWarning,
     ReportInfoV2,
 )
+from metroliza.parsing.source_inspection import (
+    SourceChangedAfterInspectionError,
+    SourceInspectionContext,
+)
+from metroliza.reports.report_repository import ReportImportDisposition
 
 
 def _parse_result(
@@ -50,6 +56,30 @@ def _parse_result(
         blocks=tuple(blocks),
         warnings=tuple(warnings),
         errors=tuple(errors),
+    )
+
+
+def _persistable_parse_result():
+    return _parse_result(
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Length",),
+                header_normalized="Length",
+                block_index=0,
+                dimensions=(
+                    MeasurementV2(
+                        axis_code="X",
+                        nominal=1.0,
+                        tol_plus=0.1,
+                        tol_minus=-0.1,
+                        bonus=None,
+                        measured=1.0,
+                        deviation=0.0,
+                        out_of_tolerance=0.0,
+                    ),
+                ),
+            ),
+        ),
     )
 
 
@@ -383,3 +413,46 @@ def test_parse_result_v2_raw_provenance_omits_measurement_tree_and_caps_diagnost
     assert summary["diagnostics_truncated"] is True
     assert len(summary["warnings"][0]["message"]) == 500
     assert len(json.dumps(payload.raw_report_json)) < 35_000
+
+
+def test_parse_result_v2_import_propagates_typed_dispositions(tmp_path):
+    source = tmp_path / "sample.csv"
+    source.write_text("synthetic", encoding="utf-8")
+    database = tmp_path / "reports.sqlite3"
+    parse_result = _persistable_parse_result()
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+
+    first = import_parse_result_v2_if_absent(
+        parse_result,
+        source_path=source,
+        database=str(database),
+        source_inspection=source_inspection,
+    )
+    second = import_parse_result_v2_if_absent(
+        parse_result,
+        source_path=source,
+        database=str(database),
+        source_inspection=source_inspection,
+    )
+
+    assert first is ReportImportDisposition.IMPORTED
+    assert second is ReportImportDisposition.ALREADY_PRESENT
+
+
+def test_parse_result_v2_source_drift_fails_before_creating_database(tmp_path):
+    source = tmp_path / "sample.csv"
+    source.write_text("reviewed", encoding="utf-8")
+    database = tmp_path / "reports.sqlite3"
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    assert source_inspection.sha256 is not None
+    source.write_text("changed", encoding="utf-8")
+
+    with pytest.raises(SourceChangedAfterInspectionError):
+        import_parse_result_v2_if_absent(
+            _persistable_parse_result(),
+            source_path=source,
+            database=str(database),
+            source_inspection=source_inspection,
+        )
+
+    assert not database.exists()
