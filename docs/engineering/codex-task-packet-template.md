@@ -2,172 +2,132 @@
 
 Status: Active template
 Owner: Product/architecture maintainer
-Last reviewed: 2026-08-25
+Last reviewed: 2026-09-04
 
-Use this template for every nontrivial Codex coordinator task and every delegated slice. Delete
-instructional comments, replace every `<placeholder>`, and keep explicit `none` or `not applicable`
-entries where silence would be ambiguous. The policy behind the template is
-[`codex-model-routing.md`](./codex-model-routing.md).
+Use this for nontrivial work. Replace placeholders, remove inapplicable detail and link the
+[playbook](./codex-model-routing.md) instead of repeating it. Keep **MUST**, **SHOULD**, **DEFERRED**,
+owned scope, evidence and authority explicit. A small task needs a small packet.
 
 ## Pre-dispatch packet
 
 ```markdown
-# <Issue/task number> — <short outcome>
+# <Issue> — <one observable outcome>
+
+AGENT_ID: <unique role/Issue identifier>
+PARENT_AGENT_ID: <identifier or NONE>
+ROLE: <coordinator / read-only reviewer / bounded worker>
+PHASE: <diagnose / prototype / implement / review / mechanical closeout>
 
 ## Durable authority
 
-- Repository: <owner/repository>
-- Issue/specification: <URL and number>
-- Accepted execution packet/comment: <URL or none>
-- Canonical base and verified SHA: <branch> @ <full SHA>
-- Target branch: <exact PR base>
-- Proposed work branch: <short-lived branch>
-- Sources of truth read: <exact files/URLs/refs>
+- Repository and Issue: <owner/repository, Issue URL>
+- Accepted packet/decision: <URL or this packet>
+- Verified base/SHA/tree: <develop @ full SHA / tree>
+- Work branch / PR base: <short-lived branch> / <develop>
+- Relevant sources: <exact files/refs; no whole-chat dump>
 
-## Exact objective
+## Routing and value
 
-<One observable outcome. State what becomes true, not a broad activity.>
+- Whole-PR class: MICRO | BOUNDED INTEGRATION | FEATURE / CROSS-LAYER | CRITICAL / MILESTONE
+- Consequence: <severity and data/security/release implications>
+- Unresolved reasoning problem: <question, or none: contract already accepted>
+- Requested model: <GPT-6 Astra / GPT-5.6 Luna / Terra / Sol / explicit alternative>
+- Requested reasoning effort: <supported value; Astra: low / medium / high / xhigh / max>
+- Why this route: <benefit relative to total effort, not the severity label alone>
+- Approved availability fallback: <exact model/effort + conditions, or none>
+- Independent review route: <requested model/effort; hosted actual may be not visible>
 
-## Whole-PR routing
+Do not silently substitute model or effort. Never use Ultra as an Astra API effort or
+GPT-6 Pro as a Codex model ID. Hidden runtime identity alone is not a blocker.
 
-- Class: MICRO | BOUNDED INTEGRATION | FEATURE / CROSS-LAYER | CRITICAL / MILESTONE
-- Requested coordinator: <model or stable capability class>
-- Requested reasoning: <mode or not specified>
-- Classification rationale: <semantic consequence and acceptance burden>
-- Silent downgrade allowed: no
-- Evidence-based upward escalation: allowed; record before broadening
+## Ownership and effort budget
 
-## Delegated slice routing
+- Allowed files/symbols: <bounded list>
+- Forbidden surfaces: <specific contracts/files>
+- Writers: <default 1>
+- Read-only helpers: <default 0, maximum 2 unless explicitly approved>
+- Delegation: <why it helps, or none>; recursive delegation: prohibited
+- First useful checkpoint: <runnable slice / failing reproducer / decision matrix>
+- Budget and exit: <finite time/effort budget and required partial handoff>
+- Preservation: <Issue/PR/branch artifact; no confidential data>
+- Local iterations: ordinary in-scope test-driven changes allowed
+- Independent-review corrections: <default 1 bounded round, or explicit alternative>
 
-<!-- Repeat this table row for each slice. Use one coordinator-only row if not delegating. -->
-
-| Slice | Risk | Planned route | Reasoning | Owned responsibility | Why delegate / why not |
+<!-- Include only when delegating; no placeholder worker table is required otherwise. -->
+| Agent | Parent | Risk | Requested route | Read/write ownership | Deliverable / focused check |
 | --- | --- | --- | --- | --- | --- |
-| <name> | GREEN / YELLOW / RED / CRITICAL | <model/capability> | <mode or n/a> | <one bounded concern> | <context/ownership value or startup-cost reason> |
+| <ID> | <ID> | GREEN / YELLOW / RED / CRITICAL | <model / effort> | <disjoint scope> | <proof> |
 
-## Owned scope
+## MUST — acceptance and preserved invariants
 
-- Files: <exact paths>
-- Symbols/contracts: <exact names or none>
-- Expected final file set: <deterministic list>
-- Allowed remote operations: <exact operations or none>
+1. <User/engineering outcome and observable success criterion.>
+2. <Regression/falsifier that detects the original broken behavior.>
+3. <Applicable local-first, SQLite, confidentiality, Windows/native or other contract.>
+4. <Only authorized files and remote operations; no unsupported evidence claims.>
 
-## Forbidden surfaces and operations
+## SHOULD — useful improvements inside scope
 
-- Files/symbols: <adjacent paths or contracts that must not change>
-- Behavior/configuration: <out-of-scope product or policy behavior>
-- Local operations: <destructive, privileged, broad cleanup, or none>
-- Remote operations: <merge, long-lived refs, tags, deploy/release/migrate/publish, etc.>
+- <Improvement or none.>
 
-## MUST — merge-blocking requirements and invariants
+## DEFERRED — forbidden or separately owned work
 
-1. <Requirement with a testable result.>
-2. <Preserved invariant.>
+- <Outcome, owner/Issue and preserved seam; or explicit non-goal.>
 
-## SHOULD — expected, scope-bounded improvements
+## Validation
 
-1. <Improvement that must not broaden owned scope.>
+| Gate | Exact command/check | Required evidence and owner | Applicability |
+| --- | --- | --- | --- |
+| Focused | <command> | <regression/result, worker or coordinator> | required |
+| Integration | <command> | <cross-contract/real workflow result, coordinator> | <required or reason> |
+| Final local/static | <commands> | <results bound to final bytes> | <required or reason> |
+| Exact-head CI | <workflow/checks> | <run, SHA/current base, terminal conclusion> | <required or reason> |
+| Conditional | <Windows/native/SQLite/security/performance/manual gate> | <actual proof + owner> | <each applicable gate> |
 
-## DEFERRED — explicitly forbidden or later work
+Run focused checks during local iteration; run full applicable validation on the final
+candidate, not after every edit. Changed bytes invalidate affected evidence. No blanket
+baseline-failure waiver, threshold reduction or green claim for an unrun gate.
 
-1. <Later Issue/outcome or explicit non-goal.>
+## Stop, preserve and escalate
 
-## Preserved contracts
+Stop for changed product/security/architecture authority, forbidden scope, an exhausted
+budget, unavailable route without an approved alternative, or inability to prove a MUST.
+A routine local test/lint correction is not a new independent-review round.
+Two repeated same-boundary findings require a bounded contract audit before another patch.
 
-- <Source of truth + exact contract that must remain true.>
-- <Architecture/data/security/compatibility/release contract.>
-- <Confidentiality and evidence boundary.>
-
-## Acceptance criteria
-
-- [ ] <Observable outcome mapped to a MUST.>
-- [ ] Final diff contains only the authorized scope.
-- [ ] Actual model/reasoning is observed or reported as `not visible`.
-- [ ] No unsupported test, CI, benchmark, review, merge, release, cost, or remote-action claim.
-
-## Focused and integrated validation
-
-| Gate | Exact command/check | Expected evidence | Owner | Applicability |
-| --- | --- | --- | --- | --- |
-| Focused | `<command>` | <observable output> | <worker/coordinator> | required |
-| Integration | `<command>` | <observable output> | coordinator | required |
-| Exact-head CI | <workflow/check names> | terminal result + run URL/ID + head SHA | coordinator/orchestrator | <required/n/a> |
-| Windows packaged | <check/manual procedure> | <artifact/clean-machine evidence> | <owner> | <reason or n/a> |
-| Native/Python parity | <check/benchmark> | <parity/fallback/rollback result> | <owner> | <reason or n/a> |
-| Database/SQLite | <check/migration proof> | <atomicity/integrity/rollback result> | <owner> | <reason or n/a> |
-| Security/privacy | <check/adversarial review> | <negative-path/sanitization result> | <owner> | <reason or n/a> |
-
-## Stop and escalate
-
-Stop before broadening or mutating when:
-
-- <a source-of-truth contradiction or missing product/architecture decision appears>;
-- <the base/head or accepted input moves unexpectedly>;
-- <ownership must cross a forbidden surface>;
-- <a destructive, privileged, force, release, migration, publication, or unapproved remote action
-  becomes necessary>;
-- <validation cannot prove a MUST without redesigning scope>.
-
-Escalation record must contain: evidence, affected MUST, safe state, options, recommended next
-decision, and operations not performed.
+State whether base movement is acceptable for this task: <pinned read-only audit may continue;
+implementation must inspect overlap and refresh integration evidence; no silent head rewrite>.
+Preserve work and report the exact missing decision, safe state and actions not performed.
 
 ## Remote-operation policy
 
-- Standing authorization in this packet: <exact normal push/PR/review/CI operations or none>
-- Separately approved operations: <exact operation + approval evidence or none>
-- Always excluded: <merge by coordinator/worker and packet-specific excluded mutations>
-- Secrets/credentials required: <no, or approved secure mechanism without values>
+- Authorized normal writes: <branch/commit/push/PR/review/CI operations or none>
+- Separately approved operations: <exact operation + approval, or none>
+- Excluded: <merge by coordinator/worker, force-push, release/deploy, real-data migration,
+  destructive actions, secrets, billing/publication and packet-specific exclusions>
+- Terminal handoff: <Draft PR / audit report / prototype; never imply merge readiness from WIP>
 ```
 
 ## Post-execution handoff
 
-Complete this after implementation and focused validation. Do not replace missing evidence with an
-inference.
-
 ```markdown
-## Post-execution handoff — <slice/coordinator name>
+## Handoff — <agent ID>
 
-- Starting base/SHA: <branch> @ <full SHA>
-- Ending head SHA: <full SHA or uncommitted>
-- Actual runtime model: <observed model or not visible>
-- Actual reasoning mode: <observed mode or not visible>
-- Inherited coordinator model: yes | no | not visible | not applicable
-- Route deviations: <none or evidence and approval>
-- Changed ownership: <exact paths/symbols>
-- Scope check: <clean or exact deviation>
-
-### MUST evidence
-
-| MUST | Evidence | Result |
-| --- | --- | --- |
-| <requirement> | <diff location, command, run, or review> | PASS / FAIL / BLOCKED |
-
-### Validation executed
-
-| Command/check | Exact outcome | Environment/fixture | Head SHA |
-| --- | --- | --- | --- |
-| `<command>` | <result/count/conclusion> | <relevant context> | <SHA> |
-
-### Findings and corrections
-
-- P0: <none or actionable finding>
-- P1: <none or actionable finding>
-- P2: <none or actionable finding>
-- Correction cycles after readiness: <integer>
-- Unresolved risk/blocker: <none or concise evidence>
-
-### Routing feedback
-
-- Coordinator class adequate: yes | no | not yet known
-- Next materially similar task: <recommended class/model/reasoning and why>
-
-### Remote-operation ledger
-
-- Performed: <exact allowed operations or none>
-- Not performed: <forbidden/destructive operations explicitly confirmed absent>
-- Approval used: <source or none>
+- Agent / parent / role: <IDs and role>
+- Starting base / final head / tree: <exact refs or uncommitted>
+- Requested model / effort: <route>
+- Actual model / effort: <observed values or not visible>
+- Worker inheritance / fallback / deviation: <observed or not visible; approval if changed>
+- Outcome and preserved artifact: <what now works; Issue/PR/commit>
+- Scope: <exact paths; deviation and authority if any>
+- Validation: <commands, exact results and SHAs; unrun gates separately>
+- Findings: <P0/P1/P2, evidence and disposition; unresolved risk>
+- Local iteration / independent-review rounds: <report separately>
+- Budget outcome: <checkpoint reached / exhausted; usage only when observed>
+- Routing lesson: <retain/change route and evidence; do not blame hidden runtime identity>
+- Remote operations: <performed / not performed>
+- Next action and frozen contracts: <one bounded continuation>
 ```
 
-The coordinator integrates slice handoffs into the
-[`pr-routing-report-template.md`](./pr-routing-report-template.md), reruns the final applicable
-gates, and records the exact final head. A worker handoff is evidence input, not merge readiness.
+Integrate the handoff into the [PR report](./pr-routing-report-template.md). Do not paste repeated
+transcripts or rerun a worker's full suite merely to reproduce its receipt. The coordinator still
+owns the final integrated gate; a worker handoff is evidence input, not merge readiness.

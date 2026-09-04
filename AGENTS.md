@@ -39,30 +39,38 @@ independent exact-head review, and merge decision. The Codex coordinator owns bo
 integration, validation, its internal exact-head readiness audit, and PR preparation. Workers own
 only their explicitly assigned slices.
 
-Classify the whole PR separately from any delegated slice:
+Use these project defaults for new packets; the playbook owns availability and escalation details:
 
 | Whole-PR class | Default coordinator |
 | --- | --- |
-| MICRO | GPT-5.6 Luna / Medium |
-| BOUNDED INTEGRATION | GPT-5.6 Terra / High |
-| FEATURE / CROSS-LAYER | GPT-5.6 Sol / High |
-| CRITICAL / MILESTONE | GPT-5.6 Sol / Ultra |
+| MICRO | GPT-5.6 Luna / medium |
+| BOUNDED INTEGRATION | GPT-5.6 Terra / high |
+| FEATURE / CROSS-LAYER | GPT-6 Astra / high |
+| CRITICAL / MILESTONE | GPT-6 Astra / high |
 
-| Slice risk | Default worker |
-| --- | --- |
-| GREEN | GPT-5.6 Luna |
-| YELLOW | GPT-5.6 Terra |
-| RED | GPT-5.6 Sol |
-| CRITICAL | GPT-5.6 Sol |
+Risk determines evidence and approval rigor, not automatic maximum reasoning. Use Astra `xhigh`
+for a bounded unresolved architecture/root-cause audit; `max` needs an explicit benefit, budget,
+checkpoint and exit condition. Historical `Ultra` is not an Astra effort value. GPT-6 Pro is the
+ChatGPT product option, not a Codex model ID. GPT-5.6 Sol / high remains an explicitly selectable
+complex-work/review alternative; no model or effort substitution may be silent.
 
-An externally selected coordinator cannot be silently downgraded. Escalate upward when evidence
-requires it. Delegate only when bounded ownership or independent context improves the work; skip a
-worker when startup and context-loading cost exceed the slice.
+Default to one writer per Issue and at most two bounded read-only helpers. Route leaf work to
+Luna, accepted integrations to Terra, and difficult contracts to Astra; select reasoning for each
+slice separately. No recursive delegation, overlapping writes, or automatic expensive-agent fan-out.
+Skip delegation when its context/integration cost exceeds its value.
 
 Every nontrivial packet uses explicit **MUST**, **SHOULD**, and **DEFERRED** sections and follows
 [`docs/engineering/codex-task-packet-template.md`](docs/engineering/codex-task-packet-template.md).
+Name each agent and its parent, outcome, route, ownership, checkpoint, finite review-correction
+budget and allowed remote operations. Routine local test-driven iterations within that scope are
+not new review-correction rounds. Stop for changed contracts/authority, not an arbitrary edit count.
+Two repeated findings on the same boundary require a contract review, not an automatic compute
+increase. Existing explicit packet limits and frozen PRs remain binding until separately refreshed.
+
 Every nontrivial PR reports routing and evidence with
 [`docs/engineering/pr-routing-report-template.md`](docs/engineering/pr-routing-report-template.md).
+Requested and observed runtime identity are separate; `not visible` alone is not a blocker. Optimize
+validated product value and total effort including rework, not consumption of an available allowance.
 
 Codex coordinators and workers never merge their own PR. Standing merge authorization belongs only
 to the external orchestrator and only after every gate in the expanded playbook is satisfied. It
