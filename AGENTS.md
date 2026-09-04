@@ -48,11 +48,14 @@ Use these project defaults for new packets; the playbook owns availability and e
 | FEATURE / CROSS-LAYER | GPT-6 Astra / high |
 | CRITICAL / MILESTONE | GPT-6 Astra / high |
 
-Risk determines evidence and approval rigor, not automatic maximum reasoning. Use Astra `xhigh`
-for a bounded unresolved architecture/root-cause audit; `max` needs an explicit benefit, budget,
-checkpoint and exit condition. Historical `Ultra` is not an Astra effort value. GPT-6 Pro is the
-ChatGPT product option, not a Codex model ID. GPT-5.6 Sol / high remains an explicitly selectable
-complex-work/review alternative; no model or effort substitution may be silent.
+Risk determines evidence and approval rigor, not automatic maximum reasoning. Codex **Ultra** is
+a current product-level reasoning choice: it uses maximum reasoning and may run additional agents
+for eligible users. It is not the literal Astra API `reasoning.effort` value. Record the execution
+surface and its selected label; do not infer an exact API parameter or agent count from the label.
+Use available higher-effort controls for bounded unresolved audits; Codex Ultra and API `max`
+require an explicit benefit, budget, checkpoint and exit condition. GPT-6 Pro is the ChatGPT product
+option, not a Codex model ID. GPT-5.6 Sol / high remains an explicitly selectable complex-work/review
+alternative; no model or effort substitution may be silent.
 
 Default to one writer per Issue and at most two bounded read-only helpers. Route leaf work to
 Luna, accepted integrations to Terra, and difficult contracts to Astra; select reasoning for each

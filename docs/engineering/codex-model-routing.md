@@ -15,8 +15,11 @@ and approval gates remain binding until an explicit replacement packet is issued
 Official sources were checked on 2026-09-04; the routing recommendations are project decisions,
 not measured claims of model superiority on Metroliza.
 
-- **GPT-6 Astra**: API ID `gpt-6-astra`; documented efforts are `low`, `medium`, `high`, `xhigh`,
-  and `max`. There is no documented Astra `none` or `ultra` effort in this reference. [1]
+- **GPT-6 Astra API**: API ID `gpt-6-astra`; documented `reasoning.effort` values are `low`,
+  `medium`, `high`, `xhigh`, and `max`. These API values do not enumerate Codex UI choices. [1]
+- **Codex Ultra** is a current product-level reasoning choice, including when shown for Astra.
+  OpenAI describes Ultra as maximum reasoning that may run additional agents for eligible users;
+  it is neither a separate model nor a literal `reasoning.effort="ultra"` API value. [7]
 - **GPT-6 Pro** is the ChatGPT product option for Astra. It is not a Codex model ID or an effort
   value; Chat controls must not be translated into API parameters by name alone. [2]
 - **GPT-5.6 Luna, Terra and Sol** remain separate options. Their documented API efforts include
@@ -24,10 +27,13 @@ not measured claims of model superiority on Metroliza.
 - Astra access is rolling out. Availability in Chat, Work, Codex and API may differ. Work/Codex
   allowances are separate from Chat, and Astra usage can consume allowance faster than Sol. [2,6]
 
-Use only controls actually supported by the execution surface. Historical `Ultra`, an effort
-value, a Pro option and multi-agent execution are not interchangeable. An old Ultra packet needs
-an explicit route refresh, not a blind replacement with `max`. A model name in a prompt requests a
-route; it does not prove which model executed it.
+Use only controls actually supported by the execution surface. A Codex packet may request
+`GPT-6 Astra / Ultra` when that choice is available. Record the surface and selected product label
+separately from any observed API effort or runtime agent topology; keep unobserved details as
+`not visible`. Do not rewrite Ultra to `xhigh` or `max` by name alone, infer a fixed agent count, or
+claim it is unavailable because it is absent from the API enum. Direct API packets must use the
+API parameter names. Changing a model in an existing packet still requires explicit authority.
+A model name in a prompt requests a route; it does not prove which model executed it.
 
 ## Universal orchestration core
 
@@ -74,7 +80,13 @@ successful evidence, availability or value; it is not a silent fallback from a n
 
 #### Reasoning selection
 
-| Effort | Use | Escalation boundary |
+The table lists direct API effort names. For Codex, request the actual displayed choice (such as
+High or Ultra) and record the surface. Do not require a UI option named `xhigh` or `max` merely
+because the API supports it. Codex Ultra follows the explicit maximum-compute approval/budget
+rule below; its possible additional agents must be included in observed usage and ownership
+reporting, not assumed to be absent.
+
+| API effort | Use | Escalation boundary |
 | --- | --- | --- |
 | low | Deterministic extraction, short triage or lookup with explicit expected output | Not the default for cross-layer implementation or safety review |
 | medium | Mechanical work, known transformations, bounded evidence checking | Escalate when the contract is unresolved rather than guessing |
@@ -83,7 +95,8 @@ successful evidence, availability or value; it is not a silent fallback from a n
 | max | Exceptional quality-first investigation where added exploration has a plausible material benefit | Requires explicit orchestrator approval and a finite experiment budget |
 
 For a hard investigation, separate Astra/xhigh diagnosis from high-effort implementation once the
-contract is settled. Do not run `max` for routine fixes, CI polling, receipts or repeated reviews.
+contract is settled. Do not default to Codex Ultra or API `max` for routine fixes, CI polling,
+receipts or repeated reviews.
 No policy requires maximum effort solely because work is P0/P1, security-related or a milestone.
 
 ### 4. Worker slice routing
@@ -103,13 +116,13 @@ integration order; more helpers require a stated reason and budget. No recursive
 Do not spawn several expensive reviewers to repeat the same audit. One read-only reviewer can use
 an independent context with the same model; independence does not require a different model family.
 If child model selection is not available or visible, do not claim economy savings. Prefer bounded
-sequential work to unmeasured fan-out. At most one xhigh/max investigation is active by default;
+sequential work to unmeasured fan-out. At most one Ultra/xhigh/max investigation is active by default;
 parallel high-effort work on independent Issues needs disjoint worktrees and explicit coordination.
 
 ### 5. Actual-runtime honesty
 
-Record agent ID, parent ID, role, requested model/effort, observed model/effort, inheritance and
-route deviations. Use `not visible` when runtime identity is unavailable; that fact alone is not a
+Record agent ID, parent ID, role, execution surface, requested model and product choice/API effort,
+observed model/effort, inheritance and route deviations. Use `not visible` when runtime identity is unavailable; that fact alone is not a
 project blocker. Never infer execution identity from a requested route, a review command or a
 subscription label. A GitHub review request does not prove the hosted review model or effort.
 
@@ -318,3 +331,4 @@ deferrals and remote-operation status are recorded. A checkpoint or Draft PR is 
 4. [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
 5. [GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
 6. [ChatGPT Work and Codex: availability and usage](https://help.openai.com/en/articles/20001275)
+7. [Codex rate card: Ultra reasoning and possible additional agents](https://help.openai.com/en/articles/20001106)
