@@ -4,12 +4,32 @@ from PyQt6.QtGui import QColor, QFont, QPalette
 
 
 TOKENS = {
-    "dark": dict(bg="#111d26", surface="#182731", soft="#1c2d39", line="#344b58",
-                 text="#e4ecf1", muted="#acbfcc", accent="#6ccec0", onaccent="#102b29",
-                 focus="#a7c6ff", selected="#29445e", nav="#0d1922"),
-    "light": dict(bg="#f3f5f8", surface="#ffffff", soft="#eaf0f4", line="#c5d1da",
-                  text="#182939", muted="#526576", accent="#176b68", onaccent="#ffffff",
-                  focus="#285bab", selected="#dae8fa", nav="#e2ebef"),
+    "dark": dict(
+        bg="#111d26",
+        surface="#182731",
+        soft="#1c2d39",
+        line="#344b58",
+        text="#e4ecf1",
+        muted="#acbfcc",
+        accent="#6ccec0",
+        onaccent="#102b29",
+        focus="#a7c6ff",
+        selected="#29445e",
+        nav="#0d1922",
+    ),
+    "light": dict(
+        bg="#f3f5f8",
+        surface="#ffffff",
+        soft="#eaf0f4",
+        line="#c5d1da",
+        text="#182939",
+        muted="#526576",
+        accent="#176b68",
+        onaccent="#ffffff",
+        focus="#285bab",
+        selected="#dae8fa",
+        nav="#e2ebef",
+    ),
 }
 
 
@@ -18,15 +38,23 @@ def apply_theme(app, mode):
     app.setStyle("Fusion")
     app.setFont(QFont("DejaVu Sans", 10))
     palette = QPalette()
-    for role, key in ((QPalette.ColorRole.Window, "bg"), (QPalette.ColorRole.WindowText, "text"),
-                      (QPalette.ColorRole.Base, "surface"), (QPalette.ColorRole.AlternateBase, "soft"),
-                      (QPalette.ColorRole.Text, "text"), (QPalette.ColorRole.Button, "surface"),
-                      (QPalette.ColorRole.ButtonText, "text"), (QPalette.ColorRole.Highlight, "selected"),
-                      (QPalette.ColorRole.HighlightedText, "text"), (QPalette.ColorRole.ToolTipBase, "surface"),
-                      (QPalette.ColorRole.ToolTipText, "text")):
+    for role, key in (
+        (QPalette.ColorRole.Window, "bg"),
+        (QPalette.ColorRole.WindowText, "text"),
+        (QPalette.ColorRole.Base, "surface"),
+        (QPalette.ColorRole.AlternateBase, "soft"),
+        (QPalette.ColorRole.Text, "text"),
+        (QPalette.ColorRole.Button, "surface"),
+        (QPalette.ColorRole.ButtonText, "text"),
+        (QPalette.ColorRole.Highlight, "selected"),
+        (QPalette.ColorRole.HighlightedText, "text"),
+        (QPalette.ColorRole.ToolTipBase, "surface"),
+        (QPalette.ColorRole.ToolTipText, "text"),
+    ):
         palette.setColor(role, QColor(t[key]))
     app.setPalette(palette)
-    app.setStyleSheet("""
+    app.setStyleSheet(
+        """
         QWidget { color: %(text)s; }
         QMainWindow, QDialog { background: %(bg)s; }
         QLabel#title { font-size: 26px; font-weight: 700; }
@@ -56,4 +84,6 @@ def apply_theme(app, mode):
         QTabWidget::pane { border: 0; }
         QTabBar::tab { padding: 10px 16px; background: %(surface)s; border-bottom: 2px solid %(line)s; }
         QTabBar::tab:selected { border-bottom-color: %(accent)s; }
-    """ % t)
+    """
+        % t
+    )

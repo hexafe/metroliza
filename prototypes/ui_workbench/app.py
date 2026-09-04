@@ -8,10 +8,28 @@ from html import escape
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
-    QProgressBar, QPushButton, QSizePolicy, QSplitter, QStackedWidget,
-    QStyle, QTableView, QTextBrowser, QVBoxLayout, QWidget,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMainWindow,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QStackedWidget,
+    QStyle,
+    QTableView,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
 )
 
 from models import ReportsModel, ReportsProxy
@@ -54,13 +72,25 @@ class ScopeDialog(QDialog):
         self.setMinimumWidth(510)
         layout = QVBoxLayout(self)
         layout.addWidget(label("Confirm selected scope", "section"))
-        layout.addWidget(label(f"SIMULATION ONLY · {len(self.plan.reports)} selected · {hidden} hidden by filters"))
-        layout.addWidget(label(f"Source: {self.plan.context.source}\nDestination: {self.plan.context.destination}\n"
-                               f"Review #{self.plan.review_version} · {self.plan.context.metadata}"))
+        layout.addWidget(
+            label(
+                f"SIMULATION ONLY · {len(self.plan.reports)} selected · {hidden} hidden by filters"
+            )
+        )
+        layout.addWidget(
+            label(
+                f"Source: {self.plan.context.source}\nDestination: {self.plan.context.destination}\n"
+                f"Review #{self.plan.review_version} · {self.plan.context.metadata}"
+            )
+        )
         counts = Counter(r.destination for r in self.plan.reports)
-        layout.addWidget(label(f"Import new: {counts[Destination.NEW]}\n"
-                               f"Verify / preserve complete: {counts[Destination.COMPLETE]}\n"
-                               f"Known incomplete: {counts[Destination.INCOMPLETE]} · unknown completeness: {counts[Destination.UNKNOWN]}"))
+        layout.addWidget(
+            label(
+                f"Import new: {counts[Destination.NEW]}\n"
+                f"Verify / preserve complete: {counts[Destination.COMPLETE]}\n"
+                f"Known incomplete: {counts[Destination.INCOMPLETE]} · unknown completeness: {counts[Destination.UNKNOWN]}"
+            )
+        )
         names = QTextBrowser()
         names.setAccessibleName("Exact selected report scope")
         names.setPlainText("\n".join(f"{r.name} — {r.eligibility}" for r in self.plan.reports))
@@ -70,8 +100,13 @@ class ScopeDialog(QDialog):
         self.repair.setAccessibleName("Explicit repair permission for selected reports only")
         self.repair.setEnabled(bool(counts[Destination.INCOMPLETE] + counts[Destination.UNKNOWN]))
         layout.addWidget(self.repair)
-        layout.addWidget(label("Unchecked: matches are verified only. Incomplete reports stay unchanged and request a separate repair decision. "
-                               "Complete accepted reports are always preserved. Hidden unselected reports are never added.", "muted"))
+        layout.addWidget(
+            label(
+                "Unchecked: matches are verified only. Incomplete reports stay unchanged and request a separate repair decision. "
+                "Complete accepted reports are always preserved. Hidden unselected reports are never added.",
+                "muted",
+            )
+        )
         self.ack = QCheckBox("I approve this exact selected scope and simulated destination")
         layout.addWidget(self.ack)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
@@ -88,6 +123,7 @@ class ScopeDialog(QDialog):
         if self.ack.isChecked():
             # Compare the originally displayed snapshot, never silently refresh it.
             from dataclasses import replace
+
             self.plan = replace(self.plan, allow_repair=self.repair.isChecked())
             self.accept()
 
@@ -98,6 +134,8 @@ class Workbench(QMainWindow):
     def __init__(self, session=None, *, theme="dark"):
         super().__init__()
         self.session = session or Session(self)
+        if self.session.parent() is None:
+            self.session.setParent(self)
         self.theme = theme
         self.current_identity = None
         self.setWindowTitle("Metroliza · Native workbench · SYNTHETIC ONLY")
@@ -118,23 +156,41 @@ class Workbench(QMainWindow):
         nav_layout.addSpacing(22)
         self.nav = QListWidget()
         self.nav.setAccessibleName("Workspace navigation")
-        items = ("Overview", "Reports", "Tabular analysis", "Industrial data", "Realtime monitor", "Parser profiles", "Task details")
-        icons = (QStyle.StandardPixmap.SP_ComputerIcon, QStyle.StandardPixmap.SP_FileIcon,
-                 QStyle.StandardPixmap.SP_FileDialogDetailedView, QStyle.StandardPixmap.SP_DriveHDIcon,
-                 QStyle.StandardPixmap.SP_MediaPlay, QStyle.StandardPixmap.SP_FileDialogContentsView,
-                 QStyle.StandardPixmap.SP_DialogApplyButton)
-        for text, icon in zip(items, icons):
+        self.nav.setWordWrap(True)
+        self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        items = (
+            "Overview",
+            "Reports",
+            "Tabular analysis",
+            "Industrial data",
+            "Realtime monitor",
+            "Parser profiles",
+            "Task details",
+        )
+        icons = (
+            QStyle.StandardPixmap.SP_ComputerIcon,
+            QStyle.StandardPixmap.SP_FileIcon,
+            QStyle.StandardPixmap.SP_FileDialogDetailedView,
+            QStyle.StandardPixmap.SP_DriveHDIcon,
+            QStyle.StandardPixmap.SP_MediaPlay,
+            QStyle.StandardPixmap.SP_FileDialogContentsView,
+            QStyle.StandardPixmap.SP_DialogApplyButton,
+        )
+        for text, icon in zip(items, icons, strict=True):
             self.nav.addItem(text)
             self.nav.item(self.nav.count() - 1).setIcon(self.style().standardIcon(icon))
         nav_layout.addWidget(self.nav, 1)
-        nav_layout.addWidget(label("LOCAL SIMULATION\nNo report file access\nNo database or network", "muted"))
+        nav_layout.addWidget(
+            label("LOCAL SIMULATION\nNo report file access\nNo database or network", "muted")
+        )
         outer.addWidget(self.sidebar)
         main = QVBoxLayout()
         main.setContentsMargins(20, 16, 20, 12)
         main.setSpacing(12)
         outer.addLayout(main, 1)
         bar = QHBoxLayout()
-        bar.addWidget(label("Validation lab  /  Native workbench", "muted"), 1)
+        self.breadcrumb = label("Validation lab  /  Native workbench", "muted")
+        bar.addWidget(self.breadcrumb, 1)
         bar.addWidget(label("SYNTHETIC PROTOTYPE", "muted"))
         self.theme_button = button("Light theme", self.toggle_theme)
         bar.addWidget(self.theme_button)
@@ -150,8 +206,12 @@ class Workbench(QMainWindow):
         self.destination.addItems(self.destinations)
         self.metadata = QComboBox()
         self.metadata.addItems(("Fast · no OCR", "Detailed · simulated"))
-        for title, widget in (("&Workspace", self.workspace), ("&Source · fixture", self.source),
-                              ("&Destination · simulated", self.destination), ("&Metadata", self.metadata)):
+        for title, widget in (
+            ("&Workspace", self.workspace),
+            ("&Source · fixture", self.source),
+            ("&Destination · simulated", self.destination),
+            ("&Metadata", self.metadata),
+        ):
             col = QVBoxLayout()
             caption = label(title, "muted")
             caption.setBuddy(widget)
@@ -167,14 +227,30 @@ class Workbench(QMainWindow):
         self.pages.addWidget(self.build_overview())
         self.pages.addWidget(self.build_reports())
         domains = (
-            ("Tabular analysis", "CSV / Excel · filter, group and analyse", "Existing tabular services and row-store contracts remain available in the application. "
-             "A workspace adapter for source scope, units, table and chart handoff is deferred. No computed statistics are shown here."),
-            ("Industrial data", "Sources · cache · synchronization", "Existing industrial workflows retain their own connection and cache lifecycle. "
-             "Credentials, queries, synchronization and production sources are disabled in this prototype."),
-            ("Realtime monitor", "Session · replay · monitoring", "Existing realtime services need explicit session ownership, retention and stop/rebind coordination. "
-             "This page is a navigation placeholder. No live connection, telemetry or polling is active."),
-            ("Parser profiles", "Profiles · validation · handoff", "Existing declarative profiles and validation remain a separate capability. "
-             "Profile editing, real parser execution and registry changes are deferred. Reports use fixed synthetic parser evidence."),
+            (
+                "Tabular analysis",
+                "CSV / Excel · filter, group and analyse",
+                "Existing tabular services and row-store contracts remain available in the application. "
+                "A workspace adapter for source scope, units, table and chart handoff is deferred. No computed statistics are shown here.",
+            ),
+            (
+                "Industrial data",
+                "Sources · cache · synchronization",
+                "Existing industrial workflows retain their own connection and cache lifecycle. "
+                "Credentials, queries, synchronization and production sources are disabled in this prototype.",
+            ),
+            (
+                "Realtime monitor",
+                "Session · replay · monitoring",
+                "Existing realtime services need explicit session ownership, retention and stop/rebind coordination. "
+                "This page is a navigation placeholder. No live connection, telemetry or polling is active.",
+            ),
+            (
+                "Parser profiles",
+                "Profiles · validation · handoff",
+                "Existing declarative profiles and validation remain a separate capability. "
+                "Profile editing, real parser execution and registry changes are deferred. Reports use fixed synthetic parser evidence.",
+            ),
         )
         for title, subtitle, description in domains:
             page = QWidget()
@@ -184,7 +260,9 @@ class Workbench(QMainWindow):
             card, body = panel()
             body.addWidget(label("Existing domain · adapter deferred", "section"))
             body.addWidget(label(description))
-            body.addWidget(label("This prototype demonstrates navigation and shared context only.", "muted"))
+            body.addWidget(
+                label("This prototype demonstrates navigation and shared context only.", "muted")
+            )
             layout.addWidget(card)
             layout.addStretch()
             self.pages.addWidget(page)
@@ -198,6 +276,7 @@ class Workbench(QMainWindow):
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(190)
         self.progress.setAccessibleName("Persistent simulated task progress")
+        self.progress.setFormat("%v / %m processed")
         self.cancel_button = button("&Cancel task", self.session.cancel)
         self.details_button = button("Task details →", lambda: self.navigate(6))
         task_bar.addWidget(self.task_status, 1)
@@ -205,9 +284,13 @@ class Workbench(QMainWindow):
         task_bar.addWidget(self.cancel_button)
         task_bar.addWidget(self.details_button)
         main.addLayout(task_bar)
-        self.workspace.currentTextChanged.connect(lambda value: self.context_changed(workspace=value))
+        self.workspace.currentTextChanged.connect(
+            lambda value: self.context_changed(workspace=value)
+        )
         self.source.currentTextChanged.connect(lambda value: self.context_changed(source=value))
-        self.destination.currentTextChanged.connect(lambda value: self.context_changed(destination=value))
+        self.destination.currentTextChanged.connect(
+            lambda value: self.context_changed(destination=value)
+        )
         self.metadata.currentTextChanged.connect(lambda value: self.context_changed(metadata=value))
         self.nav.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.session.changed.connect(self.sync)
@@ -238,8 +321,13 @@ class Workbench(QMainWindow):
         self.attention = label("")
         body.addWidget(self.attention)
         layout.addWidget(attention)
-        layout.addWidget(label("Reports owns review, scope and import outcomes. Other domains keep their own primary destinations. "
-                               "All operations in this workspace are deterministic simulations.", "muted"))
+        layout.addWidget(
+            label(
+                "Reports owns review, scope and import outcomes. Other domains keep their own primary destinations. "
+                "All operations in this workspace are deterministic simulations.",
+                "muted",
+            )
+        )
         layout.addStretch()
         return page
 
@@ -252,14 +340,18 @@ class Workbench(QMainWindow):
         self.review_button = button("&Review reports", self.session.review)
         top.addWidget(self.review_button)
         layout.addLayout(top)
-        self.review_status = label("Review the source. Choose the scope. Import only what you approve.", "muted")
+        self.review_status = label(
+            "Review the source. Choose the scope. Import only what you approve.", "muted"
+        )
         layout.addWidget(self.review_status)
         filters = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search report or folder…   Ctrl+F")
         self.search.setAccessibleName("Search reports or folders")
         self.status_filter = QComboBox()
-        self.status_filter.addItems(("All reports", "New reports", "Destination matches", "Needs attention", "Selected"))
+        self.status_filter.addItems(
+            ("All reports", "New reports", "Destination matches", "Needs attention", "Selected")
+        )
         self.status_filter.setAccessibleName("Report status filter")
         self.parser_filter = QComboBox()
         self.parser_filter.addItems(("All parsers", "CMM PDF", "CSV profile"))
@@ -271,10 +363,17 @@ class Workbench(QMainWindow):
         self.model = ReportsModel(self.session)
         self.proxy = ReportsProxy(self.model)
         self.table = QTableView()
-        self.table.setAccessibleName("Synthetic reports. Space toggles the current report selection.")
+        self.table.setAccessibleName(
+            "Synthetic reports. Space toggles the current report selection."
+        )
         self.table.setModel(self.proxy)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
+        self.table.setWordWrap(False)
+        self.table.setTabKeyNavigation(False)
+        self.table.setToolTip(
+            "Arrow keys move between rows. Space selects the current report. Tab leaves the table."
+        )
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.table.setSortingEnabled(True)
@@ -286,8 +385,12 @@ class Workbench(QMainWindow):
             self.table.setColumnWidth(i, width)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.selectionModel().currentChanged.connect(self.inspect_current)
-        QShortcut(QKeySequence("Space"), self.table, activated=self.toggle_current,
-                  context=Qt.ShortcutContext.WidgetShortcut)
+        QShortcut(
+            QKeySequence("Space"),
+            self.table,
+            activated=self.toggle_current,
+            context=Qt.ShortcutContext.WidgetShortcut,
+        )
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(self.table)
         detail, body = panel()
@@ -312,7 +415,13 @@ class Workbench(QMainWindow):
         selection.addWidget(self.clear_button)
         layout.addLayout(selection)
         footer = QHBoxLayout()
-        footer.addWidget(label("Matches can be verified independently.\nRepair requires explicit scope approval; complete reports stay unchanged.", "muted"), 1)
+        footer.addWidget(
+            label(
+                "Matches can be verified independently.\nRepair requires explicit scope approval; complete reports stay unchanged.",
+                "muted",
+            ),
+            1,
+        )
         self.import_button = button("Confirm 0 selected…", self.confirm_scope, primary=True)
         footer.addWidget(self.import_button)
         layout.addLayout(footer)
@@ -325,9 +434,13 @@ class Workbench(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(label("Task details", "title"))
-        layout.addWidget(label("Persistent evidence · navigation never starts or duplicates work", "muted"))
+        layout.addWidget(
+            label("Persistent evidence · navigation never starts or duplicates work", "muted")
+        )
         self.task_evidence = QTextBrowser()
-        self.task_evidence.setAccessibleName("Import outcomes, review snapshot and changed-since-review evidence")
+        self.task_evidence.setAccessibleName(
+            "Import outcomes, review snapshot and changed-since-review evidence"
+        )
         layout.addWidget(self.task_evidence, 1)
         return page
 
@@ -351,19 +464,27 @@ class Workbench(QMainWindow):
 
     def filter_changed(self, *_args):
         identity = self.current_identity
-        self.proxy.configure(self.search.text(), self.status_filter.currentText(), self.parser_filter.currentText())
+        self.proxy.configure(
+            self.search.text(), self.status_filter.currentText(), self.parser_filter.currentText()
+        )
         self.current_identity = identity
         self.restore_current()
         self.sync()
 
     def restore_current(self):
-        if not self.current_identity:
-            self.update_evidence()
-            return
+        found = False
         for i in range(self.proxy.rowCount()):
             if self.proxy.index(i, 0).data(Qt.ItemDataRole.UserRole) == self.current_identity:
                 self.table.setCurrentIndex(self.proxy.index(i, 1))
+                found = True
                 break
+        if not found:
+            if self.proxy.rowCount():
+                index = self.proxy.index(0, 1)
+                self.current_identity = index.data(Qt.ItemDataRole.UserRole)
+                self.table.setCurrentIndex(index)
+            else:
+                self.current_identity = None
         self.update_evidence()
 
     def inspect_current(self, current, _previous):
@@ -373,24 +494,37 @@ class Workbench(QMainWindow):
 
     def update_evidence(self):
         row = next((r for r in self.session.reports if r.identity == self.current_identity), None)
+        self.drift_button.setEnabled(bool(row) and not self.session.busy)
         if not row:
-            self.evidence.setPlainText("Choose a row to inspect its recognition, destination, eligibility and source evidence.\n\nAll values are synthetic. No report preview is loaded.")
+            self.evidence.setPlainText(
+                "Choose a row to inspect its recognition, destination, eligibility and source evidence.\n\nAll values are synthetic. No report preview is loaded."
+            )
             return
-        outcome = self.session.results.get(row.identity)
-        self.evidence.setHtml(f"<h3>{escape(row.name)}</h3><p>{escape(row.folder)}</p>"
+        outcome = (
+            self.session.results.get(row.identity)
+            if self.session.plan
+            and self.session.plan.context == self.session.context
+            and self.session.plan.review_version == self.session.review_version
+            else None
+        )
+        self.evidence.setHtml(
+            f"<h3>{escape(row.name)}</h3><p>{escape(row.folder)}</p>"
             f"<p><b>Recognition</b><br>{row.recognition.value} · {row.confidence}% demo score</p>"
             f"<p><b>Destination completeness</b><br>{row.destination.value}<br>Fixture-only classification</p>"
-            f"<p><b>Eligibility</b><br>{row.eligibility}</p><p><b>Selection</b><br>"
+            f"<p><b>Eligibility</b><br>{'Rejected · refresh review' if outcome == Outcome.CHANGED else row.eligibility}</p><p><b>Selection</b><br>"
             f"{'Selected explicitly' if row.identity in self.session.selected else 'Not selected'}</p>"
             f"<p><b>Execution outcome</b><br>{outcome.value if outcome else 'Not executed'}</p>"
-            f"<p><b>Evidence · synthetic</b><br>{row.parser}<br>{row.fingerprint}<br>Parser generation: demo-1</p>"
+            f"<p><b>Reviewed evidence · synthetic</b><br>{row.parser}<br>{row.fingerprint}<br>Parser generation: demo-1</p>"
             f"<p>Source-copy exclusion: {'yes' if row.same_source else 'no'}<br>"
-            f"Changed since review: {'yes' if row.stale else 'no'}<br>"
-            f"Simulated failure fixture: {'yes' if row.fail else 'no'}</p>")
+            f"Changed since review: {'yes' if row.stale or outcome == Outcome.CHANGED else 'no'}<br>"
+            f"Simulated failure fixture: {'yes' if row.fail else 'no'}</p>"
+        )
 
     def toggle_current(self):
-        if self.current_identity:
-            self.session.select(self.current_identity, self.current_identity not in self.session.selected)
+        index = self.table.currentIndex()
+        if index.isValid():
+            identity = index.data(Qt.ItemDataRole.UserRole)
+            self.session.select(identity, identity not in self.session.selected)
 
     def change_current(self):
         if self.current_identity and not self.session.busy:
@@ -411,14 +545,44 @@ class Workbench(QMainWindow):
         self.import_button.setFocus()
 
     def next_action(self):
-        if self.session.busy or self.session.plan is not None:
+        if self.session.busy or self.current_task_matches_review():
             self.navigate(6)
         else:
             self.navigate(1)
 
+    def current_task_matches_review(self):
+        s = self.session
+        return bool(
+            s.review_current
+            and s.plan
+            and s.plan.context == s.context
+            and s.plan.review_version == s.review_version
+        )
+
+    def task_title(self):
+        s = self.session
+        if s.running:
+            return "Running"
+        if Outcome.CANCELLED in s.results.values():
+            return "Cancelled"
+        if any(
+            value in (Outcome.FAILED, Outcome.CHANGED, Outcome.REPAIR_NEEDED)
+            for value in s.results.values()
+        ):
+            return "Completed · attention needed"
+        return "Completed"
+
     def sync(self):
         s = self.session
-        for widget in (self.source, self.destination, self.metadata, self.workspace, self.review_button):
+        if self.proxy.status == "Selected":
+            self.proxy.invalidateFilter()
+        for widget in (
+            self.source,
+            self.destination,
+            self.metadata,
+            self.workspace,
+            self.review_button,
+        ):
             widget.setEnabled(not s.busy)
         self.select_button.setEnabled(s.review_current and not s.busy)
         self.clear_button.setEnabled(bool(s.selected) and not s.busy)
@@ -427,36 +591,66 @@ class Workbench(QMainWindow):
         self.cancel_button.setEnabled(s.busy)
         self.drift_button.setEnabled(not s.busy and bool(self.current_identity))
         visible = self.proxy.visible_ids()
-        self.selection_label.setText(f"{len(visible):,} shown / {len(s.reports):,} · {len(s.selected):,} selected\n"
-                                     f"{len(s.selected - visible):,} selected hidden by filters")
-        self.review_status.setText(f"Review #{s.review_version} · {'current' if s.review_current else 'approval needed'} · "
-                                   "all operations simulated")
+        self.selection_label.setText(
+            f"{len(visible):,} shown / {len(s.reports):,} · {len(s.selected):,} selected\n"
+            f"{len(s.selected - visible):,} selected hidden by filters"
+        )
+        self.review_status.setText(
+            f"Review #{s.review_version} · {'current' if s.review_current else 'approval needed'} · "
+            "all operations simulated"
+        )
         self.banner.setText(s.message)
-        self.overview_context.setText(f"{s.context.workspace}\n{s.context.source} → {s.context.destination}\n"
-                                     f"{len(s.reports):,} synthetic reports · {len(s.selected):,} selected")
-        self.attention.setText(s.message + f"\n{sum(not r.selectable for r in s.reports)} source records need attention or are excluded.")
-        self.overview_next.setText("View active task →" if s.busy else "Review task outcome →" if s.plan else
-                                  "Continue selection →" if s.review_current else "Review reports →")
+        self.breadcrumb.setText(f"{s.context.workspace}  /  Native workbench")
+        self.overview_context.setText(
+            f"{s.context.workspace}\n{s.context.source} → {s.context.destination}\n"
+            f"{len(s.reports):,} synthetic reports · {len(s.selected):,} selected"
+        )
+        self.attention.setText(
+            s.message
+            + f"\n{sum(not r.selectable for r in s.reports)} source records need attention or are excluded."
+        )
+        self.overview_next.setText(
+            "View active task →"
+            if s.busy
+            else "Review task outcome →"
+            if self.current_task_matches_review()
+            else "Continue selection →"
+            if s.review_current
+            else "Review reports →"
+        )
         self.progress.setRange(0, len(s.plan.reports) if s.plan else 1)
-        self.progress.setValue(len(s.results))
-        self.task_status.setText("Reviewing · simulated" if s.reviewing else
-                                 f"{'Running' if s.running else 'Last task'} · {len(s.results)} / {len(s.plan.reports)} reports"
-                                 if s.plan else "No active task · simulation only")
+        processed = sum(value != Outcome.CANCELLED for value in s.results.values())
+        self.progress.setValue(processed)
+        self.task_status.setText(
+            "Reviewing · simulated"
+            if s.reviewing
+            else f"{self.task_title()} · {processed} / {len(s.plan.reports)} processed"
+            if s.plan
+            else "No active task · simulation only"
+        )
         self.update_evidence()
         self.update_tasks()
 
     def update_tasks(self):
         s = self.session
         if not s.plan:
-            self.task_evidence.setPlainText("No import task yet. Review reports, choose a subset and confirm its exact scope.\n\n"
-                                           "Review and import are simulated; no database is accessed.")
+            self.task_evidence.setPlainText(
+                "No import task yet. Review reports, choose a subset and confirm its exact scope.\n\n"
+                "Review and import are simulated; no database is accessed."
+            )
             return
         counts = Counter(s.results.values())
-        outcomes = " · ".join(f"{outcome.value}: {counts[outcome]}" for outcome in Outcome if outcome != Outcome.CHANGED)
-        report_rows = "".join(f"<tr><td>{escape(r.name)}</td><td>{s.results[r.identity].value if r.identity in s.results else 'Pending'}</td></tr>"
-                              for r in s.plan.reports[:500])
+        outcomes = " · ".join(
+            f"{outcome.value}: {counts[outcome]}"
+            for outcome in Outcome
+            if outcome != Outcome.CHANGED
+        )
+        report_rows = "".join(
+            f"<tr><td>{escape(r.name)}</td><td>{s.results[r.identity].value if r.identity in s.results else 'Pending'}</td></tr>"
+            for r in s.plan.reports[:500]
+        )
         self.task_evidence.setHtml(
-            f"<h3>SIMULATED TASK · {'Running' if s.running else 'Terminal'}</h3>"
+            f"<h3>SIMULATED TASK · {self.task_title()}</h3>"
             f"<p><b>Frozen scope:</b> {len(s.plan.reports)} reports · {escape(s.plan.context.source)} → "
             f"{escape(s.plan.context.destination)}<br>Review #{s.plan.review_version} · "
             f"Repair permission: {'explicitly granted' if s.plan.allow_repair else 'not granted'}</p>"
@@ -468,27 +662,40 @@ class Workbench(QMainWindow):
             f"<h3>Per-report ledger</h3><table cellspacing='8'>{report_rows}</table>"
             f"<p>{'First 500 rows shown; all results retained in memory.' if len(s.plan.reports) > 500 else ''}</p>"
             f"<p>{len(s.history)} earlier simulated tasks retained for this session. "
-            "Session state is in memory; closing the prototype resets it.</p>")
+            "Session state is in memory; closing the prototype resets it.</p>"
+        )
 
     def set_theme(self, mode):
         self.theme = mode
         apply_theme(QApplication.instance(), mode)
         self.theme_button.setText("Light theme" if mode == "dark" else "Dark theme")
+        self.update_columns()
 
     def toggle_theme(self):
         self.set_theme("light" if self.theme == "dark" else "dark")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.update_columns()
+
+    def update_columns(self):
         compact = self.width() < 1150
-        self.sidebar.setFixedWidth(154 if compact else 188)
+        self.sidebar.setFixedWidth(188)
         for column in (2, 5, 6, 7):
             self.table.setColumnHidden(column, self.width() < 1500)
         self.table.setColumnHidden(4, compact)
+        header = self.table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        for column, width in enumerate((50, 230, 105, 148, 172, 96, 100, 122)):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            self.table.setColumnWidth(column, width)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
     def closeEvent(self, event):
         if self.session.busy:
-            self.session.message = "A simulated task is active. Cancel it or wait before closing this workspace."
+            self.session.message = (
+                "A simulated task is active. Cancel it or wait before closing this workspace."
+            )
             self.sync()
             event.ignore()
         else:
@@ -497,14 +704,18 @@ class Workbench(QMainWindow):
 
 def install_safety_guard():
     """Fail closed if an accidental Python network/DB call is introduced."""
+
     def guard(event, _args):
         if event.startswith(("socket.", "sqlite3.connect")):
             raise RuntimeError(f"Synthetic prototype forbids {event}")
+
     sys.addaudithook(guard)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Synthetic native Metroliza workbench; no backend access")
+    parser = argparse.ArgumentParser(
+        description="Synthetic native Metroliza workbench; no backend access"
+    )
     parser.add_argument("--theme", choices=("light", "dark"), default="dark")
     args = parser.parse_args()
     install_safety_guard()

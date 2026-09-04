@@ -69,8 +69,14 @@ class Report:
         return f"synthetic:{self.identity}:v{self.revision}"
 
 
-SCENARIOS = ("Validation batch", "Five eligible reports", "Destination matches only",
-             "Empty source", "Missing source", "10,000 synthetic reports")
+SCENARIOS = (
+    "Validation batch",
+    "Five eligible reports",
+    "Destination matches only",
+    "Empty source",
+    "Missing source",
+    "10,000 synthetic reports",
+)
 
 
 def fixtures(scenario):
@@ -78,17 +84,35 @@ def fixtures(scenario):
         return ()
     count = 10000 if scenario == SCENARIOS[-1] else 5 if scenario == SCENARIOS[1] else 24
     if scenario == SCENARIOS[2]:
-        return tuple(Report(f"match-{i}", f"inspection_{i + 1:03}.pdf", "Destination-only batch",
-                            destination=d) for i, d in enumerate(
-            (Destination.INCOMPLETE, Destination.COMPLETE, Destination.UNKNOWN)))
+        return tuple(
+            Report(
+                f"match-{i}", f"inspection_{i + 1:03}.pdf", "Destination-only batch", destination=d
+            )
+            for i, d in enumerate(
+                (Destination.INCOMPLETE, Destination.COMPLETE, Destination.UNKNOWN)
+            )
+        )
     rows = []
     for i in range(count):
         kind = i % 24 if count != 5 else 0
-        row = Report(f"report-{i:05}", f"inspection_{i + 1:05}.pdf", f"Batch {i // 24 + 1:03} / Station {i % 3 + 1}",
-                     parser="CSV profile" if i % 4 == 0 else "CMM PDF", confidence=96 + i % 4)
+        row = Report(
+            f"report-{i:05}",
+            f"inspection_{i + 1:05}.pdf",
+            f"Batch {i // 24 + 1:03} / Station {i % 3 + 1}",
+            parser="CSV profile" if i % 4 == 0 else "CMM PDF",
+            confidence=96 + i % 4,
+        )
         if 15 <= kind <= 19:
-            row = replace(row, destination=(Destination.UNKNOWN, Destination.INCOMPLETE,
-                                            Destination.COMPLETE, Destination.COMPLETE, Destination.UNKNOWN)[kind - 15])
+            row = replace(
+                row,
+                destination=(
+                    Destination.UNKNOWN,
+                    Destination.INCOMPLETE,
+                    Destination.COMPLETE,
+                    Destination.COMPLETE,
+                    Destination.UNKNOWN,
+                )[kind - 15],
+            )
         if kind == 20:
             row = replace(row, recognition=Recognition.AMBIGUOUS, confidence=51)
         if kind == 21:
@@ -161,7 +185,9 @@ class Session(QObject):
 
     def change_context(self, **fields):
         if self.busy:
-            raise ValueError("The running plan is immutable. Cancel or wait before changing context.")
+            raise ValueError(
+                "The running plan is immutable. Cancel or wait before changing context."
+            )
         if all(getattr(self.context, k) == v for k, v in fields.items()):
             return
         self.context = replace(self.context, **fields, version=self.context.version + 1)
@@ -169,7 +195,9 @@ class Session(QObject):
         self.selected.clear()
         self.review_current = False
         self.drift.clear()
-        self.message = "Context changed. Approval cleared; review this source and destination again."
+        self.message = (
+            "Context changed. Approval cleared; review this source and destination again."
+        )
         self.rows_changed.emit()
         self.changed.emit()
 
@@ -190,12 +218,24 @@ class Session(QObject):
         self.reviewing = False
         self.review_version += 1
         self.review_current = self.context.source != "Missing source"
-        self.reports = tuple(replace(r, stale=False, revision=r.revision + int(r.stale),
-                                    destination=Destination.COMPLETE if (self.context.destination, r.identity) in self.accepted else r.destination)
-                             for r in self.reports)
+        self.reports = tuple(
+            replace(
+                r,
+                stale=False,
+                drift_on_execute=r.drift_on_execute and not r.stale,
+                revision=r.revision + int(r.stale),
+                destination=Destination.COMPLETE
+                if (self.context.destination, r.identity) in self.accepted
+                else r.destination,
+            )
+            for r in self.reports
+        )
         self.drift.clear()
-        self.message = ("Source unavailable (simulated). Choose another fixture source."
-                        if not self.review_current else "Review current · choose an explicit subset. No records selected automatically.")
+        self.message = (
+            "Source unavailable (simulated). Choose another fixture source."
+            if not self.review_current
+            else "Review current · choose an explicit subset. No records selected automatically."
+        )
         self.rows_changed.emit()
         self.changed.emit()
 
@@ -230,8 +270,14 @@ class Session(QObject):
         chosen = tuple(r for r in self.reports if r.identity in self.selected)
         if any(not r.selectable for r in chosen):
             raise ValueError("Selection contains changed or ineligible reports. Refresh review.")
-        return Plan(self.context, self.review_version, chosen, allow_repair,
-                    sum(r.destination != Destination.NEW for r in self.reports), len(self.reports))
+        return Plan(
+            self.context,
+            self.review_version,
+            chosen,
+            allow_repair,
+            sum(r.destination != Destination.NEW for r in self.reports),
+            len(self.reports),
+        )
 
     def start(self, plan):
         if plan != self.make_plan(plan.allow_repair):
@@ -277,7 +323,22 @@ class Session(QObject):
         self.timer.stop()
         self.running = False
         self.message = "Simulation finished. Review per-report outcomes; accepted complete reports were preserved."
+        self.invalidate_changed_review()
         self.changed.emit()
+
+    def invalidate_changed_review(self):
+        changed = {
+            identity for identity, outcome in self.results.items() if outcome == Outcome.CHANGED
+        }
+        if not changed:
+            return
+        self.review_current = False
+        self.selected.clear()
+        self.reports = tuple(
+            replace(row, stale=True) if row.identity in changed else row for row in self.reports
+        )
+        self.message += " Changed source evidence rejected; refresh review before another task."
+        self.rows_changed.emit()
 
     def cancel(self):
         if self.reviewing:
@@ -292,13 +353,16 @@ class Session(QObject):
                     self.results[row.identity] = Outcome.CANCELLED
             self.running = False
             self.message = "Simulation cancelled. Completed per-report outcomes remain preserved."
+            self.invalidate_changed_review()
         self.changed.emit()
 
     def simulate_drift(self, identity):
         if self.running:
             raise ValueError("Fixture inputs cannot change during execution.")
         self.drift.add(identity)
-        self.reports = tuple(replace(r, stale=True) if r.identity == identity else r for r in self.reports)
+        self.reports = tuple(
+            replace(r, stale=True) if r.identity == identity else r for r in self.reports
+        )
         self.review_current = False
         self.selected.clear()
         self.message = "Synthetic source changed since review. Approval cleared."

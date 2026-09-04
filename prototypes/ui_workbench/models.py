@@ -1,10 +1,19 @@
 """Native table model, stable identity selection and independent visibility proxy."""
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
+from PyQt6.QtCore import QAbstractTableModel, QSortFilterProxyModel, Qt
 
 
 class ReportsModel(QAbstractTableModel):
-    headers = ("Select", "Report / location", "Recognition", "Destination", "Eligibility", "Parser", "Confidence", "Outcome")
+    headers = (
+        "Select",
+        "Report / location",
+        "Recognition",
+        "Destination",
+        "Eligibility",
+        "Parser",
+        "Confidence",
+        "Outcome",
+    )
 
     def __init__(self, session):
         super().__init__(session)
@@ -20,11 +29,11 @@ class ReportsModel(QAbstractTableModel):
         if self.rowCount():
             self.dataChanged.emit(self.index(0, 0), self.index(self.rowCount() - 1, 7))
 
-    def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.session.reports)
+    def rowCount(self, parent=None):
+        return 0 if parent is not None and parent.isValid() else len(self.session.reports)
 
-    def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.headers)
+    def columnCount(self, parent=None):
+        return 0 if parent is not None and parent.isValid() else len(self.headers)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
@@ -38,10 +47,30 @@ class ReportsModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.UserRole:
             return row.identity
         if role == Qt.ItemDataRole.CheckStateRole and index.column() == 0:
-            return Qt.CheckState.Checked if row.identity in self.session.selected else Qt.CheckState.Unchecked
-        outcome = self.session.results.get(row.identity)
-        values = ("", f"{row.name}\n{row.folder}", row.recognition.value, row.destination.value,
-                  row.eligibility, row.parser, f"{row.confidence}% · demo", outcome.value if outcome else "—")
+            return (
+                Qt.CheckState.Checked
+                if row.identity in self.session.selected
+                else Qt.CheckState.Unchecked
+            )
+        outcome = (
+            self.session.results.get(row.identity)
+            if self.session.plan
+            and self.session.plan.context == self.session.context
+            and self.session.plan.review_version == self.session.review_version
+            else None
+        )
+        values = (
+            "",
+            f"{row.name}\n{row.folder}",
+            row.recognition.value,
+            row.destination.value,
+            "Rejected · refresh review"
+            if outcome and outcome.value == "Changed since review"
+            else row.eligibility,
+            row.parser,
+            f"{row.confidence}% · demo",
+            outcome.value if outcome else "—",
+        )
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.AccessibleTextRole):
             return values[index.column()]
         if role == Qt.ItemDataRole.ToolTipRole:
@@ -58,8 +87,10 @@ class ReportsModel(QAbstractTableModel):
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
         if index.isValid() and index.column() == 0 and role == Qt.ItemDataRole.CheckStateRole:
-            return self.session.select(self.session.reports[index.row()].identity,
-                                       value == Qt.CheckState.Checked.value or value == Qt.CheckState.Checked)
+            return self.session.select(
+                self.session.reports[index.row()].identity,
+                value == Qt.CheckState.Checked.value or value == Qt.CheckState.Checked,
+            )
         return False
 
 
@@ -92,4 +123,41 @@ class ReportsProxy(QSortFilterProxyModel):
         }.get(self.status, True)
 
     def visible_ids(self):
-        return {self.index(i, 0).data(Qt.ItemDataRole.UserRole) for i in range(self.rowCount())}
+        rows = self.sourceModel().session.reports
+        return {
+            rows[self.mapToSource(self.index(i, 0)).row()].identity for i in range(self.rowCount())
+        }
+
+    def lessThan(self, left, right):
+        session = self.sourceModel().session
+        rows = session.reports
+        a, b = rows[left.row()], rows[right.row()]
+        if left.column() == 0:
+            return (a.identity in session.selected, a.identity) < (
+                b.identity in session.selected,
+                b.identity,
+            )
+        if left.column() == 7:
+            current = (
+                session.plan
+                and session.plan.context == session.context
+                and session.plan.review_version == session.review_version
+            )
+
+            def key(row):
+                outcome = session.results.get(row.identity) if current else None
+                return (outcome.value if outcome else "", row.identity)
+
+            return key(a) < key(b)
+        fields = (
+            "identity",
+            "name",
+            "recognition",
+            "destination",
+            "eligibility",
+            "parser",
+            "confidence",
+            "identity",
+        )
+        field = fields[left.column()]
+        return getattr(a, field) < getattr(b, field)

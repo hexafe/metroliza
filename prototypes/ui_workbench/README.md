@@ -29,11 +29,17 @@ Pinned design baseline: `develop@dd0f964cbcf8cd3382fd68dd528b22c1a3b5d7be`.
 All operations are in-memory simulations, not production readiness evidence.
 Production CI: **NOT RUN**. No Actions dispatch is part of this experiment.
 
-Prototype tests (14 interaction cases at the WIP checkpoint):
+Prototype tests:
 
 ```sh
 python -m unittest -v test_workbench
 ```
 
-WIP checkpoint: native launch and interaction tests pass. Rendered screenshots,
-10,000-row observations and the adapter matrix follow before the Draft handoff.
+See [native screenshots and measured validation](VALIDATION.md) and the
+[capability matrix, integration plan and rollback](CAPABILITIES.md).
+
+The Validation batch includes a deterministic execution-time source change at report
+12 and a simulated failure at report 13. They demonstrate separate rejection/failure
+evidence; Five eligible reports provides the all-success subset path.
+
+![Native Reports workspace](evidence/reports-dark-1280x800.png)

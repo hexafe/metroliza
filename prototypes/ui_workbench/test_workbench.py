@@ -1,4 +1,5 @@
 """Prototype-only native interaction tests; no production pytest configuration."""
+
 import ast
 from dataclasses import FrozenInstanceError, replace
 import os
@@ -82,9 +83,25 @@ class WorkbenchTests(unittest.TestCase):
         self.w.select_visible()
         self.assertEqual(self.s.selected, {"report-00001"})
 
+    def test_space_after_filter_targets_visible_row(self):
+        self.review()
+        self.w.navigate(1)
+        self.w.table.setCurrentIndex(self.w.proxy.index(0, 1))
+        self.assertEqual(self.w.current_identity, "report-00000")
+        self.w.search.setText("00002")
+        self.w.table.setFocus()
+        APP.processEvents()
+        QTest.keyClick(self.w.table, Qt.Key.Key_Space)
+        self.assertEqual(self.s.selected, {"report-00001"})
+        self.assertIn("inspection_00002", self.w.evidence.toPlainText())
+
     def test_context_invalidates_approval(self):
-        for field, value in (("destination", "Archive"), ("source", "Validation batch"),
-                             ("metadata", "Detailed"), ("workspace", "Other")):
+        for field, value in (
+            ("destination", "Archive"),
+            ("source", "Validation batch"),
+            ("metadata", "Detailed"),
+            ("workspace", "Other"),
+        ):
             with self.subTest(field=field):
                 self.review()
                 self.s.select("report-00000", True)
@@ -110,8 +127,14 @@ class WorkbenchTests(unittest.TestCase):
         self.assertTrue(self.w.import_button.isEnabled())
         self.s.start(self.s.make_plan())
         self.finish()
-        self.assertEqual(self.s.results, {"match-0": Outcome.REPAIR_NEEDED,
-                                         "match-1": Outcome.PRESENT, "match-2": Outcome.REPAIR_NEEDED})
+        self.assertEqual(
+            self.s.results,
+            {
+                "match-0": Outcome.REPAIR_NEEDED,
+                "match-1": Outcome.PRESENT,
+                "match-2": Outcome.REPAIR_NEEDED,
+            },
+        )
         self.assertNotIn((self.s.context.destination, "match-0"), self.s.accepted)
 
     def test_destination_only_repair_preserves_complete_and_subset(self):
@@ -149,6 +172,8 @@ class WorkbenchTests(unittest.TestCase):
         self.s.cancel()
         self.assertEqual(self.s.results["report-00000"], Outcome.IMPORTED)
         self.assertEqual(sum(v == Outcome.CANCELLED for v in self.s.results.values()), 4)
+        self.assertEqual(self.w.progress.value(), 1)
+        self.assertIn("Cancelled", self.w.task_status.text())
 
     def test_changed_failed_cancelled_disjoint(self):
         self.review("Validation batch")
@@ -158,8 +183,15 @@ class WorkbenchTests(unittest.TestCase):
         for _ in range(3):
             self.s.step()
         self.s.cancel()
-        self.assertEqual(self.s.results, {"report-00000": Outcome.IMPORTED, "report-00011": Outcome.CHANGED,
-                                         "report-00012": Outcome.FAILED, "report-00014": Outcome.CANCELLED})
+        self.assertEqual(
+            self.s.results,
+            {
+                "report-00000": Outcome.IMPORTED,
+                "report-00011": Outcome.CHANGED,
+                "report-00012": Outcome.FAILED,
+                "report-00014": Outcome.CANCELLED,
+            },
+        )
         for text in ("Import outcomes", "Review snapshot", "Changed since review"):
             self.assertIn(text, self.w.task_evidence.toPlainText())
 
@@ -176,6 +208,35 @@ class WorkbenchTests(unittest.TestCase):
         self.s.cancel()
         self.assertFalse(self.s.review_current)
 
+    def test_execute_drift_requires_review_and_details_agree(self):
+        self.review("Validation batch")
+        self.s.select("report-00011", True)
+        self.s.start(self.s.make_plan())
+        self.finish()
+        self.w.current_identity = "report-00011"
+        self.w.update_evidence()
+        self.assertIn("Changed since review: yes", self.w.evidence.toPlainText())
+        self.assertFalse(self.s.review_current)
+        self.assertFalse(self.s.selected)
+        self.s.review()
+        self.s.finish_review()
+        self.w.current_identity = "report-00011"
+        self.w.update_evidence()
+        self.assertNotIn("Rejected", self.w.evidence.toPlainText())
+        self.assertIn("Changed since review: no", self.w.evidence.toPlainText())
+        self.s.select("report-00011", True)
+        self.s.start(self.s.make_plan())
+        self.finish()
+        self.assertEqual(self.s.results["report-00011"], Outcome.IMPORTED)
+
+    def test_outcome_sort_uses_outcome(self):
+        self.review("Destination matches only")
+        self.w.select_visible()
+        self.s.start(self.s.make_plan(allow_repair=True))
+        self.finish()
+        self.w.table.sortByColumn(7, Qt.SortOrder.AscendingOrder)
+        self.assertEqual(self.w.proxy.index(0, 0).data(Qt.ItemDataRole.UserRole), "match-1")
+
     def test_stale_confirmation(self):
         self.review()
         self.s.select("report-00000", True)
@@ -185,6 +246,22 @@ class WorkbenchTests(unittest.TestCase):
             self.s.start(old)
         with self.assertRaises(ValueError):
             self.s.start(replace(old, review_version=999))
+
+    def test_selected_filter_updates_and_outcome_context_is_not_mixed(self):
+        self.review()
+        self.s.select("report-00000", True)
+        self.w.status_filter.setCurrentText("Selected")
+        self.assertEqual(self.w.proxy.rowCount(), 1)
+        self.s.clear_selection()
+        self.assertEqual(self.w.proxy.rowCount(), 0)
+        self.s.select("report-00000", True)
+        self.s.start(self.s.make_plan())
+        self.finish()
+        self.assertEqual(self.w.model.index(0, 7).data(), "Imported")
+        self.s.change_context(destination="Other")
+        self.assertEqual(self.w.model.index(0, 7).data(), "—")
+        self.assertIn("Comparison lab", self.w.task_evidence.toPlainText())
+        self.assertEqual(self.w.overview_next.text(), "Review reports →")
 
     def test_layout_reachable(self):
         self.review()
@@ -196,8 +273,16 @@ class WorkbenchTests(unittest.TestCase):
                     self.w.navigate(1)
                     APP.processEvents()
                     self.assertEqual((self.w.width(), self.w.height()), (width, height))
-                    for control in (self.w.import_button, self.w.review_button, self.w.cancel_button, self.w.search, self.w.destination):
-                        self.assertTrue(self.w.rect().contains(control.mapTo(self.w, control.rect().center())))
+                    for control in (
+                        self.w.import_button,
+                        self.w.review_button,
+                        self.w.cancel_button,
+                        self.w.search,
+                        self.w.destination,
+                    ):
+                        self.assertTrue(
+                            self.w.rect().contains(control.mapTo(self.w, control.rect().center()))
+                        )
                         self.assertTrue(control.isVisible())
 
     def test_close_active_task_blocked(self):
@@ -210,12 +295,52 @@ class WorkbenchTests(unittest.TestCase):
         self.w.close()
         self.assertFalse(self.w.isVisible())
 
+    def test_tab_focus_reaches_scope_and_cancel_controls(self):
+        self.review()
+        self.w.select_visible()
+        self.s.start(self.s.make_plan())
+        self.w.navigate(1)
+        self.w.search.setFocus()
+        visited = set()
+        for _ in range(30):
+            focus = APP.focusWidget()
+            if focus:
+                visited.add(focus)
+                QTest.keyClick(focus, Qt.Key.Key_Tab)
+        self.assertIn(self.w.cancel_button, visited)
+        self.s.cancel()
+        self.w.search.setFocus()
+        visited.clear()
+        for _ in range(30):
+            focus = APP.focusWidget()
+            if focus:
+                visited.add(focus)
+                QTest.keyClick(focus, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+        self.assertIn(self.w.import_button, visited)
+
     def test_no_backend_imports(self):
-        forbidden = {"sqlite3", "socket", "requests", "urllib", "metroliza", "modules", "PyQt6.QtNetwork", "PyQt6.QtWebEngineWidgets"}
+        forbidden = {
+            "sqlite3",
+            "socket",
+            "requests",
+            "urllib",
+            "metroliza",
+            "modules",
+            "PyQt6.QtNetwork",
+            "PyQt6.QtWebEngineWidgets",
+        }
         for path in ("app.py", "models.py", "state.py", "theme.py"):
             for node in ast.walk(ast.parse(Path(path).read_text())):
-                names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""] if isinstance(node, ast.ImportFrom) else []
-                self.assertFalse(any(n == f or n.startswith(f + ".") for n in names for f in forbidden), path)
+                names = (
+                    [a.name for a in node.names]
+                    if isinstance(node, ast.Import)
+                    else [node.module or ""]
+                    if isinstance(node, ast.ImportFrom)
+                    else []
+                )
+                self.assertFalse(
+                    any(n == f or n.startswith(f + ".") for n in names for f in forbidden), path
+                )
 
 
 if __name__ == "__main__":
