@@ -1033,6 +1033,19 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _review_source_name(self, report):
+        """Identify the same reviewed occurrence across fresh archive extraction roots."""
+        source = Path(self.directory)
+        if self._extracted_archive_dir is not None:
+            source = Path(self._extracted_archive_dir.name)
+        path = Path(report).absolute()
+        if source.is_file():
+            return path.name if path == source.absolute() else None
+        try:
+            return str(path.relative_to(source.absolute()))
+        except ValueError:
+            return None
+
     def _filter_reports_for_preflight(self, report_paths):
         """Apply an operator-approved scan and reject changed/new content.
 
@@ -1053,8 +1066,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         ):
             return [], max(len(report_paths), len(preflight.ready_files))
 
-        expected_fingerprint_counts = Counter(
-            item.fingerprint for item in preflight.files if item.fingerprint
+        expected_source_counts = Counter(
+            (item.display_name, item.fingerprint) for item in preflight.files if item.fingerprint
         )
         atomic_import_items = preflight.atomic_import_candidates(
             source_path=self.directory,
@@ -1062,16 +1075,16 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             metadata_parsing_mode=self.metadata_parsing_mode,
             registry_generation_id=report_parser_factory.get_registry_snapshot().generation_id,
         )
-        atomic_import_fingerprint_counts = Counter(
-            item.fingerprint for item in atomic_import_items if item.fingerprint
+        atomic_import_source_counts = Counter(
+            (item.display_name, item.fingerprint) for item in atomic_import_items if item.fingerprint
         )
-        parser_approval_by_fingerprint = {
-            item.fingerprint: (item.parser_id, item.registry_generation_id)
+        parser_approval_by_source = {
+            (item.display_name, item.fingerprint): (item.parser_id, item.registry_generation_id)
             for item in atomic_import_items
             if item.fingerprint and item.parser_id
         }
-        observed_fingerprint_counts: Counter[str] = Counter()
-        used_atomic_import_fingerprint_counts: Counter[str] = Counter()
+        observed_source_counts: Counter[tuple[str | None, str | None]] = Counter()
+        used_atomic_import_source_counts: Counter[tuple[str | None, str | None]] = Counter()
         approved: list[Path] = []
         changed_observed_files = 0
         for report in report_paths:
@@ -1083,16 +1096,17 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             )
             sha256_value = inspection.sha256
             fingerprint = f"sha256:{sha256_value}" if sha256_value else None
+            source_key = (self._review_source_name(report), fingerprint)
             if (
                 not fingerprint
-                or observed_fingerprint_counts[fingerprint]
-                >= expected_fingerprint_counts[fingerprint]
+                or observed_source_counts[source_key]
+                >= expected_source_counts[source_key]
             ):
                 changed_observed_files += 1
                 continue
-            observed_fingerprint_counts[fingerprint] += 1
+            observed_source_counts[source_key] += 1
 
-            parser_approval = parser_approval_by_fingerprint.get(fingerprint)
+            parser_approval = parser_approval_by_source.get(source_key)
             if parser_approval is None:
                 # Selected-source duplicates and rejected entries are review
                 # evidence, not separate persistence work. Destination matches
@@ -1100,8 +1114,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 # graph from an incomplete identity inside the transaction.
                 continue
             if (
-                used_atomic_import_fingerprint_counts[fingerprint]
-                >= atomic_import_fingerprint_counts[fingerprint]
+                used_atomic_import_source_counts[source_key]
+                >= atomic_import_source_counts[source_key]
             ):
                 continue
             approved_parser_id, approved_registry_generation_id = parser_approval
@@ -1131,11 +1145,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 changed_observed_files += 1
                 continue
             approved.append(report)
-            used_atomic_import_fingerprint_counts[fingerprint] += 1
+            used_atomic_import_source_counts[source_key] += 1
 
         missing_approved_files = sum(
-            max(0, expected_count - observed_fingerprint_counts[fingerprint])
-            for fingerprint, expected_count in atomic_import_fingerprint_counts.items()
+            max(0, expected_count - observed_source_counts[source_key])
+            for source_key, expected_count in atomic_import_source_counts.items()
         )
         changed_files = max(changed_observed_files, missing_approved_files)
         return approved, changed_files

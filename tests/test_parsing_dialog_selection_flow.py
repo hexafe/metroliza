@@ -821,8 +821,9 @@ if __name__ == '__main__':
     unittest.main()
 
 
+@pytest.mark.parametrize("source_copy", [False, True], ids=["singleton", "excluded-copy-first"])
 @pytest.mark.parametrize("accepted", [False, True], ids=["incomplete", "accepted"])
-def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monkeypatch, accepted, request):
+def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monkeypatch, accepted, source_copy, request):
     # The complete suite shares Qt application/window state. Exercise the real
     # modal click/worker flow in a fresh Qt process, as in an application launch.
     import os
@@ -853,6 +854,8 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
     source_dir.mkdir()
     source = source_dir / "synthetic.pdf"
     shutil.copyfile(Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf", source)
+    if source_copy:
+        shutil.copyfile(source, source_dir / "z-copy.pdf")
     database = tmp_path / "reports.sqlite3"
     repository = ReportRepository(str(database))
     repository.replace_existing_report(
@@ -883,6 +886,8 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
 
     def create_thread(request):
         worker = ParseReportsThread(request)
+        discover = worker.get_list_of_reports
+        worker.get_list_of_reports = lambda: sorted(discover(), reverse=True)
         workers.append(worker)
         return worker
 
@@ -898,9 +903,9 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
             review = ParsePreflightService().scan_source(
                 source_path=source_dir, database_path=database, metadata_parsing_mode="light"
             )
-            assert len(review.files) == 1
+            assert len(review.files) == 1 + source_copy
             assert review.count(ParsePreflightStatus.READY) == 0
-            assert review.count(ParsePreflightStatus.DUPLICATE) == 1
+            assert review.count(ParsePreflightStatus.DUPLICATE) == 1 + source_copy
             dialog._preflight_result = review
             dialog._sync_readiness_state()
             before = graph()
@@ -916,7 +921,7 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
             assert len(feedback) == attempt + 1
             result = workers[-1].last_parse_result
             assert result.parsed_files == result.imported_files + result.already_present_files == 1
-            assert result.preflight_duplicate_files == 1
+            assert result.preflight_duplicate_files == 1 + source_copy
             assert "Import outcome" in feedback[-1]
             assert "Review snapshot" in feedback[-1]
             if accepted or attempt:
@@ -928,6 +933,7 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
                 assert graph()["parsed_reports"][0][6] in ("parsed", "parsed_with_warnings")
                 assert graph()["report_measurements"]
                 assert "Saved: 1 report file" in feedback[-1]
+            assert {row[4] for row in graph()["source_file_locations"]} == {source.name}
             snapshots.append(graph())
         assert snapshots[0] == snapshots[1]
     finally:
