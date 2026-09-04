@@ -1,12 +1,18 @@
+import hashlib
 import json
+import sqlite3
+from contextlib import closing
 
 import pytest
 
+import metroliza.parsing.parse_result_v2_persistence as persistence_module
 from metroliza.parsing.parse_result_v2_persistence import (
     EmptyParseResultError,
     ParseResultContractError,
     build_persistence_payload,
     import_parse_result_v2_if_absent,
+    import_parse_result_v2_payload_if_absent,
+    persist_parse_result_v2_payload,
 )
 from metroliza.parsing.parser_plugin_contracts import (
     MeasurementBlockV2,
@@ -81,6 +87,17 @@ def _persistable_parse_result():
             ),
         ),
     )
+
+
+def _forbid_repository_construction(monkeypatch):
+    calls = []
+
+    def forbidden_repository(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("repository must not be constructed")
+
+    monkeypatch.setattr(persistence_module, "ReportRepository", forbidden_repository)
+    return calls
 
 
 def test_parse_result_v2_payload_maps_warnings_and_measurement_statuses():
@@ -456,3 +473,254 @@ def test_parse_result_v2_source_drift_fails_before_creating_database(tmp_path):
         )
 
     assert not database.exists()
+
+
+def test_atomic_import_rejects_explicit_digest_from_older_source_before_repository(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sample.csv"
+    content_a = b"synthetic source revision A"
+    content_b = b"synthetic source revision B"
+    source.write_bytes(content_a)
+    digest_a = hashlib.sha256(content_a).hexdigest()
+    source.write_bytes(content_b)
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    database = tmp_path / "reports.sqlite3"
+    repository_calls = _forbid_repository_construction(monkeypatch)
+
+    with pytest.raises(ValueError, match="does not match the inspected source digest"):
+        import_parse_result_v2_if_absent(
+            _persistable_parse_result(),
+            source_path=source,
+            database=str(database),
+            source_sha256=digest_a,
+            source_inspection=source_inspection,
+        )
+
+    assert repository_calls == []
+    assert not database.exists()
+
+
+def test_atomic_payload_rejects_digest_binding_before_repository(tmp_path, monkeypatch):
+    source = tmp_path / "sample.csv"
+    content_a = b"synthetic payload source revision A"
+    content_b = b"synthetic payload source revision B"
+    source.write_bytes(content_a)
+    digest_a = hashlib.sha256(content_a).hexdigest()
+    source.write_bytes(content_b)
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    database = tmp_path / "reports.sqlite3"
+    parse_result = _persistable_parse_result()
+    payload = build_persistence_payload(parse_result, source_path=source)
+    repository_calls = _forbid_repository_construction(monkeypatch)
+
+    with pytest.raises(ValueError, match="does not match the inspected source digest"):
+        import_parse_result_v2_payload_if_absent(
+            payload,
+            parse_result=parse_result,
+            source_path=source,
+            database=str(database),
+            source_sha256=digest_a,
+            source_inspection=source_inspection,
+        )
+
+    assert repository_calls == []
+    assert not database.exists()
+
+
+def test_atomic_payload_rejects_explicit_digest_when_inspection_has_no_digest(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "missing.csv"
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    assert source_inspection.sha256 is None
+    database = tmp_path / "reports.sqlite3"
+    parse_result = _persistable_parse_result()
+    payload = build_persistence_payload(parse_result, source_path=source)
+    repository_calls = _forbid_repository_construction(monkeypatch)
+
+    with pytest.raises(ValueError, match="does not match the inspected source digest"):
+        import_parse_result_v2_payload_if_absent(
+            payload,
+            parse_result=parse_result,
+            source_path=source,
+            database=str(database),
+            source_sha256="0" * 64,
+            source_inspection=source_inspection,
+        )
+
+    assert repository_calls == []
+    assert not database.exists()
+
+
+def test_atomic_import_matching_bound_digest_preserves_duplicate_graph(tmp_path):
+    source = tmp_path / "sample.csv"
+    source.write_bytes(b"synthetic matching source")
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    assert source_inspection.sha256 is not None
+    database = tmp_path / "reports.sqlite3"
+    parse_result = _persistable_parse_result()
+
+    first = import_parse_result_v2_if_absent(
+        parse_result,
+        source_path=source,
+        database=str(database),
+        source_sha256=source_inspection.sha256,
+        source_inspection=source_inspection,
+    )
+    with closing(sqlite3.connect(database)) as connection:
+        graph_after_first = tuple(connection.iterdump())
+    second = import_parse_result_v2_if_absent(
+        parse_result,
+        source_path=source,
+        database=str(database),
+        source_sha256=source_inspection.sha256,
+        source_inspection=source_inspection,
+    )
+    with closing(sqlite3.connect(database)) as connection:
+        graph_after_second = tuple(connection.iterdump())
+
+    assert first is ReportImportDisposition.IMPORTED
+    assert second is ReportImportDisposition.ALREADY_PRESENT
+    assert graph_after_second == graph_after_first
+
+
+def test_atomic_payload_forwards_canonical_inspected_digest_for_case_only_match(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "sample.csv"
+    source.write_bytes(b"synthetic canonical digest source")
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    assert source_inspection.sha256 is not None
+    parse_result = _persistable_parse_result()
+    payload = build_persistence_payload(parse_result, source_path=source)
+    forwarded = {}
+
+    class RecordingRepository:
+        def __init__(self, database, *, connection=None):
+            forwarded["constructor"] = (database, connection)
+
+        def import_report_if_absent(self, **kwargs):
+            forwarded.update(kwargs)
+            return ReportImportDisposition.IMPORTED
+
+    monkeypatch.setattr(persistence_module, "ReportRepository", RecordingRepository)
+
+    disposition = import_parse_result_v2_payload_if_absent(
+        payload,
+        parse_result=parse_result,
+        source_path=source,
+        database=str(tmp_path / "unused.sqlite3"),
+        source_sha256=source_inspection.sha256.upper(),
+        source_inspection=source_inspection,
+    )
+
+    assert disposition is ReportImportDisposition.IMPORTED
+    assert forwarded["source_sha256"] == source_inspection.sha256
+    assert forwarded["source_digest_verifier"]() == source_inspection.sha256
+
+
+def test_atomic_import_explicit_only_verifies_current_source(tmp_path):
+    source = tmp_path / "sample.csv"
+    content = b"synthetic explicit-only source"
+    source.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    database = tmp_path / "reports.sqlite3"
+
+    imported = import_parse_result_v2_if_absent(
+        _persistable_parse_result(),
+        source_path=source,
+        database=str(database),
+        source_sha256=digest,
+    )
+    with closing(sqlite3.connect(database)) as connection:
+        graph_before_drift = tuple(connection.iterdump())
+    source.write_bytes(b"synthetic explicit-only changed source")
+
+    with pytest.raises(ValueError, match="does not match the final source digest"):
+        import_parse_result_v2_if_absent(
+            _persistable_parse_result(),
+            source_path=source,
+            database=str(database),
+            source_sha256=digest,
+        )
+    with closing(sqlite3.connect(database)) as connection:
+        graph_after_drift = tuple(connection.iterdump())
+
+    assert imported is ReportImportDisposition.IMPORTED
+    assert graph_after_drift == graph_before_drift
+
+
+def test_replacement_payload_rejects_digest_binding_before_repository(tmp_path, monkeypatch):
+    source = tmp_path / "sample.csv"
+    content_a = b"synthetic replacement source revision A"
+    content_b = b"synthetic replacement source revision B"
+    source.write_bytes(content_a)
+    digest_a = hashlib.sha256(content_a).hexdigest()
+    source.write_bytes(content_b)
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    database = tmp_path / "reports.sqlite3"
+    parse_result = _persistable_parse_result()
+    payload = build_persistence_payload(parse_result, source_path=source)
+    repository_calls = _forbid_repository_construction(monkeypatch)
+
+    with pytest.raises(ValueError, match="does not match the inspected source digest"):
+        persist_parse_result_v2_payload(
+            payload,
+            parse_result=parse_result,
+            source_path=source,
+            database=str(database),
+            source_sha256=digest_a,
+            source_inspection=source_inspection,
+        )
+
+    assert repository_calls == []
+    assert not database.exists()
+
+
+def test_replacement_payload_rejects_source_drift_before_repository(tmp_path, monkeypatch):
+    source = tmp_path / "sample.csv"
+    source.write_bytes(b"synthetic inspected replacement source")
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    assert source_inspection.sha256 is not None
+    source.write_bytes(b"synthetic changed replacement source")
+    database = tmp_path / "reports.sqlite3"
+    parse_result = _persistable_parse_result()
+    payload = build_persistence_payload(parse_result, source_path=source)
+    repository_calls = _forbid_repository_construction(monkeypatch)
+
+    with pytest.raises(SourceChangedAfterInspectionError):
+        persist_parse_result_v2_payload(
+            payload,
+            parse_result=parse_result,
+            source_path=source,
+            database=str(database),
+            source_inspection=source_inspection,
+        )
+
+    assert repository_calls == []
+    assert not database.exists()
+
+
+def test_replacement_payload_persists_matching_inspected_digest(tmp_path):
+    source = tmp_path / "sample.csv"
+    source.write_bytes(b"synthetic matching replacement source")
+    source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    assert source_inspection.sha256 is not None
+    database = tmp_path / "reports.sqlite3"
+    parse_result = _persistable_parse_result()
+    payload = build_persistence_payload(parse_result, source_path=source)
+
+    report_id = persist_parse_result_v2_payload(
+        payload,
+        parse_result=parse_result,
+        source_path=source,
+        database=str(database),
+        source_sha256=source_inspection.sha256.upper(),
+        source_inspection=source_inspection,
+    )
+    with closing(sqlite3.connect(database)) as connection:
+        persisted_digest = connection.execute("SELECT sha256 FROM source_files").fetchone()[0]
+
+    assert report_id > 0
+    assert persisted_digest == source_inspection.sha256

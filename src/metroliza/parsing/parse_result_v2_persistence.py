@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,27 @@ class ParseResultV2PersistencePayload:
     nok_count: int
     identity_hash: str
     raw_report_json: dict[str, Any]
+
+
+def _resolve_source_digest_binding(
+    *,
+    source_path: str | Path,
+    source_sha256: str | None,
+    source_inspection: SourceInspectionContext | None,
+) -> tuple[str | None, Callable[[], str | None] | None]:
+    """Bind an explicit digest to the exact inspected source, if provided."""
+
+    if source_inspection is None:
+        return source_sha256, None
+
+    inspected_sha256 = source_inspection.sha256
+    if source_sha256 is not None and (
+        inspected_sha256 is None or source_sha256.casefold() != inspected_sha256.casefold()
+    ):
+        raise ValueError(
+            f"Explicit source digest does not match the inspected source digest: {source_path}"
+        )
+    return inspected_sha256, source_inspection.verified_sha256
 
 
 def _clean_optional(value: Any) -> str | None:
@@ -501,21 +523,13 @@ def persist_parse_result_v2_payload(
             plugin_id=parse_result.meta.plugin_id,
         )
 
-    verified_source_sha256 = source_sha256
-    if source_inspection is not None:
-        current_sha256 = source_inspection.verified_sha256()
-        if (
-            source_sha256 is not None
-            and (
-                current_sha256 is None
-                or source_sha256.casefold() != current_sha256.casefold()
-            )
-        ):
-            raise ValueError(
-                "Explicit source digest does not match the inspected source digest: "
-                f"{source_path}"
-            )
-        verified_source_sha256 = current_sha256
+    verified_source_sha256, source_digest_verifier = _resolve_source_digest_binding(
+        source_path=source_path,
+        source_sha256=source_sha256,
+        source_inspection=source_inspection,
+    )
+    if source_digest_verifier is not None:
+        verified_source_sha256 = source_digest_verifier()
 
     repository = ReportRepository(database, connection=connection)
     return repository.persist_parsed_report(
@@ -559,11 +573,11 @@ def import_parse_result_v2_payload_if_absent(
             plugin_id=parse_result.meta.plugin_id,
         )
 
-    inspected_sha256 = source_sha256
-    source_digest_verifier = None
-    if source_inspection is not None:
-        inspected_sha256 = source_inspection.sha256
-        source_digest_verifier = source_inspection.verified_sha256
+    inspected_sha256, source_digest_verifier = _resolve_source_digest_binding(
+        source_path=source_path,
+        source_sha256=source_sha256,
+        source_inspection=source_inspection,
+    )
 
     repository = ReportRepository(database, connection=connection)
     return repository.import_report_if_absent(
