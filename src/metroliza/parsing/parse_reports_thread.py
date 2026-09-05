@@ -680,6 +680,9 @@ def parse_new_reports(
                 if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
                     try:
                         _require_prepared_report_approval(prepared)
+                        if should_cancel():
+                            cancel_requested = True
+                            break
                         outcome = persist_report(parser)
                         _record_persistence_outcome(outcome)
                     except Exception as exc:
@@ -758,6 +761,8 @@ def parse_new_reports(
                 if require_typed_persistence_outcome:
                     parser.prepare_for_two_stage_pipeline()
                 _require_prepared_report_approval(prepared)
+                if should_cancel():
+                    break
                 outcome = persist_report(parser)
                 _record_persistence_outcome(outcome)
             except Exception as exc:

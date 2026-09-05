@@ -820,9 +820,12 @@ class ParsingDialog(QDialog):
             self.parsing_canceled = False
             self.parse_error_message = None
 
-            # Start the parsing thread
-            plan = ImportPlan.all_atomic_candidates(request, self._preflight_result)
-            self.parse_thread = ParseReportsThread(plan)
+            # The import action supplies a review. Legacy direct loading-screen
+            # calls still reach the worker's fail-closed missing-plan validation.
+            execution_request = request
+            if self._preflight_result is not None:
+                execution_request = ImportPlan.all_atomic_candidates(request, self._preflight_result)
+            self.parse_thread = ParseReportsThread(execution_request)
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
             self.parse_thread.error_occurred.connect(self.on_parse_error)

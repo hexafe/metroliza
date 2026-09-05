@@ -581,11 +581,9 @@ class TestParseHelpers(unittest.TestCase):
 
             persisted = []
             existing = set()
-            calls = {'count': 0}
 
             def should_cancel():
-                calls['count'] += 1
-                return calls['count'] > 2
+                return len(persisted) >= 2
 
             progress_updates = []
 
