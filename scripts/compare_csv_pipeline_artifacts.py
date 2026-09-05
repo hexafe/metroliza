@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 import re
 import zipfile
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 
 _SQLITE_PATH = re.compile(
     rb"(?<='sqlite_path': ')/[^'<>\s]*/metroliza_csv_summary_[a-z0-9_]+\.sqlite(?=')"

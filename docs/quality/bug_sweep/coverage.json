@@ -2500,7 +2500,9 @@
       "id": "analytics-audit-tools",
       "include": [
         "scripts/benchmark_comparison_stats.py",
+        "scripts/benchmark_csv_pipeline.py",
         "scripts/benchmark_distribution_fit_batch.py",
+        "scripts/compare_csv_pipeline_artifacts.py",
         "scripts/generate_chart_parity_fixtures.py"
       ],
       "exclude": [],

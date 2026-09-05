@@ -10,7 +10,9 @@ import openpyxl
 import pytest
 
 from metroliza.charts import hexafe_plotstats_adapter as adapter
-from scripts.compare_csv_pipeline_artifacts import artifact_manifest, compare_artifacts
+from scripts.compare_csv_pipeline_artifacts import (
+    _normalized_part, artifact_manifest, compare_artifacts,
+)
 
 
 def _count_table_computations(monkeypatch):
@@ -118,6 +120,9 @@ def test_request_cache_does_not_remember_unavailable_backend(monkeypatch):
         recovered = adapter.build_histogram_stats_table([1.0, 2.0])
         assert recovered.backend == "hexafe-plotstats"
         assert len(calls) == 1
+    monkeypatch.setattr(adapter, "_histogram_table_rows_from_plotstats", lambda *a, **k: ())
+    with adapter.histogram_stats_request():
+        assert adapter.build_histogram_stats_table([1.0, 2.0], backend="python").backend == "python"
 
 
 def test_real_histogram_table_is_identical_with_reuse_and_new_requests():
@@ -214,3 +219,11 @@ def test_artifact_manifest_requires_offline_assets_and_preserves_literal_formula
     (directory / "dashboard.html").write_text('<script src="https://example.invalid/runtime.js"></script>')
     with pytest.raises(ValueError, match="Remote dashboard asset"):
         artifact_manifest(directory)
+
+
+def test_artifact_metadata_parser_rejects_xml_entities():
+    from defusedxml.common import DefusedXmlException
+
+    payload = b'<!DOCTYPE x [<!ENTITY expansion "unexpected">]><x>&expansion;</x>'
+    with pytest.raises(DefusedXmlException):
+        _normalized_part("docProps/core.xml", payload)
