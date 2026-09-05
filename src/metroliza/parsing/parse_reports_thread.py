@@ -27,6 +27,7 @@ from metroliza.shared.progress_status import (
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_repository import (
+    ReportEnrichmentApproval,
     ReportImportDisposition,
     ReportImportPolicy,
     ReportRepository,
@@ -1114,9 +1115,14 @@ def selection_result_for_complete_metadata_parser(parser):
     return selection_result
 
 
-def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *, connection=None):
+def persist_complete_metadata_enrichment(
+    db_file, report_id, selection_result, *, connection=None,
+    approval: ReportEnrichmentApproval | None = None,
+):
     if selection_result is None:
         return None, {"skipped": True, "reason": "metadata_parser_not_available"}
+    if approval is not None:
+        approval.validate_entry(db_file, connection)
     current_row = report_metadata_row_for_enrichment(db_file, report_id, connection=connection)
     merged_metadata, merge_summary = merge_enriched_metadata_for_persistence(
         current_row,
@@ -1141,6 +1147,7 @@ def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *
         metadata_confidence=merged_metadata.metadata_confidence,
         identity_hash=build_report_identity_hash(merged_metadata),
         raw_report_json=raw_report_json,
+        approval=approval,
     )
     return merged_metadata, merge_summary
 
@@ -1603,6 +1610,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         if not report_paths:
             self._emit_stage_progress('enrich_metadata', 1.0)
             return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
+        self._validate_enrichment_connection(connection)
 
         self.update_label.emit(
             build_three_line_status(
@@ -1637,7 +1645,9 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             return parser
 
         def _persist_enrichment(report, parser):
-            _require_prepared_report_approval(parser._selected_enrichment_approval)
+            prepared = parser._selected_enrichment_approval
+            approval = self._enrichment_transaction_approval(prepared)
+            _require_prepared_report_approval(prepared)
             if self.parsing_canceled:
                 return False
             report_id = self._report_id_for_source_path(
@@ -1658,6 +1668,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 report_id,
                 selection_result,
                 connection=connection,
+                approval=approval,
             )
             return True
 
@@ -1687,6 +1698,34 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             ),
         )
         return result
+
+    def _validate_enrichment_connection(self, connection):
+        if self.import_plan is not None:
+            ReportEnrichmentApproval.validate_connection(connection)
+
+    def _enrichment_transaction_approval(self, prepared):
+        if self.import_plan is None:
+            # Compatibility for explicit legacy helper callers. Core run()
+            # rejects missing plans before import or enrichment can start.
+            return None
+        identity = prepared.selected_identity
+        if (
+            identity is None
+            or identity not in self.import_plan.selected_reports
+            or self._occurrence_id_for_report(Path(prepared.report_path)) != identity.occurrence_id
+            or not isinstance(prepared.source_inspection, SourceInspectionContext)
+        ):
+            raise _SelectedReportApprovalDriftError("Selected enrichment approval is incomplete")
+
+        def verify_live():
+            _require_prepared_report_approval(prepared)
+            if self.parsing_canceled:
+                raise ValueError("Selected enrichment cancelled before acceptance")
+
+        return ReportEnrichmentApproval(
+            expected_source_sha256=identity.fingerprint.removeprefix("sha256:"),
+            verify_live=verify_live,
+        )
 
     def run(self):
         try:

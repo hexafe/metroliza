@@ -1,6 +1,7 @@
-from contextlib import closing
+from contextlib import closing, nullcontext
 from dataclasses import FrozenInstanceError, replace
 import hashlib
+import json
 from itertools import product
 from pathlib import Path
 import sqlite3
@@ -22,10 +23,443 @@ from metroliza.parsing.preflight import (
     validate_import_plan,
 )
 from metroliza.shared.parse_contracts import ParseRequest
-from metroliza.reports.report_repository import ReportImportDisposition, ReportRepository
+from metroliza.reports.report_repository import ReportEnrichmentApproval, ReportImportDisposition, ReportRepository
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
+
+
+def _enrichment_graph(database, connection=None):
+    def snapshot(conn):
+        tables = ("source_files", "source_file_locations", "parsed_reports", "report_metadata",
+                  "report_metadata_candidates", "report_metadata_warnings", "report_parse_state",
+                  "report_measurements")
+        return {table: sorted(conn.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+                for table in tables}
+    if connection is not None:
+        return snapshot(connection)
+    with closing(sqlite3.connect(database)) as conn:
+        return snapshot(conn)
+
+
+def _synthetic_enrichment_selection():
+    return SimpleNamespace(metadata={
+        "parser_id": "cmm_pdf_header_box", "template_family": "cmm_pdf_header_box",
+        "metadata_confidence": 0.99, "operator_name": "SYNTHETIC-ENRICHMENT",
+        "metadata_json": {}, "warnings": (),
+    }, candidates=())
+
+
+@pytest.mark.parametrize("boundary", ("report_lookup", "repository_entry"))
+def test_late_enrichment_source_drift_must_not_commit_metadata(tmp_path, monkeypatch, boundary):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "late-enrichment.sqlite3"
+    request = replace(_request(source, database), run_background_metadata_enrichment=True)
+    plan = ImportPlan.all_ready(request, _preflight(source, database))
+    worker = ParseReportsThread(plan)
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser",
+                        lambda parser: _synthetic_enrichment_selection())
+    before, enrichment_results = [], []
+    original_enrich = worker._run_background_metadata_enrichment
+
+    def capture_enrichment(*args):
+        before.append(_enrichment_graph(database))
+        outcome = original_enrich(*args)
+        enrichment_results.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", capture_enrichment)
+    seam = ((worker, "_report_id_for_source_path") if boundary == "report_lookup"
+            else (ReportRepository, "replace_report_metadata_enrichment"))
+    original = getattr(*seam)
+    observed = []
+
+    def change_source_at_boundary(*args, **kwargs):
+        if boundary == "report_lookup":
+            outcome = original(*args, **kwargs)
+        report.write_bytes(report.read_bytes() + b"changed after approved enrichment")
+        observed.append(report)
+        if boundary == "repository_entry":
+            outcome = original(*args, **kwargs)
+        return outcome
+
+    monkeypatch.setattr(*seam, change_source_at_boundary)
+    worker.run()
+    assert worker.last_parse_result.imported_files == 1
+    assert observed == [report]
+    assert _enrichment_graph(database) == before[0]
+    assert enrichment_results[0].enriched_files == 0
+    assert enrichment_results[0].failed_files == 1
+
+
+def _enrichment_worker_case(tmp_path, monkeypatch, count=1):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", count)
+    database = tmp_path / "enrichment-boundaries.sqlite3"
+    request = replace(_request(reports[0].parent, database), run_background_metadata_enrichment=True)
+    plan = ImportPlan.all_ready(request, _preflight(reports[0].parent, database))
+    worker = ParseReportsThread(plan)
+    state = {"parsers": {}, "before": None, "result": None}
+
+    def synthetic_extract(parser):
+        state["parsers"][parser.file_name] = parser
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", synthetic_extract)
+    enrich = worker._run_background_metadata_enrichment
+
+    def capture(paths, connection):
+        state["before"] = _enrichment_graph(database)
+        state["result"] = enrich(paths, connection)
+        return state["result"]
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", capture)
+    return reports, database, worker, state
+
+
+def _change_enrichment_approval(kind, report, worker, state, monkeypatch):
+    if kind == "source":
+        report.write_bytes(report.read_bytes() + b"changed at transaction checkpoint")
+    elif kind == "generation":
+        snapshot = report_parser_factory.get_registry_snapshot()
+        monkeypatch.setattr(report_parser_factory, "get_registry_snapshot",
+                            lambda: replace(snapshot, generation_id=snapshot.generation_id + 1))
+    elif kind == "parser":
+        parser = state["parsers"][report.name]
+        parser.parser_resolution_evidence = replace(parser.parser_resolution_evidence, plugin_id="changed-parser")
+    else:
+        worker.stop_parsing()
+
+
+@pytest.mark.parametrize("boundary", ("entry", "after_mutation"))
+@pytest.mark.parametrize("change", ("source", "generation", "parser", "cancel"))
+@pytest.mark.parametrize("borrowed", (False, True))
+def test_enrichment_transaction_rejects_live_approval_drift(tmp_path, monkeypatch, boundary, change, borrowed):
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch)
+    if borrowed:
+        captured_enrich = worker._run_background_metadata_enrichment
+
+        def with_borrowed_connection(paths, _connection):
+            with closing(sqlite3.connect(database)) as supplied:
+                outcome = captured_enrich(paths, supplied)
+                assert not supplied.in_transaction
+                assert supplied.execute("SELECT count(*) FROM parsed_reports").fetchone() == (1,)
+                return outcome
+
+        monkeypatch.setattr(worker, "_run_background_metadata_enrichment", with_borrowed_connection)
+    seam = "replace_report_metadata_enrichment" if boundary == "entry" else "_replace_report_metadata"
+    original = getattr(ReportRepository, seam)
+    changed = []
+
+    def change_at_seam(repository, *args, **kwargs):
+        # Initial atomic import also uses the metadata writer; inject only once
+        # enrichment has captured the committed graph and constructed its parser.
+        if state["parsers"] and not changed:
+            if boundary == "after_mutation":
+                assert args[0].connection.in_transaction
+                outcome = original(repository, *args, **kwargs)
+            changed.append(change)
+            _change_enrichment_approval(change, reports[0], worker, state, monkeypatch)
+            if boundary == "entry":
+                outcome = original(repository, *args, **kwargs)
+            return outcome
+        return original(repository, *args, **kwargs)
+
+    monkeypatch.setattr(ReportRepository, seam, change_at_seam)
+    worker.run()
+    assert changed == [change]
+    assert _enrichment_graph(database) == state["before"]
+    assert state["result"].enriched_files == 0
+    assert state["result"].failed_files == 1
+    imported = worker.last_parse_result
+    assert imported.selected_files == imported.imported_files == imported.parsed_files == 1
+    assert imported.cancelled_files == imported.preflight_changed_files == imported.failed_files == 0
+
+
+@pytest.mark.parametrize("borrowed", (False, True, "legacy_autocommit"))
+def test_guarded_enrichment_checks_actual_owner_transaction_and_preserves_measurements(tmp_path, monkeypatch, borrowed):
+    from metroliza.reports import report_repository as repository_module
+
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch)
+    owner = get_ident()
+    active, checks = {}, []
+    original_transaction = repository_module.run_transaction_with_retry
+
+    def observe_transaction(database, operation, **kwargs):
+        def observe(cursor):
+            active["connection"] = cursor.connection
+            try:
+                return operation(cursor)
+            finally:
+                active.clear()
+        return original_transaction(database, observe, **kwargs)
+
+    monkeypatch.setattr(repository_module, "run_transaction_with_retry", observe_transaction)
+    approval_builder = worker._enrichment_transaction_approval
+
+    def observe_approval(prepared):
+        approval = approval_builder(prepared)
+
+        def verify():
+            checks.append((get_ident(), bool(active and active["connection"].in_transaction)))
+            approval.verify_live()
+
+        return ReportEnrichmentApproval(approval.expected_source_sha256, verify)
+
+    monkeypatch.setattr(worker, "_enrichment_transaction_approval", observe_approval)
+    captured_enrich = worker._run_background_metadata_enrichment
+
+    def with_connection(paths, connection):
+        options = {"isolation_level": None} if borrowed == "legacy_autocommit" else {}
+        with closing(sqlite3.connect(database, **options)) if borrowed else nullcontext(None) as supplied:
+            outcome = captured_enrich(paths, supplied)
+            if supplied is not None:
+                assert not supplied.in_transaction
+                assert supplied.execute("SELECT count(*) FROM parsed_reports").fetchone() == (1,)
+            return outcome
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", with_connection)
+    worker.run()
+    after = _enrichment_graph(database)
+    assert state["result"].enriched_files == 1
+    assert state["result"].failed_files == 0
+    assert checks and all(thread == owner for thread, _ in checks)
+    assert [inside for _, inside in checks if inside] == [True, True]
+    assert checks[-1] == (owner, True)
+    for table in ("source_files", "source_file_locations", "report_measurements"):
+        assert after[table] == state["before"][table]
+    with closing(sqlite3.connect(database)) as conn:
+        raw, operator = conn.execute("SELECT pr.raw_report_json, rm.operator_name FROM parsed_reports pr "
+                                     "JOIN report_metadata rm ON rm.report_id=pr.id").fetchone()
+    assert json.loads(raw)["metadata_enrichment"]["measurement_rows_preserved"] is True
+    assert operator == "SYNTHETIC-ENRICHMENT"
+
+
+@pytest.mark.parametrize("borrowed", (False, True))
+@pytest.mark.parametrize("change", ("source", "generation", "cancel"))
+def test_enrichment_busy_retry_rechecks_changed_approval(tmp_path, monkeypatch, borrowed, change):
+    from metroliza.reports import db as db_module
+
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch)
+    captured_enrich = worker._run_background_metadata_enrichment
+    retries = []
+
+    def locked_enrichment(paths, connection):
+        with closing(sqlite3.connect(database, timeout=0)) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            connect = db_module.connect_sqlite
+
+            def zero_timeout(path, *args, **kwargs):
+                return connect(path, timeout_s=0)
+
+            def retry_boundary(_delay):
+                assert not retries
+                retries.append("real SQLite lock encountered")
+                blocker.rollback()
+                _change_enrichment_approval(change, reports[0], worker, state, monkeypatch)
+
+            with monkeypatch.context() as patcher:
+                patcher.setattr(db_module, "connect_sqlite", zero_timeout)
+                patcher.setattr(db_module.time, "sleep", retry_boundary)
+                with closing(sqlite3.connect(database, timeout=0)) if borrowed else nullcontext(None) as supplied:
+                    return captured_enrich(paths, supplied)
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", locked_enrichment)
+    worker.run()
+    assert retries == ["real SQLite lock encountered"]
+    assert _enrichment_graph(database) == state["before"]
+    assert state["result"].enriched_files == 0 and state["result"].failed_files == 1
+    assert worker.last_parse_result.imported_files == 1
+
+
+@pytest.mark.parametrize("target_change", ("different_report", "deleted", "rebound_source"))
+def test_enrichment_target_identity_change_never_updates_another_graph(tmp_path, monkeypatch, target_change):
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch, count=2)
+    original_lookup = worker._report_id_for_source_path
+    expected = []
+
+    def change_target(report, **kwargs):
+        report_id = original_lookup(report, **kwargs)
+        if report == reports[0]:
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("PRAGMA foreign_keys=ON")
+                other_id, = connection.execute(
+                    "SELECT id FROM parsed_reports WHERE id<>?", (report_id,)
+                ).fetchone()
+                if target_change == "different_report":
+                    report_id = other_id
+                elif target_change == "deleted":
+                    connection.execute("DELETE FROM parsed_reports WHERE id=?", (report_id,))
+                else:
+                    other_source = connection.execute(
+                        "INSERT INTO source_files(sha256,source_format,discovered_at) VALUES(?,?,?)",
+                        ("f" * 64, "pdf", "2026-09-05T00:00:00Z"),
+                    ).lastrowid
+                    connection.execute("UPDATE parsed_reports SET source_file_id=? WHERE id=?", (other_source, report_id))
+                connection.commit()
+            expected.append(_enrichment_graph(database))
+        return report_id
+
+    monkeypatch.setattr(worker, "_report_id_for_source_path", change_target)
+    original_enrich = worker._run_background_metadata_enrichment
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", lambda paths, conn: original_enrich(paths[:1], conn))
+    worker.run()
+    assert expected and _enrichment_graph(database) == expected[0]
+    assert state["result"].enriched_files == 0 and state["result"].failed_files == 1
+    assert worker.last_parse_result.imported_files == 2
+
+
+def test_partial_enrichment_keeps_first_success_and_rolls_back_later_drift(tmp_path, monkeypatch):
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch, count=2)
+    original = ReportRepository.replace_report_metadata_enrichment
+    after_first = []
+
+    def second_report_drifts(repository, report_id, *args, **kwargs):
+        if after_first:
+            reports[1].write_bytes(reports[1].read_bytes() + b"late second report drift")
+        result = original(repository, report_id, *args, **kwargs)
+        after_first.append(_enrichment_graph(database))
+        return result
+
+    monkeypatch.setattr(ReportRepository, "replace_report_metadata_enrichment", second_report_drifts)
+    worker.run()
+    assert len(after_first) == 1 and _enrichment_graph(database) == after_first[0]
+    assert state["result"].enriched_files == state["result"].failed_files == 1
+    result = worker.last_parse_result
+    assert result.selected_files == result.imported_files == result.parsed_files == 2
+    assert result.cancelled_files == result.preflight_changed_files == result.failed_files == 0
+
+
+@pytest.mark.parametrize("mode", ("active", "autocommit"))
+def test_guarded_helper_rejects_borrowed_ownership_without_touching_caller_work(tmp_path, mode):
+    from metroliza.parsing.parse_reports_thread import persist_complete_metadata_enrichment
+
+    if mode == "autocommit" and not hasattr(sqlite3.Connection, "autocommit"):
+        pytest.skip("sqlite3 autocommit argument requires Python 3.12+")
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "borrowed-owner.sqlite3"
+    ParseReportsThread(ImportPlan.all_ready(_request(source, database), _preflight(source, database))).run()
+    before = _enrichment_graph(database)
+    inspection = SourceInspectionContext.from_path(report)
+    approval = ReportEnrichmentApproval(inspection.sha256, lambda: inspection.verified_sha256() and None)
+    options = {"autocommit": True} if mode == "autocommit" else {}
+    with closing(sqlite3.connect(database, **options)) as connection:
+        if mode == "active":
+            connection.execute("UPDATE parsed_reports SET raw_report_json='caller pending'")
+        pending = _enrichment_graph(database, connection)
+        with pytest.raises(ValueError, match="borrowed|autocommit"):
+            persist_complete_metadata_enrichment(str(database), 1, _synthetic_enrichment_selection(),
+                                                 connection=connection, approval=approval)
+        assert connection.in_transaction is (mode == "active")
+        assert _enrichment_graph(database, connection) == pending
+        assert _enrichment_graph(database) == before
+
+
+@pytest.mark.parametrize("selection", ("empty", "first", "stale", "disabled"))
+def test_optional_enrichment_never_expands_selected_or_creates_rejected_destination(tmp_path, monkeypatch, selection):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "selection-enrichment.sqlite3"
+    request = replace(_request(reports[0].parent, database),
+                      run_background_metadata_enrichment=selection != "disabled")
+    plan = ImportPlan.from_preflight(request, _preflight(reports[0].parent, database),
+                                    selected_occurrence_ids=() if selection == "empty" else (reports[0].name,))
+    if selection == "stale":
+        reports[0].write_bytes(reports[0].read_bytes() + b"unapproved bytes")
+    observed = []
+
+    def extract(parser):
+        observed.append(parser.file_name)
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extract)
+    worker = ParseReportsThread(plan)
+    worker.run()
+    assert observed == ([reports[0].name] if selection == "first" else [])
+    if selection in ("empty", "stale"):
+        assert not database.exists()
+        assert worker.last_parse_result.imported_files == 0
+    else:
+        assert worker.last_parse_result.imported_files == 1
+        assert _stored_source_hashes(database) == {hashlib.sha256(reports[0].read_bytes()).hexdigest()}
+
+
+def test_guarded_enrichment_missing_destination_and_incomplete_approval_fail_closed(tmp_path):
+    from metroliza.parsing.parse_reports_thread import persist_complete_metadata_enrichment
+
+    database = tmp_path / "must-not-exist.sqlite3"
+    approval = ReportEnrichmentApproval("a" * 64, lambda: None)
+    with pytest.raises(ValueError, match="existing destination"):
+        persist_complete_metadata_enrichment(str(database), 1, _synthetic_enrichment_selection(), approval=approval)
+    with pytest.raises(ValueError, match="existing destination"):
+        ReportRepository(str(database)).replace_report_metadata_enrichment(
+            1, {}, candidates=(), warnings=(), metadata_version="test", approval=approval,
+        )
+    with pytest.raises(ValueError, match="SHA-256 and verifier"):
+        ReportEnrichmentApproval("", lambda: None)
+    with pytest.raises(ValueError, match="SHA-256 and verifier"):
+        ReportEnrichmentApproval("a" * 64, None)
+    assert not database.exists()
+
+
+@pytest.mark.parametrize("drift", (False, True))
+def test_standalone_selected_enrichment_uses_bound_approval_and_real_repository(tmp_path, monkeypatch, drift):
+    from test_thread_flow_helpers import _standalone_evidence, _standalone_plugin_class
+
+    evidence = _standalone_evidence()
+    plugin = _standalone_plugin_class(evidence)
+
+    def extract_metadata(parser):
+        parser._metadata_selection_result = _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(plugin, "open_report", extract_metadata, raising=False)
+    report, = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "standalone-enrichment.sqlite3"
+    report_parser_factory.register_parser(plugin)
+    try:
+        request = replace(_request(report.parent, database), run_background_metadata_enrichment=True)
+        plan = ImportPlan.all_ready(request, _preflight(report.parent, database))
+        worker = ParseReportsThread(plan)
+        before, results = [], []
+        enrich = worker._run_background_metadata_enrichment
+
+        def capture(paths, connection):
+            before.append(_enrichment_graph(database))
+            result = enrich(paths, connection)
+            results.append(result)
+            return result
+
+        monkeypatch.setattr(worker, "_run_background_metadata_enrichment", capture)
+        original_write = ReportRepository._replace_report_metadata
+
+        def mutate_after_enrichment_write(repository, cursor, *args, **kwargs):
+            result = original_write(repository, cursor, *args, **kwargs)
+            if drift and before:
+                assert cursor.connection.in_transaction
+                report.write_bytes(report.read_bytes() + b"standalone source drift")
+            return result
+
+        monkeypatch.setattr(ReportRepository, "_replace_report_metadata", mutate_after_enrichment_write)
+        worker.run()
+        assert worker.last_parse_result.imported_files == 1
+        assert results[0].enriched_files == int(not drift)
+        assert results[0].failed_files == int(drift)
+        assert evidence["legacy_calls"] == []
+        after = _enrichment_graph(database)
+        if drift:
+            assert after == before[0]
+        else:
+            assert after["report_metadata"] != before[0]["report_metadata"]
+            assert after["report_measurements"] == before[0]["report_measurements"]
+            assert after["source_files"] == before[0]["source_files"]
+    finally:
+        report_parser_factory._unregister_parser(plugin.manifest.plugin_id)
 
 
 def test_one_to_one_rename_counts_one_changed_slot_and_writes_nothing(tmp_path):

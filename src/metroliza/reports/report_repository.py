@@ -131,6 +131,44 @@ class ReportImportDisposition(Enum):
 
 
 @dataclass(frozen=True)
+class ReportEnrichmentApproval:
+    """Immutable target expectation and trusted live, exception-based verifier.
+
+    The caller owns source/parser/cancellation checks; the repository owns when
+    they run. This is checkpoint verification, not a cross-resource lock.
+    """
+
+    expected_source_sha256: str
+    verify_live: Callable[[], None]
+
+    def __post_init__(self) -> None:
+        digest = self.expected_source_sha256
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdefABCDEF" for char in digest)
+            or not callable(self.verify_live)
+        ):
+            raise ValueError("Enrichment approval requires an expected SHA-256 and verifier")
+
+    @staticmethod
+    def validate_connection(connection) -> None:
+        # commit()/rollback() cannot own explicit transactions in autocommit=True.
+        # Legacy isolation_level=None remains supported by those methods.
+        if connection is not None and (
+            connection.in_transaction or getattr(connection, "autocommit", None) is True
+        ):
+            raise ValueError("Guarded enrichment requires an idle borrowed connection with commit/rollback ownership")
+
+    def validate_entry(self, database: str, connection=None) -> None:
+        """Reject before opening a missing destination or taking caller ownership."""
+        self.validate_connection(connection)
+        if connection is None and not Path(database).is_file():
+            raise ValueError("Guarded enrichment requires an existing destination")
+        self.verify_live()
+
+
+@dataclass(frozen=True)
 class ReportImportPolicy:
     """Mode-specific rules for deciding whether an existing report is accepted."""
 
@@ -815,15 +853,24 @@ class ReportRepository:
         metadata_confidence: float | None = None,
         identity_hash: str | None | object = _UNSET,
         raw_report_json: Any = _UNSET,
+        approval: ReportEnrichmentApproval | None = None,
     ) -> None:
-        """Atomically replace metadata enrichment rows without touching measurements."""
+        """Replace enrichment; optional approval guards every transaction attempt.
 
+        Guarded calls own the transaction on an owned or idle borrowed connection.
+        An already-active borrowed transaction is rejected without committing or
+        rolling back its caller's work. Unguarded callers retain legacy behavior.
+        """
+
+        if approval is not None:
+            if not isinstance(approval, ReportEnrichmentApproval):
+                raise TypeError("Invalid enrichment approval")
+            approval.validate_entry(self.database, self.connection)
+        candidate_values, warning_values = tuple(candidates), tuple(warnings)
         now = utc_timestamp()
 
         def _replace(cursor) -> None:
-            cursor.execute("SELECT id FROM parsed_reports WHERE id = ?", (int(report_id),))
-            if cursor.fetchone() is None:
-                raise ValueError(f"Report {report_id} does not exist")
+            self._validate_enrichment_target(cursor, report_id, approval)
 
             self._replace_report_metadata(
                 cursor,
@@ -833,8 +880,8 @@ class ReportRepository:
                 metadata_profile_id=metadata_profile_id,
                 metadata_profile_version=metadata_profile_version,
             )
-            self._replace_metadata_candidates(cursor, report_id, candidates)
-            self._replace_metadata_warnings(cursor, report_id, warnings)
+            self._replace_metadata_candidates(cursor, report_id, candidate_values)
+            self._replace_metadata_warnings(cursor, report_id, warning_values)
 
             cursor.execute(
                 "UPDATE parsed_reports SET updated_at = ? WHERE id = ?",
@@ -860,8 +907,30 @@ class ReportRepository:
                     "UPDATE parsed_reports SET raw_report_json = ? WHERE id = ?",
                     (_to_json(raw_report_json), int(report_id)),
                 )
+            if approval is not None:
+                # Last substantive operation before the helper commits. Any
+                # rejection propagates and rolls back every enrichment mutation.
+                approval.verify_live()
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
+
+    @staticmethod
+    def _validate_enrichment_target(cursor, report_id: int, approval: ReportEnrichmentApproval | None) -> None:
+        if approval is None:
+            cursor.execute("SELECT id FROM parsed_reports WHERE id = ?", (int(report_id),))
+            if cursor.fetchone() is None:
+                raise ValueError(f"Report {report_id} does not exist")
+            return
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute(
+            "SELECT sf.sha256 FROM parsed_reports pr "
+            "JOIN source_files sf ON sf.id = pr.source_file_id WHERE pr.id = ?",
+            (int(report_id),),
+        )
+        target = cursor.fetchone()
+        if target is None or str(target[0]).casefold() != approval.expected_source_sha256.casefold():
+            raise ValueError("Enrichment target no longer matches approved source")
+        approval.verify_live()
 
     def append_metadata_warning(self, report_id: int, warning: Any) -> None:
         """Append one metadata warning without replacing existing warning rows."""
