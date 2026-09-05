@@ -1043,11 +1043,12 @@ def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expecte
 
 
 @pytest.mark.parametrize("existing", (False, True))
-@pytest.mark.parametrize("outcome", ("success", "failure", "cancel", "source_rejected", "parser_rejected", "before_stage", "after_last", "missing"))
+@pytest.mark.parametrize("outcome", ("success", "failure", "cancel", "source_rejected", "parser_rejected", "before_stage", "after_last", "missing", "close"))
 def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, request, outcome, existing):
     import os
     import subprocess
     import sys
+    from threading import Event
 
     if os.environ.get("METROLIZA_ENRICHMENT_UI_TEST_CHILD") != "1":
         environment = dict(os.environ, METROLIZA_ENRICHMENT_UI_TEST_CHILD="1", QT_QPA_PLATFORM="offscreen")
@@ -1081,6 +1082,7 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
             review,
         )).run()
     workers, feedback, launches, before = [], [], [], []
+    extraction_started, release_extraction = Event(), Event()
 
     def graph():
         with closing(sqlite3.connect(database)) as conn:
@@ -1106,6 +1108,9 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
         return worker
 
     def extract(parser):
+        if outcome == "close":
+            extraction_started.set()
+            assert release_extraction.wait(10)
         if outcome == "failure":
             raise RuntimeError("Synthetic extraction failure")
         if outcome == "cancel":
@@ -1146,9 +1151,22 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
         assert dialog.parse_button.isEnabled()
         QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
         deadline = time.monotonic() + 15
-        while (not feedback or workers[-1].isRunning()) and time.monotonic() < deadline:
+        while dialog.parse_thread is not None and time.monotonic() < deadline:
             app.processEvents()
+            if outcome == "close" and extraction_started.is_set() and not release_extraction.is_set():
+                dialog.reject()
+                assert dialog.is_close_deferred()
+                release_extraction.set()
             QTest.qWait(5)
+        if outcome == "close":
+            assert extraction_started.is_set() and release_extraction.is_set()
+            assert not workers[0].isRunning()
+            assert dialog.parse_thread is None
+            assert workers[0].last_enrichment_result.cancelled_files == 1
+            assert graph() == before[0]
+            assert feedback == launches == []
+            assert not dialog.isVisible()
+            return
         assert len(workers) == len(feedback) == 1
         assert not workers[0].isRunning()
         assert workers[0].last_parse_result.imported_files == int(not existing)
@@ -1177,6 +1195,7 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
             raw = conn.execute("SELECT raw_report_json FROM parsed_reports").fetchone()[0]
             assert ('"metadata_enrichment"' in raw) is (outcome in {"success", "after_last", "missing"})
     finally:
+        release_extraction.set()
         for worker in workers:
             worker.wait(15000)
         dialog.close()
