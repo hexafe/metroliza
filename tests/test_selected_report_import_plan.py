@@ -1,0 +1,2401 @@
+from contextlib import closing, nullcontext
+from dataclasses import FrozenInstanceError, replace
+import hashlib
+import json
+from itertools import product
+from pathlib import Path
+import sqlite3
+from threading import get_ident
+from types import SimpleNamespace
+import zipfile
+
+import pytest
+
+from metroliza.parsing import report_parser_factory
+from metroliza.parsing.cmm_report_parser import CMMReportParser
+from metroliza.parsing.parse_reports_thread import ParseReportsThread, parse_new_reports
+from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.preflight import (
+    ImportPlan,
+    ParsePreflightService,
+    ParsePreflightStatus,
+    SelectedReportIdentity,
+    validate_import_plan,
+)
+from metroliza.shared.parse_contracts import ParseRequest
+from metroliza.reports.report_repository import ReportEnrichmentApproval, ReportImportDisposition, ReportRepository
+
+
+FIXTURE = Path(__file__).parent / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
+
+
+def _enrichment_graph(database, connection=None):
+    def snapshot(conn):
+        tables = ("source_files", "source_file_locations", "parsed_reports", "report_metadata",
+                  "report_metadata_candidates", "report_metadata_warnings", "report_parse_state",
+                  "report_measurements")
+        return {table: sorted(conn.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+                for table in tables}
+    if connection is not None:
+        return snapshot(connection)
+    with closing(sqlite3.connect(database)) as conn:
+        return snapshot(conn)
+
+
+def _synthetic_enrichment_selection():
+    return SimpleNamespace(metadata={
+        "parser_id": "cmm_pdf_header_box", "template_family": "cmm_pdf_header_box",
+        "metadata_confidence": 0.99, "operator_name": "SYNTHETIC-ENRICHMENT",
+        "metadata_json": {}, "warnings": (),
+    }, candidates=())
+
+
+@pytest.mark.parametrize("boundary", ("report_lookup", "repository_entry"))
+def test_late_enrichment_source_drift_must_not_commit_metadata(tmp_path, monkeypatch, boundary):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "late-enrichment.sqlite3"
+    request = replace(_request(source, database), run_background_metadata_enrichment=True)
+    plan = ImportPlan.all_ready(request, _preflight(source, database))
+    worker = ParseReportsThread(plan)
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser",
+                        lambda parser: _synthetic_enrichment_selection())
+    before, enrichment_results = [], []
+    original_enrich = worker._run_background_metadata_enrichment
+
+    def capture_enrichment(*args):
+        before.append(_enrichment_graph(database))
+        outcome = original_enrich(*args)
+        enrichment_results.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", capture_enrichment)
+    seam = ((worker, "_report_id_for_source_path") if boundary == "report_lookup"
+            else (ReportRepository, "replace_report_metadata_enrichment"))
+    original = getattr(*seam)
+    observed = []
+
+    def change_source_at_boundary(*args, **kwargs):
+        if boundary == "report_lookup":
+            outcome = original(*args, **kwargs)
+        report.write_bytes(report.read_bytes() + b"changed after approved enrichment")
+        observed.append(report)
+        if boundary == "repository_entry":
+            outcome = original(*args, **kwargs)
+        return outcome
+
+    monkeypatch.setattr(*seam, change_source_at_boundary)
+    worker.run()
+    assert worker.last_parse_result.imported_files == 1
+    assert observed == [report]
+    assert _enrichment_graph(database) == before[0]
+    assert enrichment_results[0].enriched_files == 0
+    assert enrichment_results[0].failed_files == 1
+
+
+def _enrichment_worker_case(tmp_path, monkeypatch, count=1):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", count)
+    database = tmp_path / "enrichment-boundaries.sqlite3"
+    request = replace(_request(reports[0].parent, database), run_background_metadata_enrichment=True)
+    plan = ImportPlan.all_ready(request, _preflight(reports[0].parent, database))
+    worker = ParseReportsThread(plan)
+    state = {"parsers": {}, "before": None, "result": None}
+
+    def synthetic_extract(parser):
+        state["parsers"][parser.file_name] = parser
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", synthetic_extract)
+    enrich = worker._run_background_metadata_enrichment
+
+    def capture(paths, connection):
+        state["before"] = _enrichment_graph(database)
+        state["result"] = enrich(paths, connection)
+        return state["result"]
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", capture)
+    return reports, database, worker, state
+
+
+def _change_enrichment_approval(kind, report, worker, state, monkeypatch):
+    if kind == "source":
+        report.write_bytes(report.read_bytes() + b"changed at transaction checkpoint")
+    elif kind == "generation":
+        snapshot = report_parser_factory.get_registry_snapshot()
+        monkeypatch.setattr(report_parser_factory, "get_registry_snapshot",
+                            lambda: replace(snapshot, generation_id=snapshot.generation_id + 1))
+    elif kind == "parser":
+        parser = state["parsers"][report.name]
+        parser.parser_resolution_evidence = replace(parser.parser_resolution_evidence, plugin_id="changed-parser")
+    else:
+        worker.stop_parsing()
+
+
+@pytest.mark.parametrize("boundary", ("entry", "after_mutation"))
+@pytest.mark.parametrize("change", ("source", "generation", "parser", "cancel"))
+@pytest.mark.parametrize("borrowed", (False, True))
+def test_enrichment_transaction_rejects_live_approval_drift(tmp_path, monkeypatch, boundary, change, borrowed):
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch)
+    if borrowed:
+        captured_enrich = worker._run_background_metadata_enrichment
+
+        def with_borrowed_connection(paths, _connection):
+            with closing(sqlite3.connect(database)) as supplied:
+                outcome = captured_enrich(paths, supplied)
+                assert not supplied.in_transaction
+                assert supplied.execute("SELECT count(*) FROM parsed_reports").fetchone() == (1,)
+                return outcome
+
+        monkeypatch.setattr(worker, "_run_background_metadata_enrichment", with_borrowed_connection)
+    seam = "replace_report_metadata_enrichment" if boundary == "entry" else "_replace_report_metadata"
+    original = getattr(ReportRepository, seam)
+    changed = []
+
+    def change_at_seam(repository, *args, **kwargs):
+        # Initial atomic import also uses the metadata writer; inject only once
+        # enrichment has captured the committed graph and constructed its parser.
+        if state["parsers"] and not changed:
+            if boundary == "after_mutation":
+                assert args[0].connection.in_transaction
+                outcome = original(repository, *args, **kwargs)
+            changed.append(change)
+            _change_enrichment_approval(change, reports[0], worker, state, monkeypatch)
+            if boundary == "entry":
+                outcome = original(repository, *args, **kwargs)
+            return outcome
+        return original(repository, *args, **kwargs)
+
+    monkeypatch.setattr(ReportRepository, seam, change_at_seam)
+    worker.run()
+    assert changed == [change]
+    assert _enrichment_graph(database) == state["before"]
+    assert state["result"].enriched_files == 0
+    assert state["result"].failed_files == int(change != "cancel")
+    assert state["result"].cancelled_files == int(change == "cancel")
+    imported = worker.last_parse_result
+    assert imported.selected_files == imported.imported_files == imported.parsed_files == 1
+    assert imported.cancelled_files == imported.preflight_changed_files == imported.failed_files == 0
+
+
+@pytest.mark.parametrize("borrowed", (False, True, "legacy_autocommit"))
+def test_guarded_enrichment_checks_actual_owner_transaction_and_preserves_measurements(tmp_path, monkeypatch, borrowed):
+    from metroliza.reports import report_repository as repository_module
+
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch)
+    owner = get_ident()
+    active, checks = {}, []
+    original_transaction = repository_module.run_transaction_with_retry
+
+    def observe_transaction(database, operation, **kwargs):
+        def observe(cursor):
+            active["connection"] = cursor.connection
+            try:
+                return operation(cursor)
+            finally:
+                active.clear()
+        return original_transaction(database, observe, **kwargs)
+
+    monkeypatch.setattr(repository_module, "run_transaction_with_retry", observe_transaction)
+    approval_builder = worker._enrichment_transaction_approval
+
+    def observe_approval(prepared):
+        approval = approval_builder(prepared)
+
+        def verify():
+            checks.append((get_ident(), bool(active and active["connection"].in_transaction)))
+            approval.verify_live()
+
+        return ReportEnrichmentApproval(approval.expected_source_sha256, verify)
+
+    monkeypatch.setattr(worker, "_enrichment_transaction_approval", observe_approval)
+    captured_enrich = worker._run_background_metadata_enrichment
+
+    def with_connection(paths, connection):
+        options = {"isolation_level": None} if borrowed == "legacy_autocommit" else {}
+        with closing(sqlite3.connect(database, **options)) if borrowed else nullcontext(None) as supplied:
+            outcome = captured_enrich(paths, supplied)
+            if supplied is not None:
+                assert not supplied.in_transaction
+                assert supplied.execute("SELECT count(*) FROM parsed_reports").fetchone() == (1,)
+            return outcome
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", with_connection)
+    worker.run()
+    after = _enrichment_graph(database)
+    assert state["result"].enriched_files == 1
+    assert state["result"].failed_files == 0
+    assert checks and all(thread == owner for thread, _ in checks)
+    assert [inside for _, inside in checks if inside] == [True, True]
+    assert checks[-1] == (owner, True)
+    for table in ("source_files", "source_file_locations", "report_measurements"):
+        assert after[table] == state["before"][table]
+    with closing(sqlite3.connect(database)) as conn:
+        raw, operator = conn.execute("SELECT pr.raw_report_json, rm.operator_name FROM parsed_reports pr "
+                                     "JOIN report_metadata rm ON rm.report_id=pr.id").fetchone()
+    assert json.loads(raw)["metadata_enrichment"]["measurement_rows_preserved"] is True
+    assert operator == "SYNTHETIC-ENRICHMENT"
+
+
+@pytest.mark.parametrize("borrowed", (False, True))
+@pytest.mark.parametrize("change", ("source", "generation", "cancel"))
+def test_enrichment_busy_retry_rechecks_changed_approval(tmp_path, monkeypatch, borrowed, change):
+    from metroliza.reports import db as db_module
+
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch)
+    captured_enrich = worker._run_background_metadata_enrichment
+    retries = []
+
+    def locked_enrichment(paths, connection):
+        with closing(sqlite3.connect(database, timeout=0)) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            connect = db_module.connect_sqlite
+
+            def zero_timeout(path, *args, **kwargs):
+                return connect(path, timeout_s=0)
+
+            def retry_boundary(_delay):
+                assert not retries
+                retries.append("real SQLite lock encountered")
+                blocker.rollback()
+                _change_enrichment_approval(change, reports[0], worker, state, monkeypatch)
+
+            with monkeypatch.context() as patcher:
+                patcher.setattr(db_module, "connect_sqlite", zero_timeout)
+                patcher.setattr(db_module.time, "sleep", retry_boundary)
+                with closing(sqlite3.connect(database, timeout=0)) if borrowed else nullcontext(None) as supplied:
+                    return captured_enrich(paths, supplied)
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", locked_enrichment)
+    worker.run()
+    assert retries == ["real SQLite lock encountered"]
+    assert _enrichment_graph(database) == state["before"]
+    assert state["result"].enriched_files == 0
+    assert state["result"].failed_files == int(change != "cancel")
+    assert state["result"].cancelled_files == int(change == "cancel")
+    assert worker.last_parse_result.imported_files == 1
+
+
+@pytest.mark.parametrize("target_change", ("different_report", "deleted", "rebound_source"))
+def test_enrichment_target_identity_change_never_updates_another_graph(tmp_path, monkeypatch, target_change):
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch, count=2)
+    original_lookup = worker._report_id_for_source_path
+    expected = []
+
+    def change_target(report, **kwargs):
+        report_id = original_lookup(report, **kwargs)
+        if report == reports[0]:
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("PRAGMA foreign_keys=ON")
+                other_id, = connection.execute(
+                    "SELECT id FROM parsed_reports WHERE id<>?", (report_id,)
+                ).fetchone()
+                if target_change == "different_report":
+                    report_id = other_id
+                elif target_change == "deleted":
+                    connection.execute("DELETE FROM parsed_reports WHERE id=?", (report_id,))
+                else:
+                    other_source = connection.execute(
+                        "INSERT INTO source_files(sha256,source_format,discovered_at) VALUES(?,?,?)",
+                        ("f" * 64, "pdf", "2026-09-05T00:00:00Z"),
+                    ).lastrowid
+                    connection.execute("UPDATE parsed_reports SET source_file_id=? WHERE id=?", (other_source, report_id))
+                connection.commit()
+            expected.append(_enrichment_graph(database))
+        return report_id
+
+    monkeypatch.setattr(worker, "_report_id_for_source_path", change_target)
+    original_enrich = worker._run_background_metadata_enrichment
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", lambda paths, conn: original_enrich(paths[:1], conn))
+    worker.run()
+    assert expected and _enrichment_graph(database) == expected[0]
+    assert state["result"].enriched_files == 0 and state["result"].failed_files == 1
+    assert worker.last_parse_result.imported_files == 2
+
+
+def test_partial_enrichment_keeps_first_success_and_rolls_back_later_drift(tmp_path, monkeypatch):
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch, count=2)
+    original = ReportRepository.replace_report_metadata_enrichment
+    after_first = []
+
+    def second_report_drifts(repository, report_id, *args, **kwargs):
+        if after_first:
+            reports[1].write_bytes(reports[1].read_bytes() + b"late second report drift")
+        result = original(repository, report_id, *args, **kwargs)
+        after_first.append(_enrichment_graph(database))
+        return result
+
+    monkeypatch.setattr(ReportRepository, "replace_report_metadata_enrichment", second_report_drifts)
+    worker.run()
+    assert len(after_first) == 1 and _enrichment_graph(database) == after_first[0]
+    assert state["result"].enriched_files == state["result"].failed_files == 1
+    result = worker.last_parse_result
+    assert result.selected_files == result.imported_files == result.parsed_files == 2
+    assert result.cancelled_files == result.preflight_changed_files == result.failed_files == 0
+
+
+@pytest.mark.parametrize("mode", ("active", "autocommit"))
+def test_guarded_helper_rejects_borrowed_ownership_without_touching_caller_work(tmp_path, mode):
+    from metroliza.parsing.parse_reports_thread import persist_complete_metadata_enrichment
+
+    if mode == "autocommit" and not hasattr(sqlite3.Connection, "autocommit"):
+        pytest.skip("sqlite3 autocommit argument requires Python 3.12+")
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "borrowed-owner.sqlite3"
+    ParseReportsThread(ImportPlan.all_ready(_request(source, database), _preflight(source, database))).run()
+    before = _enrichment_graph(database)
+    inspection = SourceInspectionContext.from_path(report)
+    approval = ReportEnrichmentApproval(inspection.sha256, lambda: inspection.verified_sha256() and None)
+    options = {"autocommit": True} if mode == "autocommit" else {}
+    with closing(sqlite3.connect(database, **options)) as connection:
+        if mode == "active":
+            connection.execute("UPDATE parsed_reports SET raw_report_json='caller pending'")
+        pending = _enrichment_graph(database, connection)
+        with pytest.raises(ValueError, match="borrowed|autocommit"):
+            persist_complete_metadata_enrichment(str(database), 1, _synthetic_enrichment_selection(),
+                                                 connection=connection, approval=approval)
+        assert connection.in_transaction is (mode == "active")
+        assert _enrichment_graph(database, connection) == pending
+        assert _enrichment_graph(database) == before
+
+
+@pytest.mark.parametrize("selection", ("empty", "first", "stale", "disabled"))
+def test_optional_enrichment_never_expands_selected_or_creates_rejected_destination(tmp_path, monkeypatch, selection):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "selection-enrichment.sqlite3"
+    request = replace(_request(reports[0].parent, database),
+                      run_background_metadata_enrichment=selection != "disabled")
+    plan = ImportPlan.from_preflight(request, _preflight(reports[0].parent, database),
+                                    selected_occurrence_ids=() if selection == "empty" else (reports[0].name,))
+    if selection == "stale":
+        reports[0].write_bytes(reports[0].read_bytes() + b"unapproved bytes")
+    observed = []
+
+    def extract(parser):
+        observed.append(parser.file_name)
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extract)
+    worker = ParseReportsThread(plan)
+    worker.run()
+    assert observed == ([reports[0].name] if selection == "first" else [])
+    if selection in ("empty", "stale"):
+        assert not database.exists()
+        assert worker.last_parse_result.imported_files == 0
+    else:
+        assert worker.last_parse_result.imported_files == 1
+        assert _stored_source_hashes(database) == {hashlib.sha256(reports[0].read_bytes()).hexdigest()}
+
+
+def test_guarded_enrichment_missing_destination_and_incomplete_approval_fail_closed(tmp_path):
+    from metroliza.parsing.parse_reports_thread import persist_complete_metadata_enrichment
+
+    database = tmp_path / "must-not-exist.sqlite3"
+    approval = ReportEnrichmentApproval("a" * 64, lambda: None)
+    with pytest.raises(ValueError, match="existing destination"):
+        persist_complete_metadata_enrichment(str(database), 1, _synthetic_enrichment_selection(), approval=approval)
+    with pytest.raises(ValueError, match="existing destination"):
+        ReportRepository(str(database)).replace_report_metadata_enrichment(
+            1, {}, candidates=(), warnings=(), metadata_version="test", approval=approval,
+        )
+    with pytest.raises(ValueError, match="SHA-256 and verifier"):
+        ReportEnrichmentApproval("", lambda: None)
+    with pytest.raises(ValueError, match="SHA-256 and verifier"):
+        ReportEnrichmentApproval("a" * 64, None)
+    assert not database.exists()
+
+
+@pytest.mark.parametrize("drift", (False, True))
+def test_standalone_selected_enrichment_uses_bound_approval_and_real_repository(tmp_path, monkeypatch, drift):
+    from metroliza.parsing.parser_plugin_contracts import (
+        BaseReportParserPlugin, MeasurementBlockV2, MeasurementV2, ParseMetaV2,
+        ParseResultV2, PluginManifest, ProbeResult, ReportInfoV2,
+    )
+
+    class StandaloneEnrichmentPlugin(BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="standalone_enrichment_guard_test", display_name="Synthetic enrichment",
+            version="1.0.0", supported_formats=("pdf",), priority=1000,
+        )
+
+        def __init__(self, file_path, database, connection=None):
+            self.source_path = str(file_path)
+
+        @classmethod
+        def probe(cls, _input_ref, _context):
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True,
+                               confidence=100, semantic_row_count=1)
+
+        def parse_to_v2(self):
+            source = Path(self.source_path)
+            return ParseResultV2(
+                meta=ParseMetaV2(
+                    source_file=source.name, source_format="pdf", plugin_id=self.manifest.plugin_id,
+                    plugin_version="1.0.0", template_id="synthetic-enrichment",
+                    parse_timestamp="2026-09-05T00:00:00Z", locale_detected=None, confidence=100,
+                ),
+                report=ReportInfoV2(reference="STANDALONE-1", report_date="2026-09-05",
+                                    sample_number="1", file_name=source.name, file_path=str(source.parent)),
+                blocks=(MeasurementBlockV2(
+                    header_raw=("Feature",), header_normalized="Feature", block_index=0,
+                    dimensions=(MeasurementV2(axis_code="X", nominal=1.0, tol_plus=0.1,
+                                              tol_minus=-0.1, bonus=0.0, measured=1.0,
+                                              deviation=0.0, out_of_tolerance=0.0),),
+                ),),
+            )
+
+        @staticmethod
+        def to_legacy_blocks(_result):
+            raise AssertionError("Standalone selected work must use repository atomic persistence")
+
+        def open_report(self):
+            self._metadata_selection_result = _synthetic_enrichment_selection()
+
+    plugin = StandaloneEnrichmentPlugin
+    report, = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "standalone-enrichment.sqlite3"
+    report_parser_factory.register_parser(plugin)
+    try:
+        request = replace(_request(report.parent, database), run_background_metadata_enrichment=True)
+        plan = ImportPlan.all_ready(request, _preflight(report.parent, database))
+        worker = ParseReportsThread(plan)
+        before, results = [], []
+        enrich = worker._run_background_metadata_enrichment
+
+        def capture(paths, connection):
+            before.append(_enrichment_graph(database))
+            result = enrich(paths, connection)
+            results.append(result)
+            return result
+
+        monkeypatch.setattr(worker, "_run_background_metadata_enrichment", capture)
+        original_write = ReportRepository._replace_report_metadata
+
+        def mutate_after_enrichment_write(repository, cursor, *args, **kwargs):
+            result = original_write(repository, cursor, *args, **kwargs)
+            if drift and before:
+                assert cursor.connection.in_transaction
+                report.write_bytes(report.read_bytes() + b"standalone source drift")
+            return result
+
+        monkeypatch.setattr(ReportRepository, "_replace_report_metadata", mutate_after_enrichment_write)
+        worker.run()
+        assert worker.last_parse_result.imported_files == 1
+        assert results[0].enriched_files == int(not drift)
+        assert results[0].failed_files == int(drift)
+        after = _enrichment_graph(database)
+        if drift:
+            assert after == before[0]
+        else:
+            assert after["report_metadata"] != before[0]["report_metadata"]
+            assert after["report_measurements"] == before[0]["report_measurements"]
+            assert after["source_files"] == before[0]["source_files"]
+    finally:
+        report_parser_factory._unregister_parser(plugin.manifest.plugin_id)
+
+
+def test_one_to_one_rename_counts_one_changed_slot_and_writes_nothing(tmp_path):
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "rename.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    report.rename(source / "renamed.pdf")
+    thread = ParseReportsThread(plan)
+    thread.run()
+    assert not database.exists()
+    assert thread.last_parse_result.total_files == 1
+    assert thread.last_parse_result.preflight_changed_files == 1
+
+
+@pytest.mark.parametrize("reviewed,missing,new,drift,cancel", tuple(
+    (reviewed, missing, new, drift, cancel)
+    for reviewed in (1, 2)
+    for missing, new, drift, cancel in product(range(reviewed + 1), range(3), (False, True), (False, True))
+))
+def test_completed_discovery_finite_matrix(tmp_path, monkeypatch, reviewed, missing, new, drift, cancel):
+    """Exercise unmatched sets, present drift, persistence and cancellation together."""
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, reviewed)
+    database = tmp_path / "matrix.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    for report in reports[:missing]:
+        report.unlink()
+    for index in range(new):
+        (source / f"new-{index}.pdf").write_bytes(FIXTURE.read_bytes() + str(index).encode())
+    changed_present = int(drift and missing < reviewed)
+    if changed_present:
+        reports[-1].write_bytes(FIXTURE.read_bytes() + b"changed")
+    thread = ParseReportsThread(plan)
+    discover = thread.get_list_of_reports
+
+    def complete_discovery():
+        paths = discover()
+        if cancel:
+            thread.stop_parsing()
+        return paths
+
+    monkeypatch.setattr(thread, "get_list_of_reports", complete_discovery)
+    thread.run()
+    result = thread.last_parse_result
+    classified_drift = 0 if cancel else changed_present
+    selected_changed = missing + classified_drift
+    imported = 0 if cancel else reviewed - selected_changed
+    assert result.total_files == max(reviewed, reviewed - missing + new)
+    assert result.preflight_changed_files == max(new, missing) + classified_drift
+    assert 0 <= result.preflight_changed_files <= result.total_files
+    assert result.imported_files == result.parsed_files == imported
+    assert result.cancelled_files == (reviewed - missing if cancel else 0)
+    assert result.failed_files == result.skipped_files == result.already_present_files == 0
+    assert result.selected_files == imported + selected_changed + result.cancelled_files == reviewed
+    if imported:
+        assert len(_stored_source_hashes(database)) == imported
+    else:
+        assert not database.exists()
+
+
+@pytest.mark.parametrize("status", tuple(ParsePreflightStatus))
+@pytest.mark.parametrize("replacement", (False, True))
+def test_unselected_and_nonready_removal_replacement_keep_historical_domains(tmp_path, status, replacement):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    database = tmp_path / "history.db"
+    review = _preflight(source, database)
+    review = replace(review, files=(review.files[0], replace(review.files[1], status=status)))
+    plan = ImportPlan.from_preflight(_request(source, database), review,
+                                    selected_occurrence_ids=(reports[0].name,))
+    reports[1].unlink()
+    if replacement:
+        (source / "new.pdf").write_bytes(FIXTURE.read_bytes() + b"new")
+    worker = ParseReportsThread(plan)
+    worker.run()
+    result = worker.last_parse_result
+    assert result.total_files == 2
+    assert result.selected_files == result.imported_files == result.parsed_files == 1
+    assert result.intentionally_excluded_files == int(status is ParsePreflightStatus.READY)
+    assert result.preflight_changed_files == int(replacement)
+    for category in ("duplicate", "unsupported", "ambiguous", "unreadable"):
+        assert getattr(result, f"preflight_{category}_files") == int(status.value == category)
+    assert _stored_source_hashes(database) == {hashlib.sha256(reports[0].read_bytes()).hexdigest()}
+
+
+@pytest.mark.parametrize("cancel_during_discovery", (False, True))
+def test_incomplete_discovery_preserves_history_and_never_infers_missing(tmp_path, monkeypatch, cancel_during_discovery):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    database = tmp_path / "incomplete.db"
+    review = _preflight(source, database)
+    history = tuple(replace(review.files[0], occurrence_id=f"old-{status.value}.pdf", status=status)
+                    for status in ParsePreflightStatus if status is not ParsePreflightStatus.READY)
+    review = replace(review, files=review.files + history)
+    plan = ImportPlan.all_ready(_request(source, database), review)
+    worker = ParseReportsThread(plan)
+    if cancel_during_discovery:
+        original = Path.rglob
+
+        def partial_paths(path, pattern):
+            if path != source:
+                yield from original(path, pattern)
+                return
+            yield reports[0]
+            worker.stop_parsing()
+            yield reports[1]
+
+        monkeypatch.setattr(Path, "rglob", partial_paths)
+    else:
+        worker.stop_parsing()
+    worker.run()
+    result = worker.last_parse_result
+    assert worker._discovery_complete is False
+    assert result.selected_files == result.cancelled_files == 2
+    assert result.preflight_changed_files == result.imported_files == result.failed_files == 0
+    assert result.total_files == len(review.files)
+    assert all(getattr(result, f"preflight_{category}_files") == 1
+               for category in ("duplicate", "unsupported", "ambiguous", "unreadable"))
+    assert not database.exists()
+
+
+@pytest.mark.parametrize("early_path", ("complete_cancel", "empty_selection", "no_eligible"))
+def test_complete_discovery_early_returns_preserve_all_historical_counts(tmp_path, monkeypatch, early_path):
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "historical.db"
+    review = _preflight(source, database)
+    history = tuple(replace(review.files[0], occurrence_id=f"old-{status.value}.pdf", status=status)
+                    for status in ParsePreflightStatus if status is not ParsePreflightStatus.READY)
+    review = replace(review, files=review.files + history)
+    plan = ImportPlan.from_preflight(_request(source, database), review,
+                                    selected_occurrence_ids=() if early_path == "empty_selection" else (report.name,))
+    worker = ParseReportsThread(plan)
+    discover = worker.get_list_of_reports
+
+    def complete_discovery_then_cancel():
+        paths = discover()
+        worker.stop_parsing()
+        return paths
+
+    if early_path == "complete_cancel":
+        monkeypatch.setattr(worker, "get_list_of_reports", complete_discovery_then_cancel)
+    elif early_path == "no_eligible":
+        report.unlink()
+    worker.run()
+    result = worker.last_parse_result
+    assert result.total_files == len(review.files)
+    for category in ("duplicate", "unsupported", "ambiguous", "unreadable"):
+        assert getattr(result, f"preflight_{category}_files") == 1
+    assert result.selected_files == int(early_path != "empty_selection")
+    assert result.cancelled_files == int(early_path == "complete_cancel")
+    assert result.preflight_changed_files == int(early_path == "no_eligible")
+    assert result.intentionally_excluded_files == int(early_path == "empty_selection")
+    assert result.imported_files == result.parsed_files == result.failed_files == result.skipped_files == 0
+    assert not database.exists()
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+def test_selected_plan_real_repository_race_preserves_competing_graph(tmp_path, monkeypatch, two_stage):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    database = tmp_path / "race.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    original = ReportRepository.import_report_if_absent
+    state = {}
+
+    def graph():
+        with closing(sqlite3.connect(database)) as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            return {name: connection.execute(f'SELECT * FROM "{name}"').fetchall() for name in tables}
+
+    def intervening_commit(repository, **kwargs):
+        assert not state
+        with closing(sqlite3.connect(database)) as competing_connection:
+            competitor = ReportRepository(str(database), connection=competing_connection)
+            competing = dict(kwargs, raw_report_json={"writer": "competitor"})
+            assert original(competitor, **competing) is ReportImportDisposition.IMPORTED
+        state["before"] = graph()
+        outcome = original(repository, **kwargs)
+        assert outcome is ReportImportDisposition.ALREADY_PRESENT
+        return outcome
+
+    monkeypatch.setattr(ReportRepository, "import_report_if_absent", intervening_commit)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker = ParseReportsThread(plan)
+    worker.run()
+    result = worker.last_parse_result
+    assert result.selected_files == result.parsed_files == result.already_present_files == 1
+    assert result.imported_files == result.failed_files == result.preflight_changed_files == 0
+    assert graph() == state["before"]
+
+
+def test_reason_mutation_cannot_change_reviewed_eligibility(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    database = tmp_path / "tamper.db"
+    review = _preflight(source, database)
+    plan = ImportPlan.all_ready(_request(source, database), review)
+    changed_review = replace(review, files=(replace(review.files[0], reason_codes=("duplicate_in_selected_source",)),))
+    with pytest.raises(ValueError, match="reviewed preflight"):
+        validate_import_plan(replace(plan, preflight_result=changed_review))
+    assert not database.exists()
+
+
+@pytest.mark.parametrize("selection", ("destination", "ready", "empty"))
+def test_destination_selection_is_explicit_and_preserves_exclusion_domain(tmp_path, monkeypatch, selection):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    database = tmp_path / "destination.db"
+    request = _request(source, database)
+    initial = ImportPlan.from_preflight(request, _preflight(source, database),
+                                       selected_occurrence_ids=(reports[0].name,))
+    ParseReportsThread(initial).run()
+    review = _preflight(source, database)
+    assert review.files[0].status is ParsePreflightStatus.DUPLICATE
+    assert [item.occurrence_id for item in ImportPlan.all_ready(request, review).selected_reports] == [reports[1].name]
+    assert len(ImportPlan.all_atomic_candidates(request, review).selected_reports) == 2
+    ids = {"destination": (reports[0].name,), "ready": (reports[1].name,), "empty": ()}[selection]
+    plan = ImportPlan.from_preflight(request, review, selected_occurrence_ids=ids)
+    calls = []
+    original = ReportRepository.import_report_if_absent
+
+    def record_import(repository, **kwargs):
+        calls.append(Path(kwargs["source_path"]).name)
+        return original(repository, **kwargs)
+
+    monkeypatch.setattr(ReportRepository, "import_report_if_absent", record_import)
+    worker = ParseReportsThread(plan)
+    worker.run()
+    result = worker.last_parse_result
+    assert calls == list(ids)
+    assert result.selected_files == len(ids)
+    assert result.preflight_duplicate_files == 1
+    assert result.intentionally_excluded_files == int(selection != "ready")
+    assert result.imported_files == int(selection == "ready")
+    assert result.already_present_files == int(selection == "destination")
+    assert result.preflight_changed_files == result.failed_files == result.cancelled_files == 0
+
+
+def test_all_candidates_adapter_rejects_stale_generation_without_shrinking(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 2)
+    database = tmp_path / "stale.db"
+    review = _preflight(source, database)
+    review = replace(review, files=(review.files[0], replace(review.files[1], registry_generation_id=-1)))
+    with pytest.raises(ValueError, match="generation is stale"):
+        ImportPlan.all_atomic_candidates(_request(source, database), review)
+    assert not database.exists()
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+@pytest.mark.parametrize("drift", ("source", "generation"))
+def test_drift_after_preparation_creates_no_database(tmp_path, monkeypatch, two_stage, drift):
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "prepared-drift.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    original_prepare = CMMReportParser.prepare_for_two_stage_pipeline
+    snapshot = report_parser_factory.get_registry_snapshot()
+
+    def prepare_then_change(parser):
+        original_prepare(parser)
+        if drift == "source":
+            report.write_bytes(report.read_bytes() + b"changed after preparation")
+        else:
+            monkeypatch.setattr(report_parser_factory, "get_registry_snapshot",
+                                lambda: replace(snapshot, generation_id=snapshot.generation_id + 1))
+
+    monkeypatch.setattr(CMMReportParser, "prepare_for_two_stage_pipeline", prepare_then_change)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker = ParseReportsThread(plan)
+    worker.run()
+    result = worker.last_parse_result
+    assert result.preflight_changed_files == result.selected_files == 1
+    assert result.failed_files == result.parsed_files == result.cancelled_files == 0
+    assert not database.exists()
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+@pytest.mark.parametrize("cancel_at", ("preparation", "approval", "transaction"))
+def test_cancellation_at_atomic_boundary_keeps_disjoint_real_outcomes(tmp_path, monkeypatch, two_stage, cancel_at):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 2)
+    database = tmp_path / "cancel-boundary.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    worker = ParseReportsThread(plan)
+    seam = {
+        "preparation": (CMMReportParser, "prepare_for_two_stage_pipeline"),
+        "approval": (worker_module, "_require_prepared_report_approval"),
+        "transaction": (ReportRepository, "import_report_if_absent"),
+    }[cancel_at]
+    original = getattr(*seam)
+    owner_thread = get_ident()
+
+    def finish_stage_then_cancel(*args, **kwargs):
+        outcome = original(*args, **kwargs)
+        if cancel_at != "approval" or get_ident() == owner_thread:
+            worker.stop_parsing()
+        return outcome
+
+    monkeypatch.setattr(*seam, finish_stage_then_cancel)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker.run()
+    result = worker.last_parse_result
+    completed = int(cancel_at == "transaction")
+    assert result.selected_files == 2
+    assert result.imported_files == result.parsed_files == completed
+    assert result.cancelled_files == 2 - completed
+    assert result.failed_files == result.skipped_files == result.already_present_files == 0
+    assert result.preflight_changed_files == 0
+    if completed:
+        assert len(_stored_source_hashes(database)) == 1
+    else:
+        assert not database.exists()
+
+
+def test_enrichment_keeps_selected_approval_and_rejects_post_import_drift(tmp_path, monkeypatch):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    database = tmp_path / "enrichment.db"
+    request = replace(_request(source, database), run_background_metadata_enrichment=True)
+    plan = ImportPlan.from_preflight(request, _preflight(source, database),
+                                    selected_occurrence_ids=(reports[0].name,))
+    worker = ParseReportsThread(plan)
+    original_enrich = worker._run_background_metadata_enrichment
+    seen, writes = [], []
+
+    def enrich_after_change(paths, connection):
+        seen.extend(paths)
+        reports[0].write_bytes(reports[0].read_bytes() + b"changed before enrichment")
+        return original_enrich(paths, connection)
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", enrich_after_change)
+    monkeypatch.setattr("metroliza.parsing.parse_reports_thread.persist_complete_metadata_enrichment",
+                        lambda *args, **kwargs: writes.append(args))
+    worker.run()
+    assert seen == [reports[0]]
+    assert writes == []
+    assert worker.last_parse_result.imported_files == 1
+    assert worker.last_parse_result.intentionally_excluded_files == 1
+    assert len(_stored_source_hashes(database)) == 1
+
+
+def test_missing_selected_remains_changed_after_complete_discovery_cancellation(tmp_path, monkeypatch):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    database = tmp_path / "cancel-missing.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    reports[1].unlink()
+    thread = ParseReportsThread(plan)
+    discover = thread.get_list_of_reports
+
+    def discover_then_cancel():
+        paths = discover()
+        thread.parsing_canceled = True
+        return paths
+
+    monkeypatch.setattr(thread, "get_list_of_reports", discover_then_cancel)
+    thread.run()
+    assert not database.exists()
+    assert thread.last_parse_result.preflight_changed_files == 1
+    assert thread.last_parse_result.cancelled_files == 1
+
+
+def _write_unique_reports(source: Path, count: int) -> list[Path]:
+    source.mkdir()
+    fixture_bytes = FIXTURE.read_bytes()
+    reports = []
+    for index in range(count):
+        report = source / f"report-{index}.pdf"
+        report.write_bytes(fixture_bytes + f"\n% synthetic-report-{index}\n".encode())
+        reports.append(report)
+    return reports
+
+
+def _request(source: Path, database: Path) -> ParseRequest:
+    return ParseRequest(
+        source_directory=str(source),
+        db_file=str(database),
+        metadata_parsing_mode="light",
+    )
+
+
+def _preflight(source: Path, database: Path):
+    return ParsePreflightService().scan_source(
+        source_path=source,
+        database_path=database,
+        metadata_parsing_mode="light",
+    )
+
+
+def _stored_source_hashes(database: Path) -> set[str]:
+    with closing(sqlite3.connect(database)) as connection:
+        return {
+            str(row[0])
+            for row in connection.execute("SELECT sha256 FROM source_files").fetchall()
+        }
+
+
+def _track_completed_import_plan_filter(monkeypatch):
+    state = {"completed": False}
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+
+    def tracked_filter(thread, report_paths, plan):
+        result = original_filter(thread, report_paths, plan)
+        state["completed"] = True
+        return result
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        tracked_filter,
+    )
+    return state
+
+
+def _assert_selected_result_counts(
+    result,
+    *,
+    parsed,
+    selected,
+    imported,
+    already_present,
+    changed,
+    failed,
+    skipped,
+    cancelled,
+    excluded,
+):
+    assert result.parsed_files == parsed
+    assert result.selected_files == selected
+    assert result.imported_files == imported
+    assert result.already_present_files == already_present
+    assert result.preflight_changed_files == changed
+    assert result.failed_files == failed
+    assert result.skipped_files == skipped
+    assert result.cancelled_files == cancelled
+    assert result.intentionally_excluded_files == excluded
+
+
+def _track_database_opens(monkeypatch):
+    database_opens = []
+
+    def unexpected_database_open(*args, **kwargs):
+        database_opens.append((args, kwargs))
+        raise AssertionError("filter-stage cancellation must not open SQLite")
+
+    monkeypatch.setattr(
+        "metroliza.reports.db.sqlite3.connect",
+        unexpected_database_open,
+    )
+    return database_opens
+
+
+def test_selected_two_of_five_persists_exactly_two_and_reports_exclusions(tmp_path):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 5)
+    database = tmp_path / "selected.db"
+    preflight = _preflight(source, database)
+    assert all(item.status is ParsePreflightStatus.READY for item in preflight.files)
+    selected_names = {reports[1].name, reports[3].name}
+    plan = ImportPlan.from_preflight(
+        _request(source, database),
+        preflight,
+        selected_occurrence_ids=selected_names,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    expected_hashes = {
+        hashlib.sha256(report.read_bytes()).hexdigest()
+        for report in reports
+        if report.name in selected_names
+    }
+    assert _stored_source_hashes(database) == expected_hashes
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=2,
+        selected=2,
+        imported=2,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=3,
+    )
+
+
+def test_empty_plan_is_immutable_and_performs_zero_writes(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 2)
+    database = tmp_path / "empty.db"
+    preflight = _preflight(source, database)
+    plan = ImportPlan.from_preflight(
+        _request(source, database),
+        preflight,
+        selected_occurrence_ids=(),
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        plan.database_path = "other.db"
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=0,
+        imported=0,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=2,
+    )
+
+
+def test_explicit_all_ready_adapter_preserves_current_behavior(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 3)
+    database = tmp_path / "all-ready.db"
+    request = _request(source, database)
+    preflight = _preflight(source, database)
+
+    thread = ParseReportsThread.for_all_ready(request, preflight)
+    thread.run()
+
+    assert len(_stored_source_hashes(database)) == 3
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=3,
+        selected=3,
+        imported=3,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_core_executor_rejects_a_missing_plan_before_database_write(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    database = tmp_path / "must-not-exist.db"
+    thread = ParseReportsThread(_request(source, database))
+    errors = []
+    thread.error_occurred.connect(errors.append)
+
+    thread.run()
+
+    assert not database.exists()
+    assert errors
+    assert "Import plan must be provided" in errors[0]
+
+
+def test_executor_rejects_context_drift_from_the_immutable_plan(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    reviewed_database = tmp_path / "reviewed.db"
+    other_database = tmp_path / "other.db"
+    preflight = _preflight(source, reviewed_database)
+    thread = ParseReportsThread(
+        ImportPlan.all_ready(_request(source, reviewed_database), preflight)
+    )
+    thread.db_file = str(other_database)
+    errors = []
+    thread.error_occurred.connect(errors.append)
+
+    thread.run()
+
+    assert not reviewed_database.exists()
+    assert not other_database.exists()
+    assert "executor inputs do not match" in errors[0]
+
+
+@pytest.mark.parametrize("drift", ("source", "database", "metadata"))
+def test_plan_rejects_request_context_not_reviewed_by_preflight(tmp_path, drift):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    database = tmp_path / "reviewed.db"
+    preflight = _preflight(source, database)
+    request = _request(source, database)
+    if drift == "source":
+        request = replace(request, source_directory=str(tmp_path / "other-reports"))
+    elif drift == "database":
+        request = replace(request, db_file=str(tmp_path / "other.db"))
+    else:
+        request = replace(request, metadata_parsing_mode="complete")
+
+    with pytest.raises(ValueError, match="do not match the reviewed preflight"):
+        ImportPlan.all_ready(request, preflight)
+
+    assert not database.exists()
+
+
+def test_non_ready_missing_or_tampered_identity_cannot_enter_a_valid_plan(tmp_path):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    reports[1].write_bytes(reports[0].read_bytes())
+    database = tmp_path / "invalid.db"
+    preflight = _preflight(source, database)
+    duplicate = preflight.files_with_status(ParsePreflightStatus.DUPLICATE)[0]
+
+    with pytest.raises(ValueError, match="not an atomic import candidate"):
+        ImportPlan.from_preflight(
+            _request(source, database),
+            preflight,
+            selected_occurrence_ids=(duplicate.stable_occurrence_id,),
+        )
+    with pytest.raises(ValueError, match="missing from preflight"):
+        ImportPlan.from_preflight(
+            _request(source, database),
+            preflight,
+            selected_occurrence_ids=("missing.pdf",),
+        )
+
+    ready = preflight.ready_files[0]
+    valid = ImportPlan.from_preflight(
+        _request(source, database),
+        preflight,
+        selected_occurrence_ids=(ready.stable_occurrence_id,),
+    )
+    tampered = replace(
+        valid,
+        selected_reports=(
+            replace(valid.selected_reports[0], fingerprint="sha256:tampered"),
+        ),
+    )
+    with pytest.raises(ValueError, match="exact atomic approval"):
+        validate_import_plan(tampered)
+
+
+@pytest.mark.parametrize("change", ("changed", "deleted"))
+def test_selected_file_changed_or_deleted_after_review_is_rejected(
+    tmp_path,
+    monkeypatch,
+    change,
+):
+    source = tmp_path / "reports"
+    report = _write_unique_reports(source, 1)[0]
+    database = tmp_path / f"{change}.db"
+    preflight = _preflight(source, database)
+    plan = ImportPlan.all_ready(_request(source, database), preflight)
+    if change == "changed":
+        report.write_bytes(b"changed after review")
+    else:
+        report.unlink()
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    filter_results = []
+
+    def capture_filter_result(thread, report_paths, import_plan):
+        result = original_filter(thread, report_paths, import_plan)
+        filter_results.append(result)
+        return result
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        capture_filter_result,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert not database.exists()
+    assert filter_results[0].selected_changed_files == 1
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=1,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_filter_stage_cancellation_keeps_changed_selected_report_out_of_cancelled(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 3)
+    database = tmp_path / "filter-cancel-changed.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    reports[1].write_bytes(b"changed after review")
+    thread = ParseReportsThread(plan)
+    original_from_path = SourceInspectionContext.from_path
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    inspected_reports = []
+    filter_results = []
+
+    def inspect_and_cancel_on_changed_report(cls, source_path, *, source_format=None):
+        inspection = original_from_path(source_path, source_format=source_format)
+        inspected_reports.append(Path(source_path).name)
+        if Path(source_path) == reports[1]:
+            assert inspection.sha256 is not None
+            thread.stop_parsing()
+        return inspection
+
+    def capture_filter_result(thread, report_paths, import_plan):
+        result = original_filter(thread, report_paths, import_plan)
+        filter_results.append(result)
+        return result
+
+    monkeypatch.setattr(
+        SourceInspectionContext,
+        "from_path",
+        classmethod(inspect_and_cancel_on_changed_report),
+    )
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        capture_filter_result,
+    )
+    database_opens = _track_database_opens(monkeypatch)
+
+    thread.run()
+
+    assert inspected_reports == [reports[0].name, reports[1].name]
+    assert filter_results[0].selected_changed_files == 1
+    assert database_opens == []
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=3,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
+
+
+def test_filter_stage_cancellation_before_classification_cancels_every_selected_report(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 3)
+    database = tmp_path / "filter-cancel-before-classification.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    thread = ParseReportsThread(plan)
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    inspection_calls = []
+
+    def cancel_before_filtering(thread, report_paths, import_plan):
+        thread.stop_parsing()
+        result = original_filter(thread, report_paths, import_plan)
+        filter_results.append(result)
+        return result
+
+    original_from_path = SourceInspectionContext.from_path
+    filter_results = []
+
+    def track_inspection(cls, source_path, *, source_format=None):
+        inspection_calls.append(Path(source_path))
+        return original_from_path(source_path, source_format=source_format)
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        cancel_before_filtering,
+    )
+    monkeypatch.setattr(
+        SourceInspectionContext,
+        "from_path",
+        classmethod(track_inspection),
+    )
+    database_opens = _track_database_opens(monkeypatch)
+
+    thread.run()
+
+    assert inspection_calls == []
+    assert filter_results[0].selected_changed_files == 0
+    assert database_opens == []
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=3,
+        imported=0,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=3,
+        excluded=0,
+    )
+
+
+def test_new_unreviewed_file_does_not_reduce_selected_cancellation_count(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 2)
+    database = tmp_path / "filter-cancel-new-file.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    new_report = source / "000-new-unreviewed.pdf"
+    new_report.write_bytes(FIXTURE.read_bytes() + b"\n% new-unreviewed\n")
+    thread = ParseReportsThread(plan)
+    original_filter = ParseReportsThread._filter_reports_for_import_plan
+    original_occurrence_id = ParseReportsThread._occurrence_id_for_report
+    state = {"filtering": False}
+
+    def track_filtering(thread, report_paths, import_plan):
+        state["filtering"] = True
+        try:
+            result = original_filter(thread, report_paths, import_plan)
+            state["result"] = result
+            return result
+        finally:
+            state["filtering"] = False
+
+    def cancel_while_classifying_new_report(thread, report):
+        occurrence_id = original_occurrence_id(thread, report)
+        if state["filtering"] and Path(report) == new_report:
+            thread.stop_parsing()
+        return occurrence_id
+
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_filter_reports_for_import_plan",
+        track_filtering,
+    )
+    monkeypatch.setattr(
+        ParseReportsThread,
+        "_occurrence_id_for_report",
+        cancel_while_classifying_new_report,
+    )
+    database_opens = _track_database_opens(monkeypatch)
+
+    thread.run()
+
+    assert state["result"].selected_changed_files == 0
+    assert database_opens == []
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=2,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
+
+
+def test_new_file_is_rejected_and_unselected_ready_is_an_intentional_exclusion(tmp_path):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    database = tmp_path / "new-and-excluded.db"
+    preflight = _preflight(source, database)
+    plan = ImportPlan.from_preflight(
+        _request(source, database),
+        preflight,
+        selected_occurrence_ids=(reports[0].name,),
+    )
+    reports[1].write_bytes(b"changed but deliberately unselected")
+    fixture_bytes = FIXTURE.read_bytes()
+    (source / "new-report.pdf").write_bytes(fixture_bytes + b"\n% new-after-review\n")
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert len(_stored_source_hashes(database)) == 1
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=1,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=1,
+    )
+
+
+@pytest.mark.parametrize("drift", ("parser", "generation"))
+def test_parser_identity_or_registry_generation_drift_rejects_selected_item(
+    tmp_path,
+    monkeypatch,
+    drift,
+):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    database = tmp_path / "parser-drift.db"
+    preflight = _preflight(source, database)
+    approved = preflight.ready_files[0]
+    plan = ImportPlan.all_ready(_request(source, database), preflight)
+    monkeypatch.setattr(
+        report_parser_factory,
+        "resolve_parser_with_diagnostics",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            selected=SimpleNamespace(
+                plugin_id=(
+                    f"{approved.parser_id}-changed"
+                    if drift == "parser"
+                    else approved.parser_id
+                )
+            ),
+            registry_generation_id=(
+                approved.registry_generation_id + 1
+                if drift == "generation"
+                else approved.registry_generation_id
+            ),
+        ),
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert not database.exists()
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=0,
+        selected=1,
+        imported=0,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_destination_becoming_duplicate_before_import_remains_safe(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    database = tmp_path / "duplicate-race.db"
+    request = _request(source, database)
+    preflight = _preflight(source, database)
+    plan = ImportPlan.all_ready(request, preflight)
+    first_import = ParseReportsThread(plan)
+    first_import.run()
+    source_hashes_after_first_import = _stored_source_hashes(database)
+
+    duplicate_recheck = ParseReportsThread(plan)
+    duplicate_recheck.run()
+
+    assert _stored_source_hashes(database) == source_hashes_after_first_import
+    _assert_selected_result_counts(
+        duplicate_recheck.last_parse_result,
+        parsed=1,
+        selected=1,
+        imported=0,
+        already_present=1,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_sequential_source_drift_after_filter_rejects_only_late_report(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "sequential-source-drift.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_persist = CMMReportParser.import_prepared_report_if_absent
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def persist_a_then_change_b(parser):
+        result = original_persist(parser)
+        if parser.file_name == reports[0].name:
+            assert filter_state["completed"]
+            reports[1].write_bytes(reports[1].read_bytes() + b"\n% changed-after-a\n")
+        return result
+
+    monkeypatch.delenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", raising=False)
+    monkeypatch.setattr(
+        CMMReportParser,
+        "import_prepared_report_if_absent",
+        persist_a_then_change_b,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+@pytest.mark.parametrize("drift", ("parser", "generation"))
+def test_sequential_parser_approval_drift_after_filter_is_changed_not_failed(
+    tmp_path,
+    monkeypatch,
+    drift,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / f"sequential-{drift}-drift.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_resolver = report_parser_factory._resolve_parser_with_registration
+    original_persist = CMMReportParser.import_prepared_report_if_absent
+    drift_state = {"active": False}
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def drifting_resolver(*args, **kwargs):
+        diagnostics, registration = original_resolver(*args, **kwargs)
+        if not drift_state["active"]:
+            return diagnostics, registration
+        if drift == "parser":
+            diagnostics = replace(
+                diagnostics,
+                selected=replace(diagnostics.selected, plugin_id="drifted-parser"),
+            )
+        else:
+            diagnostics = replace(
+                diagnostics,
+                registry_generation_id=diagnostics.registry_generation_id + 1,
+            )
+        return diagnostics, registration
+
+    def persist_a_then_enable_drift(parser):
+        result = original_persist(parser)
+        if parser.file_name == reports[0].name:
+            assert filter_state["completed"]
+            drift_state["active"] = True
+        return result
+
+    monkeypatch.delenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", raising=False)
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        drifting_resolver,
+    )
+    monkeypatch.setattr(
+        CMMReportParser,
+        "import_prepared_report_if_absent",
+        persist_a_then_enable_drift,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_get_parser_validates_the_single_resolution_used_for_construction(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "single-resolution.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+    calls = []
+
+    class ApprovedParser:
+        def __init__(self, file_path, database, connection=None):
+            self.file_path = file_path
+            self.database = database
+            self.connection = connection
+
+    registration = SimpleNamespace(plugin_id="approved", parser_cls=ApprovedParser)
+    diagnostics = SimpleNamespace(
+        selected=SimpleNamespace(plugin_id="approved"),
+        registry_generation_id=17,
+        source_inspection=inspection,
+    )
+
+    def resolve_once(*args, **kwargs):
+        calls.append((args, kwargs))
+        return diagnostics, registration
+
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        resolve_once,
+    )
+
+    parser = report_parser_factory.get_parser(
+        report,
+        database=":memory:",
+        source_inspection=inspection,
+        expected_plugin_id="approved",
+        expected_registry_generation_id=17,
+    )
+
+    assert len(calls) == 1
+    assert type(parser) is ApprovedParser
+    assert parser.source_inspection_context is inspection
+    assert parser.parser_resolution_evidence.plugin_id == "approved"
+    assert parser.parser_resolution_evidence.registry_generation_id == 17
+    assert parser.parser_resolution_evidence.registration is registration
+
+
+def test_get_parser_rejects_identity_drift_from_the_same_resolution(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "identity-drift.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+
+    class DriftedParser:
+        def __init__(self, file_path, database, connection=None):
+            pytest.fail("approval drift must reject before parser construction")
+
+    registration = SimpleNamespace(plugin_id="drifted", parser_cls=DriftedParser)
+    diagnostics = SimpleNamespace(
+        selected=SimpleNamespace(plugin_id="drifted"),
+        registry_generation_id=23,
+        source_inspection=inspection,
+    )
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        lambda *_args, **_kwargs: (diagnostics, registration),
+    )
+
+    with pytest.raises(report_parser_factory.ParserApprovalMismatchError):
+        report_parser_factory.get_parser(
+            report,
+            database=":memory:",
+            source_inspection=inspection,
+            expected_plugin_id="approved",
+            expected_registry_generation_id=23,
+        )
+
+
+def test_get_parser_translates_late_ambiguity_with_exact_approval_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "late-ambiguity.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+    diagnostics = SimpleNamespace(
+        source_path=str(report),
+        selected=None,
+        registry_generation_id=31,
+        source_inspection=inspection,
+    )
+    ambiguity = report_parser_factory.ParserAmbiguityError(
+        diagnostics,
+        ("approved", "new-parser"),
+    )
+    resolver_calls = []
+
+    def raise_ambiguity(*args, **kwargs):
+        resolver_calls.append((args, kwargs))
+        raise ambiguity
+
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        raise_ambiguity,
+    )
+    monkeypatch.setattr(
+        report_parser_factory.inspect,
+        "signature",
+        lambda *_args, **_kwargs: pytest.fail(
+            "parser construction must not be reached after late ambiguity"
+        ),
+    )
+
+    with pytest.raises(report_parser_factory.ParserApprovalMismatchError) as exc_info:
+        report_parser_factory.get_parser(
+            report,
+            database=":memory:",
+            source_inspection=inspection,
+            expected_plugin_id="approved",
+            expected_registry_generation_id=31,
+        )
+
+    mismatch = exc_info.value
+    assert resolver_calls == [
+        ((str(report),), {"source_inspection": inspection})
+    ]
+    assert mismatch.__cause__ is ambiguity
+    assert mismatch.diagnostics is diagnostics
+    assert mismatch.expected_plugin_id == "approved"
+    assert mismatch.expected_registry_generation_id == 31
+    assert mismatch.resolved_plugin_id is None
+    assert mismatch.resolved_registry_generation_id == 31
+
+
+def test_get_parser_without_expected_approval_preserves_ambiguity(
+    tmp_path,
+    monkeypatch,
+):
+    report = tmp_path / "first-time-ambiguity.pdf"
+    report.write_bytes(b"synthetic")
+    inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+    diagnostics = SimpleNamespace(
+        source_path=str(report),
+        selected=None,
+        registry_generation_id=37,
+        source_inspection=inspection,
+    )
+    ambiguity = report_parser_factory.ParserAmbiguityError(
+        diagnostics,
+        ("parser-a", "parser-b"),
+    )
+    resolver_calls = 0
+
+    def raise_ambiguity(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        raise ambiguity
+
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        raise_ambiguity,
+    )
+
+    with pytest.raises(report_parser_factory.ParserAmbiguityError) as exc_info:
+        report_parser_factory.get_parser(
+            report,
+            database=":memory:",
+            source_inspection=inspection,
+        )
+
+    assert resolver_calls == 1
+    assert exc_info.value is ambiguity
+    assert exc_info.value.diagnostics is diagnostics
+
+
+def test_sequential_late_ambiguity_is_changed_not_failed(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "sequential-late-ambiguity.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_resolver = report_parser_factory._resolve_parser_with_registration
+    original_persist = CMMReportParser.import_prepared_report_if_absent
+    state = {"report_a_persisted": False}
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def late_ambiguity_resolver(file_path, **kwargs):
+        diagnostics, registration = original_resolver(file_path, **kwargs)
+        if Path(file_path) == reports[1] and filter_state["completed"]:
+            assert state["report_a_persisted"]
+            ambiguous_diagnostics = replace(
+                diagnostics,
+                selected=None,
+                rejected_reason="ambiguous_parser_match",
+                ambiguous_plugin_ids=("cmm", "new-parser"),
+            )
+            raise report_parser_factory.ParserAmbiguityError(
+                ambiguous_diagnostics,
+                ambiguous_diagnostics.ambiguous_plugin_ids,
+            )
+        return diagnostics, registration
+
+    def persist_a(parser):
+        result = original_persist(parser)
+        if parser.file_name == reports[0].name:
+            state["report_a_persisted"] = True
+        return result
+
+    monkeypatch.delenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", raising=False)
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        late_ambiguity_resolver,
+    )
+    monkeypatch.setattr(
+        CMMReportParser,
+        "import_prepared_report_if_absent",
+        persist_a,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert state["report_a_persisted"]
+    assert _stored_source_hashes(database) == {report_a_hash}
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_two_stage_late_ambiguity_is_changed_not_failed(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "two-stage-late-ambiguity.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_resolver = report_parser_factory._resolve_parser_with_registration
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def late_ambiguity_resolver(file_path, **kwargs):
+        diagnostics, registration = original_resolver(file_path, **kwargs)
+        if Path(file_path) == reports[1] and filter_state["completed"]:
+            ambiguous_diagnostics = replace(
+                diagnostics,
+                selected=None,
+                rejected_reason="ambiguous_parser_match",
+                ambiguous_plugin_ids=("cmm", "new-parser"),
+            )
+            raise report_parser_factory.ParserAmbiguityError(
+                ambiguous_diagnostics,
+                ambiguous_diagnostics.ambiguous_plugin_ids,
+            )
+        return diagnostics, registration
+
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", "1")
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_WORKERS", "2")
+    monkeypatch.setattr(
+        report_parser_factory,
+        "_resolve_parser_with_registration",
+        late_ambiguity_resolver,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_two_stage_late_source_drift_is_changed_and_keeps_identity_pairing(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 2)
+    database = tmp_path / "two-stage-source-drift.db"
+    plan = ImportPlan.all_ready(
+        _request(reports[0].parent, database), _preflight(reports[0].parent, database)
+    )
+    filter_state = _track_completed_import_plan_filter(monkeypatch)
+    original_prepare = CMMReportParser.prepare_for_two_stage_pipeline
+    report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
+
+    def prepare_then_change_selected_source(parser):
+        result = original_prepare(parser)
+        if parser.file_name == reports[1].name:
+            assert filter_state["completed"]
+            reports[1].write_bytes(reports[1].read_bytes() + b"\n% late-two-stage-change\n")
+        return result
+
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", "1")
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_WORKERS", "2")
+    monkeypatch.setattr(
+        CMMReportParser,
+        "prepare_for_two_stage_pipeline",
+        prepare_then_change_selected_source,
+    )
+
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {report_a_hash}
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=2,
+        imported=1,
+        already_present=0,
+        changed=1,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_identical_content_has_deterministic_occurrence_identity(tmp_path):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    reports[1].write_bytes(reports[0].read_bytes())
+    database = tmp_path / "occurrences.db"
+
+    first_scan = _preflight(source, database)
+    second_scan = _preflight(source, database)
+
+    assert [item.stable_occurrence_id for item in first_scan.files] == [
+        reports[0].name,
+        reports[1].name,
+    ]
+    assert first_scan.result_id == second_scan.result_id
+    assert first_scan.files[0].status is ParsePreflightStatus.READY
+    assert first_scan.files[1].status is ParsePreflightStatus.DUPLICATE
+    assert ImportPlan.all_ready(
+        _request(source, database),
+        first_scan,
+    ).selected_reports[0].occurrence_id == reports[0].name
+
+
+def test_archive_selection_survives_reextraction_without_temporary_path_identity(tmp_path):
+    fixture_bytes = FIXTURE.read_bytes()
+    selected_bytes = fixture_bytes + b"\n% selected-archive-member\n"
+    archive = tmp_path / "reports.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("nested/excluded.pdf", fixture_bytes + b"\n% excluded\n")
+        bundle.writestr("nested/selected.pdf", selected_bytes)
+    database = tmp_path / "archive.db"
+    preflight = _preflight(archive, database)
+    selected_item = next(
+        item for item in preflight.ready_files if item.display_name == "nested/selected.pdf"
+    )
+    plan = ImportPlan.from_preflight(
+        _request(archive, database),
+        preflight,
+        selected_occurrence_ids=(selected_item.stable_occurrence_id,),
+    )
+
+    assert selected_item.source_path not in repr(plan.selected_reports)
+    assert plan.selected_reports[0].occurrence_id == "nested/selected.pdf"
+    thread = ParseReportsThread(plan)
+    thread.run()
+
+    assert _stored_source_hashes(database) == {hashlib.sha256(selected_bytes).hexdigest()}
+    _assert_selected_result_counts(
+        thread.last_parse_result,
+        parsed=1,
+        selected=1,
+        imported=1,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=1,
+    )
+
+
+def test_cancellation_keeps_completed_atomic_report_and_truthful_counts(tmp_path):
+    reports = _write_unique_reports(tmp_path / "reports", 3)
+    database = tmp_path / "cancelled.db"
+    cancel_requested = False
+
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE completed (name TEXT PRIMARY KEY)")
+
+        def persist_report(parser):
+            nonlocal cancel_requested
+            with connection:
+                connection.execute("INSERT INTO completed (name) VALUES (?)", (parser.name,))
+            cancel_requested = True
+
+        result = parse_new_reports(
+            reports,
+            set(),
+            parser_factory=lambda report, **_kwargs: SimpleNamespace(name=report.name),
+            persist_report=persist_report,
+            should_cancel=lambda: cancel_requested,
+        )
+        completed = connection.execute("SELECT name FROM completed").fetchall()
+
+    assert completed == [(reports[0].name,)]
+    _assert_selected_result_counts(
+        result,
+        parsed=1,
+        selected=3,
+        imported=1,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
+
+
+def test_two_stage_cancellation_keeps_completed_atomic_report_and_exact_counts(
+    tmp_path,
+    monkeypatch,
+):
+    reports = _write_unique_reports(tmp_path / "reports", 3)
+    database = tmp_path / "two-stage-cancelled.db"
+    cancel_requested = False
+    caller_thread_id = get_ident()
+    persistence_thread_ids = []
+
+    monkeypatch.setattr(
+        "metroliza.parsing.parse_reports_thread.as_completed",
+        lambda futures: iter(futures),
+    )
+
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE completed (name TEXT PRIMARY KEY)")
+
+        def persist_report(parser):
+            nonlocal cancel_requested
+            persistence_thread_ids.append(get_ident())
+            with connection:
+                connection.execute("INSERT INTO completed (name) VALUES (?)", (parser.name,))
+            cancel_requested = True
+
+        result = parse_new_reports(
+            reports,
+            set(),
+            parser_factory=lambda report, **_kwargs: SimpleNamespace(name=report.name),
+            persist_report=persist_report,
+            should_cancel=lambda: cancel_requested,
+            enable_two_stage_pipeline=True,
+            worker_count=1,
+        )
+        completed = connection.execute("SELECT name FROM completed").fetchall()
+
+    assert completed == [(reports[0].name,)]
+    assert persistence_thread_ids == [caller_thread_id]
+    _assert_selected_result_counts(
+        result,
+        parsed=1,
+        selected=3,
+        imported=1,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=2,
+        excluded=0,
+    )
+
+
+def test_two_stage_parsing_keeps_all_sqlite_writes_on_the_caller_thread(tmp_path):
+    reports = _write_unique_reports(tmp_path / "reports", 3)
+    database = tmp_path / "single-writer.db"
+    caller_thread_id = get_ident()
+    persistence_thread_ids = []
+
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE completed (name TEXT PRIMARY KEY)")
+
+        def persist_report(parser):
+            persistence_thread_ids.append(get_ident())
+            with connection:
+                connection.execute("INSERT INTO completed (name) VALUES (?)", (parser.name,))
+
+        result = parse_new_reports(
+            reports,
+            set(),
+            parser_factory=lambda report, **_kwargs: SimpleNamespace(name=report.name),
+            persist_report=persist_report,
+            enable_two_stage_pipeline=True,
+            worker_count=2,
+        )
+        stored_count = connection.execute("SELECT COUNT(*) FROM completed").fetchone()[0]
+
+    assert stored_count == 3
+    assert persistence_thread_ids == [caller_thread_id] * 3
+    _assert_selected_result_counts(
+        result,
+        parsed=3,
+        selected=3,
+        imported=3,
+        already_present=0,
+        changed=0,
+        failed=0,
+        skipped=0,
+        cancelled=0,
+        excluded=0,
+    )
+
+
+def test_cancelled_preflight_cannot_build_a_plan(tmp_path):
+    source = tmp_path / "reports"
+    _write_unique_reports(source, 1)
+    database = tmp_path / "cancelled-preflight.db"
+    cancelled = replace(_preflight(source, database), cancelled=True)
+
+    with pytest.raises(ValueError, match="cancelled preflight"):
+        ImportPlan.all_ready(_request(source, database), cancelled)
+
+    assert not database.exists()
+
+
+def test_selected_identity_is_a_frozen_typed_value():
+    identity = SelectedReportIdentity("report.pdf", "sha256:abc", "cmm", 1)
+
+    with pytest.raises(FrozenInstanceError):
+        identity.parser_id = "other"
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+def test_requested_enrichment_accepts_destination_only_report(tmp_path, monkeypatch, two_stage):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "existing.sqlite3"
+    request = _request(reports[0].parent, database)
+    ParseReportsThread(ImportPlan.all_ready(request, _preflight(reports[0].parent, database))).run()
+    before = _enrichment_graph(database)
+    request = replace(request, run_background_metadata_enrichment=True)
+    plan = ImportPlan.all_atomic_candidates(request, _preflight(reports[0].parent, database))
+    extracted = []
+
+    def extract(parser):
+        extracted.append(parser.file_name)
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extract)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker = ParseReportsThread(plan)
+    worker.run()
+    assert worker.last_parse_result.already_present_files == 1
+    assert worker.last_parse_result.imported_files == 0
+    assert extracted == [reports[0].name]
+    assert worker.last_enrichment_result.enriched_files == 1
+    after = _enrichment_graph(database)
+    for table in ("source_files", "source_file_locations", "report_measurements"):
+        assert after[table] == before[table]
+    assert after["report_metadata"] != before["report_metadata"]
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+@pytest.mark.parametrize("archive", (False, True))
+@pytest.mark.parametrize("concurrent", (False, True))
+def test_enrichment_queue_uses_selected_typed_acceptances(tmp_path, monkeypatch, two_stage, archive, concurrent):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", 3)
+    # This excluded same-content occurrence must not inherit acceptance.
+    (reports[0].parent / "z-copy.pdf").write_bytes(reports[0].read_bytes())
+    database = tmp_path / "mixed.sqlite3"
+    if not concurrent:
+        initial = ImportPlan.from_preflight(_request(reports[0].parent, database),
+                                           _preflight(reports[0].parent, database),
+                                           selected_occurrence_ids=(reports[0].name,))
+        ParseReportsThread(initial).run()
+    source = reports[0].parent
+    if archive:
+        source = tmp_path / "source.zip"
+        with zipfile.ZipFile(source, "w") as bundle:
+            for report in sorted(reports[0].parent.iterdir(), reverse=True):
+                bundle.write(report, report.name)
+    request = replace(_request(source, database), run_background_metadata_enrichment=True)
+    plan = ImportPlan.from_preflight(request, _preflight(source, database),
+                                    selected_occurrence_ids=(reports[0].name, reports[1].name))
+    imported, accepted, extracted, before = [], [], [], []
+    original_parse = worker_module.parse_new_reports
+    original_import = ReportRepository.import_report_if_absent
+
+    def record_parse(*args, **kwargs):
+        callback = kwargs["on_file_accepted"]
+
+        def accept(item, parser, disposition):
+            accepted.append((item.selected_identity.occurrence_id, disposition))
+            callback(item, parser, disposition)
+
+        kwargs["on_file_accepted"] = accept
+        kwargs["on_file_imported"] = lambda path, parser: imported.append(Path(path).name)
+        return original_parse(*args, **kwargs)
+
+    def race(repository, **kwargs):
+        if concurrent and not before:
+            with closing(sqlite3.connect(database)) as connection:
+                competitor = ReportRepository(str(database), connection=connection)
+                assert original_import(competitor, **kwargs) is ReportImportDisposition.IMPORTED
+            before.append(_enrichment_graph(database))
+        return original_import(repository, **kwargs)
+
+    def extract(parser):
+        extracted.append(Path(parser.file_path) / parser.file_name)
+        assert extracted[-1].is_file()
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "parse_new_reports", record_parse)
+    monkeypatch.setattr(ReportRepository, "import_report_if_absent", race)
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extract)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker = ParseReportsThread(plan)
+    discover = worker.get_list_of_reports
+    monkeypatch.setattr(worker, "get_list_of_reports", lambda: sorted(discover(), reverse=True))
+    enrich = worker._run_background_metadata_enrichment
+    graphs = []
+
+    def record_before(paths, connection):
+        graphs.append(_enrichment_graph(database))
+        return enrich(paths, connection)
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", record_before)
+    worker.run()
+    result = worker.last_parse_result
+    assert result.imported_files == result.already_present_files == 1
+    assert result.failed_files == result.cancelled_files == result.preflight_changed_files == 0
+    assert len(imported) == 1
+    assert {name for name, _ in accepted} == {reports[0].name, reports[1].name}
+    assert len(accepted) == len(extracted) == 2
+    assert {path.name for path in extracted} == {reports[0].name, reports[1].name}
+    assert worker.last_enrichment_result.total_files == worker.last_enrichment_result.enriched_files == 2
+    after = _enrichment_graph(database)
+    for table in ("source_files", "source_file_locations", "report_measurements"):
+        assert after[table] == graphs[0][table]
+    if archive:
+        assert all(not path.exists() for path in extracted)
+        assert worker._extracted_archive_dir is None
+
+
+@pytest.mark.parametrize("boundary", ("before_stage", "between", "during_dml", "after_last", "failure_then_cancel", "final_failure_then_cancel"))
+def test_enrichment_cancellation_partition_preserves_committed_graph(tmp_path, monkeypatch, boundary):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    count = 1 if boundary == "final_failure_then_cancel" else 2
+    reports, database, worker, state = _enrichment_worker_case(
+        tmp_path, monkeypatch, count=3 if boundary == "before_stage" else count,
+    )
+    original = ReportRepository.replace_report_metadata_enrichment
+    committed = []
+    if boundary == "before_stage":
+        parse = worker_module.parse_new_reports
+
+        def parse_then_cancel(*args, **kwargs):
+            accept = kwargs["on_file_accepted"]
+            accepted = []
+
+            def cancel_after_two(item, parser, outcome):
+                accept(item, parser, outcome)
+                accepted.append(item.selected_identity)
+                if len(accepted) == 2:
+                    worker.stop_parsing()
+
+            kwargs["on_file_accepted"] = cancel_after_two
+            return parse(*args, **kwargs)
+
+        monkeypatch.setattr(worker_module, "parse_new_reports", parse_then_cancel)
+    elif boundary == "during_dml":
+        dml = ReportRepository._replace_report_metadata
+
+        def cancel_after_dml(repository, *args, **kwargs):
+            result = dml(repository, *args, **kwargs)
+            if state["parsers"]:
+                worker.stop_parsing()
+            return result
+
+        monkeypatch.setattr(ReportRepository, "_replace_report_metadata", cancel_after_dml)
+    elif boundary in {"failure_then_cancel", "final_failure_then_cancel"}:
+        def fail_and_cancel(parser):
+            worker.stop_parsing()
+            raise RuntimeError("Extraction failed independently of cancellation")
+
+        monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", fail_and_cancel)
+    else:
+        def commit_then_cancel(repository, *args, **kwargs):
+            result = original(repository, *args, **kwargs)
+            committed.append(_enrichment_graph(database))
+            if boundary == "between" or len(committed) == 2:
+                worker.stop_parsing()
+            return result
+
+        monkeypatch.setattr(ReportRepository, "replace_report_metadata_enrichment", commit_then_cancel)
+    worker.run()
+    imported = worker.last_parse_result
+    assert imported.imported_files == count
+    assert imported.cancelled_files == int(boundary == "before_stage")
+    assert imported.failed_files == imported.preflight_changed_files == 0
+    result = worker.last_enrichment_result
+    assert result is state["result"]
+    expected = {"before_stage": (0, 0, 0, 2), "between": (1, 0, 0, 1),
+                "during_dml": (0, 0, 0, 2), "after_last": (2, 0, 0, 0),
+                "failure_then_cancel": (0, 1, 0, 1), "final_failure_then_cancel": (0, 1, 0, 0)}[boundary]
+    assert (result.enriched_files, result.failed_files, result.skipped_files, result.cancelled_files) == expected
+    assert result.total_files == sum(expected) == count
+    assert result.cancellation_requested is True
+    assert result.status == ("cancelled_before_start" if boundary == "before_stage" else
+                             "completed" if boundary == "after_last" else "incomplete")
+    assert _enrichment_graph(database) == (committed[-1] if committed else state["before"])
+
+
+@pytest.mark.parametrize("case", ("disabled", "empty", "stale", "unsupported_metadata", "complete", "early_cancel"))
+def test_requested_enrichment_no_work_states(tmp_path, monkeypatch, case):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    report, = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "no-work.sqlite3"
+    mode = "complete" if case == "complete" else "light"
+    request = replace(_request(report.parent, database), metadata_parsing_mode=mode,
+                      run_background_metadata_enrichment=case not in {"disabled", "complete"})
+    review = ParsePreflightService().scan_source(source_path=report.parent, database_path=database,
+                                               metadata_parsing_mode=mode)
+    plan = ImportPlan.from_preflight(request, review,
+                                    selected_occurrence_ids=() if case == "empty" else (report.name,))
+    calls = []
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser",
+                        lambda parser: calls.append(parser) or None)
+    worker = ParseReportsThread(plan)
+    if case == "stale":
+        report.write_bytes(report.read_bytes() + b"stale")
+    if case == "early_cancel":
+        worker.stop_parsing()
+    worker.run()
+    result = worker.last_enrichment_result
+    if case in {"disabled", "complete"}:
+        assert result is None
+        assert calls == []
+    else:
+        assert result.enriched_files == result.failed_files == result.cancelled_files == 0
+        assert result.skipped_files == int(case == "unsupported_metadata")
+        assert result.total_files == int(case == "unsupported_metadata")
+        assert result.status == ("incomplete" if case == "unsupported_metadata" else
+                                 "cancelled_before_start" if case == "early_cancel" else "no_eligible_work")
+    if case in {"empty", "stale", "early_cancel"}:
+        assert not database.exists()
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+@pytest.mark.parametrize("outcome", ("failed", "skipped"))
+def test_failed_or_skipped_import_never_enters_requested_enrichment(tmp_path, monkeypatch, two_stage, outcome):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    report, = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "rejected.sqlite3"
+    request = replace(_request(report.parent, database), run_background_metadata_enrichment=True)
+    worker = ParseReportsThread(ImportPlan.all_ready(request, _preflight(report.parent, database)))
+    extracted = []
+
+    def reject(parser):
+        if outcome == "skipped":
+            raise report_parser_factory.UnsupportedReportFormatError(str(report))
+        raise RuntimeError("Synthetic import preparation failure")
+
+    monkeypatch.setattr(CMMReportParser, "prepare_for_two_stage_pipeline", reject)
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extracted.append)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker.run()
+    result = worker.last_parse_result
+    assert result.imported_files == result.already_present_files == 0
+    # Sequential preparation belongs to the persistence step; preserve its existing import accounting.
+    assert result.failed_files + result.skipped_files == 1
+    assert worker.last_enrichment_result.status == "no_eligible_work"
+    assert worker.last_enrichment_result.total_files == 0
+    assert extracted == []
+    assert not database.exists()

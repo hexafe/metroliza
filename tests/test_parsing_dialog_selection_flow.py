@@ -47,6 +47,17 @@ class _Signal:
         return None
 
 
+def _attach_synthetic_review(dialog):
+    from metroliza.parsing.preflight import ParsePreflightResult
+
+    dialog._preflight_result = ParsePreflightResult(
+        source_path=dialog.directory,
+        database_path=dialog.db_file,
+        metadata_parsing_mode=dialog._build_parse_request_fields()[0],
+        files=(),
+    )
+
+
 class _ProgressDialog:
     def __init__(self, events=None):
         self.events = events
@@ -178,6 +189,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         fast_index = dialog.metadata_mode_combo.findData('fast')
         self.assertGreaterEqual(fast_index, 0)
         dialog.metadata_mode_combo.setCurrentIndex(fast_index)
+        _attach_synthetic_review(dialog)
 
         with patch(
             'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
@@ -189,7 +201,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
         self.assertFalse(captured['request'].run_background_metadata_enrichment)
 
-    def test_loading_screen_passes_fast_then_enrich_metadata_mode(self):
+    def test_loading_screen_binds_fast_then_enrich_to_import_plan(self):
         captured = {}
 
         class _FakeParseThread:
@@ -207,6 +219,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         enrich_index = dialog.metadata_mode_combo.findData('fast_then_enrich')
         self.assertGreaterEqual(enrich_index, 0)
         dialog.metadata_mode_combo.setCurrentIndex(enrich_index)
+        _attach_synthetic_review(dialog)
 
         with patch(
             'modules.parsing_dialog.create_worker_progress_dialog',
@@ -216,8 +229,8 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
 
         self.assertTrue(captured['started'])
         self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
-        self.assertFalse(captured['request'].run_background_metadata_enrichment)
-        self.assertTrue(dialog._pending_modeless_metadata_enrichment)
+        self.assertTrue(captured['request'].run_background_metadata_enrichment)
+        self.assertFalse(dialog._pending_modeless_metadata_enrichment)
 
     def test_fast_then_enrich_archive_uses_embedded_enrichment_fallback(self):
         captured = {}
@@ -237,6 +250,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         enrich_index = dialog.metadata_mode_combo.findData('fast_then_enrich')
         self.assertGreaterEqual(enrich_index, 0)
         dialog.metadata_mode_combo.setCurrentIndex(enrich_index)
+        _attach_synthetic_review(dialog)
 
         with patch(
             'modules.parsing_dialog.create_worker_progress_dialog',
@@ -267,6 +281,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         complete_index = dialog.metadata_mode_combo.findData('complete')
         self.assertGreaterEqual(complete_index, 0)
         dialog.metadata_mode_combo.setCurrentIndex(complete_index)
+        _attach_synthetic_review(dialog)
 
         with patch(
             'modules.parsing_dialog.create_worker_progress_dialog',
@@ -318,6 +333,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         class _FakeParseThread:
             def __init__(self, request):
                 captured['thread'] = self
+                self.preflight_result = request.preflight_result
                 self.update_label = _Signal()
                 self.update_progress = _Signal()
                 self.error_occurred = _Signal()
@@ -993,11 +1009,22 @@ def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expecte
         dialog.directory = worker.directory = ""
     if case == "no-database":
         dialog.db_file = worker.db_file = ""
-    dialog._preflight_result = worker.preflight_result = review
+    dialog._preflight_result = review
     try:
         dialog._sync_readiness_state()
         assert dialog.parse_button.isEnabled() is expected
-        approved, _changed = worker._filter_reports_for_preflight([source])
+        if case in {
+            "cancelled", "stale-source", "stale-database", "stale-mode",
+            "stale-generation", "no-generation", "no-parser", "no-fingerprint",
+            "no-source", "no-database",
+        }:
+            with pytest.raises(ValueError):
+                worker.preflight_result = review
+                worker._filter_reports_for_preflight([source])
+            approved = []
+        else:
+            worker.preflight_result = review
+            approved, _changed = worker._filter_reports_for_preflight([source])
         assert approved == ([source] if expected else [])
         assert review.files == (item,)
         assert not database.exists()
@@ -1013,3 +1040,189 @@ def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expecte
             assert "1 eligible for import / verification" in dialog.readiness_label.text()
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize("existing", (False, True))
+@pytest.mark.parametrize("outcome", ("success", "failure", "cancel", "source_rejected", "parser_rejected", "before_stage", "after_last", "missing", "close"))
+def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, request, outcome, existing):
+    import os
+    import subprocess
+    import sys
+    from threading import Event
+
+    if os.environ.get("METROLIZA_ENRICHMENT_UI_TEST_CHILD") != "1":
+        environment = dict(os.environ, METROLIZA_ENRICHMENT_UI_TEST_CHILD="1", QT_QPA_PLATFORM="offscreen")
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", request.node.nodeid, "-q"],
+            cwd=Path(__file__).resolve().parents[1], env=environment,
+            capture_output=True, text=True, timeout=60,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        return
+
+    from PyQt6.QtTest import QTest
+    from metroliza.parsing import parse_reports_thread as worker_module
+    from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+    from metroliza.shared.parse_contracts import ParseRequest
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.ui.parsing_dialog import ParsingDialog
+
+    app = QApplication.instance() or QApplication([])
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "synthetic.pdf"
+    shutil.copyfile(Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf", source)
+    database = tmp_path / "reports.sqlite3"
+    if existing:
+        review = ParsePreflightService().scan_source(
+            source_path=source_dir, database_path=database, metadata_parsing_mode="light"
+        )
+        worker_module.ParseReportsThread(ImportPlan.all_ready(
+            ParseRequest(source_directory=str(source_dir), db_file=str(database), metadata_parsing_mode="light"),
+            review,
+        )).run()
+    workers, feedback, launches, before = [], [], [], []
+    extraction_started, release_extraction = Event(), Event()
+
+    def graph():
+        with closing(sqlite3.connect(database)) as conn:
+            return {table: conn.execute(f"SELECT * FROM {table}").fetchall()
+                    for table in ("source_files", "source_file_locations", "parsed_reports",
+                                  "report_metadata", "report_metadata_candidates", "report_metadata_warnings",
+                                  "report_parse_state", "report_measurements")}
+
+
+    def create_thread(plan):
+        worker = worker_module.ParseReportsThread(plan)
+        workers.append(worker)
+        enrich = worker._run_background_metadata_enrichment
+
+        def capture(paths, connection):
+            before.append(graph())
+            if outcome == "before_stage":
+                worker.stop_parsing()
+            result = enrich(paths, connection)
+            return None if outcome == "missing" else result
+
+        worker._run_background_metadata_enrichment = capture
+        return worker
+
+    def extract(parser):
+        if outcome == "close":
+            extraction_started.set()
+            assert release_extraction.wait(10)
+        if outcome == "failure":
+            raise RuntimeError("Synthetic extraction failure")
+        if outcome == "cancel":
+            workers[-1].stop_parsing()
+        if outcome == "source_rejected":
+            source.write_bytes(source.read_bytes() + b"changed during synthetic extraction")
+        if outcome == "parser_rejected":
+            from dataclasses import replace
+            parser.parser_resolution_evidence = replace(parser.parser_resolution_evidence, plugin_id="changed")
+        return SimpleNamespace(metadata={
+            "parser_id": "cmm_pdf_header_box", "template_family": "cmm_pdf_header_box",
+            "metadata_confidence": 0.99, "operator_name": "SYNTHETIC-ENRICHMENT",
+            "metadata_json": {}, "warnings": (),
+        }, candidates=())
+
+    original_enrich = ReportRepository.replace_report_metadata_enrichment
+
+    def commit_then_cancel(repository, *args, **kwargs):
+        result = original_enrich(repository, *args, **kwargs)
+        if outcome == "after_last":
+            workers[-1].stop_parsing()
+        return result
+
+    monkeypatch.setattr(ReportRepository, "replace_report_metadata_enrichment", commit_then_cancel)
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extract)
+    monkeypatch.setattr("metroliza.ui.parsing_dialog.ParseReportsThread", create_thread)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: feedback.append(("info", args[1], args[2])))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: feedback.append(("warning", args[1], args[2])))
+    dialog = ParsingDialog(directory=str(source_dir), db_file=str(database))
+    dialog.metadata_enrichment_requested.connect(launches.append)
+    dialog.metadata_mode_combo.setCurrentIndex(dialog.metadata_mode_combo.findData("fast_then_enrich"))
+    dialog._preflight_result = ParsePreflightService().scan_source(
+        source_path=source_dir, database_path=database, metadata_parsing_mode="light"
+    )
+    dialog._sync_readiness_state()
+    dialog.show()
+    try:
+        assert dialog.parse_button.isEnabled()
+        QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
+        deadline = time.monotonic() + 15
+        while dialog.parse_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            if outcome == "close" and extraction_started.is_set() and not release_extraction.is_set():
+                dialog.reject()
+                assert dialog.is_close_deferred()
+                release_extraction.set()
+            QTest.qWait(5)
+        if outcome == "close":
+            assert extraction_started.is_set() and release_extraction.is_set()
+            assert not workers[0].isRunning()
+            assert dialog.parse_thread is None
+            assert workers[0].last_enrichment_result.cancelled_files == 1
+            assert graph() == before[0]
+            assert feedback == launches == []
+            assert not dialog.isVisible()
+            return
+        assert len(workers) == len(feedback) == 1
+        assert not workers[0].isRunning()
+        assert workers[0].last_parse_result.imported_files == int(not existing)
+        assert workers[0].last_parse_result.already_present_files == int(existing)
+        assert workers[0].last_parse_result.cancelled_files == 0
+        severity, title, message = feedback[0]
+        assert severity == ("info" if outcome in {"success", "after_last"} else "warning"), feedback
+        assert "Metadata enrichment:" in message
+        assert ("Already present at import time: 1" if existing else "Saved: 1 report file") in message
+        expected = {"success": "Enriched: 1", "after_last": "Enriched: 1", "failure": "Failed or rejected: 1",
+                    "source_rejected": "Failed or rejected: 1", "parser_rejected": "Failed or rejected: 1",
+                    "cancel": "Cancelled: 1", "before_stage": "Cancelled: 1", "missing": "evidence is unavailable"}
+        assert expected[outcome] in message
+        assert "Nothing was written" not in message and "Nothing new was saved" not in message
+        after = graph()
+        for table in ("source_files", "source_file_locations", "report_measurements"):
+            assert after[table] == before[0][table]
+        if outcome not in {"success", "after_last", "missing"}:
+            assert after == before[0]
+        assert not launches
+        assert dialog.parse_thread is None
+        assert not dialog.parsing_canceled
+        with closing(sqlite3.connect(database)) as conn:
+            assert conn.execute("SELECT count(*) FROM parsed_reports").fetchone() == (1,)
+            assert conn.execute("SELECT count(*) FROM report_measurements").fetchone()[0] > 0
+            raw = conn.execute("SELECT raw_report_json FROM parsed_reports").fetchone()[0]
+            assert ('"metadata_enrichment"' in raw) is (outcome in {"success", "after_last", "missing"})
+    finally:
+        release_extraction.set()
+        for worker in workers:
+            worker.wait(15000)
+        dialog.close()
+
+
+@pytest.mark.parametrize("result", (None, SimpleNamespace(parsed_files=1, total_files=1),
+                                    SimpleNamespace(parsed_files=1, total_files=1, imported_files=0,
+                                                    already_present_files=0, selected_files=0)))
+@pytest.mark.parametrize("enrichment", ("disabled", "missing", "zero", "legacy_success", "unbalanced"))
+def test_enrichment_summary_optional_and_explicit_zero_compatibility(result, enrichment):
+    from metroliza.parsing.parse_reports_thread import MetadataEnrichmentBatchResult
+    from metroliza.ui.parsing_dialog import _build_parse_completion_summary
+
+    evidence = {"disabled": None, "missing": None,
+                "zero": MetadataEnrichmentBatchResult(0, 0, started=False),
+                "legacy_success": SimpleNamespace(enriched_files=1, total_files=1),
+                "unbalanced": SimpleNamespace(enriched_files=0, total_files=1)}[enrichment]
+    severity, title, message = _build_parse_completion_summary(
+        result, "synthetic.db", evidence, enrichment_requested=enrichment != "disabled",
+    )
+    assert ("Metadata enrichment:" in message) is (enrichment != "disabled")
+    if enrichment in {"missing", "unbalanced"} or (result is None and enrichment != "disabled"):
+        assert severity == "warning"
+    if enrichment == "zero":
+        assert "No eligible accepted reports" in message
+    if enrichment == "legacy_success":
+        assert "Enriched: 1" in message
+        assert "Nothing was written" not in message
+    if result is not None and getattr(result, "selected_files", None) == 0:
+        assert "Saved: 1" not in message
