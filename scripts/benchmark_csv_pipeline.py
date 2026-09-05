@@ -32,9 +32,34 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _checkout_identity(repo: Path) -> tuple[str, str]:
+    """Reject mutable working trees before attributing execution to committed code."""
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=repo,
+    )
+    if status:
+        raise RuntimeError("Benchmark checkout must be clean; commit changes and use external "
+                           "or git-ignored output directories before measuring")
+    return tuple(subprocess.check_output(
+        ["git", "rev-parse", "HEAD", "HEAD^{tree}"], cwd=repo, text=True,
+    ).splitlines())
+
+
+def _verify_checkout_identity(repo: Path, expected: tuple[str, str], driver_sha: str) -> None:
+    if _checkout_identity(repo) != expected or _sha(Path(__file__).resolve()) != driver_sha:
+        raise RuntimeError("Benchmark checkout or shared driver changed during measurement")
+
+
 def _worker(args: argparse.Namespace) -> None:
     started = time.perf_counter()
     repo = Path(args.repo).resolve()
+    identity = _checkout_identity(repo)
+    driver_sha = _sha(Path(__file__).resolve())
+    destination = Path(args.output).resolve()
+    if destination.is_relative_to(repo) and subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", str(destination)], cwd=repo,
+    ).returncode != 0:
+        raise RuntimeError("Benchmark output must be external or git-ignored")
     sys.path[:0] = [str(repo / "src"), str(repo)]
     from scripts import benchmark_paths as harness
     harness._install_headless_stubs()
@@ -45,7 +70,6 @@ def _worker(args: argparse.Namespace) -> None:
     )
     from metroliza.industrial.industrial_analytics_workflow import run_tabular_file_analytics
 
-    destination = Path(args.output).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     rows, columns, groups = CASES[args.case]
     fixture = destination / "summary_fixture.csv"
@@ -110,11 +134,12 @@ def _worker(args: argparse.Namespace) -> None:
         modules[name] = {"loaded": module is not None, "file": Path(
             str(getattr(module, "__file__", ""))).name if module else None}
     import matplotlib
+    _verify_checkout_identity(repo, identity, driver_sha)
     payload = {
         "case": args.case, "rows": rows, "numeric_columns": columns, "groups": groups,
         "selected_metrics": 4, "seed": 7, "fixture_sha256": _sha(fixture),
-        "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
-        "tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=repo, text=True).strip(),
+        "head": identity[0], "tree": identity[1], "driver_sha256": driver_sha,
+        "checkout_verified_clean_before_and_after": True,
         "profiled": args.profile, "setup_s": setup_s, "records": records,
         "matplotlib_backend": matplotlib.get_backend(), "native_modules": modules,
         "versions": {name: importlib.metadata.version(name) for name in (

@@ -53,7 +53,7 @@
       "oznak": "ed51580dfdec9f91f6320c7937af6d65dd5a1290"
     }
   },
-  "driver_sha256": "d245394d5be081934cae9e418ccb306c4108e86413f772b6e6ef106baa452216",
+  "driver_sha256": "f4e5b7c85b69d0446f520e17edd86ff62e48a0439f760d7c65e1d4618a902871",
   "profile_B_small": {
     "profile_total_s": 23.865975587000005,
     "functions": [
@@ -3106,7 +3106,7 @@
       "images": 8
     }
   },
-  "review_correction_passes": 1,
+  "review_correction_passes": 2,
   "incomplete_low_power_extension": {
     "status": "stopped after power-profile drift discovery; excluded from comparison medians; no B/C extension or industrial repeat completed",
     "observed_at_utc": "2026-09-05 22:19:57",
@@ -3243,5 +3243,11 @@
         "raw_sha256": "7e6466ad4e0ec60deeda9dfd904f38335cb681b35e6cb9762f018f416f0a92eb"
       }
     ]
+  },
+  "measured_driver_sha256": "d245394d5be081934cae9e418ccb306c4108e86413f772b6e6ef106baa452216",
+  "provenance_guard": {
+    "applies_to": "future runs only; all saved timing receipts predate guard",
+    "checks": "clean tracked/staged/untracked state before imports and after workflow; unchanged HEAD/tree and shared driver SHA; external or ignored output",
+    "historical_evidence": "saved raw/parity hashes and unchanged production blobs independently verified; no retroactive clean-checkout claim"
   }
 }

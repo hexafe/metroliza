@@ -295,3 +295,44 @@ def test_sqlite_normalization_preserves_literal_diagnostic_fragments(tmp_path):
     comparison = compare_artifacts(baseline, changed_literal)
     assert not comparison["equal"]
     assert "sheets" in comparison["differing_sections"]
+
+
+@pytest.mark.parametrize("dirty_kind", ["tracked", "staged", "untracked"])
+def test_benchmark_rejects_dirty_checkout_before_recording_identity(tmp_path, dirty_kind):
+    import subprocess
+    from scripts.benchmark_csv_pipeline import (
+        _checkout_identity, _sha, _verify_checkout_identity,
+    )
+    from scripts import benchmark_csv_pipeline as driver
+
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True)
+
+    git("init", "--quiet")
+    source = tmp_path / "source.py"
+    source.write_text("value = 1\n")
+    git("add", "source.py")
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "--quiet", "-m", "fixture")
+    identity = _checkout_identity(tmp_path)
+    assert identity == tuple(git("rev-parse", "HEAD", "HEAD^{tree}").splitlines())
+    target = tmp_path / "extra.py" if dirty_kind == "untracked" else source
+    target.write_text("value = 2\n")
+    if dirty_kind == "staged":
+        git("add", "source.py")
+    with pytest.raises(RuntimeError, match="must be clean"):
+        _checkout_identity(tmp_path)
+    with pytest.raises(RuntimeError, match="must be clean"):
+        _verify_checkout_identity(tmp_path, identity, _sha(Path(driver.__file__)))
+
+
+def test_benchmark_rejects_commit_or_driver_drift(monkeypatch, tmp_path):
+    from scripts import benchmark_csv_pipeline as driver
+
+    monkeypatch.setattr(driver, "_checkout_identity", lambda repo: ("head", "tree"))
+    monkeypatch.setattr(driver, "_sha", lambda path: "driver")
+    driver._verify_checkout_identity(tmp_path, ("head", "tree"), "driver")
+    with pytest.raises(RuntimeError, match="changed during measurement"):
+        driver._verify_checkout_identity(tmp_path, ("previous", "tree"), "driver")
+    with pytest.raises(RuntimeError, match="changed during measurement"):
+        driver._verify_checkout_identity(tmp_path, ("head", "tree"), "previous-driver")

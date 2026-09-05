@@ -292,3 +292,23 @@ Run the primary driver with --case medium, --case large or --case many-groups
 and --samples 2 --blocks 1 for the lower-confidence supplemental comparisons. Revert this
 PR to restore the original computation; no migration or persistent-cache cleanup
 is needed. This is a bounded pipeline audit, not a whole-repository performance audit.
+
+
+## Review correction 2: measurement provenance guard
+
+GitHub review identified that the original driver labeled working-tree execution
+with HEAD/tree without rejecting local edits. The driver now rejects tracked,
+staged and untracked changes before imports, checks output placement before any
+fixture write, and verifies the same clean HEAD/tree again before publishing a
+receipt. The shared driver has its own SHA256, checked again after execution.
+Use clean comparison checkouts and external or git-ignored output directories;
+the coordinator checkout's untracked artifact directory is not exempted.
+
+Earlier raw measurements are preserved as **unguarded historical receipts**;
+the new guard is not retroactive proof. The A/B checkouts and the separately
+committed cache-off ablation (`288ec7f7f8547775001b5f4bf47f0bd53c3fc46e`) remain
+available. The three measured production blobs were independently reverified as
+unchanged, and all saved raw/parity hashes were checked. No measured sample is
+relabeled as having run this newer guarded driver. A future guarded repeat on a
+stable host is the remaining confirmation task; the first-pass budget does not
+permit repeating the entire matrix after this tooling-only correction.
