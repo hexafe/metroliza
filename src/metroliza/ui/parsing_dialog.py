@@ -924,7 +924,7 @@ class ParsingDialog(QDialog):
         return _build_parse_completion_summary(
             getattr(self.parse_thread, "last_parse_result", None), self.db_file,
             getattr(self.parse_thread, "last_enrichment_result", None),
-            enrichment_requested=self._embedded_enrichment_requested(),
+            enrichment_requested=ParsingDialog._embedded_enrichment_requested(self),
         )
 
     def _embedded_enrichment_requested(self):
