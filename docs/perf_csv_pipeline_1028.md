@@ -1,6 +1,6 @@
 # CSV analytics/export performance — Issue #1028
 
-Status: first-pass work in progress. Parent #918 remains open.
+Status: measured candidate in Draft PR #1029. Exact-final-head validation/review receipts are maintained on the PR. Parent #918 remains open.
 
 ## Authority and fixed comparisons
 
@@ -48,8 +48,8 @@ the separate process duration also includes imports, fixture preparation, result
 serialization and artifact hashing. These boundaries differ from a full GUI run.
 
 The fixed interpreter is CPython 3.11.16, Linux x86_64, on a Xeon W-10855M with
-six physical/twelve logical cores and 64 GiB RAM, Omarchy 4.0.2, balanced power
-profile. One resolved environment and exact sibling SHAs are reused for A/B/C.
+six physical/twelve logical cores and 64 GiB RAM, Omarchy 4.0.2; the initial power-profile snapshot was balanced.
+Continuous profile/frequency telemetry was not collected. One resolved environment and exact sibling SHAs are reused for A/B/C.
 Agg, one BLAS/OpenMP/NumExpr thread, hash seed 0, and a shared dedicated font cache
 within each block pair are fixed. No OS-cache dropping or machine setting changes.
 
@@ -61,6 +61,7 @@ groupstats), full dashboard detail, XLSX and separate parameter sheets:
 | Existing CI small | 300 | 4 | 4 | 3 | 7 per variant/block, 2 blocks |
 | Medium-wide | 30,000 | 12 | 4 | 12 | 2 per variant, lower confidence |
 | Bounded large | 150,001 | 4 | 4 | 12 | 2 per variant, lower confidence |
+| Review boundary case | 600 | 4 | 4 | 24 | 2 per variant, lower confidence |
 
 Each independent block starts with a fresh-process warmup per variant, retained
 but excluded from the measured median. Variant order alternates. Larger cases
@@ -75,10 +76,10 @@ Both small and large currently use SQLite: the loaders unconditionally call
 The large case crosses four 50,000-row ingestion batches; the preview is bounded
 at 5,000 rows. Actual storage diagnostics and cleanup must be recorded.
 
-An initial A/B block ran while a user game used approximately 630–670% CPU.
-Those samples are preserved as contended exploratory evidence. This load is a
-confounder and does not establish a quiet-machine performance result. No tests,
-builds or other worker benchmarks ran concurrently.
+A user GameThread process was observed at approximately 630–674% CPU during the session.
+Original local timings are treated as contended-host evidence. An optional repeat after
+observed GameThread exit was stopped when external power-profile drift was found. The original confounder prevents
+a quiet-machine claim. No local tests, builds or other worker benchmarks ran concurrently.
 
 Example (run serially with the same interpreter):
 
@@ -114,102 +115,180 @@ SQLite diagnostic path are normalized. This normalization was established on A/B
 before candidate changes: the primary A/B HTML and all other XLSX parts matched
 byte-for-byte. No visual or numerical tolerance is relaxed; PNG bytes must match.
 
-## Results and measured scope
+## Attribution A→B, separately from candidate improvement
 
-The [first public checkpoint](https://github.com/hexafe/metroliza/issues/1028#issuecomment-5554520956)
-preceded production edits. Compact raw timings and environment identity are in
-[`perf_csv_pipeline_1028.json`](perf_csv_pipeline_1028.json).
+The fixed A/B comparisons use identical fixtures, options and resolved dependencies.
+The observed direction changes between the two small blocks. The medium and large
+cases have only two samples per variant, and host load is uncontrolled.
 
-Initial contended A/B medians: A 14.783197 s, B 14.595880 s; median RSS 214,832 and
-214,834 KiB. This does not show a large feature regression, but host contention
-limits attribution. Single exploratory B probes: medium 113.341565 s / 465,484 KiB;
-large 291.107645 s / 1,224,484 KiB. Both retained all rows, ten sheets, twelve
-dashboard charts and successfully cleaned the actual temporary SQLite store.
+| Case | A median seconds | B median seconds | Observed B minus A | Samples per variant |
+|---|---:|---:|---:|---:|
+| small contended | 14.783197 | 14.595880 | -1.27% | 14 |
+| medium-wide | 112.143750 | 114.181714 | +1.82% | 2 |
+| bounded large | 295.391484 | 309.440864 | +4.76% | 2 |
 
-Separate cProfile on small B (23.87 s instrumented; overlapping inclusive spans):
+Attribution: **inconclusive at the few-percent scale; the primary workload does not
+reproduce a material selected-import regression**. The historical workload/pin
+mismatch is confirmed, but its contribution cannot be quantified without the old
+environment. Do not label the larger observed A/B difference zero or dismiss it.
+The separate small B profile contains no runtime calls in the five production
+files changed by A→B; it excludes module-import initialization. Whole-process
+measurements, including imports/setup, are retained separately in JSON.
 
-| Rank | Cost | Observation / decision |
+## Candidate B→C measurements
+
+The small B/C experiment is independent of the earlier A/B experiment; its B median
+must not be substituted into A→B attribution. Parentheses below are MAD in seconds,
+not confidence intervals. Raw samples, IQR, min/max, process durations, fixture hashes,
+backend identity, peak RSS and output identities are retained in the compact JSON.
+
+| Case | B median (MAD), seconds | C median (MAD), seconds | Time reduction | Peak RSS B→C, MiB | Samples per variant |
+|---|---:|---:|---:|---:|---:|
+| small contended | 15.718314 (0.668372) | 11.990279 (0.168196) | 23.72% | 209.77 → 209.91 | 14 |
+| medium-wide | 114.181714 (1.469826) | 97.164397 (2.699797) | 14.90% | 454.61 → 455.91 | 2 |
+| bounded large | 309.440864 (8.799697) | 251.104338 (1.224237) | 18.85% | 1195.38 → 1200.07 | 2 |
+| 24-group review case | 75.405182 (1.392909) | 58.389874 (0.344148) | 22.57% | 219.32 → 221.90 | 2 |
+
+Original contended small block medians independently favor C: 16.204504→12.154230 s and
+14.438391→11.817838 s. The original contended small gain is 23.72%, below the 30% planning target.
+All original observations remain available. A later optional extension was stopped
+incomplete after discovering an externally changed low-power profile (AC online,
+CPU0 about 1.1 GHz at 22:19:57 UTC). Its partial 25–26 s observations are retained
+separately and excluded from comparison medians. No machine settings were changed. There is **no material memory improvement**: the large request retains
+approximately 4.7 MiB more at peak, consistent with the bounded input snapshots.
+
+Fresh-process samples run after font/library-cache warmups. They are process-cold,
+not OS-cache-cold. Whole-process medians include imports, fixture setup and receipt
+hashing; the primary workflow timer includes CSV/SQLite load through complete
+HTML/XLSX publication. No cache-dropping or machine-wide changes occurred.
+
+Separate same-process request times (request 0, 1, 2) are:
+- B: 8.834171 s, 7.932339 s, 8.386767 s.
+- C: 6.945657 s, 6.402642 s, 6.509871 s.
+
+These supplemental requests occurred near the external host-state transition;
+they demonstrate repeated-request behavior and are not an isolated cache speedup.
+Their RSS values are cumulative process high-water marks, not live retained-memory
+measurements. All three requests were compared semantically; caches clear between
+requests. A real test also changes input data, limits and chart selection at the
+same source path across successive requests.
+
+## Ranked small-workload diagnosis and scope
+
+Separate cProfile on B took 23.87 s; inclusive spans overlap and must not be summed
+or used as speedup evidence. The first Issue checkpoint preceded production edits.
+
+| Rank | Measured hotspot | Mechanism, risk and decision |
 |---|---|---|
-| 1 | Histogram preparation: 48 calls, 10.22 s; fitting nested 10.02 s | Remove unsupported grouped-PNG work and reuse identical immutable table rows |
-| 2 | Dashboard distribution rendering: 12 calls, 6.02 s | Keep distinct image settings and all images; reject naive image sharing |
-| 3 | Groupstats: four calls, 2.35 s | Already reuses analysis and prepared metric data |
-| 4 | pandas writes 0.52 s; workbook close 0.27 s | Retain all sheets/cells; larger writer work remains a follow-up |
-| 5 | SQLite ingestion 0.086 s; workbook grouping 0.072 s; finite coercion 0.031 s | Small-case costs do not justify an index or conversion rewrite |
+| 1 | 48 histogram payloads, 10.22 s; fitting nested 10.02 s | Unsupported grouped PNG fits every group then returns no image; tables repeat across outputs. Bypass that dead end and reuse immutable table rows within a bounded request. |
+| 2 | 12 dashboard distribution renders, 6.02 s | Keep every image. Naive PNG sharing would change sizes/styles/extrema/sampling seeds, so it was rejected without shipping an experiment. |
+| 3 | Four groupstats calculations, 2.35 s | Analysis and prepared metrics already reuse their results. No change. |
+| 4 | Eight pandas writes, 0.52 s; workbook close 0.27 s | Small-case cost does not justify changing writer contracts. Larger full materialization remains a memory investigation, not a proved allocation diagnosis. |
+| 5 | SQLite load 0.086 s; workbook grouping 0.072 s; finite coercion 0.031 s | No small-case evidence for an index or conversion rewrite. Additional actual 12/997-group probes are recorded below. |
 
-The candidate changes three production files: the workbook chart helper bypasses
-an unavailable grouped PNG operation; the plotstats adapter stores at most 64
-immutable table entries / 8 MiB of retained input-and-row payload; the workflow
-owns a separate context per request. A lookup may transiently create one bounded
-input snapshot. Complete float64 input bytes preserve order and signed zero;
-hexadecimal limits distinguish positive/negative zero. The fixed table computation
-uses full fitting and default distribution settings; render settings and titles
-are applied outside the reused result. Failed/unavailable results are not cached.
-Context reset and buffer clearing run on every exit, including nested requests.
-Source verification and publication/cancellation checks remain on the original path.
+Three production paths change: `hexafe_plotstats_adapter.py`,
+`industrial_analytics_workflow.py`, and `industrial_analytics_workbook_charts.py`.
+The grouped workbook histogram still emits the same editable chart and tables;
+only an unavailable artifact attempt disappears. The cache stores at most 64
+entries / 8 MiB of retained input-and-row payload. One bounded lookup snapshot may
+exist transiently; Python object overhead is additionally bounded by entry count.
+Full finite float64 bytes preserve order; hexadecimal limits preserve signed zero.
+The table helper has fixed full-fit/default distribution settings and no selectable
+compute backend. Titles/render settings are applied outside cached rows. Failures
+and unavailable results are not cached. Each nested workflow owns an isolated
+context, reset and cleared on every exit. Source verification remains live.
 
-Focused evidence so far: 55 adapter/workbook/cache/comparator tests, 122 adjacent
-tabular/industrial/workflow/security tests, then 17 cache/comparator/C901 tests after
-the signed-zero key refinement; full Ruff passed. Exact candidate performance,
-full final-byte CI-equivalent validation, independent review and remote CI are pending.
+A cache-off ablation, with grouped-PNG bypass retained, had median 13.879835 s
+versus 11.792553 s for C (three samples each); all three pairs favored caching.
+The cache-disabled experimental constant is not in the shipping branch. Small C
+profiling reduced payload builds 48→24 and standalone table calculations 24→12.
+The 24-group supplemental case was declared during independent review before
+execution; it does not replace the original primary workload. Its separate counter
+run reached exactly 64 admitted entries and cleared both contexts to zero entries
+and zero payload bytes. The driver extension changes only the case catalog;
+original case settings and worker/controller code remain unchanged.
 
-## Candidate observations (provisional until the full matrix completes)
+## Full output and adjacent-path proof
 
-Small B→C, two blocks of seven fresh-process observations each: B median
-15.718314 s (MAD 0.668372, IQR 1.687535), C 11.990279 s (MAD 0.168196,
-IQR 0.308707), a 3.728035 s / 23.72% reduction. Median peak RSS is effectively
-unchanged: 214,802 → 214,946 KiB. Median whole-process duration is
-18.015192 → 14.287146 s. This is below the 30% planning target and remains
-contended-host evidence, not quiet-machine proof.
+The semantic matrix compares all worksheet cells/types/formulas/order, every XLSX
+part/chart reference/style/relationship, exact HTML, PNGs and offline assets for
+small, medium, large and 24-group B/C; A/B is also checked for the three original
+cases. Only XLSX timestamps and the store-created Diagnostics context's temporary
+SQLite path are normalized. Literal matching fragments in user cells remain
+significant, with a targeted negative test. The earlier broad normalization was
+hardened in independent review correction pass 1.
 
-A separate three-sample cache ablation retained the grouped-PNG bypass but disabled
-cache admission in an isolated, unshipped worktree. Its median was 13.879835 s
-versus 11.792553 s with the cache; all three paired observations favored reuse.
-This supports retaining both related changes. The ablation patch is preserved;
-its cache-disabled constant is not in the shipping branch.
+All main cases preserve ten sheets, twelve dashboard plots, eight editable XLSX
+charts and eight XLSX images. Complete Table Data rows/columns and literal formula-like
+strings are read back; generated hyperlinks remain absent. Representative histogram
+and violin PNGs were visually inspected. No visual/numerical tolerance was relaxed.
 
-The separate candidate profile reduced histogram payload builds from 48 to 24
-and standalone table computations from 24 to 12. Candidate instrumented inclusive
-spans were 4.30 s for payload builds and 2.35 s for standalone table calculations;
-these are diagnostic counters/timings, not the claimed speedup.
+Representative large outputs: HTML 7,977,393 bytes, offline Plotly asset 3,598,158
+bytes, XLSX about 36,521,020 bytes (a few metadata/compression bytes vary). Every
+record reports actual SQLite creation and successful cleanup; the large load
+crosses four ingestion batches. There is no reduction of requested output work.
 
-The next rendering opportunity is in the pinned plotstats grouped artifact API:
-it still calculates tables while constructing dashboard plots even when the
-caller only uses the figure. A future library change could expose explicit
-artifact requirements or reusable immutable results. That needs a scoped
-follow-up contract and a measured full-call comparison, including conversions,
-fallback, cancellation and Windows packaging; no dependency change ships here.
+Adjacent measurements use the existing report/export and industrial harnesses,
+including their writer wrappers, so they are diagnostic comparisons rather than
+the primary uninstrumented speedup evidence. Three samples plus a warmup per variant;
+query probes hold 30,000 rows fixed and vary actual group cardinality with empty search.
 
-## Native and storage inventory
+| Adjacent case | B median seconds | C median seconds | C minus B | Review threshold crossed |
+|---|---:|---:|---:|---|
+| report | 0.199503 | 0.202665 | +0.003162 s (+1.59%) | False |
+| industrial | 13.081902 | 13.685658 | +0.603756 s (+4.62%) | False |
+| groups-12 | 0.978305 | 0.989909 | +0.011604 s (+1.19%) | False |
+| groups-997 | 0.944943 | 0.959656 | +0.014714 s (+1.56%) | False |
 
-The existing optional bridges cover CMM parsing, group-stat numeric coercion,
-comparison bootstrap, distribution Anderson-Darling work and chart rendering.
-The CSV pipeline measurements loaded none of these extension modules. The pinned
-groupstats workbook result reported the Python backend; rendered PNGs used Agg.
-CMM parsing is outside CSV chart preparation. SQLite query execution remains in
-the existing sqlite3/store path, and XLSX writing uses the existing XlsxWriter
-integration. No profile evidence justified a new kernel, writer library, process
-pool or scratch index spike. No index is proposed without EXPLAIN evidence.
+The industrial sequence straddled GameThread exit and had strongly falling raw
+times; its +4.62% / +0.604 s aggregate median is inconclusive. The unchanged
+dashboard stage varied more than the workbook stage. A planned post-game repeat
+was not reached before external power-profile drift stopped the optional extension.
+The review criterion is a repeatable regression over both 5% and 0.1 s; these
+criteria do not modify CI thresholds. This remaining uncertainty is explicit. Adjacent XLSX/dashboard artifacts are compared
+semantically. The standalone report probe initially failed before measurement due
+to the harness stub's parent-package import order; the preserved retry loads that
+namespace before installing the same headless stub for both variants. No production
+fix or measured sample was discarded for that setup failure.
 
-The larger pipeline still materializes full data for its complete Table Data and
-parameter-sheet contract. Replacing that with global XlsxWriter constant-memory
-mode would risk pandas column-oriented writes, tables, merges and chart ranges;
-it was not attempted. Peak memory must be evaluated independently from the small
-CPU improvement. These observations do not constitute a repository-wide audit.
+## Native inventory, validation and next opportunity
 
-## Independent review correction, pass 1
+Optional existing bridges cover CMM parsing, group-stat coercion, comparison
+bootstrap, distribution Anderson-Darling work and chart rendering. None loaded in
+these CSV measurements: observed groupstats backend is Python and PNG rendering is
+Agg. SQLite execution and XlsxWriter remain on existing paths. No new native/library,
+index, process-pool or cross-session-cache spike was justified or shipped.
 
-The independent reviewer identified a missing actual high-cardinality/cache-boundary
-case and an overly broad diagnostic-path normalization in the comparison tool.
-The latter now recognizes only the store-created Diagnostics context field;
-a literal matching fragment in ordinary user cells remains significant, with
-an adversarial test that changes only the relevant literal content.
+Next highest-value opportunity: avoid the remaining grouped-artifact statistics
+that are computed while only its Plotly figure is consumed. First evaluate reuse
+of already returned immutable rows under a complete computation contract; if the
+pinned API cannot express that, propose a narrow upstream artifact-selection API.
+Any dependency/native/index follow-up must quantify end-to-end benefit including
+conversion/startup, exact semantics/fallback/invalidation/cancellation, Windows
+packaging, maintenance/license/security cost and rollback. Writer allocation and
+row-oriented streaming deserve a separate large-case profile; global constant-memory
+mode is unsafe without proving pandas write order, tables/merges and chart references.
 
-Before running the additional case, declare 600 rows / four numeric metrics /
-24 actual manual groups, two fresh-process samples plus one warmup per B/C variant,
-the same full output/chart flags, a 600-second child timeout and the existing
-8 GiB planning bound. This is lower-confidence supplemental correctness evidence,
-chosen to exceed the 64-entry cache boundary, not a replacement primary workload.
-A separate instrumented run records actual cache admissions and cleanup.
-The benchmark driver adds only this case-catalog entry; original case settings and
-worker/controller functions are unchanged. Original and extended driver hashes
-are retained in the compact receipt. Production bytes remain frozen.
+Focused cache/workbook/workflow/export/security tests, real successive-request
+checks and artifact mutation tests are included. Current full CI runs include
+unit tests, nine isolated appended Qt shards, combined/canonical coverage ≥80%,
+Ruff/compile/type/architecture/C901, release metadata/hygiene, secret scanning and
+pinned-sibling security audit. Exact-final-head local/remote results and fresh
+independent review are recorded on PR #1029 rather than self-referencing this file's
+commit. Required checks come from effective branch rules, not a green workflow
+summary. The same prior candidate head had advisory CSV push PASS 4.477469 s and
+PR FAIL 6.594658 s against the unchanged historical baseline; final raw outcomes
+must be reported separately. CMM native execution is verified from its usage log,
+not from a successful fallback/skip. Manual packaged/startup lanes remain opt-in;
+no packaged executable or release acceptance is claimed.
+
+Evidence is bound to production commit `187ebd694f1e66516fb4a8ccfe272011d68e6216`
+and the three unchanged production blob IDs in the compact JSON. Ordinary later
+commits hold tooling/tests/evidence. Raw samples/profiles/generated outputs remain
+in the durable coordinator checkout under `artifacts/perf-1028`, with hashes in
+[`perf_csv_pipeline_1028.json`](perf_csv_pipeline_1028.json). The serial benchmark driver and strict comparator are preserved in git; the
+supplemental existing-harness driver remains in durable artifacts with its hash.
+Run the primary driver with --case medium, --case large or --case many-groups
+and --samples 2 --blocks 1 for the lower-confidence supplemental comparisons. Revert this
+PR to restore the original computation; no migration or persistent-cache cleanup
+is needed. This is a bounded pipeline audit, not a whole-repository performance audit.

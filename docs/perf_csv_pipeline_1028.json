@@ -1,6 +1,6 @@
 {
   "schema": "metroliza.csv_pipeline_perf.v1",
-  "status": "measured candidate; final proof in progress",
+  "status": "measured candidate; exact-final-head validation and independent review receipts are maintained on Draft PR 1029",
   "issue": 1028,
   "base": "77e398375e5277858110c746a428d13535db6a59",
   "A": "9e01a2b7ceb796e06c845efad599af6f298a98af",
@@ -2127,32 +2127,297 @@
         }
       },
       "raw_samples_file_sha256": "36d28b881e71deb5e7e234fd802b59d35fccf4b5edd1c9e0ce569118026cf68d"
+    },
+    "bc-high-groups": {
+      "summary": {
+        "B": {
+          "workflow_s": {
+            "samples": [
+              74.01227341900085,
+              76.79809066600137
+            ],
+            "median": 75.40518204250111,
+            "mad": 1.3929086235002615,
+            "iqr": 1.3929086235002615,
+            "min": 74.01227341900085,
+            "max": 76.79809066600137
+          },
+          "peak_rss_kib": {
+            "samples": [
+              224644,
+              224532
+            ],
+            "median": 224588.0,
+            "mad": 56.0,
+            "iqr": 56.0,
+            "min": 224532,
+            "max": 224644
+          },
+          "process_s": {
+            "samples": [
+              76.45119390699983,
+              79.21823003800091
+            ],
+            "median": 77.83471197250037,
+            "mad": 1.3835180655005388,
+            "iqr": 1.3835180655005388,
+            "min": 76.45119390699983,
+            "max": 79.21823003800091
+          }
+        },
+        "C": {
+          "workflow_s": {
+            "samples": [
+              58.04572674300289,
+              58.73402184600127
+            ],
+            "median": 58.38987429450208,
+            "mad": 0.34414755149919074,
+            "iqr": 0.34414755149919074,
+            "min": 58.04572674300289,
+            "max": 58.73402184600127
+          },
+          "peak_rss_kib": {
+            "samples": [
+              225812,
+              228636
+            ],
+            "median": 227224.0,
+            "mad": 1412.0,
+            "iqr": 1412.0,
+            "min": 225812,
+            "max": 228636
+          },
+          "process_s": {
+            "samples": [
+              60.515408475002914,
+              61.269195302003936
+            ],
+            "median": 60.892301888503425,
+            "mad": 0.3768934135005111,
+            "iqr": 0.3768934135005111,
+            "min": 60.515408475002914,
+            "max": 61.269195302003936
+          }
+        }
+      },
+      "sample_columns": [
+        "variant",
+        "block",
+        "warmup",
+        "workflow_s",
+        "process_s",
+        "peak_rss_kib",
+        "workbook_bytes"
+      ],
+      "samples": [
+        [
+          "C",
+          0,
+          true,
+          61.476349173994095,
+          64.018373540006,
+          236848,
+          2061316
+        ],
+        [
+          "B",
+          0,
+          true,
+          76.76590570600092,
+          79.30070233900187,
+          224284,
+          2061317
+        ],
+        [
+          "B",
+          0,
+          false,
+          74.01227341900085,
+          76.45119390699983,
+          224644,
+          2061317
+        ],
+        [
+          "C",
+          0,
+          false,
+          58.04572674300289,
+          60.515408475002914,
+          225812,
+          2061317
+        ],
+        [
+          "C",
+          0,
+          false,
+          58.73402184600127,
+          61.269195302003936,
+          228636,
+          2061316
+        ],
+        [
+          "B",
+          0,
+          false,
+          76.79809066600137,
+          79.21823003800091,
+          224532,
+          2061315
+        ]
+      ],
+      "heads": {
+        "B": [
+          "77e398375e5277858110c746a428d13535db6a59"
+        ],
+        "C": [
+          "5de83af74b6b9ff613e8244ba6fdd8fe791c9400"
+        ]
+      },
+      "sqlite_created_and_cleaned_for_all": true,
+      "representative_outputs": {
+        "B": {
+          "artifacts": {
+            "dashboard.html": {
+              "bytes": 4499348,
+              "sha256": "c5cd2a3f47898c469bb90a1cfc9305bbabe02413f4ebdd6ed79e0abf6dcb9ca2"
+            },
+            "dashboard_assets/plotly-2.27.0.min.js": {
+              "bytes": 3598158,
+              "sha256": "7f4930eba8f8541dbec28dca5bd5f787f8eef1cde0369ac9657b70bed230b3e0"
+            },
+            "workbook.xlsx": {
+              "bytes": 2061317,
+              "sha256": "938cc6c74dafeb55b15619b6dc1e9bd2d6f043a690b74cb28088481a5befc956"
+            }
+          },
+          "rows": 600,
+          "metrics": 4,
+          "html_charts": 12,
+          "sheets": [
+            "Table Data",
+            "Aggregates",
+            "Metrics",
+            "Charts",
+            "Groupstats",
+            "Diagnostics",
+            "Dim 01",
+            "Dim 02",
+            "Dim 03",
+            "Dim 04"
+          ],
+          "fixture_sha256": "059afb25ca3b415e0e3246c5e640a205736781ef280189ec15bb76a2939ffaf0"
+        },
+        "C": {
+          "artifacts": {
+            "dashboard.html": {
+              "bytes": 4499348,
+              "sha256": "c5cd2a3f47898c469bb90a1cfc9305bbabe02413f4ebdd6ed79e0abf6dcb9ca2"
+            },
+            "dashboard_assets/plotly-2.27.0.min.js": {
+              "bytes": 3598158,
+              "sha256": "7f4930eba8f8541dbec28dca5bd5f787f8eef1cde0369ac9657b70bed230b3e0"
+            },
+            "workbook.xlsx": {
+              "bytes": 2061317,
+              "sha256": "8fae80ad6382f2ad45a4358f4822138aed473295deddfd00e005e43343487fd3"
+            }
+          },
+          "rows": 600,
+          "metrics": 4,
+          "html_charts": 12,
+          "sheets": [
+            "Table Data",
+            "Aggregates",
+            "Metrics",
+            "Charts",
+            "Groupstats",
+            "Diagnostics",
+            "Dim 01",
+            "Dim 02",
+            "Dim 03",
+            "Dim 04"
+          ],
+          "fixture_sha256": "059afb25ca3b415e0e3246c5e640a205736781ef280189ec15bb76a2939ffaf0"
+        }
+      },
+      "raw_samples_file_sha256": "140b28280242d8f4aaeb3323a4231d26cd64ee4b033d941457dfdd0675398983"
     }
   },
   "parity": {
+    "parity-AB-large": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "8c2d1be19aa19775ec9a7878c25f960f7d8971b9837d75bf54b12a296e8a0fe2"
+    },
     "parity-AB-medium": {
       "equal": true,
       "differing_sections": [],
-      "receipt_sha256": "26178b90255995a9aa505df906934507988a9a99b1a4bf39e86150196baf2110"
+      "receipt_sha256": "dcd2559afb347e0359ddf1572d6b833351e3f225189d37393266ab03cb59a648"
     },
     "parity-AB-small": {
       "equal": true,
       "differing_sections": [],
-      "receipt_sha256": "f4f5bf55deb281be4818ce04b60c039b8337f3010c8d4dcfbe5dcf83828dae78"
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "parity-B-warm-1": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "parity-B-warm-2": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "parity-BC-adjacent-industrial": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "1244241d35dc53dc8f5d6b825362c67bd81edabc5d5d762b7ef23653516a21a3"
+    },
+    "parity-BC-adjacent-report": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "b4cd4038e70f9624b6193b7c25e8851d7972465e8956a86cacde4c97cf981ffe"
+    },
+    "parity-BC-large": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "8c2d1be19aa19775ec9a7878c25f960f7d8971b9837d75bf54b12a296e8a0fe2"
+    },
+    "parity-BC-many-groups": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "93c6f212f0bec20053f20d675e38ed6983e3adb278bb76c492c829752ad480a1"
     },
     "parity-BC-medium": {
       "equal": true,
       "differing_sections": [],
-      "receipt_sha256": "26178b90255995a9aa505df906934507988a9a99b1a4bf39e86150196baf2110"
+      "receipt_sha256": "dcd2559afb347e0359ddf1572d6b833351e3f225189d37393266ab03cb59a648"
     },
     "parity-BC-small": {
       "equal": true,
       "differing_sections": [],
-      "receipt_sha256": "f4f5bf55deb281be4818ce04b60c039b8337f3010c8d4dcfbe5dcf83828dae78"
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "parity-C-warm-1": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "parity-C-warm-2": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "parity-NoCacheC-cache-ablation": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
     }
   },
   "artifact_retrieval": "Coordinator durable perf-1028 checkout: artifacts/perf-1028; large outputs and profiles deliberately excluded from git.",
-  "host_limitation": "User GameThread process observed at 630-674 percent CPU during measurements; no quiet-machine inference. No concurrent local tests/builds/worker benchmarks.",
+  "host_limitation": "Original completed comparisons were made under observed GameThread contention with initial balanced power profile. After game exit, an optional extension encountered an externally changed low-power profile (AC online, about 1.1 GHz). That extension was stopped incomplete; partial observations are excluded from pooled comparisons. No machine settings were changed by this task.",
   "profile_C_small": {
     "profiled_total_s": 16.62886073600008,
     "total_calls": 8997362,
@@ -2205,5 +2470,778 @@
     "commit": "187ebd694f1e66516fb4a8ccfe272011d68e6216",
     "sha256": "e6b16c8436c417f9198d94b4477e5937891e104b7dcf688010d6cea37c33763e",
     "note": "Original small/medium/large cases and driver functions; a later case-catalog-only extension will cover cache-boundary grouping."
+  },
+  "adjacent": {
+    "method": "Existing harness inclusive scenario timers with writer wrappers; three measured fresh-process samples plus one warmup per variant; diagnostic regression check, not primary speedup evidence. Grouping search is empty, so total group counts cover all values.",
+    "scenarios": {
+      "report": {
+        "variants": {
+          "B": {
+            "wall_time_s": {
+              "samples": [
+                0.19731298799888464,
+                0.2039101699992898,
+                0.1995028960009222
+              ],
+              "median": 0.1995028960009222,
+              "mad": 0.002189908002037555,
+              "min": 0.19731298799888464,
+              "max": 0.2039101699992898
+            },
+            "peak_rss_kib": {
+              "samples": [
+                182384,
+                182480,
+                182612
+              ],
+              "median": 182480,
+              "mad": 96,
+              "min": 182384,
+              "max": 182612
+            },
+            "stage_medians_s": {
+              "data_load": 0.015836929000215605,
+              "groupby_stats": 0.0009161179987131618,
+              "transform_grouping": 0.006002339992846828,
+              "worksheet_write_planning": 0.0,
+              "chart_payload_preparation": 0.0,
+              "chart_rendering": 0.008355421021406073,
+              "worksheet_writes": 0.024508747002983,
+              "workbook_close": 0.08989949399983743
+            },
+            "input_metrics": {
+              "rows": 240,
+              "headers": 6,
+              "chart_count": 12,
+              "chart_backend_native_count": 0,
+              "chart_backend_matplotlib_count": 0,
+              "chart_type_median_distribution_s": 0.0,
+              "chart_type_median_iqr_s": 0.0,
+              "chart_type_median_histogram_s": 0.0,
+              "chart_type_median_trend_s": 0.0,
+              "high_header_cardinality_detected": 0,
+              "high_header_cardinality_max_headers": 6
+            }
+          },
+          "C": {
+            "wall_time_s": {
+              "samples": [
+                0.20266516900301212,
+                0.19948891900276067,
+                0.2035886399971787
+              ],
+              "median": 0.20266516900301212,
+              "mad": 0.0009234709941665642,
+              "min": 0.19948891900276067,
+              "max": 0.2035886399971787
+            },
+            "peak_rss_kib": {
+              "samples": [
+                182660,
+                182512,
+                182760
+              ],
+              "median": 182660,
+              "mad": 100,
+              "min": 182512,
+              "max": 182760
+            },
+            "stage_medians_s": {
+              "data_load": 0.015460055001312867,
+              "groupby_stats": 0.0008353060038643889,
+              "transform_grouping": 0.0063908190131769516,
+              "worksheet_write_planning": 0.0,
+              "chart_payload_preparation": 0.0,
+              "chart_rendering": 0.00804789199901279,
+              "worksheet_writes": 0.02415493899025023,
+              "workbook_close": 0.09124442799657118
+            },
+            "input_metrics": {
+              "rows": 240,
+              "headers": 6,
+              "chart_count": 12,
+              "chart_backend_native_count": 0,
+              "chart_backend_matplotlib_count": 0,
+              "chart_type_median_distribution_s": 0.0,
+              "chart_type_median_iqr_s": 0.0,
+              "chart_type_median_histogram_s": 0.0,
+              "chart_type_median_trend_s": 0.0,
+              "high_header_cardinality_detected": 0,
+              "high_header_cardinality_max_headers": 6
+            }
+          }
+        },
+        "delta_s": 0.0031622730020899326,
+        "delta_percent": 1.585076239733039,
+        "requires_regression_investigation": false
+      },
+      "industrial": {
+        "variants": {
+          "B": {
+            "wall_time_s": {
+              "samples": [
+                16.311542531002488,
+                13.081902140998864,
+                9.200391379999928
+              ],
+              "median": 13.081902140998864,
+              "mad": 3.229640390003624,
+              "min": 9.200391379999928,
+              "max": 16.311542531002488
+            },
+            "peak_rss_kib": {
+              "samples": [
+                226484,
+                226940,
+                226668
+              ],
+              "median": 226668,
+              "mad": 184,
+              "min": 226484,
+              "max": 226940
+            },
+            "stage_medians_s": {
+              "aggregation": 0.017244392998691183,
+              "dashboard_manifest": 7.982844874000875,
+              "dashboard_html_write": 0.1761069749991293,
+              "dashboard_write": 0.1761069749991293,
+              "workbook_export": 4.905705899000168,
+              "workbook_sheet_writes": 0.09798495599534363,
+              "workbook_close": 0.0,
+              "workbook_export_overhead": 4.807720943004824,
+              "dashboard_writer_static_population_layer": 0.000787488002970349,
+              "dashboard_writer_plotly_budget_resolution": 0.10769260999950347,
+              "dashboard_writer_plotly_json_measurement": 0.021036588004790246,
+              "dashboard_writer_html_rendering": 0.029574689004221,
+              "dashboard_writer_html_write": 0.0009113199994317256
+            },
+            "input_metrics": {
+              "rows": 300,
+              "headers": 4,
+              "chart_count": 20,
+              "dashboard_html_bytes": 1631051,
+              "dashboard_interactive_chart_count": 20,
+              "dashboard_plotly_spec_count": 20,
+              "dashboard_embedded_plotly_spec_count": 20,
+              "dashboard_plotly_serialized_json_bytes": 371620,
+              "dashboard_embedded_plotly_serialized_json_bytes": 371620,
+              "dashboard_plotly_budget_over": 0,
+              "workbook_sheets": 9,
+              "workbook_parameter_sheets": 4,
+              "workbook_sheet_write_count": 7,
+              "workbook_bytes": 671192
+            }
+          },
+          "C": {
+            "wall_time_s": {
+              "samples": [
+                13.700760792991787,
+                13.685658125999907,
+                7.761417608009651
+              ],
+              "median": 13.685658125999907,
+              "mad": 0.015102666991879232,
+              "min": 7.761417608009651,
+              "max": 13.700760792991787
+            },
+            "peak_rss_kib": {
+              "samples": [
+                227136,
+                226804,
+                226972
+              ],
+              "median": 226972,
+              "mad": 164,
+              "min": 226804,
+              "max": 227136
+            },
+            "stage_medians_s": {
+              "aggregation": 0.01656389399431646,
+              "dashboard_manifest": 8.438290677004261,
+              "dashboard_html_write": 0.23874244399485178,
+              "dashboard_write": 0.23874244399485178,
+              "workbook_export": 4.874456416000612,
+              "workbook_sheet_writes": 0.15004728100029752,
+              "workbook_close": 0.0,
+              "workbook_export_overhead": 4.7222164339982555,
+              "dashboard_writer_static_population_layer": 0.0013176450011087582,
+              "dashboard_writer_plotly_budget_resolution": 0.13842693500191672,
+              "dashboard_writer_plotly_json_measurement": 0.02984485399792902,
+              "dashboard_writer_html_rendering": 0.04398546100128442,
+              "dashboard_writer_html_write": 0.0011012600007234141
+            },
+            "input_metrics": {
+              "rows": 300,
+              "headers": 4,
+              "chart_count": 20,
+              "dashboard_html_bytes": 1631051,
+              "dashboard_interactive_chart_count": 20,
+              "dashboard_plotly_spec_count": 20,
+              "dashboard_embedded_plotly_spec_count": 20,
+              "dashboard_plotly_serialized_json_bytes": 371620,
+              "dashboard_embedded_plotly_serialized_json_bytes": 371620,
+              "dashboard_plotly_budget_over": 0,
+              "workbook_sheets": 9,
+              "workbook_parameter_sheets": 4,
+              "workbook_sheet_write_count": 7,
+              "workbook_bytes": 671192
+            }
+          }
+        },
+        "delta_s": 0.6037559850010439,
+        "delta_percent": 4.615200285812139,
+        "requires_regression_investigation": false
+      },
+      "groups-12": {
+        "variants": {
+          "B": {
+            "wall_time_s": {
+              "samples": [
+                0.9783047259916202,
+                0.9507967919926159,
+                0.9809737369942013
+              ],
+              "median": 0.9783047259916202,
+              "mad": 0.002669011002581101,
+              "min": 0.9507967919926159,
+              "max": 0.9809737369942013
+            },
+            "peak_rss_kib": {
+              "samples": [
+                110456,
+                110260,
+                110228
+              ],
+              "median": 110260,
+              "mad": 32,
+              "min": 110228,
+              "max": 110456
+            },
+            "stage_medians_s": {
+              "csv_sqlite_load": 0.6964106009982061,
+              "value_preview": 0.01858407099643955,
+              "single_column_group_preview": 0.002491832994564902,
+              "multi_column_group_preview": 0.047877106997475494,
+              "row_ids_for_group_search": 0.009352672997920308,
+              "assign_filtered_scope": 0.005922142001509201,
+              "materialize_required_columns": 0.19405047799955355
+            },
+            "input_metrics": {
+              "rows": 30000,
+              "headers": 5,
+              "configured_group_count": 12,
+              "storage_mode_sqlite": 1,
+              "sqlite_row_count": 30000,
+              "metric_candidates": 2,
+              "value_preview_rows": 12,
+              "value_preview_total": 12,
+              "group_preview_rows": 12,
+              "group_preview_total": 12,
+              "multi_group_preview_rows": 12,
+              "multi_group_preview_total": 12,
+              "row_ids_for_search": 30000,
+              "assign_filtered_scope_rows": 30000,
+              "materialized_rows": 30000,
+              "materialized_columns": 6
+            }
+          },
+          "C": {
+            "wall_time_s": {
+              "samples": [
+                0.9729482359980466,
+                0.9899090489998343,
+                0.994769680997706
+              ],
+              "median": 0.9899090489998343,
+              "mad": 0.004860631997871678,
+              "min": 0.9729482359980466,
+              "max": 0.994769680997706
+            },
+            "peak_rss_kib": {
+              "samples": [
+                110300,
+                110384,
+                110272
+              ],
+              "median": 110300,
+              "mad": 28,
+              "min": 110272,
+              "max": 110384
+            },
+            "stage_medians_s": {
+              "csv_sqlite_load": 0.6972466439983691,
+              "value_preview": 0.01808730299671879,
+              "single_column_group_preview": 0.0024929179999162443,
+              "multi_column_group_preview": 0.04795686099532759,
+              "row_ids_for_group_search": 0.00973371000145562,
+              "assign_filtered_scope": 0.005919689996517263,
+              "materialize_required_columns": 0.20212872899719514
+            },
+            "input_metrics": {
+              "rows": 30000,
+              "headers": 5,
+              "configured_group_count": 12,
+              "storage_mode_sqlite": 1,
+              "sqlite_row_count": 30000,
+              "metric_candidates": 2,
+              "value_preview_rows": 12,
+              "value_preview_total": 12,
+              "group_preview_rows": 12,
+              "group_preview_total": 12,
+              "multi_group_preview_rows": 12,
+              "multi_group_preview_total": 12,
+              "row_ids_for_search": 30000,
+              "assign_filtered_scope_rows": 30000,
+              "materialized_rows": 30000,
+              "materialized_columns": 6
+            }
+          }
+        },
+        "delta_s": 0.011604323008214124,
+        "delta_percent": 1.186166508237181,
+        "requires_regression_investigation": false
+      },
+      "groups-997": {
+        "variants": {
+          "B": {
+            "wall_time_s": {
+              "samples": [
+                0.9688294590087025,
+                0.9449426339924685,
+                0.8908571070132894
+              ],
+              "median": 0.9449426339924685,
+              "mad": 0.02388682501623407,
+              "min": 0.8908571070132894,
+              "max": 0.9688294590087025
+            },
+            "peak_rss_kib": {
+              "samples": [
+                110388,
+                110336,
+                110636
+              ],
+              "median": 110388,
+              "mad": 52,
+              "min": 110336,
+              "max": 110636
+            },
+            "stage_medians_s": {
+              "csv_sqlite_load": 0.6833034219962428,
+              "value_preview": 0.018185412001912482,
+              "single_column_group_preview": 0.0035546310027712025,
+              "multi_column_group_preview": 0.040117598000506405,
+              "row_ids_for_group_search": 0.009005061001516879,
+              "assign_filtered_scope": 0.005980020003335085,
+              "materialize_required_columns": 0.19413459800125565
+            },
+            "input_metrics": {
+              "rows": 30000,
+              "headers": 5,
+              "configured_group_count": 997,
+              "storage_mode_sqlite": 1,
+              "sqlite_row_count": 30000,
+              "metric_candidates": 2,
+              "value_preview_rows": 100,
+              "value_preview_total": 997,
+              "group_preview_rows": 100,
+              "group_preview_total": 997,
+              "multi_group_preview_rows": 100,
+              "multi_group_preview_total": 997,
+              "row_ids_for_search": 30000,
+              "assign_filtered_scope_rows": 30000,
+              "materialized_rows": 30000,
+              "materialized_columns": 6
+            }
+          },
+          "C": {
+            "wall_time_s": {
+              "samples": [
+                0.9596564980092808,
+                0.968965174004552,
+                0.92278262101172
+              ],
+              "median": 0.9596564980092808,
+              "mad": 0.009308675995271187,
+              "min": 0.92278262101172,
+              "max": 0.968965174004552
+            },
+            "peak_rss_kib": {
+              "samples": [
+                110484,
+                110336,
+                110520
+              ],
+              "median": 110484,
+              "mad": 36,
+              "min": 110336,
+              "max": 110520
+            },
+            "stage_medians_s": {
+              "csv_sqlite_load": 0.6825398650034913,
+              "value_preview": 0.018527295003877953,
+              "single_column_group_preview": 0.0033717729966156185,
+              "multi_column_group_preview": 0.03851537700393237,
+              "row_ids_for_group_search": 0.008937044003687333,
+              "assign_filtered_scope": 0.005855413997778669,
+              "materialize_required_columns": 0.19035959500615718
+            },
+            "input_metrics": {
+              "rows": 30000,
+              "headers": 5,
+              "configured_group_count": 997,
+              "storage_mode_sqlite": 1,
+              "sqlite_row_count": 30000,
+              "metric_candidates": 2,
+              "value_preview_rows": 100,
+              "value_preview_total": 997,
+              "group_preview_rows": 100,
+              "group_preview_total": 997,
+              "multi_group_preview_rows": 100,
+              "multi_group_preview_total": 997,
+              "row_ids_for_search": 30000,
+              "assign_filtered_scope_rows": 30000,
+              "materialized_rows": 30000,
+              "materialized_columns": 6
+            }
+          }
+        },
+        "delta_s": 0.014713864016812295,
+        "delta_percent": 1.5571171717213015,
+        "requires_regression_investigation": false
+      }
+    },
+    "raw_sha256": "d6e9488c5bb320b8f83a2e092fc4fa8a6b98744ad0378af4385705846f396f3d",
+    "driver_sha256": "f6f4dcca3f8635fbd71bd112d54886992343fbed73572b79cd8ec7d32ab60bd0"
+  },
+  "warm_requests": {
+    "B": {
+      "workflow_s": [
+        8.834170939000614,
+        7.932339141996636,
+        8.386767001000408
+      ],
+      "cumulative_peak_rss_kib": [
+        225212,
+        237240,
+        239344
+      ],
+      "raw_sha256": "17ac7ac63de316b4ec3867a3c9ada0572e383b127a829c1f01d4d697ed61a5e0",
+      "head": "77e398375e5277858110c746a428d13535db6a59"
+    },
+    "C": {
+      "workflow_s": [
+        6.945657493000908,
+        6.4026424449984916,
+        6.509870836001937
+      ],
+      "cumulative_peak_rss_kib": [
+        214940,
+        228672,
+        228672
+      ],
+      "raw_sha256": "0b4684a883b6d5e20432d2540b8cc1a57ebc3ebc53c61e31e138254862a2e143",
+      "head": "5de83af74b6b9ff613e8244ba6fdd8fe791c9400"
+    }
+  },
+  "cache_boundary": [
+    {
+      "peak_entries": 0,
+      "final_entries": 0,
+      "final_payload_bytes": 0
+    },
+    {
+      "peak_entries": 64,
+      "final_entries": 0,
+      "final_payload_bytes": 0
+    }
+  ],
+  "cache_boundary_profile": {
+    "total_s": 90.36331769399992,
+    "counters": {
+      "_request_histogram_table_rows": {
+        "calls": 112,
+        "inclusive_s": 22.366424805
+      },
+      "_histogram_table_rows_from_plotstats": {
+        "calls": 100,
+        "inclusive_s": 22.357246840000002
+      },
+      "build_histogram_payload": {
+        "calls": 196,
+        "inclusive_s": 44.399157494
+      }
+    },
+    "profile_sha256": "51d1e60091d88af7097735cec3c3a5c4d45f6146b535c3bbe13f9e7fed478499"
+  },
+  "semantic_matrix": {
+    "AB-small": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "BC-small": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "AB-medium": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "dcd2559afb347e0359ddf1572d6b833351e3f225189d37393266ab03cb59a648"
+    },
+    "BC-medium": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "dcd2559afb347e0359ddf1572d6b833351e3f225189d37393266ab03cb59a648"
+    },
+    "AB-large": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "8c2d1be19aa19775ec9a7878c25f960f7d8971b9837d75bf54b12a296e8a0fe2"
+    },
+    "BC-large": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "8c2d1be19aa19775ec9a7878c25f960f7d8971b9837d75bf54b12a296e8a0fe2"
+    },
+    "BC-many-groups": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "93c6f212f0bec20053f20d675e38ed6983e3adb278bb76c492c829752ad480a1"
+    },
+    "NoCacheC-cache-ablation": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "BC-adjacent-report": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "b4cd4038e70f9624b6193b7c25e8851d7972465e8956a86cacde4c97cf981ffe"
+    },
+    "BC-adjacent-industrial": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "1244241d35dc53dc8f5d6b825362c67bd81edabc5d5d762b7ef23653516a21a3"
+    },
+    "B-warm-1": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "B-warm-2": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "C-warm-1": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "C-warm-2": {
+      "equal": true,
+      "differing_sections": [],
+      "receipt_sha256": "183155ea1438cc940cbcec1913059d84fdaa87db3a8dc5fb9b945c4674aca818"
+    },
+    "security-shape-medium": {
+      "literal_formula_preserved": true,
+      "generated_hyperlinks": 0,
+      "table_rows": 30000,
+      "table_columns": 22,
+      "sheets": [
+        "Table Data",
+        "Aggregates",
+        "Metrics",
+        "Charts",
+        "Groupstats",
+        "Diagnostics",
+        "Dim 01",
+        "Dim 02",
+        "Dim 03",
+        "Dim 04"
+      ],
+      "editable_charts": 8,
+      "images": 8
+    },
+    "security-shape-large": {
+      "literal_formula_preserved": true,
+      "generated_hyperlinks": 0,
+      "table_rows": 150001,
+      "table_columns": 14,
+      "sheets": [
+        "Table Data",
+        "Aggregates",
+        "Metrics",
+        "Charts",
+        "Groupstats",
+        "Diagnostics",
+        "Dim 01",
+        "Dim 02",
+        "Dim 03",
+        "Dim 04"
+      ],
+      "editable_charts": 8,
+      "images": 8
+    },
+    "security-shape-many-groups": {
+      "literal_formula_preserved": true,
+      "generated_hyperlinks": 0,
+      "table_rows": 600,
+      "table_columns": 14,
+      "sheets": [
+        "Table Data",
+        "Aggregates",
+        "Metrics",
+        "Charts",
+        "Groupstats",
+        "Diagnostics",
+        "Dim 01",
+        "Dim 02",
+        "Dim 03",
+        "Dim 04"
+      ],
+      "editable_charts": 8,
+      "images": 8
+    }
+  },
+  "review_correction_passes": 1,
+  "incomplete_low_power_extension": {
+    "status": "stopped after power-profile drift discovery; excluded from comparison medians; no B/C extension or industrial repeat completed",
+    "observed_at_utc": "2026-09-05 22:19:57",
+    "profile": "low-power",
+    "cpu0_khz": 1100024,
+    "ac_online": true,
+    "completed_children": [
+      {
+        "case_directory": "block-0-0-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          26.496397451999655
+        ],
+        "raw_sha256": "b6080549d0b55efcceefa085d5f0f01ddd90d92c8a0440fe6cd383894089c55b"
+      },
+      {
+        "case_directory": "block-0-0-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          26.08175382700574
+        ],
+        "raw_sha256": "e5f5363a8ebd6feba47ef2409fb140ebfcb39cf6bd5e50dc719aa0cda9db9a57"
+      },
+      {
+        "case_directory": "block-0-1-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          25.705685917004303
+        ],
+        "raw_sha256": "edebf61139995d23e871c668e01541ff1bfd99ee196d76a6b8f6406c05e0536e"
+      },
+      {
+        "case_directory": "block-0-1-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          25.812576907999755
+        ],
+        "raw_sha256": "9368cfd5b16f226d39ff675c59aaa4d5c9969b69618d1adfe61d3f1b8af45747"
+      },
+      {
+        "case_directory": "block-0-2-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          26.058804319000046
+        ],
+        "raw_sha256": "b2bb25bcbc47d6cedaf0a72d4a53eab8fe7bc3d3d09d2763f3f269fb49cdb687"
+      },
+      {
+        "case_directory": "block-0-2-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          24.980619185997057
+        ],
+        "raw_sha256": "c492af614a16f84543414c7cbfa4a545a043929e4dfb53e01017213789ce667b"
+      },
+      {
+        "case_directory": "block-0-3-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          26.20027028700133
+        ],
+        "raw_sha256": "f986ec8076997ec7109dad19ec2be0c032b3f4099a200d0baaa084fbc16375d7"
+      },
+      {
+        "case_directory": "block-0-3-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          25.722973182004353
+        ],
+        "raw_sha256": "1ba3c43fa0ab349ce90df3d234c719d14a2bb04c459cdbf540b45ef6f14409c0"
+      },
+      {
+        "case_directory": "block-0-4-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          27.389874837004754
+        ],
+        "raw_sha256": "4bc09677bb9e27b73e35f6ad7e6859518e916289285ecf990424c649210eff52"
+      },
+      {
+        "case_directory": "block-0-4-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          28.318486292999296
+        ],
+        "raw_sha256": "3e20fa0804b9edfe166a8771cfe2009f1563bb71991810c6d91473203f452093"
+      },
+      {
+        "case_directory": "block-0-5-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          26.17249709200405
+        ],
+        "raw_sha256": "e92d715b7d13a89559abad2260b02cb6e9845c4b77e27151acae2cebeef137bb"
+      },
+      {
+        "case_directory": "block-0-5-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          27.105490212001314
+        ],
+        "raw_sha256": "bd0aabf21244622613beafb308d0c04670ad930597caefc898d6cfddcda92ada"
+      },
+      {
+        "case_directory": "block-0-6-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          25.747124979003274
+        ],
+        "raw_sha256": "726c480636a78d22342c00585bb33557b670d416993c7aa2d08cbca04157a9a3"
+      },
+      {
+        "case_directory": "block-0-6-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          26.359386630996596
+        ],
+        "raw_sha256": "a4f31855881599d6e706e9ff2d53b603d6717ce0babc97530d8e804b29c0e39a"
+      },
+      {
+        "case_directory": "block-0-7-A",
+        "head": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+        "workflow_s": [
+          26.84235194399662
+        ],
+        "raw_sha256": "93eecad651d216ab72f16155c5405e073058d5dc12608a617cf47559d2192bac"
+      },
+      {
+        "case_directory": "block-0-7-B",
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "workflow_s": [
+          26.37442169499991
+        ],
+        "raw_sha256": "7e6466ad4e0ec60deeda9dfd904f38335cb681b35e6cb9762f018f416f0a92eb"
+      }
+    ]
   }
 }
