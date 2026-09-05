@@ -1,0 +1,120 @@
+{
+  "captured_at_utc": "2026-09-04T20:01:34.810348+00:00",
+  "python": "3.14.7 (main, Aug 14 2026, 15:35:28) [Clang 22.1.3 ]",
+  "qt": "6.6.1",
+  "pyqt": "6.6.1",
+  "platform": "Linux-7.1.9-arch1-2-x86_64-with-glibc2.44",
+  "renderer": "native Qt Fusion / offscreen",
+  "scale_factor": "1.25",
+  "actual_device_pixel_ratio": 1.25,
+  "geometry": [
+    {
+      "theme": "light",
+      "viewport": [
+        1024,
+        700
+      ],
+      "reachable": {
+        "import_button": true,
+        "review_button": true,
+        "cancel_button": true,
+        "search": true,
+        "destination": true
+      }
+    },
+    {
+      "theme": "light",
+      "viewport": [
+        1280,
+        800
+      ],
+      "reachable": {
+        "import_button": true,
+        "review_button": true,
+        "cancel_button": true,
+        "search": true,
+        "destination": true
+      }
+    },
+    {
+      "theme": "light",
+      "viewport": [
+        1600,
+        1000
+      ],
+      "reachable": {
+        "import_button": true,
+        "review_button": true,
+        "cancel_button": true,
+        "search": true,
+        "destination": true
+      }
+    },
+    {
+      "theme": "dark",
+      "viewport": [
+        1024,
+        700
+      ],
+      "reachable": {
+        "import_button": true,
+        "review_button": true,
+        "cancel_button": true,
+        "search": true,
+        "destination": true
+      }
+    },
+    {
+      "theme": "dark",
+      "viewport": [
+        1280,
+        800
+      ],
+      "reachable": {
+        "import_button": true,
+        "review_button": true,
+        "cancel_button": true,
+        "search": true,
+        "destination": true
+      }
+    },
+    {
+      "theme": "dark",
+      "viewport": [
+        1600,
+        1000
+      ],
+      "reachable": {
+        "import_button": true,
+        "review_button": true,
+        "cancel_button": true,
+        "search": true,
+        "destination": true
+      }
+    }
+  ],
+  "review_10000_ms": 415.45,
+  "filter_10000_ms": {
+    "samples": [
+      18.53,
+      22.5,
+      354.44,
+      25.49,
+      363.2,
+      95.23,
+      27.91,
+      24.98,
+      368.45,
+      57.87
+    ],
+    "median": 42.89,
+    "max": 368.45
+  },
+  "sort_10000_ms": 557.93,
+  "five_scroll_jumps_ms": 18.05,
+  "blocked_connection_probes": [
+    "socket",
+    "sqlite"
+  ],
+  "production_modules_loaded": []
+}
