@@ -1,0 +1,783 @@
+{
+  "schema": "metroliza.csv_pipeline_perf.v1",
+  "status": "candidate experiments pending",
+  "issue": 1028,
+  "base": "77e398375e5277858110c746a428d13535db6a59",
+  "A": "9e01a2b7ceb796e06c845efad599af6f298a98af",
+  "environment": {
+    "python": "3.11.16",
+    "versions": {
+      "numpy": "2.4.6",
+      "pandas": "3.0.5",
+      "scipy": "1.17.1",
+      "matplotlib": "3.11.1",
+      "XlsxWriter": "3.2.9",
+      "openpyxl": "3.1.5",
+      "hexafe-groupstats": "0.1.0rc3",
+      "hexafe-plotstats": "0.1.0a1",
+      "PyQt6": "6.6.1",
+      "PyQt6-Qt6": "6.6.1"
+    },
+    "cpu": "Intel Xeon W-10855M",
+    "ram_kib": 65585092,
+    "os": "Omarchy 4.0.2 Linux x86_64",
+    "power_profile": "balanced",
+    "threads": 1,
+    "matplotlib_backend": "Agg",
+    "groupstats_backend_observed": "python",
+    "native_modules": {
+      "_metroliza_chart_native": {
+        "loaded": false,
+        "file": null
+      },
+      "_metroliza_group_stats_native": {
+        "loaded": false,
+        "file": null
+      },
+      "_metroliza_comparison_stats_native": {
+        "loaded": false,
+        "file": null
+      },
+      "_metroliza_distribution_fit_native": {
+        "loaded": false,
+        "file": null
+      },
+      "_metroliza_cmm_native": {
+        "loaded": false,
+        "file": null
+      }
+    },
+    "sibling_shas": {
+      "hexafe-groupstats": "14cc60e7412fa2647a8906f3f8833d0d789fc552",
+      "hexafe-plotstats": "1e2c72107d342f44a37e5fb78d7d76992ea60315",
+      "oznak": "ed51580dfdec9f91f6320c7937af6d65dd5a1290"
+    }
+  },
+  "driver_sha256": "e6b16c8436c417f9198d94b4477e5937891e104b7dcf688010d6cea37c33763e",
+  "ab_small_contended": {
+    "limitation": "User game observed at 630-670 percent CPU; exploratory only. No concurrent tests/builds/worker benchmarks.",
+    "summary": {
+      "A": {
+        "workflow_s": {
+          "samples": [
+            11.969364516000496,
+            14.62476882700139,
+            14.087362265003321,
+            15.12861681800132,
+            15.089311046001967,
+            15.70795924399863,
+            15.136500795000757,
+            15.737838609995379,
+            14.941624484003114,
+            13.96187071500026,
+            14.039379838999594,
+            13.938446604995988,
+            13.929930162004894,
+            15.785268595005618
+          ],
+          "median": 14.783196655502252,
+          "mad": 0.7825713785023254,
+          "iqr": 1.1532818047508044,
+          "min": 11.969364516000496,
+          "max": 15.785268595005618
+        },
+        "peak_rss_kib": {
+          "samples": [
+            214892,
+            214944,
+            214796,
+            214796,
+            214532,
+            214724,
+            214688,
+            214768,
+            214996,
+            214604,
+            214868,
+            215264,
+            214872,
+            214872
+          ],
+          "median": 214832.0,
+          "mad": 86.0,
+          "iqr": 152.0,
+          "min": 214532,
+          "max": 215264
+        },
+        "process_s": {
+          "samples": [
+            13.807252765000158,
+            16.823066569995717,
+            16.261066423998273,
+            17.443238147003285,
+            17.501412982004695,
+            18.05996284900175,
+            17.420335408001847,
+            18.145443900000828,
+            17.22876717699546,
+            15.953184341000451,
+            16.061349645999144,
+            16.009757367995917,
+            16.003055455999856,
+            18.096719846995256
+          ],
+          "median": 17.02591687349559,
+          "mad": 0.9903633664980589,
+          "iqr": 1.4642138357576187,
+          "min": 13.807252765000158,
+          "max": 18.145443900000828
+        }
+      },
+      "B": {
+        "workflow_s": {
+          "samples": [
+            13.754284671995265,
+            14.76242960899981,
+            14.071681904002617,
+            14.429329954000423,
+            16.028008729997964,
+            15.125555877995794,
+            15.195686715000193,
+            15.681147694005631,
+            14.428253972997481,
+            14.316166620999866,
+            14.120874168998853,
+            14.002786418001051,
+            15.178754366002977,
+            15.955370449999464
+          ],
+          "median": 14.595879781500116,
+          "mad": 0.5562753404992691,
+          "iqr": 1.0217563457517826,
+          "min": 13.754284671995265,
+          "max": 16.028008729997964
+        },
+        "peak_rss_kib": {
+          "samples": [
+            214572,
+            215020,
+            214948,
+            214656,
+            214448,
+            214604,
+            215212,
+            214432,
+            214848,
+            214608,
+            215168,
+            214932,
+            214868,
+            214820
+          ],
+          "median": 214834.0,
+          "mad": 206.0,
+          "iqr": 339.0,
+          "min": 214432,
+          "max": 215212
+        },
+        "process_s": {
+          "samples": [
+            15.804815659997985,
+            17.328808373000356,
+            16.165198048998718,
+            16.65690275900124,
+            18.471734223996464,
+            17.558564984006807,
+            17.40003212999727,
+            18.009335168004327,
+            16.55705191299785,
+            16.354622273000132,
+            16.111526234002667,
+            16.053742451003927,
+            17.320758904003014,
+            18.296350374999747
+          ],
+          "median": 16.988830831502128,
+          "mad": 0.7289206705027027,
+          "iqr": 1.3063776655053516,
+          "min": 15.804815659997985,
+          "max": 18.471734223996464
+        }
+      }
+    },
+    "runs": [
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": true,
+        "workflow_s": 11.753983463000623,
+        "process_s": 16.041157464002026,
+        "peak_rss_kib": 245740,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": true,
+        "workflow_s": 12.724534401997516,
+        "process_s": 14.704937966002035,
+        "peak_rss_kib": 231808,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 11.969364516000496,
+        "process_s": 13.807252765000158,
+        "peak_rss_kib": 214892,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 13.754284671995265,
+        "process_s": 15.804815659997985,
+        "peak_rss_kib": 214572,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 14.76242960899981,
+        "process_s": 17.328808373000356,
+        "peak_rss_kib": 215020,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 14.62476882700139,
+        "process_s": 16.823066569995717,
+        "peak_rss_kib": 214944,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 14.087362265003321,
+        "process_s": 16.261066423998273,
+        "peak_rss_kib": 214796,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585265,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 14.071681904002617,
+        "process_s": 16.165198048998718,
+        "peak_rss_kib": 214948,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 14.429329954000423,
+        "process_s": 16.65690275900124,
+        "peak_rss_kib": 214656,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 15.12861681800132,
+        "process_s": 17.443238147003285,
+        "peak_rss_kib": 214796,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 15.089311046001967,
+        "process_s": 17.501412982004695,
+        "peak_rss_kib": 214532,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 16.028008729997964,
+        "process_s": 18.471734223996464,
+        "peak_rss_kib": 214448,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 15.125555877995794,
+        "process_s": 17.558564984006807,
+        "peak_rss_kib": 214604,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 15.70795924399863,
+        "process_s": 18.05996284900175,
+        "peak_rss_kib": 214724,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 15.136500795000757,
+        "process_s": 17.420335408001847,
+        "peak_rss_kib": 214688,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 0,
+        "warmup": false,
+        "workflow_s": 15.195686715000193,
+        "process_s": 17.40003212999727,
+        "peak_rss_kib": 215212,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": true,
+        "workflow_s": 15.442253178000101,
+        "process_s": 17.789622450000024,
+        "peak_rss_kib": 214648,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585265,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": true,
+        "workflow_s": 14.664760902000125,
+        "process_s": 16.97996292499738,
+        "peak_rss_kib": 214524,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 15.681147694005631,
+        "process_s": 18.009335168004327,
+        "peak_rss_kib": 214432,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 15.737838609995379,
+        "process_s": 18.145443900000828,
+        "peak_rss_kib": 214768,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 14.941624484003114,
+        "process_s": 17.22876717699546,
+        "peak_rss_kib": 214996,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 14.428253972997481,
+        "process_s": 16.55705191299785,
+        "peak_rss_kib": 214848,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 14.316166620999866,
+        "process_s": 16.354622273000132,
+        "peak_rss_kib": 214608,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 13.96187071500026,
+        "process_s": 15.953184341000451,
+        "peak_rss_kib": 214604,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 14.039379838999594,
+        "process_s": 16.061349645999144,
+        "peak_rss_kib": 214868,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 14.120874168998853,
+        "process_s": 16.111526234002667,
+        "peak_rss_kib": 215168,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 14.002786418001051,
+        "process_s": 16.053742451003927,
+        "peak_rss_kib": 214932,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 13.938446604995988,
+        "process_s": 16.009757367995917,
+        "peak_rss_kib": 215264,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 13.929930162004894,
+        "process_s": 16.003055455999856,
+        "peak_rss_kib": 214872,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585263,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 15.178754366002977,
+        "process_s": 17.320758904003014,
+        "peak_rss_kib": 214868,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "B",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 15.955370449999464,
+        "process_s": 18.296350374999747,
+        "peak_rss_kib": 214820,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585264,
+        "html_charts": 12,
+        "rows": 300
+      },
+      {
+        "variant": "A",
+        "block": 1,
+        "warmup": false,
+        "workflow_s": 15.785268595005618,
+        "process_s": 18.096719846995256,
+        "peak_rss_kib": 214872,
+        "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+        "html_bytes": 1291068,
+        "xlsx_bytes": 585265,
+        "html_charts": 12,
+        "rows": 300
+      }
+    ]
+  },
+  "profile_B_small": {
+    "profile_total_s": 23.865975587000005,
+    "functions": [
+      {
+        "file": "histogram.py",
+        "line": 12,
+        "function": "build_histogram_payload",
+        "calls": 48,
+        "self_s": 0.003485737,
+        "inclusive_s": 10.223187212000001
+      },
+      {
+        "file": "industrial_analytics_dashboard.py",
+        "line": 2750,
+        "function": "_render_matplotlib_distribution_image",
+        "calls": 12,
+        "self_s": 0.0034078560000000003,
+        "inclusive_s": 6.022703692
+      },
+      {
+        "file": "hexafe_plotstats_adapter.py",
+        "line": 786,
+        "function": "_histogram_table_rows_from_plotstats",
+        "calls": 24,
+        "self_s": 0.001696418,
+        "inclusive_s": 5.404584925
+      },
+      {
+        "file": "metroliza.py",
+        "line": 228,
+        "function": "_grouped_histogram_artifact",
+        "calls": 8,
+        "self_s": 0.0011326,
+        "inclusive_s": 5.084012689000001
+      },
+      {
+        "file": "industrial_analytics_workbook_charts.py",
+        "line": 385,
+        "function": "_write_histogram_stats_tables",
+        "calls": 4,
+        "self_s": 0.000496198,
+        "inclusive_s": 2.617501377
+      },
+      {
+        "file": "industrial_analytics_dashboard.py",
+        "line": 1847,
+        "function": "_build_plotstats_histogram_spec",
+        "calls": 4,
+        "self_s": 0.00030912,
+        "inclusive_s": 2.5877463140000003
+      },
+      {
+        "file": "hexafe_groupstats_adapter.py",
+        "line": 605,
+        "function": "analyze_group_metric",
+        "calls": 4,
+        "self_s": 0.00028410100000000004,
+        "inclusive_s": 2.348589533
+      },
+      {
+        "file": "generic.py",
+        "line": 2137,
+        "function": "to_excel",
+        "calls": 8,
+        "self_s": 0.00018238500000000002,
+        "inclusive_s": 0.517271832
+      },
+      {
+        "file": "tabular_analytics_service.py",
+        "line": 1692,
+        "function": "_load_tabular_files_into_sqlite",
+        "calls": 1,
+        "self_s": 0.009551978000000001,
+        "inclusive_s": 0.086197776
+      },
+      {
+        "file": "industrial_analytics_workbook_charts.py",
+        "line": 540,
+        "function": "_plot_groups",
+        "calls": 12,
+        "self_s": 0.0013544590000000001,
+        "inclusive_s": 0.072348154
+      },
+      {
+        "file": "industrial_analytics_dashboard.py",
+        "line": 3038,
+        "function": "_plot_groups",
+        "calls": 12,
+        "self_s": 4.8161e-05,
+        "inclusive_s": 0.039098866
+      },
+      {
+        "file": "hexafe_plotstats_adapter.py",
+        "line": 929,
+        "function": "_finite_values",
+        "calls": 140,
+        "self_s": 0.00042366800000000004,
+        "inclusive_s": 0.030641210000000002
+      },
+      {
+        "file": "industrial_analytics_helpers.py",
+        "line": 36,
+        "function": "to_excel",
+        "calls": 1,
+        "self_s": 6.8216e-05,
+        "inclusive_s": 0.000561656
+      }
+    ]
+  },
+  "baseline_probes": {
+    "medium": {
+      "confidence": "single exploratory run under user-game load",
+      "fixture_sha256": "c29dd727202fc2d1dbf0e4910acc4e7e954a8d06e96c6560b902699b6c7a027c",
+      "rows": 30000,
+      "numeric_columns": 12,
+      "groups": 12,
+      "workflow_s": 113.34156483200059,
+      "peak_rss_kib": 465484,
+      "html_bytes": 6050753,
+      "xlsx_bytes": 9780155,
+      "sheet_names": [
+        "Table Data",
+        "Aggregates",
+        "Metrics",
+        "Charts",
+        "Groupstats",
+        "Diagnostics",
+        "Dim 01",
+        "Dim 02",
+        "Dim 03",
+        "Dim 04"
+      ],
+      "html_charts": 12,
+      "sqlite_cleanup_verified": true
+    },
+    "large": {
+      "confidence": "single exploratory run under user-game load",
+      "fixture_sha256": "a50d547844e82c8787c3bf82b388d7ecea1e3ff05e07eb0c267ae4f23c236820",
+      "rows": 150001,
+      "numeric_columns": 4,
+      "groups": 12,
+      "workflow_s": 291.107644730997,
+      "peak_rss_kib": 1224484,
+      "html_bytes": 7977393,
+      "xlsx_bytes": 36521020,
+      "sheet_names": [
+        "Table Data",
+        "Aggregates",
+        "Metrics",
+        "Charts",
+        "Groupstats",
+        "Diagnostics",
+        "Dim 01",
+        "Dim 02",
+        "Dim 03",
+        "Dim 04"
+      ],
+      "html_charts": 12,
+      "sqlite_cleanup_verified": true
+    }
+  }
+}

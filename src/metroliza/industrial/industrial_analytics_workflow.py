@@ -17,6 +17,7 @@ from metroliza.industrial.dashboard_manifest import (
     ProductionDashboardWriteResult,
 )
 from metroliza.charts.chart_render_service import deterministic_grouped_downsample_frame
+from metroliza.charts.hexafe_plotstats_adapter import histogram_stats_request
 from metroliza.charts.dashboard_visual_options import dashboard_visual_settings_to_plotly_settings
 from metroliza.industrial.industrial_analytics_dashboard import (
     DASHBOARD_RAW_POINT_LIMIT,
@@ -100,6 +101,7 @@ class IndustrialAnalyticsRunResult:
     diagnostics: tuple[ProductionAnalyticsDiagnostic, ...] = field(default_factory=tuple)
 
 
+@histogram_stats_request()
 def run_production_cache_analytics(
     *,
     db_file: str,
@@ -272,6 +274,7 @@ def run_production_cache_analytics(
     )
 
 
+@histogram_stats_request()
 def run_tabular_file_analytics(
     *,
     input_file: str,

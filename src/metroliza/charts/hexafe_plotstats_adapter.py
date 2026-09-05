@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from io import BytesIO
 import math
@@ -29,6 +31,8 @@ from metroliza.charts.value_formatting import format_metrology_legend_value as _
 PLOTSTATS_EXPORT_CHARTS_ENV_VAR = "METROLIZA_PLOTSTATS_EXPORT_CHARTS"
 _PLOTSTATS_DISABLED_VALUES = {"0", "false", "no", "off", "disabled", "metroliza", "legacy"}
 _PLOTSTATS_ENABLED_VALUES = TRUE_VALUES | frozenset({"all", "*"})
+_HISTOGRAM_TABLE_CACHE_MAX_ENTRIES = 64
+_HISTOGRAM_TABLE_CACHE_MAX_BYTES = 8 * 1024 * 1024
 _PLOTLY_GROUP_COLORWAY = (
     SUMMARY_PLOT_PALETTE["distribution_foreground"],
     "#D55E00",
@@ -53,6 +57,59 @@ class HistogramStatsTable:
             "backend": self.backend,
             "rows": [{"label": label, "value": value} for label, value in self.rows],
         }
+
+
+@dataclass
+class _HistogramTableCache:
+    rows: dict[tuple[bytes, str | None, str | None], tuple[tuple[str, str], ...]]
+    payload_bytes: int = 0
+
+
+_histogram_table_cache: ContextVar[_HistogramTableCache | None] = ContextVar(
+    "histogram_table_cache", default=None
+)
+
+
+@contextmanager
+def histogram_stats_request():
+    """Reuse immutable table rows only within one analytics request.
+
+    Each nested request owns a separate bounded cache. Reset and clear on every
+    exit, including cancellation; source validation remains outside this helper.
+    """
+    cache = _HistogramTableCache(rows={})
+    token = _histogram_table_cache.set(cache)
+    try:
+        yield
+    finally:
+        _histogram_table_cache.reset(token)
+        cache.rows.clear()
+        cache.payload_bytes = 0
+
+
+def _request_histogram_table_rows(
+    values: np.ndarray, *, lsl: float | None, usl: float | None,
+) -> tuple[tuple[str, str], ...]:
+    cache = _histogram_table_cache.get()
+    if cache is None or values.nbytes > _HISTOGRAM_TABLE_CACHE_MAX_BYTES:
+        return _histogram_table_rows_from_plotstats(values, lsl=lsl, usl=usl)
+    # _finite_values supplies one-dimensional float64 data. The complete byte
+    # snapshot preserves values and order independently of mutable caller state.
+    # The underlying helper has a fixed full-fit configuration; only limits vary.
+    key = (
+        values.tobytes(),
+        None if lsl is None else float(lsl).hex(),
+        None if usl is None else float(usl).hex(),
+    )
+    if key in cache.rows:
+        return cache.rows[key]
+    rows = _histogram_table_rows_from_plotstats(values, lsl=lsl, usl=usl)
+    payload_bytes = len(key[0]) + sum(len(text.encode("utf-8")) for row in rows for text in row)
+    if (rows and len(cache.rows) < _HISTOGRAM_TABLE_CACHE_MAX_ENTRIES
+            and cache.payload_bytes + payload_bytes <= _HISTOGRAM_TABLE_CACHE_MAX_BYTES):
+        cache.rows[key] = rows
+        cache.payload_bytes += payload_bytes
+    return rows
 
 
 @dataclass(frozen=True)
@@ -622,7 +679,7 @@ def build_histogram_stats_table(
     array = _finite_values(values)
     if array.size == 0:
         return None
-    package_rows = _histogram_table_rows_from_plotstats(array, lsl=lsl, usl=usl)
+    package_rows = _request_histogram_table_rows(array, lsl=lsl, usl=usl)
     if package_rows:
         rows = _normalize_histogram_capability_rows(package_rows, lsl=lsl, usl=usl)
         resolved_backend = "hexafe-plotstats"

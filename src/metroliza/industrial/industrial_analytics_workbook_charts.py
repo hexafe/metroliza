@@ -255,21 +255,18 @@ def _insert_histogram_chart(
 
     groups = _plot_groups(dataframe, metric.field_name, group_fields=group_fields)
     grouped_histogram = len(groups) > 1
-    if plotstats_export_charts_enabled():
+    # The pinned plotstats artifact contract cannot render grouped histogram
+    # PNGs. Requesting one fits every group and returns no image, after which we
+    # build this same editable Excel chart and its statistics tables anyway.
+    if not grouped_histogram and plotstats_export_charts_enabled():
         payload: dict[str, object] = {
             "type": "histogram",
             "title": f"{metric.display_label} distribution",
             "bin_count": bin_count,
             "limits": _metric_limits(metric),
         }
-        if grouped_histogram:
-            payload["groups"] = [
-                {"group": label, "values": group_values.tolist()}
-                for label, group_values in groups
-            ]
-        else:
-            payload["values"] = values.tolist()
-            payload["style"] = {"axis_label_x": metric.display_label, "axis_label_y": "Count"}
+        payload["values"] = values.tolist()
+        payload["style"] = {"axis_label_x": metric.display_label, "axis_label_y": "Count"}
         rendered = render_chart_artifact_png(payload, target="workbook_image", backend="auto")
         if rendered is not None:
             worksheet.write(row, 8, f"Histogram rendered by {rendered.backend}")
