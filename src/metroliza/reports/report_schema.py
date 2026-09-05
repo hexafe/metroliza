@@ -733,6 +733,47 @@ def _migrate_legacy_report_tables(cursor) -> None:
         )
 
 
+def is_report_schema_ready(connection) -> bool:
+    """Read current report schema/migration evidence without creating or repairing it.
+
+    Derive required objects from the schema declarations. In particular, the
+    unchanged main version alone cannot prove source-location ownership, and
+    an index name alone cannot prove the unique active-path constraint.
+    """
+
+    try:
+        objects = {
+            (str(kind), str(name)): sql
+            for kind, name, sql in connection.execute(
+                "SELECT type, name, sql FROM sqlite_master"
+            )
+        }
+        if any(
+            ("table", statement.split()[5]) not in objects
+            for statement in SCHEMA_TABLE_STATEMENTS
+        ) or any(("view", name) not in objects for name in SCHEMA_VIEW_NAMES):
+            return False
+        versions = dict(connection.execute("SELECT key, value FROM app_schema"))
+        if (
+            versions.get("schema_version") != SCHEMA_VERSION
+            or versions.get("source_location_ownership_version") != SOURCE_LOCATION_OWNERSHIP_VERSION
+        ):
+            return False
+        for statement in SCHEMA_INDEX_STATEMENTS:
+            expected = " ".join(statement.lower().replace("if not exists ", "").split())
+            name = expected.split("index ", 1)[1].split()[0]
+            actual = objects.get(("index", name))
+            if not actual or " ".join(actual.lower().split()) != expected:
+                return False
+        indexes = connection.execute("PRAGMA index_list(source_file_locations)").fetchall()
+        return any(
+            row[1] == "idx_source_file_locations_active_path_unique" and row[2] == 1 and row[4] == 1
+            for row in indexes
+        )
+    except sqlite3.DatabaseError:
+        return False
+
+
 def ensure_report_schema(database: str, *, connection=None, retries: int = 4, retry_delay_s: float = 1) -> None:
     """Ensure report ingestion tables, indexes, views, and schema metadata exist."""
 

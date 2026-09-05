@@ -1,8 +1,10 @@
 """Parsing dialog for selecting input sources and running report ingestion."""
 
+from metroliza.parsing import report_parser_factory
+
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
-from metroliza.parsing.preflight import ParsePreflightStatus
+from metroliza.parsing.preflight import ImportPlan, ParsePreflightStatus
 try:
     from metroliza.ui.parser_preflight_worker import ParsePreflightThread
 except ImportError:  # pragma: no cover - lightweight Qt test stubs.
@@ -64,6 +66,184 @@ _METADATA_MODE_REQUEST_FIELDS = {
     _METADATA_MODE_FAST_THEN_ENRICH: ("light", False),
     _METADATA_MODE_COMPLETE: ("complete", False),
 }
+_MISSING_RESULT_FIELD = object()
+_COMPLETION_COUNT_FIELDS = (
+    "total_files",
+    "parsed_files",
+    "failed_files",
+    "skipped_files",
+    "preflight_duplicate_files",
+    "preflight_unsupported_files",
+    "preflight_ambiguous_files",
+    "preflight_unreadable_files",
+    "preflight_changed_files",
+    "selected_files",
+    "imported_files",
+    "already_present_files",
+    "intentionally_excluded_files",
+    "cancelled_files",
+)
+
+
+def _normalized_completion_counts(result):
+    raw_values = {
+        field: getattr(result, field, _MISSING_RESULT_FIELD)
+        for field in _COMPLETION_COUNT_FIELDS
+    }
+    counts = {
+        field: max(0, int(0 if value is _MISSING_RESULT_FIELD else value or 0))
+        for field, value in raw_values.items()
+    }
+    present = {
+        field: value is not _MISSING_RESULT_FIELD
+        for field, value in raw_values.items()
+    }
+    return counts, present
+
+
+def _report_count_text(count):
+    label = "report file" if count == 1 else "report files"
+    return f"{count} {label}"
+
+
+def _completion_title(counts, present):
+    typed_outcomes = present["imported_files"] or present["already_present_files"]
+    completed = (
+        counts["imported_files"] + counts["already_present_files"]
+        if typed_outcomes
+        else counts["parsed_files"]
+    )
+    attention = any(
+        counts[field]
+        for field in (
+            "failed_files",
+            "skipped_files",
+            "preflight_unsupported_files",
+            "preflight_ambiguous_files",
+            "preflight_unreadable_files",
+            "preflight_changed_files",
+            "cancelled_files",
+        )
+    )
+    if attention:
+        if counts["cancelled_files"] and not completed:
+            return "warning", "Import cancelled"
+        if completed:
+            return "warning", "Parsing completed with warnings"
+        if counts["failed_files"] or counts["preflight_changed_files"]:
+            return "warning", "No reports imported"
+        return "warning", "No compatible reports parsed"
+    if present["selected_files"] and counts["selected_files"] == 0:
+        return "info", "No reports selected"
+    if typed_outcomes:
+        if counts["imported_files"]:
+            return "info", "Import successful"
+        return "info", "No new reports saved"
+    if counts["parsed_files"]:
+        return "info", "Parsing successful"
+    if counts["preflight_duplicate_files"]:
+        return "info", "No new reports saved"
+    return "info", "No reports selected"
+
+
+def _primary_outcome_lines(counts, typed_outcomes):
+    lines = []
+    if typed_outcomes:
+        categories = (
+            ("imported_files", "Saved"),
+            ("already_present_files", "Already present at import time"),
+        )
+        for field, label in categories:
+            if counts[field]:
+                lines.append(f"- {label}: {_report_count_text(counts[field])}.")
+    elif counts["parsed_files"]:
+        lines.append(
+            "- Completed and available in the destination: "
+            f"{_report_count_text(counts['parsed_files'])}."
+        )
+    return lines
+
+
+def _additional_outcome_lines(counts):
+    lines = []
+    categories = (
+        ("failed_files", "Failed", " could not be parsed"),
+        ("cancelled_files", "Cancelled", ""),
+        ("intentionally_excluded_files", "Intentionally not selected", ""),
+    )
+    for field, label, suffix in categories:
+        if counts[field]:
+            lines.append(f"- {label}: {_report_count_text(counts[field])}{suffix}.")
+    if counts["skipped_files"]:
+        lines.append(
+            "- Runtime-skipped. Unsupported based on file contents and skipped: "
+            f"{_report_count_text(counts['skipped_files'])}."
+        )
+        lines.append("- Parser recognition uses file contents, not filenames.")
+    return lines
+
+
+def _review_snapshot_group(counts):
+    lines = ["Review snapshot:"]
+    categories = (
+        ("preflight_duplicate_files", "Matched the destination during review"),
+        ("preflight_unsupported_files", "Unsupported during review"),
+        ("preflight_ambiguous_files", "Ambiguous during review"),
+        ("preflight_unreadable_files", "Unreadable during review"),
+    )
+    for field, label in categories:
+        if counts[field]:
+            lines.append(f"- {label}: {_report_count_text(counts[field])}.")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _changed_since_review_group(count):
+    if not count:
+        return ""
+    return (
+        "Changed since review:\n"
+        "- Content or parser selection changed after scan; source content, occurrence, "
+        "parser identity or parser generation no longer matched the reviewed state: "
+        f"{_report_count_text(count)}."
+    )
+
+
+def _build_completion_groups(counts, present, db_file):
+    typed_outcomes = present["imported_files"] or present["already_present_files"]
+    outcome_lines = ["Import outcome:"]
+    outcome_lines.extend(_primary_outcome_lines(counts, typed_outcomes))
+    outcome_lines.extend(_additional_outcome_lines(counts))
+
+    saved_count = counts["imported_files"] if typed_outcomes else counts["parsed_files"]
+    if not saved_count:
+        outcome_lines.append(f"- Nothing new was saved to {db_file}.")
+    else:
+        outcome_lines.append(f"- Destination: {db_file}.")
+    if present["selected_files"] and counts["selected_files"] == 0:
+        outcome_lines.append(
+            "- Reports were reviewed, but none were selected or approved for import."
+        )
+
+    groups = ["\n".join(outcome_lines)]
+    review_group = _review_snapshot_group(counts)
+    changed_group = _changed_since_review_group(counts["preflight_changed_files"])
+    groups.extend(group for group in (review_group, changed_group) if group)
+    return "\n\n".join(groups)
+
+
+def _build_parse_completion_summary(result, db_file):
+    counts, present = _normalized_completion_counts(result)
+    if counts["total_files"] == 0:
+        return (
+            "info",
+            "No reports parsed",
+            (
+                "No supported report files were found in the selected source. "
+                f"Nothing was written to {db_file}."
+            ),
+        )
+    severity, title = _completion_title(counts, present)
+    return severity, title, _build_completion_groups(counts, present, db_file)
 
 
 class ParsingDialog(QDialog):
@@ -146,8 +326,8 @@ class ParsingDialog(QDialog):
         self.review_scan_button.clicked.connect(self.show_preflight_details)
         self.review_scan_button.setEnabled(False)
 
-        self.parse_button = QPushButton("Import ready reports")
-        self.parse_button.clicked.connect(self.show_loading_screen)
+        self.parse_button = QPushButton("Import / verify reports")
+        self.parse_button.clicked.connect(self._import_reviewed_reports)
         self.parse_button.setEnabled(False)
         self.parse_button.setToolTip(
             "Import only the exact report contents approved by the latest scan."
@@ -241,7 +421,7 @@ class ParsingDialog(QDialog):
         configure_accessibility(self.metadata_mode_combo, name="Metadata mode")
         configure_accessibility(self.scan_button, name="Scan report contents")
         configure_accessibility(self.review_scan_button, name="Review parser scan")
-        configure_accessibility(self.parse_button, name="Import ready reports")
+        configure_accessibility(self.parse_button, name="Import / verify reports")
         apply_metroliza_theme(self)
 
     def _selected_metadata_request_fields(self):
@@ -293,12 +473,14 @@ class ParsingDialog(QDialog):
         inputs_ready = bool(self.directory and self.db_file)
         self.scan_button.setEnabled(inputs_ready)
         preflight_current = self._preflight_is_current()
-        ready_count = (
-            self._preflight_result.count(ParsePreflightStatus.READY)
-            if preflight_current
-            else 0
-        )
+        ready_count = len(self._atomic_import_candidates())
         self.parse_button.setEnabled(preflight_current and ready_count > 0)
+        self.parse_button.setToolTip(
+            f"Import or verify {ready_count} reviewed report files; destination matches "
+            "are checked atomically before any write."
+            if ready_count else
+            "No eligible reviewed reports. Select a source and database, then scan again."
+        )
         self.review_scan_button.setEnabled(bool(self._preflight_result or self._preflight_error_detail))
         configure_dialog_button_roles(
             primary=self.parse_button if preflight_current and ready_count > 0 else self.scan_button,
@@ -311,7 +493,10 @@ class ParsingDialog(QDialog):
             quiet=(self.review_scan_button,),
         )
         if preflight_current:
-            self.readiness_label.setText(self._preflight_summary_text(self._preflight_result))
+            self.readiness_label.setText(
+                self._preflight_summary_text(self._preflight_result)
+                + f" {ready_count} eligible for import / verification."
+            )
             has_review_items = any(
                 self._preflight_result.count(status)
                 for status in (
@@ -336,6 +521,17 @@ class ParsingDialog(QDialog):
             self.readiness_label.setText("Select a source and database to scan report contents.")
             set_status_variant(self.readiness_label, "warning")
 
+    def _atomic_import_candidates(self):
+        if self._preflight_result is None:
+            return ()
+        metadata_mode, _background, _modeless = self._build_parse_request_fields()
+        return self._preflight_result.atomic_import_candidates(
+            source_path=self.directory,
+            database_path=self.db_file,
+            metadata_parsing_mode=metadata_mode,
+            registry_generation_id=report_parser_factory.get_registry_snapshot().generation_id,
+        )
+
     def _preflight_is_current(self):
         if self._preflight_result is None or self._preflight_result.cancelled:
             return False
@@ -351,7 +547,7 @@ class ParsingDialog(QDialog):
         counts = result.status_counts
         return (
             f"Scan complete: {counts[ParsePreflightStatus.READY]} ready, "
-            f"{counts[ParsePreflightStatus.DUPLICATE]} already imported, "
+            f"{counts[ParsePreflightStatus.DUPLICATE]} matched destination during review, "
             f"{counts[ParsePreflightStatus.UNSUPPORTED]} unsupported, "
             f"{counts[ParsePreflightStatus.AMBIGUOUS]} ambiguous, "
             f"{counts[ParsePreflightStatus.UNREADABLE]} unreadable."
@@ -584,6 +780,14 @@ class ParsingDialog(QDialog):
         dialog.exec()
 
     @pyqtSlot()
+    def _import_reviewed_reports(self):
+        """Recheck eligibility at the explicit import/verification click."""
+        if not self._atomic_import_candidates():
+            self._sync_readiness_state()
+            return
+        self.show_loading_screen()
+
+    @pyqtSlot()
     def show_loading_screen(self):
         """Validate parse request and hand processing to the parser thread."""
         try:
@@ -619,9 +823,8 @@ class ParsingDialog(QDialog):
             self.parse_error_message = None
 
             # Start the parsing thread
-            self.parse_thread = ParseReportsThread(request)
-            if self._preflight_is_current():
-                self.parse_thread.preflight_result = self._preflight_result
+            plan = ImportPlan.all_atomic_candidates(request, self._preflight_result)
+            self.parse_thread = ParseReportsThread(plan)
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
             self.parse_thread.error_occurred.connect(self.on_parse_error)
@@ -674,125 +877,7 @@ class ParsingDialog(QDialog):
                 "Parsing successful",
                 f"Measurements data saved to {self.db_file}!",
             )
-
-        total_files = max(0, int(getattr(result, "total_files", 0) or 0))
-        parsed_files = max(0, int(getattr(result, "parsed_files", 0) or 0))
-        failed_files = max(0, int(getattr(result, "failed_files", 0) or 0))
-        skipped_files = max(0, int(getattr(result, "skipped_files", 0) or 0))
-        duplicate_files = max(
-            0,
-            int(getattr(result, "preflight_duplicate_files", 0) or 0),
-        )
-        unsupported_files = max(
-            0,
-            int(getattr(result, "preflight_unsupported_files", 0) or 0),
-        )
-        ambiguous_files = max(
-            0,
-            int(getattr(result, "preflight_ambiguous_files", 0) or 0),
-        )
-        unreadable_files = max(
-            0,
-            int(getattr(result, "preflight_unreadable_files", 0) or 0),
-        )
-        changed_files = max(
-            0,
-            int(getattr(result, "preflight_changed_files", 0) or 0),
-        )
-        reviewed_omissions = (
-            duplicate_files
-            + unsupported_files
-            + ambiguous_files
-            + unreadable_files
-            + changed_files
-        )
-
-        if total_files == 0:
-            return (
-                "info",
-                "No reports parsed",
-                (
-                    "No supported report files were found in the selected source. "
-                    f"Nothing was written to {self.db_file}."
-                ),
-            )
-
-        if (failed_files or changed_files) and parsed_files == 0:
-            skipped_message = ""
-            if skipped_files:
-                skipped_message = (
-                    " Unsupported based on file contents and skipped: "
-                    f"{skipped_files} {self._report_file_label(skipped_files)}."
-                )
-            return (
-                "warning",
-                "No reports parsed",
-                (
-                    f"Metroliza found {total_files} {self._report_file_label(total_files)}, "
-                    f"but none were saved to {self.db_file}. "
-                    f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
-                    "Content or parser selection changed after scan: "
-                    f"{changed_files}. "
-                    f"{skipped_message} "
-                    "Review the log for details, then check the report format and retry."
-                ),
-            )
-
-        if (skipped_files or reviewed_omissions) and parsed_files == 0:
-            return (
-                "warning",
-                "No compatible reports parsed",
-                (
-                    f"Metroliza inspected {total_files} {self._report_file_label(total_files)}, "
-                    f"but none were approved for import. Already imported: {duplicate_files}; "
-                    f"unsupported: {unsupported_files + skipped_files}; ambiguous: {ambiguous_files}; "
-                    f"unreadable: {unreadable_files}; content or parser selection changed "
-                    f"after scan: {changed_files}. "
-                    f"Nothing was written to {self.db_file}. Parser recognition uses file contents, "
-                    "not filenames."
-                ),
-            )
-
-        if failed_files or changed_files:
-            skipped_message = ""
-            if skipped_files:
-                skipped_message = (
-                    " Unsupported based on file contents and skipped: "
-                    f"{skipped_files} {self._report_file_label(skipped_files)}."
-                )
-            return (
-                "warning",
-                "Parsing completed with warnings",
-                (
-                    f"{parsed_files} of {total_files} {self._report_file_label(total_files)} "
-                    f"completed successfully and are available in {self.db_file}. "
-                    f"{failed_files} {self._report_file_label(failed_files)} could not be parsed. "
-                    "Content or parser selection changed after scan and was not imported: "
-                    f"{changed_files}. "
-                    f"{skipped_message} "
-                    "Skipped files are listed in the log."
-                ),
-            )
-
-        if skipped_files or reviewed_omissions:
-            return (
-                "warning",
-                "Import completed with reviewed omissions",
-                (
-                    f"{parsed_files} of {total_files} {self._report_file_label(total_files)} "
-                    f"completed successfully and are available in {self.db_file}. "
-                    f"Already imported: {duplicate_files}; unsupported: "
-                    f"{unsupported_files + skipped_files}; ambiguous: {ambiguous_files}; "
-                    f"unreadable: {unreadable_files}; content or parser selection changed "
-                    f"after scan: {changed_files}."
-                ),
-            )
-
-        return (
-            "info",
-            "Parsing successful",
-            f"Measurements data saved to {self.db_file}!",
-        )
+        return _build_parse_completion_summary(result, self.db_file)
 
 
     @pyqtSlot(str)
@@ -817,7 +902,15 @@ class ParsingDialog(QDialog):
             if not close_requested:
                 if self.parse_error_message:
                     QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
-                elif self.parsing_canceled:
+                elif self.parsing_canceled and (
+                    getattr(self.parse_thread, "last_parse_result", None) is None
+                    or getattr(
+                        self.parse_thread.last_parse_result,
+                        "cancelled_files",
+                        _MISSING_RESULT_FIELD,
+                    )
+                    is _MISSING_RESULT_FIELD
+                ):
                     QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
                 elif not should_request_modeless_enrichment:
                     severity, title, message = self._build_parse_completion_feedback()

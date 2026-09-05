@@ -4,16 +4,21 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 import hashlib
 import json
 import os
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
-from metroliza.reports.db import run_transaction_with_retry
+from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
-from metroliza.reports.report_schema import ensure_report_schema, upsert_report_parse_state
+from metroliza.reports.report_schema import (
+    is_report_schema_ready,
+    ensure_report_schema,
+    upsert_report_parse_state,
+)
 
 
 SEMANTIC_DUPLICATE_WARNING_CODE = "semantic_duplicate_identity_hash_detected"
@@ -68,6 +73,41 @@ MEASUREMENT_EDITABLE_FIELDS = frozenset(
 MEASUREMENT_FLOAT_FIELDS = frozenset({"nominal", "tol_plus", "tol_minus", "bonus", "meas", "dev", "outtol"})
 MEASUREMENT_INT_FIELDS = frozenset({"page_number", "row_order"})
 MEASUREMENT_STATUS_CODES = frozenset({"ok", "nok", "unknown"})
+REPORT_METADATA_FIELD_UPDATE_SQL = {
+    "reference": "UPDATE report_metadata SET reference = ? WHERE report_id = ?",
+    "report_date": "UPDATE report_metadata SET report_date = ? WHERE report_id = ?",
+    "report_time": "UPDATE report_metadata SET report_time = ? WHERE report_id = ?",
+    "part_name": "UPDATE report_metadata SET part_name = ? WHERE report_id = ?",
+    "revision": "UPDATE report_metadata SET revision = ? WHERE report_id = ?",
+    "sample_number": "UPDATE report_metadata SET sample_number = ? WHERE report_id = ?",
+    "operator_name": "UPDATE report_metadata SET operator_name = ? WHERE report_id = ?",
+    "comment": "UPDATE report_metadata SET comment = ? WHERE report_id = ?",
+    "stats_count_raw": "UPDATE report_metadata SET stats_count_raw = ? WHERE report_id = ?",
+    "stats_count_int": "UPDATE report_metadata SET stats_count_int = ? WHERE report_id = ?",
+}
+MEASUREMENT_FIELD_UPDATE_SQL = {
+    "header": "UPDATE report_measurements SET header = ? WHERE id = ?",
+    "section_name": "UPDATE report_measurements SET section_name = ? WHERE id = ?",
+    "feature_label": "UPDATE report_measurements SET feature_label = ? WHERE id = ?",
+    "characteristic_name": "UPDATE report_measurements SET characteristic_name = ? WHERE id = ?",
+    "characteristic_family": "UPDATE report_measurements SET characteristic_family = ? WHERE id = ?",
+    "description": "UPDATE report_measurements SET description = ? WHERE id = ?",
+    "ax": "UPDATE report_measurements SET ax = ? WHERE id = ?",
+    "nominal": "UPDATE report_measurements SET nominal = ? WHERE id = ?",
+    "tol_plus": "UPDATE report_measurements SET tol_plus = ? WHERE id = ?",
+    "tol_minus": "UPDATE report_measurements SET tol_minus = ? WHERE id = ?",
+    "bonus": "UPDATE report_measurements SET bonus = ? WHERE id = ?",
+    "meas": "UPDATE report_measurements SET meas = ? WHERE id = ?",
+    "dev": "UPDATE report_measurements SET dev = ? WHERE id = ?",
+    "outtol": "UPDATE report_measurements SET outtol = ? WHERE id = ?",
+    "page_number": "UPDATE report_measurements SET page_number = ? WHERE id = ?",
+    "row_order": "UPDATE report_measurements SET row_order = ? WHERE id = ?",
+    "status_code": "UPDATE report_measurements SET status_code = ? WHERE id = ?",
+    "is_nok": "UPDATE report_measurements SET is_nok = ? WHERE id = ?",
+    "raw_measurement_json": (
+        "UPDATE report_measurements SET raw_measurement_json = ? WHERE id = ?"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -81,6 +121,36 @@ class SourceFileRecord:
     file_name: str
     file_extension: str
     source_format: str
+
+
+class ReportImportDisposition(Enum):
+    """Closed result of one repository-owned no-clobber import transaction."""
+
+    IMPORTED = "imported"
+    ALREADY_PRESENT = "already_present"
+
+
+@dataclass(frozen=True)
+class ReportImportPolicy:
+    """Mode-specific rules for deciding whether an existing report is accepted."""
+
+    metadata_parsing_mode: str = "complete"
+    refreshable_parser_id: str | None = None
+    refreshable_parser_version: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.metadata_parsing_mode not in {"light", "complete"}:
+            raise ValueError("metadata_parsing_mode must be 'light' or 'complete'")
+
+
+@dataclass(frozen=True)
+class _SourceFileObservation:
+    path: Path
+    digest: str
+    source_format: str
+    file_size_bytes: int | None
+    file_modified_at: str | None
+    discovered_at: str
 
 
 def utc_timestamp() -> str:
@@ -220,6 +290,133 @@ class ReportRepository:
     def ensure_schema(self) -> None:
         ensure_report_schema(self.database, connection=self.connection)
 
+    def _import_schema_is_ready(self) -> bool:
+        if self.connection is not None:
+            return is_report_schema_ready(self.connection)
+        if Path(self.database).is_file():
+            try:
+                with sqlite_readonly_connection_scope(self.database) as connection:
+                    return is_report_schema_ready(connection)
+            except OSError:
+                pass
+        return False
+
+    def _ensure_import_schema(self) -> None:
+        if self._import_schema_is_ready():
+            return
+        self.ensure_schema()
+        if not self._import_schema_is_ready():
+            raise RuntimeError("Report schema is not ready after the existing migration")
+
+    @staticmethod
+    def _source_file_observation(
+        source_path: str | Path,
+        *,
+        digest: str,
+        source_format: str | None = None,
+        discovered_at: str | None = None,
+    ) -> _SourceFileObservation:
+        path = Path(source_path).resolve()
+        stat_result = path.stat() if path.is_file() else None
+        modified_at = (
+            datetime.fromtimestamp(stat_result.st_mtime, timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+            if stat_result is not None
+            else None
+        )
+        return _SourceFileObservation(
+            path=path,
+            digest=digest,
+            source_format=source_format or infer_source_format(path),
+            file_size_bytes=stat_result.st_size if stat_result is not None else None,
+            file_modified_at=modified_at,
+            discovered_at=discovered_at or utc_timestamp(),
+        )
+
+    @staticmethod
+    def _upsert_source_file_observation(
+        cursor,
+        observation: _SourceFileObservation,
+        *,
+        ingested_at: str | None = None,
+    ) -> SourceFileRecord:
+        path = observation.path
+        cursor.execute(
+            """
+            INSERT INTO source_files (
+                sha256, file_size_bytes, source_format, discovered_at, ingested_at, is_active
+            )
+            VALUES (?, ?, ?, ?, ?, 1)
+            ON CONFLICT(sha256) DO UPDATE SET
+                file_size_bytes = excluded.file_size_bytes,
+                source_format = excluded.source_format,
+                discovered_at = excluded.discovered_at,
+                ingested_at = COALESCE(excluded.ingested_at, source_files.ingested_at),
+                is_active = 1
+            """,
+            (
+                observation.digest,
+                observation.file_size_bytes,
+                observation.source_format,
+                observation.discovered_at,
+                ingested_at,
+            ),
+        )
+        cursor.execute("SELECT id FROM source_files WHERE sha256 = ?", (observation.digest,))
+        source_file_id = int(cursor.fetchone()[0])
+        cursor.execute(
+            """
+            UPDATE source_file_locations
+            SET is_active = 0
+            WHERE absolute_path = ?
+              AND source_file_id <> ?
+              AND is_active = 1
+            """,
+            (str(path), source_file_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO source_file_locations (
+                source_file_id,
+                absolute_path,
+                directory_path,
+                file_name,
+                file_extension,
+                file_modified_at,
+                discovered_at,
+                is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(source_file_id, absolute_path) DO UPDATE SET
+                directory_path = excluded.directory_path,
+                file_name = excluded.file_name,
+                file_extension = excluded.file_extension,
+                file_modified_at = excluded.file_modified_at,
+                discovered_at = excluded.discovered_at,
+                is_active = 1
+            """,
+            (
+                source_file_id,
+                str(path),
+                str(path.parent),
+                path.name,
+                path.suffix.lower(),
+                observation.file_modified_at,
+                observation.discovered_at,
+            ),
+        )
+        return SourceFileRecord(
+            id=source_file_id,
+            sha256=observation.digest,
+            absolute_path=str(path),
+            directory_path=str(path.parent),
+            file_name=path.name,
+            file_extension=path.suffix.lower(),
+            source_format=observation.source_format,
+        )
+
     def upsert_source_file(
         self,
         source_path: str | Path,
@@ -232,87 +429,23 @@ class ReportRepository:
         """Insert or refresh source content and its path location."""
 
         path = Path(source_path).resolve()
-        stat_result = path.stat() if path.is_file() else None
         digest = sha256 or (
             compute_sha256(path)
-            if stat_result is not None
+            if path.is_file()
             else hashlib.sha256(str(path).encode("utf-8")).hexdigest()
         )
-        detected_format = source_format or infer_source_format(path)
-        discovered_value = discovered_at or utc_timestamp()
-        modified_at = (
-            datetime.fromtimestamp(stat_result.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-            if stat_result is not None
-            else None
+        observation = self._source_file_observation(
+            path,
+            digest=digest,
+            source_format=source_format,
+            discovered_at=discovered_at,
         )
 
         def _upsert(cursor) -> SourceFileRecord:
-            cursor.execute(
-                """
-                INSERT INTO source_files (
-                    sha256, file_size_bytes, source_format, discovered_at, ingested_at, is_active
-                )
-                VALUES (?, ?, ?, ?, ?, 1)
-                ON CONFLICT(sha256) DO UPDATE SET
-                    file_size_bytes = excluded.file_size_bytes,
-                    source_format = excluded.source_format,
-                    discovered_at = excluded.discovered_at,
-                    ingested_at = COALESCE(excluded.ingested_at, source_files.ingested_at),
-                    is_active = 1
-                """,
-                (digest, stat_result.st_size if stat_result is not None else None, detected_format, discovered_value, ingested_at),
-            )
-            cursor.execute("SELECT id FROM source_files WHERE sha256 = ?", (digest,))
-            source_file_id = int(cursor.fetchone()[0])
-            cursor.execute(
-                """
-                UPDATE source_file_locations
-                SET is_active = 0
-                WHERE absolute_path = ?
-                  AND source_file_id <> ?
-                  AND is_active = 1
-                """,
-                (str(path), source_file_id),
-            )
-            cursor.execute(
-                """
-                INSERT INTO source_file_locations (
-                    source_file_id,
-                    absolute_path,
-                    directory_path,
-                    file_name,
-                    file_extension,
-                    file_modified_at,
-                    discovered_at,
-                    is_active
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-                ON CONFLICT(source_file_id, absolute_path) DO UPDATE SET
-                    directory_path = excluded.directory_path,
-                    file_name = excluded.file_name,
-                    file_extension = excluded.file_extension,
-                    file_modified_at = excluded.file_modified_at,
-                    discovered_at = excluded.discovered_at,
-                    is_active = 1
-                """,
-                (
-                    source_file_id,
-                    str(path),
-                    str(path.parent),
-                    path.name,
-                    path.suffix.lower(),
-                    modified_at,
-                    discovered_value,
-                ),
-            )
-            return SourceFileRecord(
-                id=source_file_id,
-                sha256=digest,
-                absolute_path=str(path),
-                directory_path=str(path.parent),
-                file_name=path.name,
-                file_extension=path.suffix.lower(),
-                source_format=detected_format,
+            return self._upsert_source_file_observation(
+                cursor,
+                observation,
+                ingested_at=ingested_at,
             )
 
         return run_transaction_with_retry(self.database, _upsert, connection=self.connection)
@@ -703,29 +836,30 @@ class ReportRepository:
             self._replace_metadata_candidates(cursor, report_id, candidates)
             self._replace_metadata_warnings(cursor, report_id, warnings)
 
-            parsed_report_updates = ["updated_at = ?"]
-            parsed_report_params: list[Any] = [now]
-            if parse_status is not None:
-                parsed_report_updates.append("parse_status = ?")
-                parsed_report_params.append(parse_status)
-            if metadata_confidence is not None:
-                parsed_report_updates.append("metadata_confidence = ?")
-                parsed_report_params.append(float(metadata_confidence))
-            if identity_hash is not _UNSET:
-                parsed_report_updates.append("identity_hash = ?")
-                parsed_report_params.append(identity_hash)
-            if raw_report_json is not _UNSET:
-                parsed_report_updates.append("raw_report_json = ?")
-                parsed_report_params.append(_to_json(raw_report_json))
-            parsed_report_params.append(int(report_id))
             cursor.execute(
-                f"""
-                UPDATE parsed_reports
-                SET {", ".join(parsed_report_updates)}
-                WHERE id = ?
-                """,
-                tuple(parsed_report_params),
+                "UPDATE parsed_reports SET updated_at = ? WHERE id = ?",
+                (now, int(report_id)),
             )
+            if parse_status is not None:
+                cursor.execute(
+                    "UPDATE parsed_reports SET parse_status = ? WHERE id = ?",
+                    (parse_status, int(report_id)),
+                )
+            if metadata_confidence is not None:
+                cursor.execute(
+                    "UPDATE parsed_reports SET metadata_confidence = ? WHERE id = ?",
+                    (float(metadata_confidence), int(report_id)),
+                )
+            if identity_hash is not _UNSET:
+                cursor.execute(
+                    "UPDATE parsed_reports SET identity_hash = ? WHERE id = ?",
+                    (identity_hash, int(report_id)),
+                )
+            if raw_report_json is not _UNSET:
+                cursor.execute(
+                    "UPDATE parsed_reports SET raw_report_json = ? WHERE id = ?",
+                    (_to_json(raw_report_json), int(report_id)),
+                )
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
@@ -954,18 +1088,14 @@ class ReportRepository:
             metadata_json["field_sources"] = field_sources
             metadata_json["manual_overrides"] = manual_overrides
 
-            assignments = [f"{field_name} = ?" for field_name in normalized_fields]
-            assignments.append("metadata_json = ?")
-            params = [normalized_fields[field_name] for field_name in normalized_fields]
-            params.append(_to_json(metadata_json))
-            params.append(int(report_id))
+            for field_name, value in normalized_fields.items():
+                cursor.execute(
+                    REPORT_METADATA_FIELD_UPDATE_SQL[field_name],
+                    (value, int(report_id)),
+                )
             cursor.execute(
-                f"""
-                UPDATE report_metadata
-                SET {", ".join(assignments)}
-                WHERE report_id = ?
-                """,
-                tuple(params),
+                "UPDATE report_metadata SET metadata_json = ? WHERE report_id = ?",
+                (_to_json(metadata_json), int(report_id)),
             )
             upsert_report_parse_state(cursor, int(report_id), metadata_json)
 
@@ -1136,17 +1266,11 @@ class ReportRepository:
         measurement_id: int,
         update_values: dict[str, Any],
     ) -> None:
-        assignments = [f"{field_name} = ?" for field_name in update_values]
-        params = [update_values[field_name] for field_name in update_values]
-        params.append(int(measurement_id))
-        cursor.execute(
-            f"""
-            UPDATE report_measurements
-            SET {", ".join(assignments)}
-            WHERE id = ?
-            """,
-            tuple(params),
-        )
+        for field_name, value in update_values.items():
+            cursor.execute(
+                MEASUREMENT_FIELD_UPDATE_SQL[field_name],
+                (value, int(measurement_id)),
+            )
 
     def update_measurement_fields(
         self,
@@ -1273,6 +1397,185 @@ class ReportRepository:
         self._replace_measurements(cursor, report_id, measurement_rows)
         self._refresh_measurement_summary(cursor, report_id, now=now)
         self._persist_semantic_duplicate_warnings(cursor, report_id, identity_hash)
+
+    @staticmethod
+    def _verify_import_source_digest(
+        source_path: str | Path,
+        *,
+        expected_sha256: str | None,
+        source_digest_verifier: Callable[[], str | None] | None,
+    ) -> str:
+        current_sha256 = (
+            source_digest_verifier()
+            if source_digest_verifier is not None
+            else compute_sha256(source_path)
+        )
+        if current_sha256 is None:
+            raise ValueError(f"Could not verify source digest before import: {source_path}")
+        if expected_sha256 is not None and expected_sha256.casefold() != current_sha256.casefold():
+            raise ValueError(
+                "Explicit source digest does not match the final source digest: "
+                f"{source_path}"
+            )
+        return current_sha256
+
+    def _accepted_report_id(
+        self,
+        cursor,
+        digest: str,
+        policy: ReportImportPolicy,
+    ) -> int | None:
+        refreshable_parser_id = policy.refreshable_parser_id
+        refreshable_parser_version = policy.refreshable_parser_version
+        cursor.execute(
+            """
+            SELECT pr.id
+            FROM source_files sf
+            JOIN parsed_reports pr ON pr.source_file_id = sf.id
+            JOIN report_metadata rm ON rm.report_id = pr.id
+            JOIN report_parse_state rps ON rps.report_id = pr.id
+            WHERE sf.sha256 = ?
+              AND sf.is_active = 1
+              AND pr.parse_status IN ('parsed', 'parsed_with_warnings')
+              AND pr.measurement_count > 0
+              AND pr.measurement_count = (
+                  SELECT COUNT(*)
+                  FROM report_measurements measurement
+                  WHERE measurement.report_id = pr.id
+              )
+              AND (
+                  ? IS NULL
+                  OR pr.parser_id <> ?
+                  OR (
+                      ? = 'light'
+                      AND pr.parser_version = ?
+                  )
+                  OR (
+                      ? = 'complete'
+                      AND pr.parser_version = ?
+                      AND rps.header_extraction_mode IS NOT NULL
+                      AND rps.header_extraction_mode <> 'none'
+                      AND rps.header_ocr_error_code IS NULL
+                      AND COALESCE(rps.reference_source, '') <> 'filename_candidate'
+                      AND COALESCE(rps.report_date_source, '') <> 'filename_candidate'
+                      AND COALESCE(rps.stats_count_source, '') <> 'filename_candidate'
+                  )
+              )
+            LIMIT 1
+            """,
+            (
+                digest,
+                refreshable_parser_id,
+                refreshable_parser_id,
+                policy.metadata_parsing_mode,
+                refreshable_parser_version,
+                policy.metadata_parsing_mode,
+                refreshable_parser_version,
+            ),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row is not None else None
+
+    def import_report_if_absent(
+        self,
+        *,
+        source_path: str | Path,
+        source_sha256: str | None = None,
+        source_digest_verifier: Callable[[], str | None] | None = None,
+        import_policy: ReportImportPolicy | None = None,
+        parser_id: str,
+        template_family: str,
+        parse_status: str,
+        metadata: Any,
+        candidates: Iterable[Any],
+        warnings: Iterable[Any],
+        measurements: Iterable[Any],
+        metadata_version: str,
+        parser_version: str | None = None,
+        template_variant: str | None = None,
+        metadata_profile_id: str | None = None,
+        metadata_profile_version: str | None = None,
+        parse_started_at: str | None = None,
+        parse_finished_at: str | None = None,
+        parse_duration_ms: int | None = None,
+        page_count: int | None = None,
+        measurement_count: int = 0,
+        has_nok: bool = False,
+        nok_count: int = 0,
+        metadata_confidence: float | None = None,
+        identity_hash: str | None = None,
+        raw_report_json: Any = None,
+    ) -> ReportImportDisposition:
+        """Atomically import one complete report graph without replacing accepted data."""
+
+        del measurement_count, has_nok, nok_count
+        policy = import_policy or ReportImportPolicy()
+        prechecked_digest = self._verify_import_source_digest(
+            source_path,
+            expected_sha256=source_sha256,
+            source_digest_verifier=source_digest_verifier,
+        )
+        self._ensure_import_schema()
+        now = utc_timestamp()
+        measurement_values = tuple(measurements)
+        candidate_values = tuple(candidates)
+        warning_values = tuple(warnings)
+
+        def _import(cursor) -> ReportImportDisposition:
+            cursor.execute("BEGIN IMMEDIATE")
+            verified_digest = self._verify_import_source_digest(
+                source_path,
+                expected_sha256=prechecked_digest,
+                source_digest_verifier=source_digest_verifier,
+            )
+            if self._accepted_report_id(cursor, verified_digest, policy) is not None:
+                return ReportImportDisposition.ALREADY_PRESENT
+
+            source_record = self._upsert_source_file_observation(
+                cursor,
+                self._source_file_observation(source_path, digest=verified_digest),
+            )
+            report_id = self._apply_parsed_report_row(
+                cursor,
+                source_file_id=source_record.id,
+                parser_id=parser_id,
+                parser_version=parser_version,
+                template_family=template_family,
+                template_variant=template_variant,
+                parse_status=parse_status,
+                parse_started_at=parse_started_at,
+                parse_finished_at=parse_finished_at,
+                parse_duration_ms=parse_duration_ms,
+                page_count=page_count,
+                measurement_count=0,
+                has_nok=False,
+                nok_count=0,
+                metadata_confidence=metadata_confidence,
+                identity_hash=identity_hash,
+                raw_report_json=raw_report_json,
+                now=now,
+            )
+            self._replace_full_report_payload(
+                cursor,
+                report_id,
+                metadata=metadata,
+                candidates=candidate_values,
+                warnings=warning_values,
+                measurements=measurement_values,
+                metadata_version=metadata_version,
+                metadata_profile_id=metadata_profile_id,
+                metadata_profile_version=metadata_profile_version,
+                identity_hash=identity_hash,
+                now=now,
+            )
+            return ReportImportDisposition.IMPORTED
+
+        return run_transaction_with_retry(self.database, _import, connection=self.connection)
+
+    def replace_existing_report(self, **report_values: Any) -> int:
+        """Deliberately replace a report graph through the compatibility persistence contract."""
+
+        return self.persist_parsed_report(**report_values)
 
     def persist_parsed_report(
         self,

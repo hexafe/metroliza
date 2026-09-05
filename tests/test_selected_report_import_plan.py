@@ -144,7 +144,7 @@ def _track_database_opens(monkeypatch):
         raise AssertionError("filter-stage cancellation must not open SQLite")
 
     monkeypatch.setattr(
-        "metroliza.parsing.parse_reports_thread.sqlite_connection_scope",
+        "metroliza.reports.db.sqlite3.connect",
         unexpected_database_open,
     )
     return database_opens
@@ -306,7 +306,7 @@ def test_non_ready_missing_or_tampered_identity_cannot_enter_a_valid_plan(tmp_pa
     preflight = _preflight(source, database)
     duplicate = preflight.files_with_status(ParsePreflightStatus.DUPLICATE)[0]
 
-    with pytest.raises(ValueError, match="not READY"):
+    with pytest.raises(ValueError, match="not an atomic import candidate"):
         ImportPlan.from_preflight(
             _request(source, database),
             preflight,
@@ -331,7 +331,7 @@ def test_non_ready_missing_or_tampered_identity_cannot_enter_a_valid_plan(tmp_pa
             replace(valid.selected_reports[0], fingerprint="sha256:tampered"),
         ),
     )
-    with pytest.raises(ValueError, match="exact READY approval"):
+    with pytest.raises(ValueError, match="exact atomic approval"):
         validate_import_plan(tampered)
 
 
@@ -681,7 +681,7 @@ def test_sequential_source_drift_after_filter_rejects_only_late_report(
         _request(reports[0].parent, database), _preflight(reports[0].parent, database)
     )
     filter_state = _track_completed_import_plan_filter(monkeypatch)
-    original_persist = CMMReportParser.open_database_and_check_filename
+    original_persist = CMMReportParser.import_prepared_report_if_absent
     report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
 
     def persist_a_then_change_b(parser):
@@ -694,7 +694,7 @@ def test_sequential_source_drift_after_filter_rejects_only_late_report(
     monkeypatch.delenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", raising=False)
     monkeypatch.setattr(
         CMMReportParser,
-        "open_database_and_check_filename",
+        "import_prepared_report_if_absent",
         persist_a_then_change_b,
     )
 
@@ -729,7 +729,7 @@ def test_sequential_parser_approval_drift_after_filter_is_changed_not_failed(
     )
     filter_state = _track_completed_import_plan_filter(monkeypatch)
     original_resolver = report_parser_factory._resolve_parser_with_registration
-    original_persist = CMMReportParser.open_database_and_check_filename
+    original_persist = CMMReportParser.import_prepared_report_if_absent
     drift_state = {"active": False}
     report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
 
@@ -764,7 +764,7 @@ def test_sequential_parser_approval_drift_after_filter_is_changed_not_failed(
     )
     monkeypatch.setattr(
         CMMReportParser,
-        "open_database_and_check_filename",
+        "import_prepared_report_if_absent",
         persist_a_then_enable_drift,
     )
 
@@ -978,7 +978,7 @@ def test_sequential_late_ambiguity_is_changed_not_failed(
     )
     filter_state = _track_completed_import_plan_filter(monkeypatch)
     original_resolver = report_parser_factory._resolve_parser_with_registration
-    original_persist = CMMReportParser.open_database_and_check_filename
+    original_persist = CMMReportParser.import_prepared_report_if_absent
     state = {"report_a_persisted": False}
     report_a_hash = hashlib.sha256(reports[0].read_bytes()).hexdigest()
 
@@ -1012,7 +1012,7 @@ def test_sequential_late_ambiguity_is_changed_not_failed(
     )
     monkeypatch.setattr(
         CMMReportParser,
-        "open_database_and_check_filename",
+        "import_prepared_report_if_absent",
         persist_a,
     )
 

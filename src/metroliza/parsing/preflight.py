@@ -474,6 +474,7 @@ class ParsePreflightResult:
                 {
                     "occurrence_id": item.stable_occurrence_id,
                     "status": item.status.value,
+                    "reason_codes": item.reason_codes,
                     "source_format": item.source_format,
                     "fingerprint": item.fingerprint,
                     "parser_id": item.parser_id,
@@ -484,6 +485,42 @@ class ParsePreflightResult:
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+    def atomic_import_candidates(
+        self,
+        *,
+        source_path: str,
+        database_path: str,
+        metadata_parsing_mode: str,
+        registry_generation_id: int | None,
+    ) -> tuple[ParseFilePreflight, ...]:
+        """Return approved candidates for verification, without reading or writing data.
+
+        DUPLICATE is historical destination evidence, not a complete-graph or
+        write decision. Only the atomic repository can make that decision.
+        A selected-plan adapter must additionally intersect its selected set.
+        """
+
+        if (
+            self.cancelled
+            or not source_path
+            or not database_path
+            or registry_generation_id is None
+            or not self.matches_request(
+                source_path=source_path,
+                database_path=database_path,
+                metadata_parsing_mode=metadata_parsing_mode,
+            )
+        ):
+            return ()
+        return tuple(
+            item for item in self.files
+            if item.status in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
+            and "duplicate_in_selected_source" not in item.reason_codes
+            and item.fingerprint
+            and item.parser_id
+            and item.registry_generation_id == registry_generation_id
+        )
 
     def matches_request(
         self,
@@ -505,7 +542,7 @@ class ParsePreflightResult:
 
 @dataclass(frozen=True)
 class SelectedReportIdentity:
-    """Content and occurrence identity approved for one selected READY report."""
+    """Content and occurrence identity approved for one selected atomic candidate."""
 
     occurrence_id: str
     fingerprint: str
@@ -537,6 +574,8 @@ class ImportPlan:
         """Build a plan from an explicit set of reviewed occurrence identities."""
 
         validated_request = validate_parse_request(request)
+        if preflight_result.cancelled:
+            raise ValueError("A cancelled preflight result cannot be imported.")
         if not preflight_result.matches_request(
             source_path=validated_request.source_directory,
             database_path=validated_request.db_file,
@@ -553,13 +592,17 @@ class ImportPlan:
             raise ValueError("Selected report occurrence identities must be unique.")
 
         files_by_occurrence = _preflight_files_by_occurrence(preflight_result)
+        eligible = {
+            item.stable_occurrence_id
+            for item in _reviewed_atomic_candidates(preflight_result)
+        }
         selected_reports: list[SelectedReportIdentity] = []
         for occurrence_id in selected_ids:
             item = files_by_occurrence.get(occurrence_id)
             if item is None:
                 raise ValueError(f"Selected report identity is missing from preflight: {occurrence_id}")
-            if not item.is_importable:
-                raise ValueError(f"Selected report is not READY: {occurrence_id}")
+            if occurrence_id not in eligible:
+                raise ValueError(f"Selected report is not an atomic import candidate: {occurrence_id}")
             if not item.fingerprint or not item.parser_id or item.registry_generation_id is None:
                 raise ValueError(f"Selected READY report has incomplete approval evidence: {occurrence_id}")
             selected_reports.append(
@@ -600,6 +643,38 @@ class ImportPlan:
                 item.stable_occurrence_id for item in preflight_result.ready_files
             ),
         )
+
+    @classmethod
+    def all_atomic_candidates(
+        cls,
+        request: ParseRequest,
+        preflight_result: ParsePreflightResult,
+    ) -> ImportPlan:
+        """Explicit compatibility adapter for the current import/verify action."""
+        candidates = _reviewed_atomic_candidates(preflight_result)
+        generation = report_parser_factory.get_registry_snapshot().generation_id
+        if any(item.registry_generation_id != generation for item in candidates):
+            raise ValueError("Reviewed parser generation is stale; scan again.")
+        return cls.from_preflight(
+            request,
+            preflight_result,
+            selected_occurrence_ids=(item.stable_occurrence_id for item in candidates),
+        )
+
+
+def _reviewed_atomic_candidates(preflight: ParsePreflightResult) -> tuple[ParseFilePreflight, ...]:
+    """Use shared eligibility at the recorded generation, without shrinking a plan on drift."""
+    generations = {item.registry_generation_id for item in preflight.files}
+    return tuple(
+        candidate
+        for generation in generations
+        for candidate in preflight.atomic_import_candidates(
+            source_path=preflight.source_path,
+            database_path=preflight.database_path,
+            metadata_parsing_mode=preflight.metadata_parsing_mode,
+            registry_generation_id=generation,
+        )
+    )
 
 
 def _normalize_occurrence_id(value: str) -> str:
@@ -660,6 +735,9 @@ def _validate_import_plan_context(plan: ImportPlan) -> None:
 
 def _validate_selected_reports(plan: ImportPlan) -> None:
     files_by_occurrence = _preflight_files_by_occurrence(plan.preflight_result)
+    eligible = {
+        item.stable_occurrence_id for item in _reviewed_atomic_candidates(plan.preflight_result)
+    }
     selected_occurrences: set[str] = set()
     for identity in plan.selected_reports:
         if not isinstance(identity, SelectedReportIdentity):
@@ -678,9 +756,9 @@ def _validate_selected_reports(plan: ImportPlan) -> None:
             parser_id=item.parser_id or "",
             registry_generation_id=item.registry_generation_id or 0,
         )
-        if not item.is_importable or identity != approved_identity:
+        if identity.occurrence_id not in eligible or identity != approved_identity:
             raise ValueError(
-                f"Selected report identity is not an exact READY approval: {identity.occurrence_id}"
+                f"Selected report identity is not an exact atomic approval: {identity.occurrence_id}"
             )
 
 
