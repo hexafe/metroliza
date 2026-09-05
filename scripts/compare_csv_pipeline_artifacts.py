@@ -22,9 +22,19 @@ _SQLITE_PATH = re.compile(
 _DCTERMS = "{http://purl.org/dc/terms/}"
 
 
-def _normalized_part(name: str, payload: bytes) -> bytes:
-    if name == "xl/sharedStrings.xml":
-        return _SQLITE_PATH.sub(b"<temporary-sqlite>", payload)
+def _normalized_part(
+    name: str, payload: bytes, diagnostic_contexts: frozenset[str] = frozenset(),
+) -> bytes:
+    if name == "xl/sharedStrings.xml" and diagnostic_contexts:
+        root = ET.fromstring(payload)
+        for item in root:
+            texts = list(item.iter("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"))
+            if "".join(node.text or "" for node in texts) in diagnostic_contexts:
+                for node in texts:
+                    node.text = _SQLITE_PATH.sub(
+                        b"<temporary-sqlite>", (node.text or "").encode()
+                    ).decode()
+        return ET.tostring(root)
     if name == "docProps/core.xml":
         root = ET.fromstring(payload)
         for tag in ("created", "modified"):
@@ -47,6 +57,25 @@ class _OfflineAssets(HTMLParser):
             self.sources.append(source)
 
 
+def _sqlite_diagnostic_contexts(workbook) -> tuple[frozenset[str], frozenset[str]]:
+    """Identify only the store-created diagnostic's context cells for normalization."""
+    if "Diagnostics" not in workbook.sheetnames:
+        return frozenset(), frozenset()
+    rows = workbook["Diagnostics"].iter_rows()
+    headers = [cell.value for cell in next(rows, ())]
+    if "code" not in headers or "context" not in headers:
+        return frozenset(), frozenset()
+    code_index, context_index = headers.index("code"), headers.index("context")
+    contexts, coordinates = set(), set()
+    for row in rows:
+        if row[code_index].value == "tabular_sqlite_store_created":
+            cell = row[context_index]
+            if isinstance(cell.value, str):
+                contexts.add(cell.value)
+                coordinates.add(cell.coordinate)
+    return frozenset(contexts), frozenset(coordinates)
+
+
 def artifact_manifest(directory: Path) -> dict:
     """Read every XLSX part and referenced HTML asset, failing on incomplete output."""
     import openpyxl
@@ -65,12 +94,14 @@ def artifact_manifest(directory: Path) -> dict:
             raise ValueError(f"Missing or nonlocal dashboard asset: {source}")
 
     workbook_path = directory / "workbook.xlsx"
-    with zipfile.ZipFile(workbook_path) as archive:
-        parts = {name: hashlib.sha256(_normalized_part(name, archive.read(name))).hexdigest()
-                 for name in sorted(archive.namelist())}
     workbook = openpyxl.load_workbook(workbook_path, read_only=True, data_only=False)
     sheets = []
     try:
+        contexts, coordinates = _sqlite_diagnostic_contexts(workbook)
+        with zipfile.ZipFile(workbook_path) as archive:
+            parts = {name: hashlib.sha256(
+                _normalized_part(name, archive.read(name), contexts)
+            ).hexdigest() for name in sorted(archive.namelist())}
         for sheet in workbook:
             digest = hashlib.sha256()
             formulas = 0
@@ -81,7 +112,8 @@ def artifact_manifest(directory: Path) -> dict:
                 cells = []
                 for cell in row:
                     value = cell.value
-                    if isinstance(value, str):
+                    if (sheet.title == "Diagnostics" and isinstance(value, str)
+                            and cell.coordinate in coordinates):
                         value = _SQLITE_PATH.sub(b"<temporary-sqlite>", value.encode()).decode()
                     nonempty += value is not None
                     formulas += cell.data_type == "f"

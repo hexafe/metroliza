@@ -266,3 +266,32 @@ def test_artifact_metadata_parser_rejects_xml_entities():
     payload = b'<!DOCTYPE x [<!ENTITY expansion "unexpected">]><x>&expansion;</x>'
     with pytest.raises(DefusedXmlException):
         _normalized_part("docProps/core.xml", payload)
+
+
+def test_sqlite_normalization_preserves_literal_diagnostic_fragments(tmp_path):
+    import xlsxwriter
+
+    def create(name, diagnostic_suffix, literal_suffix):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "dashboard.html").write_text("<p>Synthetic offline output</p>")
+        with xlsxwriter.Workbook(directory / "workbook.xlsx") as workbook:
+            table = workbook.add_worksheet("Table Data")
+            table.write(0, 0, "'sqlite_path': '/tmp/metroliza_csv_summary_"
+                        + literal_suffix + ".sqlite'")
+            diagnostics = workbook.add_worksheet("Diagnostics")
+            diagnostics.write_row(0, 0, ["code", "context"])
+            diagnostics.write_row(1, 0, [
+                "tabular_sqlite_store_created",
+                "{'row_count': 1, 'source_file_count': 1, 'sqlite_path': "
+                "'/tmp/metroliza_csv_summary_" + diagnostic_suffix + ".sqlite'}",
+            ])
+        return directory
+
+    baseline = create("baseline", "real_a", "literal_a")
+    legitimate = create("legitimate", "real_b", "literal_a")
+    changed_literal = create("changed_literal", "real_c", "literal_b")
+    assert compare_artifacts(baseline, legitimate)["equal"]
+    comparison = compare_artifacts(baseline, changed_literal)
+    assert not comparison["equal"]
+    assert "sheets" in comparison["differing_sections"]
