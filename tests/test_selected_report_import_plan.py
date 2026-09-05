@@ -26,6 +26,40 @@ from metroliza.shared.parse_contracts import ParseRequest
 FIXTURE = Path(__file__).parent / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
 
 
+def test_one_to_one_rename_counts_one_changed_slot_and_writes_nothing(tmp_path):
+    source = tmp_path / "reports"
+    report, = _write_unique_reports(source, 1)
+    database = tmp_path / "rename.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    report.rename(source / "renamed.pdf")
+    thread = ParseReportsThread(plan)
+    thread.run()
+    assert not database.exists()
+    assert thread.last_parse_result.total_files == 1
+    assert thread.last_parse_result.preflight_changed_files == 1
+
+
+def test_missing_selected_remains_changed_after_complete_discovery_cancellation(tmp_path, monkeypatch):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 2)
+    database = tmp_path / "cancel-missing.db"
+    plan = ImportPlan.all_ready(_request(source, database), _preflight(source, database))
+    reports[1].unlink()
+    thread = ParseReportsThread(plan)
+    discover = thread.get_list_of_reports
+
+    def discover_then_cancel():
+        paths = discover()
+        thread.parsing_canceled = True
+        return paths
+
+    monkeypatch.setattr(thread, "get_list_of_reports", discover_then_cancel)
+    thread.run()
+    assert not database.exists()
+    assert thread.last_parse_result.preflight_changed_files == 1
+    assert thread.last_parse_result.cancelled_files == 1
+
+
 def _write_unique_reports(source: Path, count: int) -> list[Path]:
     source.mkdir()
     fixture_bytes = FIXTURE.read_bytes()
