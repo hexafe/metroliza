@@ -195,3 +195,21 @@ parameter-sheet contract. Replacing that with global XlsxWriter constant-memory
 mode would risk pandas column-oriented writes, tables, merges and chart ranges;
 it was not attempted. Peak memory must be evaluated independently from the small
 CPU improvement. These observations do not constitute a repository-wide audit.
+
+## Independent review correction, pass 1
+
+The independent reviewer identified a missing actual high-cardinality/cache-boundary
+case and an overly broad diagnostic-path normalization in the comparison tool.
+The latter now recognizes only the store-created Diagnostics context field;
+a literal matching fragment in ordinary user cells remains significant, with
+an adversarial test that changes only the relevant literal content.
+
+Before running the additional case, declare 600 rows / four numeric metrics /
+24 actual manual groups, two fresh-process samples plus one warmup per B/C variant,
+the same full output/chart flags, a 600-second child timeout and the existing
+8 GiB planning bound. This is lower-confidence supplemental correctness evidence,
+chosen to exceed the 64-entry cache boundary, not a replacement primary workload.
+A separate instrumented run records actual cache admissions and cleanup.
+The benchmark driver adds only this case-catalog entry; original case settings and
+worker/controller functions are unchanged. Original and extended driver hashes
+are retained in the compact receipt. Production bytes remain frozen.

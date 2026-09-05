@@ -22,7 +22,10 @@ import subprocess
 import sys
 import time
 
-CASES = {"small": (300, 4, 3), "medium": (30_000, 12, 12), "large": (150_001, 4, 12)}
+CASES = {
+    "small": (300, 4, 3), "medium": (30_000, 12, 12), "large": (150_001, 4, 12),
+    "many-groups": (600, 4, 24),
+}
 
 
 def _sha(path: Path) -> str:

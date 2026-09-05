@@ -53,7 +53,7 @@
       "oznak": "ed51580dfdec9f91f6320c7937af6d65dd5a1290"
     }
   },
-  "driver_sha256": "e6b16c8436c417f9198d94b4477e5937891e104b7dcf688010d6cea37c33763e",
+  "driver_sha256": "d245394d5be081934cae9e418ccb306c4108e86413f772b6e6ef106baa452216",
   "profile_B_small": {
     "profile_total_s": 23.865975587000005,
     "functions": [
@@ -667,8 +667,12 @@
         ]
       ],
       "heads": {
-        "B": "77e398375e5277858110c746a428d13535db6a59",
-        "A": "9e01a2b7ceb796e06c845efad599af6f298a98af"
+        "A": [
+          "9e01a2b7ceb796e06c845efad599af6f298a98af"
+        ],
+        "B": [
+          "77e398375e5277858110c746a428d13535db6a59"
+        ]
       },
       "sqlite_created_and_cleaned_for_all": true,
       "representative_outputs": {
@@ -1184,8 +1188,12 @@
         ]
       ],
       "heads": {
-        "C": "187ebd694f1e66516fb4a8ccfe272011d68e6216",
-        "B": "77e398375e5277858110c746a428d13535db6a59"
+        "B": [
+          "77e398375e5277858110c746a428d13535db6a59"
+        ],
+        "C": [
+          "187ebd694f1e66516fb4a8ccfe272011d68e6216"
+        ]
       },
       "sqlite_created_and_cleaned_for_all": true,
       "representative_outputs": {
@@ -1419,8 +1427,12 @@
         ]
       ],
       "heads": {
-        "C": "1b8876ec227391f0557d24d95e2ded357de43937",
-        "NoCache": "288ec7f7f8547775001b5f4bf47f0bd53c3fc46e"
+        "C": [
+          "1b8876ec227391f0557d24d95e2ded357de43937"
+        ],
+        "NoCache": [
+          "288ec7f7f8547775001b5f4bf47f0bd53c3fc46e"
+        ]
       },
       "sqlite_created_and_cleaned_for_all": true,
       "representative_outputs": {
@@ -1692,9 +1704,15 @@
         ]
       ],
       "heads": {
-        "C": "1b8876ec227391f0557d24d95e2ded357de43937",
-        "B": "77e398375e5277858110c746a428d13535db6a59",
-        "A": "9e01a2b7ceb796e06c845efad599af6f298a98af"
+        "A": [
+          "9e01a2b7ceb796e06c845efad599af6f298a98af"
+        ],
+        "B": [
+          "77e398375e5277858110c746a428d13535db6a59"
+        ],
+        "C": [
+          "1b8876ec227391f0557d24d95e2ded357de43937"
+        ]
       },
       "sqlite_created_and_cleaned_for_all": true,
       "representative_outputs": {
@@ -1796,6 +1814,319 @@
         }
       },
       "raw_samples_file_sha256": "8ac1b7080ebf684e1b0711c964f3911815d95be8578766c00a7edd42f50b0803"
+    },
+    "abc-large": {
+      "summary": {
+        "A": {
+          "workflow_s": {
+            "samples": [
+              293.99346218499704,
+              296.78950547899876
+            ],
+            "median": 295.3914838319979,
+            "mad": 1.39802164700086,
+            "iqr": 1.39802164700086,
+            "min": 293.99346218499704,
+            "max": 296.78950547899876
+          },
+          "peak_rss_kib": {
+            "samples": [
+              1225036,
+              1224200
+            ],
+            "median": 1224618.0,
+            "mad": 418.0,
+            "iqr": 418.0,
+            "min": 1224200,
+            "max": 1225036
+          },
+          "process_s": {
+            "samples": [
+              300.2334969020012,
+              303.51851152499876
+            ],
+            "median": 301.8760042135,
+            "mad": 1.6425073114987754,
+            "iqr": 1.6425073114987754,
+            "min": 300.2334969020012,
+            "max": 303.51851152499876
+          }
+        },
+        "B": {
+          "workflow_s": {
+            "samples": [
+              318.2405607699984,
+              300.64116643000307
+            ],
+            "median": 309.44086360000074,
+            "mad": 8.799697169997671,
+            "iqr": 8.799697169997671,
+            "min": 300.64116643000307,
+            "max": 318.2405607699984
+          },
+          "peak_rss_kib": {
+            "samples": [
+              1224164,
+              1223980
+            ],
+            "median": 1224072.0,
+            "mad": 92.0,
+            "iqr": 92.0,
+            "min": 1223980,
+            "max": 1224164
+          },
+          "process_s": {
+            "samples": [
+              325.0269300029977,
+              307.225559597995
+            ],
+            "median": 316.12624480049635,
+            "mad": 8.900685202501336,
+            "iqr": 8.900685202501336,
+            "min": 307.225559597995,
+            "max": 325.0269300029977
+          }
+        },
+        "C": {
+          "workflow_s": {
+            "samples": [
+              249.8801015739955,
+              252.32857514100033
+            ],
+            "median": 251.1043383574979,
+            "mad": 1.2242367835024197,
+            "iqr": 1.2242367835024197,
+            "min": 249.8801015739955,
+            "max": 252.32857514100033
+          },
+          "peak_rss_kib": {
+            "samples": [
+              1228992,
+              1228760
+            ],
+            "median": 1228876.0,
+            "mad": 116.0,
+            "iqr": 116.0,
+            "min": 1228760,
+            "max": 1228992
+          },
+          "process_s": {
+            "samples": [
+              257.2068808210024,
+              259.19418425399635
+            ],
+            "median": 258.2005325374994,
+            "mad": 0.99365171649697,
+            "iqr": 0.99365171649697,
+            "min": 257.2068808210024,
+            "max": 259.19418425399635
+          }
+        }
+      },
+      "sample_columns": [
+        "variant",
+        "block",
+        "warmup",
+        "workflow_s",
+        "process_s",
+        "peak_rss_kib",
+        "workbook_bytes"
+      ],
+      "samples": [
+        [
+          "C",
+          0,
+          true,
+          233.107198771002,
+          239.8991340970024,
+          1229292,
+          36521020
+        ],
+        [
+          "B",
+          0,
+          true,
+          284.712735041001,
+          291.30086705300346,
+          1224176,
+          36521020
+        ],
+        [
+          "A",
+          0,
+          true,
+          283.7045087289953,
+          290.0654884370015,
+          1224276,
+          36521020
+        ],
+        [
+          "A",
+          0,
+          false,
+          293.99346218499704,
+          300.2334969020012,
+          1225036,
+          36521021
+        ],
+        [
+          "B",
+          0,
+          false,
+          318.2405607699984,
+          325.0269300029977,
+          1224164,
+          36521022
+        ],
+        [
+          "C",
+          0,
+          false,
+          249.8801015739955,
+          257.2068808210024,
+          1228992,
+          36521019
+        ],
+        [
+          "C",
+          0,
+          false,
+          252.32857514100033,
+          259.19418425399635,
+          1228760,
+          36521022
+        ],
+        [
+          "B",
+          0,
+          false,
+          300.64116643000307,
+          307.225559597995,
+          1223980,
+          36521020
+        ],
+        [
+          "A",
+          0,
+          false,
+          296.78950547899876,
+          303.51851152499876,
+          1224200,
+          36521021
+        ]
+      ],
+      "heads": {
+        "A": [
+          "9e01a2b7ceb796e06c845efad599af6f298a98af"
+        ],
+        "B": [
+          "77e398375e5277858110c746a428d13535db6a59"
+        ],
+        "C": [
+          "1b8876ec227391f0557d24d95e2ded357de43937",
+          "23ba85785220bfb1eeb9be01540774ee5ad9722b"
+        ]
+      },
+      "sqlite_created_and_cleaned_for_all": true,
+      "representative_outputs": {
+        "A": {
+          "artifacts": {
+            "dashboard.html": {
+              "bytes": 7977393,
+              "sha256": "7a6388430ad0bbab82af481827e9c553fd99be249efe8497c0239ea72d9d7747"
+            },
+            "dashboard_assets/plotly-2.27.0.min.js": {
+              "bytes": 3598158,
+              "sha256": "7f4930eba8f8541dbec28dca5bd5f787f8eef1cde0369ac9657b70bed230b3e0"
+            },
+            "workbook.xlsx": {
+              "bytes": 36521021,
+              "sha256": "4cd7f130d7640e531ff1183bcaa762817f2548001d88d9e7392e93a50dc51334"
+            }
+          },
+          "rows": 150001,
+          "metrics": 4,
+          "html_charts": 12,
+          "sheets": [
+            "Table Data",
+            "Aggregates",
+            "Metrics",
+            "Charts",
+            "Groupstats",
+            "Diagnostics",
+            "Dim 01",
+            "Dim 02",
+            "Dim 03",
+            "Dim 04"
+          ],
+          "fixture_sha256": "a50d547844e82c8787c3bf82b388d7ecea1e3ff05e07eb0c267ae4f23c236820"
+        },
+        "B": {
+          "artifacts": {
+            "dashboard.html": {
+              "bytes": 7977393,
+              "sha256": "7a6388430ad0bbab82af481827e9c553fd99be249efe8497c0239ea72d9d7747"
+            },
+            "dashboard_assets/plotly-2.27.0.min.js": {
+              "bytes": 3598158,
+              "sha256": "7f4930eba8f8541dbec28dca5bd5f787f8eef1cde0369ac9657b70bed230b3e0"
+            },
+            "workbook.xlsx": {
+              "bytes": 36521022,
+              "sha256": "cd9fb5d1ce27cd8a486d7eb7275d67b36a4c6e413541ee79432a65ff634bd1e8"
+            }
+          },
+          "rows": 150001,
+          "metrics": 4,
+          "html_charts": 12,
+          "sheets": [
+            "Table Data",
+            "Aggregates",
+            "Metrics",
+            "Charts",
+            "Groupstats",
+            "Diagnostics",
+            "Dim 01",
+            "Dim 02",
+            "Dim 03",
+            "Dim 04"
+          ],
+          "fixture_sha256": "a50d547844e82c8787c3bf82b388d7ecea1e3ff05e07eb0c267ae4f23c236820"
+        },
+        "C": {
+          "artifacts": {
+            "dashboard.html": {
+              "bytes": 7977393,
+              "sha256": "7a6388430ad0bbab82af481827e9c553fd99be249efe8497c0239ea72d9d7747"
+            },
+            "dashboard_assets/plotly-2.27.0.min.js": {
+              "bytes": 3598158,
+              "sha256": "7f4930eba8f8541dbec28dca5bd5f787f8eef1cde0369ac9657b70bed230b3e0"
+            },
+            "workbook.xlsx": {
+              "bytes": 36521019,
+              "sha256": "c1c4c0a7a2230ca9c79b51a3f5ce5a74d74a12c20636cc1b57e956738d848131"
+            }
+          },
+          "rows": 150001,
+          "metrics": 4,
+          "html_charts": 12,
+          "sheets": [
+            "Table Data",
+            "Aggregates",
+            "Metrics",
+            "Charts",
+            "Groupstats",
+            "Diagnostics",
+            "Dim 01",
+            "Dim 02",
+            "Dim 03",
+            "Dim 04"
+          ],
+          "fixture_sha256": "a50d547844e82c8787c3bf82b388d7ecea1e3ff05e07eb0c267ae4f23c236820"
+        }
+      },
+      "raw_samples_file_sha256": "36d28b881e71deb5e7e234fd802b59d35fccf4b5edd1c9e0ce569118026cf68d"
     }
   },
   "parity": {
@@ -1869,5 +2200,10 @@
     "profile-B-small/request-0/pipeline.pstats": "36822f36a21eb1b373eba9bf959b635fd9e39e2c99318d353648bfbab211100d",
     "no-cache-ablation.patch": "2517aaf4ef22a47f2adc245828e9ca66cce04bafc3a19e520b21cfbb1972758c",
     "resolved-environment.txt": "ec4e2ce0a282420e4b9561f137848fbf75d59b6aed7ef72f3576e628db8370ee"
+  },
+  "primary_driver_at_measurement": {
+    "commit": "187ebd694f1e66516fb4a8ccfe272011d68e6216",
+    "sha256": "e6b16c8436c417f9198d94b4477e5937891e104b7dcf688010d6cea37c33763e",
+    "note": "Original small/medium/large cases and driver functions; a later case-catalog-only extension will cover cache-boundary grouping."
   }
 }
