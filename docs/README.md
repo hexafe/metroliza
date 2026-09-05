@@ -44,6 +44,7 @@ Start here for current product scope, architecture, planning, and development pr
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `realtime_industrial_validation.md` — deterministic fixture matrix for realtime industrial detector validation.
 - `perf_realtime_detectors.md` — local throughput benchmark guide for deterministic realtime industrial detectors.
+- `perf_csv_pipeline_1028.md` — bounded CSV analytics/export measurement protocol, optimization evidence, and remaining proof limits for Issue #1028.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - `../THIRD_PARTY_NOTICES.md` — third-party license and notice inventory for packaged distributions.

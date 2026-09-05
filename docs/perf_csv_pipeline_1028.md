@@ -151,3 +151,47 @@ Focused evidence so far: 55 adapter/workbook/cache/comparator tests, 122 adjacen
 tabular/industrial/workflow/security tests, then 17 cache/comparator/C901 tests after
 the signed-zero key refinement; full Ruff passed. Exact candidate performance,
 full final-byte CI-equivalent validation, independent review and remote CI are pending.
+
+## Candidate observations (provisional until the full matrix completes)
+
+Small B→C, two blocks of seven fresh-process observations each: B median
+15.718314 s (MAD 0.668372, IQR 1.687535), C 11.990279 s (MAD 0.168196,
+IQR 0.308707), a 3.728035 s / 23.72% reduction. Median peak RSS is effectively
+unchanged: 214,802 → 214,946 KiB. Median whole-process duration is
+18.015192 → 14.287146 s. This is below the 30% planning target and remains
+contended-host evidence, not quiet-machine proof.
+
+A separate three-sample cache ablation retained the grouped-PNG bypass but disabled
+cache admission in an isolated, unshipped worktree. Its median was 13.879835 s
+versus 11.792553 s with the cache; all three paired observations favored reuse.
+This supports retaining both related changes. The ablation patch is preserved;
+its cache-disabled constant is not in the shipping branch.
+
+The separate candidate profile reduced histogram payload builds from 48 to 24
+and standalone table computations from 24 to 12. Candidate instrumented inclusive
+spans were 4.30 s for payload builds and 2.35 s for standalone table calculations;
+these are diagnostic counters/timings, not the claimed speedup.
+
+The next rendering opportunity is in the pinned plotstats grouped artifact API:
+it still calculates tables while constructing dashboard plots even when the
+caller only uses the figure. A future library change could expose explicit
+artifact requirements or reusable immutable results. That needs a scoped
+follow-up contract and a measured full-call comparison, including conversions,
+fallback, cancellation and Windows packaging; no dependency change ships here.
+
+## Native and storage inventory
+
+The existing optional bridges cover CMM parsing, group-stat numeric coercion,
+comparison bootstrap, distribution Anderson-Darling work and chart rendering.
+The CSV pipeline measurements loaded none of these extension modules. The pinned
+groupstats workbook result reported the Python backend; rendered PNGs used Agg.
+CMM parsing is outside CSV chart preparation. SQLite query execution remains in
+the existing sqlite3/store path, and XLSX writing uses the existing XlsxWriter
+integration. No profile evidence justified a new kernel, writer library, process
+pool or scratch index spike. No index is proposed without EXPLAIN evidence.
+
+The larger pipeline still materializes full data for its complete Table Data and
+parameter-sheet contract. Replacing that with global XlsxWriter constant-memory
+mode would risk pandas column-oriented writes, tables, merges and chart ranges;
+it was not attempted. Peak memory must be evaluated independently from the small
+CPU improvement. These observations do not constitute a repository-wide audit.

@@ -161,6 +161,45 @@ def test_workflow_request_cancellation_clears_cache_before_next_request(tmp_path
     assert not (tmp_path / "dashboard.html").exists()
 
 
+def test_successive_workflows_use_new_data_limits_and_chart_selection(tmp_path):
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionChartSelection, ProductionMetricSelection,
+    )
+    from metroliza.industrial.industrial_analytics_workflow import run_tabular_file_analytics
+
+    source = tmp_path / "source.csv"
+    for index, offset in enumerate((0, 10)):
+        source.write_text("PART,DIM\n" + "".join(f"P{i},{i + offset}\n" for i in range(1, 5)))
+        output = tmp_path / str(index)
+        output.mkdir()
+        result = run_tabular_file_analytics(
+            input_file=str(source), output_dashboard_file=str(output / "dashboard.html"),
+            output_workbook_file=str(output / "workbook.xlsx"), reference_column="PART",
+            metric_selection=(ProductionMetricSelection(
+                "dim", display_label=f"Metric <{index}>", lsl=float(offset), usl=float(offset + 5),
+            ),),
+            chart_selection=ProductionChartSelection(
+                time_series=False, histogram=True, violin=False, box=bool(index), groupstats=False,
+            ),
+        )
+        assert result.row_count == 4
+        assert result.html_dashboard_chart_count == index + 1
+        assert adapter._histogram_table_cache.get() is None
+        html = (output / "dashboard.html").read_text()
+        assert f"Metric &lt;{index}&gt;" in html
+        assert f"<td>Mean</td><td>{2.5 + offset:.3f}</td>" in html
+        workbook = openpyxl.load_workbook(output / "workbook.xlsx", read_only=True)
+        try:
+            rows = workbook["Table Data"].iter_rows(values_only=True)
+            headers = next(rows)
+            assert [row[headers.index("dim")] for row in rows] == [offset + i for i in range(1, 5)]
+            rows = workbook["Metrics"].iter_rows(values_only=True)
+            headers = next(rows)
+            assert next(rows)[headers.index("mean")] == offset + 2.5
+        finally:
+            workbook.close()
+
+
 def _minimal_artifacts(directory: Path) -> None:
     import xlsxwriter
 
