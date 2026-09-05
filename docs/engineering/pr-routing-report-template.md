@@ -2,150 +2,117 @@
 
 Status: Active template
 Owner: Product/architecture maintainer
-Last reviewed: 2026-08-25
+Last reviewed: 2026-09-05
 
-Copy this into a nontrivial PR description and replace every `<placeholder>`. Keep `none`, `not
-applicable`, or `not visible` explicit. The report implements the evidence contract in
-[`codex-model-routing.md`](./codex-model-routing.md) and receives execution details from
-[`codex-task-packet-template.md`](./codex-task-packet-template.md).
+Use the sections relevant to the change, replace placeholders and retain explicit unavailable or
+inapplicable evidence. Keep the report proportionate: MICRO work does not need a milestone essay.
+The [playbook](./codex-model-routing.md) owns routing; the
+[task packet](./codex-task-packet-template.md) owns execution scope.
 
 ```markdown
 ## Outcome
 
-<Concise user/engineering outcome.>
+<One user/engineering result and its value.>
+Closes #<primary Issue> <!-- Use Refs instead if this PR is only a slice. -->
 
-<Choose exactly one linkage: `Closes #<issue>` when this PR completes the Issue, or `Refs #<issue>`
-when it is only one tracked slice.>
+## Identity, scope and rollback
 
-## Scope and non-goals
+- Base / head / tree: <exact refs>
+- Changed files/contracts: <bounded list>
+- Explicit non-goals: <adjacent work not performed>
+- Scope change authority: <none or decision URL>
+- Main risk and rollback: <preserved data-safe route>
 
-Changed:
+## Routing
 
-- <bounded outcome/path>
-
-Not changed:
-
-- <explicit adjacent behavior, configuration, release, migration, or follow-up>
-
-Authorized final file/symbol set:
-
-- `<path or symbol>`
-
-Scope deviation: <none, or exact explanation and recorded approval>
-
-## Routing report
-
+- Agent / parent / role: <IDs; coordinator or read-only reviewer>
 - Whole-PR class: MICRO | BOUNDED INTEGRATION | FEATURE / CROSS-LAYER | CRITICAL / MILESTONE
-- Requested coordinator: <model/capability>
-- Requested reasoning: <mode>
-- Actual coordinator model: <observed value or not visible>
-- Actual coordinator reasoning: <observed value or not visible>
-- Classification rationale: <semantic risk and acceptance burden>
-- Per-agent selection visible: yes | no | partially
-- Coordinator route deviation: <none or evidence/approval>
-- Why delegation was used or skipped: <bounded ownership/context value or startup-cost reason>
+- Consequence and reasoning difficulty: <separate rationale>
+- Execution surface / sign-in: <client or direct API; relevant access>
+- Requested model / product control: <actual label; product control N/A for direct API>
+- Request-level API effort / applied effort updates: <separate values when used; otherwise N/A>
+- Actual model / effective effort / topology: <observed values or not visible>
+- Fallback/deviation: <none or exact requested/observed change and authority>
+- Why this route: <expected value; no unmeasured superiority/cost claim>
+- Delegation: <none or bounded ownership reason>
+- Checkpoint / effort budget outcome: <deliverable, spent budget if observed>
 
-| Slice | Risk | Planned model/reasoning | Actual model/reasoning | Inheritance/deviation | Responsibility | Focused validation |
-| --- | --- | --- | --- | --- | --- | --- |
-| <name> | GREEN / YELLOW / RED / CRITICAL | <route and mode> | <observed values or not visible> | <inheritance and route deviation> | <bounded ownership> | `<command>` → <result> |
+<!-- Optional: omit when these capabilities were not used or required. -->
+- Capability use and availability: <context management, async, steering, effort updates, UI>
+- Approved changes during execution: <packet/decision revision; effect on scope and effort>
+- Pending-operation disposition: <completed / cancelled / preserved; stale results reconciled>
+- Safety stop: <none or sanitized error/state and operator disposition; never auto-retried>
+
+A selected Ultra label does not prove a helper count or API effort. After an effort update, the
+response's request-level effort field does not establish the updated effective effort.
+
+<!-- Only include worker rows for actual workers. -->
+| Agent / parent | Role and ownership | Requested route | Observed route / inheritance | Evidence |
+| --- | --- | --- | --- | --- |
+| <IDs> | <disjoint slice / read-only review> | <model / effort> | <observed or not visible> | <result> |
 
 ## MUST-to-evidence matrix
 
-| MUST requirement/invariant | Implementation evidence | Validation/review evidence | Status |
+| Requirement | Implementation evidence | Validation/falsifier | Result |
 | --- | --- | --- | --- |
-| <requirement> | `<path>` / <section/symbol> | `<command>` / <run URL or review> | PASS / FAIL / BLOCKED |
+| <MUST> | <symbol/diff> | <command or exact-head check> | PASS / FAIL / BLOCKED |
 
-Known requirement gap hidden by aggregate green results: <none or exact risk>
-
-Representative falsifier/broken-case evidence: <test/audit that would fail, or why not applicable>
-
-## Preserved Metroliza contracts
-
-- Branch/base: <`develop` or separately approved release path>
-- Architecture/imports: <canonical package and compatibility effect>
-- Data/SQLite: <atomicity, migration, cleanup, or not applicable>
-- Native/performance: <Python parity, benchmark, packaging, rollback, or not applicable>
-- Windows/release: <core/packaged/manual/release evidence or not applicable>
-- Offline/network: <offline/local-first and integration effect>
-- Confidentiality/security: <sanitized evidence and exposure review>
-- Evidence honesty: <unobserved claims explicitly absent>
+Known gap hidden by aggregate results: <none or exact risk>.
 
 ## Validation
 
-Exact reviewed head: `<full SHA>`
+| Command/check | Result | Exact head / environment | Required/applicable reason |
+| --- | --- | --- | --- |
+| <focused/local/static> | <actual result> | <SHA and relevant environment> | <reason> |
+| <CI workflow> | <run URL, terminal conclusion> | <head/current base> | <reason> |
+| <conditional manual/package gate> | <actual artifact/procedure or not run> | <candidate> | <reason> |
 
-### Local/focused
+- Integration-result/base currentness: <verified state>
+- Local baseline failures: <none or exact failures, A/B evidence and separate disposition>
+- Unrun gates: <not run; not green>
+- Preserved contracts: <applicable canonical package, local-first/offline, SQLite atomicity,
+  confidentiality, Python/native parity, Windows packaging, release and rollback evidence>
 
-| Command/check | Exact result | Head/tree |
-| --- | --- | --- |
-| `<command>` | <exit/result/count> | `<SHA>` |
+A local result is not hosted CI, and hosted CI is not packaged/manual evidence.
 
-### GitHub exact-head evidence
+## Independent review and correction history
 
-| Workflow/check | Run ID or URL | Head SHA | Conclusion | Required/applicable reason |
-| --- | --- | --- | --- | --- |
-| <name> | <ID/URL> | `<SHA>` | success / failure / pending | <reason> |
+- Requested independent reviewer route: <model / effort>
+- Actual independent reviewer model / effort: <observed or not visible>
+- Review evidence: <URL, reviewed SHA, scope, result>
+- Coordinator self-audit: <separate result; not the independent review>
+- P0/P1/P2 findings: <none or each finding + evidence + disposition>
+- Local test-driven iterations: <concise account; not review-round count>
+- Independent-review correction rounds: <count and authority>
+- Repeated same-boundary findings / contract audit: <none or decision>
+- Later blocker: <none or exact evidence>
 
-Integration-result/base currentness: <observed status and base SHA>
+A requested route or GitHub review trigger does not identify the hosted runtime. A clear
+reviewer outcome is still required even when the runtime identity is not visible.
 
-Manual/conditional gates not run: <gate + why not applicable, or blocker>
+## Readiness and remote operations
 
-## Exact-head and adversarial review
+- GitHub Codex Review: <exact-head result or pending>
+- External independent exact-head review: <result or pending>
+- Required CI/manual gates: <terminal-green / blocked / pending>
+- Unresolved review threads: <observed integer or not yet checked>
+- Head unchanged since review: <yes/no>
+- Current-base evidence and mergeability: <verified / pending>
+- External orchestrator decision: READY FOR MERGE | NOT READY | pending
+- Remote writes performed: <exact scoped operations>
+- Excluded operations not performed: <force, unrelated refs, tags, release/deploy,
+  real-data migration, destructive actions, billing/publication, etc.>
 
-- Final diff reviewed against authorized scope: yes | no
-- Requirement/document consistency: <result>
-- Negative/failure paths: <result or not applicable>
-- Confidentiality/security boundaries: <result>
-- Production/disabled behavior: <result or not applicable>
-- Windows/native/benchmark/SQLite/release applicability: <result>
-- TupTup-specific leakage check: <result or not applicable>
-- Project-specific rule incorrectly generalized: <result>
-- Later blocker after review: <none or exact blocker>
+Codex coordinators and workers have not merged this PR. Only the authorized external
+orchestrator may squash-merge after the playbook's full predicate is satisfied. No model
+route or READY label authorizes release, destructive or other separately gated operations.
 
-### Actionable findings
+## Routing lesson
 
-- P0: <none or finding + disposition>
-- P1: <none or finding + disposition>
-- P2: <none or finding + disposition>
-- Informational observations: <none or concise note>
-- Correction cycles after readiness: <integer>
-
-### Routing feedback
-
-- Coordinator class adequate: yes | no | pending
-- Routing review required: <yes/no and trigger>
-- Next materially similar task recommendation: <class/model/reasoning and rationale>
-
-## Review and readiness ledger
-
-- GitHub Codex Review: <requested at SHA / result / pending>
-- Independent exact-head review: <reviewer/result/SHA or pending>
-- Unresolved review-thread count: <integer or not yet observed>
-- Required CI terminal-green: yes | no | pending
-- Head unchanged since readiness review: yes | no | pending
-- GitHub mergeable: yes | no | unknown
-- External orchestrator conclusion: READY FOR MERGE | NOT READY | pending
-
-The Codex coordinator/workers have not merged this PR. A READY result authorizes only the external
-orchestrator's ordinary squash merge under the repository playbook; it does not authorize release
-promotion, real-data migration, deployment, destructive operations, secrets, billing, external
-publication, or other remote product mutations.
-
-## Risk and rollback
-
-- Primary risk: <risk>
-- Mitigation: <evidence/control>
-- Rollback: <reviewed revert/disable/data-safe route>
-
-## Remote-operation ledger
-
-- Allowed operations performed: <branch push, PR, CI, review request, or none>
-- Destructive/privileged operations performed: none | <exact separately approved action>
-- Unrelated refs/tags/branches changed: no | <exact approved exception>
-- Release/deploy/migrate/publish/merge performed: no | <exact separately approved action>
-- Approval evidence: <task packet/comment or none>
+<Retain/change model or effort based on the actual failure class, acceptance quality and
+rework. Token/credit/cost figures only if observed. State one lesson, not a new policy system.>
 ```
 
-Do not mark the report READY while an exact-head check, review, thread count, mergeability result,
-or applicable conditional gate is unknown. A changed head invalidates earlier exact-head evidence
-and starts a new readiness review cycle.
+Do not mark READY while any applicable exact-head review, CI/manual result, thread count or
+integration/mergeability gate is unknown. Changed head or invalidated base evidence revokes the
+previous readiness conclusion. Keep remaining gaps visible; a checkpoint is not completion.
