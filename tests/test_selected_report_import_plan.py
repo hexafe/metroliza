@@ -410,15 +410,51 @@ def test_guarded_enrichment_missing_destination_and_incomplete_approval_fail_clo
 
 @pytest.mark.parametrize("drift", (False, True))
 def test_standalone_selected_enrichment_uses_bound_approval_and_real_repository(tmp_path, monkeypatch, drift):
-    from test_thread_flow_helpers import _standalone_evidence, _standalone_plugin_class
+    from metroliza.parsing.parser_plugin_contracts import (
+        BaseReportParserPlugin, MeasurementBlockV2, MeasurementV2, ParseMetaV2,
+        ParseResultV2, PluginManifest, ProbeResult, ReportInfoV2,
+    )
 
-    evidence = _standalone_evidence()
-    plugin = _standalone_plugin_class(evidence)
+    class StandaloneEnrichmentPlugin(BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="standalone_enrichment_guard_test", display_name="Synthetic enrichment",
+            version="1.0.0", supported_formats=("pdf",), priority=1000,
+        )
 
-    def extract_metadata(parser):
-        parser._metadata_selection_result = _synthetic_enrichment_selection()
+        def __init__(self, file_path, database, connection=None):
+            self.source_path = str(file_path)
 
-    monkeypatch.setattr(plugin, "open_report", extract_metadata, raising=False)
+        @classmethod
+        def probe(cls, _input_ref, _context):
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True,
+                               confidence=100, semantic_row_count=1)
+
+        def parse_to_v2(self):
+            source = Path(self.source_path)
+            return ParseResultV2(
+                meta=ParseMetaV2(
+                    source_file=source.name, source_format="pdf", plugin_id=self.manifest.plugin_id,
+                    plugin_version="1.0.0", template_id="synthetic-enrichment",
+                    parse_timestamp="2026-09-05T00:00:00Z", locale_detected=None, confidence=100,
+                ),
+                report=ReportInfoV2(reference="STANDALONE-1", report_date="2026-09-05",
+                                    sample_number="1", file_name=source.name, file_path=str(source.parent)),
+                blocks=(MeasurementBlockV2(
+                    header_raw=("Feature",), header_normalized="Feature", block_index=0,
+                    dimensions=(MeasurementV2(axis_code="X", nominal=1.0, tol_plus=0.1,
+                                              tol_minus=-0.1, bonus=0.0, measured=1.0,
+                                              deviation=0.0, out_of_tolerance=0.0),),
+                ),),
+            )
+
+        @staticmethod
+        def to_legacy_blocks(_result):
+            raise AssertionError("Standalone selected work must use repository atomic persistence")
+
+        def open_report(self):
+            self._metadata_selection_result = _synthetic_enrichment_selection()
+
+    plugin = StandaloneEnrichmentPlugin
     report, = _write_unique_reports(tmp_path / "reports", 1)
     database = tmp_path / "standalone-enrichment.sqlite3"
     report_parser_factory.register_parser(plugin)
@@ -450,7 +486,6 @@ def test_standalone_selected_enrichment_uses_bound_approval_and_real_repository(
         assert worker.last_parse_result.imported_files == 1
         assert results[0].enriched_files == int(not drift)
         assert results[0].failed_files == int(drift)
-        assert evidence["legacy_calls"] == []
         after = _enrichment_graph(database)
         if drift:
             assert after == before[0]
