@@ -459,11 +459,9 @@ class ParsingDialog(QDialog):
         )
         request_modeless_enrichment = selected_mode == _METADATA_MODE_FAST_THEN_ENRICH
 
-        if request_modeless_enrichment and self._source_is_archive():
-            # Archive imports are unpacked into a temporary directory owned by
-            # ParseReportsThread. Modeless enrichment would run after cleanup,
-            # so archive fast-then-enrich intentionally keeps enrichment inside
-            # the parser thread while those extracted files still exist.
+        if request_modeless_enrichment:
+            # Keep enrichment bound to the selected import plan and its source
+            # approvals. The database-wide modeless launcher cannot carry them.
             run_background_metadata_enrichment = True
             request_modeless_enrichment = False
 

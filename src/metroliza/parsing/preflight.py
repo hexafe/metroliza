@@ -664,6 +664,13 @@ class ImportPlan:
 
 def _reviewed_atomic_candidates(preflight: ParsePreflightResult) -> tuple[ParseFilePreflight, ...]:
     """Use shared eligibility at the recorded generation, without shrinking a plan on drift."""
+    if any(
+        item.status in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
+        and "duplicate_in_selected_source" not in item.reason_codes
+        and (not item.fingerprint or not item.parser_id or item.registry_generation_id is None)
+        for item in preflight.files
+    ):
+        raise ValueError("Reviewed report has incomplete approval evidence.")
     generations = {item.registry_generation_id for item in preflight.files}
     return tuple(
         candidate

@@ -201,7 +201,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
         self.assertFalse(captured['request'].run_background_metadata_enrichment)
 
-    def test_loading_screen_passes_fast_then_enrich_metadata_mode(self):
+    def test_loading_screen_binds_fast_then_enrich_to_import_plan(self):
         captured = {}
 
         class _FakeParseThread:
@@ -229,8 +229,8 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
 
         self.assertTrue(captured['started'])
         self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
-        self.assertFalse(captured['request'].run_background_metadata_enrichment)
-        self.assertTrue(dialog._pending_modeless_metadata_enrichment)
+        self.assertTrue(captured['request'].run_background_metadata_enrichment)
+        self.assertFalse(dialog._pending_modeless_metadata_enrichment)
 
     def test_fast_then_enrich_archive_uses_embedded_enrichment_fallback(self):
         captured = {}
@@ -1009,11 +1009,22 @@ def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expecte
         dialog.directory = worker.directory = ""
     if case == "no-database":
         dialog.db_file = worker.db_file = ""
-    dialog._preflight_result = worker.preflight_result = review
+    dialog._preflight_result = review
     try:
         dialog._sync_readiness_state()
         assert dialog.parse_button.isEnabled() is expected
-        approved, _changed = worker._filter_reports_for_preflight([source])
+        if case in {
+            "cancelled", "stale-source", "stale-database", "stale-mode",
+            "stale-generation", "no-generation", "no-parser", "no-fingerprint",
+            "no-source", "no-database",
+        }:
+            with pytest.raises(ValueError):
+                worker.preflight_result = review
+                worker._filter_reports_for_preflight([source])
+            approved = []
+        else:
+            worker.preflight_result = review
+            approved, _changed = worker._filter_reports_for_preflight([source])
         assert approved == ([source] if expected else [])
         assert review.files == (item,)
         assert not database.exists()

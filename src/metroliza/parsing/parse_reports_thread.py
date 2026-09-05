@@ -1579,6 +1579,18 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
     def _report_metadata_row(self, report_id, connection=None):
         return report_metadata_row_for_enrichment(self.db_file, report_id, connection=connection)
 
+    def _selected_enrichment_identity(self, report, source_inspection):
+        if self.import_plan is None:
+            return None
+        identities = {item.occurrence_id: item for item in self.import_plan.selected_reports}
+        identity = identities.get(self._occurrence_id_for_report(Path(report)))
+        if identity is None:
+            raise _SelectedReportApprovalDriftError("Enrichment report is not selected")
+        _require_selected_source_approval(
+            _SelectedReportWorkItem(report, identity), source_inspection, verify_current=True,
+        )
+        return identity
+
     def _run_background_metadata_enrichment(self, report_paths, connection):
         if self.metadata_parsing_mode != "light" or not self.run_background_metadata_enrichment:
             return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
@@ -1599,11 +1611,20 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         start_time = time.perf_counter()
 
         def _parser_factory(report, *, source_inspection=None):
+            identity = self._selected_enrichment_identity(report, source_inspection)
             parser = get_parser(
                 report,
                 self.db_file,
                 connection=connection,
                 source_inspection=source_inspection,
+                expected_plugin_id=identity.parser_id if identity is not None else None,
+                expected_registry_generation_id=(
+                    identity.registry_generation_id if identity is not None else None
+                ),
+            )
+            parser._selected_enrichment_approval = _PreparedReportWorkItem(
+                report, identity, source_inspection, parser,
+                getattr(parser, "parser_resolution_evidence", None),
             )
             selection_result = selection_result_for_complete_metadata_parser(parser)
             if selection_result is not None:
@@ -1611,6 +1632,9 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             return parser
 
         def _persist_enrichment(report, parser):
+            _require_prepared_report_approval(parser._selected_enrichment_approval)
+            if self.parsing_canceled:
+                return False
             report_id = self._report_id_for_source_path(
                 report,
                 connection=connection,

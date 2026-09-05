@@ -194,12 +194,25 @@ def _database_contents(database):
 
 
 def _configured_import_thread(report, database):
-    thread = parse_thread_module.ParseReportsThread(
-        ParseRequest(source_directory=str(report), db_file=str(database))
+    from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+
+    request = ParseRequest(source_directory=str(report), db_file=str(database))
+    review = ParsePreflightService().scan_source(
+        source_path=report, database_path=database,
+        metadata_parsing_mode=request.metadata_parsing_mode,
     )
-    thread.get_list_of_reports = lambda: [report]
-    thread._filter_reports_for_preflight = lambda reports: (reports, 0)
+    thread = parse_thread_module.ParseReportsThread(
+        ImportPlan.all_atomic_candidates(request, review)
+    )
     return thread
+
+
+def _bind_test_parser(parser, report, database, **kwargs):
+    """Keep real resolver/source approval while substituting only the persistence seam."""
+    resolved = parse_thread_module.report_parser_factory.get_parser(report, database, **kwargs)
+    parser.source_inspection_context = resolved.source_inspection_context
+    parser.parser_resolution_evidence = resolved.parser_resolution_evidence
+    return parser
 
 
 class TestParseHelpers(unittest.TestCase):
@@ -753,7 +766,6 @@ class TestParseHelpers(unittest.TestCase):
             report = Path(tmpdir) / "standalone.pdf"
             report.write_bytes(b"synthetic standalone plugin report")
             database = Path(tmpdir) / "reports.sqlite3"
-            thread = _configured_import_thread(report, database)
             report_parser_factory = parse_thread_module.report_parser_factory
             real_import = parse_thread_module.import_parse_result_v2_payload_if_absent
 
@@ -767,6 +779,7 @@ class TestParseHelpers(unittest.TestCase):
 
             report_parser_factory.register_parser(plugin)
             try:
+                thread = _configured_import_thread(report, database)
                 with mock.patch.dict(
                     os.environ,
                     {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1"},
@@ -806,10 +819,10 @@ class TestParseHelpers(unittest.TestCase):
             report = Path(tmpdir) / "standalone.pdf"
             report.write_bytes(b"synthetic malformed plugin report")
             database = Path(tmpdir) / "reports.sqlite3"
-            thread = _configured_import_thread(report, database)
             report_parser_factory = parse_thread_module.report_parser_factory
             report_parser_factory.register_parser(plugin)
             try:
+                thread = _configured_import_thread(report, database)
                 with mock.patch.object(
                     parse_thread_module,
                     "_log_parse_file_failure",
@@ -876,22 +889,14 @@ class TestParseHelpers(unittest.TestCase):
                 report_parser_factory._unregister_parser(_STANDALONE_PLUGIN_ID)
 
             result = drift_thread.last_parse_result
-            self.assertEqual(result.failed_files, 1)
+            self.assertEqual(result.failed_files, 0)
+            self.assertEqual(result.preflight_changed_files, 1)
             self.assertEqual(result.parsed_files, 0)
             self.assertEqual(result.imported_files, 0)
             self.assertEqual(result.already_present_files, 0)
             self.assertEqual(_database_contents(database), original_graph)
             self.assertEqual(evidence["legacy_calls"], [])
-            from metroliza.parsing.source_inspection import (
-                SourceChangedAfterInspectionError,
-            )
-
-            failure = log_failure.call_args.args[2]
-            self.assertIsInstance(failure, SourceChangedAfterInspectionError)
-            self.assertEqual(
-                getattr(failure, "_metroliza_parse_failure_stage", None),
-                "persistence",
-            )
+            log_failure.assert_not_called()
 
     def test_preflight_destination_duplicate_reaches_atomic_import_filter(self):
         import shutil
@@ -945,9 +950,6 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(changed_count, 0)
 
     def test_parse_thread_propagates_typed_outcomes_on_owner_thread(self):
-        from modules.contracts import ParseRequest
-        from modules.parse_reports_thread import ParseReportsThread
-
         owner_thread = threading.get_ident()
 
         class DummyParser:
@@ -972,7 +974,7 @@ class TestParseHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             report = os.path.join(tmpdir, "synthetic.pdf")
             with open(report, "wb") as report_file:
-                report_file.write(b"synthetic")
+                report_file.write((Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf").read_bytes())
 
             for two_stage, disposition in (
                 (False, ReportImportDisposition.IMPORTED),
@@ -981,15 +983,11 @@ class TestParseHelpers(unittest.TestCase):
                 with self.subTest(two_stage=two_stage, disposition=disposition):
                     database = os.path.join(tmpdir, f"{two_stage}.sqlite3")
                     parser = DummyParser(disposition)
-                    thread = ParseReportsThread(
-                        ParseRequest(source_directory=tmpdir, db_file=database)
-                    )
-                    thread.get_list_of_reports = lambda: [report]
-                    thread._filter_reports_for_preflight = lambda reports: (reports, 0)
+                    thread = _configured_import_thread(report, database)
                     with mock.patch.object(
                         parse_thread_module,
                         "get_parser",
-                        return_value=parser,
+                        side_effect=lambda *args, **kwargs: _bind_test_parser(parser, *args, **kwargs),
                     ), mock.patch.dict(
                         os.environ,
                         {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1" if two_stage else "0"},
@@ -1022,7 +1020,7 @@ class TestParseHelpers(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             report = Path(tmpdir) / "synthetic.pdf"
-            report.write_bytes(b"synthetic")
+            report.write_bytes((Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf").read_bytes())
             database = Path(tmpdir) / "reports.sqlite3"
             parsers = (
                 (
@@ -1060,7 +1058,7 @@ class TestParseHelpers(unittest.TestCase):
                     with mock.patch.object(
                         parse_thread_module,
                         "get_parser",
-                        return_value=parser,
+                        side_effect=lambda *args, **kwargs: _bind_test_parser(parser, *args, **kwargs),
                     ), mock.patch.dict(
                         os.environ,
                         {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1" if two_stage else "0"},
@@ -1091,19 +1089,12 @@ class TestParseHelpers(unittest.TestCase):
                         self.assertNotEqual(preparation_threads[0], owner_thread)
 
     def test_parse_thread_parser_failure_creates_no_database_artifact(self):
-        from modules.contracts import ParseRequest
-        from modules.parse_reports_thread import ParseReportsThread
-
         with tempfile.TemporaryDirectory() as tmpdir:
             report = os.path.join(tmpdir, "broken.pdf")
             database = os.path.join(tmpdir, "reports.sqlite3")
             with open(report, "wb") as report_file:
-                report_file.write(b"broken")
-            thread = ParseReportsThread(
-                ParseRequest(source_directory=tmpdir, db_file=database)
-            )
-            thread.get_list_of_reports = lambda: [report]
-            thread._filter_reports_for_preflight = lambda reports: (reports, 0)
+                report_file.write((Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf").read_bytes())
+            thread = _configured_import_thread(report, database)
 
             with mock.patch.object(
                 parse_thread_module,
