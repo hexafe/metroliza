@@ -174,7 +174,8 @@ def test_enrichment_transaction_rejects_live_approval_drift(tmp_path, monkeypatc
     assert changed == [change]
     assert _enrichment_graph(database) == state["before"]
     assert state["result"].enriched_files == 0
-    assert state["result"].failed_files == 1
+    assert state["result"].failed_files == int(change != "cancel")
+    assert state["result"].cancelled_files == int(change == "cancel")
     imported = worker.last_parse_result
     assert imported.selected_files == imported.imported_files == imported.parsed_files == 1
     assert imported.cancelled_files == imported.preflight_changed_files == imported.failed_files == 0
@@ -272,7 +273,9 @@ def test_enrichment_busy_retry_rechecks_changed_approval(tmp_path, monkeypatch, 
     worker.run()
     assert retries == ["real SQLite lock encountered"]
     assert _enrichment_graph(database) == state["before"]
-    assert state["result"].enriched_files == 0 and state["result"].failed_files == 1
+    assert state["result"].enriched_files == 0
+    assert state["result"].failed_files == int(change != "cancel")
+    assert state["result"].cancelled_files == int(change == "cancel")
     assert worker.last_parse_result.imported_files == 1
 
 
@@ -2145,3 +2148,250 @@ def test_selected_identity_is_a_frozen_typed_value():
 
     with pytest.raises(FrozenInstanceError):
         identity.parser_id = "other"
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+def test_requested_enrichment_accepts_destination_only_report(tmp_path, monkeypatch, two_stage):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "existing.sqlite3"
+    request = _request(reports[0].parent, database)
+    ParseReportsThread(ImportPlan.all_ready(request, _preflight(reports[0].parent, database))).run()
+    before = _enrichment_graph(database)
+    request = replace(request, run_background_metadata_enrichment=True)
+    plan = ImportPlan.all_atomic_candidates(request, _preflight(reports[0].parent, database))
+    extracted = []
+
+    def extract(parser):
+        extracted.append(parser.file_name)
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extract)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker = ParseReportsThread(plan)
+    worker.run()
+    assert worker.last_parse_result.already_present_files == 1
+    assert worker.last_parse_result.imported_files == 0
+    assert extracted == [reports[0].name]
+    assert worker.last_enrichment_result.enriched_files == 1
+    after = _enrichment_graph(database)
+    for table in ("source_files", "source_file_locations", "report_measurements"):
+        assert after[table] == before[table]
+    assert after["report_metadata"] != before["report_metadata"]
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+@pytest.mark.parametrize("archive", (False, True))
+@pytest.mark.parametrize("concurrent", (False, True))
+def test_enrichment_queue_uses_selected_typed_acceptances(tmp_path, monkeypatch, two_stage, archive, concurrent):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports = _write_unique_reports(tmp_path / "reports", 3)
+    # This excluded same-content occurrence must not inherit acceptance.
+    (reports[0].parent / "z-copy.pdf").write_bytes(reports[0].read_bytes())
+    database = tmp_path / "mixed.sqlite3"
+    if not concurrent:
+        initial = ImportPlan.from_preflight(_request(reports[0].parent, database),
+                                           _preflight(reports[0].parent, database),
+                                           selected_occurrence_ids=(reports[0].name,))
+        ParseReportsThread(initial).run()
+    source = reports[0].parent
+    if archive:
+        source = tmp_path / "source.zip"
+        with zipfile.ZipFile(source, "w") as bundle:
+            for report in sorted(reports[0].parent.iterdir(), reverse=True):
+                bundle.write(report, report.name)
+    request = replace(_request(source, database), run_background_metadata_enrichment=True)
+    plan = ImportPlan.from_preflight(request, _preflight(source, database),
+                                    selected_occurrence_ids=(reports[0].name, reports[1].name))
+    imported, accepted, extracted, before = [], [], [], []
+    original_parse = worker_module.parse_new_reports
+    original_import = ReportRepository.import_report_if_absent
+
+    def record_parse(*args, **kwargs):
+        callback = kwargs["on_file_accepted"]
+
+        def accept(item, parser, disposition):
+            accepted.append((item.selected_identity.occurrence_id, disposition))
+            callback(item, parser, disposition)
+
+        kwargs["on_file_accepted"] = accept
+        kwargs["on_file_imported"] = lambda path, parser: imported.append(Path(path).name)
+        return original_parse(*args, **kwargs)
+
+    def race(repository, **kwargs):
+        if concurrent and not before:
+            with closing(sqlite3.connect(database)) as connection:
+                competitor = ReportRepository(str(database), connection=connection)
+                assert original_import(competitor, **kwargs) is ReportImportDisposition.IMPORTED
+            before.append(_enrichment_graph(database))
+        return original_import(repository, **kwargs)
+
+    def extract(parser):
+        extracted.append(Path(parser.file_path) / parser.file_name)
+        assert extracted[-1].is_file()
+        return _synthetic_enrichment_selection()
+
+    monkeypatch.setattr(worker_module, "parse_new_reports", record_parse)
+    monkeypatch.setattr(ReportRepository, "import_report_if_absent", race)
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extract)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker = ParseReportsThread(plan)
+    discover = worker.get_list_of_reports
+    monkeypatch.setattr(worker, "get_list_of_reports", lambda: sorted(discover(), reverse=True))
+    enrich = worker._run_background_metadata_enrichment
+    graphs = []
+
+    def record_before(paths, connection):
+        graphs.append(_enrichment_graph(database))
+        return enrich(paths, connection)
+
+    monkeypatch.setattr(worker, "_run_background_metadata_enrichment", record_before)
+    worker.run()
+    result = worker.last_parse_result
+    assert result.imported_files == result.already_present_files == 1
+    assert result.failed_files == result.cancelled_files == result.preflight_changed_files == 0
+    assert len(imported) == 1
+    assert {name for name, _ in accepted} == {reports[0].name, reports[1].name}
+    assert len(accepted) == len(extracted) == 2
+    assert {path.name for path in extracted} == {reports[0].name, reports[1].name}
+    assert worker.last_enrichment_result.total_files == worker.last_enrichment_result.enriched_files == 2
+    after = _enrichment_graph(database)
+    for table in ("source_files", "source_file_locations", "report_measurements"):
+        assert after[table] == graphs[0][table]
+    if archive:
+        assert all(not path.exists() for path in extracted)
+        assert worker._extracted_archive_dir is None
+
+
+@pytest.mark.parametrize("boundary", ("before_stage", "between", "during_dml", "after_last", "failure_then_cancel"))
+def test_enrichment_cancellation_partition_preserves_committed_graph(tmp_path, monkeypatch, boundary):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch, count=3 if boundary == "before_stage" else 2)
+    original = ReportRepository.replace_report_metadata_enrichment
+    committed = []
+    if boundary == "before_stage":
+        parse = worker_module.parse_new_reports
+
+        def parse_then_cancel(*args, **kwargs):
+            accept = kwargs["on_file_accepted"]
+            accepted = []
+
+            def cancel_after_two(item, parser, outcome):
+                accept(item, parser, outcome)
+                accepted.append(item.selected_identity)
+                if len(accepted) == 2:
+                    worker.stop_parsing()
+
+            kwargs["on_file_accepted"] = cancel_after_two
+            return parse(*args, **kwargs)
+
+        monkeypatch.setattr(worker_module, "parse_new_reports", parse_then_cancel)
+    elif boundary == "during_dml":
+        dml = ReportRepository._replace_report_metadata
+
+        def cancel_after_dml(repository, *args, **kwargs):
+            result = dml(repository, *args, **kwargs)
+            if state["parsers"]:
+                worker.stop_parsing()
+            return result
+
+        monkeypatch.setattr(ReportRepository, "_replace_report_metadata", cancel_after_dml)
+    elif boundary == "failure_then_cancel":
+        def fail_and_cancel(parser):
+            worker.stop_parsing()
+            raise RuntimeError("Extraction failed independently of cancellation")
+
+        monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", fail_and_cancel)
+    else:
+        def commit_then_cancel(repository, *args, **kwargs):
+            result = original(repository, *args, **kwargs)
+            committed.append(_enrichment_graph(database))
+            if boundary == "between" or len(committed) == 2:
+                worker.stop_parsing()
+            return result
+
+        monkeypatch.setattr(ReportRepository, "replace_report_metadata_enrichment", commit_then_cancel)
+    worker.run()
+    imported = worker.last_parse_result
+    assert imported.imported_files == 2
+    assert imported.cancelled_files == int(boundary == "before_stage")
+    assert imported.failed_files == imported.preflight_changed_files == 0
+    result = worker.last_enrichment_result
+    assert result is state["result"]
+    expected = {"before_stage": (0, 0, 0, 2), "between": (1, 0, 0, 1),
+                "during_dml": (0, 0, 0, 2), "after_last": (2, 0, 0, 0),
+                "failure_then_cancel": (0, 1, 0, 1)}[boundary]
+    assert (result.enriched_files, result.failed_files, result.skipped_files, result.cancelled_files) == expected
+    assert result.total_files == sum(expected) == 2
+    assert result.status == ("cancelled_before_start" if boundary == "before_stage" else
+                             "completed" if boundary == "after_last" else "incomplete")
+    assert _enrichment_graph(database) == (committed[-1] if committed else state["before"])
+
+
+@pytest.mark.parametrize("case", ("disabled", "empty", "stale", "unsupported_metadata", "complete", "early_cancel"))
+def test_requested_enrichment_no_work_states(tmp_path, monkeypatch, case):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    report, = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "no-work.sqlite3"
+    mode = "complete" if case == "complete" else "light"
+    request = replace(_request(report.parent, database), metadata_parsing_mode=mode,
+                      run_background_metadata_enrichment=case not in {"disabled", "complete"})
+    review = ParsePreflightService().scan_source(source_path=report.parent, database_path=database,
+                                               metadata_parsing_mode=mode)
+    plan = ImportPlan.from_preflight(request, review,
+                                    selected_occurrence_ids=() if case == "empty" else (report.name,))
+    calls = []
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser",
+                        lambda parser: calls.append(parser) or None)
+    worker = ParseReportsThread(plan)
+    if case == "stale":
+        report.write_bytes(report.read_bytes() + b"stale")
+    if case == "early_cancel":
+        worker.stop_parsing()
+    worker.run()
+    result = worker.last_enrichment_result
+    if case in {"disabled", "complete"}:
+        assert result is None
+        assert calls == []
+    else:
+        assert result.enriched_files == result.failed_files == result.cancelled_files == 0
+        assert result.skipped_files == int(case == "unsupported_metadata")
+        assert result.total_files == int(case == "unsupported_metadata")
+        assert result.status == ("incomplete" if case == "unsupported_metadata" else
+                                 "cancelled_before_start" if case == "early_cancel" else "no_eligible_work")
+    if case in {"empty", "stale", "early_cancel"}:
+        assert not database.exists()
+
+
+@pytest.mark.parametrize("two_stage", (False, True))
+@pytest.mark.parametrize("outcome", ("failed", "skipped"))
+def test_failed_or_skipped_import_never_enters_requested_enrichment(tmp_path, monkeypatch, two_stage, outcome):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    report, = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "rejected.sqlite3"
+    request = replace(_request(report.parent, database), run_background_metadata_enrichment=True)
+    worker = ParseReportsThread(ImportPlan.all_ready(request, _preflight(report.parent, database)))
+    extracted = []
+
+    def reject(parser):
+        if outcome == "skipped":
+            raise report_parser_factory.UnsupportedReportFormatError(str(report))
+        raise RuntimeError("Synthetic import preparation failure")
+
+    monkeypatch.setattr(CMMReportParser, "prepare_for_two_stage_pipeline", reject)
+    monkeypatch.setattr(worker_module, "selection_result_for_complete_metadata_parser", extracted.append)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(two_stage)))
+    worker.run()
+    result = worker.last_parse_result
+    assert result.imported_files == result.already_present_files == 0
+    # Sequential preparation belongs to the persistence step; preserve its existing import accounting.
+    assert result.failed_files + result.skipped_files == 1
+    assert worker.last_enrichment_result.status == "no_eligible_work"
+    assert worker.last_enrichment_result.total_files == 0
+    assert extracted == []
+    assert not database.exists()

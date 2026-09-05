@@ -115,9 +115,26 @@ class MetadataEnrichmentBatchResult:
     total_files: int
     failed_files: int = 0
     skipped_files: int = 0
+    cancelled_files: int = 0
+    started: bool = True
+    cancellation_requested: bool = False
+
+    @property
+    def status(self):
+        if not self.started and self.cancellation_requested:
+            return "cancelled_before_start"
+        if not self.total_files:
+            return "no_eligible_work"
+        if self.failed_files or self.skipped_files or self.cancelled_files:
+            return "incomplete"
+        return "completed"
 
 
 PARSE_TELEMETRY_BATCH_SIZE = 25
+
+
+class _MetadataEnrichmentCancelled(Exception):
+    """The active enrichment was rejected before commit due to cancellation."""
 
 
 class _SelectedReportApprovalDriftError(ValueError):
@@ -432,6 +449,7 @@ def parse_new_reports(
     log_file_failures=True,
     on_file_imported=None,
     require_typed_persistence_outcome=False,
+    on_file_accepted=None,
 ):
     work_items = tuple(_coerce_selected_report_work_item(report) for report in report_paths)
     parsed_files = 0
@@ -698,6 +716,8 @@ def parse_new_reports(
                         or outcome is ReportImportDisposition.IMPORTED
                     ):
                         on_file_imported(report, parser)
+                    if on_file_accepted and require_typed_persistence_outcome:
+                        on_file_accepted(work_item, parser, outcome)
                 else:
                     already_present_files += 1
                 parsed_files = imported_files + already_present_files
@@ -778,6 +798,8 @@ def parse_new_reports(
                 or outcome is ReportImportDisposition.IMPORTED
             ):
                 on_file_imported(report, parser)
+            if on_file_accepted and require_typed_persistence_outcome:
+                on_file_accepted(work_item, parser, outcome)
         else:
             parser = None
             already_present_files += 1
@@ -819,11 +841,15 @@ def enrich_report_metadata(
     skipped_files = 0
     processed_files = 0
     total_files = len(report_paths)
+    started = False
+    cancellation_requested = False
 
     for report in report_paths:
         if should_cancel():
+            cancellation_requested = True
             break
 
+        started = True
         enrichment_start = time.perf_counter()
         parser = None
         try:
@@ -841,7 +867,12 @@ def enrich_report_metadata(
                 parser._verified_source_sha256 = verified_source_sha256
             except (AttributeError, TypeError):
                 pass
+            if should_cancel():
+                raise _MetadataEnrichmentCancelled()
             enriched = parser is not None and persist_enrichment(report, parser)
+        except _MetadataEnrichmentCancelled:
+            cancellation_requested = True
+            break
         except report_parser_factory.UnsupportedReportFormatError as exc:
             skipped_files += 1
             _log_unsupported_report_skip(
@@ -882,6 +913,9 @@ def enrich_report_metadata(
         total_files=total_files,
         failed_files=failed_files,
         skipped_files=skipped_files,
+        cancelled_files=total_files - processed_files,
+        started=started,
+        cancellation_requested=cancellation_requested,
     )
 
 
@@ -1201,6 +1235,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self._parse_request = validated_request
         self.import_plan = import_plan
         self.last_parse_result = ParseBatchResult(parsed_files=0, total_files=0)
+        self.last_enrichment_result: MetadataEnrichmentBatchResult | None = None
         self._last_emitted_progress = -1
         self._progress_stage_ranges = dict(self.PROGRESS_STAGE_RANGES)
         if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
@@ -1607,15 +1642,20 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         if self.metadata_parsing_mode != "light" or not self.run_background_metadata_enrichment:
             return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
 
+        if self.parsing_canceled:
+            return MetadataEnrichmentBatchResult(
+                enriched_files=0, total_files=len(report_paths),
+                cancelled_files=len(report_paths), started=False, cancellation_requested=True,
+            )
         if not report_paths:
             self._emit_stage_progress('enrich_metadata', 1.0)
-            return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
+            return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0, started=False)
         self._validate_enrichment_connection(connection)
 
         self.update_label.emit(
             build_three_line_status(
                 "Enriching report metadata...",
-                "Running complete OCR metadata for imported reports",
+                "Running complete OCR metadata for accepted reports",
                 "ETA --",
             )
         )
@@ -1644,38 +1684,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 parser._metadata_selection_result = selection_result
             return parser
 
-        def _persist_enrichment(report, parser):
-            prepared = parser._selected_enrichment_approval
-            approval = self._enrichment_transaction_approval(prepared)
-            _require_prepared_report_approval(prepared)
-            if self.parsing_canceled:
-                return False
-            report_id = self._report_id_for_source_path(
-                report,
-                connection=connection,
-                source_sha256=getattr(parser, "_verified_source_sha256", None),
-            )
-            if report_id is None:
-                return False
-
-            selection_result = getattr(parser, "_metadata_selection_result", None)
-            if selection_result is None:
-                selection_result = selection_result_for_complete_metadata_parser(parser)
-            if selection_result is None:
-                return False
-            persist_complete_metadata_enrichment(
-                self.db_file,
-                report_id,
-                selection_result,
-                connection=connection,
-                approval=approval,
-            )
-            return True
-
         result = enrich_report_metadata(
             report_paths,
             parser_factory=_parser_factory,
-            persist_enrichment=_persist_enrichment,
+            persist_enrichment=lambda report, parser: self._persist_selected_metadata(report, parser, connection),
             should_cancel=lambda: self.parsing_canceled,
             on_progress=lambda enriched_files, total_files: (
                 self._emit_stage_progress('enrich_metadata', enriched_files / total_files if total_files else 1.0),
@@ -1699,6 +1711,38 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         )
         return result
 
+    def _persist_selected_metadata(self, report, parser, connection):
+        prepared = parser._selected_enrichment_approval
+        approval = self._enrichment_transaction_approval(prepared)
+        _require_prepared_report_approval(prepared)
+        if self.parsing_canceled:
+            raise _MetadataEnrichmentCancelled()
+        report_id = self._report_id_for_source_path(
+            report,
+            connection=connection,
+            source_sha256=getattr(parser, "_verified_source_sha256", None),
+        )
+        if report_id is None:
+            return False
+
+        selection_result = getattr(parser, "_metadata_selection_result", None)
+        if selection_result is None:
+            selection_result = selection_result_for_complete_metadata_parser(parser)
+        if selection_result is None:
+            return False
+        persist_complete_metadata_enrichment(
+            self.db_file,
+            report_id,
+            selection_result,
+            connection=connection,
+            approval=approval,
+        )
+        return True
+
+    def _complete_requested_enrichment(self, report_paths, connection):
+        if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
+            self.last_enrichment_result = self._run_background_metadata_enrichment(report_paths, connection)
+
     def _validate_enrichment_connection(self, connection):
         if self.import_plan is not None:
             ReportEnrichmentApproval.validate_connection(connection)
@@ -1720,7 +1764,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         def verify_live():
             _require_prepared_report_approval(prepared)
             if self.parsing_canceled:
-                raise ValueError("Selected enrichment cancelled before acceptance")
+                raise _MetadataEnrichmentCancelled()
 
         return ReportEnrichmentApproval(
             expected_source_sha256=identity.fingerprint.removeprefix("sha256:"),
@@ -1759,6 +1803,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         cancel_flag=True,
                     )
                 )
+                self._complete_requested_enrichment([], None)
                 self.parsing_finished.emit()
                 return
 
@@ -1800,6 +1845,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     preflight_changed_files=filter_result.changed_files,
                 )
                 self._emit_stage_progress('parse_reports', 1.0)
+                self._complete_requested_enrichment([], None)
                 self.parsing_finished.emit()
                 return
 
@@ -1954,7 +2000,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     parser.report_import_policy = import_policy
                     return parser
 
-                imported_report_paths: list[Path] = []
+                accepted_reports: dict[SelectedReportIdentity, Path] = {}
+
+                def _record_accepted_report(work_item, _parser, _outcome):
+                    accepted_reports.setdefault(work_item.selected_identity, work_item.report_path)
+
                 result = parse_new_reports(
                     reports_to_parse,
                     report_fingerprints,
@@ -1981,7 +2031,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         ),
                     ),
                     on_file_parsed=_record_file_telemetry,
-                    on_file_imported=lambda report, _parser: imported_report_paths.append(report),
+                    on_file_accepted=_record_accepted_report,
                     on_file_failed=_record_file_failure,
                     enable_two_stage_pipeline=two_stage_enabled,
                     worker_count=two_stage_workers,
@@ -2020,12 +2070,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 )
                 self.last_parse_result = result
 
-                if (
-                    not self.parsing_canceled
-                    and self.run_background_metadata_enrichment
-                    and Path(self.db_file).is_file()
-                ):
-                    self._run_background_metadata_enrichment(imported_report_paths, connection)
+                self._complete_requested_enrichment(list(accepted_reports.values()), connection)
 
             if result.total_files == 0:
                 self._emit_stage_progress('parse_reports', 1.0)

@@ -231,7 +231,7 @@ def _build_completion_groups(counts, present, db_file):
     return "\n\n".join(groups)
 
 
-def _build_parse_completion_summary(result, db_file):
+def _build_import_completion_summary(result, db_file):
     counts, present = _normalized_completion_counts(result)
     if counts["total_files"] == 0:
         return (
@@ -244,6 +244,56 @@ def _build_parse_completion_summary(result, db_file):
         )
     severity, title = _completion_title(counts, present)
     return severity, title, _build_completion_groups(counts, present, db_file)
+
+
+def _enrichment_completion_group(result):
+    lines = ["Metadata enrichment:"]
+    if result is None:
+        return True, "\n".join(lines + ["- Requested, but completion evidence is unavailable."])
+    counts = {
+        field: max(0, int(getattr(result, field, 0) or 0))
+        for field in ("enriched_files", "failed_files", "skipped_files", "cancelled_files")
+    }
+    for field, label in (
+        ("enriched_files", "Enriched"), ("failed_files", "Failed or rejected"),
+        ("skipped_files", "Skipped"), ("cancelled_files", "Cancelled"),
+    ):
+        if counts[field]:
+            lines.append(f"- {label}: {_report_count_text(counts[field])}.")
+    total = getattr(result, "total_files", None)
+    missing = total is None or total != sum(counts.values())
+    cancelled_before_start = (
+        not getattr(result, "started", True)
+        and getattr(result, "cancellation_requested", False)
+    )
+    if cancelled_before_start:
+        lines.append("- Cancelled before metadata enrichment started.")
+    elif total == 0:
+        lines.append("- No eligible accepted reports for the requested enrichment.")
+    if missing:
+        lines.append("- Requested, but complete outcome evidence is unavailable.")
+    attention = missing or cancelled_before_start or any(
+        counts[field] for field in ("failed_files", "skipped_files", "cancelled_files")
+    )
+    return attention, "\n".join(lines)
+
+
+def _build_parse_completion_summary(result, db_file, enrichment_result=None, *, enrichment_requested=False):
+    requested = enrichment_requested or enrichment_result is not None
+    if result is None:
+        severity, title, message = "info", "Parsing successful", f"Measurements data saved to {db_file}!"
+        if requested:
+            severity, title, message = "warning", "Completion evidence unavailable", "Import outcome unavailable."
+    else:
+        severity, title, message = _build_import_completion_summary(result, db_file)
+    if not requested:
+        return severity, title, message
+    attention, enrichment_group = _enrichment_completion_group(enrichment_result)
+    message = message.replace(f"Nothing was written to {db_file}.", f"No new reports were saved to {db_file}.")
+    message = message.replace(f"Nothing new was saved to {db_file}.", f"No new reports were saved to {db_file}.")
+    if attention and severity != "warning":
+        severity, title = "warning", "Metadata enrichment incomplete"
+    return severity, title, message + "\n\n" + enrichment_group
 
 
 class ParsingDialog(QDialog):
@@ -871,14 +921,17 @@ class ParsingDialog(QDialog):
         return "report file" if count == 1 else "report files"
 
     def _build_parse_completion_feedback(self):
-        result = getattr(self.parse_thread, "last_parse_result", None)
-        if result is None:
-            return (
-                "info",
-                "Parsing successful",
-                f"Measurements data saved to {self.db_file}!",
-            )
-        return _build_parse_completion_summary(result, self.db_file)
+        return _build_parse_completion_summary(
+            getattr(self.parse_thread, "last_parse_result", None), self.db_file,
+            getattr(self.parse_thread, "last_enrichment_result", None),
+            enrichment_requested=self._embedded_enrichment_requested(),
+        )
+
+    def _embedded_enrichment_requested(self):
+        return bool(
+            getattr(self.parse_thread, "run_background_metadata_enrichment", False)
+            and getattr(self.parse_thread, "metadata_parsing_mode", "light") == "light"
+        )
 
 
     @pyqtSlot(str)
@@ -892,33 +945,24 @@ class ParsingDialog(QDialog):
         """Handle parse completion, including cancellation and error paths."""
         try:
             close_requested = getattr(self, "_close_requested", False)
+            # Retain both stage outcomes before stopped-thread cleanup or flag resets.
+            result = getattr(self.parse_thread, "last_parse_result", None)
+            enrichment_result = getattr(self.parse_thread, "last_enrichment_result", None)
+            enrichment_requested = self._embedded_enrichment_requested()
+            feedback = _build_parse_completion_summary(
+                result, self.db_file, enrichment_result, enrichment_requested=enrichment_requested,
+            )
             should_request_modeless_enrichment = (
                 not close_requested
                 and not self.parse_error_message
                 and not self.parsing_canceled
                 and self._pending_modeless_metadata_enrichment
+                and not enrichment_requested
             )
             dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
 
             if not close_requested:
-                if self.parse_error_message:
-                    QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
-                elif self.parsing_canceled and (
-                    getattr(self.parse_thread, "last_parse_result", None) is None
-                    or getattr(
-                        self.parse_thread.last_parse_result,
-                        "cancelled_files",
-                        _MISSING_RESULT_FIELD,
-                    )
-                    is _MISSING_RESULT_FIELD
-                ):
-                    QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
-                elif not should_request_modeless_enrichment:
-                    severity, title, message = self._build_parse_completion_feedback()
-                    if severity == "warning":
-                        QMessageBox.warning(self, title, message)
-                    else:
-                        QMessageBox.information(self, title, message)
+                self._show_parse_completion(feedback, enrichment_requested, should_request_modeless_enrichment)
 
             # Reset parse state flags
             self.parsing_canceled = False
@@ -939,6 +983,29 @@ class ParsingDialog(QDialog):
                 self.metadata_enrichment_requested.emit(self.db_file)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _show_parse_completion(self, feedback, enrichment_requested, should_request_modeless_enrichment):
+        if self.parse_error_message:
+            message = self.parse_error_message
+            if enrichment_requested:
+                message += "\n\n" + feedback[2]
+            QMessageBox.warning(self, "Parsing failed", message)
+        elif self.parsing_canceled and not enrichment_requested and (
+            getattr(self.parse_thread, "last_parse_result", None) is None
+            or getattr(
+                self.parse_thread.last_parse_result,
+                "cancelled_files",
+                _MISSING_RESULT_FIELD,
+            )
+            is _MISSING_RESULT_FIELD
+        ):
+            QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
+        elif not should_request_modeless_enrichment:
+            severity, title, message = feedback
+            if severity == "warning":
+                QMessageBox.warning(self, title, message)
+            else:
+                QMessageBox.information(self, title, message)
 
     @staticmethod
     def _thread_is_running(thread):
