@@ -2,7 +2,7 @@
 
 Status: Active template
 Owner: Product/architecture maintainer
-Last reviewed: 2026-09-04
+Last reviewed: 2026-09-05
 
 Use the sections relevant to the change, replace placeholders and retain explicit unavailable or
 inapplicable evidence. Keep the report proportionate: MICRO work does not need a milestone essay.
@@ -28,12 +28,23 @@ Closes #<primary Issue> <!-- Use Refs instead if this PR is only a slice. -->
 - Agent / parent / role: <IDs; coordinator or read-only reviewer>
 - Whole-PR class: MICRO | BOUNDED INTEGRATION | FEATURE / CROSS-LAYER | CRITICAL / MILESTONE
 - Consequence and reasoning difficulty: <separate rationale>
-- Requested model / effort: <model and supported effort>
-- Actual model / effort: <observed values or not visible>
+- Execution surface / sign-in: <client or direct API; relevant access>
+- Requested model / product control: <actual label; product control N/A for direct API>
+- Request-level API effort / applied effort updates: <separate values when used; otherwise N/A>
+- Actual model / effective effort / topology: <observed values or not visible>
 - Fallback/deviation: <none or exact requested/observed change and authority>
 - Why this route: <expected value; no unmeasured superiority/cost claim>
 - Delegation: <none or bounded ownership reason>
 - Checkpoint / effort budget outcome: <deliverable, spent budget if observed>
+
+<!-- Optional: omit when these capabilities were not used or required. -->
+- Capability use and availability: <context management, async, steering, effort updates, UI>
+- Approved changes during execution: <packet/decision revision; effect on scope and effort>
+- Pending-operation disposition: <completed / cancelled / preserved; stale results reconciled>
+- Safety stop: <none or sanitized error/state and operator disposition; never auto-retried>
+
+A selected Ultra label does not prove a helper count or API effort. After an effort update, the
+response's request-level effort field does not establish the updated effective effort.
 
 <!-- Only include worker rows for actual workers. -->
 | Agent / parent | Role and ownership | Requested route | Observed route / inheritance | Evidence |

@@ -2,7 +2,7 @@
 
 Status: Active template
 Owner: Product/architecture maintainer
-Last reviewed: 2026-09-04
+Last reviewed: 2026-09-05
 
 Use this for nontrivial work. Replace placeholders, remove inapplicable detail and link the
 [playbook](./codex-model-routing.md) instead of repeating it. Keep **MUST**, **SHOULD**, **DEFERRED**,
@@ -32,13 +32,26 @@ PHASE: <diagnose / prototype / implement / review / mechanical closeout>
 - Consequence: <severity and data/security/release implications>
 - Unresolved reasoning problem: <question, or none: contract already accepted>
 - Requested model: <GPT-6 Astra / GPT-5.6 Luna / Terra / Sol / explicit alternative>
-- Requested reasoning effort: <supported value; Astra: low / medium / high / xhigh / max>
+- Execution surface / sign-in: <Codex client, ChatGPT Work, Chat or direct API; relevant access>
+- Requested product control: <actual displayed label, e.g. High / Ultra; N/A for direct API>
+- API effort, when applicable: <Astra: low / medium / high / xhigh / max; otherwise not visible>
+- Approved phase/effort transitions: <conditions and ceiling, or none>
 - Why this route: <benefit relative to total effort, not the severity label alone>
 - Approved availability fallback: <exact model/effort + conditions, or none>
 - Independent review route: <requested model/effort; hosted actual may be not visible>
 
-Do not silently substitute model or effort. Never use Ultra as an Astra API effort or
-GPT-6 Pro as a Codex model ID. Hidden runtime identity alone is not a blocker.
+Do not silently substitute model or effort. Codex Ultra is valid when exposed, but is not an
+Astra API effort; GPT-6 Pro is not a Codex model ID. Hidden runtime identity alone is not a blocker.
+
+<!-- Optional: include only capabilities actually used or needed by acceptance. -->
+- Runtime capabilities: <context management / async tools / steering / effort updates / UI tools>
+- Availability and approval: <verified client/request support, opt-in authority; or unavailable>
+- Pending-work owner and finish condition: <bounded jobs, stale-result handling, reconciliation>
+- Capability fallback: <approved ordinary execution path; or blocker if acceptance requires it>
+
+Follow the playbook's compatibility limits; this packet does not enable unsupported combinations.
+Complete already-authorized work to the intended deliverable, asking only for a material missing
+decision. Name an applicable instruction/skill that blocks work rather than inventing a new gate.
 
 ## Ownership and effort budget
 
@@ -114,8 +127,10 @@ Preserve work and report the exact missing decision, safe state and actions not 
 
 - Agent / parent / role: <IDs and role>
 - Starting base / final head / tree: <exact refs or uncommitted>
-- Requested model / effort: <route>
-- Actual model / effort: <observed values or not visible>
+- Execution surface / requested model / product control: <surface and selected route>
+- Request-level API effort / applied effort updates: <separate values when used; otherwise N/A>
+- Actual model / effective effort / topology: <observed values or not visible>
+- Capability use / steering / pending actions: <only when used; revised packet and reconciled state>
 - Worker inheritance / fallback / deviation: <observed or not visible; approval if changed>
 - Outcome and preserved artifact: <what now works; Issue/PR/commit>
 - Scope: <exact paths; deviation and authority if any>

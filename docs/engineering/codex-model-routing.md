@@ -2,7 +2,7 @@
 
 Status: Active supporting engineering policy
 Owner: Product/architecture maintainer
-Last reviewed: 2026-09-04
+Last reviewed: 2026-09-05
 Decision: [#1024](https://github.com/hexafe/metroliza/issues/1024)
 
 This playbook expands [`../../AGENTS.md`](../../AGENTS.md). It does not replace the active Issue,
@@ -12,14 +12,14 @@ and approval gates remain binding until an explicit replacement packet is issued
 
 ## Verified model reference
 
-Official sources were checked on 2026-09-04; the routing recommendations are project decisions,
+Official sources were checked on 2026-09-05; the routing recommendations are project decisions,
 not measured claims of model superiority on Metroliza.
 
 - **GPT-6 Astra API**: API ID `gpt-6-astra`; documented `reasoning.effort` values are `low`,
   `medium`, `high`, `xhigh`, and `max`. These API values do not enumerate Codex UI choices. [1]
-- **Codex Ultra** is a current product-level reasoning choice, including when shown for Astra.
-  OpenAI describes Ultra as maximum reasoning that may run additional agents for eligible users;
-  it is neither a separate model nor a literal `reasoning.effort="ultra"` API value. [7]
+- **Codex Max / Ultra** are product controls: Max adds single-agent reasoning depth; Ultra
+  delegates separate parts to parallel subagents. Ultra is available for Astra when exposed by
+  the client/account; it is not a separate model or a literal API effort named `ultra`. [7]
 - **GPT-6 Pro** is the ChatGPT product option for Astra. It is not a Codex model ID or an effort
   value; Chat controls must not be translated into API parameters by name alone. [2]
 - **GPT-5.6 Luna, Terra and Sol** remain separate options. Their documented API efforts include
@@ -34,6 +34,82 @@ separately from any observed API effort or runtime agent topology; keep unobserv
 claim it is unavailable because it is absent from the API enum. Direct API packets must use the
 API parameter names. Changing a model in an existing packet still requires explicit authority.
 A model name in a prompt requests a route; it does not prove which model executed it.
+
+## GPT-6 capability adoption
+
+Checked 2026-09-05. These are execution options, not implemented Metroliza product features or
+permission to enable settings. Check the client, sign-in, tools and request mode before using an
+option; record unavailable features only when relevant. Ordinary work can continue on the approved
+route without optional features. A feature required by acceptance needs a real supported runtime.
+
+### New API capabilities
+
+| Capability | Verified behavior | Metroliza adoption rule |
+| --- | --- | --- |
+| Async tool calling [9] | Astra can continue while an application runs a function/custom tool marked `async: true`; results retain the original `call_id`. | Overlap independent reads or isolated checks only within authorized scope. The host owns execution, finite pending-work limits, failure/cancellation handling and result reconciliation. No implied parallel database or shared-worktree writers. |
+| Mid-turn steering [10] | Responses WebSockets accept user updates during a running response. A queued update is not proof it has been applied; started tools/actions are not undone. | Preserve unchanged requirements. Record an accepted scope change in the Issue/packet, inspect stale work and reconcile pending actions before continuing affected mutations. Keep one task budget across continuations. |
+| Cache-preserving effort changes [11] | `configuration_update` selects effort between responses in standard, single-agent Astra requests while retaining the request-level setting. | Preapprove the phase/effort transitions and ceiling; record each applied update separately from the initial request setting. No silent route change or automatic maximum-compute escalation. |
+| Misalignment monitoring [12] | Coverage and automatic stopping depend on the API and retained conversation context. A flag calls for review, not an automatic conclusion of wrongdoing. | On `misalignment_policy_violation`, stop dispatching affected actions, preserve sanitized IDs/state and review already-started operations. Do not automatically retry or evade the stop. Existing application safeguards remain necessary. |
+
+Async tools are application-executed, not hosted built-ins or automatically managed background jobs.
+Do not combine them with Programmatic Tool Calling; API multi-agent mode must not combine async
+tools with parallel tool calls. [9]
+
+Effort updates are not supported with automatic compaction/truncation or the standalone compact
+endpoint. Keep updates in their original history positions; adjacent updates are rejected. Explicit
+`compaction_trigger` requires reapplying the desired update afterwards. The response's effort field
+still reflects the request-level value, so it does not prove the effort selected by an update. [11]
+Do not bundle context management, Ultra and effort updates into an assumed all-compatible preset.
+
+For an explicitly authorized API migration, Astra tool calling requires Responses. `none`/`minimal`
+are not supported effort choices; remove unsupported sampling/logprob parameters rather than copy
+an older request unchanged. With EU data residency, Astra uses Standard instead of Fast/priority;
+this is an API project configuration distinction, not the developer's physical location. [8]
+No API migration or host implementation is authorized by this playbook alone.
+
+### Codex context and UI work
+
+Experimental context management is optional, off by default, and at launch limited to supported
+Codex clients signed in with ChatGPT Plus or Pro, not Business, Enterprise or API-key sign-in.
+An approved local opt-in uses `features.context_management.experimental_mode = true` in
+`config.toml` and requires a new task. It keeps notes across context windows and searches earlier
+messages/tool results within that task; it is not guaranteed cross-task memory. [7]
+
+Use it for long bounded investigations, retaining the Issue, accepted constraints, relevant SHAs,
+findings, next check and pending-operation state. Revalidate the repository after a context change.
+Never store confidential measurements or credentials in notes, and never treat recalled task text
+as a replacement for current GitHub authority. This update does not enable the experiment.
+
+Computer use and multi-agent orchestration already existed before Astra; do not label every
+supported tool a new GPT-6 capability. [8] OpenAI reports stronger end-to-end UI work with Astra. [13]
+For Metroliza, exploit available UI tools to exercise real PyQt actions and inspect rendered results
+with synthetic fixtures. Browser prototypes, generated screenshots and source-only Linux runs do
+not establish native or packaged Windows behavior. Missing tools mean an unrun gate, not fake proof.
+
+### Prompting and early evidence
+
+Adapt OpenAI's GPT-6 guidance [8] to the accepted project authority:
+
+- Request a concrete outcome and complete already-authorized work before seeking an outstanding
+  approval. Ask only for a material missing decision; a useful checkpoint is not the final outcome.
+- Audit applicable `AGENTS.md`, instruction delegates and loaded skills for conflicts. Identify the
+  exact source of a pause; do not import broad autonomy examples over project or platform rules.
+- Make delegation explicit and bounded. Prefer distinct investigations over duplicate reviewers;
+  keep messages legible and conclusions focused on outcomes, evidence and remaining decisions.
+- Use meaningful existing tests where appropriate. Complete mandatory gates; add or repeat checks
+  for changed behavior, failures or unresolved risk, not implementation-mirroring policy prose tests.
+
+The September 4 CodeRabbit evaluation found its largest gains over Sol on cross-file review, not
+uniformly across all tasks. [14] Early Reddit accounts include productive Astra/Medium sessions
+and better code understanding, but also remaining bugs and overengineering. [15,16] These are
+vendor-specific measurements and anecdotes, not Metroliza results or a stable community consensus.
+The durable research/disposition record is [#1024](https://github.com/hexafe/metroliza/issues/1024).
+
+Keep Astra/high as the substantial-work default. The orchestrator may explicitly approve an
+Astra/medium comparison on bounded work with the same acceptance and review gates. Compare the
+same starting code/task, supported surface, corrections and observed total usage; do not substitute
+API token prices for subscription consumption. Record a lesson in the existing PR report, not a new
+benchmark platform. Change defaults only on evidence and an explicit decision.
 
 ## Universal orchestration core
 
@@ -84,7 +160,10 @@ The table lists direct API effort names. For Codex, request the actual displayed
 High or Ultra) and record the surface. Do not require a UI option named `xhigh` or `max` merely
 because the API supports it. Codex Ultra follows the explicit maximum-compute approval/budget
 rule below; its possible additional agents must be included in observed usage and ownership
-reporting, not assumed to be absent.
+reporting, not assumed to be absent. Select Ultra only with an approved delegation scope and
+budget. If a runtime cannot enforce a hard packet ownership/topology limit, obtain a bounded
+exception or use an already-approved single-agent route. Hidden model identity alone is not such
+a failure; do not infer that automatic workers are read-only or that their exact number is known.
 
 | API effort | Use | Escalation boundary |
 | --- | --- | --- |
@@ -331,4 +410,16 @@ deferrals and remote-operation status are recorded. A checkpoint or Draft PR is 
 4. [GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
 5. [GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
 6. [ChatGPT Work and Codex: availability and usage](https://help.openai.com/en/articles/20001275)
-7. [Codex rate card: Ultra reasoning and possible additional agents](https://help.openai.com/en/articles/20001106)
+7. [Codex models, Max/Ultra and experimental context management](https://learn.chatgpt.com/docs/models)
+8. [GPT-6 Astra guidance, prompting and API migration](https://developers.openai.com/api/docs/guides/latest-model)
+9. [Async tool calling and compatibility](https://developers.openai.com/api/docs/guides/async-tool-calling)
+10. [Mid-turn steering and pending actions](https://developers.openai.com/api/docs/guides/steering)
+11. [Changing reasoning mid-conversation](https://developers.openai.com/api/docs/guides/reasoning#change-reasoning-mid-conversation)
+12. [Misalignment monitoring and stopped conversations](https://developers.openai.com/api/docs/guides/safety-checks/misalignment-monitoring)
+13. [GPT-6 Astra announcement](https://openai.com/index/gpt-6-astra/)
+
+## Early external evidence — not policy authority
+
+14. [CodeRabbit evaluation, 2026-09-04](https://www.coderabbit.ai/blog/gpt-6-astra-code-review-evaluation)
+15. [Reddit: Astra/Medium experience, accessed 2026-09-05](https://www.reddit.com/r/codex/comments/1w7vs7b/astra_medium_costs_less_than_56_sol_high/)
+16. [Reddit: gains and remaining failures, accessed 2026-09-05](https://www.reddit.com/r/codex/comments/1w7pwow/astra_is_a_great_step_up_from_sol_56/)

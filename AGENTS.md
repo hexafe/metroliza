@@ -48,10 +48,11 @@ Use these project defaults for new packets; the playbook owns availability and e
 | FEATURE / CROSS-LAYER | GPT-6 Astra / high |
 | CRITICAL / MILESTONE | GPT-6 Astra / high |
 
-Risk determines evidence and approval rigor, not automatic maximum reasoning. Codex **Ultra** is
-a current product-level reasoning choice: it uses maximum reasoning and may run additional agents
-for eligible users. It is not the literal Astra API `reasoning.effort` value. Record the execution
-surface and its selected label; do not infer an exact API parameter or agent count from the label.
+Risk determines evidence and approval rigor, not automatic maximum reasoning. Codex **Max** gives
+one agent more reasoning depth; **Ultra** delegates parts of a task to parallel subagents. Ultra is
+a product control, not a literal Astra API `reasoning.effort` value. Record the execution surface
+and selected label separately from observed API effort and topology; do not infer an exact mapping
+or agent count. Automatic delegation must respect the packet's ownership and budget.
 Use available higher-effort controls for bounded unresolved audits; Codex Ultra and API `max`
 require an explicit benefit, budget, checkpoint and exit condition. GPT-6 Pro is the ChatGPT product
 option, not a Codex model ID. GPT-5.6 Sol / high remains an explicitly selectable complex-work/review
@@ -69,6 +70,14 @@ budget and allowed remote operations. Routine local test-driven iterations withi
 not new review-correction rounds. Stop for changed contracts/authority, not an arbitrary edit count.
 Two repeated findings on the same boundary require a contract review, not an automatic compute
 increase. Existing explicit packet limits and frozen PRs remain binding until separately refreshed.
+
+For GPT-6 execution, use the playbook's capability and prompting guidance. Complete already-
+authorized work to a reviewable result; ask only for missing decisions that materially affect it.
+Inspect applicable instruction/skill conflicts, naming the exact source instead of inventing a gate.
+Use task-local context notes only as working memory; GitHub remains durable authority. Async tools,
+steering and effort updates require actual runtime support and do not expand permissions. Reconcile
+pending actions before claiming completion. Run meaningful required checks; repeat or broaden them
+when changed bytes, failures or unresolved risks justify it, not merely to repeat a passing receipt.
 
 Every nontrivial PR reports routing and evidence with
 [`docs/engineering/pr-routing-report-template.md`](docs/engineering/pr-routing-report-template.md).
