@@ -2265,11 +2265,14 @@ def test_enrichment_queue_uses_selected_typed_acceptances(tmp_path, monkeypatch,
         assert worker._extracted_archive_dir is None
 
 
-@pytest.mark.parametrize("boundary", ("before_stage", "between", "during_dml", "after_last", "failure_then_cancel"))
+@pytest.mark.parametrize("boundary", ("before_stage", "between", "during_dml", "after_last", "failure_then_cancel", "final_failure_then_cancel"))
 def test_enrichment_cancellation_partition_preserves_committed_graph(tmp_path, monkeypatch, boundary):
     from metroliza.parsing import parse_reports_thread as worker_module
 
-    reports, database, worker, state = _enrichment_worker_case(tmp_path, monkeypatch, count=3 if boundary == "before_stage" else 2)
+    count = 1 if boundary == "final_failure_then_cancel" else 2
+    reports, database, worker, state = _enrichment_worker_case(
+        tmp_path, monkeypatch, count=3 if boundary == "before_stage" else count,
+    )
     original = ReportRepository.replace_report_metadata_enrichment
     committed = []
     if boundary == "before_stage":
@@ -2299,7 +2302,7 @@ def test_enrichment_cancellation_partition_preserves_committed_graph(tmp_path, m
             return result
 
         monkeypatch.setattr(ReportRepository, "_replace_report_metadata", cancel_after_dml)
-    elif boundary == "failure_then_cancel":
+    elif boundary in {"failure_then_cancel", "final_failure_then_cancel"}:
         def fail_and_cancel(parser):
             worker.stop_parsing()
             raise RuntimeError("Extraction failed independently of cancellation")
@@ -2316,16 +2319,17 @@ def test_enrichment_cancellation_partition_preserves_committed_graph(tmp_path, m
         monkeypatch.setattr(ReportRepository, "replace_report_metadata_enrichment", commit_then_cancel)
     worker.run()
     imported = worker.last_parse_result
-    assert imported.imported_files == 2
+    assert imported.imported_files == count
     assert imported.cancelled_files == int(boundary == "before_stage")
     assert imported.failed_files == imported.preflight_changed_files == 0
     result = worker.last_enrichment_result
     assert result is state["result"]
     expected = {"before_stage": (0, 0, 0, 2), "between": (1, 0, 0, 1),
                 "during_dml": (0, 0, 0, 2), "after_last": (2, 0, 0, 0),
-                "failure_then_cancel": (0, 1, 0, 1)}[boundary]
+                "failure_then_cancel": (0, 1, 0, 1), "final_failure_then_cancel": (0, 1, 0, 0)}[boundary]
     assert (result.enriched_files, result.failed_files, result.skipped_files, result.cancelled_files) == expected
-    assert result.total_files == sum(expected) == 2
+    assert result.total_files == sum(expected) == count
+    assert result.cancellation_requested is True
     assert result.status == ("cancelled_before_start" if boundary == "before_stage" else
                              "completed" if boundary == "after_last" else "incomplete")
     assert _enrichment_graph(database) == (committed[-1] if committed else state["before"])

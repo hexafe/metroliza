@@ -915,7 +915,7 @@ def enrich_report_metadata(
         skipped_files=skipped_files,
         cancelled_files=total_files - processed_files,
         started=started,
-        cancellation_requested=cancellation_requested,
+        cancellation_requested=cancellation_requested or should_cancel(),
     )
 
 
