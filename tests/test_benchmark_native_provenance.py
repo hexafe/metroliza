@@ -85,6 +85,175 @@ def _guard_child(tmp_path, code, *args):
     return _child(tmp_path, GUARD_SETUP + dedent(code), *args)
 
 
+def _bootstrap_child(tmp_path, location, suffix, option="tooling", link=False, module="argparse"):
+    _child(tmp_path, """\
+        import builtins
+        import importlib.machinery as machinery
+        import subprocess
+        import os
+        location, suffix, option, link, module = sys.argv[3:]
+        tooling = Path(sys.argv[2]) / 'tooling'; (tooling / 'scripts').mkdir(parents=True)
+        measured = tooling.parent / 'measured'; measured.mkdir()
+        driver = tooling / 'scripts' / 'benchmark_csv_pipeline.py'
+        driver.write_bytes((Path(sys.argv[1]) / 'scripts' / driver.name).read_bytes())
+        selected = tooling if option == 'tooling' else measured
+        directory = selected / location; directory.mkdir(exist_ok=True)
+        artifact = directory / (module + suffix)
+        if link == 'True':
+            target = tooling.parent / 'native-target'; target.mkdir()
+            (target / artifact.name).write_bytes(b'INERT - MUST NEVER EXECUTE')
+            if location == 'linked':
+                directory.rmdir(); directory.symlink_to(target, target_is_directory=True)
+            else:
+                artifact.symlink_to(target / artifact.name)
+        else:
+            artifact.write_bytes(b'INERT - MUST NEVER EXECUTE')
+        (selected / '.gitignore').write_text('*.[sS][oO]\\n*.[pP][yY][dD]\\nlinked\\n')
+        subprocess.run(['git', 'init', '--quiet', str(selected)], check=True)
+        subprocess.run(['git', 'add', '.gitignore'], cwd=selected, check=True)
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                        'commit', '--quiet', '-m', 'bootstrap fixture'], cwd=selected, check=True)
+        ignored_entry = directory if link == 'True' and location == 'linked' else artifact
+        assert subprocess.check_output(['git', 'check-ignore', str(ignored_entry)], cwd=selected)
+        spec = machinery.PathFinder.find_spec(module, [str(directory)])
+        if suffix in machinery.EXTENSION_SUFFIXES or (
+            sys.platform == 'win32' and suffix.lower() in machinery.EXTENSION_SUFFIXES
+        ):
+            assert spec and Path(spec.origin) == artifact
+            assert isinstance(spec.loader, machinery.ExtensionFileLoader)
+        assert module not in sys.modules
+        original_import = builtins.__import__
+        def checked_import(name, *args, **kwargs):
+            if name in {'argparse', 'cProfile', 'hashlib'}:
+                raise AssertionError('Bootstrap dependency reached before native rejection: ' + name)
+            return original_import(name, *args, **kwargs)
+        builtins.__import__ = checked_import
+        # Belt-and-braces: never initialize an inert candidate even if the first gate regresses.
+        def audit(event, args):
+            if event == 'import' and len(args) > 1 and args[1]:
+                raise AssertionError('Unexpected native initialization in inert bootstrap test')
+        sys.addaudithook(audit)
+        sys.path[:0] = [str(directory), str(tooling / 'scripts'), str(tooling)]
+        if option == 'tooling':
+            arguments = ['--help']
+        else:
+            flag, style = option.split(':')
+            value = str(measured) if '--repo'.startswith(flag) else 'B=' + str(measured)
+            arguments = [flag + '=' + value] if style == 'equals' else [flag, value]
+            arguments += ['--help']
+        sys.argv = [str(driver), *arguments]
+        try:
+            exec(compile(driver.read_bytes(), str(driver), 'exec'),
+                 {'__file__': str(driver), '__name__': '__main__', '__package__': None})
+        except RuntimeError as exc:
+            assert 'native' in str(exc).lower()
+        else:
+            raise AssertionError('Bootstrap accepted checkout native input')
+        assert artifact.read_bytes() == b'INERT - MUST NEVER EXECUTE'
+        """, tmp_path, location, suffix, option, link, module)
+
+
+@pytest.mark.parametrize("location", [".", "src", "scripts"])
+@pytest.mark.parametrize("suffix", SUFFIXES)
+def test_bootstrap_native_rejection_precedes_stdlib_imports(tmp_path, location, suffix):
+    _bootstrap_child(tmp_path, location, suffix)
+
+
+@pytest.mark.parametrize("module", ["cProfile", "benchmark_native_provenance"])
+def test_bootstrap_rejects_dependency_and_helper_shadows(tmp_path, module):
+    _bootstrap_child(tmp_path, "scripts", importlib.machinery.EXTENSION_SUFFIXES[0], module=module)
+
+
+@pytest.mark.parametrize("flag", ["--repo", "--rep", "--compare", "--compar", "--co"])
+@pytest.mark.parametrize("style", ["equals", "separate"])
+@pytest.mark.parametrize("location", [".", "src"])
+def test_bootstrap_covers_declared_checkout_on_startup_path(tmp_path, flag, style, location):
+    _bootstrap_child(tmp_path, location, importlib.machinery.EXTENSION_SUFFIXES[0], flag + ':' + style)
+
+
+@pytest.mark.parametrize("location", [".", "linked"])
+def test_bootstrap_native_symlinks_are_rejected(tmp_path, location):
+    probe = tmp_path / "probe"
+    try:
+        probe.symlink_to(tmp_path, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unavailable on this host")
+    probe.unlink()
+    _bootstrap_child(tmp_path, location, importlib.machinery.EXTENSION_SUFFIXES[0], link=True)
+
+
+@pytest.mark.parametrize("flag", ["--repo", "--rep", "--compare", "--co"])
+@pytest.mark.parametrize("equals", [False, True])
+def test_bootstrap_roots_agree_with_accepted_cli(monkeypatch, tmp_path, flag, equals):
+    from scripts import benchmark_csv_pipeline as driver
+
+    first = str(tmp_path / "first")
+    value = first if "--repo".startswith(flag) else "B=" + first
+    arguments = [flag + "=" + value] if equals else [flag, value]
+    if "--repo".startswith(flag):
+        arguments.append("--worker")
+    elif not equals:
+        arguments.append("C=" + str(tmp_path / "second"))
+    arguments += ["--output", str(tmp_path / "output")]
+    captured = []
+    monkeypatch.setattr(driver, "_worker", captured.append)
+    monkeypatch.setattr(driver, "_compare", captured.append)
+    monkeypatch.setattr(sys, "argv", [driver.__file__, *arguments])
+    driver.main()
+    args = captured[0]
+    expected = [args.repo] if args.worker else [v.split("=", 1)[1] for v in args.compare]
+    assert driver._bootstrap_roots(arguments)[1:] == expected
+    assert driver._bootstrap_roots(["--", *arguments])[1:] == []
+
+
+def test_bootstrap_file_symlink_uses_actual_interpreter_search_root(tmp_path):
+    target = tmp_path / "source" / "scripts"
+    target.mkdir(parents=True)
+    invocation = tmp_path / "invocation"
+    invocation.mkdir()
+    probe = target / "probe.py"
+    probe.write_text("import sys\nprint(sys.path[0])\n")
+    link = invocation / "entry.py"
+    try:
+        link.symlink_to(probe)
+    except OSError:
+        pytest.skip("symlink creation unavailable on this host")
+    observed = subprocess.check_output([sys.executable, str(link)], cwd=tmp_path, text=True).strip()
+    link.unlink()
+    driver = target / "benchmark_csv_pipeline.py"
+    driver.write_bytes((ROOT / "scripts" / driver.name).read_bytes())
+    link.symlink_to(driver)
+    artifact = invocation / ("argparse" + importlib.machinery.EXTENSION_SUFFIXES[0])
+    artifact.write_bytes(b"INERT - MUST NEVER EXECUTE")
+    output = _child(tmp_path, """\
+        import importlib.machinery as machinery
+        import os
+        link, observed, artifact = map(Path, sys.argv[2:])
+        admitted = observed.resolve() == link.parent.resolve()
+        spec = machinery.PathFinder.find_spec('argparse', [str(artifact.parent)])
+        assert Path(spec.origin) == artifact and isinstance(spec.loader, machinery.ExtensionFileLoader)
+        assert 'argparse' not in sys.modules
+        def audit(event, args):
+            if event == 'import' and len(args) > 1 and args[1]:
+                assert Path(args[1]).resolve() != artifact.resolve(), 'Inert binary reached loader'
+        sys.addaudithook(audit)
+        sys.path[0] = str(observed)
+        sys.argv = [str(link), '--help']
+        try:
+            exec(compile(link.read_bytes(), str(link), 'exec'),
+                 {'__file__': str(link), '__name__': '__main__', '__package__': None})
+        except RuntimeError as exc:
+            assert admitted and 'native' in str(exc).lower()
+        except SystemExit as exc:
+            assert not admitted and exc.code == 0
+        else:
+            raise AssertionError('No bootstrap disposition')
+        assert artifact.read_bytes() == b'INERT - MUST NEVER EXECUTE'
+        print('FILE_SYMLINK_BOOTSTRAP', sys.platform, 'invocation_root_admitted=' + str(admitted))
+        """, link, observed, artifact)
+    print(output.splitlines()[-1])
+
+
 @pytest.mark.parametrize("suffix", SUFFIXES)
 def test_external_native_suffix_inventory_without_execution(tmp_path, suffix):
     _guard_child(tmp_path, """\

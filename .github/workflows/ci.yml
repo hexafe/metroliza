@@ -813,7 +813,7 @@ jobs:
         env:
           PYTHONPATH: src;.
         run: >-
-          python -m pytest -v
+          python -m pytest -v -s
           "tests/test_benchmark_native_provenance.py"
           "tests/test_csv_pipeline_performance.py::test_benchmark_rejects_dirty_checkout_before_recording_identity[tracked]"
           "tests/test_csv_pipeline_performance.py::test_benchmark_rejects_dirty_checkout_before_recording_identity[staged]"

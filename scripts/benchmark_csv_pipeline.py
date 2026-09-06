@@ -10,18 +10,84 @@ help remain platform-neutral.
 """
 from __future__ import annotations
 
-import argparse
-import cProfile
-from dataclasses import asdict
-import hashlib
-import importlib.metadata
-import json
 import os
-from pathlib import Path
-import statistics
-import subprocess
 import sys
-import time
+
+_CLI_OPTIONS = {name: "--" + name for name in (
+    "repo", "output", "case", "compare", "samples", "blocks", "requests",
+    "timeout", "profile", "worker",
+)}
+
+
+def _bootstrap_roots(arguments):
+    """Locate declared source roots without importing shadowable CLI dependencies.
+
+    argparse still validates the CLI. Share its long option names and recognize
+    the same unambiguous prefixes; inspect every comparison value conservatively.
+    """
+    actual_script_directory = os.path.dirname(os.path.realpath(__file__))
+    roots = [os.path.dirname(actual_script_directory)]
+    invocation_directory = os.path.dirname(os.path.abspath(__file__))
+    # Windows direct-file symlinks can admit the link directory; POSIX normally
+    # resolves the target for sys.path[0]. Inspect only the actually admitted root.
+    if (sys.path and os.path.realpath(sys.path[0]) == os.path.realpath(invocation_directory)
+            and os.path.realpath(invocation_directory) != actual_script_directory):
+        roots.append(invocation_directory)
+    for index, argument in enumerate(arguments):
+        if argument == "--":
+            break
+        option, separator, inline = argument.partition("=")
+        if not option.startswith("--"):
+            continue
+        matches = [flag for flag in _CLI_OPTIONS.values() if flag.startswith(option)]
+        if len(matches) != 1 or matches[0] not in {"--repo", "--compare"}:
+            continue
+        values = [inline] if separator else []
+        for value in arguments[index + 1:]:
+            if value.startswith("-"):
+                break
+            values.append(value)
+        if matches[0] == "--repo":
+            roots.extend(values[:1])
+        else:
+            roots.extend(value.split("=", 1)[1] for value in values if "=" in value)
+    return roots
+
+
+def _bootstrap_reject_native(root, ancestors=frozenset()):
+    """Dependency-free rejection before stdlib/helper names can be shadowed.
+
+    Deliberately duplicate the small helper predicate: importing that helper first
+    could itself initialize an ignored extension. Full identities follow later.
+    """
+    resolved = os.path.realpath(root)
+    if not os.path.exists(resolved):
+        return  # argparse/the worker owns invalid or missing checkout diagnostics.
+    if resolved in ancestors:
+        raise RuntimeError("Unsupported cyclic import-directory symlink")
+    with os.scandir(root) as entries:
+        for entry in entries:
+            if entry.name.lower().endswith((".so", ".pyd")) and entry.name.split(".")[0].isidentifier():
+                raise RuntimeError("Checkout-local native inputs are unsupported before bootstrap imports")
+            if entry.name.isidentifier() and entry.is_dir():
+                _bootstrap_reject_native(entry.path, ancestors | {resolved})
+
+
+for _bootstrap_root in _bootstrap_roots(sys.argv[1:]):
+    _bootstrap_reject_native(_bootstrap_root)
+
+# These imports must follow the dependency-free native rejection above.
+import argparse  # noqa: E402
+import cProfile  # noqa: E402
+from dataclasses import asdict  # noqa: E402
+import hashlib  # noqa: E402
+import importlib.metadata  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+import statistics  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
+
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -57,23 +123,41 @@ def _verify_checkout_identity(repo: Path, expected: tuple[str, str], driver_sha:
         raise RuntimeError("Benchmark checkout or shared driver changed during measurement")
 
 
+def _check_output_location(repo: Path, destination: Path) -> None:
+    if destination.is_relative_to(repo) and subprocess.run(
+        ["git", "check-ignore", "--quiet", "--", str(destination)], cwd=repo,
+    ).returncode != 0:
+        raise RuntimeError("Benchmark output must be external or git-ignored")
+
+
+def _prepare_non_small_fixture(fixture, case, pd, np, rows):
+    if case == "small":
+        return
+    frame = pd.read_csv(fixture)
+    # Keep full rows/columns; adversarial text and missing values are intentional.
+    frame["DIM_01"] = frame["DIM_01"].astype(object)
+    frame.loc[frame.index[::997], "DIM_01"] = "invalid"
+    frame.loc[frame.index[::991], "DIM_02"] = np.nan
+    frame["CATEGORY"] = [f"Category {i % 997:04d}" for i in range(rows)]
+    frame.loc[0, "PART"] = '=HYPERLINK("https://example.invalid","<unsafe>&")'
+    frame.to_csv(fixture, index=False)
+
+
 def _worker(args: argparse.Namespace) -> None:
     from scripts.benchmark_native_provenance import reject_checkout_native
 
     repo = Path(args.repo).resolve()
     reject_checkout_native(repo)
+    tooling_root = Path(__file__).resolve().parents[1]
+    reject_checkout_native(tooling_root)
     import resource
 
     started = time.perf_counter()
     identity = _checkout_identity(repo)
-    tooling_root = Path(__file__).resolve().parents[1]
     tooling_identity = identity if tooling_root == repo else _checkout_identity(tooling_root)
     driver_sha = _sha(Path(__file__).resolve())
     destination = Path(args.output).resolve()
-    if destination.is_relative_to(repo) and subprocess.run(
-        ["git", "check-ignore", "--quiet", "--", str(destination)], cwd=repo,
-    ).returncode != 0:
-        raise RuntimeError("Benchmark output must be external or git-ignored")
+    _check_output_location(repo, destination)
     sys.path[:0] = [str(repo / "src"), str(repo)]
     from scripts.benchmark_native_provenance import NativeProvenance
     native_guard = NativeProvenance(repo)
@@ -113,15 +197,7 @@ def _worker(args: argparse.Namespace) -> None:
     rows, columns, groups = CASES[args.case]
     fixture = destination / "summary_fixture.csv"
     harness._create_csv_fixture(fixture, row_count=rows, data_columns=columns)
-    if args.case != "small":
-        frame = pd.read_csv(fixture)
-        # Keep full rows/columns; adversarial text and missing values are intentional.
-        frame["DIM_01"] = frame["DIM_01"].astype(object)
-        frame.loc[frame.index[::997], "DIM_01"] = "invalid"
-        frame.loc[frame.index[::991], "DIM_02"] = np.nan
-        frame["CATEGORY"] = [f"Category {i % 997:04d}" for i in range(rows)]
-        frame.loc[0, "PART"] = '=HYPERLINK("https://example.invalid","<unsafe>&")'
-        frame.to_csv(fixture, index=False)
+    _prepare_non_small_fixture(fixture, args.case, pd, np, rows)
     grouping = pd.DataFrame({
         "REPORT_ID": np.arange(1, rows + 1, dtype=int),
         "GROUP": [f"Group {index % groups + 1}" for index in range(rows)],
@@ -209,6 +285,22 @@ def _summary(values: list[float]) -> dict:
             "iqr": quartiles[2] - quartiles[0], "min": min(values), "max": max(values)}
 
 
+def _verify_comparison_sample(payload, identity, tooling_identity, driver_sha, helper_sha,
+                              native_inputs, label):
+    if (tuple(payload[key] for key in ("head", "tree")) != identity
+            or payload["driver_sha256"] != driver_sha
+            or payload["native_helper_sha256"] != helper_sha
+            or tuple(payload[key] for key in ("shared_tooling_head", "shared_tooling_tree"))
+            != tooling_identity):
+        raise RuntimeError("Comparison source/driver identity changed between samples")
+    native = payload["native_provenance"]
+    native_identity = {key: native[key] for key in
+                       ("artifacts", "bridge_resolution", "interpreter",
+                        "requested_backend_environment")}
+    if native_inputs.setdefault(label, native_identity) != native_identity:
+        raise RuntimeError("Comparison native inputs changed between samples")
+
+
 def _compare(args: argparse.Namespace) -> None:
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -246,18 +338,8 @@ def _compare(args: argparse.Namespace) -> None:
                                    check=True, timeout=args.timeout)
                 process_s = time.perf_counter() - start
                 payload = json.loads((run_dir / "result.json").read_text())
-                if (tuple(payload[key] for key in ("head", "tree")) != identities[label]
-                        or payload["driver_sha256"] != driver_sha
-                        or payload["native_helper_sha256"] != helper_sha
-                        or tuple(payload[key] for key in ("shared_tooling_head", "shared_tooling_tree"))
-                        != tooling_identity):
-                    raise RuntimeError("Comparison source/driver identity changed between samples")
-                native = payload["native_provenance"]
-                native_identity = {key: native[key] for key in
-                                   ("artifacts", "bridge_resolution", "interpreter",
-                                    "requested_backend_environment")}
-                if native_inputs.setdefault(label, native_identity) != native_identity:
-                    raise RuntimeError("Comparison native inputs changed between samples")
+                _verify_comparison_sample(payload, identities[label], tooling_identity,
+                                          driver_sha, helper_sha, native_inputs, label)
                 record = {"variant": label, "block": block, "warmup": index == -1,
                           "process_s": process_s, "result": payload}
                 records.append(record)
@@ -283,16 +365,16 @@ def _compare(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo")
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--case", choices=CASES, default="small")
-    parser.add_argument("--compare", nargs="+")
-    parser.add_argument("--samples", type=int, default=7)
-    parser.add_argument("--blocks", type=int, default=2)
-    parser.add_argument("--requests", type=int, default=1)
-    parser.add_argument("--timeout", type=int, default=600)
-    parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--worker", action="store_true")
+    parser.add_argument(_CLI_OPTIONS["repo"])
+    parser.add_argument(_CLI_OPTIONS["output"], required=True)
+    parser.add_argument(_CLI_OPTIONS["case"], choices=CASES, default="small")
+    parser.add_argument(_CLI_OPTIONS["compare"], nargs="+")
+    parser.add_argument(_CLI_OPTIONS["samples"], type=int, default=7)
+    parser.add_argument(_CLI_OPTIONS["blocks"], type=int, default=2)
+    parser.add_argument(_CLI_OPTIONS["requests"], type=int, default=1)
+    parser.add_argument(_CLI_OPTIONS["timeout"], type=int, default=600)
+    parser.add_argument(_CLI_OPTIONS["profile"], action="store_true")
+    parser.add_argument(_CLI_OPTIONS["worker"], action="store_true")
     args = parser.parse_args()
     if args.worker:
         _worker(args)

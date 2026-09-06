@@ -382,6 +382,8 @@ diagnostic only.
 |---|---|
 | Ready P1: ignored executable input despite clean Git | `test_ignored_importable_native_is_rejected_before_execution`, actual Git + resolution, root/src and all current suffixes plus `.so`/`.pyd` |
 | Windows suffix case, including `.PYD` and uppercase ABI suffixes | Same root/src rejection matrix plus `test_external_native_suffix_inventory_without_execution`; real Windows resolution without loading inert files, external origin/hash inclusion |
+| Bootstrap P1: checkout extension shadows a stdlib/helper import before rejection | `test_bootstrap_native_rejection_precedes_stdlib_imports`, dependency/helper shadows, declared source roots already on startup paths, CLI spelling parity and symlink regressions; independent pre-load sentinel, inert files only |
+| CI complexity ratchet: four new functions raised count 147 to 151 | Existing `test_production_complexity_does_not_exceed_reviewed_ratchet`; coherent helper extraction, unchanged budget and timed workflow/profiler/RSS sequence |
 | Installed inventory, same basename, different content | `test_external_native_inventory_detects_drift`, `test_same_named_artifacts_have_distinct_content_identity` |
 | Same size/mtime, addition/removal/replacement | `test_external_native_inventory_detects_drift` five mutation modes |
 | File/directory links and checkout aliases | `test_native_symlink_identity_and_retargeting`, `test_checkout_symlink_to_external_native_is_rejected`; real host support required |
@@ -468,12 +470,47 @@ resolution accepts uppercase suffixes. Twelve added conservative suffix cases
 failed first; the classifier now normalizes suffix case while preserving the
 module basename and recorded path spelling. This is an inventory/default-rejection
 correction; the existing pre-load audit hook already rejected unidentified origins.
-The final helper SHA-256 is
+At that suffix-only checkpoint the helper SHA-256 was
 `d02b2e1dab22b59b13f8c0d468b7287667e6262e6415409c79ddaefae219b0eb`.
 Complete inventories and content identities from both classifiers were compared
 against the actual measured receipts over all seven effective roots for B and C:
 all 616 records matched exactly. Driver, shared harness and all three production
 modules remain byte-identical to b631. With independent agreement, this preserves
 the unaffected Linux comparison as **measured at b631**, with final suffix behavior
-validated separately by current tests and native Windows CI. It does not claim
+validated separately by its tests and native Windows CI. It does not claim
 that the changed helper executed this series or certify its final overhead.
+
+### Bootstrap and consolidated-validation correction
+
+The b631 series above remains historical at its exact identity. Subsequent
+independent reconciliation confirmed a bootstrap P1: an ignored `argparse`,
+`cProfile` or helper extension could be selected before the original rejection.
+The known interpreter has some standard modules built in, but real normal
+resolution of the shadowable names was demonstrated without loading an unknown
+binary; other supported CPython builds also expose `_lsprof`/`resource` as ordinary
+extensions. A late rejection cannot undo initialization.
+
+The driver now uses only trusted startup `os`/`sys` for an early native rejection
+before CLI/profiling/hashing/helper imports. It covers the shared tooling root and
+all declared measured roots, including roots already present via startup paths.
+The extractor and argparse share option names; separate/equals forms, comparison
+lists and unambiguous abbreviations retain their normal meaning. Argparse remains
+the validator. A direct-file symlink's invocation directory is additionally checked
+only when the interpreter actually admits it as `sys.path[0]`; a harmless real
+interpreter probe and independent import sentinel cover the platform distinction.
+Both actual worker source roots are rejected before `resource`.
+The small rejection predicate is deliberately duplicated to avoid importing a
+shadowable helper or creating circular imports before this boundary. Full content
+inventory, audit and checkpoint verification follow as before. Forty-six initial
+bootstrap cases failed first; an independent import sentinel prevented any inert
+candidate from executing. A directory-symlink test's separate Git setup error was
+corrected by checking the ignored link entry itself, retaining real resolution
+through that directory and rejection assertions.
+
+The first consolidated hosted unit job at `19bed18` also found the existing C901
+ratchet at 151 versus its unchanged 147 budget. That deterministic failure was not
+retried. Four directly affected functions were split at fixture/output validation,
+sample identity, native-export binding and loaded-origin reconciliation boundaries.
+The measured workflow/profiler/RSS sequence and all three production modules are
+unchanged. The bootstrap/driver changes receive a new guarded five-pair series;
+the earlier series is not relabelled as execution of this driver.

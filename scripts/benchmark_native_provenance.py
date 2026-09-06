@@ -194,7 +194,12 @@ class NativeProvenance:
             loaded[name] = {"kind": "extension", "origin": actual,
                             "loaded_path": str(_absolute(filename)), "resolution_name": resolution_name,
                             "artifact": self.by_resolved[actual]["logical_origin"]}
+        loaded.update(self._native_exports(exports, loaded))
+        return loaded
+
+    def _native_exports(self, exports, loaded) -> dict:
         providers = {record["resolution_name"]: record for record in loaded.values()}
+        result = {}
         for name, module, filename in exports:
             canonical = getattr(module, "__name__", "")
             if sys.modules.get(canonical) is not module:
@@ -214,10 +219,10 @@ class NativeProvenance:
                     or (spec is not None and spec.name != canonical)
                     or (origin is not None and str(Path(origin).resolve(strict=True)) != actual)):
                 raise RuntimeError("Native export disagrees with verified provider: " + name)
-            loaded[name] = {"kind": "native_export", "provider": parent, "origin": actual,
+            result[name] = {"kind": "native_export", "provider": parent, "origin": actual,
                             "loaded_path": str(_absolute(filename)), "canonical_name": canonical,
                             "artifact": providers[parent]["artifact"]}
-        return loaded
+        return result
 
     def install(self) -> None:
         if self._installed:
@@ -254,6 +259,12 @@ class NativeProvenance:
             raise RuntimeError("Benchmark interpreter changed")
         if self._bridge_resolutions() != self.resolutions:
             raise RuntimeError("Native bridge resolution changed")
+        self._verify_loaded_origins()
+        self.checkpoints += 1
+        self.verification_s += time.perf_counter() - started
+        return self.receipt()
+
+    def _verify_loaded_origins(self) -> None:
         loaded = self._loaded()
         bridges = self._loaded_bridges()
         for name, previous in self.bridge_loaded.items():
@@ -267,9 +278,6 @@ class NativeProvenance:
             if loaded.get(name, {}).get("origin") != origin:
                 raise RuntimeError("Audited native import disagrees with loaded origin: " + name)
         self.loaded = loaded
-        self.checkpoints += 1
-        self.verification_s += time.perf_counter() - started
-        return self.receipt()
 
     def receipt(self) -> dict:
         return {
