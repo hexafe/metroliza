@@ -450,3 +450,21 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
             raise AssertionError('Mixed implementation evidence was summarized')
         assert not (output / 'summary.json').exists()
         """, tmp_path / "repo", changed_key)
+
+
+def test_native_alias_uses_verified_canonical_import_resolution(tmp_path):
+    _guard_child(tmp_path, """\
+        guard = NativeProvenance(repo)
+        guard.install()
+        # SciPy/Cython installs _cyutility as an alias of scipy._cyutility.
+        import scipy.special
+        native = sys.modules['scipy._cyutility']
+        assert sys.modules['_cyutility'] is native
+        receipt = guard.verify()
+        canonical = receipt['loaded_extensions']['scipy._cyutility']
+        alias = receipt['loaded_extensions']['_cyutility']
+        assert alias == canonical
+        assert alias['resolution_name'] == native.__spec__.name
+        assert receipt['artifacts'][alias['artifact']]['sha256'] == hashlib.sha256(
+            Path(native.__file__).read_bytes()).hexdigest()
+        """, tmp_path / "repo", tmp_path / "installed")

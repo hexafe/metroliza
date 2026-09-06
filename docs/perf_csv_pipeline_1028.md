@@ -377,7 +377,7 @@ to be zero. Profiles remain diagnostic only.
 | Same size/mtime, addition/removal/replacement | `test_external_native_inventory_detects_drift` five mutation modes |
 | File/directory links and checkout aliases | `test_native_symlink_identity_and_retargeting`, `test_checkout_symlink_to_external_native_is_rejected`; real host support required |
 | Unknown ordinary/explicit native loader input | `test_new_native_input_is_blocked_before_binary_execution`; inert files, isolated processes |
-| Loaded origin/spec/search/removal mismatch | `test_loaded_native_origin_must_agree` |
+| Loaded origin/spec/search/removal mismatch and standard aliases | `test_loaded_native_origin_must_agree`, `test_native_alias_uses_verified_canonical_import_resolution` (actual SciPy/Cython alias) |
 | Installed wrapper identity without execution | `test_installed_bridge_package_is_identified_without_execution` |
 | Actual trusted native computation | `test_trusted_native_execution_is_recorded_without_claiming_application_use` executes NumPy addition; `test_installed_metroliza_native_execution` executes the existing installed wheel's coercion kernel when available |
 | Clean fallback and harmless ignored outputs/cache | `test_clean_fallback_and_harmless_ignored_outputs` |
@@ -395,3 +395,9 @@ production modules and original output/numerical contracts remain unchanged.
 Fresh comparison and exact-head validation receipts are recorded below/on PR
 #1029; #918, historical attribution uncertainty, absent demonstrated memory
 improvement and the unmatched historical CI baseline remain open limitations.
+
+The first new warmup was rejected before workflow execution because the initial
+guard resolved SciPy's `_cyutility` alias as a separate top-level import. Its
+permanent fail-first regression now validates the canonical `ModuleSpec` name,
+matching module object, resolved origin and artifact identity for every alias.
+The unsuccessful launch is preserved separately and contributes no sample.

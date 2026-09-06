@@ -175,13 +175,17 @@ class NativeProvenance:
             actual = str(Path(filename).resolve(strict=True))
             if actual != str(Path(origin).resolve(strict=True)) or actual not in self.by_resolved:
                 raise RuntimeError("Loaded native origin mismatch: " + name)
-            parent = name.rpartition(".")[0]
+            resolution_name = spec.name
+            if sys.modules.get(resolution_name) is not module:
+                raise RuntimeError("Native alias has no matching canonical module: " + name)
+            parent = resolution_name.rpartition(".")[0]
             search = getattr(sys.modules.get(parent), "__path__", None) if parent else list(sys.path)
-            resolved = machinery.PathFinder.find_spec(name, search)
+            resolved = machinery.PathFinder.find_spec(resolution_name, search)
             if (resolved is None or not isinstance(resolved.loader, machinery.ExtensionFileLoader)
                     or str(Path(resolved.origin).resolve(strict=True)) != actual):
                 raise RuntimeError("Loaded native origin disagrees with import resolution: " + name)
-            loaded[name] = {"origin": actual, "artifact": self.by_resolved[actual]["logical_origin"]}
+            loaded[name] = {"origin": actual, "resolution_name": resolution_name,
+                            "artifact": self.by_resolved[actual]["logical_origin"]}
         return loaded
 
     def install(self) -> None:
