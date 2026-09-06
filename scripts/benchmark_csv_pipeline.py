@@ -294,9 +294,12 @@ def _verify_comparison_sample(payload, identity, tooling_identity, driver_sha, h
             != tooling_identity):
         raise RuntimeError("Comparison source/driver identity changed between samples")
     native = payload["native_provenance"]
+    # Stable availability and observed loading must both agree within a variant.
+    # These fields contain no timing counters; imports still do not prove use.
     native_identity = {key: native[key] for key in
                        ("artifacts", "bridge_resolution", "interpreter",
-                        "requested_backend_environment")}
+                        "requested_backend_environment", "loaded_bridges",
+                        "loaded_extensions", "observed_native_imports", "initially_loaded")}
     if native_inputs.setdefault(label, native_identity) != native_identity:
         raise RuntimeError("Comparison native inputs changed between samples")
 

@@ -394,6 +394,7 @@ diagnostic only.
 | Clean fallback and harmless ignored outputs/cache | `test_clean_fallback_and_harmless_ignored_outputs` |
 | In-request native/source/helper/driver/shared-harness drift and initial dirty/shared-native inputs | `test_worker_drift_never_publishes_a_success_receipt`; two real synthetic Git checkouts, unchanged-root positive control, Linux RSS worker |
 | Previous receipt and cross-sample identity | `test_compare_preserves_previous_receipt_directory`, `test_compare_rejects_different_implementations_between_samples` |
+| Subsequent Ready P1: cross-sample observed native-load drift | Same isolated publication regression now varies loaded bridges, extension maps, audited imports and initially loaded modules independently while availability stays fixed; unchanged loads and changed guard timings remain accepted |
 | Earlier P1: dirty/staged/untracked source and driver drift | Existing `test_benchmark_rejects_dirty_checkout_before_recording_identity` and `test_benchmark_rejects_commit_or_driver_drift` retained |
 | Earlier independent P2: unavailable resource / portable help | Existing three absent-resource isolated-process regressions retained; portable matrix selected in native Windows core smoke |
 | Earlier cache-boundary P2 and comparator P3 | Existing real 24-group/64-entry evidence and literal Diagnostics-fragment regression retained |
@@ -559,3 +560,36 @@ compiled-wheel execution, full unit/Qt/coverage and independent/configured revie
 remain separate exact-head gates; historical green jobs do not satisfy them.
 #918, old provenance uncertainty, unmatched historical CI baseline, absent memory
 improvement and advisory CSV FAIL remain visible limitations.
+
+### Subsequent Ready correction: observed native state across samples
+
+The automatic Ready review of `02e17d0` reported P1
+`discussion_r3943779856`: the comparison retained available artifacts and requested
+backend settings but discarded recorded native-load state. An optional import
+not attempted, or a wrapper failure before native initialization, could therefore
+produce different observed loading across fresh processes without invalidating
+the aggregate. Native initialization observed by the audit hook and then missing
+from loaded modules was already rejected by the per-worker guard; that distinct
+case is not the newly reproduced trigger.
+
+The comparison now binds `loaded_bridges`, `loaded_extensions`,
+`observed_native_imports` and `initially_loaded` alongside the existing per-label
+identity. These fields contain stable module/origin/provider/artifact values,
+not elapsed times or temporary output paths. Exact equality is appropriate within
+each fixed variant. Availability and import remain separate from demonstrated
+computation; this correction makes no claim that an imported extension performed
+the workflow's numerical work.
+
+Four isolated receipt-publication regressions failed first against the unchanged
+`02e17d0` driver, with seven existing/positive cases passing. They independently
+change each observed-state field while leaving artifact availability/resolution
+fixed and require no successful summary. Unchanged state and different guard
+timing counters remain accepted. The same portable selection runs on native
+Windows. An independent read-only reader confirmed the contract and checked that
+all six receipts per variant in the preserved b0e3 series agree on these four
+fields; that audit does not relabel the old driver identity as current execution.
+
+The worker, native helper, measurement boundaries and three production modules
+are unchanged. All earlier raw measurements retain their original identities.
+Further guarded comparison and current exact-head validation/review/Ready receipts
+are recorded on PR #1029; historical results do not replace those gates.

@@ -634,7 +634,11 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
         assert target.read_bytes() == b"changed", "Workflow must actually reach the injected mutation"
 
 
-@pytest.mark.parametrize("changed_key", ["head", "driver_sha256", "native_helper_sha256", "shared_tooling_head", "native"])
+@pytest.mark.parametrize("changed_key", [
+    "head", "driver_sha256", "native_helper_sha256", "shared_tooling_head", "native",
+    "loaded_bridges", "loaded_extensions", "observed_native_imports", "initially_loaded",
+    "none", "guard_timings",
+])
 def test_compare_rejects_different_implementations_between_samples(tmp_path, changed_key):
     _child(tmp_path, """\
         from argparse import Namespace
@@ -644,6 +648,7 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
         repo = Path(sys.argv[2]); repo.mkdir()
         # Localized worker receipt hook: this proves publication rejection, not execution.
         driver._checkout_identity = lambda repo: ('head', 'tree')
+        driver._verify_checkout_identity = lambda *args: None
         def fake_worker(command, **kwargs):
             destination = Path(command[command.index('--output') + 1]); destination.mkdir()
             payload = {
@@ -654,6 +659,9 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
                 'native_provenance': {
                     'artifacts': {'fixture': 'first'}, 'bridge_resolution': {},
                     'interpreter': {}, 'requested_backend_environment': {},
+                    'loaded_bridges': {'_metroliza_group_stats_native': None},
+                    'loaded_extensions': {}, 'observed_native_imports': {},
+                    'initially_loaded': [], 'verification_s': 0.1, 'import_guard_s': 0.01,
                 },
                 'records': [{'workflow_s': 1, 'peak_rss_kib': 1}],
             }
@@ -661,6 +669,15 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
                 key = sys.argv[3]
                 if key == 'native':
                     payload['native_provenance']['artifacts']['fixture'] = 'changed'
+                elif key in ('loaded_bridges', 'loaded_extensions', 'observed_native_imports'):
+                    # Availability/resolution remain fixed while observed loading differs.
+                    payload['native_provenance'][key]['_metroliza_group_stats_native'] = 'known-origin'
+                elif key == 'initially_loaded':
+                    payload['native_provenance'][key].append('known-native-module')
+                elif key == 'guard_timings':
+                    payload['native_provenance'].update(verification_s=0.2, import_guard_s=0.02)
+                elif key == 'none':
+                    pass
                 else:
                     payload[key] = 'changed'
             (destination / 'result.json').write_text(json.dumps(payload))
@@ -671,10 +688,11 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
                                      blocks=1, samples=1, requests=1, profile=False,
                                      case='small', timeout=30))
         except RuntimeError as exc:
+            assert sys.argv[3] not in ('none', 'guard_timings'), str(exc)
             assert 'between samples' in str(exc)
         else:
-            raise AssertionError('Mixed implementation evidence was summarized')
-        assert not (output / 'summary.json').exists()
+            assert sys.argv[3] in ('none', 'guard_timings'), 'Mixed implementation evidence was summarized'
+        assert (output / 'summary.json').exists() == (sys.argv[3] in ('none', 'guard_timings'))
         """, tmp_path / "repo", changed_key)
 
 
