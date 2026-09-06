@@ -606,10 +606,10 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
         import os
         from argparse import Namespace
         sys.path[0] = sys.argv[2]
-        from scripts.benchmark_csv_pipeline import _worker
         os.environ['PROVENANCE_TEST_MUTATION'] = sys.argv[4]
         output = Path(sys.argv[5])
         try:
+            from scripts.benchmark_csv_pipeline import _worker
             _worker(Namespace(repo=sys.argv[3], output=str(output),
                               case='small', requests=2, profile=False))
         except RuntimeError as exc:

@@ -501,8 +501,8 @@ interpreter probe and independent import sentinel cover the platform distinction
 Both actual worker source roots are rejected before `resource`.
 The small rejection predicate is deliberately duplicated to avoid importing a
 shadowable helper or creating circular imports before this boundary. Full content
-inventory, audit and checkpoint verification follow as before. Forty-six initial
-bootstrap cases failed first; an independent import sentinel prevented any inert
+inventory, audit and checkpoint verification follow as before. Forty-eight final
+bootstrap cases failed first against the preserved 19bed18 driver; an independent import sentinel prevented any inert
 candidate from executing. A directory-symlink test's separate Git setup error was
 corrected by checking the ignored link entry itself, retaining real resolution
 through that directory and rejection assertions.
