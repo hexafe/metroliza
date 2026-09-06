@@ -475,7 +475,10 @@ jobs:
         env:
           METROLIZA_CHART_RENDERER_BACKEND: auto
           METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS: histogram,distribution,iqr,trend
-        run: PYTHONPATH=. python -m pytest tests/test_native_chart_renderer_smoke.py -q
+        run: >-
+          PYTHONPATH=. python -m pytest tests/test_native_chart_renderer_smoke.py
+          tests/test_benchmark_native_provenance.py::test_installed_metroliza_native_execution
+          -v -s
 
       - name: Native chart planner parity smoke
         run: |
@@ -811,6 +814,7 @@ jobs:
           PYTHONPATH: src;.
         run: >-
           python -m pytest -v
+          "tests/test_benchmark_native_provenance.py"
           "tests/test_csv_pipeline_performance.py::test_benchmark_rejects_dirty_checkout_before_recording_identity[tracked]"
           "tests/test_csv_pipeline_performance.py::test_benchmark_rejects_dirty_checkout_before_recording_identity[staged]"
           "tests/test_csv_pipeline_performance.py::test_benchmark_rejects_dirty_checkout_before_recording_identity[untracked]"

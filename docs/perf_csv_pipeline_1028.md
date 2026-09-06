@@ -312,3 +312,86 @@ unchanged, and all saved raw/parity hashes were checked. No measured sample is
 relabeled as having run this newer guarded driver. A future guarded repeat on a
 stable host is the remaining confirmation task; the first-pass budget does not
 permit repeating the entire matrix after this tooling-only correction.
+
+## Native provenance correction under authority #5558038371
+
+The historical results above and their original JSON arrays remain unchanged.
+The Ready-time P1 (`discussion_r3943387619`) showed that clean Git status does
+not identify ignored importable native binaries. The permanent fail-first test
+creates an inert ignored file, proves clean Git status and actual
+`PathFinder`/`ExtensionFileLoader` resolution, and requires rejection without
+executing or deleting it. All eight root/src and suffix cases failed on the
+starting driver at `522f8b36ee570e3ee34593dd062e27f59d63d6c5`.
+
+The supported trust model is a trusted CPython interpreter, standard-library
+bootstrap and installed environment, with controlled synthetic benchmark
+processes. The guard detects accidental/stale inputs and changes visible at
+checkpoints. It is not an OS sandbox, supply-chain/build attestation, malicious
+loader defense, transitive shared-library inventory, or atomic protection against
+someone changing and restoring files between checks.
+
+The driver rejects checkout-local extension candidates, including ignored files,
+root/src packages, namespace directories and symlink aliases. It never removes
+build artifacts. A clean separate comparison checkout is the supported route for
+local builds. Every existing effective `sys.path` directory is inventoried through
+identifier-named package/namespace directories; normal `.so`/`.pyd` and ABI variants
+are recognized conservatively. Installed extension records contain a logical
+search-root/relative origin, local absolute spelling/resolved target, SHA-256 and
+size. Standard native bridge wrapper packages also receive source hashes. The
+interpreter has its own content/platform/version/suffix identity; binary source or
+build provenance is explicitly not inferred from a filename or the checkout SHA.
+
+The five Metroliza bridges and installed `_hexafe_groupstats_native` are resolved
+without importing candidate binaries. An import audit hook rejects an extension
+whose resolved origin was not in the initial inventory before native execution,
+including explicit `ExtensionFileLoader` calls and nonstandard filename suffixes.
+An unidentified explicit `hexafe-groupstats` `rust/target` fallback outside the
+inventoried search roots is unsupported and terminates the worker; optional
+backend exception handling cannot turn it into a successful fallback receipt.
+Non-directory import roots, cyclic directory links and unsupported native loader
+or loaded-origin cases also fail closed. The policy does not alter backend
+settings. Requested backend environment, availability, imported bridges/extensions
+and computational use are separate fields; import is never labelled proof of
+application computation.
+
+Before and after each measured request, and before `result.json`, the worker
+rechecks source/driver/helper identity, native inventory/content, bridge resolution
+and loaded-origin agreement. A comparison also binds every sample to fixed source,
+driver/helper and per-variant native identities. Existing output directories are
+refused so a failed run cannot overwrite an earlier valid receipt. A failed sample
+never produces a successful aggregate summary. Harmless ignored logs, output and
+bytecode caches remain permitted.
+
+Content fingerprinting and checkpoint validation occur outside workflow timing.
+The small import-time membership check is timed separately: `workflow_s` excludes
+that measured check duration, while `workflow_with_import_guard_s` preserves the
+raw elapsed value and `native_import_guard_s` reports the adjustment. Process time
+includes all overhead. `provenance_s` and the native receipt's verification/import
+counters expose guard cost. Residual audit dispatch/timer overhead is not claimed
+to be zero. Profiles remain diagnostic only.
+
+| Boundary / finding | Permanent regression or evidence |
+|---|---|
+| Ready P1: ignored executable input despite clean Git | `test_ignored_importable_native_is_rejected_before_execution`, actual Git + resolution, root/src and all current suffixes plus `.so`/`.pyd` |
+| Installed inventory, same basename, different content | `test_external_native_inventory_detects_drift`, `test_same_named_artifacts_have_distinct_content_identity` |
+| Same size/mtime, addition/removal/replacement | `test_external_native_inventory_detects_drift` five mutation modes |
+| File/directory links and checkout aliases | `test_native_symlink_identity_and_retargeting`, `test_checkout_symlink_to_external_native_is_rejected`; real host support required |
+| Unknown ordinary/explicit native loader input | `test_new_native_input_is_blocked_before_binary_execution`; inert files, isolated processes |
+| Loaded origin/spec/search/removal mismatch | `test_loaded_native_origin_must_agree` |
+| Installed wrapper identity without execution | `test_installed_bridge_package_is_identified_without_execution` |
+| Actual trusted native computation | `test_trusted_native_execution_is_recorded_without_claiming_application_use` executes NumPy addition; `test_installed_metroliza_native_execution` executes the existing installed wheel's coercion kernel when available |
+| Clean fallback and harmless ignored outputs/cache | `test_clean_fallback_and_harmless_ignored_outputs` |
+| In-request native/source/helper/driver drift | `test_worker_drift_never_publishes_a_success_receipt`; real synthetic Git checkout, Linux RSS worker |
+| Previous receipt and cross-sample identity | `test_compare_preserves_previous_receipt_directory`, `test_compare_rejects_different_implementations_between_samples` |
+| Earlier P1: dirty/staged/untracked source and driver drift | Existing `test_benchmark_rejects_dirty_checkout_before_recording_identity` and `test_benchmark_rejects_commit_or_driver_drift` retained |
+| Earlier independent P2: unavailable resource / portable help | Existing three absent-resource isolated-process regressions retained; portable matrix selected in native Windows core smoke |
+| Earlier cache-boundary P2 and comparator P3 | Existing real 24-group/64-entry evidence and literal Diagnostics-fragment regression retained |
+
+Scope increases from twelve to fourteen paths: one directly necessary provenance
+helper and one isolated regression file. The helper is registered in the pending
+analytics audit ledger; the test remains covered by the existing pending test
+rule. Existing Windows/native jobs only extend relevant test selection. The three
+production modules and original output/numerical contracts remain unchanged.
+Fresh comparison and exact-head validation receipts are recorded below/on PR
+#1029; #918, historical attribution uncertainty, absent demonstrated memory
+improvement and the unmatched historical CI baseline remain open limitations.

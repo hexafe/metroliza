@@ -23,6 +23,9 @@ import subprocess
 import sys
 import time
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 CASES = {
     "small": (300, 4, 3), "medium": (30_000, 12, 12), "large": (150_001, 4, 12),
     "many-groups": (600, 4, 24),
@@ -35,6 +38,9 @@ def _sha(path: Path) -> str:
 
 def _checkout_identity(repo: Path) -> tuple[str, str]:
     """Reject mutable working trees before attributing execution to committed code."""
+    from scripts.benchmark_native_provenance import reject_checkout_native
+
+    reject_checkout_native(repo)
     status = subprocess.check_output(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=repo,
     )
@@ -52,10 +58,13 @@ def _verify_checkout_identity(repo: Path, expected: tuple[str, str], driver_sha:
 
 
 def _worker(args: argparse.Namespace) -> None:
+    from scripts.benchmark_native_provenance import reject_checkout_native
+
+    repo = Path(args.repo).resolve()
+    reject_checkout_native(repo)
     import resource
 
     started = time.perf_counter()
-    repo = Path(args.repo).resolve()
     identity = _checkout_identity(repo)
     driver_sha = _sha(Path(__file__).resolve())
     destination = Path(args.output).resolve()
@@ -64,6 +73,22 @@ def _worker(args: argparse.Namespace) -> None:
     ).returncode != 0:
         raise RuntimeError("Benchmark output must be external or git-ignored")
     sys.path[:0] = [str(repo / "src"), str(repo)]
+    from scripts.benchmark_native_provenance import NativeProvenance
+    native_guard = NativeProvenance(repo)
+    native_guard.install()
+    helper_path = Path(sys.modules[NativeProvenance.__module__].__file__).resolve()
+    helper_sha = _sha(helper_path)
+    provenance_s = time.perf_counter() - started
+
+    def verify_inputs():
+        nonlocal provenance_s
+        checked_at = time.perf_counter()
+        _verify_checkout_identity(repo, identity, driver_sha)
+        if _sha(helper_path) != helper_sha:
+            raise RuntimeError("Benchmark native provenance helper changed")
+        native_guard.verify()
+        provenance_s += time.perf_counter() - checked_at
+
     from scripts import benchmark_paths as harness
     harness._install_headless_stubs()
     import numpy as np
@@ -73,7 +98,7 @@ def _worker(args: argparse.Namespace) -> None:
     )
     from metroliza.industrial.industrial_analytics_workflow import run_tabular_file_analytics
 
-    destination.mkdir(parents=True, exist_ok=True)
+    destination.mkdir(parents=True, exist_ok=False)
     rows, columns, groups = CASES[args.case]
     fixture = destination / "summary_fixture.csv"
     harness._create_csv_fixture(fixture, row_count=rows, data_columns=columns)
@@ -107,15 +132,20 @@ def _worker(args: argparse.Namespace) -> None:
             ),
             output_workbook_file=str(output / "workbook.xlsx"), separate_parameter_sheets=True,
         )
+        verify_inputs()
         profiler = cProfile.Profile() if args.profile else None
+        import_guard_before = native_guard.import_guard_s
         run_start = time.perf_counter()
         if profiler:
             profiler.enable()
         result = run_tabular_file_analytics(**kwargs)
         if profiler:
             profiler.disable()
-        elapsed = time.perf_counter() - run_start
+        elapsed_with_guard = time.perf_counter() - run_start
+        import_guard_s = native_guard.import_guard_s - import_guard_before
+        elapsed = elapsed_with_guard - import_guard_s
         peak_rss_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        verify_inputs()
         if profiler:
             profiler.dump_stats(str(output / "pipeline.pstats"))
         artifacts = {
@@ -126,30 +156,28 @@ def _worker(args: argparse.Namespace) -> None:
         for key in ("html_dashboard_path", "html_dashboard_assets_path", "workbook_path"):
             outcome[key] = Path(outcome[key]).name
         records.append({
-            "request": request, "workflow_s": elapsed, "peak_rss_kib": peak_rss_kib,
+            "request": request, "workflow_s": elapsed,
+            "workflow_with_import_guard_s": elapsed_with_guard,
+            "native_import_guard_s": import_guard_s, "peak_rss_kib": peak_rss_kib,
             "outcome": outcome, "artifacts": artifacts,
         })
-    modules = {}
-    for name in ("_metroliza_chart_native", "_metroliza_group_stats_native",
-                 "_metroliza_comparison_stats_native", "_metroliza_distribution_fit_native",
-                 "_metroliza_cmm_native"):
-        module = sys.modules.get(name)
-        modules[name] = {"loaded": module is not None, "file": Path(
-            str(getattr(module, "__file__", ""))).name if module else None}
     import matplotlib
-    _verify_checkout_identity(repo, identity, driver_sha)
     payload = {
         "case": args.case, "rows": rows, "numeric_columns": columns, "groups": groups,
         "selected_metrics": 4, "seed": 7, "fixture_sha256": _sha(fixture),
         "head": identity[0], "tree": identity[1], "driver_sha256": driver_sha,
         "checkout_verified_clean_before_and_after": True,
         "profiled": args.profile, "setup_s": setup_s, "records": records,
-        "matplotlib_backend": matplotlib.get_backend(), "native_modules": modules,
+        "matplotlib_backend": matplotlib.get_backend(),
+        "native_helper_sha256": helper_sha,
         "versions": {name: importlib.metadata.version(name) for name in (
             "numpy", "pandas", "scipy", "matplotlib", "XlsxWriter", "openpyxl",
             "hexafe-groupstats", "hexafe-plotstats", "PyQt6", "PyQt6-Qt6",
         )}, "python": sys.version.split()[0],
     }
+    verify_inputs()
+    payload["native_provenance"] = native_guard.receipt()
+    payload["provenance_s"] = provenance_s
     (destination / "result.json").write_text(json.dumps(payload, indent=2, default=str) + "\n")
 
 
@@ -163,8 +191,14 @@ def _summary(values: list[float]) -> dict:
 
 def _compare(args: argparse.Namespace) -> None:
     output = Path(args.output).resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=False)
     variants = dict(item.split("=", 1) for item in args.compare)
+    identities = {label: _checkout_identity(Path(repo).resolve()) for label, repo in variants.items()}
+    driver_sha = _sha(Path(__file__).resolve())
+    from scripts import benchmark_native_provenance
+    helper_path = Path(benchmark_native_provenance.__file__).resolve()
+    helper_sha = _sha(helper_path)
+    native_inputs = {}
     env = os.environ.copy()
     env.update({"MPLBACKEND": "Agg", "MPLCONFIGDIR": str(output / "mpl-cache"),
                 "QT_QPA_PLATFORM": "offscreen", "PYTHONHASHSEED": "0",
@@ -190,6 +224,16 @@ def _compare(args: argparse.Namespace) -> None:
                                    check=True, timeout=args.timeout)
                 process_s = time.perf_counter() - start
                 payload = json.loads((run_dir / "result.json").read_text())
+                if (tuple(payload[key] for key in ("head", "tree")) != identities[label]
+                        or payload["driver_sha256"] != driver_sha
+                        or payload["native_helper_sha256"] != helper_sha):
+                    raise RuntimeError("Comparison source/driver identity changed between samples")
+                native = payload["native_provenance"]
+                native_identity = {key: native[key] for key in
+                                   ("artifacts", "bridge_resolution", "interpreter",
+                                    "requested_backend_environment")}
+                if native_inputs.setdefault(label, native_identity) != native_identity:
+                    raise RuntimeError("Comparison native inputs changed between samples")
                 record = {"variant": label, "block": block, "warmup": index == -1,
                           "process_s": process_s, "result": payload}
                 records.append(record)
@@ -197,6 +241,10 @@ def _compare(args: argparse.Namespace) -> None:
                 print(json.dumps({"variant": label, "block": block, "warmup": index == -1,
                                   "workflow_s": payload["records"][0]["workflow_s"],
                                   "process_s": process_s}), flush=True)
+    for label, repo in variants.items():
+        _verify_checkout_identity(Path(repo).resolve(), identities[label], driver_sha)
+    if _sha(helper_path) != helper_sha:
+        raise RuntimeError("Comparison native provenance helper changed")
     summary = {}
     for label in variants:
         selected = [r for r in records if r["variant"] == label and not r["warmup"]]
