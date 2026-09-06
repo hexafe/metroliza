@@ -33,7 +33,8 @@ def _absolute(path) -> Path:
 
 
 def _native_file(path: Path) -> bool:
-    return path.name.endswith(NATIVE_ENDINGS) and path.name.split(".")[0].isidentifier()
+    # Windows FileFinder normalizes suffix case, but preserves the module basename.
+    return path.name.lower().endswith(NATIVE_ENDINGS) and path.name.split(".")[0].isidentifier()
 
 
 def _candidates(root: Path, ancestors: frozenset[Path] = frozenset()):

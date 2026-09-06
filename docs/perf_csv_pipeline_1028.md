@@ -381,6 +381,7 @@ diagnostic only.
 | Boundary / finding | Permanent regression or evidence |
 |---|---|
 | Ready P1: ignored executable input despite clean Git | `test_ignored_importable_native_is_rejected_before_execution`, actual Git + resolution, root/src and all current suffixes plus `.so`/`.pyd` |
+| Windows suffix case, including `.PYD` and uppercase ABI suffixes | Same root/src rejection matrix plus `test_external_native_suffix_inventory_without_execution`; real Windows resolution without loading inert files, external origin/hash inclusion |
 | Installed inventory, same basename, different content | `test_external_native_inventory_detects_drift`, `test_same_named_artifacts_have_distinct_content_identity` |
 | Same size/mtime, addition/removal/replacement | `test_external_native_inventory_detects_drift` five mutation modes |
 | File/directory links and checkout aliases | `test_native_symlink_identity_and_retargeting`, `test_checkout_symlink_to_external_native_is_rejected`; real host support required |
@@ -414,3 +415,65 @@ identical object and matching origin are checked at every checkpoint. They do no
 pretend to be independent binary imports and do not expand the pre-load allowlist.
 Both failed launches and permanent fail-first regressions are preserved separately;
 neither launch contributes a measurement sample.
+
+### Fresh guarded small-workload confirmation
+
+This series measured `b631e0dbeee75f10dc9da18ddc09f1c11752a56a`, tree
+`866eacc8ad28251e69ec318a49165ca7141104d6`, against fixed B
+`77e398375e5277858110c746a428d13535db6a59`. Both used that same C driver and
+shared tooling. Driver SHA-256 was
+`61ea5b5adf41d49943ed04b32b242863642f63039c565386054bb93fda92c62e`;
+measured helper SHA-256 was
+`a4bf5097b4c5e04785be248e5ee2b8cff622bc41d5bd8f4c81a6ab52179e6eb9`.
+The additive `native_guarded_confirmation` JSON field retains all twelve raw
+observations in execution order. All older JSON fields/data remain unchanged and
+historical, including their former Draft status description.
+
+One declared fresh-process warmup per variant preceded five interleaved pairs,
+one request per process, serially apart from tests/builds. The seed-7 fixture had
+300 rows, four numeric columns/metrics and three groups. All twelve complete
+HTML/assets/XLSX artifacts, including warmups, passed the preserved comparator
+against the first B output. All fixture hashes and package versions agreed.
+CPython 3.11.16/Agg and the same installed environment were used for both variants.
+
+| Raw measurement | B median | Measured current median | Dispersion B / current |
+|---|---:|---:|---|
+| Workflow seconds | 36.461032 | 28.461491 | MAD 0.415916 / 0.276011; IQR 3.130917 / 0.384797 |
+| Process seconds | 58.790219 | 51.821177 | MAD 1.656813 / 0.051012 |
+| Peak RSS KiB | 240400 | 240044 | MAD 224 / 304 |
+| Setup seconds | 8.506258 | 8.387334 | Includes initialization/guard effects |
+| Provenance checkpoint seconds | 17.464198 | 18.275262 | Overlaps native verification/setup counters |
+| Import guard seconds inside workflow | 0.001279 | 0.001386 | Reported separately; raw workflow remains primary |
+
+Workflow medians differ by -21.94% on this series; each interleaved pair favored
+the measured candidate. This is a limited confirmation, not general performance
+acceptance. The 356 KiB median RSS difference does not establish memory improvement.
+The host remained on AC with **power-saver**, unchanged by the agent, throughout
+44 observations from 09:48:00 to 09:59:08 UTC on 2026-09-06; one-minute load ranged
+2.87–4.94. Historical measurements used balanced, so the series cannot be pooled
+or its absolute timing attributed solely to production code. No profiled or
+coverage timing is used here; #918 and advisory CSV FAIL remain unchanged.
+
+All receipts identify the same 616 native artifact records, 155 loaded records
+and 149 observed native imports. The six optional bridge resolutions were absent
+and the bridges unloaded; requested backend overrides were empty. Scientific
+extensions were identified by origin/content, while import itself was explicitly
+not claimed to prove their computational use by this workflow. Actual trusted
+NumPy/SciPy and installed Metroliza-wheel regression execution are separate
+integration evidence. Local raw receipts retain resolved absolute paths; public
+evidence uses logical roots and hashes.
+
+Independent contract reconciliation subsequently confirmed that Windows normal
+resolution accepts uppercase suffixes. Twelve added conservative suffix cases
+failed first; the classifier now normalizes suffix case while preserving the
+module basename and recorded path spelling. This is an inventory/default-rejection
+correction; the existing pre-load audit hook already rejected unidentified origins.
+The final helper SHA-256 is
+`d02b2e1dab22b59b13f8c0d468b7287667e6262e6415409c79ddaefae219b0eb`.
+Complete inventories and content identities from both classifiers were compared
+against the actual measured receipts over all seven effective roots for B and C:
+all 616 records matched exactly. Driver, shared harness and all three production
+modules remain byte-identical to b631. With independent agreement, this preserves
+the unaffected Linux comparison as **measured at b631**, with final suffix behavior
+validated separately by current tests and native Windows CI. It does not claim
+that the changed helper executed this series or certify its final overhead.

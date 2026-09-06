@@ -10,7 +10,10 @@ from textwrap import dedent
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SUFFIXES = tuple(dict.fromkeys([*importlib.machinery.EXTENSION_SUFFIXES, ".so", ".pyd"]))
+SUFFIXES = tuple(dict.fromkeys([
+    *importlib.machinery.EXTENSION_SUFFIXES, ".so", ".pyd", ".PYD",
+    *(suffix.upper() for suffix in importlib.machinery.EXTENSION_SUFFIXES),
+]))
 
 
 def _child(tmp_path, code, *args):
@@ -36,7 +39,7 @@ def test_ignored_importable_native_is_rejected_before_execution(tmp_path, locati
         def git(*args):
             return subprocess.check_output(['git', *args], cwd=repo, text=True)
         git('init', '--quiet')
-        (repo / '.gitignore').write_text('*.so\\n*.pyd\\n')
+        (repo / '.gitignore').write_text('*.[sS][oO]\\n*.[pP][yY][dD]\\n')
         git('add', '.gitignore')
         git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
             'commit', '--quiet', '-m', 'inert fixture')
@@ -46,7 +49,9 @@ def test_ignored_importable_native_is_rejected_before_execution(tmp_path, locati
         artifact.write_bytes(b'INERT - MUST NEVER EXECUTE')
         assert git('status', '--porcelain') == ''
         assert git('check-ignore', str(artifact)).strip()
-        if suffix in machinery.EXTENSION_SUFFIXES:
+        if suffix in machinery.EXTENSION_SUFFIXES or (
+            sys.platform == 'win32' and suffix.lower() in machinery.EXTENSION_SUFFIXES
+        ):
             spec = machinery.PathFinder.find_spec('_metroliza_group_stats_native', [str(directory)])
             assert Path(spec.origin) == artifact
             assert isinstance(spec.loader, machinery.ExtensionFileLoader)
@@ -78,6 +83,28 @@ sys.path.insert(0, str(external))
 
 def _guard_child(tmp_path, code, *args):
     return _child(tmp_path, GUARD_SETUP + dedent(code), *args)
+
+
+@pytest.mark.parametrize("suffix", SUFFIXES)
+def test_external_native_suffix_inventory_without_execution(tmp_path, suffix):
+    _guard_child(tmp_path, """\
+        suffix = sys.argv[4]
+        artifact = external / ('trusted_fixture' + suffix)
+        artifact.write_bytes(b'INERT - MUST NEVER EXECUTE')
+        if suffix in machinery.EXTENSION_SUFFIXES or (
+            sys.platform == 'win32' and suffix.lower() in machinery.EXTENSION_SUFFIXES
+        ):
+            spec = machinery.PathFinder.find_spec('trusted_fixture', [str(external)])
+            assert Path(spec.origin) == artifact
+            assert isinstance(spec.loader, machinery.ExtensionFileLoader)
+        guard = NativeProvenance(repo)
+        record = next(v for v in guard.inventory.values() if v['path'] == str(artifact))
+        assert record['resolved_path'] == str(artifact.resolve())
+        assert record['sha256'] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+        assert record['logical_origin'].endswith('/' + artifact.name)
+        guard.verify()
+        assert 'trusted_fixture' not in sys.modules
+        """, tmp_path / "repo", tmp_path / "installed", suffix)
 
 
 @pytest.mark.parametrize("change", ["content", "same_stat", "add", "remove", "replace"])

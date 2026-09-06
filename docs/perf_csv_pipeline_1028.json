@@ -3250,4 +3250,370 @@
     "checks": "clean tracked/staged/untracked state before imports and after workflow; unchanged HEAD/tree and shared driver SHA; external or ignored output",
     "historical_evidence": "saved raw/parity hashes and unchanged production blobs independently verified; no retroactive clean-checkout claim"
   }
+,
+  "native_guarded_confirmation": {
+    "status": "guarded Linux confirmation measured at b631; final suffix-classification correction verified separately; original top-level campaign and status remain historical",
+    "measurement_head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+    "measurement_tree": "866eacc8ad28251e69ec318a49165ca7141104d6",
+    "B": "77e398375e5277858110c746a428d13535db6a59",
+    "shared_tooling_head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+    "driver_sha256": "61ea5b5adf41d49943ed04b32b242863642f63039c565386054bb93fda92c62e",
+    "measured_helper_sha256": "a4bf5097b4c5e04785be248e5ee2b8cff622bc41d5bd8f4c81a6ab52179e6eb9",
+    "harness_origin": {
+      "root": "shared_tooling",
+      "path": "scripts/benchmark_paths.py",
+      "sha256": "0ebd0925e2c1377731ca5273a2ef60132e6ef4d9e5b3f66412296aa1165424bc"
+    },
+    "method": {
+      "case": "small",
+      "rows": 300,
+      "numeric_columns": 4,
+      "groups": 3,
+      "metrics": 4,
+      "seed": 7,
+      "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+      "warmups_per_variant": 1,
+      "interleaved_pairs": 5,
+      "requests_per_process": 1,
+      "serial": true,
+      "profiled": false,
+      "all_twelve_complete_artifacts_equal": true,
+      "timing": "raw wall-clock workflow_s; adjusted diagnostic only; guard counters overlap"
+    },
+    "environment": {
+      "python": "3.11.16",
+      "versions": {
+        "numpy": "2.4.6",
+        "pandas": "3.0.5",
+        "scipy": "1.17.1",
+        "matplotlib": "3.11.1",
+        "XlsxWriter": "3.2.9",
+        "openpyxl": "3.1.5",
+        "hexafe-groupstats": "0.1.0rc3",
+        "hexafe-plotstats": "0.1.0a1",
+        "PyQt6": "6.6.1",
+        "PyQt6-Qt6": "6.6.1"
+      },
+      "matplotlib_backend": "Agg",
+      "power_profiles": [
+        "power-saver"
+      ],
+      "ac_online": [
+        "1"
+      ],
+      "first_observation_utc": "2026-09-06T09:48:00Z",
+      "last_observation_utc": "2026-09-06T09:59:08Z",
+      "observations": 44,
+      "one_minute_load_range": [
+        2.87,
+        4.94
+      ],
+      "settings_changed": false
+    },
+    "native": {
+      "artifact_records": 616,
+      "loaded_records": 155,
+      "observed_imports": 149,
+      "bridge_resolution": {
+        "_metroliza_chart_native": null,
+        "_metroliza_group_stats_native": null,
+        "_metroliza_comparison_stats_native": null,
+        "_metroliza_distribution_fit_native": null,
+        "_metroliza_cmm_native": null,
+        "_hexafe_groupstats_native": null
+      },
+      "loaded_bridges": {
+        "_metroliza_chart_native": null,
+        "_metroliza_group_stats_native": null,
+        "_metroliza_comparison_stats_native": null,
+        "_metroliza_distribution_fit_native": null,
+        "_metroliza_cmm_native": null,
+        "_hexafe_groupstats_native": null
+      },
+      "requested_backend_environment": {},
+      "computational_use": "not inferred from availability or import",
+      "interpreter_sha256": "2874a0b9344d06b7767aebb1e6e25a759ffcbdb544e99400ecc74dc6092d1174",
+      "trust_model": "trusted-environment-checkpoint-v1; reject checkout native builds"
+    },
+    "summary": {
+      "B": {
+        "workflow_s": {
+          "samples": [
+            36.797304307998274,
+            36.46103237099305,
+            36.876948200006154,
+            33.6663875499944,
+            33.34442029200727
+          ],
+          "median": 36.46103237099305,
+          "mad": 0.41591582901310176,
+          "iqr": 3.1309167580038775,
+          "min": 33.34442029200727,
+          "max": 36.876948200006154
+        },
+        "peak_rss_kib": {
+          "samples": [
+            240176,
+            240032,
+            240456,
+            240400,
+            240844
+          ],
+          "median": 240400,
+          "mad": 224,
+          "iqr": 280.0,
+          "min": 240032,
+          "max": 240844
+        },
+        "process_s": {
+          "samples": [
+            60.447032437994494,
+            59.89321690000361,
+            58.790219442002126,
+            56.43459751000046,
+            54.02762243100733
+          ],
+          "median": 58.790219442002126,
+          "mad": 1.656812995992368,
+          "iqr": 3.4586193900031503,
+          "min": 54.02762243100733,
+          "max": 60.447032437994494
+        }
+      },
+      "current": {
+        "workflow_s": {
+          "samples": [
+            28.185479687002953,
+            28.461491042005946,
+            28.922859265003353,
+            28.570277039994835,
+            27.967497366000316
+          ],
+          "median": 28.461491042005946,
+          "mad": 0.2760113550029928,
+          "iqr": 0.3847973529918818,
+          "min": 27.967497366000316,
+          "max": 28.922859265003353
+        },
+        "peak_rss_kib": {
+          "samples": [
+            240468,
+            240044,
+            239548,
+            240156,
+            239740
+          ],
+          "median": 240044,
+          "mad": 304,
+          "iqr": 416.0,
+          "min": 239548,
+          "max": 240468
+        },
+        "process_s": {
+          "samples": [
+            51.82757779600797,
+            51.9206481329893,
+            51.8211773459916,
+            51.770165467998595,
+            47.80830239300849
+          ],
+          "median": 51.8211773459916,
+          "mad": 0.05101187799300533,
+          "iqr": 0.057412328009377234,
+          "min": 47.80830239300849,
+          "max": 51.9206481329893
+        }
+      }
+    },
+    "samples_in_execution_order": [
+      {
+        "variant": "current",
+        "warmup": true,
+        "head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+        "tree": "866eacc8ad28251e69ec318a49165ca7141104d6",
+        "process_s": 53.626292119995924,
+        "workflow_s": 30.32083335900097,
+        "workflow_excluding_import_guard_s": 30.319442656982574,
+        "native_import_guard_s": 0.0013907020183978602,
+        "peak_rss_kib": 239168,
+        "setup_s": 8.54832498000178,
+        "provenance_s": 18.31529542899807,
+        "native_verification_s": 18.128263596008765,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": true,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "process_s": 61.50153835999663,
+        "workflow_s": 37.60391531798814,
+        "workflow_excluding_import_guard_s": 37.60264027696394,
+        "native_import_guard_s": 0.0012750410242006183,
+        "peak_rss_kib": 240560,
+        "setup_s": 8.681817618009518,
+        "provenance_s": 18.73797646901221,
+        "native_verification_s": 18.336351079982705,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "process_s": 60.447032437994494,
+        "workflow_s": 36.797304307998274,
+        "workflow_excluding_import_guard_s": 36.79618978899089,
+        "native_import_guard_s": 0.001114519007387571,
+        "peak_rss_kib": 240176,
+        "setup_s": 8.506258232999244,
+        "provenance_s": 18.852224008005578,
+        "native_verification_s": 18.45033747998241,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+        "tree": "866eacc8ad28251e69ec318a49165ca7141104d6",
+        "process_s": 51.82757779600797,
+        "workflow_s": 28.185479687002953,
+        "workflow_excluding_import_guard_s": 28.18409363400133,
+        "native_import_guard_s": 0.001386053001624532,
+        "peak_rss_kib": 240468,
+        "setup_s": 8.385116352001205,
+        "provenance_s": 18.92100898498029,
+        "native_verification_s": 18.726563315984095,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+        "tree": "866eacc8ad28251e69ec318a49165ca7141104d6",
+        "process_s": 51.9206481329893,
+        "workflow_s": 28.461491042005946,
+        "workflow_excluding_import_guard_s": 28.46014469700458,
+        "native_import_guard_s": 0.0013463450013659894,
+        "peak_rss_kib": 240044,
+        "setup_s": 8.728078569998615,
+        "provenance_s": 18.275262144990847,
+        "native_verification_s": 18.091458643990336,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "process_s": 59.89321690000361,
+        "workflow_s": 36.46103237099305,
+        "workflow_excluding_import_guard_s": 36.45954099899973,
+        "native_import_guard_s": 0.0014913719933247194,
+        "peak_rss_kib": 240032,
+        "setup_s": 8.60969342199678,
+        "provenance_s": 18.329154359991662,
+        "native_verification_s": 17.944475672993576,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "process_s": 58.790219442002126,
+        "workflow_s": 36.876948200006154,
+        "workflow_excluding_import_guard_s": 36.87566939301905,
+        "native_import_guard_s": 0.0012788069871021435,
+        "peak_rss_kib": 240456,
+        "setup_s": 8.092776388992206,
+        "provenance_s": 17.09592797899677,
+        "native_verification_s": 16.722459295007866,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+        "tree": "866eacc8ad28251e69ec318a49165ca7141104d6",
+        "process_s": 51.8211773459916,
+        "workflow_s": 28.922859265003353,
+        "workflow_excluding_import_guard_s": 28.921465458988678,
+        "native_import_guard_s": 0.001393806014675647,
+        "peak_rss_kib": 239548,
+        "setup_s": 8.492308304004837,
+        "provenance_s": 17.92099024199706,
+        "native_verification_s": 17.73638329800451,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+        "tree": "866eacc8ad28251e69ec318a49165ca7141104d6",
+        "process_s": 51.770165467998595,
+        "workflow_s": 28.570277039994835,
+        "workflow_excluding_import_guard_s": 28.56897322399891,
+        "native_import_guard_s": 0.001303815995925106,
+        "peak_rss_kib": 240156,
+        "setup_s": 8.387334108992945,
+        "provenance_s": 18.343743204983184,
+        "native_verification_s": 18.14856464798504,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "process_s": 56.43459751000046,
+        "workflow_s": 33.6663875499944,
+        "workflow_excluding_import_guard_s": 33.665003654998145,
+        "native_import_guard_s": 0.001383894996251911,
+        "peak_rss_kib": 240400,
+        "setup_s": 8.518823475998943,
+        "provenance_s": 17.464197795983637,
+        "native_verification_s": 17.097672982985387,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "process_s": 54.02762243100733,
+        "workflow_s": 33.34442029200727,
+        "workflow_excluding_import_guard_s": 33.343261342000915,
+        "native_import_guard_s": 0.0011589500063564628,
+        "peak_rss_kib": 240844,
+        "setup_s": 6.92056462400069,
+        "provenance_s": 16.36269693801296,
+        "native_verification_s": 16.006768865001504,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "head": "b631e0dbeee75f10dc9da18ddc09f1c11752a56a",
+        "tree": "866eacc8ad28251e69ec318a49165ca7141104d6",
+        "process_s": 47.80830239300849,
+        "workflow_s": 27.967497366000316,
+        "workflow_excluding_import_guard_s": 27.966053534983075,
+        "native_import_guard_s": 0.001443831017240882,
+        "peak_rss_kib": 239740,
+        "setup_s": 7.315553852997255,
+        "provenance_s": 15.655576113014831,
+        "native_verification_s": 15.498594930992112,
+        "checkpoints": 3
+      }
+    ],
+    "limitations": [
+      "Five small-workload pairs on one non-isolated AC power-saver host; historical campaign used balanced and cannot be pooled.",
+      "Raw workflow observations favor candidate here; no general performance acceptance or speedup inferred from profiling/coverage.",
+      "RSS difference is negligible; memory improvement remains unproved.",
+      "Original unguarded provenance and unmatched historical CI baseline remain uncertain; #918 stays open and advisory CSV FAIL remains FAIL.",
+      "Measurement receipts identify b631 helper; final suffix discovery code was not executed in this series. Full Linux inventory equality and unchanged driver/harness/production validate the unaffected evidence boundary independently.",
+      "Previous interrupted full local suite remains incomplete; consolidated local focus/static plus current hosted full-suite/Qt/coverage are used."
+    ]
+  }
 }
