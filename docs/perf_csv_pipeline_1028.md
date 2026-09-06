@@ -356,19 +356,27 @@ application computation.
 
 Before and after each measured request, and before `result.json`, the worker
 rechecks source/driver/helper identity, native inventory/content, bridge resolution
-and loaded-origin agreement. A comparison also binds every sample to fixed source,
+and loaded-origin agreement. The selected checkout and shared tooling checkout
+both have independently recorded and checked clean Git HEAD/tree identities and
+native-build rejection. This includes the actual shared `scripts.benchmark_paths`
+source, whose logical root/path/hash is recorded; checking only B and the two C
+driver files would omit that executed harness. The legacy five-entry
+`native_modules` import summary remains alongside the richer native manifest. A comparison also binds every sample to fixed source,
 driver/helper and per-variant native identities. Existing output directories are
 refused so a failed run cannot overwrite an earlier valid receipt. A failed sample
 never produces a successful aggregate summary. Harmless ignored logs, output and
 bytecode caches remain permitted.
 
 Content fingerprinting and checkpoint validation occur outside workflow timing.
-The small import-time membership check is timed separately: `workflow_s` excludes
-that measured check duration, while `workflow_with_import_guard_s` preserves the
-raw elapsed value and `native_import_guard_s` reports the adjustment. Process time
-includes all overhead. `provenance_s` and the native receipt's verification/import
-counters expose guard cost. Residual audit dispatch/timer overhead is not claimed
-to be zero. Profiles remain diagnostic only.
+`workflow_s` retains raw elapsed wall-clock semantics. The necessary import-time
+allowlist check is timed separately in `native_import_guard_s`;
+`workflow_excluding_import_guard_s` is only an adjusted diagnostic. Performance
+confirmation uses the raw measurement. Process time, setup and peak RSS remain
+raw and include guard effects; checkpoint allocations/page-cache effects cannot
+be removed by subtracting durations. `provenance_s`, setup and the native receipt's
+verification/import counters overlap and must not be added as disjoint costs.
+Residual audit dispatch/timer overhead is not claimed to be zero. Profiles remain
+diagnostic only.
 
 | Boundary / finding | Permanent regression or evidence |
 |---|---|
@@ -377,11 +385,11 @@ to be zero. Profiles remain diagnostic only.
 | Same size/mtime, addition/removal/replacement | `test_external_native_inventory_detects_drift` five mutation modes |
 | File/directory links and checkout aliases | `test_native_symlink_identity_and_retargeting`, `test_checkout_symlink_to_external_native_is_rejected`; real host support required |
 | Unknown ordinary/explicit native loader input | `test_new_native_input_is_blocked_before_binary_execution`; inert files, isolated processes |
-| Loaded origin/spec/search/removal mismatch and standard aliases | `test_loaded_native_origin_must_agree`, `test_native_alias_uses_verified_canonical_import_resolution` (actual SciPy/Cython alias) |
+| Loaded origin/spec/search/removal mismatch, aliases and extension exports | `test_loaded_native_origin_must_agree`, `test_native_alias_uses_verified_canonical_import_resolution`, `test_native_exported_modules_are_bound_to_verified_provider` (actual SciPy/Cython/pybind objects and negative provider relationships) |
 | Installed wrapper identity without execution | `test_installed_bridge_package_is_identified_without_execution` |
 | Actual trusted native computation | `test_trusted_native_execution_is_recorded_without_claiming_application_use` executes NumPy addition; `test_installed_metroliza_native_execution` executes the existing installed wheel's coercion kernel when available |
 | Clean fallback and harmless ignored outputs/cache | `test_clean_fallback_and_harmless_ignored_outputs` |
-| In-request native/source/helper/driver drift | `test_worker_drift_never_publishes_a_success_receipt`; real synthetic Git checkout, Linux RSS worker |
+| In-request native/source/helper/driver/shared-harness drift and initial dirty/shared-native inputs | `test_worker_drift_never_publishes_a_success_receipt`; two real synthetic Git checkouts, unchanged-root positive control, Linux RSS worker |
 | Previous receipt and cross-sample identity | `test_compare_preserves_previous_receipt_directory`, `test_compare_rejects_different_implementations_between_samples` |
 | Earlier P1: dirty/staged/untracked source and driver drift | Existing `test_benchmark_rejects_dirty_checkout_before_recording_identity` and `test_benchmark_rejects_commit_or_driver_drift` retained |
 | Earlier independent P2: unavailable resource / portable help | Existing three absent-resource isolated-process regressions retained; portable matrix selected in native Windows core smoke |
@@ -396,8 +404,13 @@ Fresh comparison and exact-head validation receipts are recorded below/on PR
 #1029; #918, historical attribution uncertainty, absent demonstrated memory
 improvement and the unmatched historical CI baseline remain open limitations.
 
-The first new warmup was rejected before workflow execution because the initial
-guard resolved SciPy's `_cyutility` alias as a separate top-level import. Its
-permanent fail-first regression now validates the canonical `ModuleSpec` name,
-matching module object, resolved origin and artifact identity for every alias.
-The unsuccessful launch is preserved separately and contributes no sample.
+Two setup attempts were rejected before workflow execution: standard SciPy
+aliases and native-exported pybind submodules exposed an incomplete loaded-module
+model. Patching paused for independent contract reconciliation. Ordinary aliases
+now require canonical `ModuleSpec`/module-object/origin agreement. Exported
+submodules have an explicit `native_export` kind bound to an already verified
+extension provider: canonical registration, provider dictionary attribute chain,
+identical object and matching origin are checked at every checkpoint. They do not
+pretend to be independent binary imports and do not expand the pre-load allowlist.
+Both failed launches and permanent fail-first regressions are preserved separately;
+neither launch contributes a measurement sample.

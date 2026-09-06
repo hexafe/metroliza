@@ -15,7 +15,7 @@ SUFFIXES = tuple(dict.fromkeys([*importlib.machinery.EXTENSION_SUFFIXES, ".so", 
 
 def _child(tmp_path, code, *args):
     result = subprocess.run(
-        [sys.executable, "-I", "-c", "import sys\nfrom pathlib import Path\n"
+        [sys.executable, "-I", "-B", "-c", "import sys\nfrom pathlib import Path\n"
          "sys.path.insert(0, sys.argv[1])\n" + dedent(code), str(ROOT), *map(str, args)],
         cwd=tmp_path, capture_output=True, text=True, timeout=90,
     )
@@ -347,13 +347,16 @@ def test_installed_metroliza_native_execution(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux RSS worker; portable guard tested separately")
-@pytest.mark.parametrize("change", ["native", "source", "helper", "driver"])
+@pytest.mark.parametrize("change", ["native", "source", "helper", "driver", "shared_harness",
+                                  "shared_dirty", "shared_native", "none"])
 def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
     """A real Git checkout and isolated synthetic workflow exercise worker ordering."""
     tooling = tmp_path / "tooling"
     (tooling / "scripts").mkdir(parents=True)
     for name in ("benchmark_csv_pipeline.py", "benchmark_native_provenance.py"):
         (tooling / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
+    (tooling / "scripts/__init__.py").write_text("")
+    (tooling / ".gitignore").write_text("*.so\n*.pyd\n")
     repo = tmp_path / "repo"
     files = {
         ".gitignore": "*.so\n*.pyd\n",
@@ -369,26 +372,40 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
             "class ProductionMetricSelection: pass\n"
         ),
         "src/metroliza/industrial/industrial_analytics_workflow.py": (
-            "from pathlib import Path\nimport os\n"
+            "from pathlib import Path\nimport os\nfrom dataclasses import dataclass\n"
+            "@dataclass\nclass Outcome:\n"
+            "    html_dashboard_path: str = 'dashboard.html'\n"
+            "    html_dashboard_assets_path: str = 'assets'\n"
+            "    workbook_path: str = 'workbook.xlsx'\n"
             "def run_tabular_file_analytics(**kwargs):\n"
             "    Path(os.environ['PROVENANCE_TEST_MUTATION']).write_bytes(b'changed')\n"
-            "    return None\n"
+            "    return Outcome()\n"
         ),
     }
     for relative, content in files.items():
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
-    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-                    "commit", "--quiet", "-m", "synthetic workflow"], cwd=repo, check=True)
+    (tooling / "scripts/benchmark_paths.py").write_text(files["scripts/benchmark_paths.py"])
+    for checkout in (repo, tooling):
+        subprocess.run(["git", "init", "--quiet", str(checkout)], check=True)
+        subprocess.run(["git", "add", "."], cwd=checkout, check=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                        "commit", "--quiet", "-m", "synthetic workflow"], cwd=checkout, check=True)
     target = {
         "native": repo / ("_metroliza_group_stats_native" + importlib.machinery.EXTENSION_SUFFIXES[0]),
         "source": repo / "src/metroliza/industrial/industrial_analytics_state.py",
         "helper": tooling / "scripts/benchmark_native_provenance.py",
         "driver": tooling / "scripts/benchmark_csv_pipeline.py",
+        "shared_harness": tooling / "scripts/benchmark_paths.py",
+        "shared_dirty": tooling / "scripts/benchmark_paths.py",
+        "shared_native": tooling / "ignored_build.so",
+        "none": tmp_path / "harmless.txt",
     }[change]
+    if change == "shared_dirty":
+        target.write_text(target.read_text() + "\n# Uncommitted shared harness change\n")
+    elif change == "shared_native":
+        target.write_bytes(b"inert - must not execute")
     output = _child(tmp_path, """\
         import os
         from argparse import Namespace
@@ -400,16 +417,28 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
             _worker(Namespace(repo=sys.argv[3], output=str(output),
                               case='small', requests=2, profile=False))
         except RuntimeError as exc:
+            assert sys.argv[6] != 'none', str(exc)
             assert any(word in str(exc) for word in ('native', 'changed', 'clean')), str(exc)
             print('WORKER_DRIFT_REJECTED', str(exc))
         else:
-            raise AssertionError('Worker published success after input drift')
-        assert not (output / 'result.json').exists()
-        """, tooling, repo, target, tmp_path / "output")
-    assert "WORKER_DRIFT_REJECTED" in output
+            assert sys.argv[6] == 'none', 'Worker published success after input drift'
+            import json
+            receipt = json.loads((output / 'result.json').read_text())
+            assert len(receipt['native_modules']) == 5
+            assert receipt['shared_tooling_root'] == str(Path(sys.argv[2]).resolve())
+            assert receipt['harness_origin']['root'] == 'shared_tooling'
+            assert receipt['shared_tooling_head'] != receipt['head']
+            print('WORKER_VALID_ROOTS_ACCEPTED')
+        if sys.argv[6] != 'none':
+            assert not (output / 'result.json').exists()
+        """, tooling, repo, (tmp_path / "harmless-native-test.txt" if change == "shared_native" else target),
+        tmp_path / "output", change)
+    assert ("WORKER_VALID_ROOTS_ACCEPTED" if change == "none" else "WORKER_DRIFT_REJECTED") in output
+    if change not in {"shared_dirty", "shared_native"}:
+        assert target.read_bytes() == b"changed", "Workflow must actually reach the injected mutation"
 
 
-@pytest.mark.parametrize("changed_key", ["head", "driver_sha256", "native_helper_sha256", "native"])
+@pytest.mark.parametrize("changed_key", ["head", "driver_sha256", "native_helper_sha256", "shared_tooling_head", "native"])
 def test_compare_rejects_different_implementations_between_samples(tmp_path, changed_key):
     _child(tmp_path, """\
         from argparse import Namespace
@@ -423,6 +452,7 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
             destination = Path(command[command.index('--output') + 1]); destination.mkdir()
             payload = {
                 'head': 'head', 'tree': 'tree',
+                'shared_tooling_head': 'head', 'shared_tooling_tree': 'tree',
                 'driver_sha256': driver._sha(Path(driver.__file__)),
                 'native_helper_sha256': driver._sha(Path(helper.__file__)),
                 'native_provenance': {
@@ -468,3 +498,56 @@ def test_native_alias_uses_verified_canonical_import_resolution(tmp_path):
         assert receipt['artifacts'][alias['artifact']]['sha256'] == hashlib.sha256(
             Path(native.__file__).read_bytes()).hexdigest()
         """, tmp_path / "repo", tmp_path / "installed")
+
+
+@pytest.mark.parametrize('change', ['none', 'alias', 'attribute', 'origin', 'provider',
+                                   'unrelated', 'loader', 'resolution'])
+def test_native_exported_modules_are_bound_to_verified_provider(tmp_path, change):
+    _guard_child(tmp_path, """\
+        from importlib.machinery import ModuleSpec
+        from types import ModuleType
+        guard = NativeProvenance(repo)
+        guard.install()
+        import scipy.optimize
+        provider_name = 'scipy.optimize._highspy._core'
+        provider = sys.modules[provider_name]
+        exports = {key: sys.modules[provider_name + '.' + key] for key in ('cb', 'simplex_constants')}
+        for key, module in exports.items():
+            assert vars(provider)[key] is module
+            assert Path(module.__file__).resolve() == Path(provider.__file__).resolve()
+        receipt = guard.verify()
+        for key in exports:
+            record = receipt['loaded_extensions'][provider_name + '.' + key]
+            assert record['kind'] == 'native_export'
+            assert record['provider'] == provider_name
+            assert record['artifact'] == receipt['loaded_extensions'][provider_name]['artifact']
+        change = sys.argv[4]
+        if change == 'none':
+            raise SystemExit(0)
+        exported = exports['cb']
+        if change == 'alias':
+            sys.modules['synthetic_export_alias'] = exported
+            receipt = guard.verify()
+            assert receipt['loaded_extensions']['synthetic_export_alias'] == receipt['loaded_extensions'][exported.__name__]
+            raise SystemExit(0)
+        if change == 'attribute':
+            del provider.cb
+        elif change == 'origin':
+            exported.__file__ = str(external / 'absent.so')
+        elif change == 'provider':
+            del sys.modules[provider_name]
+        elif change == 'unrelated':
+            extra = ModuleType('unrelated_export')
+            extra.__file__ = provider.__file__
+            sys.modules[extra.__name__] = extra
+        elif change == 'loader':
+            exported.__spec__ = ModuleSpec(exported.__name__, object(), origin=exported.__file__)
+        else:
+            provider.__spec__.origin = str(external / 'absent.so')
+        try:
+            guard.verify()
+        except (RuntimeError, FileNotFoundError):
+            pass
+        else:
+            raise AssertionError('Unproven native export relationship accepted: ' + change)
+        """, tmp_path / "repo", tmp_path / "installed", change)

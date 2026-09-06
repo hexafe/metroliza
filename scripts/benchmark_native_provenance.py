@@ -163,6 +163,7 @@ class NativeProvenance:
 
     def _loaded(self) -> dict:
         loaded = {}
+        exports = []
         for name, module in tuple(sys.modules.items()):
             spec = getattr(module, "__spec__", None)
             origin = getattr(spec, "origin", None)
@@ -170,7 +171,12 @@ class NativeProvenance:
             is_extension = isinstance(getattr(spec, "loader", None), machinery.ExtensionFileLoader)
             if not is_extension and not (filename and _native_file(Path(filename))):
                 continue
-            if not is_extension or not origin or not filename:
+            if not is_extension:
+                if getattr(spec, "loader", None) is not None or getattr(module, "__loader__", None) is not None:
+                    raise RuntimeError("Unsupported loaded native module: " + name)
+                exports.append((name, module, filename))
+                continue
+            if not origin or not filename:
                 raise RuntimeError("Unsupported loaded native module: " + name)
             actual = str(Path(filename).resolve(strict=True))
             if actual != str(Path(origin).resolve(strict=True)) or actual not in self.by_resolved:
@@ -184,8 +190,32 @@ class NativeProvenance:
             if (resolved is None or not isinstance(resolved.loader, machinery.ExtensionFileLoader)
                     or str(Path(resolved.origin).resolve(strict=True)) != actual):
                 raise RuntimeError("Loaded native origin disagrees with import resolution: " + name)
-            loaded[name] = {"origin": actual, "resolution_name": resolution_name,
+            loaded[name] = {"kind": "extension", "origin": actual,
+                            "loaded_path": str(_absolute(filename)), "resolution_name": resolution_name,
                             "artifact": self.by_resolved[actual]["logical_origin"]}
+        providers = {record["resolution_name"]: record for record in loaded.values()}
+        for name, module, filename in exports:
+            canonical = getattr(module, "__name__", "")
+            if sys.modules.get(canonical) is not module:
+                raise RuntimeError("Native export has no matching canonical module: " + name)
+            parent = canonical.rpartition(".")[0]
+            while parent and parent not in providers:
+                parent = parent.rpartition(".")[0]
+            if not parent:
+                raise RuntimeError("Native export has no verified provider: " + name)
+            owner = sys.modules[parent]
+            for component in canonical[len(parent) + 1:].split("."):
+                owner = vars(owner).get(component) if isinstance(owner, type(sys)) else None
+            actual = str(Path(filename).resolve(strict=True))
+            spec = getattr(module, "__spec__", None)
+            origin = getattr(spec, "origin", None)
+            if (owner is not module or actual != providers[parent]["origin"]
+                    or (spec is not None and spec.name != canonical)
+                    or (origin is not None and str(Path(origin).resolve(strict=True)) != actual)):
+                raise RuntimeError("Native export disagrees with verified provider: " + name)
+            loaded[name] = {"kind": "native_export", "provider": parent, "origin": actual,
+                            "loaded_path": str(_absolute(filename)), "canonical_name": canonical,
+                            "artifact": providers[parent]["artifact"]}
         return loaded
 
     def install(self) -> None:

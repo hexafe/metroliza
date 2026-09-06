@@ -66,6 +66,8 @@ def _worker(args: argparse.Namespace) -> None:
 
     started = time.perf_counter()
     identity = _checkout_identity(repo)
+    tooling_root = Path(__file__).resolve().parents[1]
+    tooling_identity = identity if tooling_root == repo else _checkout_identity(tooling_root)
     driver_sha = _sha(Path(__file__).resolve())
     destination = Path(args.output).resolve()
     if destination.is_relative_to(repo) and subprocess.run(
@@ -84,12 +86,21 @@ def _worker(args: argparse.Namespace) -> None:
         nonlocal provenance_s
         checked_at = time.perf_counter()
         _verify_checkout_identity(repo, identity, driver_sha)
+        if tooling_root != repo:
+            _verify_checkout_identity(tooling_root, tooling_identity, driver_sha)
         if _sha(helper_path) != helper_sha:
             raise RuntimeError("Benchmark native provenance helper changed")
         native_guard.verify()
         provenance_s += time.perf_counter() - checked_at
 
     from scripts import benchmark_paths as harness
+    harness_path = Path(harness.__file__).resolve()
+    harness_root = tooling_root if harness_path.is_relative_to(tooling_root) else repo
+    if not harness_path.is_relative_to(harness_root):
+        raise RuntimeError("Benchmark harness resolved outside verified source roots")
+    harness_origin = {"root": "shared_tooling" if harness_root == tooling_root else "measured_checkout",
+                      "path": harness_path.relative_to(harness_root).as_posix(),
+                      "sha256": _sha(harness_path)}
     harness._install_headless_stubs()
     import numpy as np
     import pandas as pd
@@ -143,7 +154,7 @@ def _worker(args: argparse.Namespace) -> None:
             profiler.disable()
         elapsed_with_guard = time.perf_counter() - run_start
         import_guard_s = native_guard.import_guard_s - import_guard_before
-        elapsed = elapsed_with_guard - import_guard_s
+        elapsed = elapsed_with_guard
         peak_rss_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         verify_inputs()
         if profiler:
@@ -157,7 +168,7 @@ def _worker(args: argparse.Namespace) -> None:
             outcome[key] = Path(outcome[key]).name
         records.append({
             "request": request, "workflow_s": elapsed,
-            "workflow_with_import_guard_s": elapsed_with_guard,
+            "workflow_excluding_import_guard_s": elapsed_with_guard - import_guard_s,
             "native_import_guard_s": import_guard_s, "peak_rss_kib": peak_rss_kib,
             "outcome": outcome, "artifacts": artifacts,
         })
@@ -166,6 +177,8 @@ def _worker(args: argparse.Namespace) -> None:
         "case": args.case, "rows": rows, "numeric_columns": columns, "groups": groups,
         "selected_metrics": 4, "seed": 7, "fixture_sha256": _sha(fixture),
         "head": identity[0], "tree": identity[1], "driver_sha256": driver_sha,
+        "shared_tooling_head": tooling_identity[0], "shared_tooling_tree": tooling_identity[1],
+        "shared_tooling_root": str(tooling_root), "harness_origin": harness_origin,
         "checkout_verified_clean_before_and_after": True,
         "profiled": args.profile, "setup_s": setup_s, "records": records,
         "matplotlib_backend": matplotlib.get_backend(),
@@ -177,6 +190,13 @@ def _worker(args: argparse.Namespace) -> None:
     }
     verify_inputs()
     payload["native_provenance"] = native_guard.receipt()
+    # Keep the historical import summary; content identity lives in native_provenance.
+    payload["native_modules"] = {
+        name: {"loaded": native_guard.bridge_loaded[name] is not None,
+               "file": Path(native_guard.bridge_loaded[name]).name
+               if native_guard.bridge_loaded[name] else None}
+        for name in native_guard.resolutions if name.startswith("_metroliza_")
+    }
     payload["provenance_s"] = provenance_s
     (destination / "result.json").write_text(json.dumps(payload, indent=2, default=str) + "\n")
 
@@ -195,6 +215,8 @@ def _compare(args: argparse.Namespace) -> None:
     variants = dict(item.split("=", 1) for item in args.compare)
     identities = {label: _checkout_identity(Path(repo).resolve()) for label, repo in variants.items()}
     driver_sha = _sha(Path(__file__).resolve())
+    tooling_root = Path(__file__).resolve().parents[1]
+    tooling_identity = _checkout_identity(tooling_root)
     from scripts import benchmark_native_provenance
     helper_path = Path(benchmark_native_provenance.__file__).resolve()
     helper_sha = _sha(helper_path)
@@ -226,7 +248,9 @@ def _compare(args: argparse.Namespace) -> None:
                 payload = json.loads((run_dir / "result.json").read_text())
                 if (tuple(payload[key] for key in ("head", "tree")) != identities[label]
                         or payload["driver_sha256"] != driver_sha
-                        or payload["native_helper_sha256"] != helper_sha):
+                        or payload["native_helper_sha256"] != helper_sha
+                        or tuple(payload[key] for key in ("shared_tooling_head", "shared_tooling_tree"))
+                        != tooling_identity):
                     raise RuntimeError("Comparison source/driver identity changed between samples")
                 native = payload["native_provenance"]
                 native_identity = {key: native[key] for key in
@@ -243,6 +267,7 @@ def _compare(args: argparse.Namespace) -> None:
                                   "process_s": process_s}), flush=True)
     for label, repo in variants.items():
         _verify_checkout_identity(Path(repo).resolve(), identities[label], driver_sha)
+    _verify_checkout_identity(tooling_root, tooling_identity, driver_sha)
     if _sha(helper_path) != helper_sha:
         raise RuntimeError("Comparison native provenance helper changed")
     summary = {}
