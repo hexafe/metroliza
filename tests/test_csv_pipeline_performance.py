@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+import subprocess
+import sys
+from textwrap import dedent
 import zipfile
 
 import numpy as np
@@ -336,3 +339,104 @@ def test_benchmark_rejects_commit_or_driver_drift(monkeypatch, tmp_path):
         driver._verify_checkout_identity(tmp_path, ("previous", "tree"), "driver")
     with pytest.raises(RuntimeError, match="changed during measurement"):
         driver._verify_checkout_identity(tmp_path, ("head", "tree"), "previous-driver")
+
+
+def _run_benchmark_without_resource(tmp_path, code):
+    # The hook exists only in a fresh isolated child, never during collection.
+    preamble = dedent("""\
+        import builtins
+        from pathlib import Path
+        import sys
+
+        repo = Path(sys.argv[1])
+        destination = Path(sys.argv[2])
+        sys.path.insert(0, str(repo))
+        sys.modules.pop("resource", None)
+        original_import = builtins.__import__
+
+        def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "resource" or name.startswith("resource."):
+                raise ModuleNotFoundError("resource unavailable for portability regression",
+                                          name="resource")
+            if (name.split(".")[0] in {"metroliza", "numpy", "pandas", "matplotlib"}
+                    or name == "scripts.benchmark_paths"
+                    or (name == "scripts" and "benchmark_paths" in fromlist)):
+                raise AssertionError("Analytics imported by a platform-neutral operation: " + name)
+            return original_import(name, globals, locals, fromlist, level)
+
+        builtins.__import__ = guarded_import
+        try:
+            import resource
+        except ModuleNotFoundError as exc:
+            assert exc.name == "resource"
+        else:
+            raise AssertionError("Unavailable-resource blocker did not take effect")
+        """)
+    return subprocess.run(
+        [sys.executable, "-I", "-c", preamble + dedent(code),
+         str(Path(__file__).resolve().parents[1]), str(tmp_path / "output")],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+
+
+def test_benchmark_helpers_import_without_resource(tmp_path):
+    result = _run_benchmark_without_resource(tmp_path, """\
+        import subprocess
+        from scripts import benchmark_csv_pipeline as driver
+
+        subprocess.run(["git", "init", "--quiet", str(destination)], check=True)
+        subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                        "commit", "--quiet", "--allow-empty", "-m", "fixture"],
+                       cwd=destination, check=True)
+        identity = driver._checkout_identity(destination)
+        assert len(identity) == 2 and all(len(value) == 40 for value in identity)
+        driver._verify_checkout_identity(destination, identity, driver._sha(Path(driver.__file__)))
+        assert "resource" not in sys.modules
+        print("HELPERS_WITHOUT_RESOURCE_OK")
+        """)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "HELPERS_WITHOUT_RESOURCE_OK" in result.stdout
+
+
+def test_benchmark_cli_help_without_resource(tmp_path):
+    result = _run_benchmark_without_resource(tmp_path, """\
+        import runpy
+
+        driver_path = repo / "scripts" / "benchmark_csv_pipeline.py"
+        sys.argv = [str(driver_path), "--help"]
+        try:
+            runpy.run_path(str(driver_path), run_name="__main__")
+        except SystemExit as exc:
+            assert exc.code == 0
+        else:
+            raise AssertionError("CLI help did not exit")
+        assert "resource" not in sys.modules
+        print("HELP_WITHOUT_RESOURCE_OK")
+        """)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--worker" in result.stdout and "HELP_WITHOUT_RESOURCE_OK" in result.stdout
+    assert not (tmp_path / "output").exists()
+
+
+def test_benchmark_worker_requires_resource_before_setup(tmp_path):
+    result = _run_benchmark_without_resource(tmp_path, """\
+        from argparse import Namespace
+        from scripts import benchmark_csv_pipeline as driver
+
+        def unexpected_timer():
+            raise AssertionError("Worker started its timer without resource")
+
+        driver.time.perf_counter = unexpected_timer
+        try:
+            driver._worker(Namespace(repo=str(repo), output=str(destination),
+                                     case="small", requests=1, profile=False))
+        except ModuleNotFoundError as exc:
+            assert exc.name == "resource"
+        else:
+            raise AssertionError("Worker fabricated a successful measurement without resource")
+        assert not destination.exists()
+        print("WORKER_REQUIRES_RESOURCE_OK")
+        """)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WORKER_REQUIRES_RESOURCE_OK" in result.stdout
+    assert not (tmp_path / "output").exists()

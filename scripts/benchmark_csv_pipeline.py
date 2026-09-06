@@ -5,6 +5,8 @@ Run with the same resolved interpreter for every checkout. The small fixture and
 options match benchmark_csv_summary_path (300 rows, four metrics, three groups).
 Timing excludes fixture generation and artifact inspection; process time includes
 imports/startup. Profiling is a separate mode, never performance evidence.
+Linux worker measurements require resource; imports, provenance helpers and CLI
+help remain platform-neutral.
 """
 from __future__ import annotations
 
@@ -16,7 +18,6 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
-import resource
 import statistics
 import subprocess
 import sys
@@ -51,6 +52,8 @@ def _verify_checkout_identity(repo: Path, expected: tuple[str, str], driver_sha:
 
 
 def _worker(args: argparse.Namespace) -> None:
+    import resource
+
     started = time.perf_counter()
     repo = Path(args.repo).resolve()
     identity = _checkout_identity(repo)
