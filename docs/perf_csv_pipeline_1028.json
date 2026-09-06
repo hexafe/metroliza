@@ -3616,4 +3616,370 @@
       "Previous interrupted full local suite remains incomplete; consolidated local focus/static plus current hosted full-suite/Qt/coverage are used."
     ]
   }
+,
+  "bootstrap_guarded_confirmation": {
+    "status": "guarded Linux confirmation of consolidated implementation at b0e3a5c; subsequent evidence-only commit retains these measured code bytes",
+    "measurement_head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+    "measurement_tree": "99cf2e7ac6bc7e271364ac776fd570ffa9d3238c",
+    "B": "77e398375e5277858110c746a428d13535db6a59",
+    "shared_tooling_head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+    "driver_sha256": "cb591c8f310a333a6b03e7d68cbc5397e01675a92a4ec0dc7e10718fa9e8b403",
+    "measured_helper_sha256": "733ee0f20c35aec62ac911c9b2af3001ef9755b623a8c1f301ed55c4cc7e3d68",
+    "harness_origin": {
+      "root": "shared_tooling",
+      "path": "scripts/benchmark_paths.py",
+      "sha256": "0ebd0925e2c1377731ca5273a2ef60132e6ef4d9e5b3f66412296aa1165424bc"
+    },
+    "method": {
+      "case": "small",
+      "rows": 300,
+      "numeric_columns": 4,
+      "groups": 3,
+      "metrics": 4,
+      "seed": 7,
+      "fixture_sha256": "2312e472932494f276cd32f69f86ed375b40f1fc3cbd5b7dc442750e40b3986f",
+      "warmups_per_variant": 1,
+      "interleaved_pairs": 5,
+      "requests_per_process": 1,
+      "serial": true,
+      "profiled": false,
+      "all_twelve_complete_artifacts_equal": true,
+      "timing": "raw wall-clock workflow_s; adjusted diagnostic only; guard counters overlap"
+    },
+    "environment": {
+      "python": "3.11.16",
+      "versions": {
+        "numpy": "2.4.6",
+        "pandas": "3.0.5",
+        "scipy": "1.17.1",
+        "matplotlib": "3.11.1",
+        "XlsxWriter": "3.2.9",
+        "openpyxl": "3.1.5",
+        "hexafe-groupstats": "0.1.0rc3",
+        "hexafe-plotstats": "0.1.0a1",
+        "PyQt6": "6.6.1",
+        "PyQt6-Qt6": "6.6.1"
+      },
+      "matplotlib_backend": "Agg",
+      "power_profiles": [
+        "power-saver"
+      ],
+      "ac_online": [
+        "1"
+      ],
+      "first_observation_utc": "2026-09-06T10:36:40Z",
+      "last_observation_utc": "2026-09-06T10:45:25Z",
+      "observations": 35,
+      "one_minute_load_range": [
+        2.53,
+        3.53
+      ],
+      "settings_changed": false
+    },
+    "native": {
+      "artifact_records": 616,
+      "loaded_records": 155,
+      "observed_imports": 149,
+      "bridge_resolution": {
+        "_metroliza_chart_native": null,
+        "_metroliza_group_stats_native": null,
+        "_metroliza_comparison_stats_native": null,
+        "_metroliza_distribution_fit_native": null,
+        "_metroliza_cmm_native": null,
+        "_hexafe_groupstats_native": null
+      },
+      "loaded_bridges": {
+        "_metroliza_chart_native": null,
+        "_metroliza_group_stats_native": null,
+        "_metroliza_comparison_stats_native": null,
+        "_metroliza_distribution_fit_native": null,
+        "_metroliza_cmm_native": null,
+        "_hexafe_groupstats_native": null
+      },
+      "requested_backend_environment": {},
+      "computational_use": "not inferred from availability or import",
+      "interpreter_sha256": "2874a0b9344d06b7767aebb1e6e25a759ffcbdb544e99400ecc74dc6092d1174",
+      "trust_model": "trusted-environment-checkpoint-v1; reject checkout native builds"
+    },
+    "summary": {
+      "B": {
+        "workflow_s": {
+          "samples": [
+            27.918644033998135,
+            27.604718057002174,
+            27.94755471299868,
+            29.969965858006617,
+            27.743496658004005
+          ],
+          "median": 27.918644033998135,
+          "mad": 0.1751473759941291,
+          "iqr": 0.20405805499467533,
+          "min": 27.604718057002174,
+          "max": 29.969965858006617
+        },
+        "peak_rss_kib": {
+          "samples": [
+            234224,
+            235456,
+            234380,
+            235776,
+            233892
+          ],
+          "median": 234380,
+          "mad": 488,
+          "iqr": 1232.0,
+          "min": 233892,
+          "max": 235776
+        },
+        "process_s": {
+          "samples": [
+            45.44683775099111,
+            45.34370930699515,
+            46.65118229499785,
+            48.15344860800542,
+            45.94900155000505
+          ],
+          "median": 45.94900155000505,
+          "mad": 0.6052922430098988,
+          "iqr": 1.2043445440067444,
+          "min": 45.34370930699515,
+          "max": 48.15344860800542
+        }
+      },
+      "current": {
+        "workflow_s": {
+          "samples": [
+            22.226398697996046,
+            22.38577485899441,
+            22.659839416999603,
+            21.7025960660103,
+            21.187697290995857
+          ],
+          "median": 22.226398697996046,
+          "mad": 0.4334407190035563,
+          "iqr": 0.6831787929841084,
+          "min": 21.187697290995857,
+          "max": 22.659839416999603
+        },
+        "peak_rss_kib": {
+          "samples": [
+            236268,
+            235756,
+            236244,
+            236608,
+            236336
+          ],
+          "median": 236268,
+          "mad": 68,
+          "iqr": 92.0,
+          "min": 235756,
+          "max": 236608
+        },
+        "process_s": {
+          "samples": [
+            40.43399856898759,
+            41.18766559699725,
+            40.434895755999605,
+            39.63051153899869,
+            38.57877126800304
+          ],
+          "median": 40.43399856898759,
+          "mad": 0.7536670280096587,
+          "iqr": 0.8043842170009157,
+          "min": 38.57877126800304,
+          "max": 41.18766559699725
+        }
+      }
+    },
+    "samples_in_execution_order": [
+      {
+        "variant": "current",
+        "warmup": true,
+        "process_s": 41.83931234999909,
+        "head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+        "tree": "99cf2e7ac6bc7e271364ac776fd570ffa9d3238c",
+        "setup_s": 6.419770533000701,
+        "provenance_s": 14.42493449500762,
+        "workflow_s": 23.481502252994687,
+        "workflow_excluding_import_guard_s": 23.480497716009268,
+        "native_import_guard_s": 0.0010045369854196906,
+        "peak_rss_kib": 237972,
+        "native_verification_s": 14.244711161009036,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": true,
+        "process_s": 46.54878180199012,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "setup_s": 6.386784201997216,
+        "provenance_s": 14.203689145986573,
+        "workflow_s": 28.40175371800433,
+        "workflow_excluding_import_guard_s": 28.40076527801284,
+        "native_import_guard_s": 0.0009884399914881214,
+        "peak_rss_kib": 235428,
+        "native_verification_s": 13.846414664018084,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "process_s": 45.44683775099111,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "setup_s": 6.4792649620067095,
+        "provenance_s": 13.650242910982342,
+        "workflow_s": 27.918644033998135,
+        "workflow_excluding_import_guard_s": 27.91767635800352,
+        "native_import_guard_s": 0.0009676759946160018,
+        "peak_rss_kib": 234224,
+        "native_verification_s": 13.298530183004914,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "process_s": 40.43399856898759,
+        "head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+        "tree": "99cf2e7ac6bc7e271364ac776fd570ffa9d3238c",
+        "setup_s": 6.44480905700766,
+        "provenance_s": 14.063035949016921,
+        "workflow_s": 22.226398697996046,
+        "workflow_excluding_import_guard_s": 22.225486512004863,
+        "native_import_guard_s": 0.0009121859911829233,
+        "peak_rss_kib": 236268,
+        "native_verification_s": 13.880773559983936,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "process_s": 41.18766559699725,
+        "head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+        "tree": "99cf2e7ac6bc7e271364ac776fd570ffa9d3238c",
+        "setup_s": 6.320192349012359,
+        "provenance_s": 14.818394450994674,
+        "workflow_s": 22.38577485899441,
+        "workflow_excluding_import_guard_s": 22.384667196005466,
+        "native_import_guard_s": 0.0011076629889430478,
+        "peak_rss_kib": 235756,
+        "native_verification_s": 14.625206286014873,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "process_s": 45.34370930699515,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "setup_s": 6.290350578012294,
+        "provenance_s": 13.85808756199549,
+        "workflow_s": 27.604718057002174,
+        "workflow_excluding_import_guard_s": 27.603742359991884,
+        "native_import_guard_s": 0.0009756970102898777,
+        "peak_rss_kib": 235456,
+        "native_verification_s": 13.517450712970458,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "process_s": 46.65118229499785,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "setup_s": 6.477997870009858,
+        "provenance_s": 14.49905064800987,
+        "workflow_s": 27.94755471299868,
+        "workflow_excluding_import_guard_s": 27.946518232987728,
+        "native_import_guard_s": 0.0010364800109528005,
+        "peak_rss_kib": 234380,
+        "native_verification_s": 14.13900918100262,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "process_s": 40.434895755999605,
+        "head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+        "tree": "99cf2e7ac6bc7e271364ac776fd570ffa9d3238c",
+        "setup_s": 6.221390599996084,
+        "provenance_s": 13.794998695972026,
+        "workflow_s": 22.659839416999603,
+        "workflow_excluding_import_guard_s": 22.658868659011205,
+        "native_import_guard_s": 0.0009707579883979633,
+        "peak_rss_kib": 236244,
+        "native_verification_s": 13.606249862990808,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "process_s": 39.63051153899869,
+        "head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+        "tree": "99cf2e7ac6bc7e271364ac776fd570ffa9d3238c",
+        "setup_s": 6.446298242997727,
+        "provenance_s": 13.807016344013391,
+        "workflow_s": 21.7025960660103,
+        "workflow_excluding_import_guard_s": 21.701564651011722,
+        "native_import_guard_s": 0.001031414998578839,
+        "peak_rss_kib": 236608,
+        "native_verification_s": 13.629860310989898,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "process_s": 48.15344860800542,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "setup_s": 6.665506367004127,
+        "provenance_s": 14.150705741005368,
+        "workflow_s": 29.969965858006617,
+        "workflow_excluding_import_guard_s": 29.968895968035213,
+        "native_import_guard_s": 0.0010698899714043364,
+        "peak_rss_kib": 235776,
+        "native_verification_s": 13.776832137009478,
+        "checkpoints": 3
+      },
+      {
+        "variant": "B",
+        "warmup": false,
+        "process_s": 45.94900155000505,
+        "head": "77e398375e5277858110c746a428d13535db6a59",
+        "tree": "c7679e12abfc863fee420a16da4a66ebc3e70e1e",
+        "setup_s": 6.823146654991433,
+        "provenance_s": 13.820787837001262,
+        "workflow_s": 27.743496658004005,
+        "workflow_excluding_import_guard_s": 27.74256597601925,
+        "native_import_guard_s": 0.0009306819847552106,
+        "peak_rss_kib": 233892,
+        "native_verification_s": 13.457368980001775,
+        "checkpoints": 3
+      },
+      {
+        "variant": "current",
+        "warmup": false,
+        "process_s": 38.57877126800304,
+        "head": "b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6",
+        "tree": "99cf2e7ac6bc7e271364ac776fd570ffa9d3238c",
+        "setup_s": 6.216716135997558,
+        "provenance_s": 13.406694720004452,
+        "workflow_s": 21.187697290995857,
+        "workflow_excluding_import_guard_s": 21.186743561003823,
+        "native_import_guard_s": 0.0009537299920339137,
+        "peak_rss_kib": 236336,
+        "native_verification_s": 13.238227801004541,
+        "checkpoints": 3
+      }
+    ],
+    "limitations": [
+      "Five small-workload pairs on one non-isolated AC power-saver host; historical campaign used balanced and cannot be pooled.",
+      "Raw workflow observations favor candidate here; no general performance acceptance or speedup inferred from profiling/coverage.",
+      "RSS difference is negligible; memory improvement remains unproved.",
+      "Original unguarded provenance and unmatched historical CI baseline remain uncertain; #918 stays open and advisory CSV FAIL remains FAIL.",
+      "Measured implementation is b0e3a5c; final documentation commit is verified to preserve driver/helper/harness/production bytes. Earlier series retain their original identities.",
+      "Previous interrupted full local suite remains incomplete; this implementation passed consolidated focused/static checks, with final hosted full-suite/Qt/coverage and review recorded on the PR."
+    ]
+  }
 }

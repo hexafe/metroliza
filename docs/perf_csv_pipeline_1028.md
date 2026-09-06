@@ -514,3 +514,48 @@ sample identity, native-export binding and loaded-origin reconciliation boundari
 The measured workflow/profiler/RSS sequence and all three production modules are
 unchanged. The bootstrap/driver changes receive a new guarded five-pair series;
 the earlier series is not relabelled as execution of this driver.
+
+### Guarded confirmation of the consolidated implementation
+
+The renewed series measured `b0e3a5c7bfdaac2bc1895eec172788e8be6b0ab6`, tree
+`99cf2e7ac6bc7e271364ac776fd570ffa9d3238c`, against fixed B
+`77e398375e5277858110c746a428d13535db6a59`. Both used the same shared driver
+SHA-256 `cb591c8f310a333a6b03e7d68cbc5397e01675a92a4ec0dc7e10718fa9e8b403`,
+helper `733ee0f20c35aec62ac911c9b2af3001ef9755b623a8c1f301ed55c4cc7e3d68`
+and unchanged harness. The subsequent evidence-only commit retains those code
+bytes; exact final review/CI and Ready receipts are maintained on PR #1029.
+
+All twelve fresh processes completed: one declared warmup each, then five
+interleaved small-workload pairs, one request per process, run serially after all
+local tests/builds completed. All twelve full HTML/assets/XLSX outputs equal the
+first B output under the preserved comparator. Fixtures, versions, environment,
+native identities and outcomes agree apart from the documented temporary SQLite
+diagnostic path. The additive `bootstrap_guarded_confirmation` JSON field contains
+all raw observations in execution order; earlier data remain unchanged.
+
+| Raw measurement | B median | Current median | Dispersion B / current |
+|---|---:|---:|---|
+| Workflow seconds | 27.918644 | 22.226399 | MAD 0.175147 / 0.433441; IQR 0.204058 / 0.683179 |
+| Process seconds | 45.949002 | 40.433999 | MAD 0.605292 / 0.753667 |
+| Peak RSS KiB | 234380 | 236268 | MAD 488 / 68 |
+| Setup seconds | 6.479265 | 6.320192 | Raw, with initialization effects |
+| Provenance checkpoint seconds | 13.858088 | 13.807016 | Overlapping counters, outside workflow |
+| Import guard seconds inside workflow | 0.000976 | 0.000971 | Raw workflow remains primary |
+
+The workflow median is approximately 20.39% lower in this series. This is a
+five-pair confirmation on one active desktop, not broad performance acceptance.
+Median RSS is **1888 KiB higher** in the candidate: memory improvement is not
+established. The unchanged AC/power-saver host was observed 35 times from 10:36:40
+to 10:45:25 UTC on 2026-09-06, with one-minute load 2.53–3.53. Absolute timings
+cannot be pooled with the earlier, differently loaded series or the historical
+balanced campaign. No profiled/coverage timings support this comparison.
+
+Consolidated local validation of these implementation bytes passed **157 tests**
+with **one skip** for the locally absent Metroliza wheel; actual trusted NumPy and
+SciPy integration cases executed. Compile, full Ruff, narrow mypy, release metadata,
+release hygiene, secret/security audits and the 946-path coverage ledger passed.
+The C901 ratchet remains at its unchanged 147 budget. Current hosted Windows,
+compiled-wheel execution, full unit/Qt/coverage and independent/configured review
+remain separate exact-head gates; historical green jobs do not satisfy them.
+#918, old provenance uncertainty, unmatched historical CI baseline, absent memory
+improvement and advisory CSV FAIL remain visible limitations.
