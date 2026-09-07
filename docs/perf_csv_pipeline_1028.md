@@ -695,3 +695,13 @@ case failed first locally; actual CLI cases run on Linux and Windows. The two
 symlinked tagged-cache fixtures also use `git check-ignore` on the ignored link
 entry, because Git refuses a pathspec beneath a directory symlink; real loader,
 cache-byte preservation and clean-Git assertions remain intact.
+
+The first current Windows run at `7be6e1d` exposed a fixture portability P2:
+Git text conversion stored LF while `Path.write_text` produced CRLF, so sixteen
+cases failed the exact blob/source assertion before driver execution (155 passed,
+18 explicit skips, 16 failed). Independent review confirmed this single cause.
+The synthetic source-entry repositories now declare `* -text` in their own
+`.gitattributes` before committing. Exact byte/cache assertions remain unchanged;
+no host or project Git setting changes. Two permanent forced-CRLF cases with
+process-local `core.autocrlf=true` failed first on Linux in both cache modes and
+validate the correction independently of the native Windows rerun.

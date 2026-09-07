@@ -838,7 +838,7 @@ def _compile_stale_fixture(source, mode, *, stale=True, cache=None):
 
 
 def _source_entry_bytecode_case(tmp_path, location, mode, role='payload', *, stale=True,
-                                inherited=False, cache_symlink=False):
+                                inherited=False, cache_symlink=False, crlf=False):
     tooling, repo = tmp_path / 'tooling', tmp_path / 'repo'
     (tooling / 'scripts').mkdir(parents=True)
     repo.mkdir()
@@ -883,7 +883,12 @@ print('SOURCE_ENTRY_BYTECODE_BYPASSED', _probe_identity)
     else:
         source, name, directory = tooling / 'scripts/argparse.py', 'argparse', tooling / 'scripts'
         source.write_text("MARKER = 'source'\n")
+    if crlf:
+        source.write_bytes(source.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
     for checkout in (tooling, repo):
+        # This fixture proves exact blob/source/cache bytes, including on Windows.
+        # Keep Git's host text conversion from changing its synthetic source blobs.
+        (checkout / '.gitattributes').write_text('* -text\n')
         _commit_bytecode_fixture(checkout)
     cache = None
     inherited_prefix = tmp_path / 'inherited-cache'
@@ -951,6 +956,15 @@ def test_inherited_populated_bytecode_prefix_is_bypassed_and_preserved(tmp_path,
 @pytest.mark.parametrize('mode', ['TIMESTAMP', 'UNCHECKED_HASH'])
 def test_stale_tagged_bytecode_directory_symlink_is_bypassed_and_preserved(tmp_path, mode):
     _source_entry_bytecode_case(tmp_path, 'src', mode, cache_symlink=True)
+
+
+@pytest.mark.parametrize('mode', ['TIMESTAMP', 'UNCHECKED_HASH'])
+def test_crlf_source_bytecode_proof_preserves_exact_git_bytes(tmp_path, monkeypatch, mode):
+    # Exercise Windows Git text conversion on every host, without persistent config.
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+    monkeypatch.setenv('GIT_CONFIG_KEY_0', 'core.autocrlf')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_0', 'true')
+    _source_entry_bytecode_case(tmp_path, 'src', mode, crlf=True)
 
 
 @pytest.mark.parametrize('dont_write', [False, True])
