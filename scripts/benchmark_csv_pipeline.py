@@ -239,16 +239,23 @@ def _checkout_identity(repo: Path) -> tuple[str, str]:
     from scripts.benchmark_native_provenance import reject_checkout_native
 
     source_targets = reject_checkout_native(repo)
+    entries = subprocess.check_output(
+        ["git", "ls-files", "-v", "--stage", "-z"], cwd=repo,
+    ).split(b"\0")
+    # These index flags suppress working-file checks, including tracked aliases.
+    # Read before status (which may refresh sparse entries); never clear flags.
+    if any(entry[:1].islower() or entry[:1] == b"S" for entry in entries):
+        raise RuntimeError("Benchmark checkout index flags assume-unchanged/skip-worktree "
+                           "are unsupported; use an ordinary fully checked checkout")
     status = subprocess.check_output(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=repo,
     )
     if status:
         raise RuntimeError("Benchmark checkout must be clean; commit changes and use external "
                            "or git-ignored output directories before measuring")
-    entries = subprocess.check_output(["git", "ls-files", "--stage", "-z"], cwd=repo).split(b"\0")
     tracked_files = {
         repo.resolve() / os.fsdecode(entry.split(b"\t", 1)[1])
-        for entry in entries if entry.startswith((b"100644 ", b"100755 "))
+        for entry in entries if entry[2:].startswith((b"100644 ", b"100755 "))
     }
     if source_targets - tracked_files:
         raise RuntimeError("Benchmark checkout resolves untracked source, including ignored alias targets")

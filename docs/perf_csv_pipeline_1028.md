@@ -705,3 +705,21 @@ The synthetic source-entry repositories now declare `* -text` in their own
 no host or project Git setting changes. Two permanent forced-CRLF cases with
 process-local `core.autocrlf=true` failed first on Linux in both cache modes and
 validate the correction independently of the native Windows rerun.
+
+The configured review at `54fdd497` then confirmed P1 `discussion_r3952732639`:
+Git's assume-unchanged and skip-worktree flags can hide modified tracked source
+from status while the index still reports an owned file. A tracked symlink can
+also silently switch between two tracked Python targets. Thirteen permanent
+real-Git regressions failed first: nine source/alias/unchanged-flag cases and four
+actual measured-worker drift cases spanning both flags and measured/tooling roots.
+The worker cases previously published successful receipts after hidden changes.
+
+Every checkout checkpoint now reads NUL-delimited `git ls-files -v --stage -z`
+before status and rejects assume-unchanged or skip-worktree entries across that
+checkout's index, including aliases and both flags together. This explicit
+unsupported-index policy avoids claiming that status checked bytes it skipped.
+It does not clear flags, mutate the index, change Git settings or remove files.
+Ordinary tracked source/aliases, Windows CRLF handling and harmless ignored
+artifacts/caches remain supported. Current full validation and configured review
+must be renewed for this correction; the green `54fdd497` receipts do not certify
+changed bytes. The compact fresh comparison had not started when this P1 arrived.

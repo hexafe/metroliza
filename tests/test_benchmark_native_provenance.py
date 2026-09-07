@@ -1250,6 +1250,93 @@ def test_module_entry_refuses_measurement_claim(tmp_path):
     assert 'Execute the reviewed driver source file directly' in result.stderr
 
 
+@pytest.mark.parametrize('flags', [('--assume-unchanged',), ('--skip-worktree',),
+                                  ('--assume-unchanged', '--skip-worktree')])
+@pytest.mark.parametrize('kind', ['source', 'alias', 'unchanged'])
+def test_hidden_index_flags_cannot_supply_checkout_identity(tmp_path, flags, kind):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    (repo / '.gitattributes').write_text('* -text\n')
+    original = repo / 'original.py'
+    original.write_bytes(b"MARKER = 'source'\n")
+    alternate = repo / 'alternate.py'
+    alternate.write_bytes(b"MARKER = 'hidden'\n")
+    target = repo / 'alias.py' if kind == 'alias' else original
+    if kind == 'alias':
+        _symlink_or_skip(target, original)
+    _commit_bytecode_fixture(repo)
+    _child(tmp_path, """\
+        import subprocess
+        import importlib.machinery as machinery
+        from scripts import benchmark_csv_pipeline as driver
+        repo, target, kind = Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+        flags = sys.argv[5:]
+        def git(*args):
+            return subprocess.check_output(['git', *args], cwd=repo)
+        identity = driver._checkout_identity(repo)
+        for flag in flags:
+            git('update-index', flag, '--', target.name)
+        if kind == 'source':
+            target.write_bytes(b"MARKER = 'hidden'\\n")
+        elif kind == 'alias':
+            target.unlink()
+            target.symlink_to(repo / 'alternate.py')
+        assert git('status', '--porcelain') == b''
+        entries = git('ls-files', '-v', '--stage', '-z')
+        spec = machinery.PathFinder.find_spec(target.stem, [str(repo)])
+        assert isinstance(spec.loader, machinery.SourceFileLoader)
+        if kind != 'unchanged':
+            assert b'hidden' in spec.loader.get_data(spec.origin)
+            assert git('show', 'HEAD:' + target.name) != target.read_bytes()
+        for check in (lambda: driver._checkout_identity(repo),
+                      lambda: driver._verify_checkout_identity(repo, identity,
+                                                               driver._sha(Path(driver.__file__)))):
+            try:
+                check()
+            except RuntimeError as exc:
+                assert 'index flags' in str(exc), str(exc)
+            else:
+                raise AssertionError('Hidden Git index flags attributed unchecked inputs to HEAD')
+        assert git('ls-files', '-v', '--stage', '-z') == entries
+        assert target.exists()
+        """, repo, target, kind, *flags)
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux RSS worker; portable index guard tested separately')
+@pytest.mark.parametrize('flag', ['--assume-unchanged', '--skip-worktree'])
+@pytest.mark.parametrize('root', ['measured', 'tooling'])
+def test_worker_hidden_index_drift_never_publishes_receipt(tmp_path, flag, root):
+    tooling, repo = _worker_fixture(tmp_path)
+    selected = repo if root == 'measured' else tooling
+    relative = ('src/metroliza/industrial/industrial_analytics_state.py' if root == 'measured'
+                else 'scripts/benchmark_paths.py')
+    workflow = repo / 'src/metroliza/industrial/industrial_analytics_workflow.py'
+    workflow.write_text(workflow.read_text().replace(
+        "    Path(os.environ['PROVENANCE_TEST_MUTATION']).write_bytes(b'changed')",
+        "    import subprocess\n"
+        "    target = Path(os.environ['PROVENANCE_TEST_MUTATION'])\n"
+        "    subprocess.run(['git', 'update-index', os.environ['PROVENANCE_TEST_INDEX_FLAG'],\n"
+        "                    '--', os.environ['PROVENANCE_TEST_RELATIVE']],\n"
+        "                   cwd=os.environ['PROVENANCE_TEST_INDEX_ROOT'], check=True)\n"
+        "    target.write_bytes(target.read_bytes() + b'\\n# hidden drift\\n')",
+    ))
+    _commit_bytecode_fixture(repo)
+    output = tmp_path / 'output'
+    result = subprocess.run(
+        [sys.executable, '-B', str(tooling / 'scripts/benchmark_csv_pipeline.py'),
+         '--worker', '--repo', str(repo), '--case', 'small', '--requests', '1', '--output', str(output)],
+        env=dict(os.environ, PROVENANCE_TEST_MUTATION=str(selected / relative),
+                 PROVENANCE_TEST_INDEX_ROOT=str(selected), PROVENANCE_TEST_RELATIVE=relative,
+                 PROVENANCE_TEST_INDEX_FLAG=flag, MPLBACKEND='Agg'),
+        cwd=tmp_path, capture_output=True, text=True, timeout=90,
+    )
+    assert (selected / relative).read_bytes().endswith(b'\n# hidden drift\n')
+    assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=selected) == b''
+    assert result.returncode != 0, 'Worker published success after hidden index drift'
+    assert 'index flags' in result.stderr
+    assert not (output / 'result.json').exists()
+
+
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux RSS worker; portable policy checks run separately')
 @pytest.mark.parametrize('boundary', ['setup', 'request', 'receipt'])
 @pytest.mark.parametrize('change', ['prefix', 'writes'])
