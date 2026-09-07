@@ -1346,3 +1346,32 @@ def test_windows_junction_source_boundary(tmp_path, kind):
                 assert kind == 'data', 'External junction source accepted'
         """, repo, kind)
     assert alias.exists() and source.read_text() == "MARKER = 'source'\n"
+
+
+@pytest.mark.parametrize('kind', ['directory', 'symlink'])
+def test_bytecode_reservation_collision_never_adopts_existing_contents(tmp_path, kind):
+    if kind == 'symlink':
+        _symlink_or_skip(tmp_path / 'probe', tmp_path / 'absent', directory=True)
+    _child(tmp_path, """\
+        from scripts import benchmark_csv_pipeline as driver
+        root = Path(sys.argv[2]); root.mkdir()
+        reservation = root / ('metroliza-bytecode-' + '00' * 24)
+        target = root / 'preserved' if sys.argv[3] == 'symlink' else reservation
+        target.mkdir()
+        (target / 'data.txt').write_text('user data')
+        if sys.argv[3] == 'symlink':
+            reservation.symlink_to(target, target_is_directory=True)
+        driver._bytecode_temp_parents = lambda: [str(root)]
+        driver.os.urandom = lambda count: bytes(count)
+        before = (sys.pycache_prefix, sys.dont_write_bytecode)
+        try:
+            driver._start_bytecode_policy([root / 'source'])
+        except RuntimeError as exc:
+            assert 'No writable external temporary directory' in str(exc)
+        else:
+            raise AssertionError('Existing reservation was adopted as fresh')
+        assert driver._BYTECODE_STATE is None
+        assert (sys.pycache_prefix, sys.dont_write_bytecode) == before
+        assert (target / 'data.txt').read_text() == 'user data'
+        assert not (target / 'unused-cache').exists()
+        """, tmp_path / 'temporary', kind)

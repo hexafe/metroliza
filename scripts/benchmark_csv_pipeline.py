@@ -36,7 +36,10 @@ def _bytecode_temp_parents():
         if local:
             parents.append(os.path.join(local, "Temp"))
     else:
-        parents.append("/tmp")
+        # B108: only a parent; allocation below uses a 192-bit random child and
+        # atomic mkdir(0700), then verifies identity. Importing tempfile here
+        # would precede the fresh-cache policy. No existing child is adopted.
+        parents.append("/tmp")  # nosec B108
     return [os.path.realpath(value) for value in parents if value]
 
 

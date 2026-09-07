@@ -674,3 +674,15 @@ full suite remains incomplete. New timing receipts distinguish driver bootstrap,
 process, setup, input validation and workflow costs. Existing `provenance_s` and
 native verification counters overlap setup/checkpoints and must not be added as
 independent costs. Imports remain distinct from demonstrated native computation.
+
+Consolidated security initially reported B108 on the literal `/tmp` parent
+(fingerprint prefix `b7b49221daed`). Independent read-only reconciliation found a
+false positive: B108 matches the string without following the allocation path;
+the code creates a 192-bit random child with atomic `mkdir(0700)` and never adopts
+an existing child. The narrow `nosec B108` annotation documents that exact reasoning;
+security baselines, expiration policy, thresholds and scanners are unchanged.
+Directory/symlink collision regressions require refusal and preservation of existing
+contents. Importing `tempfile` before isolation or requiring a new environment
+variable would break the accepted bootstrap/support contract; disguising the literal
+would hide the finding. The original failed local/hosted receipts remain evidence,
+and the unchanged security command must pass on the corrected candidate.
