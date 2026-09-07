@@ -190,7 +190,11 @@ def _bootstrap_reject_native(root, ancestors=frozenset(), *, source_root=None):
             if entry.name.lower().endswith(".pyc") and entry.name[:-4].isidentifier():
                 raise RuntimeError("Checkout-local sourceless bytecode is unsupported before bootstrap imports")
             if (entry.name.lower().endswith(".py") and entry.name[:-3].isidentifier()
-                    and entry.is_file() and not _within_path(entry.path, source_root)):
+                    and entry.is_file() and not _within_path(entry.path, source_root)
+                    and os.path.normcase(os.path.abspath(entry.path))
+                    != os.path.normcase(os.path.abspath(__file__))):
+                # The trusted entry itself may be a launcher symlink. Its resolved
+                # tooling root is separately checked and supplies driver identity.
                 raise RuntimeError("Importable source alias escapes the verified checkout")
             if entry.name.isidentifier() and entry.is_dir():
                 _bootstrap_reject_native(entry.path, ancestors | {resolved}, source_root=source_root)

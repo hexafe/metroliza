@@ -903,7 +903,8 @@ print('SOURCE_ENTRY_BYTECODE_BYPASSED', _probe_identity)
     owner = tooling if source.is_relative_to(tooling) else repo
     assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=owner) == b''
     if not inherited:
-        assert subprocess.check_output(['git', 'check-ignore', str(cache)], cwd=owner)
+        ignored_entry = cache.parent if cache_symlink else cache
+        assert subprocess.check_output(['git', 'check-ignore', str(ignored_entry)], cwd=owner)
     assert subprocess.check_output(['git', 'show', 'HEAD:' + source.relative_to(owner).as_posix()],
                                    cwd=owner) == source.read_bytes()
     receipt = tmp_path / 'receipt.json'
@@ -1375,3 +1376,37 @@ def test_bytecode_reservation_collision_never_adopts_existing_contents(tmp_path,
         assert (target / 'data.txt').read_text() == 'user data'
         assert not (target / 'unused-cache').exists()
         """, tmp_path / 'temporary', kind)
+
+
+@pytest.mark.parametrize('entry', ['actual_cli', 'admitted_link_directory'])
+def test_direct_driver_symlink_preserves_trusted_source_entry(tmp_path, entry):
+    tooling = tmp_path / 'source' / 'scripts'
+    tooling.mkdir(parents=True)
+    driver = tooling / 'benchmark_csv_pipeline.py'
+    driver.write_bytes((ROOT / 'scripts/benchmark_csv_pipeline.py').read_bytes())
+    invocation = tmp_path / 'invocation'
+    invocation.mkdir()
+    link = invocation / 'entry.py'
+    _symlink_or_skip(link, driver)
+    if entry == 'actual_cli':
+        result = subprocess.run([sys.executable, '-B', str(link), '--help'], cwd=tmp_path,
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert '--worker' in result.stdout
+    else:
+        # Emulate the admitted directory on hosts whose CLI resolves it away;
+        # native Windows also executes the actual-CLI case above.
+        _child(tmp_path, """\
+            link = Path(sys.argv[2])
+            sys.path[0] = str(link.parent)
+            sys.argv = [str(link), '--help']
+            try:
+                exec(compile(link.read_bytes(), str(link), 'exec'),
+                     {'__file__': str(link), '__name__': '__main__',
+                      '__package__': None, '__spec__': None})
+            except SystemExit as exc:
+                assert exc.code == 0
+            else:
+                raise AssertionError('Trusted driver entry symlink failed to show help')
+            """, link)
+    assert link.is_symlink() and driver.exists()

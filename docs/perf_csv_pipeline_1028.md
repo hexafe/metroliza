@@ -686,3 +686,12 @@ contents. Importing `tempfile` before isolation or requiring a new environment
 variable would break the accepted bootstrap/support contract; disguising the literal
 would hide the finding. The original failed local/hosted receipts remain evidence,
 and the unchanged security command must pass on the corrected candidate.
+
+The source-alias check preserves a direct driver launcher symlink even on Windows,
+where its invocation directory can remain on `sys.path`. Only the invoked entry
+path receives this exception: its resolved tooling root and driver content are
+separately verified. Other escaping source aliases still fail. An admitted-directory
+case failed first locally; actual CLI cases run on Linux and Windows. The two
+symlinked tagged-cache fixtures also use `git check-ignore` on the ignored link
+entry, because Git refuses a pathspec beneath a directory symlink; real loader,
+cache-byte preservation and clean-Git assertions remain intact.
