@@ -1,6 +1,8 @@
 # CSV analytics/export performance — Issue #1028
 
-Status: measured candidate in Draft PR #1029. Exact-final-head validation/review receipts are maintained on the PR. Parent #918 remains open.
+Status: measured candidate in PR #1029; current exact-head validation/review and Ready receipts are maintained on the PR. Parent #918 remains open.
+
+The original packet below is historical. [Convergence authority #5558038371](https://github.com/hexafe/metroliza/issues/1028#issuecomment-5558038371) supersedes its Draft-only endpoint and permits the bounded repair/review/Ready loop, including bytecode correction. Merge remains a separate forbidden action for the implementation owner.
 
 ## Authority and fixed comparisons
 
@@ -365,7 +367,7 @@ driver files would omit that executed harness. The legacy five-entry
 driver/helper and per-variant native identities. Existing output directories are
 refused so a failed run cannot overwrite an earlier valid receipt. A failed sample
 never produces a successful aggregate summary. Harmless ignored logs, output and
-bytecode caches remain permitted.
+tagged source-bytecode caches are preserved but bypassed by the current policy below; importable checkout sourceless bytecode is rejected.
 
 Content fingerprinting and checkpoint validation occur outside workflow timing.
 `workflow_s` retains raw elapsed wall-clock semantics. The necessary import-time
@@ -593,3 +595,82 @@ The worker, native helper, measurement boundaries and three production modules
 are unchanged. All earlier raw measurements retain their original identities.
 Further guarded comparison and current exact-head validation/review/Ready receipts
 are recorded on PR #1029; historical results do not replace those gates.
+
+
+### Source entry and fresh bytecode policy
+
+The later P1 `discussion_r3943838695` was reproduced with ten trusted,
+self-compiled stale-cache fixtures: root/src source files, packages, the shared
+helper and a shadowable bootstrap dependency, in both timestamp-valid and
+unchecked-hash modes. All ten failed first with `STALE_BYTECODE_EXECUTED: cached`
+on the committed pre-correction driver; Git was clean and the actual loader was
+`SourceFileLoader`. `-B` alone stops writes but does not prevent these cache reads.
+The preserved three-file partial implementation was committed as WIP `b62419f`
+before completion; its skip marker and partial 39-case evidence are not acceptance.
+
+The supported measurement entry is the reviewed driver **source file**, executed
+directly by trusted CPython. Before shadowable filesystem imports, it uses the
+trusted startup `os`/`sys` and builtin `time`/`atexit` to reserve a random external
+per-process directory. An absent child becomes `sys.pycache_prefix`, and bytecode
+writes are disabled. An inherited prefix is bypassed. Tagged caches, including
+stale or symlinked caches, remain untouched. Ordinary helper imports preserve the
+caller's interpreter policy and remain independent of analytics and `resource`.
+`-m` is rejected as an attested measurement entry: code executing from an old driver
+cache cannot repair or attest itself. Trusted isolated test harnesses explicitly
+supply the direct-entry globals; this is distinct from a measured source-file CLI.
+
+Root/src/package sourceless bytecode is rejected before bootstrap imports and at
+checkout checkpoints. Importable source aliases escaping the checkout are rejected;
+resolved source targets must also be regular files owned by Git before measured
+application imports. This catches tracked aliases to ignored code without rejecting
+tracked targets merely because an ignore pattern matches them. In-root tracked
+aliases and harmless data aliases remain supported. Traversal is confined to the
+existing import-addressable directory policy, including normal symlinks and Windows
+junctions, rather than scanning the host recursively.
+
+Policy verification binds the PID, canonical reservation and device/inode identity,
+absence of links/replacements or contents, exact prefix/write settings and stable
+policy dictionary. It requires externality to every admitted source root. POSIX
+reservations use mode 0700; Windows 3.11 uses inherited user-temp ACLs, with no claim
+that `mkdir(mode=0700)` establishes a private Windows ACL. Checks run before/after
+requests and immediately before worker/controller evidence publication. Cleanup
+uses only `rmdir` on the owned empty reservation, preserves unexpected contents and
+restores caller settings. Unique controller/worker paths remain local receipt data;
+the stable policy is compared across samples and any prefix reuse is rejected.
+
+| Pending-handoff boundary | Permanent regression / disposition |
+|---|---|
+| Original ten stale-cache failures | Retained source-entry probes for root/src, helper, bootstrap dependency and package in both modes |
+| Actual measured worker | Two direct-CLI Linux worker cases run the synthetic workflow twice, require the source marker in measured outcomes and preserve stale cache bytes |
+| Inherited and symlinked tagged cache | Both cache modes bypass and preserve contents; independent processes get distinct prefixes |
+| Sourceless files/packages and links | Actual trusted compiled fixtures; bootstrap and checkout rejection without deletion, including suffix case |
+| External source alias | Three real Git/loader fail-first negatives, with in-root tracked file/package and external-data positives |
+| Ignored in-root source target | Two fail-first alias negatives and two forced-tracked positives under the same ignore rule |
+| Fresh-prefix filesystem and policy drift | Missing/populated/replaced/symlinked prefix, PID, policy, write flag, permissions, externality and cleanup controls |
+| Worker evidence boundaries | Setup, request and final-receipt drift injection for both prefix and write policy; no successful result |
+| Controller evidence boundaries | Worker/controller prefix reuse, changed worker policy, live controller drift and post-aggregation drift; no successful summary |
+| Existing provenance contracts | Complete native/source/driver/observed-load and CSV test files remain selected; earlier guards are retained |
+| Windows portability | Existing Windows job selects the entire provenance file plus portable CSV nodeids; new native-junction cases execute there; Linux RSS cases are explicit skips |
+
+The initial full-file run exposed old bootstrap harnesses without `__spec__` in
+explicit `exec` globals; those fixtures now model direct source entry explicitly.
+Their pre-import inert-native sentinels and all previous suffix/root cases remain.
+The post-aggregation policy-drift case failed first before moving the final controller
+policy checkpoint after summary construction. This does not claim an atomic lock
+against changes after a checkpoint or hostile code controlling the process.
+
+No production module, backend selection, kernel, dependency or numeric/output
+contract changed. The supported model still trusts the interpreter, entry source
+and installed environment; it does not attest the already-running interpreter,
+all installed Python source or transitive shared libraries. Historical measurements
+retain their original provenance limitations and are not retroactively certified.
+
+Final full-file counts, native Windows/compiled-wheel results, hosted Qt/coverage,
+fresh guarded comparison, independent/configured review and Ready activity are
+recorded for their actual candidate identities on PR #1029. The tooling-only
+validation allowance uses consolidated local focused/static/security/release/ledger
+checks plus hosted exact-head full-suite/Qt/coverage; the older interrupted local
+full suite remains incomplete. New timing receipts distinguish driver bootstrap,
+process, setup, input validation and workflow costs. Existing `provenance_s` and
+native verification counters overlap setup/checkpoints and must not be added as
+independent costs. Imports remain distinct from demonstrated native computation.

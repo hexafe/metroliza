@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import os
 from pathlib import Path
 import py_compile
@@ -147,7 +148,7 @@ def _bootstrap_child(tmp_path, location, suffix, option="tooling", link=False, m
         sys.argv = [str(driver), *arguments]
         try:
             exec(compile(driver.read_bytes(), str(driver), 'exec'),
-                 {'__file__': str(driver), '__name__': '__main__', '__package__': None})
+                 {'__file__': str(driver), '__name__': '__main__', '__package__': None, '__spec__': None})
         except RuntimeError as exc:
             assert 'native' in str(exc).lower()
         else:
@@ -244,7 +245,7 @@ def test_bootstrap_file_symlink_uses_actual_interpreter_search_root(tmp_path):
         sys.argv = [str(link), '--help']
         try:
             exec(compile(link.read_bytes(), str(link), 'exec'),
-                 {'__file__': str(link), '__name__': '__main__', '__package__': None})
+                 {'__file__': str(link), '__name__': '__main__', '__package__': None, '__spec__': None})
         except RuntimeError as exc:
             assert admitted and 'native' in str(exc).lower()
         except SystemExit as exc:
@@ -547,20 +548,16 @@ def test_installed_metroliza_native_execution(tmp_path):
     print(output)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux RSS worker; portable guard tested separately")
-@pytest.mark.parametrize("change", ["native", "source", "helper", "driver", "shared_harness",
-                                  "shared_dirty", "shared_native", "none"])
-def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
-    """A real Git checkout and isolated synthetic workflow exercise worker ordering."""
+def _worker_fixture(tmp_path):
     tooling = tmp_path / "tooling"
     (tooling / "scripts").mkdir(parents=True)
     for name in ("benchmark_csv_pipeline.py", "benchmark_native_provenance.py"):
         (tooling / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
     (tooling / "scripts/__init__.py").write_text("")
-    (tooling / ".gitignore").write_text("*.so\n*.pyd\n")
+    (tooling / ".gitignore").write_text("*.so\n*.pyd\n__pycache__/\n")
     repo = tmp_path / "repo"
     files = {
-        ".gitignore": "*.so\n*.pyd\n",
+        ".gitignore": "*.so\n*.pyd\n__pycache__/\n",
         "scripts/benchmark_paths.py": (
             "def _install_headless_stubs(): pass\n"
             "def _create_csv_fixture(path, **kwargs): path.write_text('PART,DIM_01\\nA,1\\n')\n"
@@ -574,10 +571,12 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
         ),
         "src/metroliza/industrial/industrial_analytics_workflow.py": (
             "from pathlib import Path\nimport os\nfrom dataclasses import dataclass\n"
+            "MARKER = 'source'\n"
             "@dataclass\nclass Outcome:\n"
             "    html_dashboard_path: str = 'dashboard.html'\n"
             "    html_dashboard_assets_path: str = 'assets'\n"
             "    workbook_path: str = 'workbook.xlsx'\n"
+            "    implementation_marker: str = MARKER\n"
             "def run_tabular_file_analytics(**kwargs):\n"
             "    Path(os.environ['PROVENANCE_TEST_MUTATION']).write_bytes(b'changed')\n"
             "    return Outcome()\n"
@@ -593,6 +592,15 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
         subprocess.run(["git", "add", "."], cwd=checkout, check=True)
         subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                         "commit", "--quiet", "-m", "synthetic workflow"], cwd=checkout, check=True)
+    return tooling, repo
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux RSS worker; portable guard tested separately")
+@pytest.mark.parametrize("change", ["native", "source", "helper", "driver", "shared_harness",
+                                  "shared_dirty", "shared_native", "none"])
+def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
+    """A real Git checkout and isolated synthetic workflow exercise worker ordering."""
+    tooling, repo = _worker_fixture(tmp_path)
     target = {
         "native": repo / ("_metroliza_group_stats_native" + importlib.machinery.EXTENSION_SUFFIXES[0]),
         "source": repo / "src/metroliza/industrial/industrial_analytics_state.py",
@@ -646,6 +654,7 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
     "head", "driver_sha256", "native_helper_sha256", "shared_tooling_head", "native",
     "loaded_bridges", "loaded_extensions", "observed_native_imports", "initially_loaded",
     "bytecode_policy", "bytecode_unverified", "bytecode_reuse", "none", "guard_timings",
+    "controller_prefix", "controller_writes", "controller_reuse", "controller_summary",
 ])
 def test_compare_rejects_different_implementations_between_samples(tmp_path, changed_key):
     _child(tmp_path, """\
@@ -658,6 +667,12 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
         driver._checkout_identity = lambda repo: ('head', 'tree')
         driver._verify_checkout_identity = lambda *args: None
         driver._start_bytecode_policy([repo])
+        if sys.argv[3] == 'controller_summary':
+            original_summary = driver._summary
+            def changed_summary(values):
+                sys.dont_write_bytecode = False
+                return original_summary(values)
+            driver._summary = changed_summary
         def fake_worker(command, **kwargs):
             destination = Path(command[command.index('--output') + 1]); destination.mkdir()
             payload = {
@@ -696,6 +711,14 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
                 elif key == 'bytecode_reuse':
                     payload['bytecode_provenance']['prefix'] = str(
                         destination.with_name(destination.name.replace('-1-', '-0-')) / 'unique-child-prefix')
+                elif key == 'controller_reuse':
+                    payload['bytecode_provenance']['prefix'] = driver._BYTECODE_STATE['prefix']
+                elif key == 'controller_prefix':
+                    sys.pycache_prefix = 'changed-prefix'
+                elif key == 'controller_writes':
+                    sys.dont_write_bytecode = False
+                elif key == 'controller_summary':
+                    pass
                 elif key == 'none':
                     pass
                 else:
@@ -709,7 +732,8 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
                                      case='small', timeout=30))
         except RuntimeError as exc:
             assert sys.argv[3] not in ('none', 'guard_timings'), str(exc)
-            assert 'between samples' in str(exc)
+            assert 'between samples' in str(exc) or (
+                sys.argv[3].startswith('controller_') and 'bytecode' in str(exc))
         else:
             assert sys.argv[3] in ('none', 'guard_timings'), 'Mixed implementation evidence was summarized'
         assert (output / 'summary.json').exists() == (sys.argv[3] in ('none', 'guard_timings'))
@@ -795,13 +819,13 @@ def _commit_bytecode_fixture(repo):
                     '-m', 'trusted source fixture'], cwd=repo, check=True)
 
 
-def _compile_stale_fixture(source, mode, *, stale=True):
+def _compile_stale_fixture(source, mode, *, stale=True, cache=None):
     fresh = source.read_bytes()
     cached = fresh.replace(b"MARKER = 'source'", b"MARKER = 'cached'") if stale else fresh
     assert len(fresh) == len(cached)
     source.write_bytes(cached)
     os.utime(source, (1700000000, 1700000000))
-    cache = source.parent / '__pycache__' / (source.stem + '.' + sys.implementation.cache_tag + '.pyc')
+    cache = cache or source.parent / '__pycache__' / (source.stem + '.' + sys.implementation.cache_tag + '.pyc')
     py_compile.compile(str(source), cfile=str(cache), doraise=True,
                        invalidation_mode=getattr(py_compile.PycInvalidationMode, mode))
     source.write_bytes(fresh)
@@ -813,7 +837,8 @@ def _compile_stale_fixture(source, mode, *, stale=True):
     return cache
 
 
-def _source_entry_bytecode_case(tmp_path, location, mode, role='payload', *, stale=True):
+def _source_entry_bytecode_case(tmp_path, location, mode, role='payload', *, stale=True,
+                                inherited=False, cache_symlink=False):
     tooling, repo = tmp_path / 'tooling', tmp_path / 'repo'
     (tooling / 'scripts').mkdir(parents=True)
     repo.mkdir()
@@ -842,7 +867,7 @@ print('SOURCE_ENTRY_BYTECODE_BYPASSED', _probe_identity)
     driver = tooling / 'scripts/benchmark_csv_pipeline.py'
     driver.write_text(driver_source + probe)
     for checkout in (tooling, repo):
-        (checkout / '.gitignore').write_text('__pycache__/\n')
+        (checkout / '.gitignore').write_text('__pycache__\n')
     directory = repo / location
     directory.mkdir(exist_ok=True)
     if role == 'payload':
@@ -860,21 +885,43 @@ print('SOURCE_ENTRY_BYTECODE_BYPASSED', _probe_identity)
         source.write_text("MARKER = 'source'\n")
     for checkout in (tooling, repo):
         _commit_bytecode_fixture(checkout)
-    cache = _compile_stale_fixture(source, mode, stale=stale)
+    cache = None
+    inherited_prefix = tmp_path / 'inherited-cache'
+    if inherited:
+        previous = sys.pycache_prefix
+        try:
+            sys.pycache_prefix = str(inherited_prefix)
+            cache = Path(importlib.util.cache_from_source(str(source)))
+        finally:
+            sys.pycache_prefix = previous
+    cache = _compile_stale_fixture(source, mode, stale=stale, cache=cache)
     cached_bytes = cache.read_bytes()
+    if cache_symlink:
+        target = tmp_path / 'user-cache'
+        cache.parent.rename(target)
+        _symlink_or_skip(cache.parent, target, directory=True)
     owner = tooling if source.is_relative_to(tooling) else repo
     assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=owner) == b''
-    assert subprocess.check_output(['git', 'check-ignore', str(cache)], cwd=owner)
+    if not inherited:
+        assert subprocess.check_output(['git', 'check-ignore', str(cache)], cwd=owner)
     assert subprocess.check_output(['git', 'show', 'HEAD:' + source.relative_to(owner).as_posix()],
                                    cwd=owner) == source.read_bytes()
     receipt = tmp_path / 'receipt.json'
     env = dict(os.environ, BYTECODE_TEST_REPO=str(repo), BYTECODE_TEST_DIRECTORY=str(directory),
                BYTECODE_TEST_MODULE=name, BYTECODE_TEST_RECEIPT=str(receipt))
+    if inherited:
+        env['PYTHONPYCACHEPREFIX'] = str(inherited_prefix)
     result = subprocess.run([sys.executable, '-B', str(driver), '--repo', str(repo)],
                             cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert cache.read_bytes() == cached_bytes, 'Source-backed user cache must be preserved'
     assert 'SOURCE_ENTRY_BYTECODE_BYPASSED' in result.stdout
+    policy = json.loads(receipt.read_text())
+    assert not Path(policy['prefix']).parent.exists(), 'Owned empty reservation must be cleaned'
+    assert not Path(policy['prefix']).is_relative_to(repo)
+    assert not Path(policy['prefix']).is_relative_to(tooling)
+    if inherited:
+        assert not Path(policy['prefix']).is_relative_to(inherited_prefix)
     return receipt
 
 
@@ -893,6 +940,16 @@ def test_bytecode_is_bypassed_before_bootstrap_helper_and_package_imports(tmp_pa
 
 def test_current_source_backed_cache_is_preserved(tmp_path):
     _source_entry_bytecode_case(tmp_path, '.', 'TIMESTAMP', stale=False)
+
+
+@pytest.mark.parametrize('mode', ['TIMESTAMP', 'UNCHECKED_HASH'])
+def test_inherited_populated_bytecode_prefix_is_bypassed_and_preserved(tmp_path, mode):
+    _source_entry_bytecode_case(tmp_path, 'src', mode, inherited=True)
+
+
+@pytest.mark.parametrize('mode', ['TIMESTAMP', 'UNCHECKED_HASH'])
+def test_stale_tagged_bytecode_directory_symlink_is_bypassed_and_preserved(tmp_path, mode):
+    _source_entry_bytecode_case(tmp_path, 'src', mode, cache_symlink=True)
 
 
 @pytest.mark.parametrize('dont_write', [False, True])
@@ -970,7 +1027,322 @@ def test_bytecode_policy_drift_fails_closed(tmp_path, change):
             assert 'bytecode' in str(exc)
         else:
             raise AssertionError('Bytecode policy drift accepted')
+        if sys.argv[3] == 'pid':
+            state['pid'] = os.getpid()
         driver._close_bytecode_policy()
         if sys.argv[3] == 'populated':
             assert Path(state['prefix'], 'preserved.txt').read_text() == 'unexpected data'
         """, tmp_path / 'source', change)
+
+
+def _symlink_or_skip(link, target, *, directory=False):
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except OSError as exc:
+        pytest.skip('symlink creation unavailable on this host: ' + str(exc))
+
+
+@pytest.mark.parametrize('kind', ['file', 'package', 'namespace', 'internal_file',
+                                  'internal_package', 'data'])
+def test_source_aliases_remain_bound_to_the_git_root(tmp_path, kind):
+    repo, external = tmp_path / 'repo', tmp_path / 'external'
+    repo.mkdir()
+    external.mkdir()
+    internal = kind.startswith('internal')
+    target_root = repo if internal else external
+    if kind.endswith('file'):
+        target = target_root / 'tracked.py'
+        target.write_text("MARKER = 'source'\n")
+        alias = repo / 'alias.py'
+        _symlink_or_skip(alias, target)
+    else:
+        target = target_root / 'payload'
+        target.mkdir()
+        source_name = 'data.txt' if kind == 'data' else (
+            'child.py' if kind == 'namespace' else '__init__.py')
+        (target / source_name).write_text("MARKER = 'source'\n")
+        alias = repo / 'alias'
+        _symlink_or_skip(alias, target, directory=True)
+    _commit_bytecode_fixture(repo)
+    assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=repo) == b''
+    _child(tmp_path, """\
+        from scripts import benchmark_csv_pipeline as driver
+        import importlib.machinery as machinery
+        repo, kind = Path(sys.argv[2]), sys.argv[3]
+        if kind != 'data':
+            spec = machinery.PathFinder.find_spec('alias', [str(repo)])
+            if kind == 'namespace':
+                spec = machinery.PathFinder.find_spec('alias.child', list(spec.submodule_search_locations))
+            assert isinstance(spec.loader, machinery.SourceFileLoader)
+            assert Path(spec.origin).resolve().is_relative_to(repo) == kind.startswith('internal')
+        for check in (driver._bootstrap_reject_native, driver._checkout_identity):
+            try:
+                check(repo)
+            except RuntimeError as exc:
+                assert not kind.startswith('internal') and kind != 'data', str(exc)
+                assert 'source alias' in str(exc), str(exc)
+            else:
+                assert kind.startswith('internal') or kind == 'data', 'External source alias accepted'
+        """, repo, kind)
+    assert alias.exists(), 'No user alias or target may be deleted'
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux RSS worker; portable source-entry probes run separately')
+@pytest.mark.parametrize('mode', ['TIMESTAMP', 'UNCHECKED_HASH'])
+def test_measured_worker_executes_source_with_stale_ignored_bytecode(tmp_path, mode):
+    tooling, repo = _worker_fixture(tmp_path)
+    source = repo / 'src/metroliza/industrial/industrial_analytics_workflow.py'
+    cache = _compile_stale_fixture(source, mode)
+    before = cache.read_bytes()
+    assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=repo) == b''
+    assert subprocess.check_output(['git', 'check-ignore', str(cache)], cwd=repo)
+    output = tmp_path / 'output'
+    mutation = tmp_path / 'workflow-ran'
+    result = subprocess.run(
+        [sys.executable, '-B', str(tooling / 'scripts/benchmark_csv_pipeline.py'),
+         '--worker', '--repo', str(repo), '--case', 'small', '--requests', '2', '--output', str(output)],
+        env=dict(os.environ, PROVENANCE_TEST_MUTATION=str(mutation), MPLBACKEND='Agg'),
+        cwd=tmp_path, capture_output=True, text=True, timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = json.loads((output / 'result.json').read_text())
+    assert len(receipt['records']) == 2
+    assert all(r['outcome']['implementation_marker'] == 'source' for r in receipt['records'])
+    assert all(r['workflow_s'] > 0 for r in receipt['records'])
+    assert receipt['head'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
+    assert receipt['bytecode_provenance']['verified'] is True
+    assert not Path(receipt['bytecode_provenance']['prefix']).parent.exists()
+    assert receipt['driver_bootstrap_s'] > 0 and receipt['input_validation_s'] > 0
+    assert mutation.read_bytes() == b'changed'
+    assert cache.read_bytes() == before
+
+
+@pytest.mark.parametrize('kind', ['file', 'package'])
+def test_sourceless_bytecode_symlinks_rejected_at_bootstrap_and_checkout(tmp_path, kind):
+    repo, external = tmp_path / 'repo', tmp_path / 'external'
+    repo.mkdir()
+    external.mkdir()
+    source = tmp_path / 'trusted_fixture.py'
+    source.write_text("MARKER = 'cached'\n")
+    cache = external / ('fixture.pyc' if kind == 'file' else '__init__.pyc')
+    py_compile.compile(str(source), cfile=str(cache), doraise=True)
+    before = cache.read_bytes()
+    alias = repo / ('fixture.pyc' if kind == 'file' else 'package')
+    _symlink_or_skip(alias, cache if kind == 'file' else external, directory=kind == 'package')
+    _commit_bytecode_fixture(repo)
+    _child(tmp_path, """\
+        from scripts import benchmark_csv_pipeline as driver
+        for check in (driver._bootstrap_reject_native, driver._checkout_identity):
+            try:
+                check(Path(sys.argv[2]))
+            except RuntimeError as exc:
+                assert 'sourceless bytecode' in str(exc), str(exc)
+            else:
+                raise AssertionError('Sourceless alias accepted')
+        """, repo)
+    assert cache.read_bytes() == before and alias.exists()
+
+
+@pytest.mark.parametrize('change', ['dangling_prefix', 'reservation_link', 'permissions', 'externality'])
+def test_bytecode_prefix_filesystem_boundaries(tmp_path, change):
+    if change == 'permissions' and os.name == 'nt':
+        pytest.skip('POSIX mode check; Windows uses inherited user-temp ACLs')
+    if change in ('dangling_prefix', 'reservation_link'):
+        _symlink_or_skip(tmp_path / 'probe', tmp_path / 'absent', directory=True)
+    _child(tmp_path, """\
+        import os
+        from scripts import benchmark_csv_pipeline as driver
+        root = Path(sys.argv[2]); root.mkdir()
+        driver._bytecode_temp_parents = lambda: [str(root)]
+        before = (sys.pycache_prefix, sys.dont_write_bytecode)
+        driver._start_bytecode_policy([root / 'source'])
+        state = driver._BYTECODE_STATE
+        reservation = Path(state['reservation'])
+        prefix = Path(state['prefix'])
+        change = sys.argv[3]
+        roots = ()
+        if change == 'dangling_prefix':
+            prefix.symlink_to(root / 'absent', target_is_directory=True)
+        elif change == 'reservation_link':
+            reservation.rename(root / 'preserved-reservation')
+            reservation.symlink_to(root / 'preserved-reservation', target_is_directory=True)
+        elif change == 'permissions':
+            reservation.chmod(0o755)
+        else:
+            roots = (root,)
+        try:
+            driver._verify_bytecode_policy(roots)
+        except RuntimeError as exc:
+            assert 'bytecode' in str(exc)
+        else:
+            raise AssertionError('Filesystem bytecode drift accepted')
+        driver._close_bytecode_policy()
+        assert (sys.pycache_prefix, sys.dont_write_bytecode) == before
+        if change == 'dangling_prefix':
+            assert prefix.is_symlink(), 'Unexpected cache contents must be retained'
+        elif change == 'reservation_link':
+            assert reservation.is_symlink() and (root / 'preserved-reservation').is_dir()
+        """, tmp_path / 'temporary', change)
+
+
+def test_bytecode_prefix_requires_writable_external_parent(tmp_path):
+    _child(tmp_path, """\
+        from scripts import benchmark_csv_pipeline as driver
+        root = Path(sys.argv[2]); root.mkdir()
+        driver._bytecode_temp_parents = lambda: [str(root)]
+        before = (sys.pycache_prefix, sys.dont_write_bytecode)
+        try:
+            driver._start_bytecode_policy([root])
+        except RuntimeError as exc:
+            assert 'external temporary directory' in str(exc)
+        else:
+            raise AssertionError('Cache reservation inside verified source accepted')
+        assert not list(root.iterdir())
+        assert driver._BYTECODE_STATE is None
+        assert (sys.pycache_prefix, sys.dont_write_bytecode) == before
+        """, tmp_path / 'temporary')
+
+
+def test_source_entry_uses_distinct_process_prefixes(tmp_path):
+    receipts = [json.loads(_source_entry_bytecode_case(tmp_path / str(index), '.', 'TIMESTAMP').read_text())
+                for index in range(2)]
+    assert receipts[0]['policy'] == receipts[1]['policy']
+    assert receipts[0]['prefix'] != receipts[1]['prefix']
+    assert receipts[0]['pid'] != receipts[1]['pid']
+
+
+@pytest.mark.parametrize('dont_write', [False, True])
+def test_bytecode_policy_success_cleanup_restores_caller(tmp_path, dont_write):
+    _child(tmp_path, """\
+        from scripts import benchmark_csv_pipeline as driver
+        sys.pycache_prefix = str(Path(sys.argv[2]) / 'caller-prefix')
+        sys.dont_write_bytecode = sys.argv[3] == 'True'
+        before = (sys.pycache_prefix, sys.dont_write_bytecode)
+        driver._start_bytecode_policy([sys.argv[2]])
+        reservation = Path(driver._BYTECODE_STATE['reservation'])
+        driver._verify_bytecode_policy()
+        driver._close_bytecode_policy()
+        driver._close_bytecode_policy()
+        assert not reservation.exists()
+        assert (sys.pycache_prefix, sys.dont_write_bytecode) == before
+        """, tmp_path / 'source', dont_write)
+
+
+def test_module_entry_refuses_measurement_claim(tmp_path):
+    result = subprocess.run([sys.executable, '-B', '-m', 'scripts.benchmark_csv_pipeline', '--help'],
+                            cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert 'Execute the reviewed driver source file directly' in result.stderr
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux RSS worker; portable policy checks run separately')
+@pytest.mark.parametrize('boundary', ['setup', 'request', 'receipt'])
+@pytest.mark.parametrize('change', ['prefix', 'writes'])
+def test_worker_policy_drift_rejected_at_evidence_boundaries(tmp_path, boundary, change):
+    tooling, repo = _worker_fixture(tmp_path)
+    mutation = tmp_path / 'drift-was-exercised'
+    drift = (
+        '\nimport sys\nimport os\nfrom pathlib import Path\n'
+        'def _drift_policy():\n'
+        "    Path(os.environ['PROVENANCE_TEST_MUTATION']).write_text('policy drift exercised')\n"
+        + ("    sys.pycache_prefix = 'changed-prefix'\n" if change == 'prefix'
+           else '    sys.dont_write_bytecode = False\n')
+    )
+    if boundary == 'request':
+        source = repo / 'src/metroliza/industrial/industrial_analytics_workflow.py'
+        source.write_text(source.read_text().replace('    return Outcome()',
+                                                   '    _drift_policy()\n    return Outcome()') + drift)
+        _commit_bytecode_fixture(repo)
+    else:
+        source = tooling / 'scripts/benchmark_paths.py'
+        hook = (
+            '\n_original_create = _create_csv_fixture\n'
+            'def _create_csv_fixture(*args, **kwargs):\n'
+            '    _original_create(*args, **kwargs)\n'
+            '    _drift_policy()\n'
+        ) if boundary == 'setup' else (
+            '\ndef _install_headless_stubs():\n'
+            "    driver = sys.modules['__main__']\n"
+            '    original = driver.asdict\n'
+            '    def after_request_check(value):\n'
+            '        result = original(value)\n'
+            '        _drift_policy()\n'
+            '        return result\n'
+            '    driver.asdict = after_request_check\n'
+        )
+        source.write_text(source.read_text() + drift + hook)
+        _commit_bytecode_fixture(tooling)
+    output = tmp_path / 'output'
+    result = subprocess.run(
+        [sys.executable, '-B', str(tooling / 'scripts/benchmark_csv_pipeline.py'),
+         '--worker', '--repo', str(repo), '--case', 'small', '--requests', '1', '--output', str(output)],
+        env=dict(os.environ, PROVENANCE_TEST_MUTATION=str(mutation), MPLBACKEND='Agg'),
+        cwd=tmp_path, capture_output=True, text=True, timeout=90,
+    )
+    assert result.returncode != 0, 'Worker published success after policy drift'
+    assert 'Benchmark bytecode policy or fresh prefix changed' in result.stderr
+    assert mutation.read_text() == 'policy drift exercised'
+    assert not (output / 'result.json').exists()
+
+
+@pytest.mark.parametrize('kind', ['file', 'package'])
+@pytest.mark.parametrize('target_tracked', [False, True])
+def test_git_tracked_alias_requires_git_owned_source_target(tmp_path, kind, target_tracked):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    ignored = repo / 'ignored_payload'
+    ignored.mkdir()
+    (repo / '.gitignore').write_text('ignored_payload/\n')
+    source = ignored / ('target.py' if kind == 'file' else '__init__.py')
+    source.write_text("MARKER = 'source'\n")
+    alias = repo / ('alias.py' if kind == 'file' else 'alias')
+    _symlink_or_skip(alias, source if kind == 'file' else ignored, directory=kind == 'package')
+    subprocess.run(['git', 'init', '--quiet', str(repo)], check=True)
+    if target_tracked:
+        subprocess.run(['git', 'add', '-f', str(source)], cwd=repo, check=True)
+    _commit_bytecode_fixture(repo)
+    assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=repo) == b''
+    _child(tmp_path, """\
+        import importlib.machinery as machinery
+        from scripts import benchmark_csv_pipeline as driver
+        repo, tracked = Path(sys.argv[2]), sys.argv[3] == 'True'
+        spec = machinery.PathFinder.find_spec('alias', [str(repo)])
+        assert isinstance(spec.loader, machinery.SourceFileLoader)
+        assert Path(spec.origin).resolve().is_relative_to(repo / 'ignored_payload')
+        try:
+            driver._checkout_identity(repo)
+        except RuntimeError as exc:
+            assert not tracked, str(exc)
+            assert 'untracked source' in str(exc), str(exc)
+        else:
+            assert tracked, 'Git-clean symlink attributed ignored executable bytes to HEAD'
+        """, repo, target_tracked)
+    assert alias.exists() and source.read_text() == "MARKER = 'source'\n"
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Native Windows directory-junction boundary')
+@pytest.mark.parametrize('kind', ['package', 'data'])
+def test_windows_junction_source_boundary(tmp_path, kind):
+    repo, external = tmp_path / 'repo', tmp_path / 'external'
+    repo.mkdir()
+    external.mkdir()
+    source = external / ('__init__.py' if kind == 'package' else 'data.txt')
+    source.write_text("MARKER = 'source'\n")
+    alias = repo / 'alias'
+    result = subprocess.run(['cmd', '/c', 'mklink', '/J', str(alias), str(external)],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert alias.resolve() == external.resolve()
+    _commit_bytecode_fixture(repo)
+    _child(tmp_path, """\
+        from scripts import benchmark_csv_pipeline as driver
+        repo, kind = Path(sys.argv[2]), sys.argv[3]
+        for check in (driver._bootstrap_reject_native, driver._checkout_identity):
+            try:
+                check(repo)
+            except RuntimeError as exc:
+                assert kind == 'package' and 'source alias' in str(exc), str(exc)
+            else:
+                assert kind == 'data', 'External junction source accepted'
+        """, repo, kind)
+    assert alias.exists() and source.read_text() == "MARKER = 'source'\n"

@@ -168,13 +168,14 @@ def _bootstrap_roots(arguments):
     return roots
 
 
-def _bootstrap_reject_native(root, ancestors=frozenset()):
+def _bootstrap_reject_native(root, ancestors=frozenset(), *, source_root=None):
     """Dependency-free rejection before stdlib/helper names can be shadowed.
 
     Deliberately duplicate the small helper predicate: importing that helper first
     could itself initialize an ignored extension. Full identities follow later.
     """
     resolved = os.path.realpath(root)
+    source_root = resolved if source_root is None else source_root
     if not os.path.exists(resolved):
         return  # argparse/the worker owns invalid or missing checkout diagnostics.
     if resolved in ancestors:
@@ -185,8 +186,11 @@ def _bootstrap_reject_native(root, ancestors=frozenset()):
                 raise RuntimeError("Checkout-local native inputs are unsupported before bootstrap imports")
             if entry.name.lower().endswith(".pyc") and entry.name[:-4].isidentifier():
                 raise RuntimeError("Checkout-local sourceless bytecode is unsupported before bootstrap imports")
+            if (entry.name.lower().endswith(".py") and entry.name[:-3].isidentifier()
+                    and entry.is_file() and not _within_path(entry.path, source_root)):
+                raise RuntimeError("Importable source alias escapes the verified checkout")
             if entry.name.isidentifier() and entry.is_dir():
-                _bootstrap_reject_native(entry.path, ancestors | {resolved})
+                _bootstrap_reject_native(entry.path, ancestors | {resolved}, source_root=source_root)
 
 
 if __name__ == "__main__":
@@ -227,13 +231,20 @@ def _checkout_identity(repo: Path) -> tuple[str, str]:
     """Reject mutable working trees before attributing execution to committed code."""
     from scripts.benchmark_native_provenance import reject_checkout_native
 
-    reject_checkout_native(repo)
+    source_targets = reject_checkout_native(repo)
     status = subprocess.check_output(
         ["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=repo,
     )
     if status:
         raise RuntimeError("Benchmark checkout must be clean; commit changes and use external "
                            "or git-ignored output directories before measuring")
+    entries = subprocess.check_output(["git", "ls-files", "--stage", "-z"], cwd=repo).split(b"\0")
+    tracked_files = {
+        repo.resolve() / os.fsdecode(entry.split(b"\t", 1)[1])
+        for entry in entries if entry.startswith((b"100644 ", b"100755 "))
+    }
+    if source_targets - tracked_files:
+        raise RuntimeError("Benchmark checkout resolves untracked source, including ignored alias targets")
     return tuple(subprocess.check_output(
         ["git", "rev-parse", "HEAD", "HEAD^{tree}"], cwd=repo, text=True,
     ).splitlines())
@@ -496,11 +507,6 @@ def _compare(args: argparse.Namespace) -> None:
     _verify_checkout_identity(tooling_root, tooling_identity, driver_sha)
     if _sha(helper_path) != helper_sha:
         raise RuntimeError("Comparison native provenance helper changed")
-    _verify_bytecode_policy(tuple(variants.values()) + (tooling_root,))
-    (output / "controller.json").write_text(json.dumps({
-        "bytecode_provenance": _bytecode_receipt(), "head": tooling_identity[0],
-        "tree": tooling_identity[1], "driver_sha256": driver_sha,
-    }, indent=2) + "\n")
     summary = {}
     for label in variants:
         selected = [r for r in records if r["variant"] == label and not r["warmup"]]
@@ -509,6 +515,11 @@ def _compare(args: argparse.Namespace) -> None:
             for key in ("workflow_s", "peak_rss_kib")
         }
         summary[label]["process_s"] = _summary([r["process_s"] for r in selected])
+    _verify_bytecode_policy(tuple(variants.values()) + (tooling_root,))
+    (output / "controller.json").write_text(json.dumps({
+        "bytecode_provenance": _bytecode_receipt(), "head": tooling_identity[0],
+        "tree": tooling_identity[1], "driver_sha256": driver_sha,
+    }, indent=2) + "\n")
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
 

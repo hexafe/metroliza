@@ -37,27 +37,37 @@ def _native_file(path: Path) -> bool:
     return path.name.lower().endswith(NATIVE_ENDINGS) and path.name.split(".")[0].isidentifier()
 
 
-def _candidates(root: Path, ancestors: frozenset[Path] = frozenset(), *, reject_bytecode=False):
+def _candidates(root: Path, ancestors: frozenset[Path] = frozenset(), *, source_root=None,
+                source_targets=None):
     """Walk only import-addressable directories, including namespace packages."""
     resolved = root.resolve(strict=True)
     if resolved in ancestors:
         raise RuntimeError("Unsupported cyclic import-directory symlink")
     for child in sorted(root.iterdir()):
-        if reject_bytecode and child.suffix.lower() == ".pyc" and child.stem.isidentifier():
+        if source_root is not None and child.suffix.lower() == ".pyc" and child.stem.isidentifier():
             raise RuntimeError("Checkout-local sourceless bytecode is unsupported: " + str(child))
+        if (source_root is not None and child.suffix.lower() == ".py"
+                and child.stem.isidentifier() and child.is_file()):
+            target = child.resolve(strict=True)
+            if not target.is_relative_to(source_root):
+                raise RuntimeError("Importable source alias escapes the verified checkout: " + str(child))
+            source_targets.add(target)
         if _native_file(child):
             if not child.is_file():
                 raise RuntimeError("Missing or nonregular native input: " + str(child))
             yield child
         elif child.name.isidentifier() and child.is_dir():
-            yield from _candidates(child, ancestors | {resolved}, reject_bytecode=reject_bytecode)
+            yield from _candidates(child, ancestors | {resolved}, source_root=source_root,
+                                   source_targets=source_targets)
 
 
-def reject_checkout_native(repo: Path) -> None:
+def reject_checkout_native(repo: Path) -> set[Path]:
     # root includes src and namespace/package directories, independent of Git.
-    if next(_candidates(repo, reject_bytecode=True), None) is not None:
+    source_targets: set[Path] = set()
+    if next(_candidates(repo, source_root=repo.resolve(), source_targets=source_targets), None) is not None:
         raise RuntimeError("Checkout-local native inputs are unsupported; use a clean separate "
                            "checkout without moving or deleting user build artifacts")
+    return source_targets
 
 
 def _fingerprint(path: Path) -> dict:
