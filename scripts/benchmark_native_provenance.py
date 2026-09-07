@@ -37,23 +37,25 @@ def _native_file(path: Path) -> bool:
     return path.name.lower().endswith(NATIVE_ENDINGS) and path.name.split(".")[0].isidentifier()
 
 
-def _candidates(root: Path, ancestors: frozenset[Path] = frozenset()):
+def _candidates(root: Path, ancestors: frozenset[Path] = frozenset(), *, reject_bytecode=False):
     """Walk only import-addressable directories, including namespace packages."""
     resolved = root.resolve(strict=True)
     if resolved in ancestors:
         raise RuntimeError("Unsupported cyclic import-directory symlink")
     for child in sorted(root.iterdir()):
+        if reject_bytecode and child.suffix.lower() == ".pyc" and child.stem.isidentifier():
+            raise RuntimeError("Checkout-local sourceless bytecode is unsupported: " + str(child))
         if _native_file(child):
             if not child.is_file():
                 raise RuntimeError("Missing or nonregular native input: " + str(child))
             yield child
         elif child.name.isidentifier() and child.is_dir():
-            yield from _candidates(child, ancestors | {resolved})
+            yield from _candidates(child, ancestors | {resolved}, reject_bytecode=reject_bytecode)
 
 
 def reject_checkout_native(repo: Path) -> None:
     # root includes src and namespace/package directories, independent of Git.
-    if next(_candidates(repo), None) is not None:
+    if next(_candidates(repo, reject_bytecode=True), None) is not None:
         raise RuntimeError("Checkout-local native inputs are unsupported; use a clean separate "
                            "checkout without moving or deleting user build artifacts")
 

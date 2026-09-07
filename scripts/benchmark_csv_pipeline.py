@@ -13,6 +13,120 @@ from __future__ import annotations
 import os
 import sys
 
+_BYTECODE_POLICY = {
+    "version": 1, "entry": "trusted-direct-source-file",
+    "cache_reads": "fresh-private-external-prefix", "cache_writes": False,
+    "checkout_sourceless_bytecode": "reject",
+}
+_BYTECODE_STATE = None
+
+
+def _within_path(path, root):
+    path, root = (os.path.normcase(os.path.realpath(value)) for value in (path, root))
+    try:
+        return os.path.commonpath((path, root)) == root
+    except ValueError:  # Separate Windows drives cannot contain one another.
+        return False
+
+
+def _bytecode_temp_parents():
+    parents = [os.environ.get(key) for key in ("TMPDIR", "TEMP", "TMP")]
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            parents.append(os.path.join(local, "Temp"))
+    else:
+        parents.append("/tmp")
+    return [os.path.realpath(value) for value in parents if value]
+
+
+def _reserve_bytecode_directory(roots):
+    for parent in _bytecode_temp_parents():
+        if not os.path.isdir(parent) or any(_within_path(parent, root) for root in roots):
+            continue
+        reservation = os.path.join(parent, "metroliza-bytecode-" + os.urandom(24).hex())
+        try:
+            os.mkdir(reservation, mode=0o700)
+        except OSError:
+            continue
+        return reservation
+    raise RuntimeError("No writable external temporary directory for bytecode isolation")
+
+
+def _start_bytecode_policy(roots):
+    """Bootstrap only from trusted source entry (or a trusted isolated test harness).
+
+    No helper import calls this function. time/atexit are trusted CPython builtins;
+    no filesystem-resolved module is imported before the cache policy is active.
+    """
+    global _BYTECODE_STATE
+    if _BYTECODE_STATE is not None:
+        raise RuntimeError("Benchmark bytecode policy is already active")
+    if sys.implementation.name != "cpython" or not {"time", "atexit"}.issubset(sys.builtin_module_names):
+        raise RuntimeError("Bytecode bootstrap requires the supported CPython builtin modules")
+    started = __import__("time").perf_counter()
+    reservation = _reserve_bytecode_directory(roots)
+    identity = os.stat(reservation, follow_symlinks=False)
+    previous = (sys.pycache_prefix, sys.dont_write_bytecode)
+    prefix = os.path.join(reservation, "unused-cache")
+    sys.pycache_prefix, sys.dont_write_bytecode = prefix, True
+    _BYTECODE_STATE = {
+        "reservation": reservation, "prefix": prefix, "pid": os.getpid(),
+        "resolved_reservation": os.path.realpath(reservation),
+        "directory_identity": (identity.st_dev, identity.st_ino),
+        "previous": previous, "policy": dict(_BYTECODE_POLICY), "started": started,
+    }
+    __import__("atexit").register(_close_bytecode_policy)
+    _verify_bytecode_policy(roots)
+
+
+def _owned_bytecode_directory(state):
+    if (os.getpid() != state["pid"] or os.path.islink(state["reservation"])
+            or os.path.realpath(state["reservation"]) != state["resolved_reservation"]):
+        return False
+    try:
+        current = os.stat(state["reservation"], follow_symlinks=False)
+    except OSError:
+        return False
+    return ((current.st_dev, current.st_ino) == state["directory_identity"]
+            and os.path.isdir(state["reservation"]))
+
+
+def _verify_bytecode_policy(roots=()):
+    state = _BYTECODE_STATE
+    if state is None:
+        raise RuntimeError("Benchmark measurements require the trusted direct source-file CLI")
+    if (not _owned_bytecode_directory(state) or state["policy"] != _BYTECODE_POLICY
+            or sys.pycache_prefix != state["prefix"] or sys.dont_write_bytecode is not True
+            or os.path.lexists(state["prefix"]) or os.listdir(state["reservation"])):
+        raise RuntimeError("Benchmark bytecode policy or fresh prefix changed")
+    if any(_within_path(state["reservation"], root) for root in roots):
+        raise RuntimeError("Benchmark bytecode prefix must remain external to source roots")
+    if os.name != "nt" and os.stat(state["reservation"]).st_mode & 0o077:
+        raise RuntimeError("Benchmark bytecode reservation permissions changed")
+
+
+def _bytecode_receipt():
+    _verify_bytecode_policy()
+    state = _BYTECODE_STATE
+    return {"policy": dict(state["policy"]), "prefix": state["prefix"],
+            "pid": state["pid"], "verified": True,
+            "directory_privacy": "inherited-user-temp-acl" if os.name == "nt" else "posix-0700"}
+
+
+def _close_bytecode_policy():
+    global _BYTECODE_STATE
+    state = _BYTECODE_STATE
+    if state is None or os.getpid() != state["pid"]:
+        return
+    if _owned_bytecode_directory(state):
+        try:
+            os.rmdir(state["reservation"])  # Never delete unexpected contents recursively.
+        except OSError:
+            pass
+    sys.pycache_prefix, sys.dont_write_bytecode = state["previous"]
+    _BYTECODE_STATE = None
+
 _CLI_OPTIONS = {name: "--" + name for name in (
     "repo", "output", "case", "compare", "samples", "blocks", "requests",
     "timeout", "profile", "worker",
@@ -69,9 +183,16 @@ def _bootstrap_reject_native(root, ancestors=frozenset()):
         for entry in entries:
             if entry.name.lower().endswith((".so", ".pyd")) and entry.name.split(".")[0].isidentifier():
                 raise RuntimeError("Checkout-local native inputs are unsupported before bootstrap imports")
+            if entry.name.lower().endswith(".pyc") and entry.name[:-4].isidentifier():
+                raise RuntimeError("Checkout-local sourceless bytecode is unsupported before bootstrap imports")
             if entry.name.isidentifier() and entry.is_dir():
                 _bootstrap_reject_native(entry.path, ancestors | {resolved})
 
+
+if __name__ == "__main__":
+    if __spec__ is not None:
+        raise RuntimeError("Execute the reviewed driver source file directly; -m is not an attested entry")
+    _start_bytecode_policy(_bootstrap_roots(sys.argv[1:]))
 
 for _bootstrap_root in _bootstrap_roots(sys.argv[1:]):
     _bootstrap_reject_native(_bootstrap_root)
@@ -152,7 +273,9 @@ def _worker(args: argparse.Namespace) -> None:
     reject_checkout_native(tooling_root)
     import resource
 
+    _verify_bytecode_policy((repo, tooling_root))
     started = time.perf_counter()
+    driver_bootstrap_s = started - _BYTECODE_STATE["started"]
     identity = _checkout_identity(repo)
     tooling_identity = identity if tooling_root == repo else _checkout_identity(tooling_root)
     driver_sha = _sha(Path(__file__).resolve())
@@ -165,17 +288,21 @@ def _worker(args: argparse.Namespace) -> None:
     helper_path = Path(sys.modules[NativeProvenance.__module__].__file__).resolve()
     helper_sha = _sha(helper_path)
     provenance_s = time.perf_counter() - started
+    input_validation_s = 0.0
 
     def verify_inputs():
-        nonlocal provenance_s
+        nonlocal provenance_s, input_validation_s
         checked_at = time.perf_counter()
+        _verify_bytecode_policy((repo, tooling_root))
         _verify_checkout_identity(repo, identity, driver_sha)
         if tooling_root != repo:
             _verify_checkout_identity(tooling_root, tooling_identity, driver_sha)
         if _sha(helper_path) != helper_sha:
             raise RuntimeError("Benchmark native provenance helper changed")
         native_guard.verify()
-        provenance_s += time.perf_counter() - checked_at
+        elapsed = time.perf_counter() - checked_at
+        provenance_s += elapsed
+        input_validation_s += elapsed
 
     from scripts import benchmark_paths as harness
     harness_path = Path(harness.__file__).resolve()
@@ -257,6 +384,7 @@ def _worker(args: argparse.Namespace) -> None:
         "shared_tooling_root": str(tooling_root), "harness_origin": harness_origin,
         "checkout_verified_clean_before_and_after": True,
         "profiled": args.profile, "setup_s": setup_s, "records": records,
+        "driver_bootstrap_s": driver_bootstrap_s,
         "matplotlib_backend": matplotlib.get_backend(),
         "native_helper_sha256": helper_sha,
         "versions": {name: importlib.metadata.version(name) for name in (
@@ -274,6 +402,8 @@ def _worker(args: argparse.Namespace) -> None:
         for name in native_guard.resolutions if name.startswith("_metroliza_")
     }
     payload["provenance_s"] = provenance_s
+    payload["input_validation_s"] = input_validation_s
+    payload["bytecode_provenance"] = _bytecode_receipt()
     (destination / "result.json").write_text(json.dumps(payload, indent=2, default=str) + "\n")
 
 
@@ -286,13 +416,20 @@ def _summary(values: list[float]) -> dict:
 
 
 def _verify_comparison_sample(payload, identity, tooling_identity, driver_sha, helper_sha,
-                              native_inputs, label):
+                              native_inputs, label, bytecode_prefixes):
     if (tuple(payload[key] for key in ("head", "tree")) != identity
             or payload["driver_sha256"] != driver_sha
             or payload["native_helper_sha256"] != helper_sha
             or tuple(payload[key] for key in ("shared_tooling_head", "shared_tooling_tree"))
             != tooling_identity):
         raise RuntimeError("Comparison source/driver identity changed between samples")
+    bytecode = payload["bytecode_provenance"]
+    if bytecode["policy"] != _BYTECODE_POLICY or bytecode["verified"] is not True:
+        raise RuntimeError("Comparison bytecode policy changed between samples")
+    prefix = os.path.normcase(os.path.realpath(bytecode["prefix"]))
+    if prefix in bytecode_prefixes:
+        raise RuntimeError("Comparison bytecode prefix reused between samples")
+    bytecode_prefixes.add(prefix)
     native = payload["native_provenance"]
     # Stable availability and observed loading must both agree within a variant.
     # These fields contain no timing counters; imports still do not prove use.
@@ -307,6 +444,7 @@ def _verify_comparison_sample(payload, identity, tooling_identity, driver_sha, h
 def _compare(args: argparse.Namespace) -> None:
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
+    _verify_bytecode_policy()
     variants = dict(item.split("=", 1) for item in args.compare)
     identities = {label: _checkout_identity(Path(repo).resolve()) for label, repo in variants.items()}
     driver_sha = _sha(Path(__file__).resolve())
@@ -316,6 +454,7 @@ def _compare(args: argparse.Namespace) -> None:
     helper_path = Path(benchmark_native_provenance.__file__).resolve()
     helper_sha = _sha(helper_path)
     native_inputs = {}
+    bytecode_prefixes = {os.path.normcase(os.path.realpath(_BYTECODE_STATE["prefix"]))}
     env = os.environ.copy()
     env.update({"MPLBACKEND": "Agg", "MPLCONFIGDIR": str(output / "mpl-cache"),
                 "QT_QPA_PLATFORM": "offscreen", "PYTHONHASHSEED": "0",
@@ -329,6 +468,7 @@ def _compare(args: argparse.Namespace) -> None:
             if (index + block) % 2:
                 order.reverse()
             for label in order:
+                _verify_bytecode_policy(tuple(variants.values()) + (tooling_root,))
                 run_dir = output / f"block-{block}-{index + 1}-{label}"
                 command = [sys.executable, str(Path(__file__).resolve()), "--worker",
                            "--repo", variants[label], "--case", args.case,
@@ -340,9 +480,10 @@ def _compare(args: argparse.Namespace) -> None:
                     subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT,
                                    check=True, timeout=args.timeout)
                 process_s = time.perf_counter() - start
+                _verify_bytecode_policy(tuple(variants.values()) + (tooling_root,))
                 payload = json.loads((run_dir / "result.json").read_text())
                 _verify_comparison_sample(payload, identities[label], tooling_identity,
-                                          driver_sha, helper_sha, native_inputs, label)
+                                          driver_sha, helper_sha, native_inputs, label, bytecode_prefixes)
                 record = {"variant": label, "block": block, "warmup": index == -1,
                           "process_s": process_s, "result": payload}
                 records.append(record)
@@ -355,6 +496,11 @@ def _compare(args: argparse.Namespace) -> None:
     _verify_checkout_identity(tooling_root, tooling_identity, driver_sha)
     if _sha(helper_path) != helper_sha:
         raise RuntimeError("Comparison native provenance helper changed")
+    _verify_bytecode_policy(tuple(variants.values()) + (tooling_root,))
+    (output / "controller.json").write_text(json.dumps({
+        "bytecode_provenance": _bytecode_receipt(), "head": tooling_identity[0],
+        "tree": tooling_identity[1], "driver_sha256": driver_sha,
+    }, indent=2) + "\n")
     summary = {}
     for label in variants:
         selected = [r for r in records if r["variant"] == label and not r["warmup"]]
@@ -388,4 +534,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _close_bytecode_policy()

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import importlib.machinery
+import importlib.util
+import os
 from pathlib import Path
+import py_compile
 import subprocess
 import sys
 from textwrap import dedent
@@ -471,7 +474,9 @@ def test_clean_fallback_and_harmless_ignored_outputs(tmp_path):
         (repo / 'outputs').mkdir()
         (repo / 'outputs' / 'result.json').write_text('{}')
         (repo / '__pycache__').mkdir()
-        (repo / '__pycache__' / 'fixture.pyc').write_bytes(b'cache')
+        # Tagged source caches are not sourceless import targets. Legacy fixture.pyc
+        # would be importable as __pycache__.fixture and has its own negative case.
+        (repo / '__pycache__' / ('fixture.' + sys.implementation.cache_tag + '.pyc')).write_bytes(b'cache')
         (repo / 'run.log').write_text('harmless output')
         assert git('status', '--porcelain') == ''
         guard.verify()
@@ -609,9 +614,12 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
         os.environ['PROVENANCE_TEST_MUTATION'] = sys.argv[4]
         output = Path(sys.argv[5])
         try:
-            from scripts.benchmark_csv_pipeline import _worker
-            _worker(Namespace(repo=sys.argv[3], output=str(output),
-                              case='small', requests=2, profile=False))
+            from scripts import benchmark_csv_pipeline as driver
+            # The isolated harness explicitly owns activation; ordinary imports
+            # must not mutate an existing interpreter's bytecode settings.
+            driver._start_bytecode_policy([sys.argv[2], sys.argv[3]])
+            driver._worker(Namespace(repo=sys.argv[3], output=str(output),
+                                     case='small', requests=2, profile=False))
         except RuntimeError as exc:
             assert sys.argv[6] != 'none', str(exc)
             assert any(word in str(exc) for word in ('native', 'changed', 'clean')), str(exc)
@@ -637,7 +645,7 @@ def test_worker_drift_never_publishes_a_success_receipt(tmp_path, change):
 @pytest.mark.parametrize("changed_key", [
     "head", "driver_sha256", "native_helper_sha256", "shared_tooling_head", "native",
     "loaded_bridges", "loaded_extensions", "observed_native_imports", "initially_loaded",
-    "none", "guard_timings",
+    "bytecode_policy", "bytecode_unverified", "bytecode_reuse", "none", "guard_timings",
 ])
 def test_compare_rejects_different_implementations_between_samples(tmp_path, changed_key):
     _child(tmp_path, """\
@@ -649,6 +657,7 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
         # Localized worker receipt hook: this proves publication rejection, not execution.
         driver._checkout_identity = lambda repo: ('head', 'tree')
         driver._verify_checkout_identity = lambda *args: None
+        driver._start_bytecode_policy([repo])
         def fake_worker(command, **kwargs):
             destination = Path(command[command.index('--output') + 1]); destination.mkdir()
             payload = {
@@ -656,6 +665,10 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
                 'shared_tooling_head': 'head', 'shared_tooling_tree': 'tree',
                 'driver_sha256': driver._sha(Path(driver.__file__)),
                 'native_helper_sha256': driver._sha(Path(helper.__file__)),
+                'bytecode_provenance': {
+                    'policy': dict(driver._BYTECODE_POLICY), 'verified': True,
+                    'prefix': str(destination / 'unique-child-prefix'),
+                },
                 'native_provenance': {
                     'artifacts': {'fixture': 'first'}, 'bridge_resolution': {},
                     'interpreter': {}, 'requested_backend_environment': {},
@@ -676,6 +689,13 @@ def test_compare_rejects_different_implementations_between_samples(tmp_path, cha
                     payload['native_provenance'][key].append('known-native-module')
                 elif key == 'guard_timings':
                     payload['native_provenance'].update(verification_s=0.2, import_guard_s=0.02)
+                elif key == 'bytecode_policy':
+                    payload['bytecode_provenance']['policy']['cache_writes'] = True
+                elif key == 'bytecode_unverified':
+                    payload['bytecode_provenance']['verified'] = False
+                elif key == 'bytecode_reuse':
+                    payload['bytecode_provenance']['prefix'] = str(
+                        destination.with_name(destination.name.replace('-1-', '-0-')) / 'unique-child-prefix')
                 elif key == 'none':
                     pass
                 else:
@@ -765,3 +785,192 @@ def test_native_exported_modules_are_bound_to_verified_provider(tmp_path, change
         else:
             raise AssertionError('Unproven native export relationship accepted: ' + change)
         """, tmp_path / "repo", tmp_path / "installed", change)
+
+
+def _commit_bytecode_fixture(repo):
+    subprocess.run(['git', 'init', '--quiet', str(repo)], check=True)
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Regression', '-c',
+                    'user.email=regression@example.invalid', 'commit', '--quiet',
+                    '-m', 'trusted source fixture'], cwd=repo, check=True)
+
+
+def _compile_stale_fixture(source, mode, *, stale=True):
+    fresh = source.read_bytes()
+    cached = fresh.replace(b"MARKER = 'source'", b"MARKER = 'cached'") if stale else fresh
+    assert len(fresh) == len(cached)
+    source.write_bytes(cached)
+    os.utime(source, (1700000000, 1700000000))
+    cache = source.parent / '__pycache__' / (source.stem + '.' + sys.implementation.cache_tag + '.pyc')
+    py_compile.compile(str(source), cfile=str(cache), doraise=True,
+                       invalidation_mode=getattr(py_compile.PycInvalidationMode, mode))
+    source.write_bytes(fresh)
+    os.utime(source, (1700000000, 1700000000))
+    if mode == 'TIMESTAMP':
+        header = cache.read_bytes()[:16]
+        assert int.from_bytes(header[8:12], 'little') == int(source.stat().st_mtime)
+        assert int.from_bytes(header[12:16], 'little') == source.stat().st_size
+    return cache
+
+
+def _source_entry_bytecode_case(tmp_path, location, mode, role='payload', *, stale=True):
+    tooling, repo = tmp_path / 'tooling', tmp_path / 'repo'
+    (tooling / 'scripts').mkdir(parents=True)
+    repo.mkdir()
+    (tooling / 'scripts/__init__.py').write_text('')
+    helper = tooling / 'scripts/benchmark_native_provenance.py'
+    helper.write_bytes((ROOT / 'scripts/benchmark_native_provenance.py').read_bytes())
+    # The direct source-file bootstrap is real; only final CLI dispatch is a
+    # localized probe. Importing a driver into an existing interpreter is not trust.
+    driver_source = (ROOT / 'scripts/benchmark_csv_pipeline.py').read_text()
+    driver_source = driver_source.rsplit('\nif __name__ == "__main__":', 1)[0]
+    probe = '''
+import importlib.machinery as _probe_machinery
+import importlib as _probe_importlib
+_probe_repo = Path(os.environ['BYTECODE_TEST_REPO'])
+_probe_directory = Path(os.environ['BYTECODE_TEST_DIRECTORY'])
+_probe_name = os.environ['BYTECODE_TEST_MODULE']
+_probe_identity = _checkout_identity(_probe_repo)
+sys.path.insert(0, str(_probe_directory))
+_probe_spec = _probe_machinery.PathFinder.find_spec(_probe_name, [str(_probe_directory)])
+assert isinstance(_probe_spec.loader, _probe_machinery.SourceFileLoader)
+_probe_module = _probe_importlib.import_module(_probe_name)
+assert _probe_module.MARKER == 'source', 'STALE_BYTECODE_EXECUTED: ' + _probe_module.MARKER
+Path(os.environ['BYTECODE_TEST_RECEIPT']).write_text(json.dumps(_bytecode_receipt()))
+print('SOURCE_ENTRY_BYTECODE_BYPASSED', _probe_identity)
+'''
+    driver = tooling / 'scripts/benchmark_csv_pipeline.py'
+    driver.write_text(driver_source + probe)
+    for checkout in (tooling, repo):
+        (checkout / '.gitignore').write_text('__pycache__/\n')
+    directory = repo / location
+    directory.mkdir(exist_ok=True)
+    if role == 'payload':
+        source, name = directory / 'provenance_fixture.py', 'provenance_fixture'
+        source.write_text("MARKER = 'source'\n")
+    elif role == 'package':
+        directory.joinpath('fixture_package').mkdir()
+        source, name = directory / 'fixture_package/__init__.py', 'fixture_package'
+        source.write_text("MARKER = 'source'\n")
+    elif role == 'helper':
+        source, name, directory = helper, 'scripts.benchmark_native_provenance', tooling / 'scripts'
+        source.write_text(source.read_text() + "\nMARKER = 'source'\n")
+    else:
+        source, name, directory = tooling / 'scripts/argparse.py', 'argparse', tooling / 'scripts'
+        source.write_text("MARKER = 'source'\n")
+    for checkout in (tooling, repo):
+        _commit_bytecode_fixture(checkout)
+    cache = _compile_stale_fixture(source, mode, stale=stale)
+    cached_bytes = cache.read_bytes()
+    owner = tooling if source.is_relative_to(tooling) else repo
+    assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=owner) == b''
+    assert subprocess.check_output(['git', 'check-ignore', str(cache)], cwd=owner)
+    assert subprocess.check_output(['git', 'show', 'HEAD:' + source.relative_to(owner).as_posix()],
+                                   cwd=owner) == source.read_bytes()
+    receipt = tmp_path / 'receipt.json'
+    env = dict(os.environ, BYTECODE_TEST_REPO=str(repo), BYTECODE_TEST_DIRECTORY=str(directory),
+               BYTECODE_TEST_MODULE=name, BYTECODE_TEST_RECEIPT=str(receipt))
+    result = subprocess.run([sys.executable, '-B', str(driver), '--repo', str(repo)],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert cache.read_bytes() == cached_bytes, 'Source-backed user cache must be preserved'
+    assert 'SOURCE_ENTRY_BYTECODE_BYPASSED' in result.stdout
+    return receipt
+
+
+@pytest.mark.parametrize('location', ['.', 'src'])
+@pytest.mark.parametrize('mode', ['TIMESTAMP', 'UNCHECKED_HASH'])
+def test_clean_checkout_must_not_execute_stale_ignored_bytecode(tmp_path, location, mode):
+    """Promoted four Git/import fail-first cases, now through trusted source entry."""
+    _source_entry_bytecode_case(tmp_path, location, mode)
+
+
+@pytest.mark.parametrize('role', ['helper', 'argparse', 'package'])
+@pytest.mark.parametrize('mode', ['TIMESTAMP', 'UNCHECKED_HASH'])
+def test_bytecode_is_bypassed_before_bootstrap_helper_and_package_imports(tmp_path, role, mode):
+    _source_entry_bytecode_case(tmp_path, 'src', mode, role)
+
+
+def test_current_source_backed_cache_is_preserved(tmp_path):
+    _source_entry_bytecode_case(tmp_path, '.', 'TIMESTAMP', stale=False)
+
+
+@pytest.mark.parametrize('dont_write', [False, True])
+def test_importing_provenance_helpers_preserves_caller_bytecode_policy(tmp_path, dont_write):
+    _child(tmp_path, """\
+        sys.pycache_prefix = str(Path(sys.argv[2]) / 'inherited-prefix')
+        sys.dont_write_bytecode = sys.argv[3] == 'True'
+        before = (sys.pycache_prefix, sys.dont_write_bytecode)
+        from scripts import benchmark_csv_pipeline as driver
+        from scripts import benchmark_native_provenance
+        assert (sys.pycache_prefix, sys.dont_write_bytecode) == before
+        assert driver._BYTECODE_STATE is None
+        assert not any(name in sys.modules for name in ('numpy', 'pandas', 'matplotlib', 'resource'))
+        """, tmp_path, dont_write)
+
+
+@pytest.mark.parametrize('relative', ['fixture.pyc', 'src/fixture.pyc', 'pkg/__init__.pyc',
+                                     '__pycache__/fixture.pyc', 'src/pkg/__init__.PYC'])
+def test_importable_sourceless_bytecode_is_rejected_without_deletion(tmp_path, relative):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    (repo / '.gitignore').write_text('*.[pP][yY][cC]\n')
+    _commit_bytecode_fixture(repo)
+    source = tmp_path / 'trusted_fixture.py'
+    source.write_text("MARKER = 'cached'\n")
+    cache = repo / relative
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    py_compile.compile(str(source), cfile=str(cache), doraise=True)
+    before = cache.read_bytes()
+    assert subprocess.check_output(['git', 'status', '--porcelain'], cwd=repo) == b''
+    assert subprocess.check_output(['git', 'check-ignore', str(cache)], cwd=repo)
+    _child(tmp_path, """\
+        from scripts.benchmark_csv_pipeline import _checkout_identity
+        import importlib.machinery as machinery
+        repo, cache = Path(sys.argv[2]), Path(sys.argv[3])
+        name = cache.stem if cache.stem != '__init__' else cache.parent.name
+        search = cache.parent if cache.stem != '__init__' else cache.parent.parent
+        if cache.suffix == '.pyc' or sys.platform == 'win32':
+            spec = machinery.PathFinder.find_spec(name, [str(search)])
+            assert isinstance(spec.loader, machinery.SourcelessFileLoader)
+            assert Path(spec.origin) == cache
+        try:
+            _checkout_identity(repo)
+        except RuntimeError as exc:
+            assert 'sourceless bytecode' in str(exc)
+        else:
+            raise AssertionError('Importable sourceless bytecode attributed to clean source')
+        """, repo, cache)
+    assert cache.read_bytes() == before
+
+
+@pytest.mark.parametrize('change', ['prefix', 'writes', 'populated', 'removed', 'policy', 'pid'])
+def test_bytecode_policy_drift_fails_closed(tmp_path, change):
+    _child(tmp_path, """\
+        import os
+        from scripts import benchmark_csv_pipeline as driver
+        driver._start_bytecode_policy([sys.argv[2]])
+        state = driver._BYTECODE_STATE
+        if sys.argv[3] == 'prefix':
+            sys.pycache_prefix = str(Path(sys.argv[2]) / 'different-prefix')
+        elif sys.argv[3] == 'writes':
+            sys.dont_write_bytecode = False
+        elif sys.argv[3] == 'populated':
+            Path(state['prefix']).mkdir()
+            Path(state['prefix'], 'preserved.txt').write_text('unexpected data')
+        elif sys.argv[3] == 'removed':
+            os.rmdir(state['reservation'])
+        elif sys.argv[3] == 'policy':
+            driver._BYTECODE_POLICY['version'] += 1
+        else:
+            state['pid'] += 1
+        try:
+            driver._verify_bytecode_policy()
+        except RuntimeError as exc:
+            assert 'bytecode' in str(exc)
+        else:
+            raise AssertionError('Bytecode policy drift accepted')
+        driver._close_bytecode_policy()
+        if sys.argv[3] == 'populated':
+            assert Path(state['prefix'], 'preserved.txt').read_text() == 'unexpected data'
+        """, tmp_path / 'source', change)
