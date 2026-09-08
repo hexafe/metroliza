@@ -1,5 +1,5 @@
 # Optional OCR backend dependencies for packaged builds.
-rapidocr==3.8.1
-onnxruntime>=1.21,<2
-openvino>=2026.1,<2027
-opencv-python>=4.12,<5
+rapidocr==3.9.2
+onnxruntime>=1.29.0,<2
+openvino>=2026.3.1,<2027
+opencv-python>=5.0.0.93,<6
