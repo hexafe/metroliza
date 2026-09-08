@@ -28,7 +28,9 @@ from metroliza.reports.db import (
 )
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.shared.datetime_parsing import parse_datetime_literal
-from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
+from metroliza.shared.finite_numeric import (
+    sqlite_numeric_filter, sqlite_numeric_membership, sqlite_prefer_integer_source,
+)
 from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
 from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
@@ -3856,6 +3858,14 @@ def _compile_sqlite_text_membership_filter_spec(
     return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
+def _sqlite_numeric_filter_source(column: str, mapping: Mapping[str, str] | None) -> str:
+    source = _quote_identifier(column)
+    sidecar = (mapping or {}).get(column, column)
+    if sidecar == column:
+        return source
+    return sqlite_prefer_integer_source(source, _quote_identifier(sidecar))
+
+
 def _compile_sqlite_numeric_membership_filter_spec(
     spec: Any,
     column: str,
@@ -3866,7 +3876,7 @@ def _compile_sqlite_numeric_membership_filter_spec(
     del spec
     params: list[Any] = []
     clause = sqlite_numeric_membership(
-        _quote_identifier((numeric_filter_columns or {}).get(column, column)),
+        _sqlite_numeric_filter_source(column, numeric_filter_columns),
         values, negate=negate, params=params,
     )
     return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
@@ -3906,7 +3916,7 @@ def _compile_sqlite_number_filter_spec(
 ) -> TabularSqliteFilterExpression:
     params: list[Any] = []
     clause = sqlite_numeric_filter(
-        _quote_identifier((numeric_filter_columns or {}).get(column, column)), operator,
+        _sqlite_numeric_filter_source(column, numeric_filter_columns), operator,
         getattr(spec, "value", None), getattr(spec, "second_value", None), params=params,
     )
     return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))

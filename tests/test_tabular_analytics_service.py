@@ -87,12 +87,12 @@ def test_sqlite_finite_numeric_large_membership(negate):
     with closing(sqlite3.connect(":memory:")) as conn:
         conn.execute("CREATE TABLE probe (reference)")
         conn.executemany("INSERT INTO probe VALUES (?)", [
-            (499,), (1200,), ("bad",), (None,), ("9223372036854775808",), ("9223372036854775809",),
+            (499,), (1200,), ("bad",), (None,), ("9223372036854775808",), ("9223372036854775809",), ("499.0",), ("1100.0",),
         ])
         rows = conn.execute(
             f"SELECT rowid FROM probe WHERE {compiled.clause} ORDER BY rowid", compiled.params,
         ).fetchall()
-        assert rows == ([(2,), (3,), (4,), (6,)] if negate else [(1,), (5,)])
+        assert rows == ([(2,), (3,), (4,), (6,), (8,)] if negate else [(1,), (5,), (7,)])
 
 
 def test_sqlite_finite_numeric_quotes_identifiers_and_rejects_injected_values():
@@ -2114,3 +2114,52 @@ def test_tabular_workbook_export_includes_groupstats_distribution_rows(tmp_path)
     posthoc = groupstats_sheet[groupstats_sheet["row_type"] == "posthoc"].iloc[0]
     assert posthoc["test_used"] == "Games-Howell"
     assert posthoc["effect_type"] == "hedges_g"
+
+
+@pytest.mark.parametrize("suffix", ["csv", "xlsx"])
+def test_sqlite_finite_numeric_loaded_integer_scope(tmp_path, suffix):
+    import csv
+    from openpyxl import Workbook
+
+    values = ["9007199254740992", "9007199254740993", "bad", None,
+              "9223372036854775808", "9223372036854775809",
+              " +9007199254740993 ", "-9007199254740993", "1,5"]
+    path = tmp_path / ("integer_scope." + suffix)
+    if suffix == "csv":
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["Code", "Metric"])
+            writer.writerows((value, index) for index, value in enumerate(values, 1))
+    else:
+        workbook = Workbook()
+        workbook.active.append(["Code", "Metric"])
+        for index, value in enumerate(values, 1):
+            workbook.active.append([value, index])
+        workbook.save(path)
+        workbook.close()
+    loaded = canonical_tabular_service.load_tabular_analytics_file(path)
+    try:
+        assert loaded.sqlite_store is not None
+        with closing(sqlite3.connect(loaded.sqlite_store.path)) as conn:
+            before = conn.execute("SELECT * FROM tabular_rows ORDER BY rowid").fetchall()
+        cases = [
+            ("Code = 9007199254740992", [1]),
+            ("Code = 9007199254740993", [2, 7]),
+            ("Code != 9007199254740992", [2, 3, 4, 5, 6, 7, 8, 9]),
+            ("Code = 9223372036854775808", [5]),
+            ("Code > 9223372036854775808", [6]),
+            ("Code IN (9007199254740992,9223372036854775808)", [1, 5]),
+            ("Code NOT IN (9007199254740992,9223372036854775808)", [2, 3, 4, 6, 7, 8, 9]),
+            ("Code = -9007199254740993", [8]),
+            ("Code = 15", [9]),  # default decimal=".": comma remains a grouping separator
+        ]
+        for expression, expected in cases * 2:
+            assert loaded.sqlite_store.row_ids(grouping_filter_expression=expression) == expected
+            result = canonical_tabular_service.materialize_tabular_dataframe(
+                loaded, row_filter_expression=expression, required_columns=("source_row_number",),
+            )
+            assert result.dataframe["source_row_number"].tolist() == expected
+        with closing(sqlite3.connect(loaded.sqlite_store.path)) as conn:
+            assert conn.execute("SELECT * FROM tabular_rows ORDER BY rowid").fetchall() == before
+    finally:
+        canonical_tabular_service.cleanup_tabular_load_result(loaded)

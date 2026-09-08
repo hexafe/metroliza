@@ -8,6 +8,7 @@ import pytest
 from metroliza.reports import report_query_service as canonical_query
 from metroliza.shared.grouping_filter_core import MembershipFilterSpec, NumberFilterSpec
 from tests.numeric_filter_cases import (
+    ROUNDING_CASES, ROUNDING_VALUES,
     PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES, SOURCE_CASES,
 )
 
@@ -92,13 +93,13 @@ def test_finite_numeric_large_membership_executes_public_query(negate):
     values = (*range(1100), 2**63)
     operator = "NOT IN" if negate else "IN"
     expression = "Measured " + operator + " (" + ",".join(map(str, values)) + ")"
-    source = [499, 1200, "bad", None, "9223372036854775808", "9223372036854775809"]
+    source = [499, 1200, "bad", None, "9223372036854775808", "9223372036854775809", "499.0", "1100.0"]
     with closing(sqlite3.connect(":memory:")) as conn:
         conn.execute("CREATE TABLE probe (meas)")
         conn.executemany("INSERT INTO probe VALUES (?)", [(value,) for value in source])
         clause = canonical_query.build_measurement_expression_clause(expression)
         rows = conn.execute(f"SELECT rowid FROM probe WHERE {clause} ORDER BY rowid").fetchall()
-        assert rows == ([(2,), (3,), (4,), (6,)] if negate else [(1,), (5,)])
+        assert rows == ([(2,), (3,), (4,), (6,), (8,)] if negate else [(1,), (5,), (7,)])
 
 
 @pytest.mark.parametrize("values, expected_ids", [
@@ -590,3 +591,12 @@ def test_build_distinct_value_query_translates_report_scope_for_measurement_valu
     assert "WHERE report_id IN" in query
     with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute(query).fetchall() == []
+
+
+@pytest.mark.parametrize("spec, expected_ids", ROUNDING_CASES)
+def test_finite_numeric_binary64_rounding_ids(spec, expected_ids):
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (reference)")
+        conn.executemany("INSERT INTO probe VALUES (?)", [(value,) for value in ROUNDING_VALUES])
+        clause = canonical_query._filter_expression_spec_to_sql(spec)
+        assert [row[0] for row in conn.execute(f"SELECT rowid FROM probe WHERE {clause} ORDER BY rowid")] == expected_ids

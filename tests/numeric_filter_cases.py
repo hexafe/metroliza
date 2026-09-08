@@ -53,6 +53,10 @@ PRECISION_CASES = (
 # Scalar boundary oracle: exact known numbers, including neighbouring binary64
 # values. Invalid syntax stays invalid even when Python float() accepts it.
 SOURCE_CASES = (
+    ("254.8182562205433470848", float.fromhex("0x1.fda2f27ab5f6fp+7")),
+    ("2548182562205433470848e-19", float.fromhex("0x1.fda2f27ab5f6fp+7")),
+    ("-254.8182562205433470848", -float.fromhex("0x1.fda2f27ab5f6fp+7")),
+    (0.2754124212333596, 0.2754124212333596),
     ("+1.2", 1.2), (".5", .5), ("1.", 1), ("+1e2", 100), ("01.50e+01", 15),
     ("1.e2", 100), ("-.1e-1", -.01), ("-000", 0), ("+00001", 1),
     ("\t\r\n\v\f 2 \t\r\n\v\f", 2), ("1e-999", 0), ("-1e-999", 0),
@@ -74,4 +78,31 @@ SOURCE_CASES = (
     ("NaN", None), ("+Inf", None), ("-Infinity", None), ("Infinity", None),
     (float("nan"), None), (float("inf"), None), (-float("inf"), None),
     ("1e999", None), ("-1e999", None), ("1.7976931348623159e308", None),
+)
+
+
+# Independently stated binary64 row scope, including exact ties to even.
+_ROUNDED_UP = float.fromhex("0x1.fda2f27ab5f6fp+7")
+_ROUNDED_DOWN = float.fromhex("0x1.fda2f27ab5f6ep+7")
+ROUNDING_VALUES = (
+    "254.8182562205433470848", "2548182562205433470848e-19", _ROUNDED_UP,
+    "254.81825622054336", _ROUNDED_DOWN, "254.81825622054333",
+    "-254.8182562205433470848", -_ROUNDED_UP, -_ROUNDED_DOWN, None, "bad",
+    "254.8182562205433470126081374473869800567626953125",  # lower tie -> even lower float
+    "254.8182562205433754343175678513944149017333984375",  # upper tie -> even upper float
+    "1.00000000000000011102230246251565404236316680908203125",  # exact tie -> 1
+    "1.000000000000000111022302462515654042363166809082031251",  # above tie -> next float
+    "-1.00000000000000011102230246251565404236316680908203125",
+)
+ROUNDING_CASES = (
+    (NumberFilterSpec("reference", "eq", _ROUNDED_UP), [1, 2, 3, 4]),
+    (NumberFilterSpec("reference", "ne", _ROUNDED_UP), [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    (NumberFilterSpec("reference", "gt", _ROUNDED_UP), [13]),
+    (NumberFilterSpec("reference", "gte", _ROUNDED_UP), [1, 2, 3, 4, 13]),
+    (NumberFilterSpec("reference", "lt", _ROUNDED_UP), [5, 6, 7, 8, 9, 12, 14, 15, 16]),
+    (NumberFilterSpec("reference", "lte", _ROUNDED_UP), [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 14, 15, 16]),
+    (NumberFilterSpec("reference", "between", _ROUNDED_DOWN, _ROUNDED_UP), [1, 2, 3, 4, 5, 6, 12]),
+    (NumberFilterSpec("reference", "eq", -_ROUNDED_UP), [7, 8]),
+    (MembershipFilterSpec("reference", (_ROUNDED_UP, 1, -1)), [1, 2, 3, 4, 14, 16]),
+    (MembershipFilterSpec("reference", (_ROUNDED_UP, 1, -1), negate=True), [5, 6, 7, 8, 9, 10, 11, 12, 13, 15]),
 )

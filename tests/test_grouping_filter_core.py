@@ -18,6 +18,7 @@ from metroliza.shared.grouping_filter_core import (
     resolve_filter_column,
 )
 from tests.numeric_filter_cases import (
+    ROUNDING_CASES, ROUNDING_VALUES,
     PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES, SOURCE_CASES,
 )
 
@@ -609,3 +610,9 @@ def test_parse_filter_expression_rejects_invalid_membership_lists() -> None:
         parse_filter_expression("Part IN A", frame.columns)
     with pytest.raises(ValueError, match="trailing comma"):
         parse_filter_expression("Part IN (A,)", frame.columns)
+
+
+@pytest.mark.parametrize("spec, expected_ids", ROUNDING_CASES)
+def test_finite_numeric_binary64_rounding_ids(spec, expected_ids):
+    frame = pd.DataFrame({"reference": pd.Series(ROUNDING_VALUES, dtype=object)})
+    assert (frame.index[spec.mask(frame)] + 1).tolist() == expected_ids
