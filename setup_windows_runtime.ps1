@@ -159,7 +159,8 @@ try {
         Invoke-Step 'Validating OCR runtime and model files' {
             & (Join-Path $repoRoot 'diagnose_windows_ocr.ps1') -VenvDir $venvPath -Compact
             if ($LASTEXITCODE -ne 0) {
-                throw 'Required OCR diagnostic validation failed. Inspect the safe check results.'
+                [Console]::Error.WriteLine('Required OCR diagnostic validation failed. Inspect the safe check results.')
+                exit 1
             }
         }
     }

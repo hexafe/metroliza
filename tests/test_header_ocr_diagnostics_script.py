@@ -2,6 +2,7 @@ from contextlib import closing
 import importlib.util
 import json
 import sqlite3
+import os
 from pathlib import Path
 
 
@@ -104,7 +105,7 @@ def test_source_rows_for_sha_returns_only_safe_count(tmp_path):
 
 def test_database_missing_schema_no_match_and_readonly(tmp_path):
     module = _load_script_module()
-    database = tmp_path / "synthetic ? # ź.sqlite"
+    database = tmp_path / ("synthetic # ź.sqlite" if os.name == "nt" else "synthetic ? # ź.sqlite")
     assert module._source_rows_for_sha(database, None)["reason"] == "database_missing"
     assert not database.exists()
     with closing(sqlite3.connect(database)) as connection:
@@ -124,3 +125,40 @@ def test_database_sidecar_is_not_created_modified_or_ignored(tmp_path):
     assert module._source_rows_for_sha(database, None)["reason"] == "database_unreadable"
     assert database.read_bytes() == b"synthetic"
     assert sidecar.read_bytes() == b"synthetic WAL"
+
+
+def test_metadata_sources_match_actual_selector_and_empty_is_absent(monkeypatch):
+    from types import SimpleNamespace
+    from metroliza.parsing import cmm_report_parser
+
+    module = _load_script_module()
+    sources = {
+        "reference": "header_exact",
+        "report_date": "header_alias",
+        "sample_number": "explicit_sample_number",
+    }
+
+    class Parser:
+        _page_count = 1
+        _header_extraction_diagnostics = {"header_extraction_mode": "words"}
+        _first_page_header_items = []
+
+        def __init__(self, path, database):
+            assert database == ":memory:"
+
+        def open_report(self):
+            pass
+
+        def extract_metadata(self):
+            return SimpleNamespace(
+                metadata=SimpleNamespace(metadata_json={"field_sources": sources})
+            )
+
+    monkeypatch.setattr(cmm_report_parser, "CMMReportParser", Parser)
+    result = module._run_parser_diagnostic(Path("synthetic.pdf"))
+    assert result["facts"]["header_fields"] == 3
+    sources.clear()
+    sources.update({"reference": None, "report_date": None})
+    result = module._run_parser_diagnostic(Path("synthetic.pdf"))
+    assert result["reason"] == "metadata_absent"
+    assert result["facts"]["metadata_fields"] == 0

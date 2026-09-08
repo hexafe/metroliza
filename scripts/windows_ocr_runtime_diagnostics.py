@@ -128,7 +128,22 @@ def _engine_smoke_check() -> dict:
         engine = backend.load_engine()
         import numpy as np
 
-        engine(np.zeros((64, 256, 3), dtype=np.uint8))
+        stages = (engine.text_det.session, engine.text_cls.session, engine.text_rec.session)
+        if config.engine == "onnxruntime":
+            expected = {
+                "cpu": "CPUExecutionProvider",
+                "cuda": "CUDAExecutionProvider",
+                "dml": "DmlExecutionProvider",
+                "coreml": "CoreMLExecutionProvider",
+            }[config.accelerator]
+            for stage in stages:
+                providers = stage.session.get_providers()
+                if not providers or providers[0] != expected:
+                    return contract.row("engine_smoke", "fail", "accelerator_unavailable")
+        # Exercise every selected model directly. RapidOCR's outer image pipeline
+        # may swallow stage errors or skip classification/recognition on blank input.
+        for stage, shape in zip(stages, ((1, 3, 64, 256), (1, 3, 48, 192), (1, 3, 48, 320))):
+            stage(np.zeros(shape, dtype=np.float32))
     except Exception:
         return contract.row("engine_smoke", "fail", "smoke_failed")
     return contract.row(
@@ -156,7 +171,9 @@ def build_payload(pdf_path: Path | None = None, db_file: str | None = None) -> d
     checks.append(contract.row("alternatives", "skipped", "not_selected", required=False))
     request = {"pdf": str(pdf_path) if pdf_path is not None else None, "database": db_file}
     for check_id, requested in (("pdf", pdf_path is not None), ("database", db_file is not None)):
-        if requested:
+        if requested and any(check["reason"] == "interrupted" for check in checks):
+            checks.append(contract.row(check_id, "skipped", "not_completed"))
+        elif requested:
             checks.append(contract.isolated_check(check_id, request))
         else:
             checks.append(contract.row(check_id, "skipped", "not_requested", required=False))
@@ -184,6 +201,13 @@ def main(argv: list[str] | None = None) -> int:
             contract.payload([contract.row("diagnostic", "fail", "invalid_arguments")]),
             None,
             True,
+            [],
+        )
+    if args.output == "":
+        return contract.publish(
+            contract.payload([contract.row("publication", "fail", "invalid_arguments")]),
+            None,
+            args.compact,
             [],
         )
     inputs = [Path(value) for value in (args.pdf, args.db_file) if value is not None]

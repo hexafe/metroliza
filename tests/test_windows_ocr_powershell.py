@@ -173,3 +173,49 @@ def test_native_required_setup_propagation(powershell, fixture_repo, mode, flags
         assert "skipped" in text and "OCR was not tested" in text
     else:
         assert "engine_smoke" in text
+        if not success:
+            assert CANARY not in text
+
+
+def test_native_relative_output_uses_one_location(powershell, fixture_repo):
+    write_child(fixture_repo, "pass")
+    result = invoke(
+        powershell, fixture_repo, "diagnose_windows_ocr.ps1", "-OutputPath", "relative result.json"
+    )
+    public_text(result)
+    assert result.returncode == 0
+    assert json.loads((fixture_repo / "relative result.json").read_text())["checks"]
+
+
+def test_native_parent_exit_cleans_descendant(powershell, fixture_repo):
+    from tests.test_windows_ocr_runtime_diagnostics import _process_alive
+
+    pid_file = fixture_repo / "descendant.pid"
+    child = "import time; time.sleep(30)"
+    script = fixture_repo / "scripts/windows_ocr_runtime_diagnostics.py"
+    script.write_text(
+        "import sys,subprocess,pathlib; child=subprocess.Popen([sys.executable,'-c',"
+        + repr(child)
+        + "]); pathlib.Path("
+        + repr(str(pid_file))
+        + ").write_text(str(child.pid))"
+    )
+    wrapper = fixture_repo / "diagnose_windows_ocr.ps1"
+    wrapper.write_text(wrapper.read_text().replace("AddMinutes(20)", "AddSeconds(1)"))
+    result = invoke(powershell, fixture_repo, wrapper.name)
+    public_text(result)
+    assert result.returncode != 0
+    assert not _process_alive(int(pid_file.read_text()))
+
+
+def test_native_output_failure_is_safe(powershell, fixture_repo):
+    write_child(fixture_repo, "pass")
+    result = invoke(
+        powershell,
+        fixture_repo,
+        "diagnose_windows_ocr.ps1",
+        "-OutputPath",
+        str(fixture_repo / "missing" / "safe.json"),
+    )
+    public_text(result)
+    assert result.returncode != 0

@@ -111,7 +111,33 @@ def validate_row(value: Any, expected_id: str | None = None) -> dict:
     ):
         if type(value[key]) is not str or value[key] not in allowed:
             raise ValueError
-    facts = value["facts"]
+    allowed_reasons = {
+        "pass": {"ok", "metadata_absent", "ocr_no_records", "no_matching_rows", "ocr_disabled"},
+        "skipped": {"not_selected", "not_requested", "ocr_disabled", "not_completed"},
+        "fail": REASONS
+        - {
+            "ok",
+            "not_selected",
+            "not_requested",
+            "metadata_absent",
+            "ocr_no_records",
+            "no_matching_rows",
+            "ocr_disabled",
+        },
+    }
+    if value["reason"] not in allowed_reasons[value["status"]]:
+        raise ValueError
+    if (
+        value["status"] == "pass"
+        and value["reason"] != "ok"
+        and check_id not in {"pdf", "database"}
+    ):
+        raise ValueError
+    _validate_facts(value["facts"])
+    return {key: value[key] for key in ("id", "requirement", "status", "reason", "facts")}
+
+
+def _validate_facts(facts: Any) -> None:
     if type(facts) is not dict or len(facts) > 16:
         raise ValueError
     for key, fact in facts.items():
@@ -122,7 +148,6 @@ def validate_row(value: Any, expected_id: str | None = None) -> dict:
         if key in VERSION_FACTS and safe_version(fact) is not None:
             continue
         raise ValueError
-    return {key: value[key] for key in ("id", "requirement", "status", "reason", "facts")}
 
 
 def payload(checks: list[dict]) -> dict:
@@ -155,18 +180,72 @@ def succeeded(value: dict) -> bool:
     return bool(required) and all(check["status"] == "pass" for check in required)
 
 
-def _stop_child(process: subprocess.Popen) -> None:
-    if os.name == "nt":
-        if process.poll() is None:
-            system = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
-            subprocess.run(
-                [str(system), "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                check=False,
-            )
-    else:
+class _WindowsJob:
+    """Own the diagnostic child's descendants independently of parent lifetime."""
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("process_time", ctypes.c_longlong),
+                ("job_time", ctypes.c_longlong),
+                ("flags", wintypes.DWORD),
+                ("min_working", ctypes.c_size_t),
+                ("max_working", ctypes.c_size_t),
+                ("active", wintypes.DWORD),
+                ("affinity", ctypes.c_size_t),
+                ("priority", wintypes.DWORD),
+                ("scheduling", wintypes.DWORD),
+            ]
+
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("basic", BasicLimits),
+                ("io", ctypes.c_ulonglong * 6),
+                ("process_memory", ctypes.c_size_t),
+                ("job_memory", ctypes.c_size_t),
+                ("peak_process", ctypes.c_size_t),
+                ("peak_job", ctypes.c_size_t),
+            ]
+
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        self.kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        self.kernel.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        self.kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.handle = self.kernel.CreateJobObjectW(None, None)
+        limits = ExtendedLimits()
+        limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not self.handle:
+            raise OSError("job_unavailable")
+        if not self.kernel.SetInformationJobObject(
+            self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)
+        ):
+            self.close()
+            raise OSError("job_unavailable")
+
+    def assign(self, process: subprocess.Popen) -> None:
+        if not self.kernel.AssignProcessToJobObject(self.handle, int(process._handle)):
+            raise OSError("job_unavailable")
+
+    def close(self) -> None:
+        if self.handle:
+            self.kernel.CloseHandle(self.handle)
+            self.handle = None
+
+
+def _stop_child(process: subprocess.Popen, job: _WindowsJob | None = None) -> None:
+    if job is not None:
+        job.close()
+    if os.name != "nt":
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -174,6 +253,14 @@ def _stop_child(process: subprocess.Popen) -> None:
     if process.poll() is None:
         process.kill()
     process.wait(timeout=10)
+
+
+def _deliver_input(pipe: Any, data: bytes) -> None:
+    try:
+        pipe.write(data)
+        pipe.close()
+    except (OSError, ValueError):
+        pass  # A dead child is classified by exit/protocol checks, never its text.
 
 
 def _capture(pipe: Any, buffer: bytearray, exceeded: threading.Event, limit: int) -> None:
@@ -198,12 +285,18 @@ def run_child(
     env: dict[str, str] | None = None,
 ) -> dict:
     """Run a trusted worker; all received bytes are untrusted private data."""
+    data = json.dumps(request or {}).encode("utf-8")
+    if len(data) > MAX_OUTPUT:
+        return row(check_id, "fail", "protocol_error")
     output, noise = bytearray(), bytearray()
     exceeded = threading.Event()
     process = None
+    job = None
     readers: list[threading.Thread] = []
     reason = None
     try:
+        deadline = time.monotonic() + timeout_s
+        job = _WindowsJob() if os.name == "nt" else None
         process = subprocess.Popen(
             command,
             cwd=REPO_ROOT,
@@ -213,45 +306,54 @@ def run_child(
             stderr=subprocess.PIPE,
             start_new_session=os.name != "nt",
         )
+        if job is not None:
+            job.assign(process)
         for pipe, buffer in ((process.stdout, output), (process.stderr, noise)):
             thread = threading.Thread(
                 target=_capture, args=(pipe, buffer, exceeded, output_limit), daemon=True
             )
             thread.start()
             readers.append(thread)
-        process.stdin.write(json.dumps(request or {}).encode("utf-8"))
-        process.stdin.close()
-        deadline = time.monotonic() + timeout_s
-        while process.poll() is None or any(thread.is_alive() for thread in readers):
-            if exceeded.is_set():
-                reason = "output_limit"
-                break
-            if time.monotonic() >= deadline:
-                reason = "timeout"
-                break
-            time.sleep(0.01)
-        if exceeded.is_set():
-            reason = "output_limit"
-        if reason is None and process.returncode != 0:
-            reason = "child_failed"
+        writer = threading.Thread(target=_deliver_input, args=(process.stdin, data), daemon=True)
+        writer.start()
+        readers.append(writer)
+        reason = _monitor_child(process, readers, exceeded, deadline)
     except KeyboardInterrupt:
         reason = "interrupted"
     except (OSError, subprocess.SubprocessError):
         reason = "child_failed"
     finally:
-        if process is not None:
-            _stop_child(process)
-            for thread in readers:
-                thread.join(timeout=2)
-            for pipe in (process.stdin, process.stdout, process.stderr):
-                if pipe is not None:
-                    pipe.close()
+        _cleanup_child(process, job, readers)
     if reason:
         return row(check_id, "fail", reason)
     try:
         return validate_row(json.loads(output.decode("utf-8")), check_id)
     except (ValueError, UnicodeError, TypeError, KeyError):
         return row(check_id, "fail", "protocol_error")
+
+
+def _monitor_child(process, readers, exceeded, deadline) -> str | None:
+    while process.poll() is None or any(thread.is_alive() for thread in readers):
+        if exceeded.is_set():
+            return "output_limit"
+        if time.monotonic() >= deadline:
+            return "timeout"
+        time.sleep(0.01)
+    if exceeded.is_set():
+        return "output_limit"
+    return "child_failed" if process.returncode != 0 else None
+
+
+def _cleanup_child(process, job, readers) -> None:
+    if process is not None:
+        _stop_child(process, job)
+        for thread in readers:
+            thread.join(timeout=2)
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            if pipe is not None:
+                pipe.close()
+    elif job is not None:
+        job.close()
 
 
 def isolated_check(check_id: str, request: dict | None = None) -> dict:

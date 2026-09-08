@@ -58,11 +58,12 @@ def _source_rows_for_sha(db_file: Path, sha256_value: str | None) -> dict:
                     "SELECT count(*) FROM (SELECT 1 FROM source_files WHERE sha256=? LIMIT 1000000)",
                     (sha256_value,),
                 ).fetchone()[0]
+        facts = {"matching_rows": count} if sha256_value is not None else {}
         return contract.row(
             "database",
             "pass",
             "no_matching_rows" if sha256_value is not None and count == 0 else "ok",
-            matching_rows=count,
+            **facts,
         )
     except (OSError, sqlite3.Error):
         return contract.row("database", "fail", "database_unreadable")
@@ -76,7 +77,7 @@ def _classify_runtime_issue(header_diagnostics: dict, field_sources: dict) -> st
         return "ocr_no_records"
     if error:
         return "extraction_failed"
-    return "ok" if field_sources else "metadata_absent"
+    return "ok" if any(field_sources.values()) else "metadata_absent"
 
 
 def _run_parser_diagnostic(pdf_path: Path) -> dict:
@@ -96,7 +97,8 @@ def _run_parser_diagnostic(pdf_path: Path) -> dict:
     selected = [value for value in sources.values() if value]
     filename = sum(value == "filename_candidate" for value in selected)
     header = sum(
-        value in {"position_cell", "header_label", "header_box", "ocr"} for value in selected
+        value in {"position_cell", "header_exact", "header_alias", "explicit_sample_number"}
+        for value in selected
     )
     return contract.row(
         "pdf",
