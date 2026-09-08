@@ -122,7 +122,7 @@ def _engine_smoke_check() -> dict:
 
     config = _selected_config()
     try:
-        contract.prevent_rapidocr_downloads()
+        contract.prevent_rapidocr_downloads(config.engine)
         backend = RapidOcrLatinBackend(
             RapidOcrLatinBackendConfig(model_paths=_selected_models(), params=config.params)
         )

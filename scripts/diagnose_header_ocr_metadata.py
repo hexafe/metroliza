@@ -133,7 +133,9 @@ def run_input_check(check_id: str, request: dict) -> dict:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
         return _source_rows_for_sha(Path(request["database"]).expanduser().resolve(), digest)
     try:
-        contract.prevent_rapidocr_downloads()
+        from metroliza.parsing.header_ocr_backend import rapidocr_latin_runtime_config_from_env
+
+        contract.prevent_rapidocr_downloads(rapidocr_latin_runtime_config_from_env().engine)
         return _run_parser_diagnostic(pdf)
     except BaseException:
         return contract.row("pdf", "fail", "extraction_failed")

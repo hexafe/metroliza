@@ -388,11 +388,13 @@ def _reject_asset_download(*args, **kwargs):
     raise DiagnosticAssetMissing("missing_models")
 
 
-def prevent_rapidocr_downloads() -> None:
+def prevent_rapidocr_downloads(engine: str) -> None:
     # Worker-local boundary for the pinned RapidOCR downloader. Intercept before
     # it creates a directory, contacts the network, or overwrites a cached file.
     # Existing dictionaries are read without invoking this path in RapidOCR 3.8.1.
     if importlib.util.find_spec("rapidocr") is not None:
+        if engine == "onnxruntime":
+            importlib.import_module("onnxruntime")
         module = importlib.import_module("rapidocr.utils.download_file")
         module.DownloadFile.run = staticmethod(_reject_asset_download)
 

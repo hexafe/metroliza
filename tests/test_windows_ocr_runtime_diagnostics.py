@@ -91,7 +91,9 @@ def simulated_runtime(tmp_path, monkeypatch):
         " @staticmethod\n def run(*args): Path(os.environ['SYNTHETIC_ASSET_TARGET']).write_text('forbidden')\n"
     )
     (rapidocr / "__init__.py").write_text(
-        "import os\n__version__='3.8.0'\n"
+        "import os,sys\n__version__='3.8.0'\n"
+        "if os.environ.get('METROLIZA_HEADER_OCR_ENGINE','onnxruntime')=='onnxruntime':\n"
+        " assert 'onnxruntime' in sys.modules, 'required preload order'\n"
         "from types import SimpleNamespace\n"
         "class Stage:\n"
         " def __init__(self): self.session=self\n"
