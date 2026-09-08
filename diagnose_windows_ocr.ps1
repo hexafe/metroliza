@@ -67,6 +67,7 @@ if (-not ('OcrDiagnosticJob1002' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
@@ -95,6 +96,14 @@ public sealed class OcrDiagnosticJob1002 : IDisposable {
     [DllImport("kernel32.dll")] static extern bool TerminateJobObject(IntPtr job, uint code);
     [DllImport("kernel32.dll")] static extern bool QueryInformationJobObject(
         IntPtr job, int type, out Accounting info, uint length, IntPtr returned);
+    [StructLayout(LayoutKind.Sequential)] struct Members {
+        public uint assigned, count;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst=256)] public UIntPtr[] pids;
+    }
+    [DllImport("kernel32.dll", EntryPoint="QueryInformationJobObject")]
+    static extern bool QueryMembers(IntPtr job, int type, ref Members info, uint length, IntPtr returned);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint rights, bool inherit, uint pid);
+    [DllImport("kernel32.dll")] static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool belongs);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Startup {
         public uint size;
@@ -167,9 +176,57 @@ public sealed class OcrDiagnosticJob1002 : IDisposable {
             Error.DisposeLocalCopyOfClientHandle();
         }
     }
+    List<IntPtr> MemberHandles() {
+        var members = new Members();
+        members.pids = new UIntPtr[256];
+        if (!QueryMembers(handle, 3, ref members, (uint)Marshal.SizeOf(members), IntPtr.Zero)
+            || members.assigned != members.count || members.count > 256)
+            throw new InvalidOperationException("not_completed");
+        if (members.count == 0) return null;
+        var handles = new List<IntPtr>();
+        try {
+            for (int i = 0; i < members.count; i++) {
+                var member = OpenProcess(0x101001, false, (uint)members.pids[i].ToUInt64());
+                if (member == IntPtr.Zero) {
+                    if (Marshal.GetLastWin32Error() == 87) continue;
+                    throw new InvalidOperationException("not_completed");
+                }
+                handles.Add(member);
+                bool belongs;
+                if (!IsProcessInJob(member, handle, out belongs) || !belongs)
+                    throw new InvalidOperationException("not_completed");
+            }
+            return handles;
+        }
+        catch {
+            foreach (var member in handles) CloseHandle(member);
+            throw;
+        }
+    }
+    void DrainMembers(Stopwatch timer) {
+        while (true) {
+            // Capture every handle before terminating a redirector and its inner job.
+            var handles = MemberHandles();
+            if (handles == null) return;
+            try {
+                if (timer.ElapsedMilliseconds >= 10000) throw new InvalidOperationException("not_completed");
+                foreach (var member in handles) {
+                    // An inner job may already be terminating this retained member.
+                    TerminateProcess(member, 1);
+                }
+                foreach (var member in handles) {
+                    uint remaining = (uint)Math.Max(0L, 10000L - timer.ElapsedMilliseconds);
+                    if (WaitForSingleObject(member, remaining) != 0)
+                        throw new InvalidOperationException("not_completed");
+                }
+            }
+            finally { foreach (var member in handles) CloseHandle(member); }
+        }
+    }
     public void Stop() {
-        if (!TerminateJobObject(handle, 1)) throw new InvalidOperationException("not_completed");
         var timer = Stopwatch.StartNew();
+        DrainMembers(timer);
+        if (!TerminateJobObject(handle, 1)) throw new InvalidOperationException("not_completed");
         while (true) {
             Accounting info;
             if (!QueryInformationJobObject(handle, 1, out info, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero))

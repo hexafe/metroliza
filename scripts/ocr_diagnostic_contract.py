@@ -226,6 +226,12 @@ class _WindowsJob:
         self.kernel.QueryInformationJobObject.argtypes = [
             wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
         ]
+        self.kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self.kernel.OpenProcess.restype = wintypes.HANDLE
+        self.kernel.IsProcessInJob.argtypes = [
+            wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL),
+        ]
+        self.kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
         self.kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         self.kernel.WaitForSingleObject.restype = wintypes.DWORD
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -307,9 +313,10 @@ class _WindowsJob:
                 ("terminated", wintypes.DWORD),
             ]
 
+        deadline = time.monotonic() + 10
+        self._drain_members(deadline)
         if not self.kernel.TerminateJobObject(self.handle, 1):
             raise OSError("not_completed")
-        deadline = time.monotonic() + 10
         while True:
             info = Accounting()
             if not self.kernel.QueryInformationJobObject(
@@ -321,6 +328,65 @@ class _WindowsJob:
             if time.monotonic() >= deadline:
                 raise subprocess.SubprocessError("not_completed")
             time.sleep(0.01)
+
+    def _member_handles(self) -> list | None:
+        import ctypes
+        from ctypes import wintypes
+
+        class Members(ctypes.Structure):
+            _fields_ = [
+                ("assigned", wintypes.DWORD), ("count", wintypes.DWORD),
+                ("pids", ctypes.c_size_t * 256),
+            ]
+
+        members = Members()
+        if not self.kernel.QueryInformationJobObject(
+            self.handle, 3, ctypes.byref(members), ctypes.sizeof(members), None
+        ) or members.assigned != members.count or members.count > 256:
+            raise OSError("not_completed")
+        if members.count == 0:
+            return None
+        handles = []
+        try:
+            for pid in members.pids[:members.count]:
+                handle = self.kernel.OpenProcess(0x101001, False, pid)
+                if not handle:
+                    if ctypes.get_last_error() == 87:  # Already gone, never a foreign kill.
+                        continue
+                    raise OSError("not_completed")
+                handles.append(handle)
+                belongs = wintypes.BOOL()
+                if not self.kernel.IsProcessInJob(handle, self.handle, ctypes.byref(belongs)):
+                    raise OSError("not_completed")
+                if not belongs.value:
+                    raise OSError("not_completed")
+            return handles
+        except BaseException:
+            for handle in handles:
+                self.kernel.CloseHandle(handle)
+            raise
+
+    def _drain_members(self, deadline: float) -> None:
+        while True:
+            # Retain the whole batch before killing any venv redirector: its
+            # teardown can terminate members of an inner job asynchronously.
+            handles = self._member_handles()
+            if handles is None:
+                return
+            try:
+                if time.monotonic() >= deadline:
+                    raise subprocess.SubprocessError("not_completed")
+                for handle in handles:
+                    # A redirector's inner job may already be terminating this
+                    # retained member. Its signaled handle proves completion.
+                    self.kernel.TerminateProcess(handle, 1)
+                for handle in handles:
+                    remaining = max(0, int((deadline - time.monotonic()) * 1000))
+                    if self.kernel.WaitForSingleObject(handle, remaining) != 0:
+                        raise subprocess.SubprocessError("not_completed")
+            finally:
+                for handle in handles:
+                    self.kernel.CloseHandle(handle)
 
     def wait(self, process: subprocess.Popen) -> None:
         # Job termination is asynchronous. Wait on the retained process handle,

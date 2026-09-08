@@ -32,15 +32,23 @@ def build_parser() -> contract.SafeArgumentParser:
     return parser
 
 
+def _database_state(db_file: Path) -> tuple:
+    # An immutable connection must never accept a concurrently changing source.
+    if any(Path(str(db_file) + suffix).exists() for suffix in ("-wal", "-journal")):
+        raise OSError("database_unreadable")
+    state = db_file.stat()
+    return (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns)
+
+
 def _source_rows_for_sha(db_file: Path, sha256_value: str | None) -> dict:
     if not db_file.is_file():
         return contract.row("database", "fail", "database_missing")
     try:
+        db_file = db_file.resolve()
         # immutable prevents creation/mutation of WAL/SHM. A live WAL cannot be
         # safely interpreted this way, so refuse it instead of reporting stale rows.
-        if any(Path(str(db_file) + suffix).exists() for suffix in ("-wal", "-journal")):
-            return contract.row("database", "fail", "database_unreadable")
-        uri = db_file.resolve().as_uri() + "?mode=ro&immutable=1"
+        before = _database_state(db_file)
+        uri = db_file.as_uri() + "?mode=ro&immutable=1"
         with closing(sqlite3.connect(uri, uri=True, timeout=1)) as connection:
             deadline = time.monotonic() + 5
             connection.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
@@ -58,6 +66,8 @@ def _source_rows_for_sha(db_file: Path, sha256_value: str | None) -> dict:
                     "SELECT count(*) FROM (SELECT 1 FROM source_files WHERE sha256=? LIMIT 1000000)",
                     (sha256_value,),
                 ).fetchone()[0]
+        if _database_state(db_file) != before:
+            return contract.row("database", "fail", "database_unreadable")
         facts = {"matching_rows": count} if sha256_value is not None else {}
         return contract.row(
             "database",

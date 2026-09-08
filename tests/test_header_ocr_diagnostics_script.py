@@ -162,3 +162,49 @@ def test_metadata_sources_match_actual_selector_and_empty_is_absent(monkeypatch)
     result = module._run_parser_diagnostic(Path("synthetic.pdf"))
     assert result["reason"] == "metadata_absent"
     assert result["facts"]["metadata_fields"] == 0
+
+
+def test_database_changes_during_open_cannot_pass(tmp_path, monkeypatch):
+    module = _load_script_module()
+    database = tmp_path / "source.sqlite"
+    connect = sqlite3.connect
+    with closing(connect(database)) as connection:
+        connection.executescript("CREATE TABLE source_files(id INTEGER, sha256 TEXT);"
+                                 "CREATE TABLE parsed_reports(id INTEGER, source_file_id INTEGER);"
+                                 "CREATE TABLE report_metadata(report_id INTEGER, metadata_json TEXT);")
+    for mode in ("wal", "main"):
+        with closing(connect(database)) as writer:
+            writer.execute("PRAGMA journal_mode=DELETE")
+
+            def racing_connect(*args, **kwargs):
+                if mode == "wal":
+                    writer.execute("PRAGMA journal_mode=WAL")
+                writer.execute("INSERT INTO source_files VALUES(1, 'SYNTHETIC_DB_CHANGE')")
+                writer.commit()
+                return connect(*args, **kwargs)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(module.sqlite3, "connect", racing_connect)
+                result = module._source_rows_for_sha(database, "SYNTHETIC_DB_CHANGE")
+            assert result["status"] == "fail", (mode, result)
+            assert result["reason"] == "database_unreadable"
+            assert "SYNTHETIC_DB_CHANGE" not in json.dumps(result)
+
+
+def test_database_symlink_checks_target_sidecars(tmp_path):
+    import pytest
+
+    module = _load_script_module()
+    target = tmp_path / "target.sqlite"
+    alias = tmp_path / "alias.sqlite"
+    with closing(sqlite3.connect(target)) as writer:
+        writer.execute("CREATE TABLE source_files(id INTEGER, sha256 TEXT)")
+        writer.commit()
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("INSERT INTO source_files VALUES(1, 'SYNTHETIC_WAL')")
+        writer.commit()
+        try:
+            alias.symlink_to(target)
+        except OSError:
+            pytest.skip("Disposable symlink requires platform permission")
+        assert module._source_rows_for_sha(alias, None)["reason"] == "database_unreadable"

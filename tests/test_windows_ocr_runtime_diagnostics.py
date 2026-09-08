@@ -626,6 +626,9 @@ def test_job_cleanup_waits_for_all_members(monkeypatch, mode):
             return mode != "terminate_failed"
 
         def QueryInformationJobObject(self, handle, kind, info, length, returned):
+            if kind == 3:
+                info._obj.assigned = info._obj.count = 0
+                return True
             events.append("query")
             info._obj.active = 0 if mode == "settles" and events.count("query") == 2 else 1
             return mode != "query_failed"
@@ -653,3 +656,38 @@ def test_job_cleanup_waits_for_all_members(monkeypatch, mode):
             contract._stop_child(process, job)
     assert events[-1] == "close"
     assert job.handle is None
+
+
+@pytest.mark.parametrize("failure", [None, "terminate", "wait", "already_terminating"])
+def test_job_members_are_waited_before_rescan(monkeypatch, failure):
+    from types import SimpleNamespace
+
+    events = []
+    batches = iter(([11, 12], [13], None))
+
+    def members(self):
+        events.append(("scan",))
+        return next(batches)
+
+    def terminate(handle, code):
+        events.append(("terminate", handle))
+        return failure not in {"terminate", "already_terminating"}
+
+    def wait(handle, timeout):
+        events.append(("wait", handle))
+        return 258 if failure in {"terminate", "wait"} or timeout == 0 else 0
+
+    job = object.__new__(contract._WindowsJob)
+    job.kernel = SimpleNamespace(TerminateProcess=terminate, WaitForSingleObject=wait,
+                                 CloseHandle=lambda handle: events.append(("close", handle)))
+    monkeypatch.setattr(contract._WindowsJob, "_member_handles", members)
+    monkeypatch.setattr(contract.time, "monotonic", lambda: 1)
+    if failure in {"terminate", "wait"}:
+        with pytest.raises((OSError, subprocess.SubprocessError)):
+            job._drain_members(5)
+        assert events[-2:] == [("close", 11), ("close", 12)]
+    else:
+        job._drain_members(5)
+        assert events == [("scan",), ("terminate", 11), ("terminate", 12),
+                          ("wait", 11), ("wait", 12), ("close", 11), ("close", 12),
+                          ("scan",), ("terminate", 13), ("wait", 13), ("close", 13), ("scan",)]
