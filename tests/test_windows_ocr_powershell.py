@@ -274,3 +274,26 @@ def test_native_job_completion_is_required(powershell, fixture_repo, mode):
     else:
         assert result.returncode != 0
         assert b"not_completed" in result.stderr
+
+
+def test_native_job_overflow_still_terminates_and_checks_accounting(powershell, fixture_repo):
+    write_child(fixture_repo, "pass")
+    wrapper = fixture_repo / "diagnose_windows_ocr.ps1"
+    marker = fixture_repo / "accounting-complete"
+    source = wrapper.read_text()
+    source = source.replace("static extern bool QueryMembers(", "static extern bool NativeQueryMembers(")
+    source = source.replace("List<IntPtr> MemberHandles() {", """
+    static bool QueryMembers(IntPtr job, int type, ref Members info, uint length, IntPtr returned) {
+        if (!NativeQueryMembers(job, type, ref info, length, returned)) return false;
+        info.assigned = 257; info.count = 256; return false;
+    }
+    List<IntPtr> MemberHandles() {""")
+    source = source.replace("if (info.active == 0) return;",
+                            "if (info.active == 0) { System.IO.File.WriteAllText("
+                            + json.dumps(str(marker)) + ", \"zero\"); return; }")
+    wrapper.write_text(source, encoding="utf-8-sig")
+    result = invoke(powershell, fixture_repo, wrapper.name)
+    public_text(result)
+    assert result.returncode != 0
+    assert b"not_completed" in result.stderr
+    assert marker.read_text() == "zero"

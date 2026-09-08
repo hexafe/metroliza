@@ -133,7 +133,7 @@ def _optional_pdf_digest(value: str | None) -> str | None:
                 if stream.read(5) == b"%PDF-":
                     stream.seek(0)
                     return hashlib.file_digest(stream, "sha256").hexdigest()
-        except OSError:
+        except (OSError, RuntimeError):
             pass
     return None
 

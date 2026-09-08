@@ -225,7 +225,10 @@ public sealed class OcrDiagnosticJob1002 : IDisposable {
     }
     public void Stop() {
         var timer = Stopwatch.StartNew();
-        DrainMembers(timer);
+        try { DrainMembers(timer); }
+        finally { TerminateAndAccount(timer); }
+    }
+    void TerminateAndAccount(Stopwatch timer) {
         if (!TerminateJobObject(handle, 1)) throw new InvalidOperationException("not_completed");
         while (true) {
             Accounting info;

@@ -303,6 +303,15 @@ class _WindowsJob:
             self.handle = None
 
     def terminate_and_wait(self) -> None:
+        deadline = time.monotonic() + 10
+        try:
+            self._drain_members(deadline)
+        finally:
+            # Overflow/query failures remain not_completed, but cannot skip
+            # whole-job termination and bounded accounting before close.
+            self._terminate_job(deadline)
+
+    def _terminate_job(self, deadline: float) -> None:
         import ctypes
         from ctypes import wintypes
 
@@ -313,8 +322,6 @@ class _WindowsJob:
                 ("terminated", wintypes.DWORD),
             ]
 
-        deadline = time.monotonic() + 10
-        self._drain_members(deadline)
         if not self.kernel.TerminateJobObject(self.handle, 1):
             raise OSError("not_completed")
         while True:

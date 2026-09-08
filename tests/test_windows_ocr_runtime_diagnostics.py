@@ -614,7 +614,7 @@ def test_requested_database_inspection_survives_pdf_failure(
     assert (database.read_bytes() if database.exists() else None) == original
 
 
-@pytest.mark.parametrize("mode", ["settles", "query_failed", "terminate_failed", "timeout"])
+@pytest.mark.parametrize("mode", ["settles", "query_failed", "terminate_failed", "timeout", "overflow"])
 def test_job_cleanup_waits_for_all_members(monkeypatch, mode):
     from types import SimpleNamespace
 
@@ -627,10 +627,11 @@ def test_job_cleanup_waits_for_all_members(monkeypatch, mode):
 
         def QueryInformationJobObject(self, handle, kind, info, length, returned):
             if kind == 3:
-                info._obj.assigned = info._obj.count = 0
-                return True
+                info._obj.assigned = 257 if mode == "overflow" else 0
+                info._obj.count = 256 if mode == "overflow" else 0
+                return mode != "overflow"
             events.append("query")
-            info._obj.active = 0 if mode == "settles" and events.count("query") == 2 else 1
+            info._obj.active = 0 if mode in {"settles", "overflow"} and events.count("query") == 2 else 1
             return mode != "query_failed"
 
         def CloseHandle(self, handle):
@@ -654,6 +655,8 @@ def test_job_cleanup_waits_for_all_members(monkeypatch, mode):
     else:
         with pytest.raises((OSError, subprocess.SubprocessError)):
             contract._stop_child(process, job)
+    if mode == "overflow":
+        assert events[:3] == ["terminate", "query", "query"]
     assert events[-1] == "close"
     assert job.handle is None
 
@@ -723,3 +726,31 @@ def test_publication_resolution_runtime_error_is_safe(tmp_path, monkeypatch, cap
     assert captured.out == ""
     assert "output_failed" in captured.err
     assert CANARIES[2] not in captured.err
+
+
+@pytest.mark.parametrize("script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"])
+def test_real_pdf_loop_preserves_independent_database_result(simulated_runtime, tmp_path, script):
+    import sqlite3
+
+    pdf = tmp_path / (CANARIES[2] + ".pdf")
+    try:
+        pdf.symlink_to(pdf.name)
+    except OSError:
+        pytest.skip("Disposable symlink requires platform permission")
+    database = tmp_path / "source.sqlite"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.executescript("CREATE TABLE source_files(id INTEGER, sha256 TEXT);"
+                                 "CREATE TABLE parsed_reports(id INTEGER, source_file_id INTEGER);"
+                                 "CREATE TABLE report_metadata(report_id INTEGER, metadata_json TEXT);")
+    before = database.read_bytes()
+    command = [sys.executable, str(contract.REPO_ROOT / "scripts" / script)]
+    command += ["--pdf", str(pdf)] if script.startswith("windows") else [str(pdf)]
+    result = subprocess.run(command + ["--db-file", str(database), "--compact"],
+                            capture_output=True, timeout=30)
+    assert result.returncode != 0
+    checks = {x["id"]: x for x in json.loads(result.stdout)["checks"]}
+    assert checks["pdf"]["status"] == "fail"
+    assert checks["database"]["status"] == "pass", checks
+    assert checks["database"]["facts"] == {}
+    assert all(marker.encode() not in result.stdout + result.stderr for marker in CANARIES)
+    assert database.read_bytes() == before
