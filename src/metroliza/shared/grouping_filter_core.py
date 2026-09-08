@@ -1203,7 +1203,8 @@ def _require_column(data_frame: pd.DataFrame, column: str) -> None:
 def _finite_number_series(series: pd.Series) -> pd.Series:
     # Object storage prevents mixed missing/integer values from rounding to float.
     return pd.Series(
-        [finite_numeric_source(value) for value in series], index=series.index, dtype=object,
+        [finite_numeric_source(value) for value in series.to_numpy(dtype=object)],
+        index=series.index, dtype=object,
     )
 
 

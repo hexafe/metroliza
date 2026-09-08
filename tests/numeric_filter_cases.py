@@ -29,3 +29,49 @@ PROBE_CASES = (
     (MembershipFilterSpec("reference", (0, .5, 1, 1.2, 100), negate=True),
      [1, 2, 3, 4, 5, 6, 12, 18, 19, 20, 21, 23]),
 )
+
+
+PRECISION_VALUES = (
+    2**53, 2**53 + 1, "9007199254740993", "9007199254740993.0", float(2**53),
+    2**63 - 1, "9223372036854775807", "9223372036854775808", "9223372036854775809",
+    "18446744073709551615", float(2**63), None,
+)
+PRECISION_CASES = (
+    (NumberFilterSpec("reference", "eq", 2**53), [1, 4, 5]),
+    (NumberFilterSpec("reference", "eq", 2**53 + 1), [2, 3]),
+    (NumberFilterSpec("reference", "gt", 2**53), [2, 3, 6, 7, 8, 9, 10, 11]),
+    (NumberFilterSpec("reference", "lte", 2**53), [1, 4, 5]),
+    (NumberFilterSpec("reference", "between", 2**63 - 1, 2**53 + 1), [2, 3, 6, 7]),
+    (NumberFilterSpec("reference", "eq", 2**63 - 1), [6, 7]),
+    (NumberFilterSpec("reference", "lt", 2**63), [1, 2, 3, 4, 5, 6, 7]),
+    (NumberFilterSpec("reference", "gt", 2**63), [9, 10]),
+    (MembershipFilterSpec("reference", (2**63,)), [8, 11]),
+    (MembershipFilterSpec("reference", (2**63,), negate=True), [1, 2, 3, 4, 5, 6, 7, 9, 10, 12]),
+    (NumberFilterSpec("reference", "is_blank"), [12]),
+)
+
+# Scalar boundary oracle: exact known numbers, including neighbouring binary64
+# values. Invalid syntax stays invalid even when Python float() accepts it.
+SOURCE_CASES = (
+    ("+1.2", 1.2), (".5", .5), ("1.", 1), ("+1e2", 100), ("01.50e+01", 15),
+    ("1.e2", 100), ("-.1e-1", -.01), ("-000", 0), ("+00001", 1),
+    ("\t\r\n\v\f 2 \t\r\n\v\f", 2), ("1e-999", 0), ("-1e-999", 0),
+    ("1.0000000000000002", 1.0000000000000002),
+    ("1.2345678901234567", 1.2345678901234567),
+    ("1.7976931348623157e308", float.fromhex("0x1.fffffffffffffp+1023")),
+    ("1.7976931348623158e308", float.fromhex("0x1.fffffffffffffp+1023")),
+    ("-1.7976931348623157e308", -float.fromhex("0x1.fffffffffffffp+1023")),
+    ("5e-324", float.fromhex("0x0.0000000000001p-1022")),
+    ("2e-324", 0), ("3e-324", float.fromhex("0x0.0000000000001p-1022")),
+    (-(2**63), -(2**63)), (str(-(2**63)), -(2**63)),
+    (str(-(2**63) + 1), -(2**63) + 1),
+    (True, 1), (False, 0), (0, 0), (-.5, -.5),
+    (None, None), ("", None), (" \t", None), ("abc", None), ("1x", None), ("1.2x", None),
+    ("+", None), (".", None), ("1.2.3", None), ("1e", None), ("1e+", None),
+    ("1ee2", None), ("1e1e1", None), ("--1", None), ("+-1", None), ("1 2", None),
+    ("0x10", None), ("1_0", None), ("１２", None), ("\u00a01\u00a0", None),
+    ("1\x00x", None), ("1\x00", None), (b"1", None),
+    ("NaN", None), ("+Inf", None), ("-Infinity", None), ("Infinity", None),
+    (float("nan"), None), (float("inf"), None), (-float("inf"), None),
+    ("1e999", None), ("-1e999", None), ("1.7976931348623159e308", None),
+)

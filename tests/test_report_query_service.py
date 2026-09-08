@@ -1,11 +1,15 @@
 from contextlib import closing
+from dataclasses import replace
 import sqlite3
 
 import pandas as pd
 import pytest
 
 from metroliza.reports import report_query_service as canonical_query
-from tests.numeric_filter_cases import PROBE_CASES, PROBE_VALUES
+from metroliza.shared.grouping_filter_core import MembershipFilterSpec, NumberFilterSpec
+from tests.numeric_filter_cases import (
+    PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES, SOURCE_CASES,
+)
 
 from modules.report_schema import ensure_report_schema
 from modules.industrial_join_service import set_manual_industrial_report_link
@@ -35,6 +39,133 @@ def test_finite_numeric_probe_executes_sql_expected_ids(spec, expected_ids):
         frame = pd.DataFrame({"reference": PROBE_VALUES}, index=range(1, 24))
         assert frame.index[spec.mask(frame)].tolist() == expected_ids
         assert conn.execute("SELECT * FROM probe ORDER BY row_id").fetchall() == before
+
+
+@pytest.mark.parametrize("spec, expected_ids", PRECISION_CASES)
+def test_finite_numeric_sql_precision_ids(spec, expected_ids):
+    with closing(sqlite3.connect(":memory:")) as conn:
+        # No affinity: native INTEGER/REAL and TEXT must remain distinguishable.
+        conn.execute("CREATE TABLE probe (row_id INTEGER PRIMARY KEY, reference)")
+        conn.executemany("INSERT INTO probe VALUES (?, ?)", enumerate(PRECISION_VALUES, start=1))
+        clause = canonical_query._filter_expression_spec_to_sql(spec)
+        rows = conn.execute(f"SELECT row_id FROM probe WHERE {clause} ORDER BY row_id")
+        assert [row[0] for row in rows] == expected_ids
+
+
+@pytest.mark.parametrize("source, expected", SOURCE_CASES)
+def test_finite_numeric_sql_source_boundary(source, expected):
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (reference)")
+        conn.execute("INSERT INTO probe VALUES (?)", (source,))
+        specs = [(NumberFilterSpec("reference", "is_blank"), expected is None)]
+        if expected is not None:
+            specs.extend([
+                (NumberFilterSpec("reference", "eq", expected), True),
+                (MembershipFilterSpec("reference", (expected,)), True),
+            ])
+        for spec, selected in specs:
+            clause = canonical_query._filter_expression_spec_to_sql(spec)
+            assert conn.execute(f"SELECT rowid FROM probe WHERE {clause}").fetchall() == (
+                [(1,)] if selected else []
+            )
+
+
+@pytest.mark.parametrize("alias, case_index", [
+    ("equals", 0), (" EQ ", 0), ("not_equals", 1), (" NE ", 1),
+    ("greater_than", 2), (" GT ", 2), ("greater_or_equal", 3), (" GTE ", 3),
+    ("less_than", 4), (" LT ", 4), ("less_or_equal", 5), (" LTE ", 5),
+])
+def test_finite_numeric_operator_aliases(alias, case_index):
+    spec, expected_ids = PROBE_CASES[case_index]
+    test_finite_numeric_probe_executes_sql_expected_ids(replace(spec, operator=alias), expected_ids)
+
+
+def test_finite_numeric_not_in_operator_alias():
+    spec, expected_ids = PROBE_CASES[-1]
+    test_finite_numeric_probe_executes_sql_expected_ids(
+        replace(spec, operator=" NOT_IN ", negate=False), expected_ids,
+    )
+
+
+@pytest.mark.parametrize("values, expected_ids", [
+    ([], []), ([None, "bad", "Inf"], []), (["1", 2, ".5"], [1, 2, 3]),
+])
+def test_finite_numeric_sql_empty_and_uniform_populations(values, expected_ids):
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (row_id INTEGER PRIMARY KEY, reference)")
+        conn.executemany("INSERT INTO probe VALUES (?, ?)", enumerate(values, start=1))
+        clause = canonical_query._number_expression_clause(NumberFilterSpec("reference", "is_not_blank"))
+        assert [row[0] for row in conn.execute(f"SELECT row_id FROM probe WHERE {clause}")] == expected_ids
+
+
+@pytest.mark.parametrize("expression, expected_ids, expected_reports", [
+    ("Measured = 0", [101], [10]),
+    ("Measured != 0", [102, 201, 202, 301, 302, 401, 402], [10, 20, 30, 40]),
+    ("Measured IN (0,.5)", [101, 202], [10, 20]),
+    ("Measured NOT IN (0,.5)", [102, 201, 301, 302, 401, 402], [10, 20, 30, 40]),
+    ("(Measured != 0 AND Measured < 1) OR (Measured IN (0) AND Reference = drop)",
+     [202, 402], [20, 40]),
+    ("(Measured NOT IN (0,.5) AND Reference = keep) OR Measured = 99",
+     [102, 201, 301, 302, 401, 402], [10, 20, 30, 40]),
+    ("Measured >= .5 AND Date >= 2026-01-01", [202, 302], [20, 30]),
+])
+def test_finite_numeric_public_query_grouping_export_scope(expression, expected_ids, expected_reports):
+    records = (
+        (10, 101, "keep", 0), (10, 102, "keep", "bad"),
+        (20, 201, "keep", None), (20, 202, "keep", ".5"),
+        (30, 301, "keep", "Inf"), (30, 302, "keep", 2.),
+        (40, 401, "keep", "1e309"), (40, 402, "keep", -1), (50, 501, "drop", 0),
+    )
+    with closing(sqlite3.connect(":memory:")) as conn:
+        definitions = [
+            f'"{column}"' + (" INTEGER" if column in {"report_id", "measurement_id"}
+                              else "" if column == "meas" else " TEXT")
+            for column in _MEASUREMENT_EXPORT_TEST_COLUMNS
+        ]
+        conn.execute("CREATE TABLE vw_measurement_export (" + ", ".join(definitions) + ")")
+        conn.executemany(
+            "INSERT INTO vw_measurement_export VALUES ("
+            + ",".join("?" for _ in _MEASUREMENT_EXPORT_TEST_COLUMNS) + ")",
+            [_measurement_row(report_id=r, measurement_id=m, reference=ref, meas=value)
+             for r, m, ref, value in records],
+        )
+        snapshot = conn.execute("SELECT *, typeof(meas) FROM vw_measurement_export").fetchall()
+        query = canonical_query.build_measurement_filter_query(
+            reference_values=["keep"], expression_text=expression,
+        )
+        grouping = canonical_query.build_grouping_query(query)
+        export = canonical_query.build_measurement_export_query(query)
+        expected_pairs = [(r, m) for r, m, _, _ in records if m in expected_ids]
+        for _ in range(2):
+            for selected_query in (query, export):
+                actual = conn.execute(
+                    f"SELECT report_id, measurement_id FROM ({selected_query}) ORDER BY measurement_id"
+                ).fetchall()
+                assert actual == expected_pairs
+            reports = conn.execute(f"SELECT report_id FROM ({grouping}) ORDER BY report_id").fetchall()
+            assert [row[0] for row in reports] == expected_reports
+        assert conn.execute("SELECT *, typeof(meas) FROM vw_measurement_export").fetchall() == snapshot
+
+
+@pytest.mark.parametrize("expression, error", [
+    ("unknown_column = 0", KeyError), ("Measured > 1; DROP TABLE probe", ValueError),
+    ("Measured IN (0); SELECT 1", ValueError),
+])
+def test_finite_numeric_public_query_rejects_unsafe_expression(expression, error):
+    with pytest.raises(error):
+        canonical_query.build_measurement_expression_clause(expression)
+
+
+def test_finite_numeric_literal_language_is_preserved():
+    # This untyped parser still treats Inf equality as text, per the authority.
+    clause = canonical_query.build_measurement_expression_clause("Reference = Inf")
+    assert "LOWER" in clause
+    # Existing float-compatible numeric literals remain safe after normalization.
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (meas INTEGER)")
+        conn.execute("INSERT INTO probe VALUES (10)")
+        clause = canonical_query.build_measurement_expression_clause("Measured = 1_0")
+        assert conn.execute(f"SELECT rowid FROM probe WHERE {clause}").fetchall() == [(1,)]
 
 
 _MEASUREMENT_EXPORT_TEST_COLUMNS = (

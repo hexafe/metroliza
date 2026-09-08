@@ -34,7 +34,10 @@ def finite_numeric_source(value: Any) -> int | float | None:
         if _INT64_MIN <= integer <= _UINT64_MAX:
             return integer
     if isinstance(value, Real):
-        number = float(value)
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
         return number if math.isfinite(number) else None
     text = str(value).strip(_SPACE)
     if _SOURCE_NUMBER.fullmatch(text) is None:
@@ -107,7 +110,7 @@ def _sqlite_normalized_source(column_sql: str) -> str:
             END AS n FROM _nf_digits"""
 
 
-def _sqlite_comparison(operator: str, value: int | float) -> str:
+def _sqlite_comparison(operator: str, value: int | float, params: list[Any] | None) -> str:
     # The TEXT branch is only UInt64 source data. Existing out-of-int64 literals
     # are binary64, hence integral throughout this range. Compare digits exactly.
     if value < 2**63:
@@ -116,11 +119,16 @@ def _sqlite_comparison(operator: str, value: int | float) -> str:
         unsigned = "1" if operator in {"<", "<=", "!="} else "0"
     else:
         unsigned = f"n COLLATE BINARY {operator} '{int(value):020d}'"
-    return f"(CASE WHEN typeof(n) = 'text' THEN {unsigned} ELSE n {operator} {value!r} END)"
+    literal = repr(value)
+    if params is not None:
+        params.append(value)
+        literal = "?"
+    return f"(CASE WHEN typeof(n) = 'text' THEN {unsigned} ELSE n {operator} {literal} END)"
 
 
 def sqlite_numeric_filter(
     column_sql: str, operator: str, value: Any = None, second_value: Any = None,
+    *, params: list[Any] | None = None,
 ) -> str:
     """Compile total finite-number predicates using a validated SQL identifier."""
     operator = operator.strip().lower()
@@ -130,21 +138,25 @@ def sqlite_numeric_filter(
         predicate = "n IS NOT NULL"
     elif operator == "between":
         lower, upper = sorted((_required_literal(value), _required_literal(second_value)))
-        predicate = f"COALESCE({_sqlite_comparison('>=', lower)} AND {_sqlite_comparison('<=', upper)}, 0)"
+        predicate = f"COALESCE({_sqlite_comparison('>=', lower, params)} AND {_sqlite_comparison('<=', upper, params)}, 0)"
     else:
         sql_operator = _OPERATORS.get(operator)
         if sql_operator is None:
             raise ValueError(f"Unsupported number filter operator: {operator}")
-        comparison = _sqlite_comparison(sql_operator, _required_literal(value))
+        comparison = _sqlite_comparison(sql_operator, _required_literal(value), params)
         predicate = f"COALESCE({comparison}, {1 if sql_operator == '!=' else 0})"
     return f"(SELECT {predicate} FROM ({_sqlite_normalized_source(column_sql)}))"
 
 
-def sqlite_numeric_membership(column_sql: str, values: tuple[Any, ...], *, negate: bool) -> str:
+def sqlite_numeric_membership(
+    column_sql: str, values: tuple[Any, ...], *, negate: bool, params: list[Any] | None = None,
+) -> str:
     """Use the same source normalization and equality for numeric IN / NOT IN."""
     if not values:
         raise ValueError("IN filters require at least one value")
-    comparisons = [_sqlite_comparison("=", _required_literal(value, "IN value")) for value in values]
+    comparisons = [
+        _sqlite_comparison("=", _required_literal(value, "IN value"), params) for value in values
+    ]
     predicate = "COALESCE((" + " OR ".join(comparisons) + "), 0)"
     if negate:
         predicate = f"NOT ({predicate})"
