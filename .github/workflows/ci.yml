@@ -831,6 +831,7 @@ jobs:
           tests/test_grouping_filter_core.py
           tests/test_report_query_service.py
           tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_shared_spec_probe
+          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_large_membership
 
   windows-startup-benchmark:
     name: Windows startup benchmark (manual/opt-in)

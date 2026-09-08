@@ -154,10 +154,17 @@ def sqlite_numeric_membership(
     """Use the same source normalization and equality for numeric IN / NOT IN."""
     if not values:
         raise ValueError("IN filters require at least one value")
-    comparisons = [
-        _sqlite_comparison("=", _required_literal(value, "IN value"), params) for value in values
-    ]
-    predicate = "COALESCE((" + " OR ".join(comparisons) + "), 0)"
+    numbers = tuple(_required_literal(value, "IN value") for value in values)
+    if params is None:
+        values_sql = ",".join(repr(number) for number in numbers)
+    else:
+        params.extend(numbers)
+        values_sql = ",".join("?" for _ in numbers)
+    unsigned_values = sorted({f"'{int(number):020d}'" for number in numbers if 2**63 <= number < 2**64})
+    unsigned = f"n COLLATE BINARY IN ({','.join(unsigned_values)})" if unsigned_values else "0"
+    # Native sets keep expression depth bounded even for long supported IN lists.
+    # The UInt64 branch has the same exact equality as _sqlite_comparison.
+    predicate = f"COALESCE(CASE WHEN typeof(n) = 'text' THEN {unsigned} ELSE n IN ({values_sql}) END, 0)"
     if negate:
         predicate = f"NOT ({predicate})"
     return f"(SELECT {predicate} FROM ({_sqlite_normalized_source(column_sql)}))"

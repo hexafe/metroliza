@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import metroliza.tabular.tabular_analytics_service as canonical_tabular_service
+from metroliza.shared.grouping_filter_core import MembershipFilterSpec
 from tests.numeric_filter_cases import PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES
 
 
@@ -77,6 +78,21 @@ def test_sqlite_finite_numeric_shared_spec_probe(spec, expected_ids, source_valu
             f"SELECT row_id FROM probe WHERE {compiled.clause} ORDER BY row_id", compiled.params,
         )
         assert [row[0] for row in rows] == expected_ids
+
+
+@pytest.mark.parametrize("negate", [False, True])
+def test_sqlite_finite_numeric_large_membership(negate):
+    spec = MembershipFilterSpec("reference", (*range(1100), 2**63), negate=negate)
+    compiled = canonical_tabular_service.compile_tabular_sqlite_grouping_filter(("reference",), (spec,))
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (reference)")
+        conn.executemany("INSERT INTO probe VALUES (?)", [
+            (499,), (1200,), ("bad",), (None,), ("9223372036854775808",), ("9223372036854775809",),
+        ])
+        rows = conn.execute(
+            f"SELECT rowid FROM probe WHERE {compiled.clause} ORDER BY rowid", compiled.params,
+        ).fetchall()
+        assert rows == ([(2,), (3,), (4,), (6,)] if negate else [(1,), (5,)])
 
 
 def _sample_table() -> pd.DataFrame:

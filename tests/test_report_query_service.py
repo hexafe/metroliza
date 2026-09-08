@@ -87,6 +87,20 @@ def test_finite_numeric_not_in_operator_alias():
     )
 
 
+@pytest.mark.parametrize("negate", [False, True])
+def test_finite_numeric_large_membership_executes_public_query(negate):
+    values = (*range(1100), 2**63)
+    operator = "NOT IN" if negate else "IN"
+    expression = "Measured " + operator + " (" + ",".join(map(str, values)) + ")"
+    source = [499, 1200, "bad", None, "9223372036854775808", "9223372036854775809"]
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (meas)")
+        conn.executemany("INSERT INTO probe VALUES (?)", [(value,) for value in source])
+        clause = canonical_query.build_measurement_expression_clause(expression)
+        rows = conn.execute(f"SELECT rowid FROM probe WHERE {clause} ORDER BY rowid").fetchall()
+        assert rows == ([(2,), (3,), (4,), (6,)] if negate else [(1,), (5,)])
+
+
 @pytest.mark.parametrize("values, expected_ids", [
     ([], []), ([None, "bad", "Inf"], []), (["1", 2, ".5"], [1, 2, 3]),
 ])
