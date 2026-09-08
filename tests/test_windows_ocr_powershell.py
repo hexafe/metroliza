@@ -198,7 +198,8 @@ def test_native_parent_exit_cleans_descendant(powershell, fixture_repo):
         + repr(child)
         + "]); pathlib.Path("
         + repr(str(pid_file))
-        + ").write_text(str(child.pid))"
+        + ").write_text(str(child.pid))",
+        encoding="utf-8",
     )
     wrapper = fixture_repo / "diagnose_windows_ocr.ps1"
     wrapper.write_text(wrapper.read_text().replace("AddMinutes(20)", "AddSeconds(1)"))

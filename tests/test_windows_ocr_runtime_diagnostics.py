@@ -101,6 +101,7 @@ def simulated_runtime(tmp_path, monkeypatch):
         "  selected=os.environ.get('METROLIZA_HEADER_OCR_ACCELERATOR','cpu')\n"
         "  return ['CUDAExecutionProvider' if selected=='cuda' and not os.environ.get('SYNTHETIC_FALLBACK') else 'CPUExecutionProvider']\n"
         " def __call__(self,image):\n"
+        "  assert image.ndim==4, 'RapidOCR sessions accept one bare batched tensor'\n"
         "  if os.environ.get('SYNTHETIC_STAGE_FAIL'): raise RuntimeError('SYNTHETIC_METADATA_1002')\n"
         "class RapidOCR:\n"
         " def __init__(self,params):\n"
@@ -389,12 +390,20 @@ def _process_alive(pid):
         kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel.OpenProcess.restype = wintypes.HANDLE
         kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         handle = kernel.OpenProcess(0x100000, False, pid)
         if not handle:
+            assert ctypes.get_last_error() == 87, "unexpected process inspection failure"
             return False
         try:
-            return kernel.WaitForSingleObject(handle, 0) == 258
+            # A job's descendants terminate asynchronously. Retain this handle
+            # through a bounded native wait; unknown errors never mean stopped.
+            initial = kernel.WaitForSingleObject(handle, 0)
+            final = kernel.WaitForSingleObject(handle, 5000) if initial == 258 else initial
+            assert final in {0, 258}, "unexpected process wait failure"
+            print(f"native process cleanup: initial_wait={initial}, final_wait={final}")
+            return final == 258
         finally:
             kernel.CloseHandle(handle)
     try:
@@ -409,13 +418,9 @@ def _process_alive(pid):
 def test_real_requested_pdf_db_markers_absent(simulated_runtime, tmp_path, script):
     import hashlib
     import sqlite3
-    import pymupdf
 
     pdf = tmp_path / (CANARIES[2] + ".pdf")
-    with pymupdf.open() as document:
-        page = document.new_page()
-        page.insert_text((72, 72), "Reference: " + CANARIES[4] + "\nOperator: " + CANARIES[0])
-        document.save(pdf)
+    _write_synthetic_pdf(pdf, "Reference: " + CANARIES[4] + "\nOperator: " + CANARIES[0])
     database = tmp_path / (CANARIES[3] + ".sqlite")
     with closing(sqlite3.connect(database)) as connection, connection:
         connection.executescript(
@@ -462,18 +467,29 @@ def test_selected_tensorrt_never_downloads_missing_dictionary(
 
 
 def test_pdf_worker_blocks_dependency_download(simulated_runtime, monkeypatch, tmp_path):
-    import pymupdf
-
     target = tmp_path / "dictionary.txt"
     monkeypatch.setenv("SYNTHETIC_DOWNLOAD", "1")
     monkeypatch.setenv("SYNTHETIC_ASSET_TARGET", str(target))
     pdf = tmp_path / "synthetic.pdf"
-    with pymupdf.open() as document:
-        document.new_page()
-        document.save(pdf)
+    _write_synthetic_pdf(pdf)
     result = contract.isolated_check("pdf", {"pdf": str(pdf)})
     assert result["reason"] == "missing_models", result
     assert not target.exists()
+
+
+def _write_synthetic_pdf(path, text=""):
+    # Other suites intentionally replace PDF modules in sys.modules. Generate
+    # this real disposable fixture in a fresh interpreter without those stubs.
+    result = subprocess.run(
+        [
+            sys.executable, "-B", "-c",
+            "import sys,pymupdf; doc=pymupdf.open(); page=doc.new_page(); "
+            "page.insert_text((72,72),sys.argv[2]); doc.save(sys.argv[1]); doc.close()",
+            str(path), text,
+        ],
+        capture_output=True, timeout=20,
+    )
+    assert result.returncode == 0, "synthetic PDF creation failed"
 
 
 def test_interrupted_publication_preserves_output_without_traceback(tmp_path, monkeypatch, capsys):
@@ -492,3 +508,38 @@ def test_interrupted_publication_preserves_output_without_traceback(tmp_path, mo
     )
     assert output.read_text() == "previous complete"
     assert "Traceback" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("pdf_state", ["missing", "invalid"])
+@pytest.mark.parametrize("db_state", ["missing", "unsupported", "valid"])
+def test_requested_database_inspection_survives_pdf_failure(
+    simulated_runtime, tmp_path, pdf_state, db_state
+):
+    from contextlib import closing
+    import sqlite3
+
+    pdf = tmp_path / "SYNTHETIC_DOCUMENT_1002.pdf"
+    if pdf_state == "invalid":
+        pdf.write_bytes(b"SYNTHETIC_METADATA_1002")
+    database = tmp_path / "SYNTHETIC_DB_1002.sqlite"
+    if db_state != "missing":
+        with closing(sqlite3.connect(database)) as connection, connection:
+            if db_state == "valid":
+                connection.executescript(
+                    "CREATE TABLE source_files(id, sha256);"
+                    "CREATE TABLE parsed_reports(id, source_file_id);"
+                    "CREATE TABLE report_metadata(report_id, metadata_json);"
+                )
+    original = database.read_bytes() if database.exists() else None
+    result = run_cli("--pdf", str(pdf), "--db-file", str(database), "--compact")
+    assert result.returncode != 0
+    checks = {check["id"]: check for check in assert_public_safe(result)["checks"]}
+    assert checks["pdf"]["reason"] == (
+        "input_unreadable" if pdf_state == "missing" else "invalid_pdf"
+    )
+    assert checks["database"]["reason"] == {
+        "missing": "database_missing", "unsupported": "schema_unsupported", "valid": "ok"
+    }[db_state]
+    assert checks["database"]["status"] == ("pass" if db_state == "valid" else "fail")
+    assert checks["database"]["facts"] == {}
+    assert (database.read_bytes() if database.exists() else None) == original

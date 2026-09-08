@@ -222,6 +222,8 @@ class _WindowsJob:
             wintypes.DWORD,
         ]
         self.kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        self.kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.kernel.WaitForSingleObject.restype = wintypes.DWORD
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         self.handle = self.kernel.CreateJobObjectW(None, None)
         limits = ExtendedLimits()
@@ -243,6 +245,12 @@ class _WindowsJob:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
 
+    def wait(self, process: subprocess.Popen) -> None:
+        # Job termination is asynchronous. Wait on the retained process handle,
+        # even if Popen has already cached an exit code during concurrent kill.
+        if self.kernel.WaitForSingleObject(int(process._handle), 10000) != 0:
+            raise subprocess.SubprocessError("not_completed")
+
 
 def _stop_child(process: subprocess.Popen, job: _WindowsJob | None = None) -> None:
     if job is not None:
@@ -255,6 +263,8 @@ def _stop_child(process: subprocess.Popen, job: _WindowsJob | None = None) -> No
     if process.poll() is None:
         process.kill()
     process.wait(timeout=10)
+    if job is not None:
+        job.wait(process)
 
 
 def _deliver_input(pipe: Any, data: bytes) -> None:

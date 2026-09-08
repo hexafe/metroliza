@@ -116,7 +116,26 @@ def _run_parser_diagnostic(pdf_path: Path) -> dict:
     )
 
 
+def _optional_pdf_digest(value: str | None) -> str | None:
+    if value is not None:
+        try:
+            with Path(value).expanduser().resolve().open("rb") as stream:
+                if stream.read(5) == b"%PDF-":
+                    stream.seek(0)
+                    return hashlib.file_digest(stream, "sha256").hexdigest()
+        except OSError:
+            pass
+    return None
+
+
 def run_input_check(check_id: str, request: dict) -> dict:
+    if check_id == "database":
+        # The PDF worker owns source validity. An unavailable source hash must
+        # not hide this separately requested database's existence/schema result.
+        return _source_rows_for_sha(
+            Path(request["database"]).expanduser().resolve(),
+            _optional_pdf_digest(request.get("pdf")),
+        )
     pdf = Path(request["pdf"]).expanduser().resolve() if request.get("pdf") is not None else None
     if pdf is not None:
         try:
@@ -126,12 +145,6 @@ def run_input_check(check_id: str, request: dict) -> dict:
             return contract.row(check_id, "fail", "input_unreadable")
         if prefix != b"%PDF-":
             return contract.row(check_id, "fail", "invalid_pdf")
-    if check_id == "database":
-        digest = None
-        if pdf is not None:
-            with pdf.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-        return _source_rows_for_sha(Path(request["database"]).expanduser().resolve(), digest)
     try:
         from metroliza.parsing.header_ocr_backend import rapidocr_latin_runtime_config_from_env
 
