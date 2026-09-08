@@ -76,10 +76,15 @@ def simulated_runtime(tmp_path, monkeypatch):
     (modules / "onnxruntime.py").write_text(
         "import os\nos.write(1,b'SYNTHETIC_CHILD_OUT_1002\\xff')\n"
         "os.write(2,b'SYNTHETIC_CHILD_ERR_1002')\n"
+        "assert os.environ.get('ORT_DISABLE_TELEMETRY')=='1', 'must opt out before native import'\n"
+        "def disable_telemetry_events(): os.environ['SYNTHETIC_TELEMETRY_DISABLED']='1'\n"
         "__version__='1.2.3+SYNTHETIC_METADATA_1002'\n"
         "def get_available_providers(): return ['CPUExecutionProvider','CUDAExecutionProvider']\n"
     )
-    (modules / "openvino.py").write_text("__version__='1.2.3'\n")
+    (modules / "openvino.py").write_text(
+        "import os\n__version__='1.2.3'\n"
+        "assert os.environ.get('CI')=='true', 'disable import-time telemetry'\n"
+    )
     (modules / "cv2.py").write_text("__version__='4.0.0'\n")
     (modules / "tensorrt.py").write_text("__version__='10.0.0'\n")
     rapidocr = modules / "rapidocr"
@@ -102,6 +107,10 @@ def simulated_runtime(tmp_path, monkeypatch):
         "  return ['CUDAExecutionProvider' if selected=='cuda' and not os.environ.get('SYNTHETIC_FALLBACK') else 'CPUExecutionProvider']\n"
         " def __call__(self,image):\n"
         "  assert image.ndim==4, 'RapidOCR sessions accept one bare batched tensor'\n"
+        "  if os.environ.get('METROLIZA_HEADER_OCR_ENGINE','onnxruntime')=='onnxruntime':\n"
+        "   assert os.environ.get('SYNTHETIC_TELEMETRY_DISABLED')=='1'\n"
+        "  if os.environ.get('SYNTHETIC_EXPECT_CI'):\n"
+        "   assert os.environ.get('CI')==os.environ['SYNTHETIC_EXPECT_CI']\n"
         "  if os.environ.get('SYNTHETIC_STAGE_FAIL'): raise RuntimeError('SYNTHETIC_METADATA_1002')\n"
         "class RapidOCR:\n"
         " def __init__(self,params):\n"
@@ -124,6 +133,24 @@ def simulated_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("PYTHONPATH", str(modules))
     monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
     return modules
+
+
+@pytest.mark.parametrize("engine", ["onnxruntime", "openvino"])
+def test_child_telemetry_and_cache_settings_do_not_mutate_parent(
+    simulated_runtime, monkeypatch, tmp_path, engine
+):
+    original_cache = tmp_path / "user-cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(original_cache))
+    monkeypatch.setenv("ORT_DISABLE_TELEMETRY", "0")
+    monkeypatch.setenv("METROLIZA_HEADER_OCR_ENGINE", engine)
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.setenv("SYNTHETIC_EXPECT_CI", "false")
+    completed = run_cli("--compact")
+    assert completed.returncode == 0, assert_public_safe(completed)
+    assert os.environ["ORT_DISABLE_TELEMETRY"] == "0"
+    assert os.environ["XDG_CACHE_HOME"] == str(original_cache)
+    assert os.environ["CI"] == "false"
+    assert not original_cache.exists()
 
 
 def run_cli(*args, script="windows_ocr_runtime_diagnostics.py", env=None):

@@ -86,7 +86,7 @@ def _runtime_import_check() -> dict:
     config = _selected_config()
     try:
         # Match the application's Windows preload ordering for the chosen engine.
-        engine = importlib.import_module(config.engine)
+        engine = contract.import_runtime_engine(config.engine)
         cv2 = importlib.import_module("cv2")
         numpy = importlib.import_module("numpy")
         rapidocr = importlib.import_module("rapidocr")

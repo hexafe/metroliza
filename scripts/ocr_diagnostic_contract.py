@@ -382,6 +382,10 @@ def isolated_check(check_id: str, request: dict | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="metroliza_diagnostic_") as private:
         # Cache location is disposable; backend/accelerator/model selection is preserved.
         env["METROLIZA_HEADER_OCR_CACHE_DIR"] = private
+        env["XDG_CACHE_HOME"] = private
+        # Set before native initialization: the runtime API alone is too late
+        # to prevent POSIX telemetry from creating uploader/device state.
+        env["ORT_DISABLE_TELEMETRY"] = "1"
         return run_child(
             [sys.executable, "-B", "-u", "-c", code, str(REPO_ROOT / "src"), str(REPO_ROOT)],
             check_id,
@@ -398,13 +402,35 @@ def _reject_asset_download(*args, **kwargs):
     raise DiagnosticAssetMissing("missing_models")
 
 
+def import_runtime_engine(name: str):
+    # OpenVINO's import-time telemetry supports disable_in_ci. Scope that flag
+    # to this worker's import only, restoring it before model loading/inference;
+    # no user consent file, dependency internals or selected OCR params change.
+    previous_ci = os.environ.get("CI")
+    try:
+        if name == "openvino":
+            os.environ["CI"] = "true"
+        module = importlib.import_module(name)
+    finally:
+        if name == "openvino":
+            if previous_ci is None:
+                os.environ.pop("CI", None)
+            else:
+                os.environ["CI"] = previous_ci
+    if name == "onnxruntime":
+        disable = getattr(module, "disable_telemetry_events", None)
+        if callable(disable):
+            disable()
+    return module
+
+
 def prevent_rapidocr_downloads(engine: str) -> None:
     # Worker-local boundary for the pinned RapidOCR downloader. Intercept before
     # it creates a directory, contacts the network, or overwrites a cached file.
     # Existing dictionaries are read without invoking this path in RapidOCR 3.8.1.
     if importlib.util.find_spec("rapidocr") is not None:
-        if engine == "onnxruntime":
-            importlib.import_module("onnxruntime")
+        if engine in {"onnxruntime", "openvino"}:
+            import_runtime_engine(engine)
         module = importlib.import_module("rapidocr.utils.download_file")
         module.DownloadFile.run = staticmethod(_reject_asset_download)
 
