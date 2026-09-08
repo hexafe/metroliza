@@ -142,7 +142,14 @@ def test_workbook_time_series_groups_combine_manual_group_and_highlight_cohort()
     ]
 
 
-def test_workbook_grouped_histogram_uses_normalized_group_shares() -> None:
+def test_workbook_grouped_histogram_uses_normalized_group_shares(monkeypatch) -> None:
+    from metroliza.industrial import industrial_analytics_workbook_charts as charts_module
+
+    def reject_unsupported_png(*args, **kwargs):
+        raise AssertionError("grouped histogram must use the complete editable Excel path")
+
+    monkeypatch.setattr(charts_module, "plotstats_export_charts_enabled", lambda: True)
+    monkeypatch.setattr(charts_module, "render_chart_artifact_png", reject_unsupported_png)
     dataframe = pd.DataFrame(
         {
             "source_row_number": list(range(1, 9)),
