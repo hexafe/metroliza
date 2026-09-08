@@ -139,7 +139,7 @@ def test_native_wrapper_safe_file(powershell, fixture_repo):
 def test_native_wrapper_timeout_and_start_failure(powershell, fixture_repo):
     write_child(fixture_repo, "timeout")
     script = fixture_repo / "diagnose_windows_ocr.ps1"
-    script.write_text(script.read_text().replace("AddMinutes(20)", "AddSeconds(1)"))
+    script.write_text(script.read_text().replace("AddMinutes(20)", "AddSeconds(5)"))
     result = invoke(powershell, fixture_repo, script.name)
     public_text(result)
     assert result.returncode != 0
@@ -202,7 +202,7 @@ def test_native_parent_exit_cleans_descendant(powershell, fixture_repo):
         encoding="utf-8",
     )
     wrapper = fixture_repo / "diagnose_windows_ocr.ps1"
-    wrapper.write_text(wrapper.read_text().replace("AddMinutes(20)", "AddSeconds(1)"))
+    wrapper.write_text(wrapper.read_text().replace("AddMinutes(20)", "AddSeconds(5)"))
     result = invoke(powershell, fixture_repo, wrapper.name)
     public_text(result)
     assert result.returncode != 0
@@ -220,3 +220,29 @@ def test_native_output_failure_is_safe(powershell, fixture_repo):
     )
     public_text(result)
     assert result.returncode != 0
+
+
+def test_native_venv_startup_hook_descendant_is_owned(powershell, fixture_repo, monkeypatch):
+    from tests.test_windows_ocr_runtime_diagnostics import _process_alive, _startup_hook_fixture
+
+    _, assigned, observed = _startup_hook_fixture(fixture_repo, monkeypatch)
+    write_child(fixture_repo, "pass")
+    wrapper = fixture_repo / "diagnose_windows_ocr.ps1"
+    source = wrapper.read_text()
+    source = source.replace(
+        "public void Assign(IntPtr process) {",
+        "public void Assign(IntPtr process) { System.Threading.Thread.Sleep(500);",
+    )
+    source = source.replace(
+        "Assign(info.process);",
+        "Assign(info.process); System.IO.File.WriteAllText("
+        + json.dumps(str(assigned)) + ", info.pid.ToString());",
+    )
+    wrapper.write_text(source, encoding="utf-8-sig")
+    result = invoke(powershell, fixture_repo, wrapper.name)
+    public_text(result)
+    observation = json.loads(observed.read_text())
+    assert result.returncode == 0
+    assert observation["assigned"]
+    assert observation["pid"] != int(assigned.read_text())
+    assert not _process_alive(observation["child"])

@@ -439,6 +439,51 @@ def _process_alive(pid):
         return False
 
 
+def _startup_hook_fixture(tmp_path, monkeypatch):
+    import venv
+
+    environment = tmp_path / ".venv"
+    # Standard-library fixture only: no ensurepip, packages or installers.
+    venv.EnvBuilder(with_pip=False).create(environment)
+    hooks = tmp_path / "startup-hooks"
+    hooks.mkdir()
+    assigned, observed = tmp_path / "assigned", tmp_path / "startup.json"
+    (hooks / "sitecustomize.py").write_text(
+        "import json,os,pathlib,subprocess,sys\n"
+        "child=subprocess.Popen([sys._base_executable,'-S','-c','import time; time.sleep(30)'],"
+        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+        "pathlib.Path(os.environ['SYNTHETIC_STARTUP_RESULT']).write_text(json.dumps({"
+        "'pid':os.getpid(),'child':child.pid,'assigned':pathlib.Path(os.environ['SYNTHETIC_ASSIGNED']).exists()}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(hooks))
+    monkeypatch.setenv("SYNTHETIC_STARTUP_RESULT", str(observed))
+    monkeypatch.setenv("SYNTHETIC_ASSIGNED", str(assigned))
+    return environment / "Scripts/python.exe", assigned, observed
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires actual Windows venv redirector")
+def test_native_venv_startup_descendant_is_owned_before_execution(tmp_path, monkeypatch):
+    python, assigned, observed = _startup_hook_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, "executable", str(python))
+    original_assign = contract._WindowsJob.assign
+    assigned_pids = []
+
+    def delayed_assign(job, process):
+        time.sleep(0.5)
+        original_assign(job, process)
+        assigned_pids.append(process.pid)
+        assigned.write_text("assigned")
+
+    monkeypatch.setattr(contract._WindowsJob, "assign", delayed_assign)
+    result = contract.isolated_check("runtime_config")
+    observation = json.loads(observed.read_text())
+    assert result["status"] == "pass", result
+    assert observation["assigned"]
+    assert observation["pid"] != assigned_pids[0], "fixture must exercise the venv redirector"
+    assert not _process_alive(observation["child"])
+
+
 @pytest.mark.parametrize(
     "script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"]
 )

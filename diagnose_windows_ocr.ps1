@@ -66,7 +66,11 @@ function Initialize-DiagnosticJobType {
 if (-not ('OcrDiagnosticJob1002' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
+using System.Diagnostics;
+using System.IO;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Text;
 public sealed class OcrDiagnosticJob1002 : IDisposable {
     [StructLayout(LayoutKind.Sequential)] struct Basic {
         public long processTime, jobTime;
@@ -85,6 +89,25 @@ public sealed class OcrDiagnosticJob1002 : IDisposable {
     [DllImport("kernel32.dll")] static extern bool SetInformationJobObject(IntPtr job, int type, ref Extended info, uint length);
     [DllImport("kernel32.dll")] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Startup {
+        public uint size;
+        public string reserved, desktop, title;
+        public uint x, y, width, height, xChars, yChars, fill, flags;
+        public ushort show, reservedBytes;
+        public IntPtr reservedData, input, output, error;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct ProcessInfo {
+        public IntPtr process, thread;
+        public uint pid, tid;
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern bool CreateProcess(string executable, StringBuilder command, IntPtr processSecurity,
+        IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string directory,
+        ref Startup startup, out ProcessInfo info);
+    [DllImport("kernel32.dll")] static extern uint ResumeThread(IntPtr thread);
+    [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr process, uint timeout);
+    public AnonymousPipeServerStream Input, Output, Error;
     IntPtr handle;
     public OcrDiagnosticJob1002() {
         handle = CreateJobObject(IntPtr.Zero, null);
@@ -97,8 +120,51 @@ public sealed class OcrDiagnosticJob1002 : IDisposable {
     public void Assign(IntPtr process) {
         if (!AssignProcessToJobObject(handle, process)) throw new InvalidOperationException("job_unavailable");
     }
+    public Process Start(string executable, string arguments, string directory) {
+        Input = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
+        Output = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        Error = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        var startup = new Startup();
+        startup.size = (uint)Marshal.SizeOf(startup);
+        startup.flags = 0x100; // STARTF_USESTDHANDLES
+        startup.input = Input.ClientSafePipeHandle.DangerousGetHandle();
+        startup.output = Output.ClientSafePipeHandle.DangerousGetHandle();
+        startup.error = Error.ClientSafePipeHandle.DangerousGetHandle();
+        var info = new ProcessInfo();
+        Process process = null;
+        try {
+            var command = new StringBuilder("\"" + executable + "\" " + arguments);
+            // No interpreter/startup hook/venv redirector runs before assignment.
+            if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true,
+                0x08000004, IntPtr.Zero, directory, ref startup, out info))
+                throw new InvalidOperationException("start_failed");
+            Assign(info.process);
+            process = Process.GetProcessById((int)info.pid);
+            if (process.Handle == IntPtr.Zero || ResumeThread(info.thread) != 1)
+                throw new InvalidOperationException("resume_failed");
+            return process;
+        }
+        catch {
+            if (info.process != IntPtr.Zero) {
+                TerminateProcess(info.process, 1);
+                WaitForSingleObject(info.process, 10000);
+            }
+            if (process != null) process.Dispose();
+            throw;
+        }
+        finally {
+            if (info.thread != IntPtr.Zero) CloseHandle(info.thread);
+            if (info.process != IntPtr.Zero) CloseHandle(info.process);
+            Input.DisposeLocalCopyOfClientHandle();
+            Output.DisposeLocalCopyOfClientHandle();
+            Error.DisposeLocalCopyOfClientHandle();
+        }
+    }
     public void Dispose() {
         if (handle != IntPtr.Zero) { CloseHandle(handle); handle = IntPtr.Zero; }
+        if (Input != null) Input.Dispose();
+        if (Output != null) Output.Dispose();
+        if (Error != null) Error.Dispose();
     }
 }
 '@
@@ -110,6 +176,7 @@ $started = $false
 $job = $null
 $diagnosticExit = 1
 try {
+    $deadline = [DateTime]::UtcNow.AddMinutes(20)
     Initialize-DiagnosticJobType
     $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
     $venvPath = if ([System.IO.Path]::IsPathRooted($VenvDir)) { $VenvDir } else { Join-Path $repoRoot $VenvDir }
@@ -132,29 +199,18 @@ try {
     if ($PSBoundParameters.ContainsKey('DbFile')) { $arguments += @('--db-file', $DbFile) }
     if ($OutputPath) { $arguments += @('--output', $OutputPath) }
     if ($Compact) { $arguments += '--compact' }
-    $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName = $python
-    $start.Arguments = (($arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
-    $start.WorkingDirectory = $repoRoot
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $start.RedirectStandardInput = $true
+    $nativeArguments = (($arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
     $job = New-Object OcrDiagnosticJob1002
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $start
-    if (-not $process.Start()) { throw 'start_failed' }
+    if ([DateTime]::UtcNow -gt $deadline) { throw 'timeout' }
+    $process = $job.Start($python, $nativeArguments, $repoRoot)
     $started = $true
-    $job.Assign($process.Handle)
-    $process.StandardInput.Close()
-    $streams = @($process.StandardOutput.BaseStream, $process.StandardError.BaseStream)
+    $job.Input.Close()
+    $streams = @($job.Output, $job.Error)
     $buffers = @((New-Object byte[] 4096), (New-Object byte[] 4096))
     $tasks = @($streams[0].ReadAsync($buffers[0], 0, 4096), $streams[1].ReadAsync($buffers[1], 0, 4096))
     $closed = @($false, $false)
     $lengths = @(0, 0)
     $safeOutput = New-Object System.IO.MemoryStream
-    $deadline = [DateTime]::UtcNow.AddMinutes(20)
     while (-not ($closed[0] -and $closed[1] -and $process.HasExited)) {
         if ([DateTime]::UtcNow -gt $deadline) { throw 'timeout' }
         foreach ($index in @(0, 1)) {

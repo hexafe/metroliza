@@ -240,6 +240,53 @@ class _WindowsJob:
         if not self.kernel.AssignProcessToJobObject(self.handle, int(process._handle)):
             raise OSError("job_unavailable")
 
+    def resume(self, process: subprocess.Popen) -> None:
+        # Popen closes CreateProcess's primary thread handle. The process is
+        # still suspended, so its sole thread can be opened before any Python
+        # startup hook or venv redirector has executed.
+        import ctypes
+        from ctypes import wintypes
+
+        class ThreadEntry(ctypes.Structure):
+            _fields_ = [
+                ("size", wintypes.DWORD), ("usage", wintypes.DWORD),
+                ("thread_id", wintypes.DWORD), ("owner", wintypes.DWORD),
+                ("base_priority", wintypes.LONG), ("delta_priority", wintypes.LONG),
+                ("flags", wintypes.DWORD),
+            ]
+
+        kernel = self.kernel
+        kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+        kernel.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+        kernel.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenThread.restype = wintypes.HANDLE
+        kernel.ResumeThread.argtypes = [wintypes.HANDLE]
+        kernel.ResumeThread.restype = wintypes.DWORD
+        snapshot = kernel.CreateToolhelp32Snapshot(4, 0)  # TH32CS_SNAPTHREAD
+        if snapshot == ctypes.c_void_p(-1).value:
+            raise OSError("resume_failed")
+        try:
+            entry = ThreadEntry()
+            entry.size = ctypes.sizeof(entry)
+            present = kernel.Thread32First(snapshot, ctypes.byref(entry))
+            while present:
+                if entry.owner == process.pid:
+                    thread = kernel.OpenThread(2, False, entry.thread_id)
+                    if not thread:
+                        raise OSError("resume_failed")
+                    try:
+                        if kernel.ResumeThread(thread) != 1:
+                            raise OSError("resume_failed")
+                        return
+                    finally:
+                        kernel.CloseHandle(thread)
+                present = kernel.Thread32Next(snapshot, ctypes.byref(entry))
+            raise OSError("resume_failed")
+        finally:
+            kernel.CloseHandle(snapshot)
+
     def close(self) -> None:
         if self.handle:
             self.kernel.CloseHandle(self.handle)
@@ -317,9 +364,11 @@ def run_child(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=os.name != "nt",
+            creationflags=4 if os.name == "nt" else 0,  # CREATE_SUSPENDED
         )
         if job is not None:
             job.assign(process)
+            job.resume(process)
         for pipe, buffer in ((process.stdout, output), (process.stderr, noise)):
             thread = threading.Thread(
                 target=_capture, args=(pipe, buffer, exceeded, output_limit), daemon=True
