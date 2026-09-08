@@ -16,7 +16,7 @@ from metroliza.shared.grouping_filter_core import MembershipFilterSpec
 from tests.numeric_filter_cases import PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES
 
 
-from modules.grouping_filter_core import (
+from metroliza.shared.grouping_filter_core import (
     NumberFilterSpec,
     TextFilterSpec,
     apply_filter_specs,
@@ -93,6 +93,23 @@ def test_sqlite_finite_numeric_large_membership(negate):
             f"SELECT rowid FROM probe WHERE {compiled.clause} ORDER BY rowid", compiled.params,
         ).fetchall()
         assert rows == ([(2,), (3,), (4,), (6,)] if negate else [(1,), (5,)])
+
+
+def test_sqlite_finite_numeric_quotes_identifiers_and_rejects_injected_values():
+    column = 'value"; DROP TABLE sentinel; --'
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute('CREATE TABLE sentinel ("value""; DROP TABLE sentinel; --")')
+        conn.execute("INSERT INTO sentinel VALUES (1)")
+        for spec in (NumberFilterSpec(column, "eq", 1), MembershipFilterSpec(column, (1,))):
+            compiled = canonical_tabular_service.compile_tabular_sqlite_grouping_filter((column,), (spec,))
+            assert compiled.params == (1,)
+            assert conn.execute(f"SELECT rowid FROM sentinel WHERE {compiled.clause}", compiled.params).fetchall() == [(1,)]
+        for value in ("0); DROP TABLE sentinel; --", "1 OR 1=1", "1; SELECT 1"):
+            with pytest.raises(ValueError, match="numeric"):
+                canonical_tabular_service.compile_tabular_sqlite_grouping_filter(
+                    (column,), (NumberFilterSpec(column, "eq", value),),
+                )
+        assert conn.execute("SELECT count(*) FROM sentinel").fetchone() == (1,)
 
 
 def _sample_table() -> pd.DataFrame:
