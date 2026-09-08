@@ -185,7 +185,7 @@ jobs:
             --cov-append \
             --cov-report= \
             --cov-fail-under=0
-          PYTHONPATH=src:. python -m pytest tests/test_industrial_analytics_dialog.py -q \
+          PYTHONPATH=src:. python scripts/ci_industrial_qt_diagnostics.py tests/test_industrial_analytics_dialog.py -q \
             --cov=src/metroliza \
             --cov=modules \
             --cov=scripts \
@@ -243,6 +243,16 @@ jobs:
             --cov-fail-under=0
           python -m coverage report --fail-under="${COVERAGE_MINIMUM_THRESHOLD:-80}"
           python -m coverage xml -o coverage.xml
+
+      - name: Preserve sanitized industrial Qt observation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: industrial-qt-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/industrial-qt-diagnostics/diagnostics.log
+            artifacts/industrial-qt-diagnostics/receipt.json
+          if-no-files-found: ignore
 
       - name: Report coverage threshold status
         run: |
