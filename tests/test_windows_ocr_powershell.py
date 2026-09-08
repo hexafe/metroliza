@@ -260,7 +260,8 @@ def test_native_job_completion_is_required(powershell, fixture_repo, mode):
         )
     else:
         count = fixture_repo / "query-count"
-        source = source.replace("var timer = Stopwatch.StartNew();", "var timer = Stopwatch.StartNew(); int queries = 0;")
+        source = source.replace("void TerminateAndAccount(Stopwatch timer) {",
+                                "void TerminateAndAccount(Stopwatch timer) { int queries = 0;")
         injected = "queries++; System.IO.File.WriteAllText(" + json.dumps(str(count)) + ", queries.ToString()); "
         injected += "if (queries < 3) info.active = 1; " if mode == "delay" else "info.active = 1; "
         source = source.replace("if (info.active == 0) return;", injected + "if (info.active == 0) return;")
@@ -268,12 +269,15 @@ def test_native_job_completion_is_required(powershell, fixture_repo, mode):
     wrapper.write_text(source, encoding="utf-8-sig")
     result = invoke(powershell, fixture_repo, wrapper.name)
     public_text(result)
+    assert json.loads(result.stdout)["checks"], "fixture must execute before cleanup injection"
     if mode == "delay":
         assert result.returncode == 0
         assert int(count.read_text()) >= 3
     else:
         assert result.returncode != 0
         assert b"not_completed" in result.stderr
+        if mode == "timeout":
+            assert int(count.read_text()) >= 1
 
 
 def test_native_job_overflow_still_terminates_and_checks_accounting(powershell, fixture_repo):
