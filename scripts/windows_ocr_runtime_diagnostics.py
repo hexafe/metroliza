@@ -122,6 +122,7 @@ def _engine_smoke_check() -> dict:
 
     config = _selected_config()
     try:
+        contract.prevent_rapidocr_downloads()
         backend = RapidOcrLatinBackend(
             RapidOcrLatinBackendConfig(model_paths=_selected_models(), params=config.params)
         )
@@ -144,6 +145,8 @@ def _engine_smoke_check() -> dict:
         # may swallow stage errors or skip classification/recognition on blank input.
         for stage, shape in zip(stages, ((1, 3, 64, 256), (1, 3, 48, 192), (1, 3, 48, 320))):
             stage(np.zeros(shape, dtype=np.float32))
+    except contract.DiagnosticAssetMissing:
+        return contract.row("engine_smoke", "fail", "missing_models")
     except Exception:
         return contract.row("engine_smoke", "fail", "smoke_failed")
     return contract.row(

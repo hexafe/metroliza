@@ -1,5 +1,6 @@
 """Public-channel and real-process regressions for #1002 / #1000."""
 
+from contextlib import closing
 from pathlib import Path
 import os
 import sys
@@ -80,7 +81,16 @@ def simulated_runtime(tmp_path, monkeypatch):
     )
     (modules / "openvino.py").write_text("__version__='1.2.3'\n")
     (modules / "cv2.py").write_text("__version__='4.0.0'\n")
-    (modules / "rapidocr.py").write_text(
+    (modules / "tensorrt.py").write_text("__version__='10.0.0'\n")
+    rapidocr = modules / "rapidocr"
+    rapidocr.mkdir()
+    (rapidocr / "utils").mkdir()
+    (rapidocr / "utils/__init__.py").write_text("")
+    (rapidocr / "utils/download_file.py").write_text(
+        "import os\nfrom pathlib import Path\nclass DownloadFile:\n"
+        " @staticmethod\n def run(*args): Path(os.environ['SYNTHETIC_ASSET_TARGET']).write_text('forbidden')\n"
+    )
+    (rapidocr / "__init__.py").write_text(
         "import os\n__version__='3.8.0'\n"
         "from types import SimpleNamespace\n"
         "class Stage:\n"
@@ -96,6 +106,9 @@ def simulated_runtime(tmp_path, monkeypatch):
         "  assert params['Det.engine_type']==os.environ.get('METROLIZA_HEADER_OCR_ENGINE','onnxruntime')\n"
         "  assert params['Rec.model_path'].startswith(os.environ['METROLIZA_HEADER_OCR_MODEL_DIR'])\n"
         "  if os.environ.get('SYNTHETIC_ENGINE_FAIL'): raise RuntimeError('SYNTHETIC_METADATA_1002')\n"
+        "  if os.environ.get('SYNTHETIC_DOWNLOAD'):\n"
+        "   from rapidocr.utils.download_file import DownloadFile\n"
+        "   DownloadFile.run(None)\n"
         " def __call__(self,image): return None\n"
     )
     for name in list(os.environ):
@@ -402,7 +415,7 @@ def test_real_requested_pdf_db_markers_absent(simulated_runtime, tmp_path, scrip
         page.insert_text((72, 72), "Reference: " + CANARIES[4] + "\nOperator: " + CANARIES[0])
         document.save(pdf)
     database = tmp_path / (CANARIES[3] + ".sqlite")
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.executescript(
             "CREATE TABLE source_files(id INTEGER, sha256 TEXT, absolute_path TEXT); CREATE TABLE parsed_reports(id INTEGER, source_file_id INTEGER); CREATE TABLE report_metadata(report_id INTEGER, metadata_json TEXT)"
         )
@@ -431,3 +444,49 @@ def test_requested_missing_input_is_nonzero(simulated_runtime, option):
     assert completed.returncode != 0
     data = assert_public_safe(completed)
     assert data["checks"][-2 if option == "--pdf" else -1]["status"] == "fail"
+
+
+def test_selected_tensorrt_never_downloads_missing_dictionary(
+    simulated_runtime, monkeypatch, tmp_path
+):
+    target = tmp_path / "user-model-cache" / "dictionary.txt"
+    monkeypatch.setenv("METROLIZA_HEADER_OCR_ENGINE", "tensorrt")
+    monkeypatch.setenv("SYNTHETIC_DOWNLOAD", "1")
+    monkeypatch.setenv("SYNTHETIC_ASSET_TARGET", str(target))
+    result = run_cli("--compact")
+    assert result.returncode != 0
+    assert assert_public_safe(result)["checks"][3]["reason"] == "missing_models"
+    assert not target.parent.exists()
+
+
+def test_pdf_worker_blocks_dependency_download(simulated_runtime, monkeypatch, tmp_path):
+    import pymupdf
+
+    target = tmp_path / "dictionary.txt"
+    monkeypatch.setenv("SYNTHETIC_DOWNLOAD", "1")
+    monkeypatch.setenv("SYNTHETIC_ASSET_TARGET", str(target))
+    pdf = tmp_path / "synthetic.pdf"
+    with pymupdf.open() as document:
+        document.new_page()
+        document.save(pdf)
+    result = contract.isolated_check("pdf", {"pdf": str(pdf)})
+    assert result["reason"] == "missing_models", result
+    assert not target.exists()
+
+
+def test_interrupted_publication_preserves_output_without_traceback(tmp_path, monkeypatch, capsys):
+    output = tmp_path / "safe.json"
+    output.write_text("previous complete")
+
+    def interrupt(*args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(contract.os, "replace", interrupt)
+    assert (
+        contract.publish(
+            contract.payload([contract.row("models", "pass", "ok")]), str(output), True, []
+        )
+        != 0
+    )
+    assert output.read_text() == "previous complete"
+    assert "Traceback" not in capsys.readouterr().err

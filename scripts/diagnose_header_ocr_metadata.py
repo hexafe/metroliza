@@ -75,6 +75,8 @@ def _classify_runtime_issue(header_diagnostics: dict, field_sources: dict) -> st
         return "ocr_disabled"
     if error in {"header_ocr_no_records", "header_ocr_no_header_items"}:
         return "ocr_no_records"
+    if type(error) is str and error.startswith("DiagnosticAssetMissing:"):
+        return "missing_models"
     if error:
         return "extraction_failed"
     return "ok" if any(field_sources.values()) else "metadata_absent"
@@ -102,7 +104,7 @@ def _run_parser_diagnostic(pdf_path: Path) -> dict:
     )
     return contract.row(
         "pdf",
-        "fail" if reason == "extraction_failed" else "pass",
+        "fail" if reason in {"extraction_failed", "missing_models"} else "pass",
         reason,
         extraction_mode=mode,
         metadata_fields=min(len(selected), 1000000),
@@ -131,6 +133,7 @@ def run_input_check(check_id: str, request: dict) -> dict:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
         return _source_rows_for_sha(Path(request["database"]).expanduser().resolve(), digest)
     try:
+        contract.prevent_rapidocr_downloads()
         return _run_parser_diagnostic(pdf)
     except BaseException:
         return contract.row("pdf", "fail", "extraction_failed")

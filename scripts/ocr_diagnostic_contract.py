@@ -7,6 +7,8 @@ in a child whose native stdout/stderr are bounded in memory and never published.
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -323,7 +325,10 @@ def run_child(
     except (OSError, subprocess.SubprocessError):
         reason = "child_failed"
     finally:
-        _cleanup_child(process, job, readers)
+        try:
+            _cleanup_child(process, job, readers)
+        except (OSError, subprocess.SubprocessError):
+            reason = "not_completed"
     if reason:
         return row(check_id, "fail", reason)
     try:
@@ -373,6 +378,23 @@ def isolated_check(check_id: str, request: dict | None = None) -> dict:
             request={"check_id": check_id, **(request or {})},
             env=env,
         )
+
+
+class DiagnosticAssetMissing(RuntimeError):
+    """A dependency tried to acquire an asset during read-only diagnosis."""
+
+
+def _reject_asset_download(*args, **kwargs):
+    raise DiagnosticAssetMissing("missing_models")
+
+
+def prevent_rapidocr_downloads() -> None:
+    # Worker-local boundary for the pinned RapidOCR downloader. Intercept before
+    # it creates a directory, contacts the network, or overwrites a cached file.
+    # Existing dictionaries are read without invoking this path in RapidOCR 3.8.1.
+    if importlib.util.find_spec("rapidocr") is not None:
+        module = importlib.import_module("rapidocr.utils.download_file")
+        module.DownloadFile.run = staticmethod(_reject_asset_download)
 
 
 def worker_main() -> None:
@@ -433,7 +455,7 @@ def publish(value: dict, output: str | None, compact: bool, inputs: list[Path]) 
         else:
             sys.stdout.write(text)
             sys.stdout.flush()
-    except (OSError, ValueError, UnicodeError):
+    except (OSError, ValueError, UnicodeError, KeyboardInterrupt):
         try:
             sys.stderr.write("OCR diagnostic: publication failed (output_failed).\n")
         except (OSError, UnicodeError):
