@@ -222,6 +222,10 @@ class _WindowsJob:
             wintypes.DWORD,
         ]
         self.kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        self.kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self.kernel.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+        ]
         self.kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         self.kernel.WaitForSingleObject.restype = wintypes.DWORD
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -292,6 +296,32 @@ class _WindowsJob:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
 
+    def terminate_and_wait(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [
+                ("times", ctypes.c_longlong * 4), ("faults", wintypes.DWORD),
+                ("total", wintypes.DWORD), ("active", wintypes.DWORD),
+                ("terminated", wintypes.DWORD),
+            ]
+
+        if not self.kernel.TerminateJobObject(self.handle, 1):
+            raise OSError("not_completed")
+        deadline = time.monotonic() + 10
+        while True:
+            info = Accounting()
+            if not self.kernel.QueryInformationJobObject(
+                self.handle, 1, ctypes.byref(info), ctypes.sizeof(info), None
+            ):
+                raise OSError("not_completed")
+            if info.active == 0:
+                return
+            if time.monotonic() >= deadline:
+                raise subprocess.SubprocessError("not_completed")
+            time.sleep(0.01)
+
     def wait(self, process: subprocess.Popen) -> None:
         # Job termination is asynchronous. Wait on the retained process handle,
         # even if Popen has already cached an exit code during concurrent kill.
@@ -300,18 +330,24 @@ class _WindowsJob:
 
 
 def _stop_child(process: subprocess.Popen, job: _WindowsJob | None = None) -> None:
-    if job is not None:
-        job.close()
-    if os.name != "nt":
+    try:
+        if job is not None:
+            job.terminate_and_wait()
+    finally:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    if process.poll() is None:
-        process.kill()
-    process.wait(timeout=10)
-    if job is not None:
-        job.wait(process)
+            if os.name != "nt":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+            if job is not None:
+                job.wait(process)
+        finally:
+            if job is not None:
+                job.close()
 
 
 def _deliver_input(pipe: Any, data: bytes) -> None:
@@ -410,12 +446,14 @@ def _monitor_child(process, readers, exceeded, deadline) -> str | None:
 
 def _cleanup_child(process, job, readers) -> None:
     if process is not None:
-        _stop_child(process, job)
-        for thread in readers:
-            thread.join(timeout=2)
-        for pipe in (process.stdin, process.stdout, process.stderr):
-            if pipe is not None:
-                pipe.close()
+        try:
+            _stop_child(process, job)
+        finally:
+            for thread in readers:
+                thread.join(timeout=2)
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
     elif job is not None:
         job.close()
 

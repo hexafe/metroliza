@@ -88,6 +88,13 @@ public sealed class OcrDiagnosticJob1002 : IDisposable {
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern IntPtr CreateJobObject(IntPtr attributes, string name);
     [DllImport("kernel32.dll")] static extern bool SetInformationJobObject(IntPtr job, int type, ref Extended info, uint length);
     [DllImport("kernel32.dll")] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [StructLayout(LayoutKind.Sequential)] struct Accounting {
+        public long user, kernel, periodUser, periodKernel;
+        public uint faults, total, active, terminated;
+    }
+    [DllImport("kernel32.dll")] static extern bool TerminateJobObject(IntPtr job, uint code);
+    [DllImport("kernel32.dll")] static extern bool QueryInformationJobObject(
+        IntPtr job, int type, out Accounting info, uint length, IntPtr returned);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Startup {
         public uint size;
@@ -158,6 +165,18 @@ public sealed class OcrDiagnosticJob1002 : IDisposable {
             Input.DisposeLocalCopyOfClientHandle();
             Output.DisposeLocalCopyOfClientHandle();
             Error.DisposeLocalCopyOfClientHandle();
+        }
+    }
+    public void Stop() {
+        if (!TerminateJobObject(handle, 1)) throw new InvalidOperationException("not_completed");
+        var timer = Stopwatch.StartNew();
+        while (true) {
+            Accounting info;
+            if (!QueryInformationJobObject(handle, 1, out info, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero))
+                throw new InvalidOperationException("not_completed");
+            if (info.active == 0) return;
+            if (timer.ElapsedMilliseconds >= 10000) throw new InvalidOperationException("not_completed");
+            System.Threading.Thread.Sleep(10);
         }
     }
     public void Dispose() {
@@ -253,13 +272,28 @@ catch {
     $diagnosticExit = 1
 }
 finally {
-    if ($null -ne $job) { $job.Dispose() }
-    if ($null -ne $process) {
-        if ($started -and -not $process.HasExited) {
-            $process.Kill()
-            $process.WaitForExit(10000) | Out-Null
+    try {
+        if ($null -ne $job) { $job.Stop() }
+    }
+    catch {
+        [Console]::Error.WriteLine('OCR diagnostic wrapper failed (not_completed).')
+        $diagnosticExit = 1
+    }
+    finally {
+        if ($null -ne $job) { $job.Dispose() }
+        if ($null -ne $process) {
+            try {
+                if ($started -and -not $process.HasExited) {
+                    $process.Kill()
+                    if (-not $process.WaitForExit(10000)) { throw 'not_completed' }
+                }
+            }
+            catch {
+                [Console]::Error.WriteLine('OCR diagnostic wrapper failed (not_completed).')
+                $diagnosticExit = 1
+            }
+            finally { $process.Dispose() }
         }
-        $process.Dispose()
     }
 }
 exit $diagnosticExit

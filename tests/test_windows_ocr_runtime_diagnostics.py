@@ -424,13 +424,10 @@ def _process_alive(pid):
             assert ctypes.get_last_error() == 87, "unexpected process inspection failure"
             return False
         try:
-            # A job's descendants terminate asynchronously. Retain this handle
-            # through a bounded native wait; unknown errors never mean stopped.
-            initial = kernel.WaitForSingleObject(handle, 0)
-            final = kernel.WaitForSingleObject(handle, 5000) if initial == 258 else initial
-            assert final in {0, 258}, "unexpected process wait failure"
-            print(f"native process cleanup: initial_wait={initial}, final_wait={final}")
-            return final == 258
+            # Completion must hold when diagnosis returns, without a test-only wait.
+            state = kernel.WaitForSingleObject(handle, 0)
+            assert state in {0, 258}, "unexpected process wait failure"
+            return state == 258
         finally:
             kernel.CloseHandle(handle)
     try:
@@ -615,3 +612,44 @@ def test_requested_database_inspection_survives_pdf_failure(
     assert checks["database"]["status"] == ("pass" if db_state == "valid" else "fail")
     assert checks["database"]["facts"] == {}
     assert (database.read_bytes() if database.exists() else None) == original
+
+
+@pytest.mark.parametrize("mode", ["settles", "query_failed", "terminate_failed", "timeout"])
+def test_job_cleanup_waits_for_all_members(monkeypatch, mode):
+    from types import SimpleNamespace
+
+    events = []
+
+    class Kernel:
+        def TerminateJobObject(self, handle, code):
+            events.append("terminate")
+            return mode != "terminate_failed"
+
+        def QueryInformationJobObject(self, handle, kind, info, length, returned):
+            events.append("query")
+            info._obj.active = 0 if mode == "settles" and events.count("query") == 2 else 1
+            return mode != "query_failed"
+
+        def CloseHandle(self, handle):
+            events.append("close")
+            return True
+
+        def WaitForSingleObject(self, handle, timeout):
+            return 0
+
+    job = object.__new__(contract._WindowsJob)
+    job.kernel, job.handle = Kernel(), 1
+    process = SimpleNamespace(pid=1, _handle=2, poll=lambda: 0, wait=lambda **kwargs: 0)
+    if hasattr(contract.os, "killpg"):
+        monkeypatch.setattr(contract.os, "killpg", lambda *args: None)
+    ticks = iter(range(0, 100, 6))
+    monkeypatch.setattr(contract.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(contract.time, "sleep", lambda seconds: None)
+    if mode == "settles":
+        contract._stop_child(process, job)
+        assert events[:3] == ["terminate", "query", "query"]
+    else:
+        with pytest.raises((OSError, subprocess.SubprocessError)):
+            contract._stop_child(process, job)
+    assert events[-1] == "close"
+    assert job.handle is None

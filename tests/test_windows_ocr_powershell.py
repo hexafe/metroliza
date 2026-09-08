@@ -246,3 +246,31 @@ def test_native_venv_startup_hook_descendant_is_owned(powershell, fixture_repo, 
     assert observation["assigned"]
     assert observation["pid"] != int(assigned.read_text())
     assert not _process_alive(observation["child"])
+
+
+@pytest.mark.parametrize("mode", ["delay", "query_failed", "timeout"])
+def test_native_job_completion_is_required(powershell, fixture_repo, mode):
+    write_child(fixture_repo, "pass")
+    wrapper = fixture_repo / "diagnose_windows_ocr.ps1"
+    source = wrapper.read_text()
+    if mode == "query_failed":
+        source = source.replace(
+            "if (!QueryInformationJobObject(handle, 1, out info,",
+            "if (!QueryInformationJobObject(new IntPtr(-1), 1, out info,",
+        )
+    else:
+        count = fixture_repo / "query-count"
+        source = source.replace("var timer = Stopwatch.StartNew();", "var timer = Stopwatch.StartNew(); int queries = 0;")
+        injected = "queries++; System.IO.File.WriteAllText(" + json.dumps(str(count)) + ", queries.ToString()); "
+        injected += "if (queries < 3) info.active = 1; " if mode == "delay" else "info.active = 1; "
+        source = source.replace("if (info.active == 0) return;", injected + "if (info.active == 0) return;")
+        source = source.replace("timer.ElapsedMilliseconds >= 10000", "timer.ElapsedMilliseconds >= 100")
+    wrapper.write_text(source, encoding="utf-8-sig")
+    result = invoke(powershell, fixture_repo, wrapper.name)
+    public_text(result)
+    if mode == "delay":
+        assert result.returncode == 0
+        assert int(count.read_text()) >= 3
+    else:
+        assert result.returncode != 0
+        assert b"not_completed" in result.stderr
