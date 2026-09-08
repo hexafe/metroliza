@@ -3,7 +3,7 @@ import warnings
 import pandas as pd
 import pytest
 
-from modules.grouping_filter_core import (
+from metroliza.shared.grouping_filter_core import (
     DataFrameGroupingIndex,
     DateFilterSpec,
     MembershipFilterSpec,
@@ -17,6 +17,18 @@ from modules.grouping_filter_core import (
     parse_filter_expression,
     resolve_filter_column,
 )
+from tests.numeric_filter_cases import PROBE_CASES, PROBE_VALUES
+
+
+@pytest.mark.parametrize("dtype", [object, "string"])
+@pytest.mark.parametrize("spec, expected_ids", PROBE_CASES)
+def test_finite_numeric_probe_expected_ids(spec, expected_ids, dtype):
+    frame = pd.DataFrame({"reference": pd.Series(PROBE_VALUES, dtype=dtype)})
+    frame.index = range(1, 24)
+    before = frame.copy(deep=True)
+    for _ in range(2):
+        assert frame.index[spec.mask(frame)].tolist() == expected_ids
+    pd.testing.assert_frame_equal(frame, before)
 
 
 def test_grouping_index_preview_filter_count_and_child_keys() -> None:

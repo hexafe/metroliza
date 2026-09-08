@@ -1,6 +1,12 @@
 from contextlib import closing
 import sqlite3
 
+import pandas as pd
+import pytest
+
+from metroliza.reports import report_query_service as canonical_query
+from tests.numeric_filter_cases import PROBE_CASES, PROBE_VALUES
+
 from modules.report_schema import ensure_report_schema
 from modules.industrial_join_service import set_manual_industrial_report_link
 from modules.report_query_service import (
@@ -14,6 +20,21 @@ from modules.report_query_service import (
     build_report_overview_query,
 )
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
+
+
+@pytest.mark.parametrize("spec, expected_ids", PROBE_CASES)
+def test_finite_numeric_probe_executes_sql_expected_ids(spec, expected_ids):
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute('CREATE TABLE probe (row_id INTEGER PRIMARY KEY, reference TEXT)')
+        conn.executemany("INSERT INTO probe VALUES (?, ?)", enumerate(PROBE_VALUES, start=1))
+        before = conn.execute("SELECT * FROM probe ORDER BY row_id").fetchall()
+        clause = canonical_query._filter_expression_spec_to_sql(spec)
+        for _ in range(2):
+            selected = conn.execute(f"SELECT row_id FROM probe WHERE {clause} ORDER BY row_id")
+            assert [row[0] for row in selected] == expected_ids
+        frame = pd.DataFrame({"reference": PROBE_VALUES}, index=range(1, 24))
+        assert frame.index[spec.mask(frame)].tolist() == expected_ids
+        assert conn.execute("SELECT * FROM probe ORDER BY row_id").fetchall() == before
 
 
 _MEASUREMENT_EXPORT_TEST_COLUMNS = (

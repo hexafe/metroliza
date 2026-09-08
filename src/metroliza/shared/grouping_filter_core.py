@@ -14,6 +14,7 @@ import re
 from typing import Any, Iterable, Literal, Mapping, Protocol
 
 from metroliza.shared.datetime_parsing import parse_datetime_literal
+from metroliza.shared.finite_numeric import finite_numeric_source, parse_numeric_literal
 
 
 FilterMatchMode = Literal["and", "or"]
@@ -404,7 +405,7 @@ class NumberFilterSpec:
     def mask(self, data_frame: pd.DataFrame) -> pd.Series:
         _require_column(data_frame, self.column)
         operator = self.operator.lower().strip()
-        numbers = pd.to_numeric(data_frame[self.column], errors="coerce")
+        numbers = _finite_number_series(data_frame[self.column])
 
         if operator == "is_blank":
             return numbers.isna()
@@ -495,7 +496,7 @@ class MembershipFilterSpec:
 
         value_kind = membership_value_kind(values, dayfirst=self.dayfirst)
         if value_kind == "number":
-            numbers = pd.to_numeric(data_frame[self.column], errors="coerce")
+            numbers = _finite_number_series(data_frame[self.column])
             parsed_values = [_coerce_number(value, field_name="IN value") for value in values]
             mask = numbers.isin(parsed_values).fillna(False)
         elif value_kind == "date":
@@ -1199,7 +1200,14 @@ def _require_column(data_frame: pd.DataFrame, column: str) -> None:
         raise KeyError(f"DataFrame column not found: {column}")
 
 
-def _coerce_number(value: float | int | str | None, *, field_name: str) -> float:
+def _finite_number_series(series: pd.Series) -> pd.Series:
+    # Object storage prevents mixed missing/integer values from rounding to float.
+    return pd.Series(
+        [finite_numeric_source(value) for value in series], index=series.index, dtype=object,
+    )
+
+
+def _coerce_number(value: float | int | str | None, *, field_name: str) -> int | float:
     if value is None:
         raise ValueError(f"{field_name} is required for this number filter")
     number = _parse_scalar_number(value)
@@ -1217,19 +1225,10 @@ def _coerce_date(value: Any, *, dayfirst: bool, field_name: str) -> datetime:
     return parsed.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
 
-def _parse_scalar_number(value: Any) -> float | None:
+def _parse_scalar_number(value: Any) -> int | float | None:
     """Parse one numeric filter literal without importing pandas."""
 
-    if value is None or isinstance(value, bool):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        number = float(text)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+    return parse_numeric_literal(value)
 
 
 def _parse_scalar_datetime(value: Any, *, dayfirst: bool) -> datetime | None:
