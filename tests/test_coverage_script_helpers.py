@@ -536,29 +536,18 @@ def test_benchmark_distribution_fit_main_covers_optional_branches(
 
 
 def test_diagnose_header_ocr_metadata_classifies_runtime_issues() -> None:
-    assert (
-        diagnose_header_ocr_metadata._classify_runtime_issue(
-            {"header_extraction_mode": "ocr"},
-            {},
-        )
-        == "OCR ran in the app parser path."
-    )
-    assert "model files were missing" in diagnose_header_ocr_metadata._classify_runtime_issue(
-        {"header_ocr_error": "header_ocr_models_missing:model.onnx"},
-        {"reference": "filename_candidate"},
-    )
-    assert "disabled" in diagnose_header_ocr_metadata._classify_runtime_issue(
-        {"header_ocr_error": "header_ocr_disabled"},
-        {},
-    )
-    assert "Only filename metadata" in diagnose_header_ocr_metadata._classify_runtime_issue(
-        {},
-        {"reference": "filename_candidate", "report_date": None},
-    )
-    assert "inspect field_sources" in diagnose_header_ocr_metadata._classify_runtime_issue(
-        {},
-        {"reference": "structured_text"},
-    )
+    assert diagnose_header_ocr_metadata._classify_runtime_issue(
+        {"header_extraction_mode": "ocr"}, {},
+    ) == "metadata_absent"
+    assert diagnose_header_ocr_metadata._classify_runtime_issue(
+        {"header_ocr_error": "header_ocr_models_missing:model.onnx"}, {},
+    ) == "extraction_failed"
+    assert diagnose_header_ocr_metadata._classify_runtime_issue(
+        {"header_ocr_error": "header_ocr_disabled"}, {},
+    ) == "ocr_disabled"
+    assert diagnose_header_ocr_metadata._classify_runtime_issue(
+        {}, {"reference": "filename_candidate"},
+    ) == "ok"
 
 
 def test_diagnose_header_ocr_metadata_loads_existing_database_rows(
@@ -629,26 +618,11 @@ def test_diagnose_header_ocr_metadata_loads_existing_database_rows(
     )
     rows = diagnose_header_ocr_metadata._source_rows_for_sha(db_file, "abc123")
 
-    assert rows == [
-        {
-            "source_file_id": 1,
-            "absolute_path": "/tmp/report.pdf",
-            "sha256": "abc123",
-            "is_active": 1,
-            "report_id": 2,
-            "parser_id": "cmm",
-            "parser_version": "1.0",
-            "template_family": "family",
-            "template_variant": "v1",
-            "parse_status": "ok",
-            "reference": "REF123",
-            "report_date": "2026-01-01",
-            "sample_number": "S1",
-            "metadata_json": {"field_sources": {"reference": "ocr"}},
-        }
-    ]
+    assert rows["status"] == "pass"
+    assert rows["facts"] == {"matching_rows": 1}
     assert len(closed_connections) == 1
-    assert diagnose_header_ocr_metadata._source_rows_for_sha(tmp_path / "missing.sqlite", "abc123") == []
+    assert diagnose_header_ocr_metadata._source_rows_for_sha(tmp_path / "missing.sqlite", "abc123")["reason"] == "database_missing"
+
 
 
 def test_fetch_rapidocr_model_reuses_verified_existing_file(
@@ -771,44 +745,12 @@ def test_google_conversion_smoke_validates_expected_sheet_names(
     assert not Path(captured["workbook_path"]).exists()
 
 
-def test_windows_ocr_runtime_diagnostics_main_writes_payload(
+def test_windows_ocr_runtime_diagnostics_main_rejects_raw_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     output_path = tmp_path / "diagnostics.json"
-    monkeypatch.setattr(
-        windows_ocr_runtime_diagnostics,
-        "build_payload",
-        lambda pdf_path=None, db_file=None: {
-            "pdf_path": str(pdf_path) if pdf_path else None,
-            "db_file": db_file,
-            "smoke_tests": [],
-        },
-    )
-
-    result = windows_ocr_runtime_diagnostics.main(
-        [
-            "--pdf",
-            str(tmp_path / "report.pdf"),
-            "--db-file",
-            "reports.sqlite",
-            "--compact",
-            "--output",
-            str(output_path),
-        ]
-    )
-
+    monkeypatch.setattr(windows_ocr_runtime_diagnostics, "build_payload", lambda *args: {"private_path": "SYNTHETIC_PRIVATE", "smoke_tests": []})
+    assert windows_ocr_runtime_diagnostics.main(["--output", str(output_path)]) != 0
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert result == 0
-    assert payload["pdf_path"].endswith("report.pdf")
-    assert payload["db_file"] == "reports.sqlite"
-
-
-def test_windows_ocr_runtime_diagnostics_non_windows_vc_status(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(windows_ocr_runtime_diagnostics.platform, "system", lambda: "Linux")
-
-    assert windows_ocr_runtime_diagnostics._vc_redist_registry_status() == {
-        "checked": False,
-        "reason": "not_windows",
-    }
+    assert payload["checks"][0]["reason"] == "protocol_error"
+    assert "SYNTHETIC_PRIVATE" not in output_path.read_text()

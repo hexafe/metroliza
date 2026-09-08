@@ -17,33 +17,28 @@ def _load_script_module():
     return module
 
 
-def test_classify_runtime_issue_reports_ocr_and_missing_model_modes():
+def test_classify_runtime_issue_reports_controlled_observations():
     module = _load_script_module()
-
     assert (
         module._classify_runtime_issue(
-            {"header_extraction_mode": "ocr"},
-            {"reference": "position_cell"},
+            {"header_extraction_mode": "ocr"}, {"reference": "position_cell"}
         )
-        == "OCR ran in the app parser path."
+        == "ok"
     )
-    assert "model files were missing" in module._classify_runtime_issue(
-        {
-            "header_extraction_mode": "none",
-            "header_ocr_error": "header_ocr_models_missing:det.onnx",
-        },
-        {"reference": "filename_candidate"},
+    assert (
+        module._classify_runtime_issue(
+            {"header_ocr_error": "header_ocr_models_missing:private.onnx"}, {}
+        )
+        == "extraction_failed"
     )
-    assert "disabled" in module._classify_runtime_issue(
-        {
-            "header_extraction_mode": "none",
-            "header_ocr_error": "header_ocr_disabled",
-        },
-        {"reference": "filename_candidate"},
+    assert (
+        module._classify_runtime_issue({"header_ocr_error": "header_ocr_disabled"}, {})
+        == "ocr_disabled"
     )
+    assert module._classify_runtime_issue({}, {}) == "metadata_absent"
 
 
-def test_source_rows_for_sha_decodes_metadata_json(tmp_path):
+def test_source_rows_for_sha_returns_only_safe_count(tmp_path):
     module = _load_script_module()
     db_path = tmp_path / "reports.sqlite"
     with closing(sqlite3.connect(db_path)) as connection, connection:
@@ -101,6 +96,31 @@ def test_source_rows_for_sha_decodes_metadata_json(tmp_path):
 
     rows = module._source_rows_for_sha(db_path, "abc123")
 
-    assert len(rows) == 1
-    assert rows[0]["sha256"] == "abc123"
-    assert rows[0]["metadata_json"] == {"header_extraction_mode": "ocr"}
+    assert rows["status"] == "pass"
+    assert rows["facts"] == {"matching_rows": 1}
+    assert "abc123" not in json.dumps(rows)
+    assert "VTST1001" not in json.dumps(rows)
+
+
+def test_database_missing_schema_no_match_and_readonly(tmp_path):
+    module = _load_script_module()
+    database = tmp_path / "synthetic ? # ź.sqlite"
+    assert module._source_rows_for_sha(database, None)["reason"] == "database_missing"
+    assert not database.exists()
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE irrelevant(value TEXT)")
+    before = database.read_bytes()
+    assert module._source_rows_for_sha(database, None)["reason"] == "schema_unsupported"
+    assert database.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == [database.name]
+
+
+def test_database_sidecar_is_not_created_modified_or_ignored(tmp_path):
+    module = _load_script_module()
+    database = tmp_path / "source.sqlite"
+    database.write_bytes(b"synthetic")
+    sidecar = Path(str(database) + "-wal")
+    sidecar.write_bytes(b"synthetic WAL")
+    assert module._source_rows_for_sha(database, None)["reason"] == "database_unreadable"
+    assert database.read_bytes() == b"synthetic"
+    assert sidecar.read_bytes() == b"synthetic WAL"

@@ -157,12 +157,20 @@ try {
 
     if (-not $SkipValidation -and -not $SkipOcr) {
         Invoke-Step 'Validating OCR runtime and model files' {
-            Invoke-Checked -Executable $venvPython -Arguments @('scripts/windows_ocr_runtime_diagnostics.py', '--compact')
-            Invoke-Checked -Executable $venvPython -Arguments @('scripts/validate_packaged_pdf_parser.py', '--require-header-ocr')
+            & (Join-Path $repoRoot 'diagnose_windows_ocr.ps1') -VenvDir $venvPath -Compact
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Required OCR diagnostic validation failed. Inspect the safe check results.'
+            }
         }
     }
 
     Write-Host ""
+    if ($SkipValidation) {
+        Write-Host 'Validation skipped (SkipValidation); OCR was not tested.'
+    }
+    elseif ($SkipOcr) {
+        Write-Host 'OCR validation skipped (SkipOcr); OCR was not tested.'
+    }
     Write-Host "Windows runtime setup completed."
     Write-Host "Activate with:"
     Write-Host "    $venvPath\Scripts\Activate.ps1"
