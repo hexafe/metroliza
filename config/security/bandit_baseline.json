@@ -1390,7 +1390,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "f98b40069ded74b3e15f4cb68cb65fc67fe10ca46e2c87dbfdb6cf8f998d5802",
+      "fingerprint": "a57823ace11171101993b2d12a80bb7311105fe6e665b95d36d59b1e03dbeac1",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
@@ -1399,7 +1399,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "83cf625f7be19d8dd5c7623d405bdefd3d4c0bf2b85816857d101913dc65665b",
+      "fingerprint": "35a8bce07166bd36a3e24ddb5f4be9f0d36a43ea695eb2517d860164cd4c4b4b",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
@@ -1408,7 +1408,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6b2e64bf567e99f6fbf793ff947addec37babb7becf3e1029e821c98e553d5cd",
+      "fingerprint": "c278d0739e913fb55ede877c2e09872e6901046bb8271cdeffd7fb358cf394e9",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
@@ -1417,7 +1417,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c8f0a42311f707abf0e90cd51fa6cfdff1fbe2e9ae2652d2e37442d19937b1d3",
+      "fingerprint": "bea441764d59bd4b0d5976a842651e30652913b34d1e0de04f9daf8a5fd15e0a",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",

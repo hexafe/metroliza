@@ -182,6 +182,8 @@ def sqlite_prefer_integer_source(source_sql: str, sidecar_sql: str) -> str:
 
 def _sqlite_normalized_source(column_sql: str) -> str:
     """Normalize integer sources and exact decimal comparison keys, without CAST rounding."""
+    # OFFSET prevents SQLite flattening from duplicating tokenization and numeric
+    # dispatch into every comparison/interval. LIMIT -1 retains every source row.
     _, overflow_exponent, overflow_digits = _rounding_interval(float.fromhex("0x1.fffffffffffffp+1023"))[1]
     return f"""WITH
         _nf_raw(v) AS (SELECT {column_sql}),
@@ -193,7 +195,7 @@ def _sqlite_normalized_source(column_sql: str) -> str:
             substr(u,instr(u,'e')+1) AS x FROM _nf_sign),
         _nf_digits AS (SELECT v,t,u,e,m,x,
             CASE WHEN substr(x,1,1) IN ('+','-') THEN substr(x,2) ELSE x END AS p,
-            ltrim(u,'0') AS z, ltrim(replace(m,'.',''),'0') AS q FROM _nf_parts),
+            ltrim(u,'0') AS z, ltrim(replace(m,'.',''),'0') AS q FROM _nf_parts LIMIT -1 OFFSET 0),
         _nf_valid AS (SELECT *,
             typeof(v) = 'text' AND instr(v,char(0)) = 0
                 AND m GLOB '*[0-9]*' AND m NOT GLOB '*[^0-9.]*'
@@ -212,7 +214,7 @@ def _sqlite_normalized_source(column_sql: str) -> str:
                 WHEN substr(t,1,1) <> '-' AND (length(z) = 19 OR
                     (length(z) = 20 AND z <= '18446744073709551615'))
                     THEN substr('00000000000000000000' || z, -20)
-                END END AS n FROM _nf_valid)
+                END END AS n FROM _nf_valid LIMIT -1 OFFSET 0)
         SELECT n,s,k, CASE WHEN ok AND n IS NULL AND
             (q = '' OR (k,rtrim(q,'0') COLLATE BINARY) < ({overflow_exponent},'{overflow_digits}'))
             THEN CASE WHEN q = '' THEN '0' ELSE rtrim(q,'0') END END AS d FROM _nf_numbers"""
