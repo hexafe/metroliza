@@ -691,3 +691,35 @@ def test_job_members_are_waited_before_rescan(monkeypatch, failure):
         assert events == [("scan",), ("terminate", 11), ("terminate", 12),
                           ("wait", 11), ("wait", 12), ("close", 11), ("close", 12),
                           ("scan",), ("terminate", 13), ("wait", 13), ("close", 13), ("scan",)]
+
+
+@pytest.mark.parametrize("script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"])
+def test_real_cli_output_symlink_loop_never_discloses_path(tmp_path, script):
+    output = tmp_path / (CANARIES[2] + ".json")
+    try:
+        output.symlink_to(output.name)
+    except OSError:
+        pytest.skip("Disposable symlink requires platform permission")
+    command = [sys.executable, str(contract.REPO_ROOT / "scripts" / script)]
+    if script == "diagnose_header_ocr_metadata.py":
+        command.append(str(tmp_path / "synthetic.pdf"))
+    result = subprocess.run(command + ["--output", str(output)], capture_output=True, timeout=10)
+    assert result.returncode != 0
+    assert result.stdout == b""
+    assert b"output_failed" in result.stderr
+    assert b"Traceback" not in result.stderr
+    assert all(marker.encode() not in result.stderr for marker in CANARIES)
+    assert output.is_symlink()
+
+
+def test_publication_resolution_runtime_error_is_safe(tmp_path, monkeypatch, capsys):
+    def unresolved(*args, **kwargs):
+        raise RuntimeError(CANARIES[2])
+
+    monkeypatch.setattr(Path, "resolve", unresolved)
+    assert contract.publish(contract.payload([contract.row("diagnostic", "fail", "not_completed")]),
+                            str(tmp_path / "safe.json"), True, []) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "output_failed" in captured.err
+    assert CANARIES[2] not in captured.err

@@ -646,7 +646,7 @@ def publish(value: dict, output: str | None, compact: bool, inputs: list[Path]) 
         else:
             sys.stdout.write(text)
             sys.stdout.flush()
-    except (OSError, ValueError, UnicodeError, KeyboardInterrupt):
+    except (OSError, ValueError, RuntimeError, UnicodeError, KeyboardInterrupt):
         try:
             sys.stderr.write("OCR diagnostic: publication failed (output_failed).\n")
         except (OSError, UnicodeError):
