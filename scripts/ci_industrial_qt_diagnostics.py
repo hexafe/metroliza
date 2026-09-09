@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import stat
+import time
 
 
 def _sanitize(text: str) -> str:
@@ -172,10 +173,16 @@ def main() -> int:
     return result
 
 
-FROZEN_SHA = "b10c3fd3cde9fd9ef83101e8459b7b9999a5ecea"
-FROZEN_TREE = "7653910dc430731e1c110bf9e504dc82db33be0c"
+FROZEN_SHA = "216877364752c20bcdc65752382da470c4f363d5"
+FROZEN_TREE = "719b80423271ff59c6fe08ace819fee2ae151fa0"
 BRANCH = "fix/998-industrial-qt-recurrence"
-APPROVAL_TIME = "2026-09-09T15:11:59Z"
+PHASE = "5608262552"
+APPROVAL_TIME = "2026-09-09T20:28:04Z"
+RUNTIME_PACKAGES = {
+    "PyQt6": "6.6.1", "PyQt6-Qt6": "6.6.1", "PyQt6-sip": "13.12.0",
+    "numpy": "2.4.6", "pandas": "3.0.5", "pytest": "9.1.1",
+    "pytest-cov": "7.1.0", "coverage": "7.16.0",
+}
 PYTEST_ARGUMENTS = [
     "tests/test_industrial_analytics_dialog.py", "-q", "--cov=src/metroliza",
     "--cov=modules", "--cov=scripts", "--cov-append", "--cov-report=",
@@ -226,6 +233,8 @@ def _github_json(route: str) -> dict:
 
 def _validate_admission(event, environment, repository, prior_runs, head, tree):
     inputs = event.get("inputs") or {}
+    if inputs.get("qt998_phase") != PHASE:
+        raise ValueError("unapproved_or_spent_phase")
     sha = inputs.get("qt998_scaffolding_sha", "")
     expected = {
         "GITHUB_REPOSITORY": "hexafe/metroliza", "GITHUB_REPOSITORY_ID": "478225616",
@@ -255,6 +264,12 @@ def _validate_admission(event, environment, repository, prior_runs, head, tree):
     run_id = environment.get("GITHUB_RUN_ID", "")
     if not re.fullmatch(r"[1-9][0-9]*", run_id):
         raise ValueError("missing_run_identity")
+    _validate_phase_history(prior_runs, run_id, sha)
+    return {"phase": PHASE, "scaffolding_sha": sha, "workload_sha": FROZEN_SHA,
+            "workload_tree": tree, "run_id": run_id, "run_attempt": 1}
+
+
+def _validate_phase_history(prior_runs, run_id, sha):
     current = [run for run in prior_runs if run.get("id") == int(run_id)]
     if (len(current) != 1 or current[0].get("head_sha") != sha
             or current[0].get("run_attempt") != 1
@@ -267,8 +282,6 @@ def _validate_admission(event, environment, repository, prior_runs, head, tree):
         if (run["event"] == "workflow_dispatch" and run["head_branch"] == BRANCH
                 and run["created_at"] >= APPROVAL_TIME and run["id"] < int(run_id)):
             raise ValueError("approval_already_spent")
-    return {"scaffolding_sha": sha, "workload_sha": FROZEN_SHA,
-            "workload_tree": tree, "run_id": run_id, "run_attempt": 1}
 
 
 def _git(checkout: Path, *arguments: str) -> str:
@@ -321,7 +334,7 @@ def hosted_admit() -> int:
             break
     else:
         raise ValueError("admission_history_incomplete")
-    workload = Path.cwd().parent / "frozen-b10"
+    workload = Path.cwd().parent / "frozen-workload"
     _verify_workload(workload)
     receipt = _validate_admission(event, os.environ, repository, prior,
                                   _git(Path.cwd(), "rev-parse", "HEAD"),
@@ -376,8 +389,24 @@ def _binary_provenance() -> dict:
     return result
 
 
-def _run_private(command: list[str], cwd: Path, root: Path, label: str) -> dict:
+def _pytest_summary(text: str) -> dict:
+    # Require a complete terminal summary, not incidental counts in test text.
+    summaries = re.findall(
+        r"(?m)^[= ]*(\d+ (?:passed|failed|skipped|error)[^\r\n]*?"
+        r" in [0-9.]+s(?: \([0-9:]+\))?)[= ]*$", text,
+    )
+    summary = summaries[-1] if summaries else ""
+    counts = re.findall(r"\b[0-9]+ (?:passed|failed|skipped|errors?|xfailed|xpassed|deselected)\b", summary)
+    return {"pytest_counts": counts, "pytest_summary_complete": len(summaries) == 1,
+            "pytest_warning_counts": re.findall(r"\b[0-9]+ warnings?\b", summary),
+            "pytest_subtest_counts": re.findall(r"\b[0-9]+ subtests passed\b", summary)}
+
+
+def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeout: float = 120) -> dict:
+    if not 0 < timeout <= 1200:
+        raise ValueError("invalid_stage_timeout")
     output = root / (label + ".raw")
+    started = time.monotonic()
     with output.open("wb") as log:
         with subprocess.Popen(command, cwd=cwd, env=_child_environment(root),
                               stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
@@ -385,11 +414,14 @@ def _run_private(command: list[str], cwd: Path, root: Path, label: str) -> dict:
             timed_out = False
             cancelled = False
             try:
-                child.wait(timeout=120)
+                child.wait(timeout=timeout)
             except (subprocess.TimeoutExpired, InterruptedError) as error:
                 timed_out = isinstance(error, subprocess.TimeoutExpired)
                 cancelled = isinstance(error, InterruptedError)
-                os.killpg(child.pid, signal.SIGKILL)
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # The owned group may have just terminated naturally.
                 child.wait()
             except BaseException:
                 os.killpg(child.pid, signal.SIGKILL)
@@ -397,15 +429,15 @@ def _run_private(command: list[str], cwd: Path, root: Path, label: str) -> dict:
                 raise
             code, pid = child.returncode, child.pid
     receipt = {"child_exit": code, "signal": -code if code < 0 else None, "pid": pid,
-               "timed_out": timed_out, "cancelled": cancelled, "output_ok": False}
+               "timed_out": timed_out, "cancelled": cancelled, "output_ok": False,
+               "elapsed_seconds": round(time.monotonic() - started, 6)}
     try:
         size = output.stat().st_size
         # Only pytest terminal counts are exported, never arbitrary child text.
         with output.open("rb") as stream:
             text = stream.read(OUTPUT_LIMIT).decode("utf-8", errors="replace")
-        counts = re.findall(r"\b[0-9]+ (?:passed|failed|skipped|errors?)\b", text)
         receipt.update(output_bytes=size, output_truncated=size > OUTPUT_LIMIT,
-                       pytest_counts=counts[-8:])
+                       **_pytest_summary(text))
         output.unlink()
         receipt["output_ok"] = True
     except OSError as error:
@@ -428,11 +460,20 @@ for thread in threads[:8]:
     thread.switch()
     frame = gdb.newest_frame()
     frames = []
-    while frame is not None and len(frames) < 20:
-        frames.append({{"function": frame.name() or "??"}})
-        frame = frame.older()
+    limit = 64 if thread.num == fault else 16
+    unwind_error = False
+    while frame is not None and len(frames) < limit:
+        try:
+            frames.append({{"function": frame.name() or "??",
+                            "module": os.path.basename(gdb.solib_name(frame.pc()) or "")}})
+            frame = frame.older()
+        except gdb.error:
+            unwind_error = True
+            break
     result["truncated"] = result["truncated"] or frame is not None
-    result["threads"].append({{"thread": thread.num, "frames": frames}})
+    result["threads"].append({{"thread": thread.num, "frames": frames,
+                              "frames_truncated": frame is not None,
+                              "unwind_error": unwind_error}})
 with open({str(output)!r}, "w", encoding="utf-8") as stream:
     json.dump(result, stream)
 end
@@ -474,9 +515,11 @@ def _inspect_core(root: Path, child: dict, executable: str) -> dict:
             for frame in thread["frames"]:
                 function = _sanitize(frame["function"])
                 # Names only: no source paths, argument values or control bytes.
-                frame["name_truncated"] = len(function) > 240
+                frame["name_truncated"] = len(function) > 160
                 frame["function"] = re.sub(r"[^A-Za-z0-9_:$<>~*. +,()\[\]&=-]", "?",
-                                           function)[:240]
+                                           function)[:160]
+                frame["unresolved"] = frame["function"] == "??"
+                frame["module"] = re.sub(r"[^A-Za-z0-9_.+-]", "?", frame.get("module", ""))[:80]
         return {"capture": "postmortem_stack", "ok": True, "core_bytes": info.st_size,
                 "native": native}
     finally:
@@ -530,9 +573,7 @@ def _prepare_hosted_capture(root: Path, workload: Path) -> dict:
     return {
         "python": platform.python_version(), "kernel": platform.release(),
         "libc": platform.libc_ver(), "runner_image": os.environ.get("ImageVersion", "unknown"),
-        "packages": {name: importlib.metadata.version(name) for name in
-                     ("PyQt6", "PyQt6-Qt6", "PyQt6-sip", "pandas", "numpy",
-                      "pytest", "pytest-cov", "coverage")},
+        "packages": {name: importlib.metadata.version(name) for name in RUNTIME_PACKAGES},
         "python_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
         "gdb_sha256": hashlib.sha256(Path("/usr/bin/gdb").read_bytes()).hexdigest(),
         "qt_binary_provenance": _binary_provenance(),
@@ -540,11 +581,156 @@ def _prepare_hosted_capture(root: Path, workload: Path) -> dict:
     }
 
 
+def _validate_runtime(environment: dict) -> None:
+    if environment["python"] != "3.11.16" or environment["packages"] != RUNTIME_PACKAGES:
+        raise ValueError("material_runtime_mismatch")
+
+
+def _capture_ready(root: Path) -> None:
+    if (Path("/proc/sys/kernel/core_pattern").read_text().strip() != str(root / "core.%p")
+            or shutil.which("gdb") != "/usr/bin/gdb"
+            or shutil.disk_usage(root).free < CORE_LIMIT + 1024**3):
+        raise ValueError("capture_capability_lost")
+
+
+def _prove_hosted_capture(root: Path, receipt: dict) -> None:
+    _capture_ready(root)
+    success = _run_private([sys.executable, "-c", "raise SystemExit(0)"], root, root, "success")
+    receipt["success_control"] = success
+    missing = _inspect_core(root, {"pid": "missing", "signal": 11}, sys.executable)
+    receipt["unavailable_control"] = {"kind": "missing-core handler; no second crash",
+                                      **missing, "preserved_exit": _postmortem_exit(-11, False)}
+    sanitization = _safe_json({"control": _sanitize("password=qt998-synthetic-secret\n::error::x")})
+    if (not _complete_stage(success, []) or missing["ok"]
+            or "qt998-synthetic-secret" in sanitization):
+        raise ValueError("noncrashing_capability_control_failed")
+    receipt["sanitization_control"] = "passed; one JSON line, synthetic secret removed"
+    source = root / "control.c"
+    source.write_text("void qt998_crash_control(void) { *(volatile int *)0 = 998; }\n"
+                      "int main(void) { qt998_crash_control(); return 0; }\n")
+    binary = root / "control"
+    compiled = _run_private(["/usr/bin/gcc", "-g", "-O0", "-o", str(binary), str(source)],
+                            root, root, "compiler")
+    if not _complete_stage(compiled, []):
+        raise ValueError("synthetic_control_compile_failed")
+    control = _run_private([str(binary)], root, root, "synthetic")
+    receipt["synthetic_control"] = control
+    capture = _inspect_core(root, control, str(binary))
+    receipt["synthetic_control"] = {**control, **capture,
+                                     "core_removed": not (root / ("core." + str(control["pid"]))).exists()}
+    if (control["child_exit"] != -11 or not control["output_ok"] or not capture["ok"]
+            or control.get("timed_out") or control.get("cancelled")
+            or control.get("output_truncated")
+            or "qt998_crash_control" not in json.dumps(capture)):
+        raise ValueError("native_capability_unproven")
+    receipt["capability"] = "proven_by_synthetic_control_only"
+
+
+def _complete_stage(child: dict, expected: list[str]) -> bool:
+    return (child["child_exit"] == 0 and child["output_ok"]
+            and not child.get("timed_out") and not child.get("cancelled")
+            and not child.get("output_truncated")
+            and child.get("pytest_counts") == expected
+            and (child.get("pytest_summary_complete") or not expected))
+
+
+def _emit_preserving_exit(receipt: dict, result: int) -> int:
+    try:
+        _emit_hosted(receipt)
+    except Exception as error:
+        # A publication error must never turn an observed SIGSEGV139 into70.
+        result = result or 70
+        try:
+            print("QT998_JSON " + _safe_json({"output_error": type(error).__name__,
+                                            "launcher_exit": result}), flush=True)
+        except Exception:
+            pass
+    return result
+
+
+def _acquisition_stage(root, workload, receipt, label, command, expected, timeout):
+    entry = {"stage": label, "command": ["python", *command[1:]],
+             "source_tree": FROZEN_TREE, "expected_counts": expected,
+             "timeout_seconds": timeout, "started": False, "complete": False}
+    receipt["stages"].append(entry)
+    result = 70
+    try:
+        _verify_workload(workload)
+        _capture_ready(root)
+        entry["started"] = True
+        child = _run_private(command, workload, root, label, timeout=timeout)
+        entry.update(child)
+        # Set terminal status before post-mortem, source verification or export.
+        result = _postmortem_exit(child["child_exit"], False)
+        capture = (_inspect_core(root, child, sys.executable) if child["signal"]
+                   else {"capture": "not_needed_no_signal", "ok": True})
+        entry.update(capture)
+        _verify_workload(workload)
+        _capture_ready(root)
+        entry["source_unchanged"] = True
+        entry["complete"] = bool(_complete_stage(child, expected) and capture["ok"])
+        result = _postmortem_exit(child["child_exit"], entry["complete"])
+    except Exception as error:
+        entry["diagnostic_error"] = type(error).__name__
+    entry["launcher_exit"] = result
+    result = _emit_preserving_exit({"acquisition_stage": entry}, result)
+    # Native frames are exported in the bounded stage receipt, once. The final
+    # cumulative ledger references that stage without duplicating a large stack.
+    if "native" in entry:
+        entry["native_stack_receipt"] = label
+        del entry["native"]
+    return result
+
+
+def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
+    receipt.update(stages=[], observation="INCOMPLETE_WORKLOAD", industrial_limit=10,
+                   industrial_aggregate_limit_seconds=600,
+                   context="prefix once; fresh processes; shared cumulative coverage")
+    coverage = PYTEST_ARGUMENTS[2:]
+    prefix = [
+        ("coverage_erase", [sys.executable, "-m", "coverage", "erase"], [], 60),
+        ("main", [sys.executable, "-m", "pytest", "tests", "-q",
+                  *[arg for arg in coverage if arg != "--cov-append"]],
+         ["4183 passed", "62 skipped"], 1200),
+        ("dashboard", [sys.executable, "-m", "pytest",
+                       "tests/test_dashboard_visual_options_dialog.py", "-q", *coverage],
+         ["24 passed"], 120),
+    ]
+    for label, command, expected, timeout in prefix:
+        result = _acquisition_stage(root, workload, receipt, label, command, expected, timeout)
+        if result:
+            receipt["observation"] = ("FAILED_WORKLOAD" if
+                receipt["stages"][-1].get("child_exit") else "INCOMPLETE_WORKLOAD")
+            return result
+    deadline = time.monotonic() + 600
+    for sample in range(1, 11):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            receipt["acquisition_budget_expired"] = True
+            return 70
+        result = _acquisition_stage(
+            root, workload, receipt, "industrial_" + str(sample),
+            [sys.executable, "-m", "pytest", *PYTEST_ARGUMENTS], ["42 passed"], min(120, remaining),
+        )
+        if result:
+            receipt["observation"] = ("FAILED_WORKLOAD" if
+                receipt["stages"][-1].get("child_exit") else "INCOMPLETE_WORKLOAD")
+            return result
+        if time.monotonic() > deadline:
+            receipt["acquisition_budget_expired"] = True
+            return 70
+    receipt["observation"] = "NON-REPRODUCTION"
+    return 0
+
+
 def hosted_observe() -> int:
     root = _private_root()
     admission = json.loads((root / "admission.json").read_text())
     if (admission["run_id"] != os.environ.get("GITHUB_RUN_ID")
             or admission["scaffolding_sha"] != os.environ.get("GITHUB_SHA")
+            or admission.get("phase") != PHASE
+            or admission.get("workload_sha") != FROZEN_SHA
+            or admission.get("workload_tree") != FROZEN_TREE
             or os.environ.get("GITHUB_RUN_ATTEMPT") != "1" or os.getuid() == 0):
         raise ValueError("admission_not_applicable")
     receipt = {"identity": admission, "observation": "not_started", "capability": "unproven"}
@@ -554,62 +740,24 @@ def hosted_observe() -> int:
 
     handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
-        workload = Path.cwd().parent / "frozen-b10"
+        workload = Path.cwd().parent / "frozen-workload"
         receipt["environment"] = _prepare_hosted_capture(root, workload)
-        success = _run_private([sys.executable, "-c", "raise SystemExit(0)"], root, root, "success")
-        receipt["success_control"] = success
-        missing = _inspect_core(root, {"pid": "missing", "signal": 11}, sys.executable)
-        receipt["unavailable_control"] = {"kind": "missing-core handler; no second crash",
-                                          **missing, "preserved_exit": _postmortem_exit(-11, False)}
-        sanitization = _safe_json({"control": _sanitize("password=qt998-synthetic-secret\n::error::x")})
-        if (success["child_exit"] != 0 or not success["output_ok"] or missing["ok"]
-                or "qt998-synthetic-secret" in sanitization):
-            raise ValueError("noncrashing_capability_control_failed")
-        receipt["sanitization_control"] = "passed; one JSON line, synthetic secret removed"
-        source = root / "control.c"
-        source.write_text("void qt998_crash_control(void) { *(volatile int *)0 = 998; }\n"
-                          "int main(void) { qt998_crash_control(); return 0; }\n")
-        binary = root / "control"
-        compiled = _run_private(["/usr/bin/gcc", "-g", "-O0", "-o", str(binary), str(source)],
-                                root, root, "compiler")
-        if compiled["child_exit"] or not compiled["output_ok"]:
-            raise ValueError("synthetic_control_compile_failed")
-        control = _run_private([str(binary)], root, root, "synthetic")
-        receipt["synthetic_control"] = control
-        capture = _inspect_core(root, control, str(binary))
-        receipt["synthetic_control"] = {**control, **capture,
-                                         "core_removed": not (root / ("core." + str(control["pid"]))).exists()}
-        if (control["child_exit"] != -11 or not control["output_ok"] or not capture["ok"]
-                or "qt998_crash_control" not in json.dumps(capture)):
-            raise ValueError("native_capability_unproven")
-        receipt["capability"] = "proven_by_synthetic_control_only"
-        # One ordinary process, with the original file/order/coverage arguments.
-        receipt["command"] = ["python", "-m", "pytest", *PYTEST_ARGUMENTS]
-        receipt["observation"] = "started_once"
-        child = _run_private([sys.executable, "-m", "pytest", *PYTEST_ARGUMENTS],
-                             workload, root, "industrial")
-        receipt["industrial"] = child
-        result = _postmortem_exit(child["child_exit"], False)
-        capture = (_inspect_core(root, child, sys.executable) if child["signal"]
-                   else {"capture": "not_needed_no_signal", "ok": True})
-        receipt["industrial"] = {**child, **capture}
-        complete = child.get("pytest_counts") == ["42 passed"] and child["output_ok"]
-        receipt["observation"] = ("NON-REPRODUCTION" if complete else "INCOMPLETE_WORKLOAD"
-                                  ) if child["child_exit"] == 0 else "FAILED_WORKLOAD"
-        receipt["frozen_tracked_bytes_unchanged"] = not _git(workload, "diff", "HEAD", "--name-only")
-        result = _postmortem_exit(child["child_exit"], capture["ok"] and child["output_ok"]
-                                 and not child.get("output_truncated")
-                                 and receipt["frozen_tracked_bytes_unchanged"] and complete)
+        _validate_runtime(receipt["environment"])
+        _prove_hosted_capture(root, receipt)
+        result = _acquire_sequence(root, workload, receipt)
     except Exception as error:
         receipt["diagnostic_error"] = type(error).__name__
     finally:
-        receipt["cleanup"] = _cleanup_hosted(root)
+        try:
+            receipt["cleanup"] = _cleanup_hosted(root)
+        except Exception as error:
+            receipt["cleanup"] = {"ok": False, "cleanup_error": type(error).__name__}
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
         if not receipt["cleanup"]["ok"] and result == 0:
             result = 70
         receipt["launcher_exit"] = result
-        _emit_hosted(receipt)
+        result = _emit_preserving_exit(receipt, result)
     return result
 
 

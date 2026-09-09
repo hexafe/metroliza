@@ -38,7 +38,7 @@ def test_hosted_admission_rejects_missing_identity():
 def admission():
     sha = "a" * 40
     event = {"inputs": {"run_industrial_postmortem": "1", "qt998_scaffolding_sha": sha,
-                        "qt998_workload_sha": diagnostic.FROZEN_SHA}}
+                        "qt998_workload_sha": diagnostic.FROZEN_SHA, "qt998_phase": diagnostic.PHASE}}
     environment = {
         "GITHUB_REPOSITORY": "hexafe/metroliza", "GITHUB_REPOSITORY_ID": "478225616",
         "GITHUB_ACTOR": "hexafe", "GITHUB_ACTOR_ID": "100516322",
@@ -57,7 +57,7 @@ def admission():
 
 def test_correct_first_owner_dispatch_is_admitted(admission):
     receipt = diagnostic._validate_admission(*admission)
-    assert receipt == {"scaffolding_sha": "a" * 40, "workload_sha": diagnostic.FROZEN_SHA,
+    assert receipt == {"phase": diagnostic.PHASE, "scaffolding_sha": "a" * 40, "workload_sha": diagnostic.FROZEN_SHA,
                        "workload_tree": diagnostic.FROZEN_TREE, "run_id": "500", "run_attempt": 1}
 
 
@@ -297,12 +297,12 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
     assert workflow["concurrency"]["cancel-in-progress"] == "true"
     assert "github.run_id" in workflow["concurrency"]["group"]
     assert "format('ci-{0}-{1}', github.workflow, github.ref)" in workflow["concurrency"]["group"]
-    assert job["concurrency"] == {"group": "qt998-postmortem-job-5604177526",
+    assert job["concurrency"] == {"group": "qt998-postmortem-job-5608262552",
                                    "cancel-in-progress": "false"}
     assert job["concurrency"]["group"] not in workflow["concurrency"]["group"]
     # GitHub evaluates job env before assigning a runner; runner context is step-only.
     assert "runner." not in repr(job.get("env", {}))
-    assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "25"
+    assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "45"
     assert "workflow_dispatch" in job["if"] and "== '1'" in job["if"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
     for step in job["steps"]:
@@ -317,7 +317,7 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
         if "actions/checkout" in action:
             assert step["with"]["persist-credentials"] == "false"
     workload_checkout = next(step for step in job["steps"]
-                             if step.get("with", {}).get("path") == "frozen-b10")
+                             if step.get("with", {}).get("path") == "frozen-workload")
     assert workload_checkout["with"]["ref"] == diagnostic.FROZEN_SHA
     assert job["steps"][-1]["if"] == "always()"
     assert job["steps"][-1]["run"].endswith("--hosted-cleanup")
@@ -341,7 +341,8 @@ def test_hosted_modes_refuse_local_host_before_any_side_effect(monkeypatch, mode
 def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
     monkeypatch, tmp_path, failure_stage, expected_exit,
 ):
-    admission = {"run_id": "500", "scaffolding_sha": "a" * 40}
+    admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
+                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE}
     (tmp_path / "admission.json").write_text(json.dumps(admission))
     monkeypatch.setenv("GITHUB_RUN_ID", "500")
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
@@ -357,32 +358,284 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
             raise OSError("synthetic private preparation failure")
         return {}
 
-    def run_private(command, cwd, root, label):
+    def prove(root, receipt):
+        receipt["capability"] = "proven_by_synthetic_control_only"
+
+    def run_private(command, cwd, root, label, **kwargs):
         events.append(label)
-        code = -11 if label in {"synthetic", "industrial"} else 0
-        return {"child_exit": code, "signal": 11 if code else None,
-                "pid": label, "output_ok": True}
+        return {"child_exit": -11, "signal": 11, "pid": 123, "output_ok": True}
 
     def inspect_core(root, child, executable):
-        if child["pid"] == "industrial":
-            raise OSError("synthetic private capture failure")
-        return {"ok": child["pid"] == "synthetic", "frame": "qt998_crash_control"}
+        raise OSError("synthetic private capture failure")
+
+    monkeypatch.setattr(diagnostic, "_prove_hosted_capture", prove)
+    monkeypatch.setattr(diagnostic, "_verify_workload", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None)
 
     def cleanup(root):
         events.append("cleanup")
         return {"ok": True}
 
     monkeypatch.setattr(diagnostic, "_prepare_hosted_capture", prepare)
+    monkeypatch.setattr(diagnostic, "_validate_runtime", lambda *args: None)
     monkeypatch.setattr(diagnostic, "_run_private", run_private)
     monkeypatch.setattr(diagnostic, "_inspect_core", inspect_core)
     monkeypatch.setattr(diagnostic, "_cleanup_hosted", cleanup)
     monkeypatch.setattr(diagnostic, "_emit_hosted", receipts.append)
     assert diagnostic.hosted_observe() == expected_exit
     assert events[-1] == "cleanup" and events.count("cleanup") == 1
-    assert receipts[0]["diagnostic_error"] == "OSError"
     if failure_stage == "preparation":
         assert events == ["preparation", "cleanup"]
-        assert receipts[0]["observation"] == "not_started"
+        assert receipts[-1]["observation"] == "not_started"
+        assert receipts[-1]["diagnostic_error"] == "OSError"
     else:
-        assert events.count("industrial") == 1
-        assert receipts[0]["industrial"]["child_exit"] == -11
+        assert events.count("coverage_erase") == 1
+        assert receipts[-1]["stages"][0]["child_exit"] == -11
+        assert receipts[-1]["stages"][0]["diagnostic_error"] == "OSError"
+
+
+def test_new_phase_has_fixed_failed_content_and_rejects_spent_phase(admission):
+    assert diagnostic.FROZEN_SHA == "216877364752c20bcdc65752382da470c4f363d5"
+    assert diagnostic.FROZEN_TREE == "719b80423271ff59c6fe08ace819fee2ae151fa0"
+    admission[0]["inputs"]["qt998_phase"] = "5604177526"
+    with pytest.raises(ValueError, match="phase"):
+        diagnostic._validate_admission(*admission)
+
+
+@pytest.mark.parametrize("timeout", [60, 120, 1200])
+def test_private_child_uses_declared_stage_timeout(monkeypatch, tmp_path, timeout):
+    waits = []
+    class Child:
+        pid, returncode = 123, 0
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def wait(self, **kwargs):
+            waits.append(kwargs)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Child())
+    diagnostic._run_private(["unused"], tmp_path, tmp_path, "stage", timeout=timeout)
+    assert waits == [{"timeout": timeout}]
+
+
+@pytest.fixture
+def acquisition(monkeypatch, tmp_path):
+    calls, emitted = [], []
+    outcomes = {}
+    def run(command, cwd, root, label, *, timeout=120):
+        assert cwd == tmp_path / "workload" and root == tmp_path
+        calls.append((label, command, timeout))
+        counts = {"coverage_erase": [], "main": ["4183 passed", "62 skipped"],
+                  "dashboard": ["24 passed"]}.get(label, ["42 passed"])
+        return {"pid": len(calls), "child_exit": 0, "signal": None,
+                "timed_out": False, "cancelled": False, "output_ok": True,
+                "output_truncated": False, "pytest_counts": counts,
+                "pytest_summary_complete": bool(counts), **outcomes.get(label, {})}
+    monkeypatch.setattr(diagnostic, "_run_private", run)
+    monkeypatch.setattr(diagnostic, "_verify_workload", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None, raising=False)
+    monkeypatch.setattr(diagnostic, "_emit_hosted", emitted.append)
+    return tmp_path, calls, outcomes, emitted
+
+
+def test_sequence_runs_prefix_once_then_ten_complete_fresh_industrial_processes(acquisition):
+    root, calls, _, emitted = acquisition
+    receipt = {}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 0
+    assert [x[0] for x in calls] == ["coverage_erase", "main", "dashboard"] + [
+        f"industrial_{i}" for i in range(1, 11)]
+    assert calls[0][1] == [sys.executable, "-m", "coverage", "erase"]
+    assert calls[1][1] == [sys.executable, "-m", "pytest", "tests", "-q",
+                          "--cov=src/metroliza", "--cov=modules", "--cov=scripts",
+                          "--cov-report=", "--cov-fail-under=0"]
+    assert calls[1][2] == 1200 and calls[2][2] == 120
+    assert calls[2][1][3] == "tests/test_dashboard_visual_options_dialog.py"
+    for _, command, timeout in calls[3:]:
+        assert command == [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS]
+        assert 0 < timeout <= 120
+    assert receipt["observation"] == "NON-REPRODUCTION"
+    assert len(receipt["stages"]) == len(emitted) == 13
+
+
+@pytest.mark.parametrize("stage", ["coverage_erase", "main", "dashboard",
+                                  "industrial_1", "industrial_4", "industrial_10"])
+@pytest.mark.parametrize("fault", ["signal", "counts", "truncated", "timeout", "cancelled"])
+def test_first_failed_or_incomplete_stage_stops_all_further_work(acquisition, monkeypatch, stage, fault):
+    root, calls, outcomes, _ = acquisition
+    outcomes[stage] = {
+        "signal": {"child_exit": -11, "signal": 11},
+        "counts": {"pytest_counts": ["1 passed"], "pytest_summary_complete": False},
+        "truncated": {"output_truncated": True},
+        "timeout": {"child_exit": -9, "signal": 9, "timed_out": True},
+        "cancelled": {"child_exit": -9, "signal": 9, "cancelled": True},
+    }[fault]
+    monkeypatch.setattr(diagnostic, "_inspect_core", lambda *args: {"ok": False, "capture": "missing_core"})
+    receipt = {}
+    code = diagnostic._acquire_sequence(root, root / "workload", receipt)
+    assert code == {"signal": 139, "timeout": 137, "cancelled": 137}.get(fault, 70)
+    assert calls[-1][0] == stage
+    assert len(calls) == len(receipt["stages"])
+    assert receipt["observation"] != "NON-REPRODUCTION"
+
+
+def test_capture_exception_does_not_hide_first_workload_signal(acquisition, monkeypatch):
+    root, calls, outcomes, _ = acquisition
+    outcomes["industrial_1"] = {"child_exit": -11, "signal": 11}
+    def broken(*args):
+        raise OSError("SYNTHETIC_SECRET")
+    monkeypatch.setattr(diagnostic, "_inspect_core", broken)
+    receipt = {}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 139
+    assert calls[-1][0] == "industrial_1"
+    assert "SYNTHETIC_SECRET" not in repr(receipt)
+    assert receipt["stages"][-1]["child_exit"] == -11
+
+
+def test_aggregate_expiry_never_starts_another_industrial_sample(acquisition, monkeypatch):
+    root, calls, _, _ = acquisition
+    clock = iter([0.0, 0.0, 601.0])
+    monkeypatch.setattr(diagnostic.time, "monotonic", lambda: next(clock))
+    receipt = {}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 70
+    assert [x[0] for x in calls] == ["coverage_erase", "main", "dashboard", "industrial_1"]
+    assert receipt["observation"] == "INCOMPLETE_WORKLOAD"
+
+
+def test_spent_old_phase_does_not_consume_the_explicit_new_allocation(admission):
+    admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
+                         "created_at": "2026-09-09T15:59:03Z", "id": 499})
+    assert diagnostic._validate_admission(*admission)["phase"] == "5608262552"
+    admission[0]["inputs"].pop("qt998_phase")
+    with pytest.raises(ValueError, match="phase"):
+        diagnostic._validate_admission(*admission)
+
+
+@pytest.mark.parametrize("text", [
+    "running 42 passed cases, no terminal receipt\n",
+    "42 passed in ",
+    "42 passed in 3.44s\n42 passed in 3.45s\n",
+    "41 passed, 1 skipped in 3.44s\n",
+    "42 passed, 1 xfailed in 3.44s\n",
+])
+def test_incomplete_or_unexpected_terminal_summary_cannot_qualify(text):
+    child = {"child_exit": 0, "output_ok": True, **diagnostic._pytest_summary(text)}
+    assert not diagnostic._complete_stage(child, ["42 passed"])
+
+
+def test_real_main_and_industrial_terminal_summaries_have_controlled_counts():
+    main = diagnostic._pytest_summary(
+        "...\n==== 4183 passed, 62 skipped, 8 warnings, 119 subtests passed in 698.91s (0:11:38) ====\n")
+    assert main == {"pytest_counts": ["4183 passed", "62 skipped"],
+                    "pytest_summary_complete": True, "pytest_warning_counts": ["8 warnings"],
+                    "pytest_subtest_counts": ["119 subtests passed"]}
+    assert diagnostic._pytest_summary("42 passed in 3.44s\n")["pytest_counts"] == ["42 passed"]
+
+
+@pytest.mark.parametrize("guard", ["_verify_workload", "_capture_ready"])
+@pytest.mark.parametrize("failure_call", [1, 8, 9])
+def test_source_or_capture_drift_stops_before_further_sampling(acquisition, monkeypatch, guard, failure_call):
+    root, calls, _, _ = acquisition
+    count = 0
+    def check(*args):
+        nonlocal count
+        count += 1
+        if count == failure_call:
+            raise ValueError("SYNTHETIC_SECRET")
+    monkeypatch.setattr(diagnostic, guard, check)
+    receipt = {}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 70
+    assert len(calls) == {1: 0, 8: 4, 9: 4}[failure_call]
+    assert "SYNTHETIC_SECRET" not in repr(receipt)
+
+
+@pytest.mark.parametrize("key", ["python", *diagnostic.RUNTIME_PACKAGES])
+def test_material_runtime_mismatch_fails_closed(key):
+    runtime = {"python": "3.11.16", "packages": dict(diagnostic.RUNTIME_PACKAGES)}
+    diagnostic._validate_runtime(runtime)
+    if key == "python":
+        runtime[key] = "3.12.0"
+    else:
+        runtime["packages"][key] = "0.0"
+    with pytest.raises(ValueError, match="material_runtime_mismatch"):
+        diagnostic._validate_runtime(runtime)
+
+
+@pytest.mark.parametrize("code", [0, 1, 139])
+def test_publication_failure_preserves_nonzero_workload_exit(monkeypatch, capsys, code):
+    def broken(*args):
+        raise OSError("SYNTHETIC_SECRET")
+    monkeypatch.setattr(diagnostic, "_emit_hosted", broken)
+    assert diagnostic._emit_preserving_exit({}, code) == (code or 70)
+    output = capsys.readouterr().out
+    assert "SYNTHETIC_SECRET" not in output
+    assert json.loads(output.removeprefix("QT998_JSON "))["launcher_exit"] == (code or 70)
+
+
+@pytest.mark.parametrize("failure", ["runtime", "preflight", "cleanup"])
+def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, tmp_path, failure):
+    admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
+                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE}
+    (tmp_path / "admission.json").write_text(json.dumps(admission))
+    monkeypatch.setenv("GITHUB_RUN_ID", "500")
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setattr(diagnostic, "_private_root", lambda: tmp_path)
+    monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(diagnostic.signal, "signal", lambda *args: None)
+    events, receipts = [], []
+    monkeypatch.setattr(diagnostic, "_prepare_hosted_capture", lambda *args: {})
+    def stage(name):
+        events.append(name)
+        if name == failure:
+            raise OSError("SYNTHETIC_SECRET")
+    monkeypatch.setattr(diagnostic, "_validate_runtime", lambda *args: stage("runtime"))
+    monkeypatch.setattr(diagnostic, "_prove_hosted_capture", lambda *args: stage("preflight"))
+    def acquire(*args):
+        events.append("workload")
+        return 139
+    monkeypatch.setattr(diagnostic, "_acquire_sequence", acquire)
+    monkeypatch.setattr(diagnostic, "_cleanup_hosted", lambda *args: stage("cleanup") or {"ok": True})
+    monkeypatch.setattr(diagnostic, "_emit_hosted", receipts.append)
+    assert diagnostic.hosted_observe() == (139 if failure == "cleanup" else 70)
+    assert ("workload" in events) == (failure == "cleanup")
+    assert events[-1] == "cleanup"
+    assert "SYNTHETIC_SECRET" not in repr(receipts)
+
+
+def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    class Frame:
+        def __init__(self, number=0):
+            self.number = number
+        def name(self):
+            return "known_symbol" if self.number else None
+        def pc(self):
+            return 1
+        def older(self):
+            return Frame(self.number + 1)
+    class Thread:
+        def __init__(self, number):
+            self.num = number
+        def switch(self):
+            pass
+    inferior = SimpleNamespace(pid=123, threads=lambda: [Thread(n) for n in range(1, 11)])
+    fake = SimpleNamespace(selected_thread=lambda: Thread(9), selected_inferior=lambda: inferior,
+                           parse_and_eval=lambda _: 11, newest_frame=Frame,
+                           solib_name=lambda _: "/synthetic/private/libQt6Core.so.6", error=RuntimeError)
+    monkeypatch.setitem(sys.modules, "gdb", fake)
+    path = tmp_path / "safe.json"
+    script = diagnostic._core_script(path)
+    exec(compile(script.removeprefix("python\n").removesuffix("end\n"), "synthetic-gdb", "exec"), {})
+    native = json.loads(path.read_text())
+    assert native["fault_thread"] == 9 and native["threads"][0]["thread"] == 9
+    assert native["thread_count"] == 10 and len(native["threads"]) == 8
+    assert native["truncated"] and all(t["frames_truncated"] for t in native["threads"])
+    assert [len(t["frames"]) for t in native["threads"]] == [64] + [16] * 7
+    assert "/synthetic/private" not in repr(native)
+    assert native["threads"][0]["frames"][0]["function"] == "??"
+    # Worst permitted frame names/modules plus flags fit one bounded stage log.
+    for thread in native["threads"]:
+        for frame in thread["frames"]:
+            frame.update(function="x" * 160, module="m" * 80, name_truncated=True, unresolved=False)
+    assert len(diagnostic._safe_json({"acquisition_stage": {"native": native}})) < 59000

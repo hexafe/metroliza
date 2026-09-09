@@ -16,7 +16,7 @@ on:
         default: "0"
 
       run_industrial_postmortem:
-        description: "Owner-only Issue998 experiment; 1 spends the single approved hosted attempt"
+        description: "Owner-only Issue998 acquisition; 1 spends the single approved phase attempt"
         required: false
         default: "0"
       qt998_scaffolding_sha:
@@ -24,7 +24,11 @@ on:
         required: false
         default: ""
       qt998_workload_sha:
-        description: "Exact frozen b10 workload commit required by Issue998"
+        description: "Exact failed PR checkout required by Issue998"
+        required: false
+        default: ""
+      qt998_phase:
+        description: "Exact new allocation comment ID; prior b10 approval is spent"
         required: false
         default: ""
 
@@ -930,10 +934,10 @@ jobs:
     name: Industrial post-mortem (single owner opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1'
     concurrency:
-      group: qt998-postmortem-job-5604177526
+      group: qt998-postmortem-job-5608262552
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read
@@ -954,8 +958,8 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
-          ref: b10c3fd3cde9fd9ef83101e8459b7b9999a5ecea
-          path: frozen-b10
+          ref: 216877364752c20bcdc65752382da470c4f363d5
+          path: frozen-workload
 
       - name: Setup historical Python without Actions caching
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -976,12 +980,12 @@ jobs:
           sudo apt-get install -y gdb gcc libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
 
       - name: Install frozen project requirements without pip cache
-        working-directory: frozen-b10
+        working-directory: frozen-workload
         run: |
           python -m pip install --upgrade pip --no-cache-dir
           python -m pip install --no-cache-dir -r requirements-dev.txt
 
-      - name: Prove private post-mortem capability then observe frozen b10 once
+      - name: Prove capture then acquire the frozen failed CI sequence
         working-directory: scaffolding
         env:
           QT998_RUNNER_ENVIRONMENT: ${{ runner.environment }}
