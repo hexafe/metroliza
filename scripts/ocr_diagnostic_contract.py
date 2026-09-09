@@ -616,6 +616,23 @@ def worker_main() -> None:
         protocol.write(json.dumps(result, allow_nan=False))
 
 
+def prepare_input_paths(
+    pdf: str | Path | None, database: str | Path | None
+) -> tuple[dict[str, Path | None], dict[str, dict]]:
+    """Bind each input to the invoking parent, retaining independent failures."""
+    paths = {}
+    failures = {}
+    for check_id, value in (("pdf", pdf), ("database", database)):
+        paths[check_id] = None
+        if value is not None:
+            try:
+                paths[check_id] = Path(value).expanduser().resolve()
+            except (OSError, RuntimeError, ValueError):
+                reason = "input_unreadable" if check_id == "pdf" else "database_unreadable"
+                failures[check_id] = row(check_id, "fail", reason)
+    return paths, failures
+
+
 def reject_output_alias(output: Path, inputs: list[Path]) -> None:
     target = output.expanduser().resolve()
     for source in inputs:

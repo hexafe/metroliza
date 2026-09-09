@@ -90,6 +90,9 @@ active WAL/journal sidecars to avoid stale inspection or sidecar changes.
 failure returns nonzero and preserves the earlier complete file. Output cannot
 alias the PDF, DB or their sidecars. Without an output path the safe result is
 printed to stdout. The standalone header script supports the same safe contract.
+Direct Python CLI input/output paths are relative to the calling directory;
+each input is resolved there before inspection and output protection. The
+PowerShell wrapper retains its repository-relative input/output convention.
 PowerShell propagates failure and required setup validation stops before setup
 completion. Explicit `-SkipOcr` / `-SkipValidation` remains skipped, not tested/pass.
 These source diagnostics do not establish clean-Windows packaged acceptance (#901).

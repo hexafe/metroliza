@@ -164,7 +164,14 @@ def run_runtime_check(check_id: str) -> dict:
     return checks[check_id]()
 
 
-def build_payload(pdf_path: Path | None = None, db_file: str | None = None) -> dict:
+def build_payload(
+    pdf_path: Path | None = None,
+    db_file: str | Path | None = None,
+    input_failures: dict[str, dict] | None = None,
+) -> dict:
+    if input_failures is None:
+        prepared, input_failures = contract.prepare_input_paths(pdf_path, db_file)
+        pdf_path, db_file = prepared["pdf"], prepared["database"]
     checks = []
     for check_id in contract.RUNTIME_IDS:
         if checks and any(check["status"] != "pass" for check in checks):
@@ -172,9 +179,12 @@ def build_payload(pdf_path: Path | None = None, db_file: str | None = None) -> d
         else:
             checks.append(contract.isolated_check(check_id))
     checks.append(contract.row("alternatives", "skipped", "not_selected", required=False))
-    request = {"pdf": str(pdf_path) if pdf_path is not None else None, "database": db_file}
+    request = {"pdf": str(pdf_path) if pdf_path is not None else None,
+               "database": str(db_file) if db_file is not None else None}
     for check_id, requested in (("pdf", pdf_path is not None), ("database", db_file is not None)):
-        if requested and any(check["reason"] == "interrupted" for check in checks):
+        if check_id in input_failures:
+            checks.append(input_failures[check_id])
+        elif requested and any(check["reason"] == "interrupted" for check in checks):
             checks.append(contract.row(check_id, "skipped", "not_completed"))
         elif requested:
             checks.append(contract.isolated_check(check_id, request))
@@ -220,9 +230,11 @@ def main(argv: list[str] | None = None) -> int:
         + (("database",) if args.db_file is not None else ())
     )
     try:
+        prepared, input_failures = contract.prepare_input_paths(args.pdf, args.db_file)
+        inputs = [value for value in prepared.values() if value is not None]
         if args.output:
             contract.reject_output_alias(Path(args.output), inputs)
-        result = build_payload(Path(args.pdf) if args.pdf is not None else None, args.db_file)
+        result = build_payload(prepared["pdf"], prepared["database"], input_failures)
         result = contract.validated_payload(result, required)
     except KeyboardInterrupt:
         result = contract.payload([contract.row("diagnostic", "fail", "interrupted")])

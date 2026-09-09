@@ -837,3 +837,128 @@ def test_real_outside_cwd_publication_uses_same_input_identity(caller_input_fixt
     assert result.stdout == b""
     for path in (fixture.caller / "source.pdf", fixture.caller / "source.db"):
         assert path.read_bytes() == fixture.originals[path]
+
+
+@pytest.mark.parametrize("script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"])
+@pytest.mark.parametrize("mode", ["relative", "absolute", "mixed_pdf", "mixed_db", "normalized",
+                                  "home", "symlinks", "hardlinks", "root"])
+def test_real_cli_input_identity_invocation_forms(caller_input_fixture, script, mode):
+    fixture = caller_input_fixture
+    cwd = fixture.repo if mode == "root" else fixture.caller
+    pdf, database, output = "source.pdf", "source.db", "safe.json"
+    env = {}
+    if mode in {"absolute", "mixed_pdf"}:
+        pdf = str(cwd / pdf)
+    if mode in {"absolute", "mixed_db"}:
+        database = str(cwd / database)
+    if mode == "absolute":
+        output = str(cwd / output)
+    if mode == "normalized":
+        pdf, database = "../caller/./source.pdf", "../caller/./source.db"
+        output = "../caller/./safe.json"
+    if mode == "home":
+        env = {"HOME": str(cwd), "USERPROFILE": str(cwd)}
+        pdf, database, output = "~/source.pdf", "~/source.db", "~/safe.json"
+    if mode in {"symlinks", "hardlinks"}:
+        for name in (pdf, database):
+            alias = cwd / ("linked-" + name)
+            if mode == "hardlinks":
+                os.link(cwd / name, alias)
+            else:
+                try:
+                    alias.symlink_to(name)
+                except OSError:
+                    pytest.skip("Disposable symlink requires platform permission")
+        pdf, database = "linked-source.pdf", "linked-source.db"
+    destination = cwd / "safe.json"
+    destination.write_text('{"previous":"complete"}\n')
+    result = fixture.run(script, pdf, database, output, cwd, env)
+    checks = {row["id"]: row for row in assert_public_safe(result, destination)["checks"]}
+    assert result.returncode == 0, checks
+    assert result.stdout == b""
+    assert checks["pdf"]["status"] == "pass"
+    assert checks["pdf"]["facts"]["page_count"] == 1
+    assert checks["database"]["facts"] == {"matching_rows": 2 if mode == "root" else 1}
+    for path, original in fixture.originals.items():
+        assert path.read_bytes() == original
+    if mode != "root":
+        assert not (fixture.repo / "safe.json").exists()
+
+
+@pytest.mark.parametrize("script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"])
+@pytest.mark.parametrize("check_id,problem", [("pdf", "missing"), ("database", "missing"),
+                                            ("pdf", "loop"), ("database", "loop"),
+                                            ("pdf", "unknown_home"), ("database", "unknown_home")])
+def test_real_input_failure_preserves_independent_outcome(caller_input_fixture, script, check_id, problem):
+    fixture = caller_input_fixture
+    value = CANARIES[2] + "-unavailable"
+    if problem == "loop":
+        try:
+            (fixture.caller / value).symlink_to(value)
+        except OSError:
+            pytest.skip("Disposable symlink requires platform permission")
+    if problem == "unknown_home":
+        if os.name == "nt":
+            pytest.skip("Named-user expansion failure is a POSIX-specific invocation")
+        value = "~" + value + "/source"
+    pdf, database = (value, "source.db") if check_id == "pdf" else ("source.pdf", value)
+    output = fixture.caller / "safe.json"
+    result = fixture.run(script, pdf, database, "safe.json")
+    checks = {row["id"]: row for row in assert_public_safe(result, output)["checks"]}
+    other = "database" if check_id == "pdf" else "pdf"
+    assert result.returncode != 0
+    assert checks[check_id]["status"] == "fail"
+    assert checks[check_id]["requirement"] == "required"
+    assert checks[check_id]["reason"] == (
+        "input_unreadable" if check_id == "pdf" else
+        "database_missing" if problem == "missing" else "database_unreadable"
+    )
+    assert checks[other]["status"] == "pass", checks
+    if other == "database":
+        assert checks[other]["facts"] == {}
+    else:
+        assert checks[other]["facts"]["page_count"] == 1
+    for path, original in fixture.originals.items():
+        assert path.read_bytes() == original
+    if problem == "missing":
+        assert not (fixture.caller / value).exists()
+
+
+@pytest.mark.parametrize("script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"])
+@pytest.mark.parametrize("input_name,alias", [
+    (name, alias) for name in ("source.pdf", "source.db")
+    for alias in ("relative", "absolute", "normalized", "symlink", "hardlink")
+] + [("source.db", suffix) for suffix in ("-wal", "-shm", "-journal")])
+def test_real_outside_cwd_protects_requested_inputs(caller_input_fixture, script, input_name, alias):
+    fixture = caller_input_fixture
+    source = fixture.caller / input_name
+    destination = source
+    output = input_name
+    if alias == "absolute":
+        output = str(source)
+    elif alias == "normalized":
+        output = "../caller/./" + input_name
+    elif alias in {"symlink", "hardlink"}:
+        destination = fixture.caller / "output-alias.json"
+        if alias == "hardlink":
+            os.link(source, destination)
+        else:
+            try:
+                destination.symlink_to(input_name)
+            except OSError:
+                pytest.skip("Disposable symlink requires platform permission")
+        output = destination.name
+    elif alias.startswith("-"):
+        destination = Path(str(source) + alias)
+        destination.write_bytes(b"SYNTHETIC_DB_SOURCE_1002-sidecar")
+        output = destination.name
+    previous = destination.read_bytes()
+    result = fixture.run(script, "source.pdf", "source.db", output)
+    assert result.returncode != 0
+    assert result.stdout == b""
+    assert b"output_failed" in result.stderr
+    assert b"Traceback" not in result.stderr
+    assert all(marker.encode() not in result.stderr for marker in CANARIES)
+    assert destination.read_bytes() == previous
+    for path, original in fixture.originals.items():
+        assert path.read_bytes() == original
