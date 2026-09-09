@@ -2423,6 +2423,7 @@
         "scripts/fetch_rapidocr_models.py",
         "scripts/generate_third_party_inventory.py",
         "scripts/measure_windows_startup.ps1",
+        "scripts/ocr_diagnostic_contract.py",
         "scripts/release_only_google_conversion_smoke.py",
         "scripts/stage_release_notices.py",
         "scripts/summarize_startup_profile.py",
