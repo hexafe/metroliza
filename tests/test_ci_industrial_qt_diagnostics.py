@@ -342,7 +342,8 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
     monkeypatch, tmp_path, failure_stage, expected_exit,
 ):
     admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
-                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE}
+                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
+                 "observation_deadline_epoch": diagnostic.time.time() + 2520}
     (tmp_path / "admission.json").write_text(json.dumps(admission))
     monkeypatch.setenv("GITHUB_RUN_ID", "500")
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
@@ -350,6 +351,7 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
     monkeypatch.setattr(diagnostic, "_private_root", lambda: tmp_path)
     monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000)
     monkeypatch.setattr(diagnostic.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(diagnostic.signal, "alarm", lambda *args: 0)
     events, receipts = [], []
 
     def prepare(*args):
@@ -476,6 +478,8 @@ def test_first_failed_or_incomplete_stage_stops_all_further_work(acquisition, mo
     assert calls[-1][0] == stage
     assert len(calls) == len(receipt["stages"])
     assert receipt["observation"] != "NON-REPRODUCTION"
+    if fault in {"timeout", "cancelled"}:
+        assert receipt["observation"] == "INCOMPLETE_WORKLOAD"
 
 
 def test_capture_exception_does_not_hide_first_workload_signal(acquisition, monkeypatch):
@@ -493,7 +497,7 @@ def test_capture_exception_does_not_hide_first_workload_signal(acquisition, monk
 
 def test_aggregate_expiry_never_starts_another_industrial_sample(acquisition, monkeypatch):
     root, calls, _, _ = acquisition
-    clock = iter([0.0, 0.0, 601.0])
+    clock = iter([0.0, 0.0, 0.0, 601.0])
     monkeypatch.setattr(diagnostic.time, "monotonic", lambda: next(clock))
     receipt = {}
     assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 70
@@ -571,10 +575,13 @@ def test_publication_failure_preserves_nonzero_workload_exit(monkeypatch, capsys
     assert json.loads(output.removeprefix("QT998_JSON "))["launcher_exit"] == (code or 70)
 
 
-@pytest.mark.parametrize("failure", ["runtime", "preflight", "cleanup"])
+@pytest.mark.parametrize("failure", ["runtime", "preflight", "cleanup", "budget"])
 def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, tmp_path, failure):
     admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
-                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE}
+                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
+                 "observation_deadline_epoch": diagnostic.time.time() + 2520}
+    if failure == "budget":
+        admission["observation_deadline_epoch"] = diagnostic.time.time() - 1
     (tmp_path / "admission.json").write_text(json.dumps(admission))
     monkeypatch.setenv("GITHUB_RUN_ID", "500")
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
@@ -582,6 +589,8 @@ def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, 
     monkeypatch.setattr(diagnostic, "_private_root", lambda: tmp_path)
     monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000)
     monkeypatch.setattr(diagnostic.signal, "signal", lambda *args: None)
+    alarms = []
+    monkeypatch.setattr(diagnostic.signal, "alarm", alarms.append)
     events, receipts = [], []
     monkeypatch.setattr(diagnostic, "_prepare_hosted_capture", lambda *args: {})
     def stage(name):
@@ -600,6 +609,12 @@ def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, 
     assert ("workload" in events) == (failure == "cleanup")
     assert events[-1] == "cleanup"
     assert "SYNTHETIC_SECRET" not in repr(receipts)
+    assert alarms[-1] == 0
+    if failure == "budget":
+        assert events == ["cleanup"] and alarms == [0]
+        assert receipts[-1]["job_budget_expired"]
+    else:
+        assert 0 < alarms[0] <= 2520
 
 
 def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypatch, tmp_path):
@@ -639,3 +654,21 @@ def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypa
         for frame in thread["frames"]:
             frame.update(function="x" * 160, module="m" * 80, name_truncated=True, unresolved=False)
     assert len(diagnostic._safe_json({"acquisition_stage": {"native": native}})) < 59000
+
+
+def test_expiry_during_guards_prevents_launch_with_stale_timeout(acquisition, monkeypatch):
+    root, calls, _, _ = acquisition
+    now = [0.0]
+    monkeypatch.setattr(diagnostic.time, "monotonic", lambda: now[0])
+    checks = [0]
+    def guard(*args):
+        checks[0] += 1
+        if checks[0] == 8:
+            now[0] = 599.0
+        elif checks[0] == 9:
+            now[0] = 601.0
+    monkeypatch.setattr(diagnostic, "_capture_ready", guard)
+    receipt = {}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 70
+    assert calls[-1][0] == "industrial_1"
+    assert len(calls) == 4

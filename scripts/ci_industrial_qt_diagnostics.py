@@ -7,6 +7,7 @@ mode inspects private guest cores after termination, then removes all raw data.
 
 from __future__ import annotations
 
+from datetime import datetime
 import importlib.metadata
 import hashlib
 import http.client
@@ -339,6 +340,12 @@ def hosted_admit() -> int:
     receipt = _validate_admission(event, os.environ, repository, prior,
                                   _git(Path.cwd(), "rev-parse", "HEAD"),
                                   _git(workload, "rev-parse", "HEAD^{tree}"))
+    current = next(run for run in prior if str(run["id"]) == receipt["run_id"])
+    # Use workflow creation (earlier than guest start) conservatively. Leave
+    # at least three minutes of the45-minute job ceiling for private cleanup.
+    receipt["observation_deadline_epoch"] = (
+        datetime.fromisoformat(current["created_at"].replace("Z", "+00:00")).timestamp() + 42 * 60
+    )
     root = _private_root()
     root.mkdir(mode=0o700)  # Existing admission cannot be reused in the same run.
     (root / "admission.json").write_text(_safe_json(receipt), encoding="utf-8")
@@ -648,7 +655,7 @@ def _emit_preserving_exit(receipt: dict, result: int) -> int:
     return result
 
 
-def _acquisition_stage(root, workload, receipt, label, command, expected, timeout):
+def _acquisition_stage(root, workload, receipt, label, command, expected, timeout, deadline=None):
     entry = {"stage": label, "command": ["python", *command[1:]],
              "source_tree": FROZEN_TREE, "expected_counts": expected,
              "timeout_seconds": timeout, "started": False, "complete": False}
@@ -657,6 +664,11 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
     try:
         _verify_workload(workload)
         _capture_ready(root)
+        if deadline is not None:
+            timeout = min(timeout, deadline - time.monotonic())
+            if timeout <= 0:
+                raise TimeoutError("acquisition_deadline_expired_before_launch")
+            entry["timeout_seconds"] = timeout
         entry["started"] = True
         child = _run_private(command, workload, root, label, timeout=timeout)
         entry.update(child)
@@ -682,6 +694,12 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
     return result
 
 
+def _failed_observation(stage: dict) -> str:
+    if stage.get("timed_out") or stage.get("cancelled") or not stage.get("child_exit"):
+        return "INCOMPLETE_WORKLOAD"
+    return "FAILED_WORKLOAD"
+
+
 def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
     receipt.update(stages=[], observation="INCOMPLETE_WORKLOAD", industrial_limit=10,
                    industrial_aggregate_limit_seconds=600,
@@ -699,8 +717,7 @@ def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
     for label, command, expected, timeout in prefix:
         result = _acquisition_stage(root, workload, receipt, label, command, expected, timeout)
         if result:
-            receipt["observation"] = ("FAILED_WORKLOAD" if
-                receipt["stages"][-1].get("child_exit") else "INCOMPLETE_WORKLOAD")
+            receipt["observation"] = _failed_observation(receipt["stages"][-1])
             return result
     deadline = time.monotonic() + 600
     for sample in range(1, 11):
@@ -711,10 +728,10 @@ def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
         result = _acquisition_stage(
             root, workload, receipt, "industrial_" + str(sample),
             [sys.executable, "-m", "pytest", *PYTEST_ARGUMENTS], ["42 passed"], min(120, remaining),
+            deadline=deadline,
         )
         if result:
-            receipt["observation"] = ("FAILED_WORKLOAD" if
-                receipt["stages"][-1].get("child_exit") else "INCOMPLETE_WORKLOAD")
+            receipt["observation"] = _failed_observation(receipt["stages"][-1])
             return result
         if time.monotonic() > deadline:
             receipt["acquisition_budget_expired"] = True
@@ -736,10 +753,18 @@ def hosted_observe() -> int:
     receipt = {"identity": admission, "observation": "not_started", "capability": "unproven"}
     result = 70
     def interrupt(signum, frame):
+        if signum == signal.SIGALRM:
+            receipt["job_budget_expired"] = True
         raise InterruptedError("hosted_parent_cancelled")
 
-    handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, signal.SIGINT)}
+    handlers = {sig: signal.signal(sig, interrupt)
+                for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGALRM)}
     try:
+        remaining = int(admission["observation_deadline_epoch"] - time.time())
+        if remaining <= 0:
+            receipt["job_budget_expired"] = True
+            raise TimeoutError("cleanup_reserve_reached")
+        signal.alarm(remaining)
         workload = Path.cwd().parent / "frozen-workload"
         receipt["environment"] = _prepare_hosted_capture(root, workload)
         _validate_runtime(receipt["environment"])
@@ -748,6 +773,7 @@ def hosted_observe() -> int:
     except Exception as error:
         receipt["diagnostic_error"] = type(error).__name__
     finally:
+        signal.alarm(0)
         try:
             receipt["cleanup"] = _cleanup_hosted(root)
         except Exception as error:
