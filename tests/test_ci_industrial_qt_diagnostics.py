@@ -649,12 +649,51 @@ def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypa
     assert [len(t["frames"]) for t in native["threads"]] == [64] + [16] * 7
     assert "/synthetic/private" not in repr(native)
     assert native["threads"][0]["frames"][0]["function"] == "??"
-    # Worst permitted frame names/modules plus flags fit one bounded stage log.
-    for thread in native["threads"]:
+
+
+@pytest.mark.parametrize("function_length", [140, 144, 145])
+@pytest.mark.parametrize("module_length", [80, 81])
+def test_complete_native_stage_publication_preserves_size_reserve(
+        monkeypatch, tmp_path, capsys, function_length, module_length):
+    # Exercise the real sanitizer and full publication, including false flags at
+    # exact caps, stage metadata and all176 frames. No native process is launched.
+    native = {"fault_thread": 1, "pid": 4194304, "signal": 11, "thread_count": 10,
+              "truncated": True, "threads": [
+                  {"thread": index + 1, "frames_truncated": True, "unwind_error": False,
+                   "frames": [{"function": "x" * function_length,
+                               "module": "m" * module_length}
+                              for _ in range(count)]}
+                  for index, count in enumerate([64] + [16] * 7)]}
+    def run(command, cwd, root, label, **kwargs):
+        if label == "debugger":
+            (root / "stack.json").write_text(json.dumps(native))
+            return {"child_exit": 0, "timed_out": False, "output_ok": True}
+        core = root / "core.4194304"
+        core.write_bytes(b"\x7fELFsynthetic marker only")
+        core.chmod(0o600)
+        return {"child_exit": -11, "signal": 11, "pid": 4194304, "timed_out": False,
+                "cancelled": False, "output_ok": True, "elapsed_seconds": 119.123456,
+                "output_bytes": 8388608, "output_truncated": False, "pytest_counts": [],
+                "pytest_summary_complete": False, "pytest_warning_counts": [],
+                "pytest_subtest_counts": []}
+    monkeypatch.setattr(diagnostic, "_run_private", run)
+    monkeypatch.setattr(diagnostic, "_verify_workload", lambda *_: None)
+    monkeypatch.setattr(diagnostic, "_capture_ready", lambda *_: None)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    assert diagnostic._acquisition_stage(
+        tmp_path, tmp_path, {"stages": []}, "industrial_10",
+        [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS],
+        ["42 passed"], 120,
+    ) == 139
+    output = capsys.readouterr().out.removeprefix("QT998_JSON ").strip()
+    assert len(output.encode("utf-8")) < 59000
+    stage = json.loads(output)["acquisition_stage"]
+    assert stage["capture"] == "postmortem_stack" and stage["source_unchanged"]
+    assert stage["launcher_exit"] == 139 and not stage["complete"]
+    for thread in stage["native"]["threads"]:
         for frame in thread["frames"]:
-            frame.update(function="x" * 144, module="m" * 80, name_truncated=True,
-                         module_truncated=True, unresolved=False)
-    assert len(diagnostic._safe_json({"acquisition_stage": {"native": native}})) < 59000
+            assert frame["name_truncated"] == (function_length > len(frame["function"]))
+            assert frame["module_truncated"] == (module_length > len(frame["module"]))
 
 
 def test_expiry_during_guards_prevents_launch_with_stale_timeout(acquisition, monkeypatch):
