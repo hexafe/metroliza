@@ -652,7 +652,8 @@ def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypa
     # Worst permitted frame names/modules plus flags fit one bounded stage log.
     for thread in native["threads"]:
         for frame in thread["frames"]:
-            frame.update(function="x" * 160, module="m" * 80, name_truncated=True, unresolved=False)
+            frame.update(function="x" * 144, module="m" * 80, name_truncated=True,
+                         module_truncated=True, unresolved=False)
     assert len(diagnostic._safe_json({"acquisition_stage": {"native": native}})) < 59000
 
 
@@ -672,3 +673,20 @@ def test_expiry_during_guards_prevents_launch_with_stale_timeout(acquisition, mo
     assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 70
     assert calls[-1][0] == "industrial_1"
     assert len(calls) == 4
+
+
+@pytest.mark.parametrize("length", [80, 81])
+def test_module_identifier_truncation_is_explicit(monkeypatch, tmp_path, length):
+    core = tmp_path / "core.123"
+    core.write_bytes(b"\x7fELFsynthetic marker only")
+    core.chmod(0o600)
+    def debugger(command, cwd, root, label):
+        (root / "stack.json").write_text(json.dumps({"signal": 11, "pid": 123,
+            "fault_thread": 1, "thread_count": 1, "truncated": False,
+            "threads": [{"thread": 1, "frames": [{"function": "safe", "module": "m" * length}]}]}))
+        return {"child_exit": 0, "timed_out": False, "output_truncated": False, "output_ok": True}
+    monkeypatch.setattr(diagnostic, "_run_private", debugger)
+    capture = diagnostic._inspect_core(tmp_path, {"pid": 123, "signal": 11}, sys.executable)
+    frame = capture["native"]["threads"][0]["frames"][0]
+    assert frame["module"] == "m" * 80
+    assert frame["module_truncated"] == (length > 80)

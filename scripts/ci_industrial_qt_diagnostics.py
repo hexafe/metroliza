@@ -522,10 +522,11 @@ def _inspect_core(root: Path, child: dict, executable: str) -> dict:
             for frame in thread["frames"]:
                 function = _sanitize(frame["function"])
                 # Names only: no source paths, argument values or control bytes.
-                frame["name_truncated"] = len(function) > 160
+                frame["name_truncated"] = len(function) > 144
                 frame["function"] = re.sub(r"[^A-Za-z0-9_:$<>~*. +,()\[\]&=-]", "?",
-                                           function)[:160]
+                                           function)[:144]
                 frame["unresolved"] = frame["function"] == "??"
+                frame["module_truncated"] = len(frame.get("module", "")) > 80
                 frame["module"] = re.sub(r"[^A-Za-z0-9_.+-]", "?", frame.get("module", ""))[:80]
         return {"capture": "postmortem_stack", "ok": True, "core_bytes": info.st_size,
                 "native": native}
