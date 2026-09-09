@@ -1,28 +1,31 @@
 """Observe the existing Linux industrial coverage shard once; never retry it.
 
 Issue #998 permits this diagnostic observation, not a claimed lifecycle repair.
-Only sanitized text and compact receipts are retained; no core or memory capture.
+The default path retains sanitized text only. The separately admitted hosted
+mode inspects private guest cores after termination, then removes all raw data.
 """
 
 from __future__ import annotations
 
 import importlib.metadata
+import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import platform
 import re
-import resource
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-
-from metroliza.industrial.industrial_data_repository import redact_sensitive_text
+import stat
 
 
 def _sanitize(text: str) -> str:
+    from metroliza.industrial.industrial_data_repository import redact_sensitive_text
+
     roots = {
         str(Path.cwd()): "<checkout>",
         sys.prefix: "<python>",
@@ -103,6 +106,8 @@ def _exit_code(debugger_exit: int, status_path: Path) -> tuple[int, dict[str, ob
 
 
 def main() -> int:
+    import resource
+
     output_dir = Path("artifacts/industrial-qt-diagnostics")
     output_dir.mkdir(parents=True, exist_ok=True)
     command = [sys.executable, "-m", "pytest", *sys.argv[1:]]
@@ -167,5 +172,466 @@ def main() -> int:
     return result
 
 
+FROZEN_SHA = "b10c3fd3cde9fd9ef83101e8459b7b9999a5ecea"
+FROZEN_TREE = "7653910dc430731e1c110bf9e504dc82db33be0c"
+BRANCH = "fix/998-industrial-qt-recurrence"
+APPROVAL_TIME = "2026-09-09T15:11:59Z"
+PYTEST_ARGUMENTS = [
+    "tests/test_industrial_analytics_dialog.py", "-q", "--cov=src/metroliza",
+    "--cov=modules", "--cov=scripts", "--cov-append", "--cov-report=",
+    "--cov-fail-under=0",
+]
+CORE_LIMIT = 2 * 1024**3
+OUTPUT_LIMIT = 8 * 1024**2
+
+
+def _safe_json(value: object) -> str:
+    # One prefixed physical log line: values cannot become Actions commands.
+    text = json.dumps(value, sort_keys=True, ensure_ascii=True)
+    if len(text) > 60000:
+        raise ValueError("safe_output_limit")
+    return text
+
+
+def _emit_hosted(value: object) -> None:
+    text = _safe_json(value)
+    print("QT998_JSON " + text, flush=True)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        # JSON is escaped again for Markdown code fences and HTML rendering.
+        text = text.replace("`", "\\u0060").replace("<", "\\u003c")
+        with Path(summary).open("a", encoding="utf-8") as output:
+            output.write("\n```json\n" + text + "\n```\n")
+
+
+def _github_json(route: str) -> dict:
+    connection = http.client.HTTPSConnection("api.github.com", timeout=20)
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "qt998-admission"}
+    token = os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        connection.request("GET", "/repos/hexafe/metroliza" + route, headers=headers)
+        response = connection.getresponse()
+        data = response.read(2 * 1024**2 + 1)
+        if response.status != 200 or len(data) > 2 * 1024**2:
+            raise ValueError("github_admission_unavailable")
+        result = json.loads(data)
+        if not isinstance(result, dict):
+            raise ValueError("github_admission_invalid")
+        return result
+    finally:
+        connection.close()
+
+
+def _validate_admission(event, environment, repository, prior_runs, head, tree):
+    inputs = event.get("inputs") or {}
+    sha = inputs.get("qt998_scaffolding_sha", "")
+    expected = {
+        "GITHUB_REPOSITORY": "hexafe/metroliza", "GITHUB_REPOSITORY_ID": "478225616",
+        "GITHUB_ACTOR": "hexafe", "GITHUB_ACTOR_ID": "100516322",
+        "GITHUB_TRIGGERING_ACTOR": "hexafe", "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REF": "refs/heads/" + BRANCH, "GITHUB_REF_TYPE": "branch",
+        "GITHUB_RUN_ATTEMPT": "1", "QT998_RUNNER_ENVIRONMENT": "github-hosted",
+        "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
+    }
+    if any(environment.get(key) != value for key, value in expected.items()):
+        raise ValueError("untrusted_execution_context")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("missing_exact_scaffolding_sha")
+    if not (sha == head == environment.get("GITHUB_SHA")
+            == environment.get("QT998_WORKFLOW_SHA")):
+        raise ValueError("scaffolding_identity_mismatch")
+    if (inputs.get("run_industrial_postmortem") != "1"
+            or inputs.get("qt998_workload_sha") != FROZEN_SHA
+            or inputs.get("run_packaging_smoke", "0") != "0"
+            or inputs.get("run_windows_startup_benchmark", "0") != "0"
+            or tree != FROZEN_TREE):
+        raise ValueError("workload_or_opt_in_mismatch")
+    if (repository.get("id") != 478225616 or repository.get("private") is not False
+            or repository.get("visibility") != "public"
+            or repository.get("full_name") != "hexafe/metroliza"):
+        raise ValueError("public_repository_cost_gate_failed")
+    run_id = environment.get("GITHUB_RUN_ID", "")
+    if not re.fullmatch(r"[1-9][0-9]*", run_id):
+        raise ValueError("missing_run_identity")
+    current = [run for run in prior_runs if run.get("id") == int(run_id)]
+    if (len(current) != 1 or current[0].get("head_sha") != sha
+            or current[0].get("run_attempt") != 1
+            or current[0].get("event") != "workflow_dispatch"
+            or current[0].get("head_branch") != BRANCH):
+        raise ValueError("current_run_not_verified_in_history")
+    # The whole approval is single-use, even if the first run failed in setup.
+    # Serial concurrency makes a queued duplicate observe its predecessor.
+    for run in prior_runs:
+        if (run["event"] == "workflow_dispatch" and run["head_branch"] == BRANCH
+                and run["created_at"] >= APPROVAL_TIME and run["id"] < int(run_id)):
+            raise ValueError("approval_already_spent")
+    return {"scaffolding_sha": sha, "workload_sha": FROZEN_SHA,
+            "workload_tree": tree, "run_id": run_id, "run_attempt": 1}
+
+
+def _git(checkout: Path, *arguments: str) -> str:
+    result = subprocess.run(["git", "--no-optional-locks", "-C", str(checkout), *arguments],
+                            capture_output=True, text=True, check=True, timeout=20)
+    return result.stdout.strip()
+
+
+def _verify_workload(checkout: Path) -> None:
+    if (_git(checkout, "rev-parse", "HEAD") != FROZEN_SHA
+            or _git(checkout, "rev-parse", "HEAD^{tree}") != FROZEN_TREE
+            or _git(checkout, "status", "--porcelain=v1")
+            or any(not row.startswith("H ") for row in
+                   _git(checkout, "ls-files", "-v").splitlines())):
+        raise ValueError("frozen_workload_not_clean")
+    # actions/checkout must not leave an HTTP authorization header in this repo.
+    config = _git(checkout, "config", "--local", "--list")
+    if "extraheader=" in config.lower():
+        raise ValueError("persisted_checkout_credentials")
+
+
+def _private_root() -> Path:
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if not re.fullmatch(r"[1-9][0-9]*", run_id):
+        raise ValueError("missing_run_identity")
+    root = Path(tempfile.gettempdir()) / ("qt998-" + run_id)
+    if root.exists() or root.is_symlink():
+        info = root.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o700):
+            raise ValueError("unsafe_private_directory")
+    return root
+
+
+def hosted_admit() -> int:
+    if (os.getuid() == 0 or platform.machine() != "x86_64"
+            or platform.freedesktop_os_release().get("ID") != "ubuntu"
+            or platform.freedesktop_os_release().get("VERSION_ID") != "24.04"):
+        raise ValueError("standard_ubuntu_guest_required")
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+    repository = _github_json("")
+    prior = []
+    for page in range(1, 11):
+        result = _github_json(
+            "/actions/workflows/237333409/runs?event=workflow_dispatch"
+            "&branch=fix%2F998-industrial-qt-recurrence&per_page=100&page=" + str(page))
+        runs = result["workflow_runs"]
+        prior.extend(runs)
+        if len(runs) < 100:
+            break
+    else:
+        raise ValueError("admission_history_incomplete")
+    workload = Path.cwd().parent / "frozen-b10"
+    _verify_workload(workload)
+    receipt = _validate_admission(event, os.environ, repository, prior,
+                                  _git(Path.cwd(), "rev-parse", "HEAD"),
+                                  _git(workload, "rev-parse", "HEAD^{tree}"))
+    root = _private_root()
+    root.mkdir(mode=0o700)  # Existing admission cannot be reused in the same run.
+    (root / "admission.json").write_text(_safe_json(receipt), encoding="utf-8")
+    _emit_hosted({"admission": "accepted", **receipt})
+    return 0
+
+
+def _child_environment(root: Path) -> dict[str, str]:
+    return {
+        "PATH": str(Path(sys.executable).parent) + ":/usr/bin:/bin",
+        # setup-python's hosted binary uses its matching shared library directory.
+        # Derive this from the interpreter, never inherit an arbitrary loader path.
+        "LD_LIBRARY_PATH": str(Path(sys.base_prefix) / "lib"),
+        "HOME": str(root / "home"), "TMPDIR": str(root / "temporary"),
+        "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "QT_QPA_PLATFORM": "offscreen",
+        "PYTHONPATH": "src:.", "PYTHONFAULTHANDLER": "1",
+        "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_FILE": str(root / ".coverage"),
+        "DEBUGINFOD_URLS": "",
+    }
+
+
+def _child_limits() -> None:
+    import resource
+
+    os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (CORE_LIMIT, CORE_LIMIT))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (CORE_LIMIT, CORE_LIMIT))
+
+
+def _postmortem_exit(child_exit: int, diagnostics_ok: bool) -> int:
+    if child_exit:
+        return child_exit if child_exit > 0 else 128 - child_exit
+    return 0 if diagnostics_ok else 70
+
+
+def _binary_provenance() -> dict:
+    result = {}
+    for package, suffix in (("PyQt6", "QtCore.abi3.so"),
+                            ("PyQt6-Qt6", "libQt6Core.so.6"),
+                            ("PyQt6-sip", "sip.cpython-311-x86_64-linux-gnu.so")):
+        distribution = importlib.metadata.distribution(package)
+        matches = [file for file in distribution.files or () if str(file).endswith(suffix)]
+        if len(matches) != 1:
+            raise ValueError("runtime_binary_provenance_unavailable")
+        binary = Path(distribution.locate_file(matches[0]))
+        result[package] = {"binary": suffix,
+                           "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+    return result
+
+
+def _run_private(command: list[str], cwd: Path, root: Path, label: str) -> dict:
+    output = root / (label + ".raw")
+    with output.open("wb") as log:
+        with subprocess.Popen(command, cwd=cwd, env=_child_environment(root),
+                              stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                              preexec_fn=_child_limits) as child:
+            timed_out = False
+            cancelled = False
+            try:
+                child.wait(timeout=120)
+            except (subprocess.TimeoutExpired, InterruptedError) as error:
+                timed_out = isinstance(error, subprocess.TimeoutExpired)
+                cancelled = isinstance(error, InterruptedError)
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
+            except BaseException:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
+                raise
+            code, pid = child.returncode, child.pid
+    receipt = {"child_exit": code, "signal": -code if code < 0 else None, "pid": pid,
+               "timed_out": timed_out, "cancelled": cancelled, "output_ok": False}
+    try:
+        size = output.stat().st_size
+        # Only pytest terminal counts are exported, never arbitrary child text.
+        with output.open("rb") as stream:
+            text = stream.read(OUTPUT_LIMIT).decode("utf-8", errors="replace")
+        counts = re.findall(r"\b[0-9]+ (?:passed|failed|skipped|errors?)\b", text)
+        receipt.update(output_bytes=size, output_truncated=size > OUTPUT_LIMIT,
+                       pytest_counts=counts[-8:])
+        output.unlink()
+        receipt["output_ok"] = True
+    except OSError as error:
+        # The already observed exit is authoritative even if log processing fails.
+        receipt["output_capture_error"] = type(error).__name__
+    return receipt
+
+
+def _core_script(output: Path) -> str:
+    # Structured GDB APIs avoid exporting the automatic raw core/argument banner.
+    return f'''python
+import gdb, json, os
+fault = gdb.selected_thread().num
+threads = list(gdb.selected_inferior().threads())
+threads.sort(key=lambda thread: (thread.num != fault, thread.num))
+result = {{"fault_thread": fault, "pid": gdb.selected_inferior().pid,
+           "signal": int(gdb.parse_and_eval("$_siginfo.si_signo")),
+           "thread_count": len(threads), "truncated": len(threads) > 8, "threads": []}}
+for thread in threads[:8]:
+    thread.switch()
+    frame = gdb.newest_frame()
+    frames = []
+    while frame is not None and len(frames) < 20:
+        frames.append({{"function": frame.name() or "??"}})
+        frame = frame.older()
+    result["truncated"] = result["truncated"] or frame is not None
+    result["threads"].append({{"thread": thread.num, "frames": frames}})
+with open({str(output)!r}, "w", encoding="utf-8") as stream:
+    json.dump(result, stream)
+end
+'''
+
+
+def _inspect_core(root: Path, child: dict, executable: str) -> dict:
+    core = root / ("core." + str(child["pid"]))
+    if not core.exists():
+        return {"capture": "missing_core", "ok": False}
+    result = {"capture": "invalid_core", "ok": False}
+    try:
+        info = core.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_size >= CORE_LIMIT):
+            return result
+        with core.open("rb") as stream:
+            if stream.read(4) != b"\x7fELF":
+                return result
+        stack = root / "stack.json"
+        script = root / "postmortem.gdb"
+        script.write_text(_core_script(stack), encoding="utf-8")
+        command = ["/usr/bin/gdb", "-q", "-batch", "-nx", "-nh",
+                   "-iex", "set auto-load off", "-iex", "set debuginfod enabled off",
+                   "-iex", "set print frame-arguments none", "-iex", "set print pretty off",
+                   "-iex", "set print entry-values no", "-se", executable, "-c", str(core),
+                   "-x", str(script)]
+        debugger = _run_private(command, root, root, "debugger")
+        if (debugger["child_exit"] or debugger["timed_out"] or not debugger["output_ok"]
+                or debugger.get("output_truncated")):
+            return {"capture": "symbolizer_failed", "ok": False}
+        if not stack.is_file() or stack.stat().st_size > 60000:
+            return {"capture": "missing_or_oversize_stack", "ok": False}
+        native = json.loads(stack.read_text())
+        if (native["signal"] != child["signal"] or native["pid"] != child["pid"]
+                or not native["threads"]):
+            return {"capture": "core_identity_mismatch", "ok": False}
+        for thread in native["threads"]:
+            for frame in thread["frames"]:
+                function = _sanitize(frame["function"])
+                # Names only: no source paths, argument values or control bytes.
+                frame["name_truncated"] = len(function) > 240
+                frame["function"] = re.sub(r"[^A-Za-z0-9_:$<>~*. +,()\[\]&=-]", "?",
+                                           function)[:240]
+        return {"capture": "postmortem_stack", "ok": True, "core_bytes": info.st_size,
+                "native": native}
+    finally:
+        core.unlink(missing_ok=True)
+        for name in ("stack.json", "postmortem.gdb"):
+            (root / name).unlink(missing_ok=True)
+
+
+def _set_core_pattern(value: str) -> None:
+    subprocess.run(["sudo", "-n", "/usr/bin/tee", "/proc/sys/kernel/core_pattern"],
+                   input=value.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   check=True, timeout=10)
+    if Path("/proc/sys/kernel/core_pattern").read_text().strip() != value:
+        raise ValueError("guest_core_route_not_set")
+
+
+def _cleanup_hosted(root: Path) -> dict:
+    if not root.exists():
+        return {"ok": True, "private_storage_removed": True, "core_route_restored": None,
+                "route_status": "no state remains; see primary cleanup receipt if configured"}
+    state = root / "core-route.json"
+    restored = True
+    if state.exists():
+        try:
+            original = json.loads(state.read_text())["original"]
+            _set_core_pattern(original)
+        except Exception:
+            # A cleanup failure is reported non-green, never printed verbatim.
+            restored = False
+    removed = True
+    try:
+        shutil.rmtree(root)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        removed = False
+    return {"core_route_restored": restored, "private_storage_removed": removed,
+            "ok": restored and removed and not root.exists()}
+
+
+def hosted_observe() -> int:
+    root = _private_root()
+    admission = json.loads((root / "admission.json").read_text())
+    if (admission["run_id"] != os.environ.get("GITHUB_RUN_ID")
+            or admission["scaffolding_sha"] != os.environ.get("GITHUB_SHA")
+            or os.environ.get("GITHUB_RUN_ATTEMPT") != "1" or os.getuid() == 0):
+        raise ValueError("admission_not_applicable")
+    receipt = {"identity": admission, "observation": "not_started", "capability": "unproven"}
+    result = 70
+    def interrupt(signum, frame):
+        raise InterruptedError("hosted_parent_cancelled")
+
+    handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        os.umask(0o077)
+        for name in ("home", "temporary"):
+            (root / name).mkdir(mode=0o700)
+        workload = Path.cwd().parent / "frozen-b10"
+        _verify_workload(workload)
+        if shutil.which("gdb") != "/usr/bin/gdb" or shutil.disk_usage(root).free < 5 * 1024**3:
+            raise ValueError("capture_prerequisite_unavailable")
+        original = Path("/proc/sys/kernel/core_pattern").read_text().strip()
+        (root / "core-route.json").write_text(json.dumps({"original": original}))
+        _set_core_pattern(str(root / "core.%p"))
+        receipt["environment"] = {
+            "python": platform.python_version(), "kernel": platform.release(),
+            "libc": platform.libc_ver(), "runner_image": os.environ.get("ImageVersion", "unknown"),
+            "packages": {name: importlib.metadata.version(name) for name in
+                         ("PyQt6", "PyQt6-Qt6", "PyQt6-sip", "pandas", "numpy",
+                          "pytest", "pytest-cov", "coverage")},
+            "python_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
+            "gdb_sha256": hashlib.sha256(Path("/usr/bin/gdb").read_bytes()).hexdigest(),
+            "qt_binary_provenance": _binary_provenance(),
+            "normalization": "offscreen; private HOME/TMP/coverage; allowlisted env; no Qt theme overrides",
+        }
+        success = _run_private([sys.executable, "-c", "raise SystemExit(0)"], root, root, "success")
+        receipt["success_control"] = success
+        missing = _inspect_core(root, {"pid": "missing", "signal": 11}, sys.executable)
+        receipt["unavailable_control"] = {"kind": "missing-core handler; no second crash",
+                                          **missing, "preserved_exit": _postmortem_exit(-11, False)}
+        sanitization = _safe_json({"control": _sanitize("password=qt998-synthetic-secret\n::error::x")})
+        if (success["child_exit"] != 0 or not success["output_ok"] or missing["ok"]
+                or "qt998-synthetic-secret" in sanitization):
+            raise ValueError("noncrashing_capability_control_failed")
+        receipt["sanitization_control"] = "passed; one JSON line, synthetic secret removed"
+        source = root / "control.c"
+        source.write_text("void qt998_crash_control(void) { *(volatile int *)0 = 998; }\n"
+                          "int main(void) { qt998_crash_control(); return 0; }\n")
+        binary = root / "control"
+        compiled = _run_private(["/usr/bin/gcc", "-g", "-O0", "-o", str(binary), str(source)],
+                                root, root, "compiler")
+        if compiled["child_exit"] or not compiled["output_ok"]:
+            raise ValueError("synthetic_control_compile_failed")
+        control = _run_private([str(binary)], root, root, "synthetic")
+        receipt["synthetic_control"] = control
+        capture = _inspect_core(root, control, str(binary))
+        receipt["synthetic_control"] = {**control, **capture,
+                                         "core_removed": not (root / ("core." + str(control["pid"]))).exists()}
+        if (control["child_exit"] != -11 or not control["output_ok"] or not capture["ok"]
+                or "qt998_crash_control" not in json.dumps(capture)):
+            raise ValueError("native_capability_unproven")
+        receipt["capability"] = "proven_by_synthetic_control_only"
+        # One ordinary process, with the original file/order/coverage arguments.
+        receipt["command"] = ["python", "-m", "pytest", *PYTEST_ARGUMENTS]
+        receipt["observation"] = "started_once"
+        child = _run_private([sys.executable, "-m", "pytest", *PYTEST_ARGUMENTS],
+                             workload, root, "industrial")
+        receipt["industrial"] = child
+        result = _postmortem_exit(child["child_exit"], False)
+        capture = (_inspect_core(root, child, sys.executable) if child["signal"]
+                   else {"capture": "not_needed_no_signal", "ok": True})
+        receipt["industrial"] = {**child, **capture}
+        complete = child.get("pytest_counts") == ["42 passed"] and child["output_ok"]
+        receipt["observation"] = ("NON-REPRODUCTION" if complete else "INCOMPLETE_WORKLOAD"
+                                  ) if child["child_exit"] == 0 else "FAILED_WORKLOAD"
+        receipt["frozen_tracked_bytes_unchanged"] = not _git(workload, "diff", "HEAD", "--name-only")
+        result = _postmortem_exit(child["child_exit"], capture["ok"] and child["output_ok"]
+                                 and not child.get("output_truncated")
+                                 and receipt["frozen_tracked_bytes_unchanged"] and complete)
+    except Exception as error:
+        receipt["diagnostic_error"] = type(error).__name__
+    finally:
+        receipt["cleanup"] = _cleanup_hosted(root)
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+        if not receipt["cleanup"]["ok"] and result == 0:
+            result = 70
+        receipt["launcher_exit"] = result
+        _emit_hosted(receipt)
+    return result
+
+
+def hosted_main(mode: str) -> int:
+    try:
+        if (os.environ.get("QT998_RUNNER_ENVIRONMENT") != "github-hosted"
+                or platform.system() != "Linux" or os.getuid() == 0
+                or platform.freedesktop_os_release().get("ID") != "ubuntu"
+                or platform.freedesktop_os_release().get("VERSION_ID") != "24.04"):
+            raise ValueError("standard_ubuntu_guest_required")
+        if mode == "--hosted-admit":
+            return hosted_admit()
+        if mode == "--hosted-cleanup":
+            cleanup = _cleanup_hosted(_private_root())
+            _emit_hosted({"always_cleanup": cleanup})
+            return 0 if cleanup["ok"] else 70
+        return hosted_observe()
+    except Exception as error:
+        _emit_hosted({"hosted_diagnostic_error": type(error).__name__,
+                      "mode": mode, "observation_status": "consult primary receipt; unknown at outer boundary"})
+        return 70
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 2 and sys.argv[1] in {
+        "--hosted-admit", "--hosted-observe", "--hosted-cleanup",
+    }:
+        raise SystemExit(hosted_main(sys.argv[1]))
     raise SystemExit(main())

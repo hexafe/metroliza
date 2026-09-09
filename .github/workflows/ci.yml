@@ -15,15 +15,30 @@ on:
         required: false
         default: "0"
 
+      run_industrial_postmortem:
+        description: "Owner-only Issue998 experiment; 1 spends the single approved hosted attempt"
+        required: false
+        default: "0"
+      qt998_scaffolding_sha:
+        description: "Exact independently and configured-reviewed scaffolding commit"
+        required: false
+        default: ""
+      qt998_workload_sha:
+        description: "Exact frozen b10 workload commit required by Issue998"
+        required: false
+        default: ""
+
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # The one experimental dispatch cannot cancel, or be cancelled by, ordinary CI.
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1' && 'qt998-postmortem-5604177526' || format('ci-{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1') }}
 
 jobs:
   static-checks:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_industrial_postmortem != '1'
     name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -137,6 +152,7 @@ jobs:
         run: python scripts/security_audit.py --ci --sibling-root artifacts/security_siblings
 
   unit-tests:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_industrial_postmortem != '1'
     name: Unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -331,6 +347,7 @@ jobs:
 
 
   native-artifacts:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_industrial_postmortem != '1'
     name: Native wheel build and smoke checks
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -790,6 +807,7 @@ jobs:
           if-no-files-found: warn
 
   windows-core-smoke:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_industrial_postmortem != '1'
     name: Windows core smoke
     runs-on: windows-latest
     timeout-minutes: 30
@@ -906,3 +924,65 @@ jobs:
           name: windows-startup-artifacts
           path: startup-artifacts
           if-no-files-found: warn
+
+
+  industrial-postmortem:
+    name: Industrial post-mortem (single owner opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PYTHONPATH: src:.
+      PYTHONDONTWRITEBYTECODE: '1'
+      PIP_NO_CACHE_DIR: '1'
+      QT998_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      QT998_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: Checkout reviewed scaffolding without persisted credentials
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: scaffolding
+
+      - name: Checkout exact historical workload without persisted credentials
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          ref: b10c3fd3cde9fd9ef83101e8459b7b9999a5ecea
+          path: frozen-b10
+
+      - name: Setup historical Python without Actions caching
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11.16'
+          cache: ''
+
+      - name: Admit the sole public-repository owner dispatch
+        working-directory: scaffolding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci_industrial_qt_diagnostics.py --hosted-admit
+
+      - name: Provision debugger and Qt support inside disposable guest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdb gcc libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+
+      - name: Install frozen project requirements without pip cache
+        working-directory: frozen-b10
+        run: |
+          python -m pip install --upgrade pip --no-cache-dir
+          python -m pip install --no-cache-dir -r requirements-dev.txt
+
+      - name: Prove private post-mortem capability then observe frozen b10 once
+        working-directory: scaffolding
+        run: python scripts/ci_industrial_qt_diagnostics.py --hosted-observe
+
+      - name: Restore guest routing and verify raw-data removal
+        if: always()
+        working-directory: scaffolding
+        run: python scripts/ci_industrial_qt_diagnostics.py --hosted-cleanup
