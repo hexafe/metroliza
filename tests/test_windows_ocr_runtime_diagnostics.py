@@ -754,3 +754,86 @@ def test_real_pdf_loop_preserves_independent_database_result(simulated_runtime, 
     assert checks["database"]["facts"] == {}
     assert all(marker.encode() not in result.stdout + result.stderr for marker in CANARIES)
     assert database.read_bytes() == before
+
+
+@pytest.fixture
+def caller_input_fixture(simulated_runtime, tmp_path):
+    """Copy only entrypoint bytes; never put disposable inputs in the real checkout."""
+    import hashlib
+    import shutil
+    import sqlite3
+    from types import SimpleNamespace
+
+    repo, caller = tmp_path / "repository", tmp_path / "caller"
+    (repo / "scripts").mkdir(parents=True)
+    caller.mkdir()
+    (repo / "scripts/__init__.py").write_text("")
+    for name in ("windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py",
+                 "ocr_diagnostic_contract.py"):
+        shutil.copy2(contract.REPO_ROOT / "scripts" / name, repo / "scripts" / name)
+    for folder, label in ((caller, "CALLER"), (repo, "REPOSITORY")):
+        _write_synthetic_pdf(folder / "source.pdf", "Reference: " + label + "\nOperator: " + CANARIES[4])
+    digests = [hashlib.sha256((folder / "source.pdf").read_bytes()).hexdigest()
+               for folder in (caller, repo)]
+    assert digests[0] != digests[1]
+    for folder, counts in ((caller, (1, 4)), (repo, (3, 2))):
+        with closing(sqlite3.connect(folder / "source.db")) as connection, connection:
+            connection.executescript(
+                "CREATE TABLE source_files(id INTEGER, sha256 TEXT, absolute_path TEXT);"
+                "CREATE TABLE parsed_reports(id INTEGER, source_file_id INTEGER);"
+                "CREATE TABLE report_metadata(report_id INTEGER, metadata_json TEXT);"
+            )
+            for digest, count in zip(digests, counts):
+                connection.executemany("INSERT INTO source_files VALUES(1,?,?)",
+                                       [(digest, CANARIES[3])] * count)
+    originals = {path: path.read_bytes() for folder in (caller, repo)
+                 for path in (folder / "source.pdf", folder / "source.db")}
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(simulated_runtime), str(contract.REPO_ROOT / "src")))
+
+    def run(script, pdf, database, output=None, cwd=None, extra_env=None):
+        command = [sys.executable, "-B", str(repo / "scripts" / script)]
+        command += ["--pdf", str(pdf)] if script.startswith("windows") else [str(pdf)]
+        command += ["--db-file", str(database), "--compact"]
+        if output is not None:
+            command += ["--output", str(output)]
+        return subprocess.run(command, cwd=cwd or caller, env=env | (extra_env or {}),
+                              capture_output=True, timeout=45)
+
+    return SimpleNamespace(repo=repo, caller=caller, run=run, originals=originals)
+
+
+@pytest.mark.parametrize("script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"])
+@pytest.mark.parametrize("decoy", ["missing", "unsupported", "different_rows"])
+def test_real_outside_cwd_uses_caller_database(caller_input_fixture, script, decoy):
+    fixture = caller_input_fixture
+    repo_db = fixture.repo / "source.db"
+    if decoy == "missing":
+        repo_db.unlink()
+    elif decoy == "unsupported":
+        repo_db.write_bytes(b"SYNTHETIC_DB_SOURCE_1002")
+    decoy_bytes = repo_db.read_bytes() if repo_db.exists() else None
+    result = fixture.run(script, fixture.caller / "source.pdf", "source.db")
+    checks = {row["id"]: row for row in assert_public_safe(result)["checks"]}
+    assert checks["database"]["status"] == "pass", checks["database"]
+    assert checks["database"]["facts"] == {"matching_rows": 1}, checks["database"]
+    assert checks["pdf"]["status"] == "pass"
+    assert result.returncode == 0
+    for path in (fixture.caller / "source.pdf", fixture.caller / "source.db"):
+        assert path.read_bytes() == fixture.originals[path]
+    assert (repo_db.read_bytes() if repo_db.exists() else None) == decoy_bytes
+
+
+@pytest.mark.parametrize("script", ["windows_ocr_runtime_diagnostics.py", "diagnose_header_ocr_metadata.py"])
+def test_real_outside_cwd_publication_uses_same_input_identity(caller_input_fixture, script):
+    fixture = caller_input_fixture
+    # The former worker input becomes legitimate unrelated output after the fix.
+    # Its count distinguishes inspection from merely protecting a .db suffix.
+    output = fixture.repo / "source.db"
+    result = fixture.run(script, fixture.caller / "source.pdf", "source.db", output)
+    checks = {row["id"]: row for row in assert_public_safe(result, output)["checks"]}
+    assert checks["database"]["facts"] == {"matching_rows": 1}, checks["database"]
+    assert result.returncode == 0
+    assert result.stdout == b""
+    for path in (fixture.caller / "source.pdf", fixture.caller / "source.db"):
+        assert path.read_bytes() == fixture.originals[path]
