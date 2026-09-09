@@ -823,6 +823,15 @@ jobs:
           "tests/test_csv_pipeline_performance.py::test_benchmark_cli_help_without_resource"
           "tests/test_csv_pipeline_performance.py::test_benchmark_worker_requires_resource_before_setup"
 
+      - name: Run safe OCR diagnostics and native PowerShell contract tests
+        env:
+          PYTHONPATH: src;.
+        run: >-
+          python -m pytest -v
+          tests/test_windows_ocr_runtime_diagnostics.py
+          tests/test_header_ocr_diagnostics_script.py
+          tests/test_windows_ocr_powershell.py
+
       - name: Run finite numeric filter and query-consumer parity on Windows
         env:
           PYTHONPATH: src;.

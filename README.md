@@ -72,10 +72,30 @@ To diagnose OCR for one PDF without relying on PowerShell output redirection:
   -OutputPath "$env:USERPROFILE\Desktop\ocr_diag.json"
 ```
 
-The output JSON includes module specs, native import smoke tests, VC++ runtime
-registry status, RapidOCR model-file status, and the real parser metadata
-diagnostic. A healthy OCR metadata path reports `header_extraction_mode="ocr"`
-and `field_sources` such as `position_cell`, not `filename_candidate`.
+Diagnostics use safe schema version 1: controlled check IDs, required/advisory
+classification, pass/fail/skipped status and reason, validated numeric runtime
+versions, model counts, extraction mode and metadata-source counts. Document/DB
+values, paths, hashes, environment values, raw child output and exception text
+are omitted. There is no raw-output mode.
+
+The selected OCR configuration is tested (default: ONNX Runtime CPU), including
+its configured model files, imports, engine construction and synthetic inference.
+Unselected alternatives are skipped/advisory. Required failures and incomplete
+requested PDF/DB inspections return nonzero while preserving completed safe
+results. Missing optional metadata is an observation; a missing or unsupported
+DB is a failure. Database inspection never creates/migrates a DB, and refuses
+active WAL/journal sidecars to avoid stale inspection or sidecar changes.
+
+`--output` / `-OutputPath` publishes complete UTF-8 JSON atomically. Publication
+failure returns nonzero and preserves the earlier complete file. Output cannot
+alias the PDF, DB or their sidecars. Without an output path the safe result is
+printed to stdout. The standalone header script supports the same safe contract.
+Direct Python CLI input/output paths are relative to the calling directory;
+each input is resolved there before inspection and output protection. The
+PowerShell wrapper retains its repository-relative input/output convention.
+PowerShell propagates failure and required setup validation stops before setup
+completion. Explicit `-SkipOcr` / `-SkipValidation` remains skipped, not tested/pass.
+These source diagnostics do not establish clean-Windows packaged acceptance (#901).
 
 ## Build Windows EXE
 
