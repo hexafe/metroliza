@@ -517,6 +517,29 @@ def _cleanup_hosted(root: Path) -> dict:
             "ok": restored and removed and not root.exists()}
 
 
+def _prepare_hosted_capture(root: Path, workload: Path) -> dict:
+    os.umask(0o077)
+    for name in ("home", "temporary"):
+        (root / name).mkdir(mode=0o700)
+    _verify_workload(workload)
+    if shutil.which("gdb") != "/usr/bin/gdb" or shutil.disk_usage(root).free < 5 * 1024**3:
+        raise ValueError("capture_prerequisite_unavailable")
+    original = Path("/proc/sys/kernel/core_pattern").read_text().strip()
+    (root / "core-route.json").write_text(json.dumps({"original": original}))
+    _set_core_pattern(str(root / "core.%p"))
+    return {
+        "python": platform.python_version(), "kernel": platform.release(),
+        "libc": platform.libc_ver(), "runner_image": os.environ.get("ImageVersion", "unknown"),
+        "packages": {name: importlib.metadata.version(name) for name in
+                     ("PyQt6", "PyQt6-Qt6", "PyQt6-sip", "pandas", "numpy",
+                      "pytest", "pytest-cov", "coverage")},
+        "python_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
+        "gdb_sha256": hashlib.sha256(Path("/usr/bin/gdb").read_bytes()).hexdigest(),
+        "qt_binary_provenance": _binary_provenance(),
+        "normalization": "offscreen; private HOME/TMP/coverage; allowlisted env; no Qt theme overrides",
+    }
+
+
 def hosted_observe() -> int:
     root = _private_root()
     admission = json.loads((root / "admission.json").read_text())
@@ -531,27 +554,8 @@ def hosted_observe() -> int:
 
     handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
-        os.umask(0o077)
-        for name in ("home", "temporary"):
-            (root / name).mkdir(mode=0o700)
         workload = Path.cwd().parent / "frozen-b10"
-        _verify_workload(workload)
-        if shutil.which("gdb") != "/usr/bin/gdb" or shutil.disk_usage(root).free < 5 * 1024**3:
-            raise ValueError("capture_prerequisite_unavailable")
-        original = Path("/proc/sys/kernel/core_pattern").read_text().strip()
-        (root / "core-route.json").write_text(json.dumps({"original": original}))
-        _set_core_pattern(str(root / "core.%p"))
-        receipt["environment"] = {
-            "python": platform.python_version(), "kernel": platform.release(),
-            "libc": platform.libc_ver(), "runner_image": os.environ.get("ImageVersion", "unknown"),
-            "packages": {name: importlib.metadata.version(name) for name in
-                         ("PyQt6", "PyQt6-Qt6", "PyQt6-sip", "pandas", "numpy",
-                          "pytest", "pytest-cov", "coverage")},
-            "python_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
-            "gdb_sha256": hashlib.sha256(Path("/usr/bin/gdb").read_bytes()).hexdigest(),
-            "qt_binary_provenance": _binary_provenance(),
-            "normalization": "offscreen; private HOME/TMP/coverage; allowlisted env; no Qt theme overrides",
-        }
+        receipt["environment"] = _prepare_hosted_capture(root, workload)
         success = _run_private([sys.executable, "-c", "raise SystemExit(0)"], root, root, "success")
         receipt["success_control"] = success
         missing = _inspect_core(root, {"pid": "missing", "signal": 11}, sys.executable)

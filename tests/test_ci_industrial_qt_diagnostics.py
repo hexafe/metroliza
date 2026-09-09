@@ -294,6 +294,12 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
     assert inputs["qt998_scaffolding_sha"]["default"] == ""
     assert inputs["qt998_workload_sha"]["default"] == ""
     job = workflow["jobs"]["industrial-postmortem"]
+    assert workflow["concurrency"]["cancel-in-progress"] == "true"
+    assert "github.run_id" in workflow["concurrency"]["group"]
+    assert "format('ci-{0}-{1}', github.workflow, github.ref)" in workflow["concurrency"]["group"]
+    assert job["concurrency"] == {"group": "qt998-postmortem-job-5604177526",
+                                   "cancel-in-progress": "false"}
+    assert job["concurrency"]["group"] not in workflow["concurrency"]["group"]
     # GitHub evaluates job env before assigning a runner; runner context is step-only.
     assert "runner." not in repr(job.get("env", {}))
     assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "25"
@@ -329,3 +335,54 @@ def test_hosted_modes_refuse_local_host_before_any_side_effect(monkeypatch, mode
     monkeypatch.setattr(diagnostic, "_set_core_pattern", forbidden)
     assert diagnostic.hosted_main(mode) == 70
     assert receipts[0]["hosted_diagnostic_error"] == "ValueError"
+
+
+@pytest.mark.parametrize(("failure_stage", "expected_exit"), [("preparation", 70), ("capture", 139)])
+def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
+    monkeypatch, tmp_path, failure_stage, expected_exit,
+):
+    admission = {"run_id": "500", "scaffolding_sha": "a" * 40}
+    (tmp_path / "admission.json").write_text(json.dumps(admission))
+    monkeypatch.setenv("GITHUB_RUN_ID", "500")
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setattr(diagnostic, "_private_root", lambda: tmp_path)
+    monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(diagnostic.signal, "signal", lambda *args: None)
+    events, receipts = [], []
+
+    def prepare(*args):
+        events.append("preparation")
+        if failure_stage == "preparation":
+            raise OSError("synthetic private preparation failure")
+        return {}
+
+    def run_private(command, cwd, root, label):
+        events.append(label)
+        code = -11 if label in {"synthetic", "industrial"} else 0
+        return {"child_exit": code, "signal": 11 if code else None,
+                "pid": label, "output_ok": True}
+
+    def inspect_core(root, child, executable):
+        if child["pid"] == "industrial":
+            raise OSError("synthetic private capture failure")
+        return {"ok": child["pid"] == "synthetic", "frame": "qt998_crash_control"}
+
+    def cleanup(root):
+        events.append("cleanup")
+        return {"ok": True}
+
+    monkeypatch.setattr(diagnostic, "_prepare_hosted_capture", prepare)
+    monkeypatch.setattr(diagnostic, "_run_private", run_private)
+    monkeypatch.setattr(diagnostic, "_inspect_core", inspect_core)
+    monkeypatch.setattr(diagnostic, "_cleanup_hosted", cleanup)
+    monkeypatch.setattr(diagnostic, "_emit_hosted", receipts.append)
+    assert diagnostic.hosted_observe() == expected_exit
+    assert events[-1] == "cleanup" and events.count("cleanup") == 1
+    assert receipts[0]["diagnostic_error"] == "OSError"
+    if failure_stage == "preparation":
+        assert events == ["preparation", "cleanup"]
+        assert receipts[0]["observation"] == "not_started"
+    else:
+        assert events.count("industrial") == 1
+        assert receipts[0]["industrial"]["child_exit"] == -11

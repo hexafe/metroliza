@@ -32,9 +32,9 @@ permissions:
   contents: read
 
 concurrency:
-  # The one experimental dispatch cannot cancel, or be cancelled by, ordinary CI.
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1' && 'qt998-postmortem-5604177526' || format('ci-{0}-{1}', github.workflow, github.ref) }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1') }}
+  # Experiment workflows are unique; their job below serializes approval use.
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1' && format('qt998-postmortem-run-{0}', github.run_id) || format('ci-{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
 
 jobs:
   static-checks:
@@ -929,6 +929,9 @@ jobs:
   industrial-postmortem:
     name: Industrial post-mortem (single owner opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1'
+    concurrency:
+      group: qt998-postmortem-job-5604177526
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
