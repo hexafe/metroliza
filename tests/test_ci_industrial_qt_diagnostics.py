@@ -294,6 +294,8 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
     assert inputs["qt998_scaffolding_sha"]["default"] == ""
     assert inputs["qt998_workload_sha"]["default"] == ""
     job = workflow["jobs"]["industrial-postmortem"]
+    # GitHub evaluates job env before assigning a runner; runner context is step-only.
+    assert "runner." not in repr(job.get("env", {}))
     assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "25"
     assert "workflow_dispatch" in job["if"] and "== '1'" in job["if"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
@@ -301,6 +303,8 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
         action = step.get("uses", "")
         assert "upload-artifact" not in action and "actions/cache" not in action
         assert "${{" not in step.get("run", "")
+        if step.get("run", "").startswith("python scripts/ci_industrial_qt_diagnostics.py --hosted-"):
+            assert step["env"]["QT998_RUNNER_ENVIRONMENT"] == "${{ runner.environment }}"
         if "setup-python" in action:
             assert step["with"]["cache"] == ""
             assert step["with"]["python-version"] == "3.11.16"

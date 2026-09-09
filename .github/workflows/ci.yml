@@ -938,7 +938,6 @@ jobs:
       PYTHONPATH: src:.
       PYTHONDONTWRITEBYTECODE: '1'
       PIP_NO_CACHE_DIR: '1'
-      QT998_RUNNER_ENVIRONMENT: ${{ runner.environment }}
       QT998_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - name: Checkout reviewed scaffolding without persisted credentials
@@ -965,6 +964,7 @@ jobs:
         working-directory: scaffolding
         env:
           GH_TOKEN: ${{ github.token }}
+          QT998_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: python scripts/ci_industrial_qt_diagnostics.py --hosted-admit
 
       - name: Provision debugger and Qt support inside disposable guest
@@ -980,9 +980,13 @@ jobs:
 
       - name: Prove private post-mortem capability then observe frozen b10 once
         working-directory: scaffolding
+        env:
+          QT998_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: python scripts/ci_industrial_qt_diagnostics.py --hosted-observe
 
       - name: Restore guest routing and verify raw-data removal
         if: always()
         working-directory: scaffolding
+        env:
+          QT998_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: python scripts/ci_industrial_qt_diagnostics.py --hosted-cleanup
