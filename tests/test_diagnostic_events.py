@@ -868,12 +868,20 @@ def test_impossible_startup_combinations_fail_closed(changes):
      diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.MILESTONE),
     (diagnostic_events.StartupCallsite.BOOTSTRAP,
      diagnostic_events.StartupMode.UNKNOWN, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.LICENSE_REJECTED,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.STARTUP_FAILED),
+    (diagnostic_events.StartupCallsite.SMOKE_RETURN,
+     diagnostic_events.StartupMode.PDF_SMOKE, diagnostic_events.StartupOutcome.STARTUP_FAILED),
 ])
 def test_terminal_outcomes_are_revalidated_at_every_boundary(phase, callsite, mode, outcome):
     import logging
     from metroliza.shared.logging_utils import ManagedSafeFormatter
 
     changes = {"callsite": callsite, "mode": mode, "outcome": outcome}
+    if outcome is diagnostic_events.StartupOutcome.STARTUP_FAILED:
+        changes["exception"] = build_exception_diagnostic_event(
+            RuntimeError("synthetic-private-exception"), operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+        )
     if phase == "constructor":
         with pytest.raises(DiagnosticEventValidationError):
             diagnostic_events.StartupDiagnosticEvent(**{**_startup_fields(), **changes})

@@ -771,8 +771,11 @@ def _validate_startup_route(event: StartupDiagnosticEvent) -> None:
         if event.callsite is not StartupCallsite.EVENT_LOOP_EXEC_REQUEST:
             raise DiagnosticEventValidationError("application failure before startup boundary")
     if event.outcome is StartupOutcome.STARTUP_FAILED:
-        if event.callsite in (StartupCallsite.EVENT_LOOP_EXEC_REQUEST, StartupCallsite.APPLICATION_RETURN):
-            raise DiagnosticEventValidationError("startup failure after startup boundary")
+        valid = event.callsite is StartupCallsite.BOOTSTRAP or any(
+            event.callsite is callsite for callsite in _STARTUP_MILESTONE_CALLSITES
+        )
+        if not valid:
+            raise DiagnosticEventValidationError("startup failure at terminal boundary")
 
 
 def _validate_startup_mode(event: StartupDiagnosticEvent) -> None:
