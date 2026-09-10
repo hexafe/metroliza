@@ -206,6 +206,11 @@ def parse_html(text: str) -> HtmlFacts:
 
 
 def inspect_html(path: Path) -> dict:
+    """Aggregate boundary check only: repeated sentinels cannot prove field parity.
+
+    Reference/metadata URL text is not asserted. No per-field literal-preservation
+    acceptance follows from this stopped audit's fixture.
+    """
     text = path.read_text(encoding="utf-8")
     parsed = parse_html(text)
     assert TEXT in "".join(parsed.text) and BREAKOUT in "".join(parsed.text)
@@ -239,7 +244,8 @@ def inspect_html(path: Path) -> dict:
                     png.verify()
             assets.append(asset.name)
     assert any(name.endswith(".js") for name in assets), "local Plotly runtime missing"
-    return {"spec_count": len(specs), "script_elements": len(parsed.scripts),
+    return {"text_evidence": "aggregate boundary only; per-field parity NOT TESTED",
+            "spec_count": len(specs), "script_elements": len(parsed.scripts),
             "preview_labels": config["previewLabels"], "assets": sorted(assets),
             "links": links, "automatic_external_resources": 0}
 
@@ -431,7 +437,8 @@ def run(output_dir: Path) -> dict:
     assert_no_marker([stdout.getvalue().encode(), stderr.getvalue().encode()])
     result = {"evidence_level": "Linux real serialization; structural inspection; injected failure seams",
               "captured_stdout_chars": len(stdout.getvalue()), "captured_stderr_chars": len(stderr.getvalue()),
-              "cases": cases, "browser_execution": "NOT TESTED", "excel_execution": "NOT TESTED"}
+              "cases": cases, "html_field_parity": "NOT TESTED: repeated sentinels; reference/metadata URL unasserted",
+              "browser_execution": "NOT TESTED", "excel_execution": "NOT TESTED"}
     (output_dir / "facts.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
 

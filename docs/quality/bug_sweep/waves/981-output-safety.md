@@ -11,7 +11,9 @@ Excela, kodu ani odwołań zewnętrznych. Nie wykazano wykonania niebezpiecznej
 formuły, wycieku danych ani konkretnego zachowania interfejsu Excela.
 
 Pozostałe próby wykonane przed STOP: generator XLSX zachował tekst komórek i nagłówków; generator
-HTML zachował badane granice elementów, atrybutów JSON i osadzonej konfiguracji JS.
+HTML nie wykazał przełamania badanych granic elementów, atrybutów JSON i osadzonej
+konfiguracji JS. Powtarzane znaczniki potwierdzają tylko obecność zbiorczą; nie
+potwierdzają zachowania każdego pola. Tekstu URL w referencji i metadanych nie sprawdzono.
 Poprzedni kompletny plik i zasoby HTML przetrwały wszystkie sprawdzone błędy.
 Kontrole negatywne potrafiły odrzucić celowo błędne, nieszkodliwe artefakty.
 
@@ -109,11 +111,11 @@ the bundled runtime, writes a private generation and promotes the HTML.
 | XLSX header and string cells: formula-like text, URL, quotes, Unicode, HTML delimiters | `RowTable.iter_rows` → backend header/cell writes → shared strings + sheet cells | `write_string`; `strings_to_formulas=False`; `strings_to_urls=False` | ACCEPTED CONTRACT: 8 exact literal cells, native synthetic numeric cells retained |
 | Deliberately authored XLSX formula and navigation | real summary-row helper → `write_formula`; adapter → `write_url` | explicit writer APIs, separate from imported values | ACCEPTED CONTRACT: exactly `D2=SUM(B2:B8)`, one internal E2 link; no external relationship |
 | Imported measurement header/axis → chart title and series name | real `build_measurement_export_dataframe` → `insert_measurement_chart` → XlsxWriter name processing → chart `strRef/f` | workbook string policy does not govern chart `name` interpretation | CONFIRMED DEFECT F981-01: two imported name formulas; completed export; wrong cached label |
-| HTML header, subtitle, reference, metadata and annotation | normalization → `_render_section`, detail cards, attributes/text | `html.escape`; fixed section IDs; image-name slugification | ACCEPTED CONTRACT: exact decoded text, no fixture-created element or event attribute |
-| Distribution group/series label and chart title/axes | chart spec → `_render_plotly_shell` → `data-plotly-spec-*` | JSON encoding followed by attribute escaping | ACCEPTED CONTRACT at serialization boundary: two real specs parse; browser interpretation NOT TESTED |
-| Derived preview label | `_dashboard_visual_preview_labels_from_manifest` → inline configuration | JSON encoding plus `</` escaping in `dashboard_visual_runtime_config_json` | ACCEPTED CONTRACT: actual embedded JSON decodes to the fixture label; no extra script element |
+| HTML header, subtitle, reference, metadata and annotation | normalization → `_render_section`, detail cards, attributes/text | `html.escape`; fixed section IDs; image-name slugification | TEST GAP for per-field text parity: repeated sentinels only establish aggregate presence; URL reference/metadata value unasserted. No fixture-created element or event attribute observed |
+| Distribution group/series label and chart title/axes | chart spec → `_render_plotly_shell` → `data-plotly-spec-*` | JSON encoding followed by attribute escaping | ACCEPTED CONTRACT only for parseable serialized attributes and aggregate sentinel presence. Each title/axis/group/annotation's exact value NOT TESTED; browser interpretation NOT TESTED |
+| Derived preview label | `_dashboard_visual_preview_labels_from_manifest` → inline configuration | JSON encoding plus `</` escaping in `dashboard_visual_runtime_config_json` | ACCEPTED CONTRACT only for parseable embedded JSON containing a reused sentinel; exact source-field-to-preview mapping NOT TESTED; no extra script element |
 | Synthetic non-export dictionary keys and unused context credential | ignored section/payload `credentials`, inert workbook context attribute | explicit selected fields, no generic object dump | ACCEPTED CONTRACT for these schema-negative fixtures only; real credential-loading flow NOT TESTED |
-| Synthetic workbook parent path | `excel_file` → basename-only manifest | `Path(...).name` | ACCEPTED CONTRACT: parent marker absent; selected metadata remains present |
+| Synthetic workbook parent path | `excel_file` → basename-only manifest | `Path(...).name` | ACCEPTED CONTRACT: parent marker absent. Per-field metadata preservation NOT TESTED |
 | Hidden/package metadata and resources | every XLSX member; HTML and referenced assets | structural inspection independent of serializer | ACCEPTED CONTRACT for fixture: one visible sheet, no comments/external relations; forbidden markers absent |
 | Exception output | injected exception → lower API caller; captured stdout/stderr | caller owns error handling | ACCEPTED CONTRACT: marker propagates in internal exception; no captured stream/artifact marker. Rollback-builder runs captured zero characters; default-enabled run captured 414 stderr characters whose content was not retained. Persistent logging/UI NOT TESTED |
 | Offline resources | emitted non-anchor `src`/`href` → relative files | bundled local Plotly, generated PNGs | ACCEPTED CONTRACT for static references: assets exist, PNGs decode, no automatic external resource attribute |
@@ -122,8 +124,8 @@ The last row does **not** establish zero browser network requests. Source search
 found no `fetch`, XHR, WebSocket or CSS `url(...)` in the four inspected project
 shell/control/publisher/navigation modules. Bundled Plotly contains capabilities
 outside the selected chart types; its runtime network behavior and user actions
-were not executed. A selected URL-valued datum remained data, not an emitted
-resource. The explicit internal workbook link remains a legitimate positive control.
+were not executed. No automatic URL-valued resource attribute was observed. The selected URL's
+literal value was not asserted, so its preservation as data is NOT TESTED. The explicit internal workbook link remains a legitimate positive control.
 
 ## Publication and failure evidence
 
@@ -225,7 +227,8 @@ Product source was not patched to create them.
 | Item | Classification | Severity / confidence | Disposition and next gate |
 | --- | --- | --- | --- |
 | F981-01 supported measurement chart names | CONFIRMED DEFECT | provisional P1 / high structural confidence | STOP; focused Issue and separate repair authority before resumption |
-| The 22 pre-STOP cell/output/publication checks, excluding F981-01 | ACCEPTED CONTRACT | no defect severity / high for exercised structural boundary | Keep existing safeguards; retain reproducible assertions |
+| The 22 pre-STOP cases, excluding F981-01 | ACCEPTED CONTRACT only for the exact assertions described above | no defect severity / high for those exercised boundaries | File-only historical publication oracle; aggregate HTML text checks do not establish per-field parity |
+| HTML field identity, URL reference/metadata value and preview mapping | TEST GAP | P3 evidence gap / high confidence that assertions are missing | Reused sentinels can mask one field's loss; require distinct sentinels and expected parsed contexts under later manual audit authority |
 | Plotly rich-text/DOM interpretation after JSON decoding | TEST GAP | P3 evidence gap / high confidence that execution is missing | #937/#981 owner: isolated network-blocked browser run before runtime literal/offline acceptance; serializer unchanged |
 | Actual Windows locks, mid-flush failure, close callbacks, cleanup failure and process interruption | TEST GAP | P3 evidence gap / high | #936/#981 owner: narrow native fault/cancellation evidence before platform publication acceptance; staging seam preserved |
 | Non-export keys versus real credential sources and persistent error handling | TEST GAP | P3 evidence gap / high | #983 owner: connect actual configuration/error sources under separate authority; no invented privacy policy |
@@ -320,3 +323,18 @@ cleanup defect. Historical 22-case receipts retain their original hashes and
 weaker oracle qualification. Local execution remains unavailable; current-byte
 execution and review receipts belong to normal hosted CI and the canonical
 checkpoint. No additional runtime audit or product repair was started.
+
+## HTML evidence qualification from configured review
+
+Configured review [P2](https://github.com/hexafe/metroliza/pull/1036#discussion_r3980374501)
+showed that repeated `TEXT`/`BREAKOUT` sentinels can hide loss or corruption of an
+individual HTML field, while `URL_TEXT` in reference/metadata is not asserted.
+The prior per-field ACCEPTED CONTRACT wording was unsupported. The matrix, probe
+receipt labels and JSON now classify field-level parity as **TEST GAP / NOT
+TESTED**, and retain only the actual aggregate-presence, parseability and boundary
+checks. This is a correction of an audit overclaim, not an HTML product defect.
+The assertions have not been strengthened and the missing proof remains open.
+A later manually authorized audit should use distinct field sentinels and exact
+parsed-context assertions with field-removal negative controls. No new runtime
+campaign is started after STOP to close this gap; old receipts are not relabelled
+as field-level proof.

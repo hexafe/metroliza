@@ -141,7 +141,8 @@
     "Static local resource attributes verified; runtime CSS/JS/Plotly networking not executed",
     "Default-enabled run stderr content not retained; count414 is not zero-warning evidence",
     "Unsupported legacy Group Comparison candidate not reproduced; separate supported measurement finding is authoritative",
-    "Full measurement/group-analysis/industrial/tabular writers, cloud, packaged Windows, numeric parity and ledger terminalization remain outside this checkpoint"
+    "Full measurement/group-analysis/industrial/tabular writers, cloud, packaged Windows, numeric parity and ledger terminalization remain outside this checkpoint",
+    "HTML reused sentinels establish aggregate presence only; individual field parity, URL reference/metadata and source-to-preview identity NOT TESTED"
   ],
   "stop_policy": {
     "adjacent_runtime_probing_stopped": true,
@@ -546,11 +547,21 @@
     "severity": "P2 audit assertion false-negative; not a product cleanup finding",
     "change": "Snapshot includes directories with trailing-slash markers; added synthetic empty-generation negative control.",
     "current_probe_file_git_blob_sha": {
-      "tests/audit_981_output_safety.py": "bdc3c32adacc4a28468fae8a9976d999d787cdf0",
+      "tests/audit_981_output_safety.py": "ed24ae81f20c02107d07a75272c6d16f64fbd509",
       "tests/test_audit_981_output_safety.py": "b56358fc582c50971b5d0d2b56ba72d1a4c52c49"
     },
     "local_validation": "NOT TESTED after local exec failure; unchanged pre-STOP receipts not relabelled",
     "current_execution_and_review": "Normal hosted CI and renewed exact-candidate reviews; canonical checkpoint owns terminal receipt",
     "production_changed": false
+  },
+  "html_field_evidence_qualification": {
+    "review_finding": "https://github.com/hexafe/metroliza/pull/1036#discussion_r3980374501",
+    "classification": "TEST GAP / NOT TESTED",
+    "severity": "P2 audit overclaim corrected by narrowing dispositions; P3 missing per-field evidence remains",
+    "assertions": "UNCHANGED: aggregate parsed text/spec presence, embedded JSON parseability, no fixture-created element/event/script boundary",
+    "missing": "Distinct field sentinels and expected parsed contexts; URL reference/metadata value assertion; field-removal controls",
+    "historical_receipts": "Retained under original hashes; no per-field proof",
+    "stop_disposition": "No new runtime campaign; later manual audit authority required",
+    "current_driver_git_blob_sha": "ed24ae81f20c02107d07a75272c6d16f64fbd509"
   }
 }
