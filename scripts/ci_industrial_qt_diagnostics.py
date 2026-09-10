@@ -175,11 +175,12 @@ def main() -> int:
     return result
 
 
-FROZEN_SHA = "216877364752c20bcdc65752382da470c4f363d5"
-FROZEN_TREE = "719b80423271ff59c6fe08ace819fee2ae151fa0"
+FROZEN_SHA = "b451e7af3153da89c16d09f5b26a7f4799a82da3"
+FROZEN_TREE = "1936b583b3ba61b9466d61599b563aabdb3556e7"
 BRANCH = "fix/998-industrial-qt-recurrence"
-PHASE = "5620299028"
-APPROVAL_TIME = "2026-09-10T14:27:39Z"
+PHASE = "5624613947"
+APPROVAL_TIME = "2026-09-10T19:56:21Z"
+AUTHORITY_DEADLINE = "2026-09-10T22:54:45+00:00"
 PROBE_VARIANTS = ("async_reference", "async_owned_teardown")
 PROBE_PHASES = ("cycle_start", "parent_constructed", "load_started", "ownership_checked",
                 "worker_terminal", "load_checked", "parent_close", "boundary", "release",
@@ -196,6 +197,13 @@ PYTEST_ARGUMENTS = [
 ]
 CORE_LIMIT = 2 * 1024**3
 OUTPUT_LIMIT = 8 * 1024**2
+PRIVATE_LIMIT = 8 * 1024**3
+LIBRARY_LIMIT = 512 * 1024**2
+SYMBOLIZER_LIMIT = 512 * 1024**2
+POSTMORTEM_SECONDS = 600
+SYMBOLIZER_PACKAGES = ("gdb", "libdebuginfod1t64", "libdebuginfod-common", "libipt2",
+                       "libbabeltrace1", "libsource-highlight4t64", "libsource-highlight-common",
+                       "libboost-regex1.83.0")
 
 
 def _safe_json(value: object) -> str:
@@ -363,10 +371,10 @@ def hosted_admit() -> int:
                                   _git(workload, "rev-parse", "HEAD^{tree}"))
     current = next(run for run in prior if str(run["id"]) == receipt["run_id"])
     # Use workflow creation (earlier than guest start) conservatively. Leave
-    # at least three minutes of the45-minute job ceiling for private cleanup.
-    receipt["observation_deadline_epoch"] = (
-        datetime.fromisoformat(current["created_at"].replace("Z", "+00:00")).timestamp() + 42 * 60
-    )
+    # Reserve five minutes for cleanup, also inside the nonrenewable authority.
+    receipt["observation_deadline_epoch"] = min(
+        datetime.fromisoformat(current["created_at"].replace("Z", "+00:00")).timestamp() + 40 * 60,
+        datetime.fromisoformat(AUTHORITY_DEADLINE).timestamp() - 5 * 60)
     receipt["probe_sha256"] = _verify_probe()
     root = _private_root()
     root.mkdir(mode=0o700)  # Existing admission cannot be reused in the same run.
@@ -376,17 +384,27 @@ def hosted_admit() -> int:
 
 
 def _child_environment(root: Path) -> dict[str, str]:
-    return {
+    environment = {
         "PATH": str(Path(sys.executable).parent) + ":/usr/bin:/bin",
         # setup-python's hosted binary uses its matching shared library directory.
         # Derive this from the interpreter, never inherit an arbitrary loader path.
         "LD_LIBRARY_PATH": str(Path(sys.base_prefix) / "lib"),
-        "HOME": str(root / "home"), "TMPDIR": str(root / "temporary"),
-        "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "QT_QPA_PLATFORM": "offscreen",
+        "HOME": str(root / "home"), "QT_QPA_PLATFORM": "offscreen",
         "PYTHONPATH": "src:.", "PYTHONFAULTHANDLER": "1",
-        "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_FILE": str(root / ".coverage"),
+        "COVERAGE_FILE": str(root / ".coverage"),
         "DEBUGINFOD_URLS": "",
     }
+    # Retain ordinary noncredential CI values only within a fixed vocabulary.
+    allowed = {"LANG": {"C.UTF-8", "C.utf8", "en_US.UTF-8"},
+               "LC_ALL": {"C.UTF-8", "C.utf8", "en_US.UTF-8"},
+               "QT_QPA_PLATFORMTHEME": {"gtk3", "qt5ct", "qt6ct"},
+               "QT_STYLE_OVERRIDE": {"Fusion", "fusion"},
+               "PYTHONDONTWRITEBYTECODE": {"0", "1"},
+               "TMPDIR": {"/tmp"}}  # nosec B108: env allowlist; captures use the private root.
+    for name, values in allowed.items():
+        if os.environ.get(name) in values:
+            environment[name] = os.environ[name]
+    return environment
 
 
 def _child_limits() -> None:
@@ -395,6 +413,14 @@ def _child_limits() -> None:
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (CORE_LIMIT, CORE_LIMIT))
     resource.setrlimit(resource.RLIMIT_FSIZE, (CORE_LIMIT, CORE_LIMIT))
+
+
+def _tool_limits() -> None:
+    import resource
+
+    os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (SYMBOLIZER_LIMIT, SYMBOLIZER_LIMIT))
 
 
 def _postmortem_exit(child_exit: int, diagnostics_ok: bool) -> int:
@@ -406,15 +432,17 @@ def _postmortem_exit(child_exit: int, diagnostics_ok: bool) -> int:
 def _binary_provenance() -> dict:
     result = {}
     for package, suffix in (("PyQt6", "QtCore.abi3.so"),
+                            ("PyQt6", "QtGui.abi3.so"), ("PyQt6", "QtWidgets.abi3.so"),
                             ("PyQt6-Qt6", "libQt6Core.so.6"),
+                            ("PyQt6-Qt6", "libQt6Gui.so.6"), ("PyQt6-Qt6", "libQt6Widgets.so.6"),
                             ("PyQt6-sip", "sip.cpython-311-x86_64-linux-gnu.so")):
         distribution = importlib.metadata.distribution(package)
         matches = [file for file in distribution.files or () if str(file).endswith(suffix)]
         if len(matches) != 1:
             raise ValueError("runtime_binary_provenance_unavailable")
         binary = Path(distribution.locate_file(matches[0]))
-        result[package] = {"binary": suffix,
-                           "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+        result[package + "/" + suffix] = {"binary": suffix,
+                                          "sha256": _file_identity(binary)["sha256"]}
     return result
 
 
@@ -686,15 +714,16 @@ def _extract_python_after_exit(text: str, cwd: Path, receipt: dict, label: str) 
         return _empty_python_context("extraction_error", receipt)
 
 
-def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeout: float = 120) -> dict:
+def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeout: float = 120,
+                 consume=None, environment=None, core_allowed=True) -> dict:
     if not 0 < timeout <= 1200:
         raise ValueError("invalid_stage_timeout")
     output = root / (label + ".raw")
     started = time.monotonic()
     with output.open("wb") as log:
-        with subprocess.Popen(command, cwd=cwd, env=_child_environment(root),
+        with subprocess.Popen(command, cwd=cwd, env=environment or _child_environment(root),
                               stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-                              preexec_fn=_child_limits) as child:
+                              preexec_fn=_child_limits if core_allowed else _tool_limits) as child:
             timed_out = False
             cancelled = False
             try:
@@ -726,6 +755,8 @@ def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeo
             receipt.update(_probe_summary(text, label))
         if receipt["signal"] and _python_workload_stage(label):
             receipt["python_context"] = _extract_python_after_exit(text, cwd, receipt, label)
+        if consume is not None and not receipt["output_truncated"]:
+            consume(text)
         output.unlink()
         receipt["output_ok"] = True
     except InterruptedError:
@@ -740,10 +771,16 @@ def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeo
     return receipt
 
 
-def _core_script(output: Path) -> str:
+def _core_script(output: Path, sysroot: Path | None = None) -> str:
     # Structured GDB APIs avoid exporting the automatic raw core/argument banner.
     return f'''python
-import gdb, json, os
+import gdb, json, os, re
+expected_root = {str(sysroot) if sysroot else None!r}
+if expected_root is not None:
+    for obj in gdb.objfiles():
+        virtual = re.fullmatch(r"system-supplied DSO at 0x[0-9a-fA-F]+", obj.filename)
+        if not virtual and not os.path.realpath(obj.filename).startswith(expected_root + os.sep):
+            raise RuntimeError("target_binary_outside_preserved_sysroot")
 fault = gdb.selected_thread().num
 threads = list(gdb.selected_inferior().threads())
 threads.sort(key=lambda thread: (thread.num != fault, thread.num))
@@ -774,7 +811,7 @@ end
 '''
 
 
-def _inspect_core(root: Path, child: dict, executable: str) -> dict:
+def _inspect_core(root: Path, child: dict, executable: str, *, symbolizer=None) -> dict:
     core = root / ("core." + str(child["pid"]))
     if not core.exists():
         return {"capture": "missing_core", "ok": False}
@@ -789,13 +826,23 @@ def _inspect_core(root: Path, child: dict, executable: str) -> dict:
                 return result
         stack = root / "stack.json"
         script = root / "postmortem.gdb"
-        script.write_text(_core_script(stack), encoding="utf-8")
-        command = ["/usr/bin/gdb", "-q", "-batch", "-nx", "-nh",
+        sysroot = root / "sysroot" if symbolizer else None
+        script.write_text(_core_script(stack, sysroot), encoding="utf-8")
+        command = [symbolizer["executable"] if symbolizer else "/usr/bin/gdb",
+                   "-q", "-batch", "-nx", "-nh",
+                   *(["--data-directory=" + str(Path(symbolizer["executable"]).parents[1] / "share/gdb")]
+                     if symbolizer else []),
                    "-iex", "set auto-load off", "-iex", "set debuginfod enabled off",
                    "-iex", "set print frame-arguments none", "-iex", "set print pretty off",
-                   "-iex", "set print entry-values no", "-se", executable, "-c", str(core),
+                   "-iex", "set print entry-values no",
+                   *(["-iex", "set sysroot " + str(sysroot),
+                      "-iex", "set solib-search-path " + str(sysroot / "empty"),
+                      "-iex", "set debug-file-directory " + str(sysroot / "empty")]
+                     if sysroot else []), "-se", executable, "-c", str(core),
                    "-x", str(script)]
-        debugger = _run_private(command, root, root, "debugger")
+        debugger = _run_private(command, root, root, "debugger",
+                                **({"environment": symbolizer["environment"], "core_allowed": False}
+                                   if symbolizer else {}))
         if (debugger["child_exit"] or debugger["timed_out"] or not debugger["output_ok"]
                 or debugger.get("output_truncated")):
             return {"capture": "symbolizer_failed", "ok": False}
@@ -855,13 +902,280 @@ def _cleanup_hosted(root: Path) -> dict:
             "ok": restored and removed and not root.exists()}
 
 
+def _storage_ready(root: Path, reserve: int = CORE_LIMIT) -> None:
+    # Two retained cores, one active raw log and two512MiB private binary sets
+    # fit below8GiB. No experiment cache/artifact or unrestricted snapshot.
+    total = sum(path.lstat().st_size for path in root.rglob("*") if not path.is_dir())
+    if total + reserve > PRIVATE_LIMIT or shutil.disk_usage(root).free < reserve + 1024**3:
+        raise ValueError("private_storage_budget_unavailable")
+
+
+def _file_identity(path: Path) -> dict:
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size > LIBRARY_LIMIT:
+        raise ValueError("binary_not_bounded_regular_file")
+    with path.open("rb") as stream:
+        if stream.read(4) != b"\x7fELF":
+            raise ValueError("binary_not_elf")
+        stream.seek(0)
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    after = path.stat()
+    def identity(info):
+        return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+    if identity(before) != identity(after):
+        raise ValueError("binary_changed_while_reading")
+    return {"stat": identity(after), "sha256": digest}
+
+
+def _inventory_binaries(root: Path) -> dict:
+    candidates = {Path(sys.executable), Path(sys.executable).resolve(),
+                  Path("/lib64/ld-linux-x86-64.so.2")}
+    def libraries(text):
+        for line in text.splitlines():
+            if " => /" in line:
+                candidates.add(Path(line.split(" => ", 1)[1]))
+    checked = _run_private(["/sbin/ldconfig", "-p"], root, root, "loader_inventory",
+                           consume=libraries, core_allowed=False)
+    if not _complete_stage(checked, []):
+        raise ValueError("loader_inventory_unavailable")
+    for distribution in importlib.metadata.distributions():
+        for file in distribution.files or ():
+            if ".so" in Path(str(file)).name:
+                candidates.add(Path(distribution.locate_file(file)))
+    candidates.update((Path(sys.base_prefix) / "lib").glob("libpython*.so*"))
+    candidates.update((Path(sys.base_prefix) / "lib/python3.11/lib-dynload").glob("*.so"))
+    if len(candidates) > 4096:
+        raise ValueError("binary_inventory_limit")
+    inventory, identities = {}, {}
+    for candidate in sorted(candidates):
+        resolved = candidate.resolve(strict=True)
+        if str(resolved) not in identities:
+            identities[str(resolved)] = _file_identity(resolved)
+        inventory[str(candidate.absolute())] = identities[str(resolved)]
+        inventory[str(resolved)] = identities[str(resolved)]
+    (root / "binaries.json").write_text(json.dumps(inventory))
+    return inventory
+
+
+def _system_packages(root: Path) -> list[list[str]]:
+    rows = []
+    checked = _run_private(["/usr/bin/dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Architecture}\n"],
+                            root, root, "system_packages", core_allowed=False,
+                            consume=lambda text: rows.extend(line.split("\t") for line in text.splitlines()))
+    if (not _complete_stage(checked, []) or not 1 <= len(rows) <= 2500
+            or any(len(row) != 3 or any(not re.fullmatch(r"[A-Za-z0-9.+:~_-]{1,120}", item)
+                                       for item in row) for row in rows)):
+        raise ValueError("system_package_provenance_unavailable")
+    return sorted(rows)
+
+
+def _record_package_provenance(root: Path) -> str:
+    system = _system_packages(root)
+    (root / "system-packages.json").write_text(json.dumps(system))
+    python = sorted([distribution.metadata["Name"], distribution.version]
+                    for distribution in importlib.metadata.distributions())
+    if (len(python) > 250 or any(not re.fullmatch(r"[A-Za-z0-9.+_-]{1,100}", item)
+                               for row in python for item in row)):
+        raise ValueError("python_package_provenance_unavailable")
+    for kind, rows in (("system", system), ("python", python)):
+        for offset in range(0, len(rows), 80):
+            _emit_hosted({"pre_workload_packages": {"kind": kind, "offset": offset,
+                "total": len(rows), "rows": rows[offset:offset + 80]}})
+    return hashlib.sha256(json.dumps(system).encode()).hexdigest()
+
+
+def _collect_core(root: Path, child: dict) -> dict:
+    core = root / ("core." + str(child["pid"]))
+    if not core.exists():
+        return {"capture": "missing_core", "ok": False}
+    info = core.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_mode & 0o077 or not 4 < info.st_size < CORE_LIMIT):
+        return {"capture": "invalid_core", "ok": False}
+    with core.open("rb") as stream:
+        header = stream.read(64)
+        valid = (len(header) == 64 and header[:7] == b"\x7fELF\x02\x01\x01"
+                 and header[16:20] == b"\x04\x00\x3e\x00")
+    return {"capture": "collected_not_symbolized" if valid else "invalid_core",
+            "ok": valid, "core_bytes": info.st_size}
+
+
+def _mapped_files(text: str) -> list[str]:
+    if text.count("NT_FILE (mapped files)") != 1:
+        raise ValueError("core_mapping_table_unavailable")
+    table = text.split("NT_FILE (mapped files)", 1)[1]
+    table = re.split(r"\n\s*\S+\s+0x[0-9a-fA-F]+\s+NT_", table, maxsplit=1)[0]
+    rows = re.findall(r"(?m)^\s*0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s*\n([^\n]+)", table)
+    paths = [row.strip() for row in rows]
+    if (not paths or len(paths) > 4096 or len(paths) != len(re.findall(r"(?m)^\s*0x", table))
+            or any(not path.startswith("/") or " (deleted)" in path or "\x00" in path
+                   or ".." in Path(path).parts for path in paths)):
+        raise ValueError("core_mapping_table_incomplete")
+    return sorted(set(paths))
+
+
+def _preserve_mapped_files(root: Path, paths: list[str], inventory: dict) -> list[dict]:
+    result = []
+    copied_bytes = sum(path.stat().st_size for path in (root / "sysroot").rglob("*") if path.is_file())
+    for name in sorted(set(paths)):
+        source = Path(name)
+        if not source.is_absolute() or ".." in source.parts:
+            raise ValueError("invalid_mapped_path")
+        with source.open("rb") as stream:
+            elf = stream.read(4) == b"\x7fELF"
+        if not elf:
+            continue  # Mapped measurement/data files are never copied or named.
+        expected = inventory.get(name)
+        if expected is None or _file_identity(source) != expected:
+            raise ValueError("mapped_binary_missing_or_changed")
+        target = root / "sysroot" / name.lstrip("/")
+        if not target.exists():
+            copied_bytes += source.stat().st_size
+            if copied_bytes > LIBRARY_LIMIT:
+                raise ValueError("preserved_library_limit")
+            _storage_ready(root, source.stat().st_size)
+            target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+            with source.open("rb") as original, target.open("xb") as copy:
+                os.chmod(target, 0o600)
+                shutil.copyfileobj(original, copy, 1024**2)
+        if (_file_identity(target)["sha256"] != expected["sha256"]
+                or _file_identity(source) != expected):
+            raise ValueError("preserved_binary_hash_mismatch")
+        result.append({"module": re.sub(r"[^A-Za-z0-9_.+-]", "?", source.name)[:100],
+                       "sha256": expected["sha256"]})
+    if not result:
+        raise ValueError("no_matching_elf_binaries")
+    return result
+
+
+def _preserve_core_binaries(root: Path, child: dict, executable: str, inventory: dict) -> list[dict]:
+    paths = []
+    read = _run_private(["/usr/bin/readelf", "-n", "-W", str(root / ("core." + str(child["pid"])))],
+                        root, root, "core_notes", consume=lambda text: paths.extend(_mapped_files(text)),
+                        environment={**_child_environment(root), "LC_ALL": "C"}, core_allowed=False)
+    if not _complete_stage(read, []) or not paths or str(Path(executable).resolve()) not in paths:
+        raise ValueError("core_mapping_or_executable_unproven")
+    return _preserve_mapped_files(root, [*paths, executable], inventory)
+
+
+def _prepare_symbolizer(root: Path) -> dict:
+    # Runs only after the entire workload has stopped and mapped files are saved.
+    # Fixed trusted Ubuntu package set; no apt install/upgrade or general resolver.
+    packages, extracted = root / "packages", root / "symbolizer"
+    packages.mkdir(mode=0o700)
+    extracted.mkdir(mode=0o700)
+    _storage_ready(root, SYMBOLIZER_LIMIT)
+    environment = {**_child_environment(root), "TMPDIR": str(root / "temporary")}
+    sizes = []
+    metadata = _run_private(["/usr/bin/apt-cache", "show", "--no-all-versions", *SYMBOLIZER_PACKAGES],
+                            root, root, "symbolizer_sizes", core_allowed=False,
+                            consume=lambda text: sizes.extend(re.findall(r"(?m)^(Size|Installed-Size): ([0-9]+)$", text)))
+    if (not _complete_stage(metadata, []) or len(sizes) != 2 * len(SYMBOLIZER_PACKAGES)
+            or sum(int(size) * (1024 if kind == "Installed-Size" else 1) for kind, size in sizes) > SYMBOLIZER_LIMIT):
+        raise ValueError("symbolizer_package_budget_unavailable")
+    download = _run_private(["/usr/bin/apt-get", "download", *SYMBOLIZER_PACKAGES],
+                            packages, root, "symbolizer_download", timeout=180,
+                            environment=environment, core_allowed=False)
+    if not _complete_stage(download, []):
+        raise ValueError("isolated_symbolizer_download_failed")
+    archives = sorted(packages.glob("*.deb"))
+    if len(archives) != len(SYMBOLIZER_PACKAGES):
+        raise ValueError("isolated_symbolizer_package_set_incomplete")
+    total = sum(path.stat().st_size for path in archives)
+    provenance = []
+    for archive in archives:
+        fields = []
+        metadata = _run_private(["/usr/bin/dpkg-deb", "-f", str(archive), "Package", "Version", "Installed-Size"],
+                                root, root, "symbolizer_metadata", core_allowed=False,
+                                consume=lambda text: fields.extend(text.splitlines()))
+        if not _complete_stage(metadata, []):
+            raise ValueError("symbolizer_package_metadata_failed")
+        parsed = dict(line.split(": ", 1) for line in fields)
+        if parsed["Package"] not in SYMBOLIZER_PACKAGES or not re.fullmatch(r"[0-9A-Za-z.+:~_-]{1,100}", parsed["Version"]):
+            raise ValueError("symbolizer_package_identity_failed")
+        total += int(parsed["Installed-Size"]) * 1024
+        if total > SYMBOLIZER_LIMIT:
+            raise ValueError("symbolizer_storage_limit")
+        provenance.append({"package": parsed["Package"], "version": parsed["Version"],
+                           "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()})
+        unpack = _run_private(["/usr/bin/dpkg-deb", "-x", str(archive), str(extracted)],
+                              root, root, "symbolizer_extract", environment=environment, core_allowed=False)
+        if not _complete_stage(unpack, []):
+            raise ValueError("isolated_symbolizer_extract_failed")
+        _storage_ready(root, 0)
+    environment["LD_LIBRARY_PATH"] = str(extracted / "usr/lib/x86_64-linux-gnu") + ":/usr/lib/x86_64-linux-gnu"
+    return {"executable": str(extracted / "usr/bin/gdb"), "environment": environment,
+            "packages": provenance}
+
+
+def _symbolize_after_workload(root: Path, receipt: dict, result: int) -> int:
+    if any(stage.get("cancelled") or stage.get("post_exit_interrupted")
+           for stage in receipt.get("stages", [])):
+        receipt["symbolization"] = "not_started_after_cancel"
+        return result or 70
+    pending = [("synthetic_control", receipt["synthetic_control"], str(root / "control"))]
+    pending.extend((stage["stage"], stage, sys.executable) for stage in receipt.get("stages", [])
+                   if stage.get("signal") and not stage.get("timed_out"))
+    inventory = json.loads((root / "binaries.json").read_text())
+    preserved, usable = {}, []
+    for label, child, executable in pending:
+        try:
+            if not _collect_core(root, child)["ok"]:
+                raise ValueError("post_workload_core_unavailable")
+            preserved[label] = _preserve_core_binaries(root, child, executable, inventory)
+        except InterruptedError:
+            raise
+        except (OSError, ValueError) as error:
+            if label == "synthetic_control":
+                raise
+            receipt["natural_binary_capture"] = {"stage": label, "ok": False,
+                                                  "error": type(error).__name__}
+            continue
+        usable.append((label, child, executable))
+        for offset in range(0, len(preserved[label]), 50):
+            _emit_hosted({"preserved_binary_hashes": {"stage": label,
+                "offset": offset, "files": preserved[label][offset:offset + 50]}})
+    symbolizer = _prepare_symbolizer(root)
+    if _system_packages(root) != json.loads((root / "system-packages.json").read_text()):
+        raise ValueError("system_packages_changed_during_symbolizer_preparation")
+    receipt["system_packages_unchanged_after_symbolizer"] = True
+    receipt["symbolizer_packages"] = symbolizer["packages"]
+    for label, child, executable in usable:
+        private_executable = root / "sysroot" / executable.lstrip("/")
+        native = _inspect_core(root, child, str(private_executable), symbolizer=symbolizer)
+        _emit_hosted({"post_workload_native": {"stage": label,
+            "pid": child["pid"], "signal": child["signal"], "source_sha": FROZEN_SHA,
+            "source_tree": FROZEN_TREE, "matching_binary_count": len(preserved[label]),
+            "matching_manifest_sha256": hashlib.sha256(json.dumps(preserved[label], sort_keys=True).encode()).hexdigest(),
+            **native}})
+        if label == "synthetic_control":
+            receipt["control_symbolization_ok"] = bool(native["ok"] and "qt998_crash_control" in json.dumps(native))
+            if not receipt["control_symbolization_ok"]:
+                raise ValueError("synthetic_symbolization_unproven")
+        elif (native["ok"] and child.get("python_context_status") in ("available", "partial")
+              and child.get("python_context_receipt") == label
+              and not child.get("python_context_publication_error")):
+            receipt["observation"] = "CAPTURED"
+            receipt["paired_process"] = {"pid": child["pid"], "signal": child["signal"], "stage": label}
+        elif child.get("signal"):
+            receipt["observation"] = "CAPTURE INCOMPLETE"
+    receipt["symbolization"] = "finished"
+    return result
+
+
 def _prepare_hosted_capture(root: Path, workload: Path) -> dict:
     os.umask(0o077)
     for name in ("home", "temporary"):
         (root / name).mkdir(mode=0o700)
     _verify_workload(workload)
-    if shutil.which("gdb") != "/usr/bin/gdb" or shutil.disk_usage(root).free < 5 * 1024**3:
+    if not Path("/usr/bin/gcc").is_file() or not Path("/usr/bin/readelf").is_file():
         raise ValueError("capture_prerequisite_unavailable")
+    _storage_ready(root, 7 * 1024**3)
+    package_digest = _record_package_provenance(root)
+    inventory = _inventory_binaries(root)
+    selected = {"libc.so.6", "ld-linux-x86-64.so.2", "libpython3.11.so.1.0"}
+    runtime_binaries = [{"binary": Path(path).name, "sha256": identity["sha256"]}
+                        for path, identity in inventory.items() if Path(path).name in selected]
     original = Path("/proc/sys/kernel/core_pattern").read_text().strip()
     (root / "core-route.json").write_text(json.dumps({"original": original}))
     _set_core_pattern(str(root / "core.%p"))
@@ -870,9 +1184,11 @@ def _prepare_hosted_capture(root: Path, workload: Path) -> dict:
         "libc": platform.libc_ver(), "runner_image": os.environ.get("ImageVersion", "unknown"),
         "packages": {name: importlib.metadata.version(name) for name in RUNTIME_PACKAGES},
         "python_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
-        "gdb_sha256": hashlib.sha256(Path("/usr/bin/gdb").read_bytes()).hexdigest(),
+        "inventory_files": len(inventory),
+        "runtime_binary_provenance": runtime_binaries,
+        "system_packages_sha256": package_digest,
         "qt_binary_provenance": _binary_provenance(),
-        "normalization": "offscreen; private HOME/TMP/coverage; allowlisted env; no Qt theme overrides",
+        "normalization": "ordinary safe locale/theme/bytecode values; offscreen; private HOME/coverage; allowlisted env; limits; no raw publication",
     }
 
 
@@ -883,16 +1199,16 @@ def _validate_runtime(environment: dict) -> None:
 
 def _capture_ready(root: Path) -> None:
     if (Path("/proc/sys/kernel/core_pattern").read_text().strip() != str(root / "core.%p")
-            or shutil.which("gdb") != "/usr/bin/gdb"
             or shutil.disk_usage(root).free < CORE_LIMIT + 1024**3):
         raise ValueError("capture_capability_lost")
+    _storage_ready(root, 2 * CORE_LIMIT)
 
 
 def _prove_hosted_capture(root: Path, receipt: dict) -> None:
     _capture_ready(root)
     success = _run_private([sys.executable, "-c", "raise SystemExit(0)"], root, root, "success")
     receipt["success_control"] = success
-    missing = _inspect_core(root, {"pid": "missing", "signal": 11}, sys.executable)
+    missing = _collect_core(root, {"pid": "missing", "signal": 11})
     receipt["unavailable_control"] = {"kind": "missing-core handler; no second crash",
                                       **missing, "preserved_exit": _postmortem_exit(-11, False)}
     sanitization = _safe_json({"control": _sanitize("password=qt998-synthetic-secret\n::error::x")})
@@ -908,19 +1224,24 @@ def _prove_hosted_capture(root: Path, receipt: dict) -> None:
                             root, root, "compiler")
     if not _complete_stage(compiled, []):
         raise ValueError("synthetic_control_compile_failed")
+    inventory = json.loads((root / "binaries.json").read_text())
+    inventory[str(binary)] = _file_identity(binary)
+    (root / "binaries.json").write_text(json.dumps(inventory))
     control = _run_private([str(binary)], root, root, "synthetic")
     receipt["synthetic_control"] = control
     if control.get("post_exit_interrupted") or control.get("cancelled"):
         raise InterruptedError("control_post_exit_interrupted")
-    capture = _inspect_core(root, control, str(binary))
+    capture = _collect_core(root, control)
     receipt["synthetic_control"] = {**control, **capture,
                                      "core_removed": not (root / ("core." + str(control["pid"]))).exists()}
     if (control["child_exit"] != -11 or not control["output_ok"] or not capture["ok"]
             or control.get("timed_out") or control.get("cancelled")
-            or control.get("output_truncated")
-            or "qt998_crash_control" not in json.dumps(capture)):
-        raise ValueError("native_capability_unproven")
-    receipt["capability"] = "proven_by_synthetic_control_only"
+            or control.get("output_truncated")):
+        raise ValueError("collection_capability_unproven")
+    # readelf inspects mapping metadata only; this is still collection, no GDB.
+    saved = _preserve_core_binaries(root, control, str(binary), inventory)
+    receipt["synthetic_control"]["preserved_binary_count"] = len(saved)
+    receipt["capability"] = "collection_proven; symbolization_deferred"
 
 
 def _complete_stage(child: dict, expected: list[str]) -> bool:
@@ -997,7 +1318,10 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
         if child.get("post_exit_interrupted") or child.get("cancelled"):
             entry.update(capture="not_inspected_after_interrupt", ok=False)
             raise InterruptedError("workload_post_exit_interrupted")
-        capture = (_inspect_core(root, child, sys.executable) if child["signal"]
+        if python_context is not None:
+            entry["python_context_status"] = python_context.get("status", "unavailable")
+        capture = ((_collect_core(root, child) if receipt.get("deferred_symbolization")
+                    else _inspect_core(root, child, sys.executable)) if child["signal"]
                    else {"capture": "not_needed_no_signal", "ok": True})
         entry.update(capture)
         _verify_workload(workload)
@@ -1033,17 +1357,18 @@ def _failed_observation(stage: dict) -> str:
 
 
 def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
-    receipt.update(stages=[], observation="INCOMPLETE_WORKLOAD", industrial_limit=10,
-                   industrial_aggregate_limit_seconds=600,
+    receipt.update(stages=[], observation="INCOMPLETE_WORKLOAD", industrial_limit=1,
+                   industrial_aggregate_limit_seconds=120,
                    context="prefix once; fresh processes; shared cumulative coverage")
     epoch = receipt.get("identity", {}).get("observation_deadline_epoch")
-    job_deadline = time.monotonic() + max(0, epoch - time.time()) if epoch is not None else None
+    job_deadline = (time.monotonic() + max(0, epoch - time.time() - POSTMORTEM_SECONDS)
+                    if epoch is not None else None)
     coverage = PYTEST_ARGUMENTS[2:]
     prefix = [
         ("coverage_erase", [sys.executable, "-m", "coverage", "erase"], [], 60),
         ("main", [sys.executable, "-m", "pytest", "tests", "-q",
                   *[arg for arg in coverage if arg != "--cov-append"]],
-         ["4183 passed", "62 skipped"], 1200),
+         ["3903 passed", "62 skipped"], 1200),
         ("dashboard", [sys.executable, "-m", "pytest",
                        "tests/test_dashboard_visual_options_dialog.py", "-q", *coverage],
          ["24 passed"], 120),
@@ -1052,12 +1377,13 @@ def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
         result = _acquisition_stage(root, workload, receipt, label, command, expected, timeout,
                                     deadline=job_deadline)
         if result:
-            receipt["observation"] = _failed_observation(receipt["stages"][-1])
+            receipt["observation"] = ("CAPTURE INCOMPLETE" if receipt.get("deferred_symbolization")
+                                      else _failed_observation(receipt["stages"][-1]))
             return result
-    deadline = time.monotonic() + 600
+    deadline = time.monotonic() + 120
     if job_deadline is not None:
         deadline = min(deadline, job_deadline)
-    for sample in range(1, 11):
+    for sample in range(1, 2):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             receipt["acquisition_budget_expired"] = True
@@ -1068,7 +1394,8 @@ def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
             deadline=deadline,
         )
         if result:
-            receipt["observation"] = _failed_observation(receipt["stages"][-1])
+            receipt["observation"] = ("CAPTURE INCOMPLETE" if receipt.get("deferred_symbolization")
+                                      else _failed_observation(receipt["stages"][-1]))
             return result
         if time.monotonic() > deadline:
             receipt["acquisition_budget_expired"] = True
@@ -1123,7 +1450,8 @@ def hosted_observe() -> int:
             or admission.get("workload_tree") != FROZEN_TREE
             or os.environ.get("GITHUB_RUN_ATTEMPT") != "1" or os.getuid() == 0):
         raise ValueError("admission_not_applicable")
-    receipt = {"identity": admission, "observation": "not_started", "capability": "unproven"}
+    receipt = {"identity": admission, "observation": "not_started", "capability": "unproven",
+               "deferred_symbolization": True}
     result = 70
     def interrupt(signum, frame):
         if signum == signal.SIGALRM:
@@ -1143,6 +1471,11 @@ def hosted_observe() -> int:
         _validate_runtime(receipt["environment"])
         _prove_hosted_capture(root, receipt)
         result = _acquire_sequence(root, workload, receipt)
+        remaining = min(POSTMORTEM_SECONDS, int(admission["observation_deadline_epoch"] - time.time()))
+        if remaining <= 0:
+            raise TimeoutError("postmortem_budget_unavailable")
+        signal.alarm(remaining)
+        result = _symbolize_after_workload(root, receipt, result)
     except Exception as error:
         receipt["diagnostic_error"] = type(error).__name__
         result = receipt.get("acquisition_exit", result) or 70

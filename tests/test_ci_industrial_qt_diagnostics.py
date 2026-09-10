@@ -11,6 +11,251 @@ import pytest
 from scripts import ci_industrial_qt_diagnostics as diagnostic
 
 
+def test_ci_context_collects_core_without_starting_symbolizer(monkeypatch, tmp_path):
+    core = tmp_path / "core.123"
+    core.write_bytes(b"\x7fELF\x02\x01\x01" + bytes(9) + b"\x04\x00\x3e\x00" + bytes(44))
+    core.chmod(0o600)
+    monkeypatch.setattr(diagnostic, "_run_private", lambda *a, **k: pytest.fail("process during collection"))
+    result = diagnostic._collect_core(tmp_path, {"pid": 123, "signal": 11})
+    assert result["ok"] and result["capture"] == "collected_not_symbolized"
+    assert core.exists()
+
+
+def test_ci_context_missing_capture_is_not_a_symbolizer_probe(tmp_path):
+    assert diagnostic._collect_core(tmp_path, {"pid": 123}) == {"capture": "missing_core", "ok": False}
+
+
+@pytest.mark.parametrize("mutation", ["missing", "changed", "unrecorded"])
+def test_ci_context_never_substitutes_unmatched_mapped_binary(tmp_path, mutation):
+    source = tmp_path / "library.so"
+    source.write_bytes(b"\x7fELFbefore")
+    inventory = {str(source): diagnostic._file_identity(source)}
+    if mutation == "missing":
+        source.unlink()
+    elif mutation == "changed":
+        source.write_bytes(b"\x7fELFafter")
+    else:
+        inventory.clear()
+    with pytest.raises((ValueError, OSError)):
+        diagnostic._preserve_mapped_files(tmp_path, [str(source)], inventory)
+
+
+def test_ci_context_matching_binary_is_private_and_hash_verified(tmp_path):
+    source = tmp_path / "library.so"
+    source.write_bytes(b"\x7fELFbefore")
+    inventory = {str(source): diagnostic._file_identity(source)}
+    result = diagnostic._preserve_mapped_files(tmp_path, [str(source)], inventory)
+    copied = tmp_path / "sysroot" / str(source).lstrip("/")
+    assert copied.read_bytes() == source.read_bytes()
+    assert copied.stat().st_mode & 0o077 == 0
+    assert result[0]["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert str(tmp_path) not in repr(result)
+
+
+def test_ci_context_readelf_requires_complete_nt_file_table():
+    text = "  CORE 0x20 NT_FILE (mapped files)\n    Page size: 4096\n                 Start                 End         Page Offset\n    0x0000000010000000  0x0000000010001000  0x0000000000000000\n        /usr/lib/libc.so.6\n"
+    assert diagnostic._mapped_files(text) == ["/usr/lib/libc.so.6"]
+    with pytest.raises(ValueError):
+        diagnostic._mapped_files(text.replace("/usr/lib/libc.so.6", "(deleted)"))
+    with pytest.raises(ValueError):
+        diagnostic._mapped_files("Cannot decode 64-bit note")
+
+
+def test_ci_context_collection_failure_keeps139_and_stops(acquisition, monkeypatch):
+    root, calls, outcomes, _ = acquisition
+    outcomes["main"] = {"child_exit": -11, "signal": 11}
+    monkeypatch.setattr(diagnostic, "_inspect_core", lambda *a: pytest.fail("early symbolization"))
+    monkeypatch.setattr(diagnostic, "_collect_core", lambda *a: {"ok": False, "capture": "missing_core"})
+    receipt = {"deferred_symbolization": True}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 139
+    assert [call[0] for call in calls] == ["coverage_erase", "main"]
+    assert receipt["stages"][-1]["capture"] == "missing_core"
+
+
+def test_ci_context_workflow_never_provisions_debugger_before_workload():
+    import yaml
+    workflow = yaml.safe_load(Path(".github/workflows/ci.yml").read_text())
+    job = workflow["jobs"]["industrial-postmortem"]
+    provision = [step.get("run", "") for step in job["steps"]]
+    assert not any("apt-get install -y gdb" in command or "install -y gcc" in command for command in provision)
+    assert "PYTHONDONTWRITEBYTECODE" not in job["env"]
+    assert diagnostic.FROZEN_SHA == "b451e7af3153da89c16d09f5b26a7f4799a82da3"
+
+
+@pytest.mark.parametrize("failure", [None, "capture", "symbols", "timeout", "cancel"])
+def test_ci_context_order_and_cleanup_on_each_boundary(monkeypatch, tmp_path, failure):
+    admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
+        "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
+        "observation_deadline_epoch": diagnostic.time.time() + 2400}
+    (tmp_path / "admission.json").write_text(json.dumps(admission))
+    for key, value in {"GITHUB_RUN_ID": "500", "GITHUB_SHA": "a" * 40,
+                       "GITHUB_RUN_ATTEMPT": "1"}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(diagnostic, "_private_root", lambda: tmp_path)
+    monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(diagnostic.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(diagnostic.signal, "alarm", lambda *a: None)
+    monkeypatch.setattr(diagnostic, "_validate_runtime", lambda *a: None)
+    events, emitted = [], []
+    def prepare(*args):
+        events.append("inventory")
+        return {}
+    def collect(*args):
+        events.append("capture")
+        if failure == "capture":
+            raise ValueError("SYNTHETIC_SECRET")
+    def execute(root, workload, receipt):
+        events.append("workload_terminated")
+        receipt["acquisition_exit"] = 139
+        return 139
+    def symbolize(root, receipt, result):
+        assert result == 139
+        events.append("symbols")
+        if failure in ("symbols", "timeout", "cancel"):
+            raise {"symbols": OSError, "timeout": TimeoutError, "cancel": InterruptedError}[failure]("SYNTHETIC_SECRET")
+        return result
+    def cleanup(root):
+        events.append("cleanup")
+        return {"ok": True}
+    for name, function in {"_prepare_hosted_capture": prepare, "_prove_hosted_capture": collect,
+        "_acquire_sequence": execute, "_symbolize_after_workload": symbolize,
+        "_cleanup_hosted": cleanup, "_emit_hosted": emitted.append}.items():
+        monkeypatch.setattr(diagnostic, name, function)
+    assert diagnostic.hosted_observe() == (70 if failure == "capture" else 139)
+    assert events == (["inventory", "capture", "cleanup"] if failure == "capture" else
+                      ["inventory", "capture", "workload_terminated", "symbols", "cleanup"])
+    assert "SYNTHETIC_SECRET" not in repr(emitted)
+
+
+@pytest.fixture
+def deferred_symbols(monkeypatch, tmp_path):
+    events = []
+    (tmp_path / "binaries.json").write_text("{}")
+    (tmp_path / "system-packages.json").write_text("[]")
+    receipt = {"synthetic_control": {"pid": 11, "signal": 11}, "observation": "CAPTURE INCOMPLETE",
+        "stages": [{"stage": "industrial_1", "pid": 22, "signal": 11,
+                    "python_context_status": "available", "python_context_receipt": "industrial_1"}]}
+    monkeypatch.setattr(diagnostic, "_collect_core", lambda *a: {"ok": True})
+    def preserve(root, child, executable, inventory):
+        events.append(("preserve", child["pid"]))
+        return [{"module": "binary", "sha256": "a" * 64}]
+    def tools(root):
+        events.append("prepare_symbolizer")
+        return {"packages": []}
+    def inspect(root, child, executable, **kwargs):
+        assert str(root / "sysroot") in executable
+        events.append(("symbolize", child["pid"]))
+        return {"ok": True, "native": {"function": "qt998_crash_control"}}
+    monkeypatch.setattr(diagnostic, "_preserve_core_binaries", preserve)
+    monkeypatch.setattr(diagnostic, "_prepare_symbolizer", tools)
+    monkeypatch.setattr(diagnostic, "_inspect_core", inspect)
+    monkeypatch.setattr(diagnostic, "_system_packages", lambda *a: [])
+    monkeypatch.setattr(diagnostic, "_emit_hosted", lambda *a: None)
+    return tmp_path, receipt, events
+
+
+def test_ci_context_preserves_both_process_binaries_before_provisioning(deferred_symbols):
+    root, receipt, events = deferred_symbols
+    assert diagnostic._symbolize_after_workload(root, receipt, 139) == 139
+    assert events == [("preserve", 11), ("preserve", 22), "prepare_symbolizer", ("symbolize", 11), ("symbolize", 22)]
+    assert receipt["observation"] == "CAPTURED" and receipt["paired_process"]["pid"] == 22
+
+
+@pytest.mark.parametrize("fault", ["missing", "mismatch", "read", "python_missing", "publication", "cancel"])
+def test_ci_context_unavailable_pair_never_reports_captured(deferred_symbols, monkeypatch, fault):
+    root, receipt, events = deferred_symbols
+    preserve = diagnostic._preserve_core_binaries
+    def changed(root, child, executable, inventory):
+        if child["pid"] == 22:
+            raise OSError("SYNTHETIC_SECRET")
+        return preserve(root, child, executable, inventory)
+    if fault == "missing":
+        monkeypatch.setattr(diagnostic, "_collect_core", lambda root, child: {"ok": child["pid"] == 11})
+    elif fault in ("mismatch", "read"):
+        monkeypatch.setattr(diagnostic, "_preserve_core_binaries", changed)
+    elif fault == "python_missing":
+        receipt["stages"][0]["python_context_status"] = "unavailable"
+    elif fault == "cancel":
+        receipt["stages"][0]["cancelled"] = True
+    elif fault == "publication":
+        def publish(value):
+            if value.get("post_workload_native", {}).get("stage") == "industrial_1":
+                raise OSError("SYNTHETIC_SECRET")
+        monkeypatch.setattr(diagnostic, "_emit_hosted", publish)
+    if fault == "publication":
+        with pytest.raises(OSError):
+            diagnostic._symbolize_after_workload(root, receipt, 139)
+    else:
+        assert diagnostic._symbolize_after_workload(root, receipt, 139) == 139
+    assert receipt["observation"] == "CAPTURE INCOMPLETE"
+    assert "SYNTHETIC_SECRET" not in repr(receipt)
+    if fault == "cancel":
+        assert events == []
+
+
+def test_ci_context_safe_ordinary_environment_is_retained(monkeypatch, tmp_path):
+    for name, value in {"LANG": "en_US.UTF-8", "QT_QPA_PLATFORMTHEME": "gtk3", "TMPDIR": "/tmp"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    child = diagnostic._child_environment(tmp_path)
+    assert child["LANG"] == "en_US.UTF-8" and child["QT_QPA_PLATFORMTHEME"] == "gtk3"
+    assert child["TMPDIR"] == "/tmp"
+    assert "LC_ALL" not in child and "PYTHONDONTWRITEBYTECODE" not in child
+
+
+def test_ci_context_tool_download_budget_failure_never_downloads(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(diagnostic, "_storage_ready", lambda *a: None)
+    def run(command, cwd, root, label, **kwargs):
+        calls.append(command)
+        return {"child_exit": 1, "output_ok": True}
+    monkeypatch.setattr(diagnostic, "_run_private", run)
+    with pytest.raises(ValueError, match="package_budget"):
+        diagnostic._prepare_symbolizer(tmp_path)
+    assert len(calls) == 1 and calls[0][0] == "/usr/bin/apt-cache"
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_ci_context_synthetic_preflight_proves_only_collection(monkeypatch, tmp_path, available):
+    (tmp_path / "binaries.json").write_text("{}")
+    monkeypatch.setattr(diagnostic, "_capture_ready", lambda *a: None)
+    monkeypatch.setattr(diagnostic, "_inspect_core", lambda *a, **k: pytest.fail("symbolizer before workload"))
+    monkeypatch.setattr(diagnostic, "_preserve_core_binaries", lambda *a: [{"sha256": "a" * 64}])
+    events = []
+    def run(command, cwd, root, label, **kwargs):
+        events.append(label)
+        if label == "compiler":
+            (root / "control").write_bytes(b"\x7fELFsynthetic executable fixture")
+        if label == "synthetic" and available:
+            core = root / "core.123"
+            core.write_bytes(b"\x7fELF\x02\x01\x01" + bytes(9) + b"\x04\x00\x3e\x00" + bytes(44))
+            core.chmod(0o600)
+        return {"pid": 123, "child_exit": -11 if label == "synthetic" else 0,
+                "signal": 11 if label == "synthetic" else None, "output_ok": True,
+                "timed_out": False, "pytest_counts": []}
+    monkeypatch.setattr(diagnostic, "_run_private", run)
+    receipt = {}
+    if available:
+        diagnostic._prove_hosted_capture(tmp_path, receipt)
+        assert receipt["capability"] == "collection_proven; symbolization_deferred"
+        assert (tmp_path / "core.123").exists()
+    else:
+        with pytest.raises(ValueError, match="collection_capability_unproven"):
+            diagnostic._prove_hosted_capture(tmp_path, receipt)
+    assert events == ["success", "compiler", "synthetic"]
+
+
+def test_ci_context_symbolizer_rejects_host_fallback_object(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    fake = SimpleNamespace(objfiles=lambda: [SimpleNamespace(filename="/usr/lib/libc.so.6")])
+    monkeypatch.setitem(sys.modules, "gdb", fake)
+    script = diagnostic._core_script(tmp_path / "stack.json", tmp_path / "sysroot")
+    with pytest.raises(RuntimeError, match="outside_preserved"):
+        exec(compile(script.removeprefix("python\n").removesuffix("end\n"), "inert-gdb", "exec"), {})
+    assert not (tmp_path / "stack.json").exists()
+
+
 def test_postmortem_keeps_child_signal_when_capture_fails():
     assert diagnostic._postmortem_exit(-11, False) == 139
     assert diagnostic._postmortem_exit(0, False) == 70
@@ -298,7 +543,7 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
     assert workflow["concurrency"]["cancel-in-progress"] == "true"
     assert "github.run_id" in workflow["concurrency"]["group"]
     assert "format('ci-{0}-{1}', github.workflow, github.ref)" in workflow["concurrency"]["group"]
-    assert job["concurrency"] == {"group": "qt998-postmortem-job-5620299028",
+    assert job["concurrency"] == {"group": "qt998-postmortem-job-5624613947",
                                    "cancel-in-progress": "false"}
     assert job["concurrency"]["group"] not in workflow["concurrency"]["group"]
     # GitHub evaluates job env before assigning a runner; runner context is step-only.
@@ -314,7 +559,7 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
             assert step["env"]["QT998_RUNNER_ENVIRONMENT"] == "${{ runner.environment }}"
         if "setup-python" in action:
             assert step["with"]["cache"] == ""
-            assert step["with"]["python-version"] == "3.11.16"
+            assert step["with"]["python-version"] == "3.11"
         if "actions/checkout" in action:
             assert step["with"]["persist-credentials"] == "false"
     workload_checkout = next(step for step in job["steps"]
@@ -384,6 +629,7 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
     monkeypatch.setattr(diagnostic, "_validate_runtime", lambda *args: None)
     monkeypatch.setattr(diagnostic, "_run_private", run_private)
     monkeypatch.setattr(diagnostic, "_inspect_core", inspect_core)
+    monkeypatch.setattr(diagnostic, "_collect_core", lambda root, child: inspect_core(root, child, "unused"))
     monkeypatch.setattr(diagnostic, "_cleanup_hosted", cleanup)
     monkeypatch.setattr(diagnostic, "_emit_hosted", receipts.append)
     assert diagnostic.hosted_observe() == expected_exit
@@ -399,8 +645,8 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
 
 
 def test_new_phase_has_fixed_failed_content_and_rejects_spent_phase(admission):
-    assert diagnostic.FROZEN_SHA == "216877364752c20bcdc65752382da470c4f363d5"
-    assert diagnostic.FROZEN_TREE == "719b80423271ff59c6fe08ace819fee2ae151fa0"
+    assert diagnostic.FROZEN_SHA == "b451e7af3153da89c16d09f5b26a7f4799a82da3"
+    assert diagnostic.FROZEN_TREE == "1936b583b3ba61b9466d61599b563aabdb3556e7"
     admission[0]["inputs"]["qt998_phase"] = "5604177526"
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -429,7 +675,7 @@ def acquisition(monkeypatch, tmp_path):
     def run(command, cwd, root, label, *, timeout=120):
         assert cwd == tmp_path / "workload" and root == tmp_path
         calls.append((label, command, timeout))
-        counts = {"coverage_erase": [], "main": ["4183 passed", "62 skipped"],
+        counts = {"coverage_erase": [], "main": ["3903 passed", "62 skipped"],
                   "dashboard": ["24 passed"]}.get(label, ["42 passed"])
         return {"pid": len(calls), "child_exit": 0, "signal": None,
                 "timed_out": False, "cancelled": False, "output_ok": True,
@@ -442,12 +688,11 @@ def acquisition(monkeypatch, tmp_path):
     return tmp_path, calls, outcomes, emitted
 
 
-def test_sequence_runs_prefix_once_then_ten_complete_fresh_industrial_processes(acquisition):
+def test_sequence_runs_prefix_once_then_one_complete_fresh_industrial_process(acquisition):
     root, calls, _, emitted = acquisition
     receipt = {}
     assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 0
-    assert [x[0] for x in calls] == ["coverage_erase", "main", "dashboard"] + [
-        f"industrial_{i}" for i in range(1, 11)]
+    assert [x[0] for x in calls] == ["coverage_erase", "main", "dashboard", "industrial_1"]
     assert calls[0][1] == [sys.executable, "-m", "coverage", "erase"]
     assert calls[1][1] == [sys.executable, "-m", "pytest", "tests", "-q",
                           "--cov=src/metroliza", "--cov=modules", "--cov=scripts",
@@ -458,11 +703,11 @@ def test_sequence_runs_prefix_once_then_ten_complete_fresh_industrial_processes(
         assert command == [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS]
         assert 0 < timeout <= 120
     assert receipt["observation"] == "NON-REPRODUCTION"
-    assert len(receipt["stages"]) == len(emitted) == 13
+    assert len(receipt["stages"]) == len(emitted) == 4
 
 
 @pytest.mark.parametrize("stage", ["coverage_erase", "main", "dashboard",
-                                  "industrial_1", "industrial_4", "industrial_10"])
+                                  "industrial_1"])
 @pytest.mark.parametrize("fault", ["signal", "counts", "truncated", "timeout", "cancelled"])
 def test_first_failed_or_incomplete_stage_stops_all_further_work(acquisition, monkeypatch, stage, fault):
     root, calls, outcomes, _ = acquisition
@@ -510,7 +755,7 @@ def test_aggregate_expiry_never_starts_another_industrial_sample(acquisition, mo
 def test_spent_old_phase_does_not_consume_the_explicit_new_allocation(admission):
     admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
                          "created_at": "2026-09-09T15:59:03Z", "id": 499})
-    assert diagnostic._validate_admission(*admission)["phase"] == "5620299028"
+    assert diagnostic._validate_admission(*admission)["phase"] == "5624613947"
     admission[0]["inputs"].pop("qt998_phase")
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -538,7 +783,7 @@ def test_real_main_and_industrial_terminal_summaries_have_controlled_counts():
 
 
 @pytest.mark.parametrize("guard", ["_verify_workload", "_capture_ready"])
-@pytest.mark.parametrize("failure_call", [1, 8, 9])
+@pytest.mark.parametrize("failure_call", [1, 7, 8])
 def test_source_or_capture_drift_stops_before_further_sampling(acquisition, monkeypatch, guard, failure_call):
     root, calls, _, _ = acquisition
     count = 0
@@ -550,7 +795,7 @@ def test_source_or_capture_drift_stops_before_further_sampling(acquisition, monk
     monkeypatch.setattr(diagnostic, guard, check)
     receipt = {}
     assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 70
-    assert len(calls) == {1: 0, 8: 4, 9: 4}[failure_call]
+    assert len(calls) == {1: 0, 7: 3, 8: 4}[failure_call]
     assert "SYNTHETIC_SECRET" not in repr(receipt)
 
 
@@ -762,7 +1007,7 @@ def test_module_identifier_truncation_is_explicit(monkeypatch, tmp_path, length)
 
 @pytest.mark.parametrize("spent", ["5604177526", "5608262552", "5614139597", "5618809967"])
 def test_reduction_admission_never_revives_either_spent_allocation(admission, spent):
-    assert diagnostic.PHASE == "5620299028"
+    assert diagnostic.PHASE == "5624613947"
     admission[0]["inputs"]["qt998_phase"] = spent
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -896,10 +1141,10 @@ def test_missing_startup_or_out_of_order_markers_cannot_qualify(text):
     assert not result["probe_valid"] and result["last_cycle"] is None
 
 
-def test_probe_history_cutoff_remains_original_authority_not_renewal(admission):
-    assert diagnostic.APPROVAL_TIME == "2026-09-10T14:27:39Z"
+def test_context_history_cutoff_remains_new_authority_not_renewal(admission):
+    assert diagnostic.APPROVAL_TIME == "2026-09-10T19:56:21Z"
     admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
-                         "created_at": "2026-09-10T14:28:00Z", "id": 499})
+                         "created_at": "2026-09-10T19:56:22Z", "id": 499})
     with pytest.raises(ValueError, match="approval_already_spent"):
         diagnostic._validate_admission(*admission)
 
@@ -1021,7 +1266,7 @@ def test_probe_admission_rejects_before_qt_entry(inert_probe, monkeypatch, tmp_p
     root = tmp_path / "qt998-500"
     root.mkdir(mode=0o700)
     admission = {"phase": "5618809967", "run_attempt": 1, "run_id": "500",
-                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
+                 "workload_sha": probe.SOURCE_SHA, "workload_tree": probe.SOURCE_TREE,
                  "probe_sha256": diagnostic.hashlib.sha256(diagnostic._probe_file().read_bytes()).hexdigest()}
     changes = {"phase": ("phase", "5608262552"), "attempt": ("run_attempt", 2),
                "hash": ("probe_sha256", "0" * 64), "source": ("workload_sha", "0" * 40),
@@ -1038,7 +1283,7 @@ def test_probe_admission_rejects_before_qt_entry(inert_probe, monkeypatch, tmp_p
     monkeypatch.setattr(probe.platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(probe.platform, "freedesktop_os_release", lambda: {"ID": "ubuntu", "VERSION_ID": "24.04"})
     monkeypatch.setattr(probe.os, "getuid", lambda: root.stat().st_uid)
-    identity = "bad\n" if reason == "git" else diagnostic.FROZEN_SHA + "\n" + diagnostic.FROZEN_TREE + "\n"
+    identity = "bad\n" if reason == "git" else probe.SOURCE_SHA + "\n" + probe.SOURCE_TREE + "\n"
     monkeypatch.setattr(probe.subprocess, "check_output", lambda *args, **kwargs: identity)
     entered = []
     monkeypatch.setitem(probe.main.__globals__, "_run", lambda *args: entered.append(True))
@@ -1678,6 +1923,8 @@ def test_hosted_post_exit_interrupt_skips_debugger_and_cleans_owned_raw_data(
 
 @pytest.mark.parametrize("interrupt_kind", ["post_exit_interrupted", "cancelled"])
 def test_capability_control_post_exit_interrupt_does_not_start_debugger(monkeypatch, tmp_path, interrupt_kind):
+    (tmp_path / "binaries.json").write_text("{}")
+    monkeypatch.setattr(diagnostic, "_file_identity", lambda *args: {"sha256": "a" * 64})
     monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None)
     monkeypatch.setattr(diagnostic, "_sanitize", lambda *args: "safe synthetic control")
     def run(command, cwd, root, label):
@@ -1693,4 +1940,4 @@ def test_capability_control_post_exit_interrupt_does_not_start_debugger(monkeypa
     receipt = {}
     with pytest.raises(InterruptedError):
         diagnostic._prove_hosted_capture(tmp_path, receipt)
-    assert inspected == ["missing"] and receipt["synthetic_control"]["child_exit"] == -11
+    assert inspected == [] and receipt["synthetic_control"]["child_exit"] == -11
