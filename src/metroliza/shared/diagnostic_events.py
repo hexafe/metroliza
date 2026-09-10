@@ -723,6 +723,16 @@ def _startup_exception(event: StartupDiagnosticEvent) -> dict[str, object] | Non
     return payload
 
 
+_STARTUP_MILESTONE_CALLSITES = (
+    StartupCallsite.LOGGING_INITIALIZE, StartupCallsite.LOGGING_READY,
+    StartupCallsite.CONFIG_LOAD, StartupCallsite.CONFIG_READY,
+    StartupCallsite.QAPPLICATION_REQUEST, StartupCallsite.QAPPLICATION_READY,
+    StartupCallsite.LICENSE_CHECK, StartupCallsite.MAIN_WINDOW_FACTORY,
+    StartupCallsite.MAIN_WINDOW_CONSTRUCT, StartupCallsite.MAIN_WINDOW_SHOW_REQUEST,
+    StartupCallsite.MAIN_WINDOW_SHOW_RETURNED, StartupCallsite.SMOKE_WORK,
+)
+
+
 def _validate_startup_terminal(event: StartupDiagnosticEvent) -> None:
     if event.outcome is StartupOutcome.STARTUP_COMPLETED:
         valid = (
@@ -732,9 +742,13 @@ def _validate_startup_terminal(event: StartupDiagnosticEvent) -> None:
         valid = event.callsite in (StartupCallsite.LICENSE_REJECTED, StartupCallsite.SMOKE_RETURN)
         valid = valid and event.exit_code is not None and event.exit_code != 0
     elif event.outcome is StartupOutcome.APPLICATION_RETURNED:
-        valid = event.callsite is StartupCallsite.APPLICATION_RETURN
+        valid = event.callsite is StartupCallsite.APPLICATION_RETURN and event.exit_code is not None
     elif event.outcome is StartupOutcome.INVOCATION_STARTED:
         valid = event.callsite is StartupCallsite.BOOTSTRAP and event.exit_code is None
+    elif event.outcome is StartupOutcome.MILESTONE:
+        valid = event.exit_code is None and any(
+            event.callsite is callsite for callsite in _STARTUP_MILESTONE_CALLSITES
+        )
     else:
         valid = event.exit_code is None
     if not valid:

@@ -854,6 +854,44 @@ def test_impossible_startup_combinations_fail_closed(changes):
         diagnostic_events.StartupDiagnosticEvent(**{**_startup_fields(), **changes})
 
 
+@pytest.mark.parametrize("phase", ["constructor", "serializer", "formatter"])
+@pytest.mark.parametrize("callsite,mode,outcome", [
+    (diagnostic_events.StartupCallsite.APPLICATION_RETURN,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.APPLICATION_RETURNED),
+    (diagnostic_events.StartupCallsite.APPLICATION_RETURN,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.LICENSE_REJECTED,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.SMOKE_RETURN,
+     diagnostic_events.StartupMode.PDF_SMOKE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.EVENT_LOOP_EXEC_REQUEST,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.BOOTSTRAP,
+     diagnostic_events.StartupMode.UNKNOWN, diagnostic_events.StartupOutcome.MILESTONE),
+])
+def test_terminal_outcomes_are_revalidated_at_every_boundary(phase, callsite, mode, outcome):
+    import logging
+    from metroliza.shared.logging_utils import ManagedSafeFormatter
+
+    changes = {"callsite": callsite, "mode": mode, "outcome": outcome}
+    if phase == "constructor":
+        with pytest.raises(DiagnosticEventValidationError):
+            diagnostic_events.StartupDiagnosticEvent(**{**_startup_fields(), **changes})
+        return
+    event = diagnostic_events.StartupDiagnosticEvent(**_startup_fields())
+    for name, value in changes.items():
+        object.__setattr__(event, name, value)
+    if phase == "serializer":
+        with pytest.raises(DiagnosticEventValidationError):
+            serialize_diagnostic_event(event)
+        return
+    record = logging.LogRecord("metroliza.startup", logging.INFO, "synthetic", 1, event, (), None)
+    output = ManagedSafeFormatter().format(record)
+    assert json.loads(output.split(" ", 2)[2]) == {
+        "event_code": "invalid_diagnostic_event", "source_class": "application",
+    }
+
+
 def test_unapproved_event_metaclass_equality_is_not_executed():
     import logging
     from metroliza.shared.logging_utils import ManagedSafeFormatter
