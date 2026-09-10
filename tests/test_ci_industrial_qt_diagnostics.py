@@ -1575,3 +1575,104 @@ runpy.run_path(sys.argv[1], run_name='inert_fault_helper')
     result = subprocess.run([sys.executable, "-I", "-c", program, str(Path(diagnostic.__file__).resolve())],
                             capture_output=True, text=True, timeout=20)
     assert result.returncode == 0 and not result.stdout and not result.stderr
+
+
+@pytest.mark.parametrize("where", ["_verify_workload", "_fatal_threads", "_source_scopes"])
+def test_python_fault_cancellation_escapes_source_and_parser_catches(fault_source, monkeypatch, where):
+    def interrupted(*args):
+        raise InterruptedError("SYNTHETIC_SECRET")
+    monkeypatch.setattr(diagnostic, where, interrupted)
+    with pytest.raises(InterruptedError):
+        _fault(_fatal_text(), fault_source)
+
+
+@pytest.mark.parametrize("crashed", [True, False])
+def test_hosted_post_exit_interrupt_skips_debugger_and_cleans_owned_raw_data(monkeypatch, tmp_path, crashed):
+    root = tmp_path / "owned"
+    root.mkdir()
+    identity = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
+                "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
+                "observation_deadline_epoch": diagnostic.time.time() + 1000}
+    (root / "admission.json").write_text(json.dumps(identity))
+    for key, value in {"GITHUB_RUN_ID": "500", "GITHUB_SHA": "a" * 40,
+                       "GITHUB_RUN_ATTEMPT": "1"}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(diagnostic, "_private_root", lambda: root)
+    monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(diagnostic.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(diagnostic.signal, "alarm", lambda *args: 0)
+    monkeypatch.setattr(diagnostic, "_prepare_hosted_capture", lambda *args: {})
+    monkeypatch.setattr(diagnostic, "_validate_runtime", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_prove_hosted_capture", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_verify_workload", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None)
+    events, outputs = [], []
+    monkeypatch.setattr(diagnostic, "_emit_hosted", outputs.append)
+    def inspect(*args):
+        events.append("debugger")
+        return {"ok": False, "capture": "missing_core"}
+    monkeypatch.setattr(diagnostic, "_inspect_core", inspect)
+    def no_host_change(*args):
+        raise AssertionError("unit test must not change any host route")
+    monkeypatch.setattr(diagnostic, "_set_core_pattern", no_host_change)
+    class Child:
+        pid = 123
+        def __init__(self, code):
+            self.returncode = code
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def wait(self, **kwargs):
+            events.append("terminal")
+    def popen(command, **kwargs):
+        events.append(command[2])
+        code = -11 if crashed and command[2] == "pytest" else 0
+        if code:
+            kwargs["stdout"].write(_fatal_text().encode())
+            (root / "core.123").write_bytes(b"synthetic core sentinel; not a native dump")
+        return Child(code)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    def interrupted(*args):
+        raise InterruptedError("SYNTHETIC_SECRET")
+    if crashed:
+        monkeypatch.setattr(diagnostic, "_python_fault_context", interrupted)
+    else:
+        original = Path.unlink
+        def unlink(path, *args, **kwargs):
+            if path == root / "coverage_erase.raw":
+                raise InterruptedError("SYNTHETIC_SECRET")
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "unlink", unlink)
+    assert diagnostic.hosted_observe() == (139 if crashed else 70)
+    assert "debugger" not in events
+    assert events == (["coverage", "terminal", "pytest", "terminal"] if crashed else ["coverage", "terminal"])
+    final = outputs[-1]
+    stage = final["stages"][-1]
+    assert stage["pid"] == 123 and stage["child_exit"] == (-11 if crashed else 0)
+    assert stage["post_exit_interrupted"] and not stage["timed_out"] and not stage["cancelled"]
+    assert stage["capture"] == "not_inspected_after_interrupt"
+    assert final["cleanup"]["ok"] and final["cleanup"]["private_storage_removed"]
+    assert not root.exists() and "SYNTHETIC_SECRET" not in repr(outputs)
+    if crashed:
+        context = next(row["python_fault_context"]["context"] for row in outputs if "python_fault_context" in row)
+        assert context["status"] == "unavailable" and context["reason"] == "extraction_interrupted"
+
+
+def test_capability_control_post_exit_interrupt_does_not_start_debugger(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_sanitize", lambda *args: "safe synthetic control")
+    def run(command, cwd, root, label):
+        return {"child_exit": -11 if label == "synthetic" else 0, "signal": 11 if label == "synthetic" else None,
+                "pid": 123, "output_ok": label != "synthetic", "timed_out": False,
+                "post_exit_interrupted": label == "synthetic", "pytest_counts": []}
+    monkeypatch.setattr(diagnostic, "_run_private", run)
+    inspected = []
+    def inspect(root, child, executable):
+        inspected.append(child["pid"])
+        return {"ok": False, "capture": "missing_core"}
+    monkeypatch.setattr(diagnostic, "_inspect_core", inspect)
+    receipt = {}
+    with pytest.raises(InterruptedError):
+        diagnostic._prove_hosted_capture(tmp_path, receipt)
+    assert inspected == ["missing"] and receipt["synthetic_control"]["child_exit"] == -11

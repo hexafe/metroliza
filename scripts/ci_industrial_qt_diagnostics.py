@@ -642,11 +642,15 @@ def _python_fault_context(text: str, checkout: Path, child: dict, label: str) ->
                      _git(checkout, "ls-tree", "-rz", FROZEN_SHA).split("\0")
                      if re.match(r"100(?:644|755) blob [0-9a-f]{40}\t", row)
                      and row.endswith(".py")}
+    except InterruptedError:
+        raise
     except Exception:
         return _empty_python_context("source_unverified", child)
     try:
         threads, terminated = _fatal_threads(text, sig)
         result = _bounded_python_threads(threads, checkout, inventory)
+    except InterruptedError:
+        raise
     except ValueError:
         return _empty_python_context("malformed_or_untrusted_context", child)
     except Exception:
@@ -671,6 +675,15 @@ def _python_context_receipt(context: dict, child: dict, label: str, receipt: dic
     if len(_safe_json(value).encode("ascii")) > 16384:
         raise ValueError("python_context_output_limit")
     return value
+
+
+def _extract_python_after_exit(text: str, cwd: Path, receipt: dict, label: str) -> dict:
+    try:
+        return _python_fault_context(text, cwd, receipt, label)
+    except InterruptedError:
+        raise
+    except Exception:
+        return _empty_python_context("extraction_error", receipt)
 
 
 def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeout: float = 120) -> dict:
@@ -712,12 +725,15 @@ def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeo
         if label in PROBE_VARIANTS:
             receipt.update(_probe_summary(text, label))
         if receipt["signal"] and _python_workload_stage(label):
-            try:
-                receipt["python_context"] = _python_fault_context(text, cwd, receipt, label)
-            except Exception:
-                receipt["python_context"] = _empty_python_context("extraction_error", receipt)
+            receipt["python_context"] = _extract_python_after_exit(text, cwd, receipt, label)
         output.unlink()
         receipt["output_ok"] = True
+    except InterruptedError:
+        # The child has already terminated: preserve its real status and tell
+        # every caller to stop before any new post-mortem process. Final cleanup
+        # owns the private log/core still present after this interruption.
+        receipt["post_exit_interrupted"] = True
+        receipt["python_context"] = _empty_python_context("extraction_interrupted", receipt)
     except OSError as error:
         # The already observed exit is authoritative even if log processing fails.
         receipt["output_capture_error"] = type(error).__name__
@@ -894,6 +910,8 @@ def _prove_hosted_capture(root: Path, receipt: dict) -> None:
         raise ValueError("synthetic_control_compile_failed")
     control = _run_private([str(binary)], root, root, "synthetic")
     receipt["synthetic_control"] = control
+    if control.get("post_exit_interrupted"):
+        raise InterruptedError("control_post_exit_interrupted")
     capture = _inspect_core(root, control, str(binary))
     receipt["synthetic_control"] = {**control, **capture,
                                      "core_removed": not (root / ("core." + str(control["pid"]))).exists()}
@@ -976,6 +994,9 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
         # Set terminal status before post-mortem, source verification or export.
         result = _postmortem_exit(child["child_exit"], False)
         receipt["acquisition_exit"] = result
+        if child.get("post_exit_interrupted"):
+            entry.update(capture="not_inspected_after_interrupt", ok=False)
+            raise InterruptedError("workload_post_exit_interrupted")
         capture = (_inspect_core(root, child, sys.executable) if child["signal"]
                    else {"capture": "not_needed_no_signal", "ok": True})
         entry.update(capture)
@@ -1005,7 +1026,8 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
 
 
 def _failed_observation(stage: dict) -> str:
-    if stage.get("timed_out") or stage.get("cancelled") or not stage.get("child_exit"):
+    if (stage.get("timed_out") or stage.get("cancelled") or stage.get("post_exit_interrupted")
+            or not stage.get("child_exit")):
         return "INCOMPLETE_WORKLOAD"
     return "FAILED_WORKLOAD"
 
