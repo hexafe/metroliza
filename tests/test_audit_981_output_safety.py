@@ -17,6 +17,7 @@ from tests.audit_981_output_safety import (
     inspect_xlsx,
     parse_html,
     run,
+    snapshot,
 )
 
 
@@ -141,3 +142,10 @@ def test_chart_name_control_rejects_missing_labels():
     root = ET.fromstring('<c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>')
     with pytest.raises(AssertionError, match="literal title missing"):
         assert_chart_names_literal(root, "literal")
+
+
+def test_empty_generation_directory_is_detected(tmp_path):
+    before = snapshot(tmp_path)
+    (tmp_path / "dashboard_assets.generation-inert").mkdir()
+    with pytest.raises(AssertionError, match="last-complete artifact changed"):
+        assert_preserved(before, snapshot(tmp_path))

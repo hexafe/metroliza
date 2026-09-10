@@ -129,24 +129,27 @@ resource. The explicit internal workbook link remains a legitimate positive cont
 
 Each row below ran with a missing target and with a previously generated,
 structurally checked target on task-owned paths containing spaces and Unicode.
-The driver hashes all output files (including HTML generation assets), excluding
-only publication lock metadata. New XLSX numeric fixture values differ from the
+Initial local receipts hashed files (including HTML generation assets), excluding
+publication lock metadata; they did not detect empty generation-directory residue.
+The corrected driver also records every directory with a trailing-slash marker.
+Execution of that stronger oracle is a fresh hosted-CI gate, not a retroactive
+claim about the initial 22 cases. New XLSX numeric fixture values differ from the
 old generation, so replacement cannot pass by silently retaining the old file.
 Returned path/outcome, target existence and staging residue are checked.
 
 | Format / seam | Actual execution and injected fault | Observed result in both target states |
 | --- | --- | --- |
-| XLSX success | real table writes, workbook close, `os.replace` | completed; new valid workbook; no staging |
-| XLSX cancel | real table writes and close, callback returns canceled | canceled; prior bytes preserved or target remains absent; staging removed |
-| XLSX writer | exception after real row/formula/link writes | exception propagates; close notification runs; previous target preserved; staging removed |
-| XLSX flush entry | real `Workbook.close` with `_store_workbook` entry raising `OSError` | real close wraps `FileCreateError`; no success; prior target preserved; staging removed |
+| XLSX success | real table writes, workbook close, `os.replace` | completed; new valid workbook; no temporary files |
+| XLSX cancel | real table writes and close, callback returns canceled | canceled; prior bytes preserved or target remains absent; temporary files removed |
+| XLSX writer | exception after real row/formula/link writes | exception propagates; close notification runs; previous target preserved; temporary files removed |
+| XLSX flush entry | real `Workbook.close` with `_store_workbook` entry raising `OSError` | real close wraps `FileCreateError`; no success; prior target preserved; temporary files removed |
 | XLSX post-close | real close finishes, injected error immediately afterward | exception propagates; complete staging is not promoted; prior target preserved |
-| XLSX promotion | real serialized/closed staging; replace seam raises | exception propagates; prior target preserved; staging removed |
+| XLSX promotion | real serialized/closed staging; replace seam raises | exception propagates; prior target preserved; temporary files removed |
 | HTML success | real specs, PNG writes, runtime copy, HTML write and replace | new valid HTML + one asset generation; actual final path returned |
 | HTML planning cancel | backend returns canceled; subsequent publisher not called | canceled planning; no publication; prior complete generation unchanged |
-| HTML renderer | actual render completes in memory after asset writes, then seam raises | exception; old HTML and all referenced assets unchanged; new staging removed |
-| HTML post-write finalization | actual `Path.write_text` writes/closes complete temp HTML, then raises | exception; no promotion; old generation unchanged; new staging removed |
-| HTML promotion | real complete temp HTML/assets; replace seam raises | exception; old generation unchanged; new staging removed |
+| HTML renderer | actual render completes in memory after asset writes, then seam raises | exception; old HTML and all referenced assets unchanged; new temporary files removed |
+| HTML post-write finalization | actual `Path.write_text` writes/closes complete temp HTML, then raises | exception; no promotion; old generation unchanged; new temporary files removed |
+| HTML promotion | real complete temp HTML/assets; replace seam raises | exception; old generation unchanged; new temporary files removed |
 
 There are **22 cases per explicit driver run**. The in-repository supported
 rollback builder (`METROLIZA_PLOTSTATS_EXPORT_CHARTS=0`) ran twice with byte-identical
@@ -304,3 +307,16 @@ of the owned branch. The last locally verified checkout remains the initial
 checkpoint; no reset or cleanup was attempted. Local execution of the changed
 import is NOT TESTED. Fresh hosted CI and exact-candidate reviews are recorded
 externally; old green results are not relabelled as current-head evidence.
+
+## Audit-assertion correction from configured review
+
+Configured review [P2](https://github.com/hexafe/metroliza/pull/1036#discussion_r3980316159)
+identified that the initial file-only snapshot missed an empty abandoned HTML
+generation directory. The driver now includes directory entries, and a synthetic
+empty-generation negative control checks that the preservation assertion rejects
+that state. Existing/missing-target comparisons consequently cover files and directory
+residue. This corrects an audit false-negative; it is not evidence of a product
+cleanup defect. Historical 22-case receipts retain their original hashes and
+weaker oracle qualification. Local execution remains unavailable; current-byte
+execution and review receipts belong to normal hosted CI and the canonical
+checkpoint. No additional runtime audit or product repair was started.

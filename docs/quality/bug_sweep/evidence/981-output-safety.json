@@ -531,13 +531,26 @@
   },
   "initial_checkpoint_sha": "44daa6693a50c906db008d21d6d458cc9f9414ac",
   "artifact_import_correction": {
-    "reason": "Initial exact-head CI Security audit rejected the bare audit_981_output_safety import as unclassified. Use existing first-party tests namespace; do not change scanner/policy.",
+    "reason": "Initial exact-head CI Security audit rejected bare audit_981_output_safety import; child ff00a6f8ca44632a79805871984b8efdfa64d3d1 uses existing first-party tests namespace.",
+    "corrected_at_commit": "ff00a6f8ca44632a79805871984b8efdfa64d3d1",
     "changed_test_blob_sha": "7ba2881740dd26ac63c9c0847d9fac12c8678fe8",
     "initial_failed_ci": "https://github.com/hexafe/metroliza/actions/runs/34490497197/job/102915671838",
-    "mutation_surface": "Normal child commit and non-force update of owned branch through GitHub Git API; local exec tool stopped creating processes before the import correction.",
+    "mutation_surface": "Normal child commits/non-force owned branch updates via GitHub Git API after local exec stopped creating processes.",
     "local_checkout_last_verified_head": "44daa6693a50c906db008d21d6d458cc9f9414ac",
-    "current_local_import_test": "NOT TESTED: local process creation unavailable; earlier evidence retained under initial checkpoint identity.",
-    "renewed_validation": "Normal hosted CI and fresh exact-candidate independent/configured review; see canonical checkpoint.",
+    "current_local_import_test": "NOT TESTED; local process creation unavailable",
     "source_or_workflow_changed": false
+  },
+  "historical_publication_oracle": "The 22 local accepted-case receipts used file-only snapshots; empty HTML generation-directory residue was NOT TESTED by those receipts.",
+  "artifact_review_correction": {
+    "finding": "https://github.com/hexafe/metroliza/pull/1036#discussion_r3980316159",
+    "severity": "P2 audit assertion false-negative; not a product cleanup finding",
+    "change": "Snapshot includes directories with trailing-slash markers; added synthetic empty-generation negative control.",
+    "current_probe_file_git_blob_sha": {
+      "tests/audit_981_output_safety.py": "bdc3c32adacc4a28468fae8a9976d999d787cdf0",
+      "tests/test_audit_981_output_safety.py": "b56358fc582c50971b5d0d2b56ba72d1a4c52c49"
+    },
+    "local_validation": "NOT TESTED after local exec failure; unchanged pre-STOP receipts not relabelled",
+    "current_execution_and_review": "Normal hosted CI and renewed exact-candidate reviews; canonical checkpoint owns terminal receipt",
+    "production_changed": false
   }
 }

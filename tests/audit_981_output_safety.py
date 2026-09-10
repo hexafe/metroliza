@@ -299,8 +299,14 @@ class WorkbookContext:
 
 def snapshot(directory: Path) -> dict[str, str]:
     # Persistent publication lock is coordination metadata, not output content.
-    return {str(path.relative_to(directory)): digest(path.read_bytes())
-            for path in directory.rglob("*") if path.is_file() and not path.name.endswith(".lock")}
+    entries = {}
+    for path in directory.rglob("*"):
+        relative = str(path.relative_to(directory))
+        if path.is_dir():
+            entries[relative + "/"] = "directory"
+        elif path.is_file() and not path.name.endswith(".lock"):
+            entries[relative] = digest(path.read_bytes())
+    return entries
 
 
 def workbook_case(directory: Path, mode: str, existing: bool) -> dict:
