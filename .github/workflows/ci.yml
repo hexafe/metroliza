@@ -934,10 +934,10 @@ jobs:
     name: Industrial post-mortem (single owner opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_industrial_postmortem == '1'
     concurrency:
-      group: qt998-postmortem-job-5608262552
+      group: qt998-postmortem-job-5614139597
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 25
     permissions:
       contents: read
       actions: read
@@ -985,7 +985,7 @@ jobs:
           python -m pip install --upgrade pip --no-cache-dir
           python -m pip install --no-cache-dir -r requirements-dev.txt
 
-      - name: Prove capture then acquire the frozen failed CI sequence
+      - name: Prove capture then run the predeclared UI-only reductions
         working-directory: scaffolding
         env:
           QT998_RUNNER_ENVIRONMENT: ${{ runner.environment }}

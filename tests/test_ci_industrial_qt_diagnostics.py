@@ -297,12 +297,12 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
     assert workflow["concurrency"]["cancel-in-progress"] == "true"
     assert "github.run_id" in workflow["concurrency"]["group"]
     assert "format('ci-{0}-{1}', github.workflow, github.ref)" in workflow["concurrency"]["group"]
-    assert job["concurrency"] == {"group": "qt998-postmortem-job-5608262552",
+    assert job["concurrency"] == {"group": "qt998-postmortem-job-5614139597",
                                    "cancel-in-progress": "false"}
     assert job["concurrency"]["group"] not in workflow["concurrency"]["group"]
     # GitHub evaluates job env before assigning a runner; runner context is step-only.
     assert "runner." not in repr(job.get("env", {}))
-    assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "45"
+    assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "25"
     assert "workflow_dispatch" in job["if"] and "== '1'" in job["if"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
     for step in job["steps"]:
@@ -343,7 +343,7 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
 ):
     admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
                  "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
-                 "observation_deadline_epoch": diagnostic.time.time() + 2520}
+                 "observation_deadline_epoch": diagnostic.time.time() + 1320}
     (tmp_path / "admission.json").write_text(json.dumps(admission))
     monkeypatch.setenv("GITHUB_RUN_ID", "500")
     monkeypatch.setenv("GITHUB_SHA", "a" * 40)
@@ -371,6 +371,7 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
         raise OSError("synthetic private capture failure")
 
     monkeypatch.setattr(diagnostic, "_prove_hosted_capture", prove)
+    monkeypatch.setattr(diagnostic, "_verify_probe", lambda: "a" * 64)
     monkeypatch.setattr(diagnostic, "_verify_workload", lambda *args: None)
     monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None)
 
@@ -391,7 +392,7 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
         assert receipts[-1]["observation"] == "not_started"
         assert receipts[-1]["diagnostic_error"] == "OSError"
     else:
-        assert events.count("coverage_erase") == 1
+        assert events.count("industrial_ui") == 1
         assert receipts[-1]["stages"][0]["child_exit"] == -11
         assert receipts[-1]["stages"][0]["diagnostic_error"] == "OSError"
 
@@ -508,7 +509,7 @@ def test_aggregate_expiry_never_starts_another_industrial_sample(acquisition, mo
 def test_spent_old_phase_does_not_consume_the_explicit_new_allocation(admission):
     admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
                          "created_at": "2026-09-09T15:59:03Z", "id": 499})
-    assert diagnostic._validate_admission(*admission)["phase"] == "5608262552"
+    assert diagnostic._validate_admission(*admission)["phase"] == "5614139597"
     admission[0]["inputs"].pop("qt998_phase")
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -575,11 +576,11 @@ def test_publication_failure_preserves_nonzero_workload_exit(monkeypatch, capsys
     assert json.loads(output.removeprefix("QT998_JSON "))["launcher_exit"] == (code or 70)
 
 
-@pytest.mark.parametrize("failure", ["runtime", "preflight", "cleanup", "budget"])
+@pytest.mark.parametrize("failure", ["runtime", "preflight", "cleanup", "budget", "after_native"])
 def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, tmp_path, failure):
     admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
                  "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
-                 "observation_deadline_epoch": diagnostic.time.time() + 2520}
+                 "observation_deadline_epoch": diagnostic.time.time() + 1320}
     if failure == "budget":
         admission["observation_deadline_epoch"] = diagnostic.time.time() - 1
     (tmp_path / "admission.json").write_text(json.dumps(admission))
@@ -599,14 +600,17 @@ def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, 
             raise OSError("SYNTHETIC_SECRET")
     monkeypatch.setattr(diagnostic, "_validate_runtime", lambda *args: stage("runtime"))
     monkeypatch.setattr(diagnostic, "_prove_hosted_capture", lambda *args: stage("preflight"))
-    def acquire(*args):
+    def acquire(root, workload, receipt):
         events.append("workload")
+        receipt["reduction_exit"] = 139
+        if failure == "after_native":
+            raise InterruptedError("SYNTHETIC_SECRET")
         return 139
-    monkeypatch.setattr(diagnostic, "_acquire_sequence", acquire)
+    monkeypatch.setattr(diagnostic, "_acquire_reduction", acquire)
     monkeypatch.setattr(diagnostic, "_cleanup_hosted", lambda *args: stage("cleanup") or {"ok": True})
     monkeypatch.setattr(diagnostic, "_emit_hosted", receipts.append)
-    assert diagnostic.hosted_observe() == (139 if failure == "cleanup" else 70)
-    assert ("workload" in events) == (failure == "cleanup")
+    assert diagnostic.hosted_observe() == (139 if failure in ("cleanup", "after_native") else 70)
+    assert ("workload" in events) == (failure in ("cleanup", "after_native"))
     assert events[-1] == "cleanup"
     assert "SYNTHETIC_SECRET" not in repr(receipts)
     assert alarms[-1] == 0
@@ -614,7 +618,7 @@ def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, 
         assert events == ["cleanup"] and alarms == [0]
         assert receipts[-1]["job_budget_expired"]
     else:
-        assert 0 < alarms[0] <= 2520
+        assert 0 < alarms[0] <= 1320
 
 
 def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypatch, tmp_path):
@@ -651,10 +655,11 @@ def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypa
     assert native["threads"][0]["frames"][0]["function"] == "??"
 
 
+@pytest.mark.parametrize("label", ["industrial_10", "industrial_ui"])
 @pytest.mark.parametrize("function_length", [140, 144, 145])
 @pytest.mark.parametrize("module_length", [80, 81])
 def test_complete_native_stage_publication_preserves_size_reserve(
-        monkeypatch, tmp_path, capsys, function_length, module_length):
+        monkeypatch, tmp_path, capsys, function_length, module_length, label):
     # Exercise the real sanitizer and full publication, including false flags at
     # exact caps, stage metadata and all176 frames. No native process is launched.
     native = {"fault_thread": 1, "pid": 4194304, "signal": 11, "thread_count": 10,
@@ -675,15 +680,22 @@ def test_complete_native_stage_publication_preserves_size_reserve(
                 "cancelled": False, "output_ok": True, "elapsed_seconds": 119.123456,
                 "output_bytes": 8388608, "output_truncated": False, "pytest_counts": [],
                 "pytest_summary_complete": False, "pytest_warning_counts": [],
-                "pytest_subtest_counts": []}
+                "pytest_subtest_counts": [], **(diagnostic._probe_summary(
+                    _probe_markers("industrial_ui", 199, terminal=False)
+                    + "QT998_PROBE industrial_ui 200 cycle_start\n"
+                    + "QT998_PROBE industrial_ui 200 parent_constructed\n", "industrial_ui")
+                    if label == "industrial_ui" else {})}
     monkeypatch.setattr(diagnostic, "_run_private", run)
+    monkeypatch.setattr(diagnostic, "_verify_probe", lambda: "a" * 64)
     monkeypatch.setattr(diagnostic, "_verify_workload", lambda *_: None)
     monkeypatch.setattr(diagnostic, "_capture_ready", lambda *_: None)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     assert diagnostic._acquisition_stage(
-        tmp_path, tmp_path, {"stages": []}, "industrial_10",
-        [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS],
-        ["42 passed"], 120,
+        tmp_path, tmp_path, {"stages": []}, label,
+        ([sys.executable, "-m", "coverage", "run", "--append", "--source=src/metroliza,modules,scripts",
+          str(diagnostic._probe_file()), "--variant", label, "--cycles", "200"]
+         if label == "industrial_ui" else [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS]),
+        [] if label == "industrial_ui" else ["42 passed"], 180 if label == "industrial_ui" else 120,
     ) == 139
     output = capsys.readouterr().out.removeprefix("QT998_JSON ").strip()
     assert len(output.encode("utf-8")) < 59000
@@ -729,3 +741,377 @@ def test_module_identifier_truncation_is_explicit(monkeypatch, tmp_path, length)
     frame = capture["native"]["threads"][0]["frames"][0]
     assert frame["module"] == "m" * 80
     assert frame["module_truncated"] == (length > 80)
+
+
+@pytest.mark.parametrize("spent", ["5604177526", "5608262552"])
+def test_reduction_admission_never_revives_either_spent_allocation(admission, spent):
+    assert diagnostic.PHASE == "5614139597"
+    admission[0]["inputs"]["qt998_phase"] = spent
+    with pytest.raises(ValueError, match="phase"):
+        diagnostic._validate_admission(*admission)
+
+
+@pytest.fixture
+def reduction(monkeypatch, tmp_path):
+    calls, outcomes = [], {}
+    def stage(root, workload, receipt, label, command, expected, timeout, deadline=None):
+        calls.append((label, command, timeout, deadline))
+        entry = {"stage": label, "child_exit": 0, "signal": None, "complete": True,
+                 "ok": True, "output_ok": True, "output_truncated": False,
+                 "timed_out": False, "cancelled": False, "source_unchanged": True,
+                 "variant_private_cleanup": True, "probe_valid": True,
+                 **outcomes.get(label, {})}
+        receipt["stages"].append(entry)
+        return diagnostic._postmortem_exit(entry["child_exit"], entry["complete"])
+    monkeypatch.setattr(diagnostic, "_acquisition_stage", stage)
+    return tmp_path, calls, outcomes
+
+
+def test_reduction_runs_only_four_declared_variants_with_frozen_bounds(reduction):
+    root, calls, _ = reduction
+    receipt = {}
+    assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 0
+    assert [x[0] for x in calls] == [
+        "industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter"]
+    assert all(0 < x[2] <= 180 and x[1][-2:] == ["--cycles", "200"] for x in calls)
+    assert len({x[3] for x in calls}) == 1
+    assert receipt["observation"] == "REDUCTION_NON_REPRODUCTION"
+    assert receipt["variant_limit"] == 4 and receipt["aggregate_limit_seconds"] == 720
+
+
+@pytest.mark.parametrize("failed", ["industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter"])
+def test_reduction_crash_allows_only_remaining_predeclared_comparisons_and_retains139(reduction, failed):
+    root, calls, outcomes = reduction
+    outcomes[failed] = {"child_exit": -11, "signal": 11, "complete": False}
+    receipt = {}
+    assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 139
+    assert len(calls) == 4 and len({x[0] for x in calls}) == 4
+    assert receipt["observation"] == "REDUCTION_FAILED_WORKLOAD"
+
+
+@pytest.mark.parametrize("bad", [
+    {"ok": False}, {"variant_private_cleanup": False}, {"source_unchanged": False},
+    {"probe_valid": False}, {"output_ok": False}, {"output_truncated": True},
+    {"timed_out": True}, {"cancelled": True}, {"diagnostic_error": "OSError"},
+])
+def test_reduction_capture_or_harness_incompleteness_stops_all_remaining_work(reduction, bad):
+    root, calls, outcomes = reduction
+    outcomes["industrial_ui"] = {"child_exit": -11, "signal": 11, "complete": False, **bad}
+    receipt = {}
+    assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 139
+    assert len(calls) == 1
+    assert receipt["observation"] == "REDUCTION_INCOMPLETE"
+
+
+def test_reduction_later_harness_error_does_not_erase_earlier139(reduction):
+    root, calls, outcomes = reduction
+    outcomes["industrial_ui"] = {"child_exit": -11, "signal": 11, "complete": False}
+    outcomes["plain_ui"] = {"child_exit": 70, "complete": False}
+    receipt = {}
+    assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 139
+    assert len(calls) == 2 and receipt["observation"] == "REDUCTION_INCOMPLETE"
+
+
+def test_reduction_budget_expiry_prevents_first_variant(reduction, monkeypatch):
+    root, calls, _ = reduction
+    clock = iter([0.0, 721.0])
+    monkeypatch.setattr(diagnostic.time, "monotonic", lambda: next(clock))
+    receipt = {}
+    assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 70
+    assert calls == [] and receipt["observation"] == "REDUCTION_INCOMPLETE"
+
+
+def _probe_markers(variant, cycles=200, terminal=True):
+    phases = (["cycle_start", "parent_constructed", "parent_show", "progress_constructed",
+               "progress_show", "ownership_checked", "events", "progress_close", "parent_close",
+               "release", "complete"] if variant == "industrial_ui" else
+              ["cycle_start", "constructed", "configured", "layout", "themed", "ownership_checked",
+               "show", "events", "close", "release", "complete"])
+    rows = [(0, "startup"), (0, "application")]
+    rows.extend((cycle, phase) for cycle in range(1, cycles + 1) for phase in phases)
+    if terminal:
+        rows.append((cycles, "process_exit"))
+    return "\n".join(f"QT998_PROBE {variant} {cycle} {phase}" for cycle, phase in rows) + "\n"
+
+
+@pytest.mark.parametrize("variant", ["industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter"])
+def test_probe_reports_complete_cycles_and_honest_partial_prefix(variant):
+    result = diagnostic._probe_summary(_probe_markers(variant), variant)
+    assert result == {"probe_valid": True, "probe_complete": True, "variant": variant,
+                      "completed_cycles": 200, "interrupted_cycles": 0,
+                      "last_completed_phase": "process_exit", "last_cycle": 200}
+    partial = _probe_markers(variant, 3, terminal=False) + f"QT998_PROBE {variant} 4 cycle_start\n"
+    partial += "Fatal Python error: Segmentation fault\nSYNTHETIC_SECRET\n"
+    result = diagnostic._probe_summary(partial, variant)
+    assert result["probe_valid"] and not result["probe_complete"]
+    assert result["completed_cycles"] == 3 and result["interrupted_cycles"] == 1
+    assert result["last_completed_phase"] == "cycle_start" and result["last_cycle"] == 4
+    assert "SYNTHETIC_SECRET" not in repr(result)
+
+
+@pytest.mark.parametrize("bad", [
+    "QT998_PROBE", "QT998_PROBE\tplain_ui 1 complete", "QT998_PROBE plain_ui 201 complete",
+    "QT998_PROBE plain_ui 200 SYNTHETIC_SECRET", "QT998_PROBE other 200 complete",
+    "QT998_PROBE plain_ui 200 process_exit", "QT998_PROBE plain_ui -1 complete",
+])
+def test_malformed_or_duplicate_probe_markers_invalidate_attribution(bad):
+    result = diagnostic._probe_summary(_probe_markers("plain_ui") + bad, "plain_ui")
+    assert not result["probe_valid"] and not result["probe_complete"]
+    assert result["last_completed_phase"] == "unavailable"
+    assert "SYNTHETIC_SECRET" not in repr(result)
+
+
+@pytest.mark.parametrize("text", ["", "Qt warning only", "QT998_PROBE plain_ui 1 cycle_start\n"])
+def test_missing_startup_or_out_of_order_markers_cannot_qualify(text):
+    result = diagnostic._probe_summary(text, "plain_ui")
+    assert not result["probe_valid"] and result["last_cycle"] is None
+
+
+def test_probe_history_cutoff_remains_original_authority_not_renewal(admission):
+    assert diagnostic.APPROVAL_TIME == "2026-09-10T06:24:21Z"
+    admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
+                         "created_at": "2026-09-10T07:00:00Z", "id": 499})
+    with pytest.raises(ValueError, match="approval_already_spent"):
+        diagnostic._validate_admission(*admission)
+
+
+@pytest.fixture
+def probe_stage(monkeypatch, tmp_path):
+    receipts = []
+    monkeypatch.setattr(diagnostic, "_verify_workload", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_verify_probe", lambda: "a" * 64)
+    monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None)
+    monkeypatch.setattr(diagnostic, "_emit_hosted", receipts.append)
+    monkeypatch.setattr(diagnostic, "_inspect_core", lambda *args: {"ok": True})
+    return tmp_path, receipts
+
+
+@pytest.mark.parametrize("code", [0, -11])
+@pytest.mark.parametrize("condition", ["complete", "partial", "malformed", "private_leftover"])
+def test_real_stage_separates_exit_capture_markers_and_private_cleanup(probe_stage, monkeypatch, code, condition):
+    root, published = probe_stage
+    text = _probe_markers("plain_ui")
+    if condition == "partial":
+        text = _probe_markers("plain_ui", 3, terminal=False)
+    if condition == "malformed":
+        text += "QT998_PROBE"
+    if condition == "private_leftover":
+        (root / "core.123").write_bytes(b"synthetic marker only")
+    child = {"child_exit": code, "signal": 11 if code == -11 else None, "pid": 123,
+             "output_ok": True, "output_truncated": False, "pytest_counts": [],
+             **diagnostic._probe_summary(text, "plain_ui")}
+    monkeypatch.setattr(diagnostic, "_run_private", lambda *args, **kwargs: child)
+    receipt = {"stages": []}
+    result = diagnostic._acquisition_stage(root, root, receipt, "plain_ui",
+                                         [sys.executable, str(diagnostic._probe_file())], [], 180)
+    assert result == (139 if code == -11 else (0 if condition == "complete" else 70))
+    entry = receipt["stages"][0]
+    assert entry["complete"] == (code == 0 and condition == "complete")
+    assert entry["variant_private_cleanup"] == (condition != "private_leftover")
+    assert diagnostic._usable_probe_failure(entry) == (code == -11 and condition in ("complete", "partial"))
+    assert str(diagnostic._probe_file()) not in repr(published)
+
+
+def test_probe_guard_error_never_exports_tooling_path(probe_stage, monkeypatch):
+    root, published = probe_stage
+    def fail():
+        raise ValueError("SYNTHETIC_SECRET")
+    monkeypatch.setattr(diagnostic, "_verify_probe", fail)
+    receipt = {"stages": []}
+    assert diagnostic._acquisition_stage(root, root, receipt, "plain_ui",
+                                        [sys.executable, str(diagnostic._probe_file())], [], 180) == 70
+    assert not receipt["stages"][0]["started"]
+    assert "SYNTHETIC_SECRET" not in repr(published)
+    assert str(diagnostic._probe_file()) not in repr(published)
+
+
+def test_failed_stage_publication_stops_remaining_controls_after139(probe_stage, monkeypatch):
+    root, _ = probe_stage
+    child = {"child_exit": -11, "signal": 11, "pid": 123, "output_ok": True,
+             **diagnostic._probe_summary(_probe_markers("industrial_ui", 2, terminal=False), "industrial_ui")}
+    monkeypatch.setattr(diagnostic, "_run_private", lambda *args, **kwargs: child)
+    def fail(*args):
+        raise OSError("SYNTHETIC_SECRET")
+    monkeypatch.setattr(diagnostic, "_emit_hosted", fail)
+    receipt = {}
+    assert diagnostic._acquire_reduction(root, root, receipt) == 139
+    assert len(receipt["stages"]) == 1
+    assert receipt["observation"] == "REDUCTION_INCOMPLETE"
+
+
+def test_probe_import_and_normal_collection_are_inert(tmp_path):
+    probe = diagnostic._probe_file()
+    # A clean interpreter denies every non-stdlib application/Qt import. This
+    # exercises the actual file without importing or executing a Qt workload.
+    code = """
+import importlib.abc, runpy, sys
+class RejectQt(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('PyQt', 'metroliza', 'modules')):
+            raise AssertionError('probe imported application or Qt')
+sys.meta_path.insert(0, RejectQt())
+module = runpy.run_path(sys.argv[1], run_name='inert_probe_import')
+assert module['_APP'] is None
+print('INERT_IMPORT')
+"""
+    result = subprocess.run([sys.executable, "-I", "-c", code, str(probe)],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0 and result.stdout.strip() == "INERT_IMPORT", result.stderr
+    # Use real pytest default discovery on the exact filename/content, with the
+    # repository's pytest settings and no application conftest/plugin effects.
+    (tmp_path / probe.name).write_bytes(probe.read_bytes())
+    (tmp_path / "pyproject.toml").write_bytes(Path("pyproject.toml").read_bytes())
+    collection = """
+import importlib.abc, os, sys
+os.environ['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
+class RejectProbe(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if 'qt_dialog_lifecycle_probe' in fullname or fullname.startswith(('PyQt', 'metroliza')):
+            raise AssertionError('ordinary discovery imported the probe or Qt')
+sys.meta_path.insert(0, RejectProbe())
+import pytest
+raise SystemExit(pytest.main(['--collect-only', '-q', '.']))
+"""
+    result = subprocess.run([sys.executable, "-I", "-c", collection], cwd=tmp_path,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 5 and "no tests collected" in result.stdout, result.stdout + result.stderr
+    assert "QT998_PROBE" not in result.stdout
+
+
+@pytest.fixture
+def inert_probe():
+    import runpy
+    import types
+    module = types.SimpleNamespace(**runpy.run_path(str(diagnostic._probe_file()), run_name="inert_probe"))
+    return module
+
+
+@pytest.mark.parametrize("reason", ["host", "phase", "attempt", "hash", "source", "tree", "git", "mode", "accepted"])
+def test_probe_admission_rejects_before_qt_entry(inert_probe, monkeypatch, tmp_path, capsys, reason):
+    probe = inert_probe
+    root = tmp_path / "qt998-500"
+    root.mkdir(mode=0o700)
+    admission = {"phase": "5614139597", "run_attempt": 1, "run_id": "500",
+                 "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
+                 "probe_sha256": diagnostic.hashlib.sha256(diagnostic._probe_file().read_bytes()).hexdigest()}
+    changes = {"phase": ("phase", "5608262552"), "attempt": ("run_attempt", 2),
+               "hash": ("probe_sha256", "0" * 64), "source": ("workload_sha", "0" * 40),
+               "tree": ("workload_tree", "0" * 40)}
+    if reason in changes:
+        key, value = changes[reason]
+        admission[key] = value
+    (root / "admission.json").write_text(json.dumps(admission))
+    if reason == "mode":
+        root.chmod(0o755)
+    monkeypatch.setenv("TMPDIR", str(root / "temporary"))
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(probe.platform, "system", lambda: "Windows" if reason == "host" else "Linux")
+    monkeypatch.setattr(probe.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(probe.platform, "freedesktop_os_release", lambda: {"ID": "ubuntu", "VERSION_ID": "24.04"})
+    monkeypatch.setattr(probe.os, "getuid", lambda: root.stat().st_uid)
+    identity = "bad\n" if reason == "git" else diagnostic.FROZEN_SHA + "\n" + diagnostic.FROZEN_TREE + "\n"
+    monkeypatch.setattr(probe.subprocess, "check_output", lambda *args, **kwargs: identity)
+    entered = []
+    monkeypatch.setitem(probe.main.__globals__, "_run", lambda *args: entered.append(True))
+    assert probe.main(["--variant", "plain_ui", "--cycles", "200"]) == (0 if reason == "accepted" else 70)
+    assert bool(entered) == (reason == "accepted")  # _run is an inert recording stub, never Qt.
+    assert capsys.readouterr().out == ("QT998_PROBE plain_ui 0 startup\n" if reason == "accepted"
+                                     else "QT998_PROBE_ERROR ValueError\n")
+
+
+@pytest.mark.parametrize("args", [
+    ["--variant", "fifth", "--cycles", "200"], ["--variant", "plain_ui", "--cycles", "0"],
+    ["--variant", "plain_ui", "--cycles", "201"], [],
+])
+def test_probe_invalid_cli_never_reaches_admission_or_qt(inert_probe, monkeypatch, args):
+    def forbidden():
+        pytest.fail("invalid CLI reached admission")
+    monkeypatch.setitem(inert_probe.main.__globals__, "_admitted", forbidden)
+    with pytest.raises(SystemExit) as result:
+        inert_probe.main(args)
+    assert result.value.code == 2
+
+
+def test_reduction_records139_before_between_variant_controller_error(reduction, monkeypatch):
+    root, calls, outcomes = reduction
+    outcomes["industrial_ui"] = {"child_exit": -11, "signal": 11, "complete": False}
+    ticks = iter([0, 1])
+    def clock():
+        try:
+            return next(ticks)
+        except StopIteration:
+            raise InterruptedError("synthetic cancellation") from None
+    monkeypatch.setattr(diagnostic.time, "monotonic", clock)
+    receipt = {}
+    with pytest.raises(InterruptedError):
+        diagnostic._acquire_reduction(root, root, receipt)
+    assert len(calls) == 1 and receipt["reduction_exit"] == 139
+
+
+@pytest.mark.parametrize("drift", ["head", "worktree", "index_flags", "blob", "none"])
+def test_reviewed_probe_guard_checks_exact_committed_bytes(monkeypatch, drift):
+    path = diagnostic._probe_file()
+    relative = "tests/qt_dialog_lifecycle_probe.py"
+    answers = {("rev-parse", "HEAD"): "a" * 40, ("status", "--porcelain=v1"): "",
+               ("ls-files", "-v", relative): "H " + relative,
+               ("hash-object", relative): "b" * 40, ("rev-parse", "HEAD:" + relative): "b" * 40}
+    changes = {"head": (("rev-parse", "HEAD"), "c" * 40),
+               "worktree": (("status", "--porcelain=v1"), " M " + relative),
+               "index_flags": (("ls-files", "-v", relative), "h " + relative),
+               "blob": (("hash-object", relative), "c" * 40)}
+    if drift in changes:
+        key, value = changes[drift]
+        answers[key] = value
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.setattr(diagnostic, "_git", lambda root, *args: answers[args])
+    if drift == "none":
+        assert diagnostic._verify_probe() == diagnostic.hashlib.sha256(path.read_bytes()).hexdigest()
+    else:
+        with pytest.raises(ValueError, match="reviewed_probe_not_clean"):
+            diagnostic._verify_probe()
+
+
+@pytest.mark.parametrize("failure_call", [1, 2])
+def test_probe_drift_before_or_after_child_stops_session(probe_stage, monkeypatch, failure_call):
+    root, _ = probe_stage
+    calls = []
+    count = 0
+    def guard():
+        nonlocal count
+        count += 1
+        if count == failure_call:
+            raise ValueError("SYNTHETIC_SECRET")
+        return "a" * 64
+    def child(*args, **kwargs):
+        calls.append(1)
+        return {"child_exit": -11, "signal": 11, "pid": 123, "output_ok": True,
+                **diagnostic._probe_summary(_probe_markers("industrial_ui", 3, False), "industrial_ui")}
+    monkeypatch.setattr(diagnostic, "_verify_probe", guard)
+    monkeypatch.setattr(diagnostic, "_run_private", child)
+    receipt = {}
+    assert diagnostic._acquire_reduction(root, root, receipt) == (70 if failure_call == 1 else 139)
+    assert len(calls) == failure_call - 1 and len(receipt["stages"]) == 1
+    assert receipt["observation"] == "REDUCTION_INCOMPLETE"
+
+
+def test_private_probe_output_extracts_partial_cycles_and_removes_raw_file(monkeypatch, tmp_path):
+    class TerminatedChild:
+        pid = 123
+        returncode = -11
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def wait(self, **kwargs):
+            return self.returncode
+    def child(*args, **kwargs):
+        text = _probe_markers("industrial_ui", 3, False) + "QT998_PROBE industrial_ui 4 cycle_start\n"
+        kwargs["stdout"].write((text + "SYNTHETIC_SECRET\n").encode())
+        return TerminatedChild()
+    monkeypatch.setattr(diagnostic.subprocess, "Popen", child)
+    result = diagnostic._run_private(["unused"], tmp_path, tmp_path, "industrial_ui", timeout=180)
+    assert result["child_exit"] == -11 and result["signal"] == 11
+    assert result["completed_cycles"] == 3 and result["interrupted_cycles"] == 1
+    assert result["probe_valid"] and not result["probe_complete"] and result["output_ok"]
+    assert not (tmp_path / "industrial_ui.raw").exists()
+    assert "SYNTHETIC_SECRET" not in repr(result)

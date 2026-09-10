@@ -177,8 +177,16 @@ def main() -> int:
 FROZEN_SHA = "216877364752c20bcdc65752382da470c4f363d5"
 FROZEN_TREE = "719b80423271ff59c6fe08ace819fee2ae151fa0"
 BRANCH = "fix/998-industrial-qt-recurrence"
-PHASE = "5608262552"
-APPROVAL_TIME = "2026-09-09T20:28:04Z"
+PHASE = "5614139597"
+APPROVAL_TIME = "2026-09-10T06:24:21Z"
+PROBE_VARIANTS = ("industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter")
+PROBE_PHASES = {
+    "industrial_ui": ("cycle_start", "parent_constructed", "parent_show", "progress_constructed",
+                      "progress_show", "ownership_checked", "events", "progress_close",
+                      "parent_close", "release", "complete"),
+    "plain": ("cycle_start", "constructed", "configured", "layout", "themed", "ownership_checked",
+              "show", "events", "close", "release", "complete"),
+}
 RUNTIME_PACKAGES = {
     "PyQt6": "6.6.1", "PyQt6-Qt6": "6.6.1", "PyQt6-sip": "13.12.0",
     "numpy": "2.4.6", "pandas": "3.0.5", "pytest": "9.1.1",
@@ -304,6 +312,22 @@ def _verify_workload(checkout: Path) -> None:
         raise ValueError("persisted_checkout_credentials")
 
 
+def _probe_file() -> Path:
+    return Path(__file__).resolve().parent.parent / "tests/qt_dialog_lifecycle_probe.py"
+
+
+def _verify_probe() -> str:
+    path = _probe_file()
+    checkout = path.parent.parent
+    relative = path.relative_to(checkout).as_posix()
+    if (_git(checkout, "rev-parse", "HEAD") != os.environ.get("GITHUB_SHA")
+            or _git(checkout, "status", "--porcelain=v1")
+            or _git(checkout, "ls-files", "-v", relative) != "H " + relative
+            or _git(checkout, "hash-object", relative) != _git(checkout, "rev-parse", "HEAD:" + relative)):
+        raise ValueError("reviewed_probe_not_clean")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _private_root() -> Path:
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if not re.fullmatch(r"[1-9][0-9]*", run_id):
@@ -342,10 +366,11 @@ def hosted_admit() -> int:
                                   _git(workload, "rev-parse", "HEAD^{tree}"))
     current = next(run for run in prior if str(run["id"]) == receipt["run_id"])
     # Use workflow creation (earlier than guest start) conservatively. Leave
-    # at least three minutes of the45-minute job ceiling for private cleanup.
+    # at least three minutes of the25-minute job ceiling for private cleanup.
     receipt["observation_deadline_epoch"] = (
-        datetime.fromisoformat(current["created_at"].replace("Z", "+00:00")).timestamp() + 42 * 60
+        datetime.fromisoformat(current["created_at"].replace("Z", "+00:00")).timestamp() + 22 * 60
     )
+    receipt["probe_sha256"] = _verify_probe()
     root = _private_root()
     root.mkdir(mode=0o700)  # Existing admission cannot be reused in the same run.
     (root / "admission.json").write_text(_safe_json(receipt), encoding="utf-8")
@@ -409,6 +434,30 @@ def _pytest_summary(text: str) -> dict:
             "pytest_subtest_counts": re.findall(r"\b[0-9]+ subtests passed\b", summary)}
 
 
+def _probe_summary(text: str, variant: str) -> dict:
+    phases = PROBE_PHASES["industrial_ui" if variant == "industrial_ui" else "plain"]
+    expected = [(0, "startup"), (0, "application")]
+    expected.extend((cycle, phase) for cycle in range(1, 201) for phase in phases)
+    expected.append((200, "process_exit"))
+    observed = []
+    valid = True
+    for line in text.splitlines():
+        if line.startswith("QT998_PROBE"):
+            match = re.fullmatch(r"QT998_PROBE ([a-z_]+) ([0-9]{1,3}) ([a-z_]+)", line)
+            if not match or match[1] != variant:
+                valid = False
+                break
+            observed.append((int(match[2]), match[3]))
+    valid = valid and bool(observed) and observed == expected[:len(observed)]
+    completed = sum(phase == "complete" for _, phase in observed) if valid else 0
+    started = sum(phase == "cycle_start" for _, phase in observed) if valid else 0
+    return {"probe_valid": valid, "probe_complete": valid and observed == expected,
+            "variant": variant, "completed_cycles": completed,
+            "interrupted_cycles": started - completed,
+            "last_completed_phase": observed[-1][1] if valid else "unavailable",
+            "last_cycle": observed[-1][0] if valid else None}
+
+
 def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeout: float = 120) -> dict:
     if not 0 < timeout <= 1200:
         raise ValueError("invalid_stage_timeout")
@@ -445,6 +494,8 @@ def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeo
             text = stream.read(OUTPUT_LIMIT).decode("utf-8", errors="replace")
         receipt.update(output_bytes=size, output_truncated=size > OUTPUT_LIMIT,
                        **_pytest_summary(text))
+        if label in PROBE_VARIANTS:
+            receipt.update(_probe_summary(text, label))
         output.unlink()
         receipt["output_ok"] = True
     except OSError as error:
@@ -642,12 +693,19 @@ def _complete_stage(child: dict, expected: list[str]) -> bool:
             and (child.get("pytest_summary_complete") or not expected))
 
 
+def _probe_private_cleanup(root: Path, label: str, child: dict) -> bool:
+    return not any((root / name).exists() for name in (
+        label + ".raw", "core." + str(child["pid"]), "debugger.raw", "stack.json", "postmortem.gdb"))
+
+
 def _emit_preserving_exit(receipt: dict, result: int) -> int:
     try:
         _emit_hosted(receipt)
     except Exception as error:
         # A publication error must never turn an observed SIGSEGV139 into70.
         result = result or 70
+        if "acquisition_stage" in receipt:
+            receipt["acquisition_stage"]["publication_error"] = type(error).__name__
         try:
             print("QT998_JSON " + _safe_json({"output_error": type(error).__name__,
                                             "launcher_exit": result}), flush=True)
@@ -657,7 +715,12 @@ def _emit_preserving_exit(receipt: dict, result: int) -> int:
 
 
 def _acquisition_stage(root, workload, receipt, label, command, expected, timeout, deadline=None):
-    entry = {"stage": label, "command": ["python", *command[1:]],
+    display_command = ["python", *command[1:]]
+    if label in PROBE_VARIANTS:
+        display_command = [arg if arg != str(_probe_file())
+                           else "reviewed-tooling/tests/qt_dialog_lifecycle_probe.py"
+                           for arg in display_command]
+    entry = {"stage": label, "command": display_command,
              "source_tree": FROZEN_TREE, "expected_counts": expected,
              "timeout_seconds": timeout, "started": False, "complete": False}
     receipt["stages"].append(entry)
@@ -665,6 +728,8 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
     try:
         _verify_workload(workload)
         _capture_ready(root)
+        if label in PROBE_VARIANTS:
+            _verify_probe()
         if deadline is not None:
             timeout = min(timeout, deadline - time.monotonic())
             if timeout <= 0:
@@ -682,6 +747,12 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
         _capture_ready(root)
         entry["source_unchanged"] = True
         entry["complete"] = bool(_complete_stage(child, expected) and capture["ok"])
+        if label in PROBE_VARIANTS:
+            _verify_probe()
+            entry["variant_private_cleanup"] = _probe_private_cleanup(root, label, child)
+            entry["complete"] = bool(entry["complete"] and child.get("probe_valid")
+                                     and child.get("probe_complete")
+                                     and entry["variant_private_cleanup"])
         result = _postmortem_exit(child["child_exit"], entry["complete"])
     except Exception as error:
         entry["diagnostic_error"] = type(error).__name__
@@ -741,6 +812,42 @@ def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
     return 0
 
 
+def _usable_probe_failure(stage: dict) -> bool:
+    return (stage.get("signal") in (6, 11) and stage.get("ok") and stage.get("probe_valid")
+            and stage.get("source_unchanged") and stage.get("variant_private_cleanup")
+            and stage.get("output_ok") and not stage.get("output_truncated")
+            and not stage.get("timed_out") and not stage.get("cancelled")
+            and not stage.get("diagnostic_error") and not stage.get("publication_error"))
+
+
+def _acquire_reduction(root: Path, workload: Path, receipt: dict) -> int:
+    receipt.update(stages=[], observation="REDUCTION_INCOMPLETE", variant_limit=4,
+                   cycles_per_variant=200, aggregate_limit_seconds=720,
+                   context="four predeclared variants; fresh processes; cumulative coverage")
+    deadline = time.monotonic() + 720
+    first_failure = 0
+    for variant in PROBE_VARIANTS:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            receipt["acquisition_budget_expired"] = True
+            return first_failure or 70
+        command = [sys.executable, "-m", "coverage", "run", "--append",
+                   "--source=src/metroliza,modules,scripts", str(_probe_file()),
+                   "--variant", variant, "--cycles", "200"]
+        result = _acquisition_stage(root, workload, receipt, variant, command, [],
+                                    min(180, remaining), deadline=deadline)
+        first_failure = first_failure or result
+        receipt["reduction_exit"] = first_failure
+        if result and not _usable_probe_failure(receipt["stages"][-1]):
+            return first_failure
+        if time.monotonic() > deadline:
+            receipt["acquisition_budget_expired"] = True
+            return first_failure or 70
+    receipt["observation"] = ("REDUCTION_FAILED_WORKLOAD" if first_failure
+                              else "REDUCTION_NON_REPRODUCTION")
+    return first_failure
+
+
 def hosted_observe() -> int:
     root = _private_root()
     admission = json.loads((root / "admission.json").read_text())
@@ -770,9 +877,10 @@ def hosted_observe() -> int:
         receipt["environment"] = _prepare_hosted_capture(root, workload)
         _validate_runtime(receipt["environment"])
         _prove_hosted_capture(root, receipt)
-        result = _acquire_sequence(root, workload, receipt)
+        result = _acquire_reduction(root, workload, receipt)
     except Exception as error:
         receipt["diagnostic_error"] = type(error).__name__
+        result = receipt.get("reduction_exit", result) or 70
     finally:
         signal.alarm(0)
         try:
