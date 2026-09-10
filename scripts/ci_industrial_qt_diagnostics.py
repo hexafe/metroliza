@@ -1021,11 +1021,13 @@ def _preserve_mapped_files(root: Path, paths: list[str], inventory: dict) -> lis
         source = Path(name)
         if not source.is_absolute() or ".." in source.parts:
             raise ValueError("invalid_mapped_path")
+        expected = inventory.get(name)
+        if expected is not None and _file_identity(source) != expected:
+            raise ValueError("mapped_binary_missing_or_changed")
         with source.open("rb") as stream:
             elf = stream.read(4) == b"\x7fELF"
         if not elf:
             continue  # Mapped measurement/data files are never copied or named.
-        expected = inventory.get(name)
         if expected is None or _file_identity(source) != expected:
             raise ValueError("mapped_binary_missing_or_changed")
         target = root / "sysroot" / name.lstrip("/")
@@ -1053,6 +1055,8 @@ def _preserve_core_binaries(root: Path, child: dict, executable: str, inventory:
     read = _run_private(["/usr/bin/readelf", "-n", "-W", str(root / ("core." + str(child["pid"])))],
                         root, root, "core_notes", consume=lambda text: paths.extend(_mapped_files(text)),
                         environment={**_child_environment(root), "LC_ALL": "C"}, core_allowed=False)
+    if read.get("cancelled") or read.get("post_exit_interrupted"):
+        raise InterruptedError("core_mapping_read_interrupted")
     if not _complete_stage(read, []) or not paths or str(Path(executable).resolve()) not in paths:
         raise ValueError("core_mapping_or_executable_unproven")
     return _preserve_mapped_files(root, [*paths, executable], inventory)
@@ -1132,9 +1136,6 @@ def _symbolize_after_workload(root: Path, receipt: dict, result: int) -> int:
                                                   "error": type(error).__name__}
             continue
         usable.append((label, child, executable))
-        for offset in range(0, len(preserved[label]), 50):
-            _emit_hosted({"preserved_binary_hashes": {"stage": label,
-                "offset": offset, "files": preserved[label][offset:offset + 50]}})
     symbolizer = _prepare_symbolizer(root)
     if _system_packages(root) != json.loads((root / "system-packages.json").read_text()):
         raise ValueError("system_packages_changed_during_symbolizer_preparation")

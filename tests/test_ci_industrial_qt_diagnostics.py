@@ -256,6 +256,84 @@ def test_ci_context_symbolizer_rejects_host_fallback_object(monkeypatch, tmp_pat
     assert not (tmp_path / "stack.json").exists()
 
 
+def test_review_context_never_publishes_mapped_file_manifest(deferred_symbols, monkeypatch):
+    root, receipt, _ = deferred_symbols
+    emitted = []
+    monkeypatch.setattr(diagnostic, "_emit_hosted", emitted.append)
+    monkeypatch.setattr(diagnostic, "_preserve_core_binaries", lambda *a:
+        [{"module": "SYNTHETIC_PRIVATE_MODULE.so", "sha256": "a" * 64}])
+    assert diagnostic._symbolize_after_workload(root, receipt, 139) == 139
+    assert "SYNTHETIC_PRIVATE_MODULE" not in repr(emitted)
+    assert all("preserved_binary_hashes" not in row for row in emitted)
+    assert emitted[-1]["post_workload_native"]["matching_binary_count"] == 1
+
+
+@pytest.mark.parametrize("interruption", ["cancelled", "post_exit_interrupted"])
+def test_review_context_mapping_interrupt_never_prepares_symbolizer(deferred_symbols, monkeypatch, interruption):
+    root, receipt, events = deferred_symbols
+    original = diagnostic._preserve_core_binaries
+    # Reach the real new readelf wrapper for the natural failure only.
+    real_preserve = _REAL_PRESERVE_CORE_BINARIES
+    def preserve(root, child, executable, inventory):
+        return (real_preserve(root, child, executable, inventory) if child["pid"] == 22
+                else original(root, child, executable, inventory))
+    monkeypatch.setattr(diagnostic, "_preserve_core_binaries", preserve)
+    monkeypatch.setattr(diagnostic, "_run_private", lambda *a, **k:
+        {"child_exit": -9, "signal": 9, "output_ok": False, interruption: True})
+    with pytest.raises(InterruptedError):
+        diagnostic._symbolize_after_workload(root, receipt, 139)
+    assert "prepare_symbolizer" not in events
+    assert not any(isinstance(event, tuple) and event[0] == "symbolize" for event in events)
+
+
+_REAL_PRESERVE_CORE_BINARIES = diagnostic._preserve_core_binaries
+
+
+@pytest.mark.parametrize("interruption", ["cancelled", "post_exit_interrupted"])
+def test_mapping_interrupt_cleans_private_files_and_retains139(deferred_symbols, monkeypatch, interruption):
+    root, pending, events = deferred_symbols
+    (root / "admission.json").write_text(json.dumps({"run_id": "500", "phase": diagnostic.PHASE,
+        "scaffolding_sha": "a" * 40, "workload_sha": diagnostic.FROZEN_SHA,
+        "workload_tree": diagnostic.FROZEN_TREE, "observation_deadline_epoch": diagnostic.time.time() + 2400}))
+    for key, value in {"GITHUB_RUN_ID": "500", "GITHUB_SHA": "a" * 40,
+                       "GITHUB_RUN_ATTEMPT": "1"}.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(diagnostic, "_private_root", lambda: root)
+    monkeypatch.setattr(diagnostic.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(diagnostic.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(diagnostic.signal, "alarm", lambda *a: None)
+    monkeypatch.setattr(diagnostic, "_prepare_hosted_capture", lambda *a: {})
+    monkeypatch.setattr(diagnostic, "_validate_runtime", lambda *a: None)
+    monkeypatch.setattr(diagnostic, "_prove_hosted_capture", lambda *a: None)
+    def acquire(root, workload, receipt):
+        receipt.update(pending, acquisition_exit=139)
+        return 139
+    original = diagnostic._preserve_core_binaries
+    def preserve(root, child, executable, inventory):
+        return (_REAL_PRESERVE_CORE_BINARIES(root, child, executable, inventory) if child["pid"] == 22
+                else original(root, child, executable, inventory))
+    monkeypatch.setattr(diagnostic, "_preserve_core_binaries", preserve)
+    monkeypatch.setattr(diagnostic, "_run_private", lambda *a, **k:
+        {"child_exit": -9, "signal": 9, "output_ok": False, interruption: True})
+    monkeypatch.setattr(diagnostic, "_acquire_sequence", acquire)
+    emitted = []
+    monkeypatch.setattr(diagnostic, "_emit_hosted", emitted.append)
+    assert diagnostic.hosted_observe() == 139
+    assert not root.exists() and emitted[-1]["cleanup"]["ok"]
+    assert emitted[-1]["diagnostic_error"] == "InterruptedError"
+    assert "prepare_symbolizer" not in events
+
+
+def test_review_context_inventoried_elf_replaced_by_data_is_not_skipped(tmp_path):
+    changed, intact = tmp_path / "changed.so", tmp_path / "intact.so"
+    for path in (changed, intact):
+        path.write_bytes(b"\x7fELFbefore")
+    inventory = {str(path): diagnostic._file_identity(path) for path in (changed, intact)}
+    changed.write_bytes(b"plain bytes after capture")
+    with pytest.raises(ValueError):
+        diagnostic._preserve_mapped_files(tmp_path, [str(changed), str(intact)], inventory)
+
+
 def test_postmortem_keeps_child_signal_when_capture_fails():
     assert diagnostic._postmortem_exit(-11, False) == 139
     assert diagnostic._postmortem_exit(0, False) == 70
