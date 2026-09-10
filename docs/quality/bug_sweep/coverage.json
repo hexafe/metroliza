@@ -2419,6 +2419,7 @@
         "scripts/benchmark_trend_compare.py",
         "scripts/build_provenance.py",
         "scripts/check_release_hygiene.py",
+        "scripts/ci_industrial_qt_diagnostics.py",
         "scripts/fetch_rapidocr_models.py",
         "scripts/generate_third_party_inventory.py",
         "scripts/measure_windows_startup.ps1",
