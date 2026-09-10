@@ -52,7 +52,7 @@
     "hexafe-groupstats": "0.1.0rc3",
     "installs_or_upgrades": false
   },
-  "probe_file_sha256": {
+  "initial_checkpoint_probe_file_sha256": {
     "tests/audit_981_output_safety.py": "b5715048470db29ba78d7f56af7d0f11bd35c3a0bd32cd12f1c9c4a270409a29",
     "tests/test_audit_981_output_safety.py": "4973674ed32a739b734b57fbb0c7e295f1edda32982249b0ed01312a505deade"
   },
@@ -528,5 +528,16 @@
     "duplicate_primary": 0,
     "ledger_changed": false,
     "ledger_terminalized": false
+  },
+  "initial_checkpoint_sha": "44daa6693a50c906db008d21d6d458cc9f9414ac",
+  "artifact_import_correction": {
+    "reason": "Initial exact-head CI Security audit rejected the bare audit_981_output_safety import as unclassified. Use existing first-party tests namespace; do not change scanner/policy.",
+    "changed_test_blob_sha": "7ba2881740dd26ac63c9c0847d9fac12c8678fe8",
+    "initial_failed_ci": "https://github.com/hexafe/metroliza/actions/runs/34490497197/job/102915671838",
+    "mutation_surface": "Normal child commit and non-force update of owned branch through GitHub Git API; local exec tool stopped creating processes before the import correction.",
+    "local_checkout_last_verified_head": "44daa6693a50c906db008d21d6d458cc9f9414ac",
+    "current_local_import_test": "NOT TESTED: local process creation unavailable; earlier evidence retained under initial checkpoint identity.",
+    "renewed_validation": "Normal hosted CI and fresh exact-candidate independent/configured review; see canonical checkpoint.",
+    "source_or_workflow_changed": false
   }
 }

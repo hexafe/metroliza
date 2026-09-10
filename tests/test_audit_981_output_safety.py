@@ -6,7 +6,7 @@ from zipfile import BadZipFile, ZipFile
 
 import pytest
 
-from audit_981_output_safety import (
+from tests.audit_981_output_safety import (
     BREAKOUT,
     FORBIDDEN,
     NS,

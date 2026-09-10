@@ -287,3 +287,20 @@ canonical checkpoint and Draft PR; they cannot be self-referentially embedded in
 the commit that they identify. A later changed head invalidates those receipts.
 This delivery authorizes **Draft only**, never Ready, merge or Issue closure.
 The shared coverage ledger remains nonterminal and unchanged.
+
+## Artifact-only CI correction after initial checkpoint
+
+Initial candidate `44daa6693a50c906db008d21d6d458cc9f9414ac` received clean
+independent review, but its CI Security audit rejected the test helper's bare
+module import. The test now uses the existing first-party `tests` namespace.
+Scanner policy, workflow and product source are unchanged. The JSON retains
+initial Python SHA-256 fingerprints under their initial commit identity and
+records the corrected test's Git blob identity separately.
+
+The local execution tool stopped creating processes before this correction,
+including attempts outside the worktree with an explicit shell. The correction
+was preserved as a normal child commit with a non-force GitHub Git API update
+of the owned branch. The last locally verified checkout remains the initial
+checkpoint; no reset or cleanup was attempted. Local execution of the changed
+import is NOT TESTED. Fresh hosted CI and exact-candidate reviews are recorded
+externally; old green results are not relabelled as current-head evidence.
