@@ -64,6 +64,10 @@ Six adjustments to the initial orchestrator proposal follow from the source and 
 6. In PyQt6 6.6.1, installing `sys.excepthook` changes the binding's callback-error path. Leave the
    global hook unchanged in the V1 Qt application; section 5.2 explains the verified source behavior.
 
+The rollout includes an explicit logging-policy migration (S2d): until accepted and implemented,
+the new recorder coexists with the current managed home/CWD logs. S2a alone does not make the
+whole application incident-only.
+
 These are proposed decisions, not accepted ADRs or findings that the current logging foundation
 is unsafe. All current behavior below is source-inspected unless an existing receipt is named.
 
@@ -117,6 +121,11 @@ the accepted safe foundation and the explicit executable-custom-LogRecord threat
 [#1033](https://github.com/hexafe/metroliza/pull/1033) supplies historical safe OCR/process/publication
 work, now present in the audited develop tree. Neither is new execution in this research.
 
+The later [owner continuation](https://github.com/hexafe/metroliza/issues/1037#issuecomment-5621182327)
+was read during this same window; its semantic-success counterexample is included in section 7.
+Local execution works in this new isolated research checkout. That does not repair or synchronize
+the old audit checkout, whose local/remote discrepancy remains recorded in its own checkpoint.
+
 The [#981 STOP checkpoint](https://github.com/hexafe/metroliza/issues/981#issuecomment-5620071004)
 preserves Draft #1036 at `b451e7af3153da89c16d09f5b26a7f4799a82da3`. It records clean final review,
 one successful CI run and another run failing in an unchanged Qt shard; no all-CI-green claim.
@@ -143,11 +152,27 @@ for the chosen build, not permission to upgrade or assume the latest behavior is
 | `QueueHandler` / `QueueListener` | Moves handler work to a listener; listener thread still shares process fate. Stock preparation formats/merges messages; bounded enqueue may drop | Possible internal implementation ingredient only after safe projection. Use finite queues of serialized primitives; never stock prepare on arbitrary records, default pickle receivers, or exposed listeners. [Python logging cookbook](https://docs.python.org/3.11/howto/logging-cookbook.html) |
 | Python 3.11 `faulthandler` | C implementation emits bounded Python frame text for selected fatal signals and Windows exceptions; descriptor lifetime matters; no Python 3.14 C-stack feature | Candidate optional channel, not default raw file. It emits filenames/functions and may be incomplete. `register` is unavailable on Windows; `dump_traceback_later(exit=True)` violates the no-kill rule. [3.11 API](https://docs.python.org/3.11/library/faulthandler.html) |
 | Crashpad directly | Client registration plus separate handler, local crash database/minidumps, platform-specific live-process access | Preferred candidate if sensitive native capture is later approved. Requires native bridge, handler distribution, symbol pipeline, licensing/build maintenance and offline policy. Memory in a minidump may contain secrets; it is not an allowlisted incident. [Crashpad design](https://chromium.googlesource.com/crashpad/crashpad/+/main/doc/overview_design.md) |
-| Sentry Native with Crashpad backend | Native SDK supplies backend integration plus Sentry event/transport machinery; not achieved by installing a Python logger | More integration convenience but extra collection/transport surface. Local-only must disable upload in both SDK and handler paths and prove offline persistence/deletion. No DSN alone is not the acceptance test. Current upstream calls standalone SDK use experimental; qualify an exact tag. Reject for V1, compare with direct Crashpad in sensitive phase. [Native SDK](https://github.com/getsentry/sentry-native) |
+| Sentry Native with Crashpad backend | Native SDK supplies backend integration plus Sentry event/transport machinery; not achieved by installing a Python logger | More integration convenience but extra collection/transport surface. Local-only must disable upload in both SDK and handler paths and prove offline persistence/deletion. No DSN alone is not the acceptance test. Current upstream calls standalone SDK use experimental; qualify an exact tag. Dedicated handler/database and compiler/privacy constraints below reinforce rejection for V1. [Native SDK](https://github.com/getsentry/sentry-native) |
 | Windows WER LocalDumps | OS collection configured before termination; per-executable registry options and local retention | Support-only alternative. Administrator required to enable documented HKLM configuration; custom crash reporting and automatic-debugger interaction limit coexistence. No registry changes here. [Microsoft LocalDumps](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps) |
 | `MiniDumpWriteDump` / explicit OS support collector | Live target handle/rights and exception context permit a helper to write a dump; Microsoft recommends another process and serializing DbgHelp calls | Native engineering, not a post-exit `Popen.wait()` callback. Same-user operation can be possible but access rights, protected targets and exact configuration decide. Manual support collector/ProcDump is separately approved, never silently installed or attached. [Microsoft API](https://learn.microsoft.com/en-us/windows/win32/api/minidumpapiset/nf-minidumpapiset-minidumpwritedump) |
 | Linux post-mortem | Existing kernel/systemd collector can preserve separate evidence; debugger/symbol tools can inspect an already retained core | Optional support input only. Availability/access/retention depend on host policy; do not change `core_pattern`, core limits, service settings or install tools. Existing journal/core text is sensitive. [systemd design](https://systemd.io/COREDUMP/) |
 | structlog / Loguru | Event ergonomics, processors, contextual binding and sinks | No process-survival guarantee and no confidentiality guarantee merely from JSON. Loguru `diagnose` may include variable values. Adds migration/dependency work without closing the central gap; reject for V1. [structlog](https://www.structlog.org/en/stable/getting-started.html), [Loguru API](https://loguru.readthedocs.io/en/stable/api/logger.html) |
+
+Sentry Native adds concrete integration constraints: distribute `crashpad_handler`, set explicit
+handler and private database paths (`sentry_options_set_handler_path` / `sentry_options_set_database_path`),
+and never share that database directory with incident/measurement files because SDK maintenance may
+delete entries. Its Windows MinGW configuration requires x64 LLVM/Clang for PDBs, whereas this repo's
+`build_nuitka.ps1` prefers MinGW/GCC (lines 64–75, 205–212, 659–664). Windows fast-fail can bypass
+`before_send`/`on_crash`; callback scrubbing is not a collection privacy boundary.
+[SDK constraints](https://github.com/getsentry/sentry-native)
+
+For a future local-only Sentry spike, inventory the exact tag's transport, consent/cache and native
+handler upload settings separately; `sentry_options_set_transport` governs SDK event transport, not
+proof about every native report path. Test denied-network operation plus later launches, queues,
+consent transitions and deletion: no delayed upload is allowed by this proposal.
+[SDK option declarations](https://github.com/getsentry/sentry-native/blob/master/include/sentry.h)
+These requirements may force a compiler/symbol/artifact change, which remains separately gated.
+Direct Crashpad still requires its own symbol/toolchain proof; choosing it does not remove that burden.
 
 A native SDK must be registered **inside the actual application/native process**, not only in the
 supervisor or onefile bootloader. Retain matching app/launcher/handler binaries, PDB/debug information,
@@ -334,7 +359,7 @@ handles; distinct admitted worker streams require separate bounded IDs/adapters,
 | Future/task | Observe result/exception at the existing owner seam and terminalize exactly once; executor-captured exceptions do not become thread-hook events. Cancelled, abandoned and failed are distinct. [Future.result](https://docs.python.org/3.11/library/concurrent.futures.html) |
 | asyncio | Install an event-loop exception handler only where an actual asyncio loop is introduced/owned; project bounded context keys and explicitly observe tasks. No asyncio loop was found in the audited canonical startup. [3.11 loop API](https://docs.python.org/3.11/library/asyncio-eventloop.html) |
 | PyQt callback/QThread | Existing handled-error seams get safe events; unhandled callback termination remains unchanged. `threading.excepthook` does not cover QThread. New catch/termination behavior needs explicit acceptance for slots, virtual overrides and QThread.run separately |
-| Qt messages | Optional `qInstallMessageHandler` adapter maps only severity/approved callsites; arbitrary message/context/category is excluded. Handler is reentrant, may run on multiple threads, and fatal processing still terminates; never log recursively, show GUI, throw or wait in it. [Qt 6.6.1 source](https://raw.githubusercontent.com/qt/qtbase/v6.6.1/src/corelib/global/qlogging.cpp) |
+| Qt messages | Optional `qInstallMessageHandler` adapter maps only severity/approved callsites; arbitrary message/context/category is excluded. Qt has one global handler: detect ownership, preserve/restore the previous handler and qualify coexistence before installation. Raw forwarding to that handler is outside incident validation. Handler is reentrant/concurrent; fatal processing still terminates. Never log recursively, show GUI, throw or wait in it. [Qt 6.6.1 source](https://raw.githubusercontent.com/qt/qtbase/v6.6.1/src/corelib/global/qlogging.cpp) |
 
 **Binding-specific source finding:** PyQt6 6.6.1 `qpycore_pyqtslotproxy.cpp:205–212` calls
 `pyqt6_err_print()` for a failed Python slot. In `qpycore_public_api.cpp:84–113`, a custom
@@ -376,12 +401,13 @@ if both processes die; inability to qualify it must not delay V1's bounded exit/
 ## 6. Storage modes, budgets and operator behavior
 
 All numbers here are **proposed initial acceptance targets**, not measurements or approved defaults.
-Do not change existing dual file logging during this research. A later migration must preserve the
-closed boundary while making the selected mode explicit and reversible.
+Do not change existing dual file logging during this research. S2d owns the later accepted migration,
+including level/console compatibility, current logging tests and rollback. These new recorder quotas
+do not retroactively cap existing managed logs; account for both stores during coexistence.
 
 | Mode/resource | Proposed policy and reason |
 | --- | --- |
-| Default incident-triggered | No ongoing workflow log file. Supervisor RAM ring: min of 2 MiB encoded event bytes, 2,000 events and 5 minutes age; 128 events/256 KiB reserved inside those totals for terminal/status facts. Child queue <=128 KiB and <=128 frames, including terminal reserve; per-frame <=4 KiB |
+| Default incident-triggered recorder | The new recorder writes no healthy-operation event file. Existing managed home/CWD logs remain during coexistence; the whole-app incident-only target requires the accepted S2d migration. Supervisor RAM ring: min of 2 MiB encoded event bytes, 2,000 events and 5 minutes age; 128 events/256 KiB reserved inside those totals for terminal/status facts. Child queue <=128 KiB and <=128 frames, including terminal reserve; per-frame <=4 KiB |
 | Healthy-session disk writes | One atomic <=4 KiB started marker, one replacement after authenticated app handshake, one clean-ended replacement at normal exit. Fields: random session ID, trusted build ID, coarse start time, marker state and local process identity needed to avoid PID reuse. No measurement/operation rows; no periodic disk heartbeat |
 | Marker retention | Local-only process PID/start identity never exported. At most 8 active supervised sessions and 20 inactive markers, <=112 KiB; inactive age <=14 days. Stale active marker without confirmed owner liveness becomes `previous_session_unclean_unknown`, not a proven crash. Indeterminate identity is not deleted as dead |
 | Incident store | <=3 MiB/report, <=20 reports, <=32 MiB aggregate including staging, age <=14 days; whichever limit binds first. Enforce before writes under a bounded local store lock. Reserve staging headroom; no existing report replacement for a new incident |
@@ -395,7 +421,9 @@ may shorten that. Coalesce routine progress into coarse stage transitions and ra
 legacy-suppression counts before the ring. Keep a bounded summary of <=32 active operations within
 the same memory budget; overflow is counted. Never retain per-file or per-row progress by default.
 Report first/last retained times, age eviction, byte/count eviction and child-side loss separately.
-No measurement of actual Python heap/RSS follows from an encoded-byte cap.
+No measurement of actual Python heap/RSS follows from an encoded-byte cap. All counters saturate
+at 2^31−1 with a saturation flag; sequence/time values are nonnegative integers <=2^63−1. Unknown
+source fields and excess active operations are rejected/coalesced within the same fixed budgets.
 
 Use a single user-private application-state location: Windows local app data; Linux XDG state home
 with the usual home-state fallback. Prefer local storage; reject or report unsuitable/unwritable
@@ -437,6 +465,7 @@ campaign follows from this document.
 | Scenario | Required V1/next-stage evidence and operator result | Acceptance discriminator / limitation |
 | --- | --- | --- |
 | Normal exit | Clean marker plus actual successful process exit; no automatic incident | S2: exit 0 + terminal handshake; history discarded. Exit 0 without clean handshake is `unclean_unknown`, not proven success |
+| Undetected incorrect result: [#1035](https://github.com/hexafe/metroliza/issues/1035) | The exporter returned `completed` with structurally incorrect chart labels and no process crash. Supervisor/hooks cannot infer this semantic defect from a successful operation/exit; no incident is guaranteed | S1 domain seam: a separately owned artifact/domain validator can emit closed `validation_failed` plus source-controlled rule/stage/location IDs, without imported headers or workbook content. Until such a validator exists, preserve observed `completed` and separate validation `not_performed`; do not retroactively report failure. Validator implementation, repair and further #981 probes are outside this research |
 | Handled operation failure | Typed failed outcome, stage and safe code location, even while app stays alive | S1/S2: catch and continue fixture emits exactly one operation terminal event; no global hook required |
 | Unhandled main error | Safe owned top-level event and nonzero exit, if adapter armed | S1/S2: pre/post-adapter exceptions separated; existing caught bootstrap path covered explicitly; no global Qt hook installed |
 | Python thread error | Thread-role failure; main process may still be alive | S1: synthetic Thread.run exception; no false application-terminated flag, no retained exception/thread objects |
@@ -483,8 +512,7 @@ PyInstaller onedir/Win:    shortcut → lean onedir L (own bootloader → Python
                                                └─ app onedir A (bootloader/hooks → Python → Qt)
 PyInstaller onedir/Linux:  shortcut → launcher bootloader/re-exec → L
                                                └─ app bootloader/re-exec → A → Qt
-                              (record actual PIDs: older docs describe two processes;
-                               exact chosen bootloader source decides fork versus exec)
+                              (v6.11.1 Linux onedir re-execs in the same PID; no fork)
 PyInstaller onefile:       shortcut → lean onedir L
                                                └─ app B (extracts, owns cleanup; splash thread)
                                                    └─ app A (hooks → Python → Qt)
@@ -505,11 +533,13 @@ collection/runtime-hook exposure and same-executable/bootloader recursion comple
 cover its own pre-entry failure. Accept it only if the PO explicitly selects that narrower startup
 scope and measured packaging evidence supports it; it is not the recommended strong-boundary V1.
 
-Qualify Windows onedir and Nuitka standalone first, then their onefile tracks. Linux onedir
-bootloader transitions also need direct inspection: [6.11.1 bootstrap documentation](https://pyinstaller.org/en/v6.11.1/advanced-topics.html)
-describes a two-process model except Windows onedir, while actual re-exec/fork behavior must be
-resolved from the selected bootloader source and observed PID tree. Do not call a bootstrap transition
-a separate PID without evidence.
+Qualify onedir/standalone first, then their onefile tracks. The generic
+[6.11.1 bootstrap prose](https://pyinstaller.org/en/v6.11.1/advanced-topics.html) describes two processes
+except Windows onedir, but exact [v6.11.1 bootloader source](https://raw.githubusercontent.com/pyinstaller/pyinstaller/v6.11.1/bootloader/src/pyi_main.c)
+`_pyi_main_handle_posix_onedir` (1255–1305) resolves Linux onedir explicitly: adjust the library path
+and `execvp` without `fork`, retaining the PID. The diagram follows source over that broad prose;
+this applies to the lean onedir launcher as well. Runtime/build version remains unpinned here, so
+exact-artifact qualification must still confirm the selected version's actual PID tree.
 
 PyInstaller distinguishes parent, main and worker process levels; onefile extraction lifetime belongs
 to the bootloader. Private `_PYI_*` state is not an application role API. Consult the **chosen version's**
@@ -604,7 +634,7 @@ mode and 5 trials of each 60-second load profile, subject to an approved bounded
 | Resident memory | OS sampling of whole process tree; peak and idle RSS/private bytes versus baseline, including launcher/bootloaders/handler. Encoded 2 MiB ring is not an RSS bound; provisional incremental budget <=40 MiB requires measurement |
 | Event cost / dropped rate | Synthetic 10/100/1,000 events/s plus 10,000/s flood; admitted/dropped/evicted/terminal counts. Demonstrate bounded plateau, preserved terminal evidence and no raw output |
 | GUI responsiveness | Loop latency/jitter compared with recording disabled at equal work; proposed added p95 <=5 ms under ordinary load; no claim before actual binding/package tests |
-| Idle disk writes | OS process-attributed write counters, excluding unrelated application/OS writes. Default recorder has only the named lifecycle marker writes; no periodic recorder write |
+| Idle disk writes | OS process-attributed write counters, excluding unrelated application/OS writes. New recorder has only the named lifecycle marker writes; existing managed-file writes are measured separately until S2d; no periodic recorder write |
 | Incident publication | Trigger-to-valid-final-file and failure-notification latency with ring full; proposed healthy-local-store p95 <=1 second, storage-failure wait bounded to <=1 second before unavailable status; slow syscall/platform limits must be reconciled before accepting this bound |
 | Degraded/flood behavior | CPU/RAM/queue/lock/EOF tests, parent death, no-console and disk denial; privacy/correctness must pass before speed tuning |
 
@@ -622,11 +652,17 @@ shared event contract or LEWY's experimental helper. Keep the total class CRITIC
 
 | Proposed slice / owner / prerequisites | MUST | SHOULD | DEFERRED and rollback |
 | --- | --- | --- | --- |
-| **S1: useful safe events/hooks**; #944 foundation owner; accepted schema/privacy contract | Extend existing classes; session/operation/stage/outcome and safe code-map contracts; bootstrap/handled/thread/future seams; preserve default Qt global exception hook; tests that fail on raw text, dynamic filenames, extra fields, spoofed metadata and lost terminal outcomes. Preserve original exception/termination and UI/result behavior | Start with bootstrap plus one import and one export adapter; approved lazy build/backend facts. Narrow Qt hook semantics qualification as its own authorized test gate | No mass log rewrite, supervisor, native dump or DB changes. Roll back new adapters/event variants while retaining current #1011 safe logging; unknown-new-event readers fail closed |
-| **S2a: supervised V1**; #944 runtime + packaging owner; S1 and accepted budgets | Minimal launcher, authenticated bounded IPC/ring/store/marker, safe publication/failure display, direct fallback; actual exit provenance and native-stack-unavailable status; fail-first process/privacy tests; all selected packaged targets and #901 mapping | Optional faulthandler RAM channel only after separate transport/mapping qualification; bootstrap-safe Python frame context | No kill/restart, raw dump or hang engine. Disable supervision through explicit direct entry; retain safe incidents/markers without replay; do not delete diagnostic evidence automatically |
+| **S1: useful safe events/hooks**; #944 foundation owner; accepted schema/privacy contract | Extend existing classes; session/operation/stage/outcome and safe code-map contracts; bootstrap/handled/thread/future seams; preserve default Qt global exception hook; tests that fail on raw text, dynamic filenames, extra fields, spoofed metadata and lost terminal outcomes. Preserve original exception/termination and UI/result behavior | Start with bootstrap plus one import and one export adapter; approved lazy build/backend facts. Narrow Qt hook semantics and single-message-handler ownership/coexistence qualification as their own authorized test gate | No mass log rewrite, supervisor, native dump or DB changes. Roll back new adapters/event variants while retaining current #1011 safe logging; unknown-new-event readers fail closed |
+| **S2a: supervised V1**; #944 runtime + packaging owner; S1 and accepted budgets | Minimal launcher, authenticated bounded IPC/ring/store/marker, safe publication/failure display, direct fallback; actual exit provenance and native-stack-unavailable status; fail-first process/privacy tests; routing/coexistence tests proving new recorder delivery does not duplicate events into current home/CWD sinks; selected packaged targets and #901 mapping | Optional faulthandler RAM channel only after separate transport/mapping qualification; bootstrap-safe Python frame context | No kill/restart, raw dump or hang engine. Disable supervision through explicit direct entry; retain safe incidents/markers without replay; do not delete diagnostic evidence automatically |
 | **S2b: operator preview/export**; #944 UX/service owner; S2a safe capture | Validate stored report, exact manifest/preview/cancel, atomic explicit export, alias guards, no arbitrary attachments. Core capture already works in S2a; export is not a prerequisite for saving an incident | Small readable timeline and instructions for missing symbols/history | No cloud/notes/samples/dumps by default. Disable export action independently while capture remains functional |
+| **S2d: managed-log policy migration**; #944 logging/security owner; S2a plus explicit PO acceptance | Own the switch from current dual home/CWD files to the proposed incident-triggered default; preserve closed serialization and visible logging-unavailable behavior; update existing rotation/fallback/level tests for explicitly selected modes; prove default no duplicate CWD/home event writes and support expiry | Keep source-compatible safe event types, concise migration guidance and optional bounded support file | No silent policy change in S2a. Roll back routing/configuration to current safe managed logging while retaining incident evidence; do not revive arbitrary text. Until this gate, whole-app incident-only behavior remains unimplemented |
 | **S3: responsiveness**; #944 + #945 UI owner; S2a and qualified Qt lifecycle seam | Separate OS/GUI/progress semantics; resume/debugger/legitimate-long-work tests; bounded suspicion snapshot and notification; no forced shutdown | Operation-specific stage expectations, diagnostic pause and recovered state | No causal deadlock claims or automatic remediation. Disable heartbeat interpretation; leave exit/history capture working |
-| **S4: sensitive native capability**; native/platform security owner + #901; explicit separate approval | Compare exact Crashpad versus Sentry Native builds and OS-only support path; native registration before failure, symbol retention, consent/retention/offline proof, handler coexistence and crash-time privacy review; verify actual app PID for every package | Prefer direct Crashpad if local capture still outweighs SDK maintenance; use already available OS evidence for narrowly approved support cases | Default raw/minidump collection and upload remain disabled. Removing/denying collector must leave V1 diagnostics operational; unregister safely, preserve OS settings and separately consented retained artifacts |
+| **S4: sensitive native capability**; native/platform security owner + #901; explicit separate approval | Compare exact Crashpad versus Sentry Native builds and OS-only support path; native registration before failure, symbol retention including GCC/Clang/PDB decision, dedicated handler/private database, collection-time privacy (not before_send/on_crash), consent/retention/offline proof, handler coexistence and crash-time privacy review; verify actual app PID for every package | Prefer direct Crashpad if local capture still outweighs SDK maintenance; use already available OS evidence for narrowly approved support cases | Default raw/minidump collection and upload remain disabled. Removing/denying collector must leave V1 diagnostics operational; unregister safely, preserve OS settings and separately consented retained artifacts |
+
+S2a can be delivered in separate small PRs: core/source transport and store first, Windows onedir
+qualification next, then onefile and Nuitka qualification tracks. Early capture remains useful while
+unqualified modes keep the explicit direct path; do not advertise those modes as protected. S2b
+export and S2d logging-policy migration are independently reviewed behavior changes.
 
 Every implementation packet must include tests with a deliberately missing hook, lossy/full transport,
 wrong peer, invalid event, denied publication and unqualified native stack so that false success fails.
@@ -644,7 +680,8 @@ updates wait for accepted product behavior.
 
 The PO can accept the schema/coverage direction independently of sensitive native capture. Concrete
 open decisions are: separate launcher delivery/size budget versus narrower same-bundle supervision;
-healthy marker writes versus explicit RAM-only mode; retention/instance/flood limits; which packaged
+healthy marker writes versus explicit RAM-only mode; S2d migration away from current dual logs;
+retention/instance/flood limits; which packaged
 modes are enabled after individual qualification; and whether/when to authorize the fatal RAM channel
 and S4. Recommended defaults are those in sections 1 and 6. No unresolved choice silently enables
 raw output, automatic restart, system configuration or cloud transport.
