@@ -177,16 +177,12 @@ def main() -> int:
 FROZEN_SHA = "216877364752c20bcdc65752382da470c4f363d5"
 FROZEN_TREE = "719b80423271ff59c6fe08ace819fee2ae151fa0"
 BRANCH = "fix/998-industrial-qt-recurrence"
-PHASE = "5614139597"
-APPROVAL_TIME = "2026-09-10T06:24:21Z"
-PROBE_VARIANTS = ("industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter")
-PROBE_PHASES = {
-    "industrial_ui": ("cycle_start", "parent_constructed", "parent_show", "progress_constructed",
-                      "progress_show", "ownership_checked", "events", "progress_close",
-                      "parent_close", "release", "complete"),
-    "plain": ("cycle_start", "constructed", "configured", "layout", "themed", "ownership_checked",
-              "show", "events", "close", "release", "complete"),
-}
+PHASE = "5618809967"
+APPROVAL_TIME = "2026-09-10T12:39:19Z"
+PROBE_VARIANTS = ("async_reference", "async_owned_teardown")
+PROBE_PHASES = ("cycle_start", "parent_constructed", "load_started", "ownership_checked",
+                "worker_terminal", "load_checked", "parent_close", "boundary", "release",
+                "lifetime", "complete")
 RUNTIME_PACKAGES = {
     "PyQt6": "6.6.1", "PyQt6-Qt6": "6.6.1", "PyQt6-sip": "13.12.0",
     "numpy": "2.4.6", "pandas": "3.0.5", "pytest": "9.1.1",
@@ -203,7 +199,7 @@ OUTPUT_LIMIT = 8 * 1024**2
 
 def _safe_json(value: object) -> str:
     # One prefixed physical log line: values cannot become Actions commands.
-    text = json.dumps(value, sort_keys=True, ensure_ascii=True)
+    text = json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     if len(text) > 60000:
         raise ValueError("safe_output_limit")
     return text
@@ -434,28 +430,79 @@ def _pytest_summary(text: str) -> dict:
             "pytest_subtest_counts": re.findall(r"\b[0-9]+ subtests passed\b", summary)}
 
 
-def _probe_summary(text: str, variant: str) -> dict:
-    phases = PROBE_PHASES["industrial_ui" if variant == "industrial_ui" else "plain"]
-    expected = [(0, "startup"), (0, "application")]
-    expected.extend((cycle, phase) for cycle in range(1, 201) for phase in phases)
-    expected.append((200, "process_exit"))
-    observed = []
-    valid = True
+def _lifetime_counters_valid(data: dict, previous: dict) -> bool:
+    for key, size in (("gc", 4), ("wrappers", 6)):
+        values = data[key]
+        if (not isinstance(values, list) or len(values) != size
+                or any(type(value) is not int or not 0 <= value <= 1000000 for value in values)):
+            return False
+        if any(value < old for value, old in zip(values, previous.get(key, [0] * size))):
+            return False
+    return all(sum(data["wrappers"][index:index + 2]) <= data["cycle"] for index in (0, 2, 4))
+
+
+def _lifetime_record(line: str, variant: str, previous: dict) -> dict:
+    data = json.loads(line.removeprefix("QT998_LIFETIME "))
+    flags = ("shown", "parent_deleted", "thread_deleted", "subtree_verified", "store_removed")
+    keys = {"variant", "cycle", "load_rows", "gc", "wrappers", *flags}
+    if not isinstance(data, dict) or data.keys() != keys:
+        raise ValueError("lifetime_schema")
+    if (data["variant"] != variant or type(data["cycle"]) is not int
+            or not 1 <= data["cycle"] <= 200
+            or any(type(data[key]) is not bool for key in flags)
+            or type(data["load_rows"]) is not int or data["load_rows"] != 4
+            or not data["store_removed"] or not _lifetime_counters_valid(data, previous)):
+        raise ValueError("lifetime_values")
+    if variant == "async_owned_teardown" and not all(
+            data[key] for key in ("parent_deleted", "thread_deleted", "subtree_verified")):
+        raise ValueError("unproven_owned_boundary")
+    return data
+
+
+def _lifetime_totals(rows: list[dict]) -> dict:
+    final = rows[-1] if rows else {}
+    return {"lifetime_snapshots": len(rows),
+            "shown_observed_cycles": sum(row["shown"] for row in rows),
+            "parent_cpp_deleted_cycles": sum(row["parent_deleted"] for row in rows),
+            "thread_cpp_deleted_cycles": sum(row["thread_deleted"] for row in rows),
+            "subtree_cpp_verified_cycles": sum(row["subtree_verified"] for row in rows),
+            "store_removed_cycles": sum(row["store_removed"] for row in rows),
+            "gc_counts": final.get("gc", [0] * 4),
+            "wrapper_release_counts": final.get("wrappers", [0] * 6)}
+
+
+def _probe_observations(text: str, variant: str) -> tuple[list, list]:
+    observed, lifetimes = [], []
     for line in text.splitlines():
-        if line.startswith("QT998_PROBE"):
+        if line.startswith("QT998_LIFETIME"):
+            row = _lifetime_record(line, variant, lifetimes[-1] if lifetimes else {})
+            lifetimes.append(row)
+            observed.append((row["cycle"], "lifetime"))
+        elif line.startswith("QT998_PROBE"):
             match = re.fullmatch(r"QT998_PROBE ([a-z_]+) ([0-9]{1,3}) ([a-z_]+)", line)
-            if not match or match[1] != variant:
-                valid = False
-                break
+            if not match or match[1] != variant or match[3] == "lifetime":
+                raise ValueError("probe_marker")
             observed.append((int(match[2]), match[3]))
-    valid = valid and bool(observed) and observed == expected[:len(observed)]
+    return observed, lifetimes
+
+
+def _probe_summary(text: str, variant: str) -> dict:
+    expected = [(0, "startup"), (0, "application")]
+    expected.extend((cycle, phase) for cycle in range(1, 201) for phase in PROBE_PHASES)
+    expected.append((200, "process_exit"))
+    try:
+        observed, lifetimes = _probe_observations(text, variant)
+        valid = variant in PROBE_VARIANTS and bool(observed) and observed == expected[:len(observed)]
+    except (ValueError, TypeError):
+        observed, lifetimes, valid = [], [], False
     completed = sum(phase == "complete" for _, phase in observed) if valid else 0
     started = sum(phase == "cycle_start" for _, phase in observed) if valid else 0
     return {"probe_valid": valid, "probe_complete": valid and observed == expected,
             "variant": variant, "completed_cycles": completed,
             "interrupted_cycles": started - completed,
             "last_completed_phase": observed[-1][1] if valid else "unavailable",
-            "last_cycle": observed[-1][0] if valid else None}
+            "last_cycle": observed[-1][0] if valid else None,
+            **_lifetime_totals(lifetimes if valid else [])}
 
 
 def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeout: float = 120) -> dict:
@@ -821,10 +868,10 @@ def _usable_probe_failure(stage: dict) -> bool:
 
 
 def _acquire_reduction(root: Path, workload: Path, receipt: dict) -> int:
-    receipt.update(stages=[], observation="REDUCTION_INCOMPLETE", variant_limit=4,
-                   cycles_per_variant=200, aggregate_limit_seconds=720,
-                   context="four predeclared variants; fresh processes; cumulative coverage")
-    deadline = time.monotonic() + 720
+    receipt.update(stages=[], observation="REDUCTION_INCOMPLETE", variant_limit=2,
+                   cycles_per_variant=200, aggregate_limit_seconds=360,
+                   context="two predeclared async variants; fresh processes; cumulative coverage")
+    deadline = time.monotonic() + 360
     first_failure = 0
     for variant in PROBE_VARIANTS:
         remaining = deadline - time.monotonic()

@@ -297,7 +297,7 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
     assert workflow["concurrency"]["cancel-in-progress"] == "true"
     assert "github.run_id" in workflow["concurrency"]["group"]
     assert "format('ci-{0}-{1}', github.workflow, github.ref)" in workflow["concurrency"]["group"]
-    assert job["concurrency"] == {"group": "qt998-postmortem-job-5614139597",
+    assert job["concurrency"] == {"group": "qt998-postmortem-job-5618809967",
                                    "cancel-in-progress": "false"}
     assert job["concurrency"]["group"] not in workflow["concurrency"]["group"]
     # GitHub evaluates job env before assigning a runner; runner context is step-only.
@@ -392,7 +392,7 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
         assert receipts[-1]["observation"] == "not_started"
         assert receipts[-1]["diagnostic_error"] == "OSError"
     else:
-        assert events.count("industrial_ui") == 1
+        assert events.count("async_reference") == 1
         assert receipts[-1]["stages"][0]["child_exit"] == -11
         assert receipts[-1]["stages"][0]["diagnostic_error"] == "OSError"
 
@@ -509,7 +509,7 @@ def test_aggregate_expiry_never_starts_another_industrial_sample(acquisition, mo
 def test_spent_old_phase_does_not_consume_the_explicit_new_allocation(admission):
     admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
                          "created_at": "2026-09-09T15:59:03Z", "id": 499})
-    assert diagnostic._validate_admission(*admission)["phase"] == "5614139597"
+    assert diagnostic._validate_admission(*admission)["phase"] == "5618809967"
     admission[0]["inputs"].pop("qt998_phase")
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -655,7 +655,7 @@ def test_fault_first_extractor_bounds_realistic_multithreaded_unwinding(monkeypa
     assert native["threads"][0]["frames"][0]["function"] == "??"
 
 
-@pytest.mark.parametrize("label", ["industrial_10", "industrial_ui"])
+@pytest.mark.parametrize("label", ["industrial_10", "async_reference"])
 @pytest.mark.parametrize("function_length", [140, 144, 145])
 @pytest.mark.parametrize("module_length", [80, 81])
 def test_complete_native_stage_publication_preserves_size_reserve(
@@ -681,10 +681,10 @@ def test_complete_native_stage_publication_preserves_size_reserve(
                 "output_bytes": 8388608, "output_truncated": False, "pytest_counts": [],
                 "pytest_summary_complete": False, "pytest_warning_counts": [],
                 "pytest_subtest_counts": [], **(diagnostic._probe_summary(
-                    _probe_markers("industrial_ui", 199, terminal=False)
-                    + "QT998_PROBE industrial_ui 200 cycle_start\n"
-                    + "QT998_PROBE industrial_ui 200 parent_constructed\n", "industrial_ui")
-                    if label == "industrial_ui" else {})}
+                    _probe_markers("async_reference", 199, terminal=False)
+                    + "QT998_PROBE async_reference 200 cycle_start\n"
+                    + "QT998_PROBE async_reference 200 parent_constructed\n", "async_reference")
+                    if label == "async_reference" else {})}
     monkeypatch.setattr(diagnostic, "_run_private", run)
     monkeypatch.setattr(diagnostic, "_verify_probe", lambda: "a" * 64)
     monkeypatch.setattr(diagnostic, "_verify_workload", lambda *_: None)
@@ -694,8 +694,8 @@ def test_complete_native_stage_publication_preserves_size_reserve(
         tmp_path, tmp_path, {"stages": []}, label,
         ([sys.executable, "-m", "coverage", "run", "--append", "--source=src/metroliza,modules,scripts",
           str(diagnostic._probe_file()), "--variant", label, "--cycles", "200"]
-         if label == "industrial_ui" else [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS]),
-        [] if label == "industrial_ui" else ["42 passed"], 180 if label == "industrial_ui" else 120,
+         if label == "async_reference" else [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS]),
+        [] if label == "async_reference" else ["42 passed"], 180 if label == "async_reference" else 120,
     ) == 139
     output = capsys.readouterr().out.removeprefix("QT998_JSON ").strip()
     assert len(output.encode("utf-8")) < 59000
@@ -743,9 +743,9 @@ def test_module_identifier_truncation_is_explicit(monkeypatch, tmp_path, length)
     assert frame["module_truncated"] == (length > 80)
 
 
-@pytest.mark.parametrize("spent", ["5604177526", "5608262552"])
+@pytest.mark.parametrize("spent", ["5604177526", "5608262552", "5614139597"])
 def test_reduction_admission_never_revives_either_spent_allocation(admission, spent):
-    assert diagnostic.PHASE == "5614139597"
+    assert diagnostic.PHASE == "5618809967"
     admission[0]["inputs"]["qt998_phase"] = spent
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -767,25 +767,25 @@ def reduction(monkeypatch, tmp_path):
     return tmp_path, calls, outcomes
 
 
-def test_reduction_runs_only_four_declared_variants_with_frozen_bounds(reduction):
+def test_reduction_runs_only_two_declared_variants_with_frozen_bounds(reduction):
     root, calls, _ = reduction
     receipt = {}
     assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 0
     assert [x[0] for x in calls] == [
-        "industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter"]
+        "async_reference", "async_owned_teardown"]
     assert all(0 < x[2] <= 180 and x[1][-2:] == ["--cycles", "200"] for x in calls)
     assert len({x[3] for x in calls}) == 1
     assert receipt["observation"] == "REDUCTION_NON_REPRODUCTION"
-    assert receipt["variant_limit"] == 4 and receipt["aggregate_limit_seconds"] == 720
+    assert receipt["variant_limit"] == 2 and receipt["aggregate_limit_seconds"] == 360
 
 
-@pytest.mark.parametrize("failed", ["industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter"])
+@pytest.mark.parametrize("failed", ["async_reference", "async_owned_teardown"])
 def test_reduction_crash_allows_only_remaining_predeclared_comparisons_and_retains139(reduction, failed):
     root, calls, outcomes = reduction
     outcomes[failed] = {"child_exit": -11, "signal": 11, "complete": False}
     receipt = {}
     assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 139
-    assert len(calls) == 4 and len({x[0] for x in calls}) == 4
+    assert len(calls) == 2 and len({x[0] for x in calls}) == 2
     assert receipt["observation"] == "REDUCTION_FAILED_WORKLOAD"
 
 
@@ -796,7 +796,7 @@ def test_reduction_crash_allows_only_remaining_predeclared_comparisons_and_retai
 ])
 def test_reduction_capture_or_harness_incompleteness_stops_all_remaining_work(reduction, bad):
     root, calls, outcomes = reduction
-    outcomes["industrial_ui"] = {"child_exit": -11, "signal": 11, "complete": False, **bad}
+    outcomes["async_reference"] = {"child_exit": -11, "signal": 11, "complete": False, **bad}
     receipt = {}
     assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 139
     assert len(calls) == 1
@@ -805,8 +805,8 @@ def test_reduction_capture_or_harness_incompleteness_stops_all_remaining_work(re
 
 def test_reduction_later_harness_error_does_not_erase_earlier139(reduction):
     root, calls, outcomes = reduction
-    outcomes["industrial_ui"] = {"child_exit": -11, "signal": 11, "complete": False}
-    outcomes["plain_ui"] = {"child_exit": 70, "complete": False}
+    outcomes["async_reference"] = {"child_exit": -11, "signal": 11, "complete": False}
+    outcomes["async_owned_teardown"] = {"child_exit": 70, "complete": False}
     receipt = {}
     assert diagnostic._acquire_reduction(root, root / "workload", receipt) == 139
     assert len(calls) == 2 and receipt["observation"] == "REDUCTION_INCOMPLETE"
@@ -821,23 +821,35 @@ def test_reduction_budget_expiry_prevents_first_variant(reduction, monkeypatch):
     assert calls == [] and receipt["observation"] == "REDUCTION_INCOMPLETE"
 
 
+def _lifetime_data(variant, cycle):
+    owned = variant == "async_owned_teardown"
+    return {"variant": variant, "cycle": cycle, "shown": False,
+            "parent_deleted": owned, "thread_deleted": owned, "subtree_verified": owned,
+            "load_rows": 4, "store_removed": True, "gc": [0, 0, 0, 0],
+            "wrappers": [0, 0, 0, 0, 0, 0]}
+
+
 def _probe_markers(variant, cycles=200, terminal=True):
-    phases = (["cycle_start", "parent_constructed", "parent_show", "progress_constructed",
-               "progress_show", "ownership_checked", "events", "progress_close", "parent_close",
-               "release", "complete"] if variant == "industrial_ui" else
-              ["cycle_start", "constructed", "configured", "layout", "themed", "ownership_checked",
-               "show", "events", "close", "release", "complete"])
-    rows = [(0, "startup"), (0, "application")]
-    rows.extend((cycle, phase) for cycle in range(1, cycles + 1) for phase in phases)
+    phases = ["cycle_start", "parent_constructed", "load_started", "ownership_checked",
+              "worker_terminal", "load_checked", "parent_close", "boundary", "release",
+              "lifetime", "complete"]
+    rows = [f"QT998_PROBE {variant} 0 startup", f"QT998_PROBE {variant} 0 application"]
+    for cycle in range(1, cycles + 1):
+        for phase in phases:
+            rows.append("QT998_LIFETIME " + json.dumps(_lifetime_data(variant, cycle))
+                        if phase == "lifetime" else f"QT998_PROBE {variant} {cycle} {phase}")
     if terminal:
-        rows.append((cycles, "process_exit"))
-    return "\n".join(f"QT998_PROBE {variant} {cycle} {phase}" for cycle, phase in rows) + "\n"
+        rows.append(f"QT998_PROBE {variant} {cycles} process_exit")
+    return "\n".join(rows) + "\n"
 
 
-@pytest.mark.parametrize("variant", ["industrial_ui", "plain_ui", "minimal_filter", "uninstalled_filter"])
+@pytest.mark.parametrize("variant", ["async_reference", "async_owned_teardown"])
 def test_probe_reports_complete_cycles_and_honest_partial_prefix(variant):
     result = diagnostic._probe_summary(_probe_markers(variant), variant)
-    assert result == {"probe_valid": True, "probe_complete": True, "variant": variant,
+    assert {key: result[key] for key in ("probe_valid", "probe_complete", "variant",
+                                        "completed_cycles", "interrupted_cycles",
+                                        "last_completed_phase", "last_cycle")} == {
+                      "probe_valid": True, "probe_complete": True, "variant": variant,
                       "completed_cycles": 200, "interrupted_cycles": 0,
                       "last_completed_phase": "process_exit", "last_cycle": 200}
     partial = _probe_markers(variant, 3, terminal=False) + f"QT998_PROBE {variant} 4 cycle_start\n"
@@ -850,27 +862,27 @@ def test_probe_reports_complete_cycles_and_honest_partial_prefix(variant):
 
 
 @pytest.mark.parametrize("bad", [
-    "QT998_PROBE", "QT998_PROBE\tplain_ui 1 complete", "QT998_PROBE plain_ui 201 complete",
-    "QT998_PROBE plain_ui 200 SYNTHETIC_SECRET", "QT998_PROBE other 200 complete",
-    "QT998_PROBE plain_ui 200 process_exit", "QT998_PROBE plain_ui -1 complete",
+    "QT998_PROBE", "QT998_PROBE\tasync_owned_teardown 1 complete", "QT998_PROBE async_owned_teardown 201 complete",
+    "QT998_PROBE async_owned_teardown 200 SYNTHETIC_SECRET", "QT998_PROBE other 200 complete",
+    "QT998_PROBE async_owned_teardown 200 process_exit", "QT998_PROBE async_owned_teardown -1 complete",
 ])
 def test_malformed_or_duplicate_probe_markers_invalidate_attribution(bad):
-    result = diagnostic._probe_summary(_probe_markers("plain_ui") + bad, "plain_ui")
+    result = diagnostic._probe_summary(_probe_markers("async_owned_teardown") + bad, "async_owned_teardown")
     assert not result["probe_valid"] and not result["probe_complete"]
     assert result["last_completed_phase"] == "unavailable"
     assert "SYNTHETIC_SECRET" not in repr(result)
 
 
-@pytest.mark.parametrize("text", ["", "Qt warning only", "QT998_PROBE plain_ui 1 cycle_start\n"])
+@pytest.mark.parametrize("text", ["", "Qt warning only", "QT998_PROBE async_owned_teardown 1 cycle_start\n"])
 def test_missing_startup_or_out_of_order_markers_cannot_qualify(text):
-    result = diagnostic._probe_summary(text, "plain_ui")
+    result = diagnostic._probe_summary(text, "async_owned_teardown")
     assert not result["probe_valid"] and result["last_cycle"] is None
 
 
 def test_probe_history_cutoff_remains_original_authority_not_renewal(admission):
-    assert diagnostic.APPROVAL_TIME == "2026-09-10T06:24:21Z"
+    assert diagnostic.APPROVAL_TIME == "2026-09-10T12:39:19Z"
     admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
-                         "created_at": "2026-09-10T07:00:00Z", "id": 499})
+                         "created_at": "2026-09-10T12:40:00Z", "id": 499})
     with pytest.raises(ValueError, match="approval_already_spent"):
         diagnostic._validate_admission(*admission)
 
@@ -890,19 +902,19 @@ def probe_stage(monkeypatch, tmp_path):
 @pytest.mark.parametrize("condition", ["complete", "partial", "malformed", "private_leftover"])
 def test_real_stage_separates_exit_capture_markers_and_private_cleanup(probe_stage, monkeypatch, code, condition):
     root, published = probe_stage
-    text = _probe_markers("plain_ui")
+    text = _probe_markers("async_owned_teardown")
     if condition == "partial":
-        text = _probe_markers("plain_ui", 3, terminal=False)
+        text = _probe_markers("async_owned_teardown", 3, terminal=False)
     if condition == "malformed":
         text += "QT998_PROBE"
     if condition == "private_leftover":
         (root / "core.123").write_bytes(b"synthetic marker only")
     child = {"child_exit": code, "signal": 11 if code == -11 else None, "pid": 123,
              "output_ok": True, "output_truncated": False, "pytest_counts": [],
-             **diagnostic._probe_summary(text, "plain_ui")}
+             **diagnostic._probe_summary(text, "async_owned_teardown")}
     monkeypatch.setattr(diagnostic, "_run_private", lambda *args, **kwargs: child)
     receipt = {"stages": []}
-    result = diagnostic._acquisition_stage(root, root, receipt, "plain_ui",
+    result = diagnostic._acquisition_stage(root, root, receipt, "async_owned_teardown",
                                          [sys.executable, str(diagnostic._probe_file())], [], 180)
     assert result == (139 if code == -11 else (0 if condition == "complete" else 70))
     entry = receipt["stages"][0]
@@ -918,7 +930,7 @@ def test_probe_guard_error_never_exports_tooling_path(probe_stage, monkeypatch):
         raise ValueError("SYNTHETIC_SECRET")
     monkeypatch.setattr(diagnostic, "_verify_probe", fail)
     receipt = {"stages": []}
-    assert diagnostic._acquisition_stage(root, root, receipt, "plain_ui",
+    assert diagnostic._acquisition_stage(root, root, receipt, "async_owned_teardown",
                                         [sys.executable, str(diagnostic._probe_file())], [], 180) == 70
     assert not receipt["stages"][0]["started"]
     assert "SYNTHETIC_SECRET" not in repr(published)
@@ -928,7 +940,7 @@ def test_probe_guard_error_never_exports_tooling_path(probe_stage, monkeypatch):
 def test_failed_stage_publication_stops_remaining_controls_after139(probe_stage, monkeypatch):
     root, _ = probe_stage
     child = {"child_exit": -11, "signal": 11, "pid": 123, "output_ok": True,
-             **diagnostic._probe_summary(_probe_markers("industrial_ui", 2, terminal=False), "industrial_ui")}
+             **diagnostic._probe_summary(_probe_markers("async_reference", 2, terminal=False), "async_reference")}
     monkeypatch.setattr(diagnostic, "_run_private", lambda *args, **kwargs: child)
     def fail(*args):
         raise OSError("SYNTHETIC_SECRET")
@@ -991,7 +1003,7 @@ def test_probe_admission_rejects_before_qt_entry(inert_probe, monkeypatch, tmp_p
     probe = inert_probe
     root = tmp_path / "qt998-500"
     root.mkdir(mode=0o700)
-    admission = {"phase": "5614139597", "run_attempt": 1, "run_id": "500",
+    admission = {"phase": "5618809967", "run_attempt": 1, "run_id": "500",
                  "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
                  "probe_sha256": diagnostic.hashlib.sha256(diagnostic._probe_file().read_bytes()).hexdigest()}
     changes = {"phase": ("phase", "5608262552"), "attempt": ("run_attempt", 2),
@@ -1013,15 +1025,15 @@ def test_probe_admission_rejects_before_qt_entry(inert_probe, monkeypatch, tmp_p
     monkeypatch.setattr(probe.subprocess, "check_output", lambda *args, **kwargs: identity)
     entered = []
     monkeypatch.setitem(probe.main.__globals__, "_run", lambda *args: entered.append(True))
-    assert probe.main(["--variant", "plain_ui", "--cycles", "200"]) == (0 if reason == "accepted" else 70)
+    assert probe.main(["--variant", "async_owned_teardown", "--cycles", "200"]) == (0 if reason == "accepted" else 70)
     assert bool(entered) == (reason == "accepted")  # _run is an inert recording stub, never Qt.
-    assert capsys.readouterr().out == ("QT998_PROBE plain_ui 0 startup\n" if reason == "accepted"
+    assert capsys.readouterr().out == ("QT998_PROBE async_owned_teardown 0 startup\n" if reason == "accepted"
                                      else "QT998_PROBE_ERROR ValueError\n")
 
 
 @pytest.mark.parametrize("args", [
-    ["--variant", "fifth", "--cycles", "200"], ["--variant", "plain_ui", "--cycles", "0"],
-    ["--variant", "plain_ui", "--cycles", "201"], [],
+    ["--variant", "fifth", "--cycles", "200"], ["--variant", "async_owned_teardown", "--cycles", "0"],
+    ["--variant", "async_owned_teardown", "--cycles", "201"], [],
 ])
 def test_probe_invalid_cli_never_reaches_admission_or_qt(inert_probe, monkeypatch, args):
     def forbidden():
@@ -1034,7 +1046,7 @@ def test_probe_invalid_cli_never_reaches_admission_or_qt(inert_probe, monkeypatc
 
 def test_reduction_records139_before_between_variant_controller_error(reduction, monkeypatch):
     root, calls, outcomes = reduction
-    outcomes["industrial_ui"] = {"child_exit": -11, "signal": 11, "complete": False}
+    outcomes["async_reference"] = {"child_exit": -11, "signal": 11, "complete": False}
     ticks = iter([0, 1])
     def clock():
         try:
@@ -1085,7 +1097,7 @@ def test_probe_drift_before_or_after_child_stops_session(probe_stage, monkeypatc
     def child(*args, **kwargs):
         calls.append(1)
         return {"child_exit": -11, "signal": 11, "pid": 123, "output_ok": True,
-                **diagnostic._probe_summary(_probe_markers("industrial_ui", 3, False), "industrial_ui")}
+                **diagnostic._probe_summary(_probe_markers("async_reference", 3, False), "async_reference")}
     monkeypatch.setattr(diagnostic, "_verify_probe", guard)
     monkeypatch.setattr(diagnostic, "_run_private", child)
     receipt = {}
@@ -1105,13 +1117,161 @@ def test_private_probe_output_extracts_partial_cycles_and_removes_raw_file(monke
         def wait(self, **kwargs):
             return self.returncode
     def child(*args, **kwargs):
-        text = _probe_markers("industrial_ui", 3, False) + "QT998_PROBE industrial_ui 4 cycle_start\n"
+        text = _probe_markers("async_reference", 3, False) + "QT998_PROBE async_reference 4 cycle_start\n"
         kwargs["stdout"].write((text + "SYNTHETIC_SECRET\n").encode())
         return TerminatedChild()
     monkeypatch.setattr(diagnostic.subprocess, "Popen", child)
-    result = diagnostic._run_private(["unused"], tmp_path, tmp_path, "industrial_ui", timeout=180)
+    result = diagnostic._run_private(["unused"], tmp_path, tmp_path, "async_reference", timeout=180)
     assert result["child_exit"] == -11 and result["signal"] == 11
     assert result["completed_cycles"] == 3 and result["interrupted_cycles"] == 1
     assert result["probe_valid"] and not result["probe_complete"] and result["output_ok"]
-    assert not (tmp_path / "industrial_ui.raw").exists()
+    assert not (tmp_path / "async_reference.raw").exists()
     assert "SYNTHETIC_SECRET" not in repr(result)
+
+
+@pytest.mark.parametrize("change", [
+    {"extra": "SYNTHETIC_SECRET"}, {"shown": 1}, {"load_rows": 3}, {"store_removed": False},
+    {"gc": [0, 0, 0]}, {"gc": [0, -1, 0, 0]}, {"gc": [0, 0, True, 0]},
+    {"wrappers": [0, 0, 0, 0, 201, 0]}, {"parent_deleted": False},
+    {"thread_deleted": False}, {"subtree_verified": False},
+])
+def test_async_lifetime_receipts_reject_unsafe_or_unproven_control(change):
+    variant = "async_owned_teardown"
+    text = _probe_markers(variant)
+    old = "QT998_LIFETIME " + json.dumps(_lifetime_data(variant, 200))
+    changed = {**_lifetime_data(variant, 200), **change}
+    result = diagnostic._probe_summary(text.replace(old, "QT998_LIFETIME " + json.dumps(changed)), variant)
+    assert not result["probe_valid"] and not result["probe_complete"]
+    assert "SYNTHETIC_SECRET" not in repr(result)
+
+
+@pytest.mark.parametrize("variant", ["async_reference", "async_owned_teardown"])
+def test_async_lifetime_receipts_summarize_actual_boundary_not_wrapper_release(variant):
+    result = diagnostic._probe_summary(_probe_markers(variant), variant)
+    assert result["lifetime_snapshots"] == 200
+    assert result["shown_observed_cycles"] == 0
+    assert result["store_removed_cycles"] == 200
+    assert result["parent_cpp_deleted_cycles"] == (200 if variant == "async_owned_teardown" else 0)
+    assert result["gc_counts"] == [0, 0, 0, 0]
+    assert result["wrapper_release_counts"] == [0, 0, 0, 0, 0, 0]
+
+
+def test_async_lifetime_receipt_cannot_be_missing_duplicated_or_go_backwards():
+    variant = "async_reference"
+    text = _probe_markers(variant)
+    row = "QT998_LIFETIME " + json.dumps(_lifetime_data(variant, 1))
+    for changed in (text.replace(row + "\n", ""), text.replace(row, row + "\n" + row),
+                    text.replace(row, "QT998_LIFETIME " + json.dumps(
+                        {**_lifetime_data(variant, 1), "gc": [1, 0, 0, 0]}))):
+        assert not diagnostic._probe_summary(changed, variant)["probe_valid"]
+
+
+def test_async_probe_keeps_spent_variants_inadmissible(inert_probe):
+    assert inert_probe.PHASE == "5618809967"
+    assert inert_probe.VARIANTS == ("async_reference", "async_owned_teardown")
+
+
+def test_async_fixture_has_exact_source_test_bytes(inert_probe, tmp_path):
+    expected = ("Time Stamp,Reference ID,Line,Length mm,Width mm\n"
+                "2026-05-10 08:00:00,R1,L1,10.0,5.0\n"
+                "2026-05-10 09:00:00,R1,L2,10.2,5.2\n"
+                "2026-05-10 10:00:00,R2,L1,10.1,5.1\n"
+                "2026-05-10 11:00:00,R2,L2,10.4,5.4\n")
+    assert inert_probe._write_fixture(tmp_path).read_bytes() == expected.encode()
+
+
+def test_async_python_observers_do_not_retain_or_inspect_referents(inert_probe, monkeypatch):
+    role = [101]
+    monkeypatch.setattr(inert_probe.threading, "get_ident", lambda: role[0])
+    counts, refs, callback, watch = inert_probe._python_observers()
+    class Referent:
+        def __repr__(self):
+            pytest.fail("observer inspected referent")
+    for kind in range(3):
+        item = Referent()
+        watch(item, kind)
+        assert refs[-1]() is item
+        role[0] = 101 if kind == 0 else 202
+        del item  # Plain Python refcount release; no Qt and no forced collection.
+        assert refs[-1]() is None
+    callback("start", object())
+    callback("stop", object())
+    assert counts == {"gc": [0, 1, 0, 1], "wrappers": [1, 0, 0, 1, 0, 1]}
+
+
+@pytest.mark.parametrize("state", ["terminal", "running", "already_deleted", "parent_deleted"])
+def test_async_owned_teardown_checks_terminal_before_receiver_deletion(inert_probe, monkeypatch, state):
+    import types
+    events = []
+    class Object:
+        def __init__(self, name):
+            self.name, self.deleted = name, False
+        def isFinished(self):
+            assert not self.deleted
+            return state != "running"
+        def isRunning(self):
+            assert not self.deleted
+            return state == "running"
+        def deleteLater(self):
+            assert not self.deleted
+            events.append(self.name + "_schedule")
+    parent, thread = Object("parent"), Object("thread")
+    parent._metroliza_window_event_filter = Object("parent_filter")
+    parent.loading_dialog = Object("progress")
+    parent.loading_dialog._metroliza_window_event_filter = Object("progress_filter")
+    parent.loading_dialog._loading_gif_buffer = Object("buffer")
+    parent.loading_dialog._delayed_show_timer = Object("timer")
+    parent.loading_gif = Object("movie")
+    children = [parent._metroliza_window_event_filter, parent.loading_dialog,
+                parent.loading_dialog._metroliza_window_event_filter, parent.loading_gif,
+                parent.loading_dialog._loading_gif_buffer, parent.loading_dialog._delayed_show_timer]
+    thread.deleted = state == "already_deleted"
+    parent.deleted = state == "parent_deleted"
+    def send(receiver, event):
+        assert not receiver.deleted and event == "deferred"
+        events.append(receiver.name + "_dispatch")
+        receiver.deleted = True
+        if receiver is parent:
+            for child in children:
+                child.deleted = True
+    app = types.SimpleNamespace(thread=lambda: "gui")
+    qt = types.ModuleType("PyQt6")
+    qt.sip = types.SimpleNamespace(isdeleted=lambda obj: obj.deleted)
+    core = types.ModuleType("PyQt6.QtCore")
+    core.QCoreApplication = types.SimpleNamespace(sendPostedEvents=send)
+    core.QEvent = types.SimpleNamespace(Type=types.SimpleNamespace(DeferredDelete="deferred"))
+    core.QThread = types.SimpleNamespace(currentThread=lambda: "gui")
+    monkeypatch.setitem(sys.modules, "PyQt6", qt)
+    monkeypatch.setitem(sys.modules, "PyQt6.QtCore", core)
+    if state == "running":
+        with pytest.raises(AssertionError, match="terminal_before_deletion"):
+            inert_probe._owned_teardown(parent, thread, app)
+        assert events == [] and not parent.deleted
+    else:
+        verified = inert_probe._owned_teardown(parent, thread, app)
+        assert verified == (state != "parent_deleted")
+        assert events == ([] if state == "already_deleted" else ["thread_dispatch"]) + (
+            [] if state == "parent_deleted" else ["parent_schedule", "parent_dispatch"])
+        assert parent.deleted and thread.deleted
+        if verified:
+            assert all(child.deleted for child in children)
+
+
+def test_async_probe_timeout_never_reaches_owned_teardown(inert_probe, monkeypatch, tmp_path):
+    # Inert stand-ins exercise the real controller error path, never Qt or a loader.
+    import types
+    app = types.SimpleNamespace(thread=lambda: "gui")
+    qt = types.ModuleType("PyQt6.QtWidgets")
+    qt.QApplication = lambda args: app
+    core = types.ModuleType("PyQt6.QtCore")
+    core.QThread = types.SimpleNamespace(currentThread=lambda: "gui")
+    monkeypatch.setitem(sys.modules, "PyQt6.QtCore", core)
+    monkeypatch.setitem(sys.modules, "PyQt6.QtWidgets", qt)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    callbacks = list(inert_probe.gc.callbacks)
+    def fail(*args):
+        raise AssertionError("loader_deadline")
+    monkeypatch.setitem(inert_probe._run.__globals__, "_async_cycle", fail)
+    with pytest.raises(AssertionError, match="loader_deadline"):
+        inert_probe._run("async_owned_teardown", 200)
+    assert inert_probe.gc.callbacks == callbacks
