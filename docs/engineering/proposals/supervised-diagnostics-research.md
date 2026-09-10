@@ -1,11 +1,17 @@
 # Supervised diagnostics: research and proposed contract
 
-Status: **PROPOSED — product acceptance required; no runtime implementation**  
-Owner: ORCH-METROLIZA / capability [#944](https://github.com/hexafe/metroliza/issues/944)  
-Research packet: [#1037](https://github.com/hexafe/metroliza/issues/1037)  
-Last reviewed: 2026-09-10  
-Audited source: `develop@b645164e83898df69335713f808189de6cc1fc31`  
-Audited tree: `46fd6819d23fbabe19fda7b90ba9ac24e5bd6110`  
+Status: **PROPOSED — product acceptance required; no runtime implementation**
+
+Owner: ORCH-METROLIZA / capability [#944](https://github.com/hexafe/metroliza/issues/944)
+
+Research packet: [#1037](https://github.com/hexafe/metroliza/issues/1037)
+
+Last reviewed: 2026-09-10
+
+Audited source: `develop@b645164e83898df69335713f808189de6cc1fc31`
+
+Audited tree: `46fd6819d23fbabe19fda7b90ba9ac24e5bd6110`
+
 Canonical execution/review receipt: [Issue checkpoint](https://github.com/hexafe/metroliza/issues/1037#issuecomment-5621144480)
 
 ## Decision for the Product Owner
@@ -281,7 +287,10 @@ an unproved assumption that custom handles survive every bootloader. Use AF_UNIX
 runtime directory on Linux, and an owner-restricted named pipe with remote clients rejected on Windows.
 No TCP port, SocketHandler or pickle. A one-use random endpoint/nonce passed only to the launched
 process is removed from descendant environment after handshake; it never enters reports. Limit to
-one admitted application peer, one handshake, bounded frame size and bounded connection attempts.
+one admitted application peer, one handshake, <=8 connection attempts and a 10-second
+post-entry handshake budget. A 120-second pre-entry startup observation deadline produces
+`startup_delayed` and a fixed notification, never a kill or second launch; this budget is a proposal
+for cold/AV-delayed packaging tests, not a guarantee that slow startup is broken.
 
 Cross-check OS peer identity against the launched tree before accepting diagnostic events. Windows
 uses pipe-client PID plus a retained process handle/creation time and verified lineage; Linux uses
@@ -304,7 +313,7 @@ Default native stdout/stderr go to a null destination; no unbounded `communicate
 raw attachment. No-console Python `None` streams need early safe null objects separately: `Popen`
 redirection does not recreate them. Support mode may drain native noise through a **separate**
 fixed-buffer discard reader; it counts bytes/loss but never saves content or parses it as safe IPC.
-Keep draining after the capture quota, so flood cannot hold application progress behind a full pipe.
+Keep draining after the capture quota (proposed 64 KiB transient RAM, 16 KiB read chunks), so flood cannot hold application progress behind a full pipe.
 No flood-triggered process termination. Rate-limited frame decoding and publication run separately
 from process observation; a stalled reader must not conceal exit.
 
@@ -346,11 +355,12 @@ termination with normal execution or swallow unsafe native exceptions. [Python 3
 
 V1 default delivers safe events, safe Python exception frames where mapped, and OS exit observations.
 **Raw faulthandler is not automatically enabled to a persistent file.** A proposed S2a qualification
-may enable a dedicated nonblocking fatal pipe before Qt/OCR imports: fixed read chunks, bounded raw
-RAM, strict coordinate projection against the trusted map, then immediate discard. The report must
+may enable a dedicated nonblocking fatal pipe before Qt/OCR imports: 16 KiB read chunks with <=64 KiB transient raw
+RAM/channel, <=64 projected frames and <=8 thread groups per incident, strict coordinate projection against the trusted map, then immediate discard. The report must
 state `not_armed`, `unavailable`, `truncated`, `unmapped` or `available` accurately.
 
-The receiving supervisor must be ready before arming. Keep the fd/handle valid until disable/exit;
+After the accepted fatal-input budget, continue draining/discarding without accumulating raw text;
+mark truncation and never publish the unused tail. The receiving supervisor must be ready before arming. Keep the fd/handle valid until disable/exit;
 close/reuse or rotating it can send fault bytes to the wrong destination. POSIX nonblocking writes
 may lose frames; Windows named/anonymous-pipe semantics, conversion to a CRT fd, broken reader and
 fatal-write backpressure must be qualified on the exact interpreter/build. No normal Python logger,
@@ -469,8 +479,12 @@ process traces. Packager/OS versions can add re-exec or helper details that exac
 ```text
 Source:                    shell/shortcut → Python L
                                                └─ Python A → bootstrap → Qt/OCR
-PyInstaller onedir:        shortcut → lean onedir L (own bootloader → Python)
+PyInstaller onedir/Win:    shortcut → lean onedir L (own bootloader → Python)
                                                └─ app onedir A (bootloader/hooks → Python → Qt)
+PyInstaller onedir/Linux:  shortcut → launcher bootloader/re-exec → L
+                                               └─ app bootloader/re-exec → A → Qt
+                              (record actual PIDs: older docs describe two processes;
+                               exact chosen bootloader source decides fork versus exec)
 PyInstaller onefile:       shortcut → lean onedir L
                                                └─ app B (extracts, owns cleanup; splash thread)
                                                    └─ app A (hooks → Python → Qt)
@@ -490,6 +504,12 @@ Contrast under evaluation: a **single role-dispatched app bundle** gives
 collection/runtime-hook exposure and same-executable/bootloader recursion complexity. It does not
 cover its own pre-entry failure. Accept it only if the PO explicitly selects that narrower startup
 scope and measured packaging evidence supports it; it is not the recommended strong-boundary V1.
+
+Qualify Windows onedir and Nuitka standalone first, then their onefile tracks. Linux onedir
+bootloader transitions also need direct inspection: [6.11.1 bootstrap documentation](https://pyinstaller.org/en/v6.11.1/advanced-topics.html)
+describes a two-process model except Windows onedir, while actual re-exec/fork behavior must be
+resolved from the selected bootloader source and observed PID tree. Do not call a bootstrap transition
+a separate PID without evidence.
 
 PyInstaller distinguishes parent, main and worker process levels; onefile extraction lifetime belongs
 to the bootloader. Private `_PYI_*` state is not an application role API. Consult the **chosen version's**
