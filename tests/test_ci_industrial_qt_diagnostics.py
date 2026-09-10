@@ -1586,8 +1586,9 @@ def test_python_fault_cancellation_escapes_source_and_parser_catches(fault_sourc
         _fault(_fatal_text(), fault_source)
 
 
-@pytest.mark.parametrize("crashed", [True, False])
-def test_hosted_post_exit_interrupt_skips_debugger_and_cleans_owned_raw_data(monkeypatch, tmp_path, crashed):
+@pytest.mark.parametrize("crashed,wait_cancel", [(True, False), (False, False), (True, True)])
+def test_hosted_post_exit_interrupt_skips_debugger_and_cleans_owned_raw_data(
+        monkeypatch, tmp_path, crashed, wait_cancel):
     root = tmp_path / "owned"
     root.mkdir()
     identity = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
@@ -1619,12 +1620,22 @@ def test_hosted_post_exit_interrupt_skips_debugger_and_cleans_owned_raw_data(mon
         pid = 123
         def __init__(self, code):
             self.returncode = code
+            self.waits = 0
         def __enter__(self):
             return self
         def __exit__(self, *args):
             pass
         def wait(self, **kwargs):
+            self.waits += 1
+            if wait_cancel and self.returncode == -11 and self.waits == 1:
+                events.append("wait_interrupted")
+                raise InterruptedError("SYNTHETIC_SECRET")
             events.append("terminal")
+    def already_finished(pid, sig):
+        assert pid == 123 and sig == diagnostic.signal.SIGKILL
+        events.append("already_finished")
+        raise ProcessLookupError
+    monkeypatch.setattr(diagnostic.os, "killpg", already_finished)
     def popen(command, **kwargs):
         events.append(command[2])
         code = -11 if crashed and command[2] == "pytest" else 0
@@ -1635,9 +1646,9 @@ def test_hosted_post_exit_interrupt_skips_debugger_and_cleans_owned_raw_data(mon
     monkeypatch.setattr(subprocess, "Popen", popen)
     def interrupted(*args):
         raise InterruptedError("SYNTHETIC_SECRET")
-    if crashed:
+    if crashed and not wait_cancel:
         monkeypatch.setattr(diagnostic, "_python_fault_context", interrupted)
-    else:
+    elif not crashed:
         original = Path.unlink
         def unlink(path, *args, **kwargs):
             if path == root / "coverage_erase.raw":
@@ -1646,26 +1657,33 @@ def test_hosted_post_exit_interrupt_skips_debugger_and_cleans_owned_raw_data(mon
         monkeypatch.setattr(Path, "unlink", unlink)
     assert diagnostic.hosted_observe() == (139 if crashed else 70)
     assert "debugger" not in events
-    assert events == (["coverage", "terminal", "pytest", "terminal"] if crashed else ["coverage", "terminal"])
+    expected_events = (["coverage", "terminal", "pytest", "terminal"] if crashed
+                       else ["coverage", "terminal"])
+    if wait_cancel:
+        expected_events = ["coverage", "terminal", "pytest", "wait_interrupted", "already_finished", "terminal"]
+    assert events == expected_events
     final = outputs[-1]
     stage = final["stages"][-1]
     assert stage["pid"] == 123 and stage["child_exit"] == (-11 if crashed else 0)
-    assert stage["post_exit_interrupted"] and not stage["timed_out"] and not stage["cancelled"]
+    assert bool(stage.get("post_exit_interrupted")) is (not wait_cancel)
+    assert not stage["timed_out"] and stage["cancelled"] is wait_cancel
     assert stage["capture"] == "not_inspected_after_interrupt"
     assert final["cleanup"]["ok"] and final["cleanup"]["private_storage_removed"]
     assert not root.exists() and "SYNTHETIC_SECRET" not in repr(outputs)
     if crashed:
         context = next(row["python_fault_context"]["context"] for row in outputs if "python_fault_context" in row)
-        assert context["status"] == "unavailable" and context["reason"] == "extraction_interrupted"
+        assert context["status"] == "unavailable"
+        assert context["reason"] == ("not_an_eligible_native_failure" if wait_cancel else "extraction_interrupted")
 
 
-def test_capability_control_post_exit_interrupt_does_not_start_debugger(monkeypatch, tmp_path):
+@pytest.mark.parametrize("interrupt_kind", ["post_exit_interrupted", "cancelled"])
+def test_capability_control_post_exit_interrupt_does_not_start_debugger(monkeypatch, tmp_path, interrupt_kind):
     monkeypatch.setattr(diagnostic, "_capture_ready", lambda *args: None)
     monkeypatch.setattr(diagnostic, "_sanitize", lambda *args: "safe synthetic control")
     def run(command, cwd, root, label):
         return {"child_exit": -11 if label == "synthetic" else 0, "signal": 11 if label == "synthetic" else None,
                 "pid": 123, "output_ok": label != "synthetic", "timed_out": False,
-                "post_exit_interrupted": label == "synthetic", "pytest_counts": []}
+                interrupt_kind: label == "synthetic", "pytest_counts": []}
     monkeypatch.setattr(diagnostic, "_run_private", run)
     inspected = []
     def inspect(root, child, executable):

@@ -910,7 +910,7 @@ def _prove_hosted_capture(root: Path, receipt: dict) -> None:
         raise ValueError("synthetic_control_compile_failed")
     control = _run_private([str(binary)], root, root, "synthetic")
     receipt["synthetic_control"] = control
-    if control.get("post_exit_interrupted"):
+    if control.get("post_exit_interrupted") or control.get("cancelled"):
         raise InterruptedError("control_post_exit_interrupted")
     capture = _inspect_core(root, control, str(binary))
     receipt["synthetic_control"] = {**control, **capture,
@@ -994,7 +994,7 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
         # Set terminal status before post-mortem, source verification or export.
         result = _postmortem_exit(child["child_exit"], False)
         receipt["acquisition_exit"] = result
-        if child.get("post_exit_interrupted"):
+        if child.get("post_exit_interrupted") or child.get("cancelled"):
             entry.update(capture="not_inspected_after_interrupt", ok=False)
             raise InterruptedError("workload_post_exit_interrupted")
         capture = (_inspect_core(root, child, sys.executable) if child["signal"]
