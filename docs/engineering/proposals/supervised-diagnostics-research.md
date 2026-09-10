@@ -75,9 +75,12 @@ is unsafe. All current behavior below is source-inspected unless an existing rec
 
 Evidence labels: **IMPLEMENTED / SOURCE-ONLY** means code and relevant tests were read, not run
 here; **TESTED (historical)** is limited to the linked existing receipt; **GAP** is absent coverage;
-**OUT-OF-SCOPE** is deliberately excluded. No runtime probe, native crash, Qt session, benchmark,
-package build, installation, dependency resolution, dump collection or hosted dispatch ran for
-this research. The only executable validation is documentation/scope/hygiene checking.
+**OUT-OF-SCOPE** is deliberately excluded. Local research execution before this document freeze
+included no runtime probe, native crash, Qt session, benchmark, package build, installation,
+dependency resolution or dump collection. No hosted job was manually dispatched. Local executable
+validation was limited to named documentation/scope/hygiene checks. Ordinary push/Draft-PR CI is
+tracked separately by exact run/result in the canonical receipt; it does not qualify the proposed
+supervisor, Qt hooks, native capture or packaged behavior.
 
 ### 2.1 Launch and sink map
 
