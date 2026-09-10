@@ -4,11 +4,314 @@ import json
 import hashlib
 from pathlib import Path
 import subprocess
+import struct
 import sys
 
 import pytest
 
 from scripts import ci_industrial_qt_diagnostics as diagnostic
+
+
+def _inert_mapping_note(paths, *, followup=True):
+    """Linux NT_FILE metadata only: fabricated ranges, no PT_LOAD/process bytes.
+
+    PT_NOTE/NT_FILE constants come from elf.h; GNU readelf is the independent
+    formatting oracle. This object is read as data and must never be executed.
+    """
+    desc = struct.pack("<QQ", len(paths), 4096)
+    desc += b"".join(struct.pack("<QQQ", (i + 1) * 4096, (i + 2) * 4096, 0)
+                     for i in range(len(paths)))
+    desc += b"".join(str(path).encode() + b"\0" for path in paths)
+    note = struct.pack("<III", 5, len(desc), 0x46494C45) + b"CORE\0\0\0\0"
+    note += desc + b"\0" * (-len(desc) % 4)
+    if followup:
+        note += struct.pack("<III", 5, 16, 6) + b"CORE\0\0\0\0" + bytes(16)
+    header = struct.pack("<16sHHIQQQIHHHHHH", b"\x7fELF\x02\x01\x01" + bytes(9),
+                         4, 62, 1, 0, 64, 0, 0, 64, 56, 1, 0, 0, 0)
+    program = struct.pack("<IIQQQQQQ", 4, 0, 256, 0, 0, len(note), len(note), 4)
+    return header + program + bytes(256 - len(header) - len(program)) + note
+
+
+@pytest.fixture
+def inert_mapping_fixture(tmp_path):
+    if sys.platform != "linux" or not Path("/usr/bin/readelf").is_file():
+        pytest.skip("existing Linux GNU readelf interoperability unavailable; no install")
+    executable, library, data = (tmp_path / name for name in ("inert-executable", "inert.so", "inert.dat"))
+    executable.write_bytes(b"\x7fELFfabricated-never-executed-file-a")
+    library.write_bytes(b"\x7fELFfabricated-never-executed-file-b")
+    data.write_bytes(b"NON_ELF_PRIVATE_SENTINEL")
+    inventory = {str(path): diagnostic._file_identity(path) for path in (executable, library)}
+    return tmp_path, executable, library, data, inventory
+
+
+@pytest.mark.parametrize("followup", [False, True])
+@pytest.mark.parametrize("symlink", [False, True])
+def test_inert_reader_parser_preserves_exact_files_without_stubs(inert_mapping_fixture, followup, symlink):
+    root, executable, library, data, inventory = inert_mapping_fixture
+    paths = [executable, library, data]
+    (root / "core.123").write_bytes(_inert_mapping_note(paths, followup=followup))
+    expected = executable
+    if symlink:
+        expected = root / "executable-alias"
+        expected.symlink_to(executable)
+        inventory[str(expected)] = diagnostic._file_identity(expected)
+    result = diagnostic._preserve_core_binaries(root, {"pid": 123}, str(expected), inventory)
+    assert {row["sha256"] for row in result} == {row["sha256"] for row in inventory.values()}
+    for path in (executable, library, expected):
+        copied = root / "sysroot" / str(path).lstrip("/")
+        assert copied.read_bytes() == path.read_bytes()
+        assert copied.stat().st_mode & 0o077 == 0
+    assert not (root / "sysroot" / str(data).lstrip("/")).exists()
+    assert not (root / "core_notes.raw").exists()
+    assert "PRIVATE_SENTINEL" not in diagnostic._safe_json(result)
+
+
+@pytest.mark.parametrize("state,reason", [
+    ({"child_exit": 7}, "tool_failed"),
+    ({"output_ok": False}, "output_unavailable"),
+    ({"output_truncated": True}, "output_truncated"),
+    ({"timed_out": True}, "timed_out"),
+])
+def test_preflight_reader_failure_has_closed_reason_and_real_exit(monkeypatch, tmp_path, state, reason):
+    read = {"child_exit": 0, "signal": None, "pid": 456, "output_ok": True,
+            "output_bytes": 17, "output_truncated": False, "timed_out": False,
+            "cancelled": False, "pytest_counts": [], **state}
+    monkeypatch.setattr(diagnostic, "_run_private", lambda *a, **k: read)
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_core_binaries(tmp_path, {"pid": 123}, "/fabricated/executable", {})
+    failure = diagnostic._preflight_failure(raised.value)
+    assert failure["stage"] == "reader" and failure["reason"] == reason
+    assert failure["tool"]["child_exit"] == read["child_exit"]
+    assert failure["tool"]["pid"] == 456
+
+
+def test_preflight_unknown_failure_never_publishes_arbitrary_metadata():
+    error = ValueError("PRIVATE_SENTINEL /private/path 0x1234 ::error::hidden")
+    error.reason = "PRIVATE_SENTINEL"
+    error.tool = {"child_exit": "PRIVATE_SENTINEL", "environment": "PRIVATE_SENTINEL"}
+    assert diagnostic._preflight_failure(error) == {"stage": "unknown", "reason": "unknown"}
+
+
+@pytest.mark.parametrize("interruption", ["cancelled", "post_exit_interrupted"])
+def test_preflight_interrupt_keeps_tool_status_and_interrupt_type(monkeypatch, tmp_path, interruption):
+    monkeypatch.setattr(diagnostic, "_run_private", lambda *a, **k:
+        {"child_exit": -9, "signal": 9, "pid": 456, "output_ok": False, interruption: True})
+    with pytest.raises(InterruptedError) as raised:
+        diagnostic._preserve_core_binaries(tmp_path, {"pid": 123}, "/fabricated/executable", {})
+    failure = diagnostic._preflight_failure(raised.value)
+    assert failure["reason"] == "interrupted"
+    assert failure["tool"]["child_exit"] == -9 and failure["tool"][interruption]
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("missing", "binary_missing"), ("changed", "binary_changed"),
+    ("unrecorded", "binary_unrecorded"),
+])
+def test_preflight_identity_failures_are_distinguishable(tmp_path, mutation, reason):
+    path = tmp_path / "private-fixture.so"
+    path.write_bytes(b"\x7fELFinert-file-bytes")
+    inventory = {str(path): diagnostic._file_identity(path)}
+    if mutation == "missing":
+        path.unlink()
+    elif mutation == "changed":
+        path.write_bytes(b"\x7fELFchanged-inert-bytes")
+    else:
+        inventory.clear()
+    with pytest.raises((ValueError, OSError)) as raised:
+        diagnostic._preserve_mapped_files(tmp_path, [str(path)], inventory)
+    failure = diagnostic._preflight_failure(raised.value)
+    assert failure == {"stage": "identity", "reason": reason}
+    assert str(path) not in diagnostic._safe_json(failure)
+
+
+@pytest.mark.parametrize("boundary", ["identity", "storage", "copy", "hash"])
+def test_preflight_preservation_interrupt_is_never_a_recoverable_failure(monkeypatch, tmp_path, boundary):
+    source = tmp_path / "inert.so"
+    source.write_bytes(b"\x7fELFinert-mapped-file")
+    inventory = {str(source): diagnostic._file_identity(source)}
+    original = diagnostic._file_identity
+    def interrupted(*args, **kwargs):
+        raise InterruptedError("PRIVATE_SENTINEL")
+    def identity(path):
+        return interrupted() if boundary == "identity" or "sysroot" in path.parts else original(path)
+    if boundary in ("identity", "hash"):
+        monkeypatch.setattr(diagnostic, "_file_identity", identity)
+    elif boundary == "storage":
+        monkeypatch.setattr(diagnostic, "_storage_ready", interrupted)
+    else:
+        monkeypatch.setattr(diagnostic.shutil, "copyfileobj", interrupted)
+    with pytest.raises(InterruptedError):
+        diagnostic._preserve_mapped_files(tmp_path, [str(source)], inventory)
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("storage", "storage_unavailable"), ("copy", "copy_failed"),
+    ("hash", "hash_mismatch"), ("hash_read", "hash_unavailable"),
+])
+def test_preflight_preservation_failures_are_closed_and_private(monkeypatch, tmp_path, failure, reason):
+    source = tmp_path / "PRIVATE_SENTINEL.so"
+    source.write_bytes(b"\x7fELFinert-mapped-file")
+    inventory = {str(source): diagnostic._file_identity(source)}
+    def fail(*args, **kwargs):
+        raise OSError("PRIVATE_SENTINEL")
+    if failure == "storage":
+        monkeypatch.setattr(diagnostic, "_storage_ready", fail)
+    elif failure == "copy":
+        monkeypatch.setattr(diagnostic.shutil, "copyfileobj", fail)
+    elif failure == "hash":
+        monkeypatch.setattr(diagnostic.shutil, "copyfileobj", lambda source, target, size: target.write(b"\x7fELFwrong"))
+    else:
+        original = diagnostic._file_identity
+        monkeypatch.setattr(diagnostic, "_file_identity", lambda path:
+                            fail() if "sysroot" in path.parts else original(path))
+    with pytest.raises((OSError, ValueError)) as raised:
+        diagnostic._preserve_mapped_files(tmp_path, [str(source)], inventory)
+    receipt = diagnostic._preflight_failure(raised.value)
+    assert receipt == {"stage": "preservation", "reason": reason}
+    assert "PRIVATE_SENTINEL" not in diagnostic._safe_json(receipt)
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("unsupported", "table_unsupported"), ("ambiguous", "table_ambiguous"),
+    ("truncated", "table_truncated"), ("relative", "table_malformed"),
+    ("deleted", "deleted_mapping"), ("inline", "table_truncated"),
+])
+def test_preflight_rejects_damaged_actual_reader_table(inert_mapping_fixture, failure, reason):
+    root, executable, library, data, _ = inert_mapping_fixture
+    (root / "core.123").write_bytes(_inert_mapping_note([executable, library, data], followup=False))
+    text, read = diagnostic._read_core_notes(root, 123)
+    assert read["child_exit"] == 0
+    if failure == "unsupported":
+        text = text.replace("NT_FILE (mapped files)", "UNSUPPORTED_NOTE")
+    elif failure == "ambiguous":
+        text += text
+    elif failure == "truncated":
+        text = text[:text.index(str(data))]
+    elif failure == "relative":
+        text = text.replace(str(library), "relative.so")
+    elif failure == "deleted":
+        text = text.replace(str(library), str(library) + " (deleted)")
+    else:
+        text = diagnostic.re.sub(r"\n\s*(" + diagnostic.re.escape(str(library)) + r")", r" \1", text)
+    with pytest.raises(ValueError) as raised:
+        diagnostic._mapped_files(text)
+    assert diagnostic._preflight_failure(raised.value) == {"stage": "parser", "reason": reason}
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_preflight_expected_executable_must_be_available_and_mapped(inert_mapping_fixture, missing):
+    root, executable, library, data, inventory = inert_mapping_fixture
+    (root / "core.123").write_bytes(_inert_mapping_note([library, data]))
+    if missing:
+        executable.unlink()
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_core_binaries(root, {"pid": 123}, str(executable), inventory)
+    failure = diagnostic._preflight_failure(raised.value)
+    assert failure["reason"] == ("executable_unavailable" if missing else "executable_absent")
+    assert failure["tool"]["child_exit"] == 0
+    assert not (root / "sysroot").exists() and not (root / "core_notes.raw").exists()
+
+
+def test_preflight_parser_failure_retains_reader_exit_and_safe_unknown(monkeypatch, inert_mapping_fixture):
+    root, executable, library, data, inventory = inert_mapping_fixture
+    (root / "core.123").write_bytes(_inert_mapping_note([executable, library, data]))
+    def fail(text):
+        raise RuntimeError("PRIVATE_SENTINEL")
+    monkeypatch.setattr(diagnostic, "_mapped_files", fail)
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_core_binaries(root, {"pid": 123}, str(executable), inventory)
+    failure = diagnostic._preflight_failure(raised.value)
+    assert failure["stage"] == failure["reason"] == "unknown"
+    assert failure["tool"]["child_exit"] == 0 and failure["tool"]["output_ok"]
+    assert not (root / "core_notes.raw").exists()
+    assert "PRIVATE_SENTINEL" not in diagnostic._safe_json(failure)
+
+
+def test_preflight_tool_unavailable_does_not_copy_or_publish_paths(monkeypatch, tmp_path):
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError("PRIVATE_SENTINEL")
+    monkeypatch.setattr(diagnostic, "_run_private", unavailable)
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_core_binaries(tmp_path, {"pid": 123}, "/private/executable", {})
+    assert diagnostic._preflight_failure(raised.value) == {"stage": "reader", "reason": "tool_unavailable"}
+
+
+def test_preflight_typed_reason_filters_tool_fields():
+    tool = {"child_exit": 7, "signal": "PRIVATE_SENTINEL", "pid": object(),
+            "output_bytes": 2**100, "output_ok": True, "cancelled": "PRIVATE_SENTINEL",
+            "raw": "PRIVATE_SENTINEL", "environment": "PRIVATE_SENTINEL"}
+    error = diagnostic.PreflightError(diagnostic.PreflightReason.TOOL_FAILED, tool)
+    assert diagnostic._preflight_failure(error) == {"stage": "reader", "reason": "tool_failed",
+                                                   "tool": {"child_exit": 7, "output_ok": True}}
+
+
+def test_inert_unsupported_note_retains_actual_reader_exit(inert_mapping_fixture):
+    root, executable, library, data, inventory = inert_mapping_fixture
+    fixture = _inert_mapping_note([executable, library, data])
+    # Replace only NT_FILE's note type; still inert metadata, never executed.
+    (root / "core.123").write_bytes(fixture[:264] + struct.pack("<I", 0x12345678) + fixture[268:])
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_core_binaries(root, {"pid": 123}, str(executable), inventory)
+    failure = diagnostic._preflight_failure(raised.value)
+    assert failure["stage"] == "parser" and failure["reason"] == "table_unsupported"
+    assert failure["tool"]["child_exit"] == 0 and failure["tool"]["output_ok"]
+    assert not (root / "core_notes.raw").exists()
+    assert str(root) not in diagnostic._safe_json(failure)
+
+
+def test_preflight_symlink_retarget_cannot_substitute_another_mapped_elf(inert_mapping_fixture):
+    root, executable, library, data, inventory = inert_mapping_fixture
+    alias = root / "executable-alias"
+    alias.symlink_to(executable)
+    inventory[str(alias)] = diagnostic._file_identity(alias)
+    alias.unlink()
+    alias.symlink_to(library)
+    (root / "core.123").write_bytes(_inert_mapping_note([executable, library, data]))
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_core_binaries(root, {"pid": 123}, str(alias), inventory)
+    assert diagnostic._preflight_failure(raised.value)["reason"] == "binary_changed"
+
+
+def test_preflight_library_quota_is_not_relaxed(monkeypatch, inert_mapping_fixture):
+    root, executable, library, _, inventory = inert_mapping_fixture
+    monkeypatch.setattr(diagnostic, "LIBRARY_LIMIT", executable.stat().st_size + 1)
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_mapped_files(root, [str(executable), str(library)], inventory)
+    assert diagnostic._preflight_failure(raised.value)["reason"] == "storage_unavailable"
+
+
+def test_preflight_growth_after_identity_still_checks_current_copy_quota(monkeypatch, tmp_path):
+    source = tmp_path / "inert.so"
+    source.write_bytes(b"\x7fELFinert-small-file")
+    inventory = {str(source): diagnostic._file_identity(source)}
+    monkeypatch.setattr(diagnostic, "LIBRARY_LIMIT", 128)
+    original = diagnostic._matched_elf_identity
+    def changed_after_identity(path, expected):
+        value = original(path, expected)
+        source.write_bytes(b"\x7fELF" + bytes(256))
+        return value
+    monkeypatch.setattr(diagnostic, "_matched_elf_identity", changed_after_identity)
+    copied = []
+    monkeypatch.setattr(diagnostic.shutil, "copyfileobj", lambda *args: copied.append(True))
+    with pytest.raises(ValueError) as raised:
+        diagnostic._preserve_mapped_files(tmp_path, [str(source)], inventory)
+    assert diagnostic._preflight_failure(raised.value)["reason"] == "storage_unavailable"
+    assert not copied
+
+
+def test_preflight_executable_resolution_interrupt_stops(monkeypatch, inert_mapping_fixture):
+    root, executable, library, data, inventory = inert_mapping_fixture
+    (root / "core.123").write_bytes(_inert_mapping_note([executable, library, data]))
+    original = Path.resolve
+    def resolve(path, *args, **kwargs):
+        if path == executable:
+            raise InterruptedError("PRIVATE_SENTINEL")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(InterruptedError) as raised:
+        diagnostic._preserve_core_binaries(root, {"pid": 123}, str(executable), inventory)
+    assert diagnostic._preflight_failure(raised.value)["reason"] == "interrupted"
+    assert not (root / "sysroot").exists()
 
 
 def test_ci_context_collects_core_without_starting_symbolizer(monkeypatch, tmp_path):
@@ -82,7 +385,7 @@ def test_ci_context_workflow_never_provisions_debugger_before_workload():
     assert diagnostic.FROZEN_SHA == "b451e7af3153da89c16d09f5b26a7f4799a82da3"
 
 
-@pytest.mark.parametrize("failure", [None, "capture", "symbols", "timeout", "cancel"])
+@pytest.mark.parametrize("failure", [None, "capture", "capture_known", "symbols", "timeout", "cancel"])
 def test_ci_context_order_and_cleanup_on_each_boundary(monkeypatch, tmp_path, failure):
     admission = {"run_id": "500", "scaffolding_sha": "a" * 40, "phase": diagnostic.PHASE,
         "workload_sha": diagnostic.FROZEN_SHA, "workload_tree": diagnostic.FROZEN_TREE,
@@ -104,6 +407,8 @@ def test_ci_context_order_and_cleanup_on_each_boundary(monkeypatch, tmp_path, fa
         events.append("capture")
         if failure == "capture":
             raise ValueError("SYNTHETIC_SECRET")
+        if failure == "capture_known":
+            raise diagnostic.PreflightError(diagnostic.PreflightReason.TABLE_TRUNCATED, {"child_exit": 0})
     def execute(root, workload, receipt):
         events.append("workload_terminated")
         receipt["acquisition_exit"] = 139
@@ -121,10 +426,16 @@ def test_ci_context_order_and_cleanup_on_each_boundary(monkeypatch, tmp_path, fa
         "_acquire_sequence": execute, "_symbolize_after_workload": symbolize,
         "_cleanup_hosted": cleanup, "_emit_hosted": emitted.append}.items():
         monkeypatch.setattr(diagnostic, name, function)
-    assert diagnostic.hosted_observe() == (70 if failure == "capture" else 139)
-    assert events == (["inventory", "capture", "cleanup"] if failure == "capture" else
+    assert diagnostic.hosted_observe() == (70 if failure in ("capture", "capture_known") else 139)
+    assert events == (["inventory", "capture", "cleanup"] if failure in ("capture", "capture_known") else
                       ["inventory", "capture", "workload_terminated", "symbols", "cleanup"])
     assert "SYNTHETIC_SECRET" not in repr(emitted)
+    if failure == "capture_known":
+        assert emitted[-1]["preflight_failure"] == {"stage": "parser", "reason": "table_truncated",
+                                                    "tool": {"child_exit": 0}}
+        assert emitted[-1]["launcher_exit"] == 70 and emitted[-1]["cleanup"]["ok"]
+    elif failure == "capture":
+        assert emitted[-1]["preflight_failure"] == {"stage": "unknown", "reason": "unknown"}
 
 
 @pytest.fixture
@@ -321,6 +632,8 @@ def test_mapping_interrupt_cleans_private_files_and_retains139(deferred_symbols,
     assert diagnostic.hosted_observe() == 139
     assert not root.exists() and emitted[-1]["cleanup"]["ok"]
     assert emitted[-1]["diagnostic_error"] == "InterruptedError"
+    assert emitted[-1]["preflight_failure"]["reason"] == "interrupted"
+    assert emitted[-1]["preflight_failure"]["tool"]["child_exit"] == -9
     assert "prepare_symbolizer" not in events
 
 

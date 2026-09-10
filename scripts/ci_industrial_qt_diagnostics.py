@@ -8,6 +8,7 @@ mode inspects private guest cores after termination, then removes all raw data.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 import importlib.metadata
 import hashlib
 import http.client
@@ -204,6 +205,69 @@ POSTMORTEM_SECONDS = 600
 SYMBOLIZER_PACKAGES = ("gdb", "libdebuginfod1t64", "libdebuginfod-common", "libipt2",
                        "libbabeltrace1", "libsource-highlight4t64", "libsource-highlight-common",
                        "libboost-regex1.83.0")
+
+
+class PreflightReason(Enum):
+    UNKNOWN = ("unknown", "unknown")
+    TOOL_UNAVAILABLE = ("reader", "tool_unavailable")
+    TOOL_FAILED = ("reader", "tool_failed")
+    OUTPUT_UNAVAILABLE = ("reader", "output_unavailable")
+    OUTPUT_TRUNCATED = ("reader", "output_truncated")
+    TIMED_OUT = ("reader", "timed_out")
+    INTERRUPTED = ("reader", "interrupted")
+    TABLE_UNSUPPORTED = ("parser", "table_unsupported")
+    TABLE_AMBIGUOUS = ("parser", "table_ambiguous")
+    TABLE_MALFORMED = ("parser", "table_malformed")
+    TABLE_TRUNCATED = ("parser", "table_truncated")
+    DELETED_MAPPING = ("parser", "deleted_mapping")
+    EXECUTABLE_ABSENT = ("identity", "executable_absent")
+    EXECUTABLE_UNAVAILABLE = ("identity", "executable_unavailable")
+    BINARY_MISSING = ("identity", "binary_missing")
+    BINARY_CHANGED = ("identity", "binary_changed")
+    BINARY_UNRECORDED = ("identity", "binary_unrecorded")
+    BINARY_UNREADABLE = ("identity", "binary_unreadable")
+    INVALID_PATH = ("identity", "invalid_path")
+    STORAGE_UNAVAILABLE = ("preservation", "storage_unavailable")
+    COPY_FAILED = ("preservation", "copy_failed")
+    HASH_MISMATCH = ("preservation", "hash_mismatch")
+    HASH_UNAVAILABLE = ("preservation", "hash_unavailable")
+    NO_ELF = ("preservation", "no_elf")
+
+
+def _preflight_tool_status(tool: dict) -> dict:
+    # No exception text, arbitrary fields, addresses or mapped paths cross here.
+    integers = {key: value for key, value in tool.items()
+                if key in ("child_exit", "signal", "pid", "output_bytes")
+                and type(value) is int and -(2**31) <= value <= PRIVATE_LIMIT}
+    flags = {key: value for key, value in tool.items()
+             if key in ("output_ok", "output_truncated", "timed_out", "cancelled", "post_exit_interrupted")
+             and type(value) is bool}
+    return {**integers, **flags}
+
+
+class PreflightError(ValueError):
+    def __init__(self, reason: PreflightReason, tool: dict | None = None):
+        self.reason = reason if isinstance(reason, PreflightReason) else PreflightReason.UNKNOWN
+        self.tool = _preflight_tool_status(tool or {})
+        super().__init__(self.reason.value[1])
+
+
+class PreflightInterrupted(InterruptedError):
+    def __init__(self, tool: dict | None = None):
+        self.reason = PreflightReason.INTERRUPTED
+        self.tool = _preflight_tool_status(tool or {})
+        super().__init__("preflight_interrupted")
+
+
+def _preflight_failure(error: Exception) -> dict:
+    if not isinstance(error, (PreflightError, PreflightInterrupted)):
+        return {"stage": "unknown", "reason": "unknown"}
+    reason = error.reason if isinstance(error.reason, PreflightReason) else PreflightReason.UNKNOWN
+    result = dict(zip(("stage", "reason"), reason.value))
+    tool = _preflight_tool_status(error.tool)
+    if tool:
+        result["tool"] = tool
+    return result
 
 
 def _safe_json(value: object) -> str:
@@ -1001,65 +1065,142 @@ def _collect_core(root: Path, child: dict) -> dict:
 
 
 def _mapped_files(text: str) -> list[str]:
-    if text.count("NT_FILE (mapped files)") != 1:
-        raise ValueError("core_mapping_table_unavailable")
+    count = text.count("NT_FILE (mapped files)")
+    if count != 1:
+        raise PreflightError(PreflightReason.TABLE_AMBIGUOUS if count else PreflightReason.TABLE_UNSUPPORTED)
     table = text.split("NT_FILE (mapped files)", 1)[1]
     table = re.split(r"\n\s*\S+\s+0x[0-9a-fA-F]+\s+NT_", table, maxsplit=1)[0]
     rows = re.findall(r"(?m)^\s*0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s*\n([^\n]+)", table)
     paths = [row.strip() for row in rows]
-    if (not paths or len(paths) > 4096 or len(paths) != len(re.findall(r"(?m)^\s*0x", table))
-            or any(not path.startswith("/") or " (deleted)" in path or "\x00" in path
-                   or ".." in Path(path).parts for path in paths)):
-        raise ValueError("core_mapping_table_incomplete")
+    if not all(paths) or not paths or len(paths) != len(re.findall(r"(?m)^\s*0x", table)):
+        raise PreflightError(PreflightReason.TABLE_TRUNCATED)
+    if any(" (deleted)" in path for path in paths):
+        raise PreflightError(PreflightReason.DELETED_MAPPING)
+    if (len(paths) > 4096 or any(not path.startswith("/") or "\x00" in path
+                                or ".." in Path(path).parts for path in paths)):
+        raise PreflightError(PreflightReason.TABLE_MALFORMED)
     return sorted(set(paths))
 
 
-def _preserve_mapped_files(root: Path, paths: list[str], inventory: dict) -> list[dict]:
-    result = []
-    copied_bytes = sum(path.stat().st_size for path in (root / "sysroot").rglob("*") if path.is_file())
-    for name in sorted(set(paths)):
-        source = Path(name)
-        if not source.is_absolute() or ".." in source.parts:
-            raise ValueError("invalid_mapped_path")
-        expected = inventory.get(name)
-        if expected is not None and _file_identity(source) != expected:
-            raise ValueError("mapped_binary_missing_or_changed")
+def _matched_elf_identity(source: Path, expected: dict | None) -> dict | None:
+    try:
+        if expected is not None:
+            if _file_identity(source) != expected:
+                raise PreflightError(PreflightReason.BINARY_CHANGED)
+            return expected
         with source.open("rb") as stream:
-            elf = stream.read(4) == b"\x7fELF"
-        if not elf:
-            continue  # Mapped measurement/data files are never copied or named.
-        if expected is None or _file_identity(source) != expected:
-            raise ValueError("mapped_binary_missing_or_changed")
-        target = root / "sysroot" / name.lstrip("/")
-        if not target.exists():
+            if stream.read(4) != b"\x7fELF":
+                return None  # Mapped data is never copied or named in output.
+    except (PreflightError, InterruptedError):
+        raise
+    except FileNotFoundError:
+        raise PreflightError(PreflightReason.BINARY_MISSING) from None
+    except ValueError:
+        raise PreflightError(PreflightReason.BINARY_CHANGED) from None
+    except OSError:
+        raise PreflightError(PreflightReason.BINARY_UNREADABLE) from None
+    raise PreflightError(PreflightReason.BINARY_UNRECORDED)
+
+
+def _copy_matched_elf(root: Path, source: Path, expected: dict, copied_bytes: int) -> int:
+    target = root / "sysroot" / str(source).lstrip("/")
+    if not target.exists():
+        try:
             copied_bytes += source.stat().st_size
             if copied_bytes > LIBRARY_LIMIT:
                 raise ValueError("preserved_library_limit")
             _storage_ready(root, source.stat().st_size)
+        except InterruptedError:
+            raise
+        except (OSError, ValueError):
+            raise PreflightError(PreflightReason.STORAGE_UNAVAILABLE) from None
+        try:
             target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
             with source.open("rb") as original, target.open("xb") as copy:
                 os.chmod(target, 0o600)
                 shutil.copyfileobj(original, copy, 1024**2)
-        if (_file_identity(target)["sha256"] != expected["sha256"]
-                or _file_identity(source) != expected):
-            raise ValueError("preserved_binary_hash_mismatch")
+        except InterruptedError:
+            raise
+        except OSError:
+            raise PreflightError(PreflightReason.COPY_FAILED) from None
+    try:
+        digest = _file_identity(target)["sha256"]
+    except InterruptedError:
+        raise
+    except (OSError, ValueError):
+        raise PreflightError(PreflightReason.HASH_UNAVAILABLE) from None
+    if digest != expected["sha256"]:
+        raise PreflightError(PreflightReason.HASH_MISMATCH)
+    _matched_elf_identity(source, expected)
+    return copied_bytes
+
+
+def _preserve_mapped_files(root: Path, paths: list[str], inventory: dict) -> list[dict]:
+    result = []
+    try:
+        copied_bytes = sum(path.stat().st_size for path in (root / "sysroot").rglob("*") if path.is_file())
+    except InterruptedError:
+        raise
+    except OSError:
+        raise PreflightError(PreflightReason.STORAGE_UNAVAILABLE) from None
+    for name in sorted(set(paths)):
+        source = Path(name)
+        if not source.is_absolute() or ".." in source.parts:
+            raise PreflightError(PreflightReason.INVALID_PATH)
+        expected = _matched_elf_identity(source, inventory.get(name))
+        if expected is None:
+            continue
+        copied_bytes = _copy_matched_elf(root, source, expected, copied_bytes)
         result.append({"module": re.sub(r"[^A-Za-z0-9_.+-]", "?", source.name)[:100],
                        "sha256": expected["sha256"]})
     if not result:
-        raise ValueError("no_matching_elf_binaries")
+        raise PreflightError(PreflightReason.NO_ELF)
     return result
 
 
-def _preserve_core_binaries(root: Path, child: dict, executable: str, inventory: dict) -> list[dict]:
-    paths = []
-    read = _run_private(["/usr/bin/readelf", "-n", "-W", str(root / ("core." + str(child["pid"])))],
-                        root, root, "core_notes", consume=lambda text: paths.extend(_mapped_files(text)),
-                        environment={**_child_environment(root), "LC_ALL": "C"}, core_allowed=False)
+def _read_core_notes(root: Path, pid) -> tuple[str, dict]:
+    output = []  # Transient bounded text only; never placed in a public receipt.
+    try:
+        read = _run_private(["/usr/bin/readelf", "-n", "-W", str(root / ("core." + str(pid)))],
+                            root, root, "core_notes", consume=output.append,
+                            environment={**_child_environment(root), "LC_ALL": "C"}, core_allowed=False)
+    except InterruptedError:
+        raise PreflightInterrupted() from None
+    except FileNotFoundError:
+        raise PreflightError(PreflightReason.TOOL_UNAVAILABLE) from None
+    except OSError:
+        raise PreflightError(PreflightReason.OUTPUT_UNAVAILABLE) from None
     if read.get("cancelled") or read.get("post_exit_interrupted"):
-        raise InterruptedError("core_mapping_read_interrupted")
-    if not _complete_stage(read, []) or not paths or str(Path(executable).resolve()) not in paths:
-        raise ValueError("core_mapping_or_executable_unproven")
-    return _preserve_mapped_files(root, [*paths, executable], inventory)
+        raise PreflightInterrupted(read)
+    for failed, reason in ((read.get("timed_out"), PreflightReason.TIMED_OUT),
+                           (read.get("output_truncated"), PreflightReason.OUTPUT_TRUNCATED),
+                           (read.get("child_exit") != 0, PreflightReason.TOOL_FAILED),
+                           (not _complete_stage(read, []) or len(output) != 1, PreflightReason.OUTPUT_UNAVAILABLE)):
+        if failed:
+            raise PreflightError(reason, read)
+    return output[0], read
+
+
+def _preserve_core_binaries(root: Path, child: dict, executable: str, inventory: dict) -> list[dict]:
+    text, read = _read_core_notes(root, child["pid"])
+    try:
+        paths = _mapped_files(text)
+        try:
+            expected = str(Path(executable).resolve(strict=True))
+        except InterruptedError:
+            raise
+        except OSError:
+            raise PreflightError(PreflightReason.EXECUTABLE_UNAVAILABLE) from None
+        if expected not in paths:
+            raise PreflightError(PreflightReason.EXECUTABLE_ABSENT)
+        return _preserve_mapped_files(root, [*paths, executable], inventory)
+    except PreflightError as error:
+        error.tool = _preflight_tool_status(read)
+        raise
+    except InterruptedError:
+        raise PreflightInterrupted(read) from None
+    except Exception:
+        raise PreflightError(PreflightReason.UNKNOWN, read) from None
 
 
 def _prepare_symbolizer(root: Path) -> dict:
@@ -1126,7 +1267,8 @@ def _preserve_pending_cores(root: Path, pending: list, receipt: dict) -> tuple:
             if label == "synthetic_control":
                 raise
             receipt["natural_binary_capture"] = {"stage": label, "ok": False,
-                                                  "error": type(error).__name__}
+                                                  "error": type(error).__name__,
+                                                  "failure": _preflight_failure(error)}
             continue
         usable.append((label, child, executable))
     return usable, preserved
@@ -1482,7 +1624,8 @@ def hosted_observe() -> int:
         signal.alarm(remaining)
         result = _symbolize_after_workload(root, receipt, result)
     except Exception as error:
-        receipt["diagnostic_error"] = type(error).__name__
+        receipt["diagnostic_error"] = "InterruptedError" if isinstance(error, PreflightInterrupted) else type(error).__name__
+        receipt["preflight_failure"] = _preflight_failure(error)
         result = receipt.get("acquisition_exit", result) or 70
     finally:
         signal.alarm(0)
