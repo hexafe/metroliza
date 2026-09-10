@@ -927,15 +927,15 @@ def _file_identity(path: Path) -> dict:
     return {"stat": identity(after), "sha256": digest}
 
 
+def _loader_paths(text: str) -> set[Path]:
+    return {Path(line.split(" => ", 1)[1]) for line in text.splitlines() if " => /" in line}
+
+
 def _inventory_binaries(root: Path) -> dict:
     candidates = {Path(sys.executable), Path(sys.executable).resolve(),
                   Path("/lib64/ld-linux-x86-64.so.2")}
-    def libraries(text):
-        for line in text.splitlines():
-            if " => /" in line:
-                candidates.add(Path(line.split(" => ", 1)[1]))
     checked = _run_private(["/sbin/ldconfig", "-p"], root, root, "loader_inventory",
-                           consume=libraries, core_allowed=False)
+                           consume=lambda text: candidates.update(_loader_paths(text)), core_allowed=False)
     if not _complete_stage(checked, []):
         raise ValueError("loader_inventory_unavailable")
     for distribution in importlib.metadata.distributions():
@@ -1112,14 +1112,7 @@ def _prepare_symbolizer(root: Path) -> dict:
             "packages": provenance}
 
 
-def _symbolize_after_workload(root: Path, receipt: dict, result: int) -> int:
-    if any(stage.get("cancelled") or stage.get("post_exit_interrupted")
-           for stage in receipt.get("stages", [])):
-        receipt["symbolization"] = "not_started_after_cancel"
-        return result or 70
-    pending = [("synthetic_control", receipt["synthetic_control"], str(root / "control"))]
-    pending.extend((stage["stage"], stage, sys.executable) for stage in receipt.get("stages", [])
-                   if stage.get("signal") and not stage.get("timed_out"))
+def _preserve_pending_cores(root: Path, pending: list, receipt: dict) -> tuple:
     inventory = json.loads((root / "binaries.json").read_text())
     preserved, usable = {}, []
     for label, child, executable in pending:
@@ -1136,6 +1129,18 @@ def _symbolize_after_workload(root: Path, receipt: dict, result: int) -> int:
                                                   "error": type(error).__name__}
             continue
         usable.append((label, child, executable))
+    return usable, preserved
+
+
+def _symbolize_after_workload(root: Path, receipt: dict, result: int) -> int:
+    if any(stage.get("cancelled") or stage.get("post_exit_interrupted")
+           for stage in receipt.get("stages", [])):
+        receipt["symbolization"] = "not_started_after_cancel"
+        return result or 70
+    pending = [("synthetic_control", receipt["synthetic_control"], str(root / "control"))]
+    pending.extend((stage["stage"], stage, sys.executable) for stage in receipt.get("stages", [])
+                   if stage.get("signal") and not stage.get("timed_out"))
+    usable, preserved = _preserve_pending_cores(root, pending, receipt)
     symbolizer = _prepare_symbolizer(root)
     if _system_packages(root) != json.loads((root / "system-packages.json").read_text()):
         raise ValueError("system_packages_changed_during_symbolizer_preparation")
@@ -1277,6 +1282,7 @@ def _emit_preserving_exit(receipt: dict, result: int) -> int:
 def _publish_python_context(context, child, label, receipt, entry, result):
     if context is None:
         return result
+    entry["python_context_status"] = context.get("status", "unavailable")
     try:
         _emit_hosted(_python_context_receipt(context, child, label, receipt))
         entry["python_context_receipt"] = label
@@ -1319,8 +1325,6 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
         if child.get("post_exit_interrupted") or child.get("cancelled"):
             entry.update(capture="not_inspected_after_interrupt", ok=False)
             raise InterruptedError("workload_post_exit_interrupted")
-        if python_context is not None:
-            entry["python_context_status"] = python_context.get("status", "unavailable")
         capture = ((_collect_core(root, child) if receipt.get("deferred_symbolization")
                     else _inspect_core(root, child, sys.executable)) if child["signal"]
                    else {"capture": "not_needed_no_signal", "ok": True})
