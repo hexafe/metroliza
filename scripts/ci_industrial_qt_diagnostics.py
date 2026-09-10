@@ -1070,6 +1070,8 @@ def _mapped_files(text: str) -> list[str]:
         raise PreflightError(PreflightReason.TABLE_AMBIGUOUS if count else PreflightReason.TABLE_UNSUPPORTED)
     table = text.split("NT_FILE (mapped files)", 1)[1]
     table = re.split(r"\n\s*\S+\s+0x[0-9a-fA-F]+\s+NT_", table, maxsplit=1)[0]
+    if re.fullmatch(r"\s*Cannot decode 64-bit note in 32-bit build\s*", table):
+        raise PreflightError(PreflightReason.TABLE_UNSUPPORTED)
     rows = re.findall(r"(?m)^\s*0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s*\n([^\n]+)", table)
     paths = [row.strip() for row in rows]
     if not all(paths) or not paths or len(paths) != len(re.findall(r"(?m)^\s*0x", table)):

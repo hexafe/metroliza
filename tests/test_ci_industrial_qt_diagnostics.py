@@ -32,10 +32,34 @@ def _inert_mapping_note(paths, *, followup=True):
     return header + program + bytes(256 - len(header) - len(program)) + note
 
 
-@pytest.fixture
-def inert_mapping_fixture(tmp_path):
+def _require_inert_mapping_reader(root):
+    note = root / "core.123"
+    note.write_bytes(_inert_mapping_note(["/fabricated/inert.elf"]))
+    try:
+        text, _ = diagnostic._read_core_notes(root, 123)
+        try:
+            paths = diagnostic._mapped_files(text)
+        except diagnostic.PreflightError as error:
+            if (error.reason == diagnostic.PreflightReason.TABLE_UNSUPPORTED
+                    and text.count("NT_FILE (mapped files)") == 1
+                    and "Cannot decode 64-bit note in 32-bit build" in text):
+                pytest.skip("UNEXECUTED: installed readelf cannot decode inert ELF64 NT_FILE; no replacement installed")
+            raise
+        assert paths == ["/fabricated/inert.elf"]
+    finally:
+        note.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
+def inert_readelf_capability(tmp_path_factory):
     if sys.platform != "linux" or not Path("/usr/bin/readelf").is_file():
-        pytest.skip("existing Linux GNU readelf interoperability unavailable; no install")
+        pytest.skip("UNEXECUTED: existing Linux GNU readelf interoperability unavailable; no install")
+    root = tmp_path_factory.mktemp("inert-readelf-capability")
+    _require_inert_mapping_reader(root)
+
+
+@pytest.fixture
+def inert_mapping_fixture(tmp_path, inert_readelf_capability):
     executable, library, data = (tmp_path / name for name in ("inert-executable", "inert.so", "inert.dat"))
     executable.write_bytes(b"\x7fELFfabricated-never-executed-file-a")
     library.write_bytes(b"\x7fELFfabricated-never-executed-file-b")
@@ -234,6 +258,40 @@ def test_preflight_tool_unavailable_does_not_copy_or_publish_paths(monkeypatch, 
     with pytest.raises(ValueError) as raised:
         diagnostic._preserve_core_binaries(tmp_path, {"pid": 123}, "/private/executable", {})
     assert diagnostic._preflight_failure(raised.value) == {"stage": "reader", "reason": "tool_unavailable"}
+
+
+@pytest.mark.parametrize("ending", ["\n", ""])
+def test_review_readelf_unsupported_elf64_is_not_a_truncated_table(ending):
+    # Sourceware print_core_note documents this successful-but-unsupported path.
+    text = " CORE 0x40 NT_FILE (mapped files)\n    Cannot decode 64-bit note in 32-bit build" + ending
+    with pytest.raises(ValueError) as raised:
+        diagnostic._mapped_files(text)
+    assert diagnostic._preflight_failure(raised.value) == {"stage": "parser", "reason": "table_unsupported"}
+
+
+def test_inert_capability_gate_skips_only_known_reader_limit_and_removes_fixture(monkeypatch, tmp_path):
+    text = " CORE 0x40 NT_FILE (mapped files)\n    Cannot decode 64-bit note in 32-bit build\n"
+    monkeypatch.setattr(diagnostic, "_read_core_notes", lambda *args: (text, {"child_exit": 0}))
+    with pytest.raises(pytest.skip.Exception, match="UNEXECUTED"):
+        _require_inert_mapping_reader(tmp_path)
+    assert not (tmp_path / "core.123").exists()
+
+
+@pytest.mark.parametrize("text", [
+    "unrecognized reader output",
+    "unrecognized reader output\nCannot decode 64-bit note in 32-bit build\n",
+    " CORE 0x40 NT_FILE (mapped files)\n",
+    " CORE 0x40 NT_FILE (mapped files)\nCannot decode 64-bit note in 32-bit build\nextra unexpected data\n",
+    " CORE 0x40 NT_FILE (mapped files)\n 0x01 0x02 0x00\n/other/fixture\n",
+])
+def test_inert_capability_gate_never_hides_other_failures(monkeypatch, tmp_path, text):
+    monkeypatch.setattr(diagnostic, "_read_core_notes", lambda *args: (text, {"child_exit": 0}))
+    try:
+        with pytest.raises((diagnostic.PreflightError, AssertionError)):
+            _require_inert_mapping_reader(tmp_path)
+    except pytest.skip.Exception:
+        pytest.fail("unexpected reader/parser output was hidden by a capability skip")
+    assert not (tmp_path / "core.123").exists()
 
 
 def test_preflight_typed_reason_filters_tool_fields():
