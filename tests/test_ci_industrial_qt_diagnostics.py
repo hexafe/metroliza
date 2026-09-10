@@ -1,6 +1,7 @@
 """Hosted #998 guard/output regressions; never create a core or import Qt."""
 
 import json
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
@@ -297,12 +298,12 @@ def test_hosted_workflow_is_default_off_standard_guest_without_cache_or_artifact
     assert workflow["concurrency"]["cancel-in-progress"] == "true"
     assert "github.run_id" in workflow["concurrency"]["group"]
     assert "format('ci-{0}-{1}', github.workflow, github.ref)" in workflow["concurrency"]["group"]
-    assert job["concurrency"] == {"group": "qt998-postmortem-job-5618809967",
+    assert job["concurrency"] == {"group": "qt998-postmortem-job-5620299028",
                                    "cancel-in-progress": "false"}
     assert job["concurrency"]["group"] not in workflow["concurrency"]["group"]
     # GitHub evaluates job env before assigning a runner; runner context is step-only.
     assert "runner." not in repr(job.get("env", {}))
-    assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "25"
+    assert job["runs-on"] == "ubuntu-24.04" and job["timeout-minutes"] == "45"
     assert "workflow_dispatch" in job["if"] and "== '1'" in job["if"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
     for step in job["steps"]:
@@ -392,7 +393,7 @@ def test_hosted_stage_failure_cleans_up_and_preserves_observed_signal(
         assert receipts[-1]["observation"] == "not_started"
         assert receipts[-1]["diagnostic_error"] == "OSError"
     else:
-        assert events.count("async_reference") == 1
+        assert events.count("coverage_erase") == 1
         assert receipts[-1]["stages"][0]["child_exit"] == -11
         assert receipts[-1]["stages"][0]["diagnostic_error"] == "OSError"
 
@@ -509,7 +510,7 @@ def test_aggregate_expiry_never_starts_another_industrial_sample(acquisition, mo
 def test_spent_old_phase_does_not_consume_the_explicit_new_allocation(admission):
     admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
                          "created_at": "2026-09-09T15:59:03Z", "id": 499})
-    assert diagnostic._validate_admission(*admission)["phase"] == "5618809967"
+    assert diagnostic._validate_admission(*admission)["phase"] == "5620299028"
     admission[0]["inputs"].pop("qt998_phase")
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -602,11 +603,11 @@ def test_no_workload_after_failed_preflight_and_cleanup_retains139(monkeypatch, 
     monkeypatch.setattr(diagnostic, "_prove_hosted_capture", lambda *args: stage("preflight"))
     def acquire(root, workload, receipt):
         events.append("workload")
-        receipt["reduction_exit"] = 139
+        receipt["acquisition_exit"] = 139
         if failure == "after_native":
             raise InterruptedError("SYNTHETIC_SECRET")
         return 139
-    monkeypatch.setattr(diagnostic, "_acquire_reduction", acquire)
+    monkeypatch.setattr(diagnostic, "_acquire_sequence", acquire)
     monkeypatch.setattr(diagnostic, "_cleanup_hosted", lambda *args: stage("cleanup") or {"ok": True})
     monkeypatch.setattr(diagnostic, "_emit_hosted", receipts.append)
     assert diagnostic.hosted_observe() == (139 if failure in ("cleanup", "after_native") else 70)
@@ -680,7 +681,15 @@ def test_complete_native_stage_publication_preserves_size_reserve(
                 "cancelled": False, "output_ok": True, "elapsed_seconds": 119.123456,
                 "output_bytes": 8388608, "output_truncated": False, "pytest_counts": [],
                 "pytest_summary_complete": False, "pytest_warning_counts": [],
-                "pytest_subtest_counts": [], **(diagnostic._probe_summary(
+                "pytest_subtest_counts": [],
+                **({"python_context": {"status": "partial", "complete": False,
+                    "threads": [{"ordinal": i + 1, "current": i == 0, "garbage_collecting": False,
+                        "frames": [{"path": "tests/test_industrial_analytics_dialog.py", "line": 72,
+                                    "function": "_wait_for_tabular_load"}] * 12,
+                        "omitted_frames": 0, "frames_truncated": False} for i in range(8)],
+                    "omitted_frames": 1, "omitted_threads": 0, "log_truncated": False}}
+                   if label == "industrial_10" else {}),
+                **(diagnostic._probe_summary(
                     _probe_markers("async_reference", 199, terminal=False)
                     + "QT998_PROBE async_reference 200 cycle_start\n"
                     + "QT998_PROBE async_reference 200 parent_constructed\n", "async_reference")
@@ -691,15 +700,23 @@ def test_complete_native_stage_publication_preserves_size_reserve(
     monkeypatch.setattr(diagnostic, "_capture_ready", lambda *_: None)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     assert diagnostic._acquisition_stage(
-        tmp_path, tmp_path, {"stages": []}, label,
+        tmp_path, tmp_path, {"stages": [], "identity": {"run_id": "34407068328",
+                              "scaffolding_sha": "a" * 40}}, label,
         ([sys.executable, "-m", "coverage", "run", "--append", "--source=src/metroliza,modules,scripts",
           str(diagnostic._probe_file()), "--variant", label, "--cycles", "200"]
          if label == "async_reference" else [sys.executable, "-m", "pytest", *diagnostic.PYTEST_ARGUMENTS]),
         [] if label == "async_reference" else ["42 passed"], 180 if label == "async_reference" else 120,
     ) == 139
-    output = capsys.readouterr().out.removeprefix("QT998_JSON ").strip()
-    assert len(output.encode("utf-8")) < 59000
-    stage = json.loads(output)["acquisition_stage"]
+    outputs = [line.removeprefix("QT998_JSON ") for line in capsys.readouterr().out.splitlines()]
+    assert len(outputs) == (2 if label == "industrial_10" else 1)
+    assert len(outputs[0].encode("utf-8")) < 59000
+    stage = json.loads(outputs[0])["acquisition_stage"]
+    if label == "industrial_10":
+        assert len(outputs[1].encode("ascii")) <= 16384
+        python = json.loads(outputs[1])["python_fault_context"]
+        assert python["pid"] == stage["pid"] == 4194304
+        assert python["signal"] == stage["signal"] == 11
+        assert sum(len(t["frames"]) for t in python["context"]["threads"]) == 96
     assert stage["capture"] == "postmortem_stack" and stage["source_unchanged"]
     assert stage["launcher_exit"] == 139 and not stage["complete"]
     for thread in stage["native"]["threads"]:
@@ -743,9 +760,9 @@ def test_module_identifier_truncation_is_explicit(monkeypatch, tmp_path, length)
     assert frame["module_truncated"] == (length > 80)
 
 
-@pytest.mark.parametrize("spent", ["5604177526", "5608262552", "5614139597"])
+@pytest.mark.parametrize("spent", ["5604177526", "5608262552", "5614139597", "5618809967"])
 def test_reduction_admission_never_revives_either_spent_allocation(admission, spent):
-    assert diagnostic.PHASE == "5618809967"
+    assert diagnostic.PHASE == "5620299028"
     admission[0]["inputs"]["qt998_phase"] = spent
     with pytest.raises(ValueError, match="phase"):
         diagnostic._validate_admission(*admission)
@@ -880,9 +897,9 @@ def test_missing_startup_or_out_of_order_markers_cannot_qualify(text):
 
 
 def test_probe_history_cutoff_remains_original_authority_not_renewal(admission):
-    assert diagnostic.APPROVAL_TIME == "2026-09-10T12:39:19Z"
+    assert diagnostic.APPROVAL_TIME == "2026-09-10T14:27:39Z"
     admission[3].append({"event": "workflow_dispatch", "head_branch": diagnostic.BRANCH,
-                         "created_at": "2026-09-10T12:40:00Z", "id": 499})
+                         "created_at": "2026-09-10T14:28:00Z", "id": 499})
     with pytest.raises(ValueError, match="approval_already_spent"):
         diagnostic._validate_admission(*admission)
 
@@ -1275,3 +1292,286 @@ def test_async_probe_timeout_never_reaches_owned_teardown(inert_probe, monkeypat
     with pytest.raises(AssertionError, match="loader_deadline"):
         inert_probe._run("async_owned_teardown", 200)
     assert inert_probe.gc.callbacks == callbacks
+
+
+@pytest.fixture
+def fault_source(tmp_path, monkeypatch):
+    checkout = tmp_path / "frozen"
+    checkout.mkdir()
+    (checkout / "tests").mkdir()
+    (checkout / "tests/test_case.py").write_text(
+        "def test_case():\n    return worker()\n\ndef worker():\n    return 1\n")
+    for args in (["init", "-q"], ["add", "."],
+                 ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                  "commit", "-qm", "synthetic frozen source"]):
+        subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True)
+    monkeypatch.setattr(diagnostic, "FROZEN_SHA", diagnostic._git(checkout, "rev-parse", "HEAD"))
+    monkeypatch.setattr(diagnostic, "FROZEN_TREE", diagnostic._git(checkout, "rev-parse", "HEAD^{tree}"))
+    return checkout
+
+
+def _fatal_text(path="tests/test_case.py", line=2, function="test_case"):
+    return ('Fatal Python error: Segmentation fault\n\n'
+            'Current thread 0x00001234 (most recent call first):\n'
+            f'  File "{path}", line {line} in {function}\n\n'
+            'Extension modules: SYNTHETIC_SECRET (total: 1)\n')
+
+
+def _fault(text, checkout, **changes):
+    child = {"child_exit": -11, "signal": 11, "pid": 123,
+             "timed_out": False, "cancelled": False, **changes}
+    return diagnostic._python_fault_context(text, checkout, child, "industrial_10")
+
+
+def test_python_fault_validates_exact_frozen_coordinates(fault_source):
+    result = _fault(_fatal_text(str(fault_source / "tests/test_case.py")), fault_source)
+    assert result["status"] == "available" and result["complete"]
+    assert result["threads"] == [{"ordinal": 1, "current": True, "garbage_collecting": False,
+        "frames": [{"path": "tests/test_case.py", "line": 2, "function": "test_case"}],
+        "omitted_frames": 0, "frames_truncated": False}]
+    assert "SYNTHETIC_SECRET" not in repr(result) and str(fault_source) not in repr(result)
+    assert "1234" not in repr(result)
+
+
+@pytest.mark.parametrize("changes", [
+    {"child_exit": 0, "signal": None}, {"child_exit": 139, "signal": None},
+    {"child_exit": -6, "signal": 6}, {"timed_out": True}, {"cancelled": True},
+])
+def test_python_fault_never_attributes_success_or_wrong_terminal_signal(fault_source, changes):
+    result = _fault(_fatal_text(), fault_source, **changes)
+    assert result["status"] == "unavailable" and result["threads"] == []
+
+
+@pytest.mark.parametrize("path,line,function", [
+    ("/private/SYNTHETIC_SECRET/test_case.py", 2, "test_case"),
+    ("../tests/test_case.py", 2, "test_case"), ("./tests/test_case.py", 2, "test_case"),
+    ("tests//test_case.py", 2, "test_case"), ("tests\\test_case.py", 2, "test_case"),
+    ("tests/test_case.py", 5, "test_case"), ("tests/test_case.py", 999, "test_case"),
+    ("tests/test_case.py", 2, "SYNTHETIC_SECRET"),
+    ("tests/test_case.py\x1b[31mSYNTHETIC_SECRET", 2, "test_case"),
+])
+def test_python_fault_omits_untrusted_source_path_scope_line_and_controls(fault_source, path, line, function):
+    result = _fault(_fatal_text(path, line, function), fault_source)
+    assert not any(t["frames"] for t in result["threads"])
+    assert result["omitted_frames"] == 1 and result["status"] == "unavailable"
+    assert "SYNTHETIC_SECRET" not in repr(result)
+
+
+@pytest.mark.parametrize("text", ["", "42 passed in 1.0s\n", _fatal_text() + _fatal_text(),
+    _fatal_text().replace('  File', '  SYNTHETIC_SECRET File'),
+    _fatal_text().replace('line 2', 'line ???'),
+    _fatal_text().replace('Extension modules:', 'Current thread 0x5678 (most recent call first):\nExtension modules:')])
+def test_python_fault_missing_ambiguous_or_malformed_is_explicit(fault_source, text):
+    result = _fault(text, fault_source)
+    assert result["status"] == "unavailable" and not result["complete"]
+    assert result["threads"] == [] and "SYNTHETIC_SECRET" not in repr(result)
+
+
+def test_python_fault_eof_truncation_retains_only_validated_partial_frames(fault_source):
+    text = _fatal_text().split("Extension modules:")[0] + "  ...\n"
+    result = _fault(text, fault_source)
+    assert result["status"] == "partial" and not result["complete"]
+    assert result["threads"][0]["frames_truncated"]
+    assert result["threads"][0]["frames"][0]["function"] == "test_case"
+
+
+def test_python_fault_current_first_and_all_output_limits(fault_source):
+    text = "Fatal Python error: Segmentation fault\n\n"
+    for ordinal in range(10):
+        text += ("Current thread" if ordinal == 9 else "Thread") + f" 0x{ordinal + 1:08x} (most recent call first):\n"
+        text += '  File "tests/test_case.py", line 2 in test_case\n' * 100 + "\n"
+    result = _fault(text + "Extension modules: SYNTHETIC_SECRET\n", fault_source)
+    assert result["threads"][0]["current"] and result["threads"][0]["ordinal"] == 10
+    assert len(result["threads"]) <= 8
+    assert sum(len(t["frames"]) for t in result["threads"]) <= 96
+    assert result["omitted_frames"] >= 904 and result["omitted_threads"] >= 2
+    assert not result["complete"] and len(json.dumps(result)) < 15000
+
+
+def test_python_fault_source_drift_fails_closed(fault_source):
+    (fault_source / "tests/test_case.py").write_text("SYNTHETIC_SECRET")
+    result = _fault(_fatal_text(), fault_source)
+    assert result["status"] == "unavailable" and result["reason"] == "source_unverified"
+    assert result["threads"] == []
+
+
+@pytest.mark.parametrize("parser_fails", [False, True])
+def test_python_fault_extracts_only_after_exit_before_private_log_removal(monkeypatch, tmp_path, parser_fails):
+    events = []
+    class Child:
+        pid, returncode = 123, -11
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            events.append("reaped")
+        def wait(self, **kwargs):
+            events.append("terminal")
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: Child())
+    def extract(text, checkout, child, label):
+        assert events == ["terminal", "reaped"]
+        assert (tmp_path / "industrial_1.raw").exists()
+        assert child["child_exit"] == -11 and child["pid"] == 123
+        events.append("extract")
+        if parser_fails:
+            raise RuntimeError("SYNTHETIC_SECRET")
+        return {"status": "partial"}
+    monkeypatch.setattr(diagnostic, "_python_fault_context", extract)
+    result = diagnostic._run_private(["unused"], tmp_path, tmp_path, "industrial_1")
+    assert events[-1] == "extract" and result["child_exit"] == -11
+    assert result["output_ok"] and not (tmp_path / "industrial_1.raw").exists()
+    assert result["python_context"]["status"] == ("unavailable" if parser_fails else "partial")
+    assert "SYNTHETIC_SECRET" not in repr(result)
+
+
+@pytest.mark.parametrize("publication_fails", [False, True])
+def test_python_native_publication_binds_same_child_and_preserves139(acquisition, monkeypatch, publication_fails):
+    root, calls, outcomes, emitted = acquisition
+    context = {"status": "partial", "threads": [], "complete": False}
+    outcomes["industrial_1"] = {"child_exit": -11, "signal": 11, "python_context": context}
+    inspected = []
+    def inspect(root, child, executable):
+        inspected.append(child["pid"])
+        return {"ok": True, "capture": "postmortem_stack", "native": {"pid": child["pid"], "signal": 11}}
+    monkeypatch.setattr(diagnostic, "_inspect_core", inspect)
+    if publication_fails:
+        def publish(value):
+            if "python_fault_context" in value:
+                raise OSError("SYNTHETIC_SECRET")
+            emitted.append(value)
+        monkeypatch.setattr(diagnostic, "_emit_hosted", publish)
+    receipt = {"identity": {"run_id": "500", "scaffolding_sha": "a" * 40}}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 139
+    assert receipt["acquisition_exit"] == 139 and inspected == [4]
+    assert calls[-1][0] == "industrial_1"
+    if publication_fails:
+        assert receipt["stages"][-1]["python_context_publication_error"]
+        assert "python_context_receipt" not in receipt["stages"][-1]
+    if not publication_fails:
+        paired = next(v["python_fault_context"] for v in emitted if "python_fault_context" in v)
+        assert paired["pid"] == 4 and paired["signal"] == 11 and paired["run_id"] == "500"
+        assert paired["workload_sha"] == diagnostic.FROZEN_SHA and paired["stage"] == "industrial_1"
+    assert "SYNTHETIC_SECRET" not in repr(receipt)
+
+
+def test_absolute_budget_is_recomputed_after_guards_before_prefix_launch(acquisition, monkeypatch):
+    root, calls, _, _ = acquisition
+    now = [0.0]
+    monkeypatch.setattr(diagnostic.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(diagnostic.time, "time", lambda: now[0])
+    def guard(*args):
+        now[0] = 11
+    monkeypatch.setattr(diagnostic, "_capture_ready", guard)
+    receipt = {"identity": {"observation_deadline_epoch": 10}}
+    assert diagnostic._acquire_sequence(root, root / "workload", receipt) == 70
+    assert calls == [] and not receipt["stages"][0]["started"]
+
+
+@pytest.mark.parametrize("before", [True, False])
+def test_python_fault_empty_thread_cannot_claim_complete(fault_source, before):
+    empty = "Thread 0x5678 (most recent call first):\n\n"
+    text = _fatal_text()
+    anchor = "Current thread" if before else "Extension modules:"
+    text = text.replace(anchor, empty + anchor)
+    result = _fault(text, fault_source)
+    assert result["status"] == "unavailable" and not result["complete"]
+
+
+def test_python_fault_combined_full_python_native_record_has_independent_limits(fault_source):
+    threads = [{"ordinal": i, "current": i == 8, "garbage_collecting": False,
+                "frames_truncated": False,
+                "raw_frames": [("tests/test_case.py", 2, "test_case")] * 100} for i in range(1, 9)]
+    context = diagnostic._bounded_python_threads(threads, fault_source, {"tests/test_case.py"})
+    paired = diagnostic._python_context_receipt(context, {"pid": 4194304, "signal": 11}, "industrial_10",
+        {"identity": {"run_id": "34407068328", "scaffolding_sha": "a" * 40}})
+    assert len(diagnostic._safe_json(paired).encode("ascii")) <= 16384
+    assert sum(len(t["frames"]) for t in context["threads"]) == 96
+    assert context["threads"][0]["current"]
+
+
+def test_python_fault_unavailable_retains_observed_truncation(fault_source):
+    result = _fault(_fatal_text().replace("line 2", "line ???"), fault_source, output_truncated=True)
+    assert result["status"] == "unavailable" and result["log_truncated"]
+
+
+@pytest.mark.parametrize("collecting", [False, True])
+def test_python_fault_reconstructed_historical_frames_use_real_frozen_blobs(fault_source, monkeypatch, collecting):
+    # These tracked files match the declared frozen blobs. Ordinary CI is
+    # shallow: this fixture must not require the historical commit object.
+    frozen_hashes = {'tests/test_industrial_analytics_dialog.py': '966aa2cc34e79475b735d68065dd1396c52592d8c2897cfd5931a1b3df7108d2', 'src/metroliza/industrial/industrial_workers.py': '8e8feed039ec08e03919dd032e6563347dfce4da774715c46c3d72836cf7aa08'}
+    paths = list(frozen_hashes)
+    for relative in paths:
+        content = Path(relative).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == frozen_hashes[relative]
+        target = fault_source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    subprocess.run(["git", "-C", str(fault_source), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(fault_source), "-c", "user.name=fixture",
+                    "-c", "user.email=fixture@example.invalid", "commit", "-qm", "historical source fixture"],
+                   check=True, capture_output=True)
+    monkeypatch.setattr(diagnostic, "FROZEN_SHA", diagnostic._git(fault_source, "rev-parse", "HEAD"))
+    monkeypatch.setattr(diagnostic, "FROZEN_TREE", diagnostic._git(fault_source, "rev-parse", "HEAD^{tree}"))
+    text = ('Fatal Python error: Segmentation fault\n\n'
+            'Thread 0xaaaa (most recent call first):\n'
+            f'  File "{fault_source}/{paths[1]}", line 513 in run\n\n'
+            'Current thread 0xbbbb (most recent call first):\n'
+            + ('  Garbage-collecting\n' if collecting else '')
+            + f'  File "{fault_source}/{paths[0]}", line 72 in _wait_for_tabular_load\n'
+            + f'  File "{fault_source}/{paths[0]}", line 1472 in test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels\n'
+            + '  File "/private/SYNTHETIC_SECRET/pytest/runner.py", line 99 in call\n\n'
+            + 'Extension modules: SYNTHETIC_SECRET (total: 1)\n')
+    context = _fault(text, fault_source)
+    assert context["status"] == "partial" and context["omitted_frames"] == 1
+    assert context["threads"][0]["garbage_collecting"] is collecting
+    assert [f["line"] for f in context["threads"][0]["frames"]] == [72, 1472]
+    assert context["threads"][1]["frames"] == [{"path": paths[1], "line": 513, "function": "run"}]
+    assert "SYNTHETIC_SECRET" not in repr(context) and str(fault_source) not in repr(context)
+
+
+def test_python_fault_byte_cap_trims_long_validated_frames(fault_source, monkeypatch):
+    function = "source_function_" + "x" * 220
+    relative = "/".join(["tests", "a" * 120, "b" * 120, "long_file.py"])
+    target = fault_source / relative
+    target.parent.mkdir(parents=True)
+    target.write_text(f"def {function}():\n    return 1\n")
+    subprocess.run(["git", "-C", str(fault_source), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(fault_source), "-c", "user.name=fixture",
+                    "-c", "user.email=fixture@example.invalid", "commit", "-qm", "long valid source"],
+                   check=True, capture_output=True)
+    monkeypatch.setattr(diagnostic, "FROZEN_SHA", diagnostic._git(fault_source, "rev-parse", "HEAD"))
+    monkeypatch.setattr(diagnostic, "FROZEN_TREE", diagnostic._git(fault_source, "rev-parse", "HEAD^{tree}"))
+    text = ("Fatal Python error: Segmentation fault\n\n"
+            "Current thread 0x1234 (most recent call first):\n"
+            + f'  File "{relative}", line 2 in {function}\n' * 96
+            + "Extension modules: SYNTHETIC_SECRET\n")
+    result = _fault(text, fault_source)
+    assert result["status"] == "partial" and 0 < len(result["threads"][0]["frames"]) < 96
+    paired = diagnostic._python_context_receipt(result, {"pid": 123, "signal": 11}, "industrial_10",
+        {"identity": {"run_id": "34407068328", "scaffolding_sha": "a" * 40}})
+    assert len(diagnostic._safe_json(paired)) <= 16384
+
+
+@pytest.mark.parametrize("marker", ["  <no Python frame>", "  <tstate is freed>"])
+def test_python_fault_explicit_absent_frame_is_partial_not_invented(fault_source, marker):
+    text = _fatal_text().replace("Current thread", "Thread 0x5678 (most recent call first):\n" + marker + "\n\nCurrent thread")
+    result = _fault(text, fault_source)
+    assert result["status"] == "partial" and not result["complete"]
+    assert result["threads"][0]["current"] and result["threads"][1]["frames"] == []
+
+
+def test_fault_helper_import_does_not_activate_any_child_or_qt():
+    program = """
+import importlib.abc, runpy, subprocess, sys
+class RejectQt(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('PyQt', 'metroliza', 'modules')):
+            raise AssertionError('unexpected application import')
+sys.meta_path.insert(0, RejectQt())
+def forbidden(*args, **kwargs):
+    raise AssertionError('unexpected child launch')
+subprocess.Popen = forbidden
+runpy.run_path(sys.argv[1], run_name='inert_fault_helper')
+"""
+    result = subprocess.run([sys.executable, "-I", "-c", program, str(Path(diagnostic.__file__).resolve())],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0 and not result.stdout and not result.stderr

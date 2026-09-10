@@ -23,6 +23,7 @@ import sys
 import tempfile
 import stat
 import time
+import types
 
 
 def _sanitize(text: str) -> str:
@@ -177,8 +178,8 @@ def main() -> int:
 FROZEN_SHA = "216877364752c20bcdc65752382da470c4f363d5"
 FROZEN_TREE = "719b80423271ff59c6fe08ace819fee2ae151fa0"
 BRANCH = "fix/998-industrial-qt-recurrence"
-PHASE = "5618809967"
-APPROVAL_TIME = "2026-09-10T12:39:19Z"
+PHASE = "5620299028"
+APPROVAL_TIME = "2026-09-10T14:27:39Z"
 PROBE_VARIANTS = ("async_reference", "async_owned_teardown")
 PROBE_PHASES = ("cycle_start", "parent_constructed", "load_started", "ownership_checked",
                 "worker_terminal", "load_checked", "parent_close", "boundary", "release",
@@ -362,9 +363,9 @@ def hosted_admit() -> int:
                                   _git(workload, "rev-parse", "HEAD^{tree}"))
     current = next(run for run in prior if str(run["id"]) == receipt["run_id"])
     # Use workflow creation (earlier than guest start) conservatively. Leave
-    # at least three minutes of the25-minute job ceiling for private cleanup.
+    # at least three minutes of the45-minute job ceiling for private cleanup.
     receipt["observation_deadline_epoch"] = (
-        datetime.fromisoformat(current["created_at"].replace("Z", "+00:00")).timestamp() + 22 * 60
+        datetime.fromisoformat(current["created_at"].replace("Z", "+00:00")).timestamp() + 42 * 60
     )
     receipt["probe_sha256"] = _verify_probe()
     root = _private_root()
@@ -505,6 +506,173 @@ def _probe_summary(text: str, variant: str) -> dict:
             **_lifetime_totals(lifetimes if valid else [])}
 
 
+
+def _empty_python_context(reason: str, child: dict | None = None) -> dict:
+    return {"status": "unavailable", "reason": reason, "complete": False, "threads": [],
+            "omitted_frames": 0, "omitted_threads": 0, "log_truncated": bool((child or {}).get("output_truncated"))}
+
+
+def _fatal_thread_line(line: str, threads: list) -> None:
+    if not threads:
+        raise ValueError("frame_without_thread")
+    thread = threads[-1]
+    frame = re.fullmatch(r'  File "([^"\n]{1,500})", line ([1-9][0-9]{0,6}) in ([^\n]{1,500})', line)
+    if frame:
+        if len(thread["raw_frames"]) >= 100:
+            raise ValueError("frame_protocol_limit")
+        thread["raw_frames"].append((frame[1], int(frame[2]), frame[3]))
+    elif line == "  ...":
+        thread["frames_truncated"] = True
+    elif line == "  Garbage-collecting" and thread["current"] and not thread["raw_frames"]:
+        thread["garbage_collecting"] = True
+    elif line in ("  <no Python frame>", "  <tstate is freed>"):
+        thread["frames_truncated"] = True
+    else:
+        raise ValueError("malformed_fatal_block")
+
+
+def _fatal_threads(text: str, observed_signal: int) -> tuple[list, bool]:
+    names = {4: "Illegal instruction", 6: "Aborted", 7: "Bus error",
+             8: "Floating point exception", 11: "Segmentation fault"}
+    banners = list(re.finditer(r"(?m)^Fatal Python error: ([A-Za-z ]+)\r?$", text))
+    if (len(banners) != 1 or text.count("Fatal Python error:") != 1
+            or banners[0][1] != names.get(observed_signal)):
+        raise ValueError("missing_ambiguous_or_mismatched_fatal_block")
+    lines = text[banners[0].end():].splitlines()
+    if len(lines) > 12000:
+        raise ValueError("fatal_block_protocol_limit")
+    threads, tokens, complete = [], set(), False
+    for line in lines:
+        if not line:
+            continue
+        if line.startswith("Extension modules: "):
+            complete = True
+            break  # The extension list is never retained.
+        header = re.fullmatch(r"(Current thread|Thread) 0x([0-9a-fA-F]{1,16}) \(most recent call first\):", line)
+        if header:
+            if int(header[2], 16) in tokens or len(threads) >= 100:
+                raise ValueError("ambiguous_thread_block")
+            tokens.add(int(header[2], 16))
+            threads.append({"ordinal": len(threads) + 1, "current": header[1] == "Current thread",
+                            "garbage_collecting": False, "raw_frames": [],
+                            "frames_truncated": False})
+        elif line == "...":
+            complete = False
+            break  # CPython's thread cap: the remainder is unavailable.
+        else:
+            _fatal_thread_line(line, threads)
+    if (not threads or sum(t["current"] for t in threads) > 1
+            or any(not t["raw_frames"] and not t["frames_truncated"] for t in threads)):
+        raise ValueError("missing_or_ambiguous_threads")
+    return threads, complete
+
+
+def _source_scopes(checkout: Path, path: str) -> set:
+    # Compile trusted frozen bytes only; never import or execute workload code.
+    result = subprocess.run(
+        ["git", "--no-optional-locks", "-C", str(checkout), "cat-file", "blob", FROZEN_SHA + ":" + path],
+        capture_output=True, check=True, timeout=20)
+    pending = [compile(result.stdout, path, "exec", dont_inherit=True, optimize=0)]
+    scopes = set()
+    while pending:
+        code = pending.pop()
+        scopes.update((code.co_name, line) for _, _, line in code.co_lines() if line is not None)
+        pending.extend(value for value in code.co_consts if isinstance(value, types.CodeType))
+    return scopes
+
+
+def _validated_python_frame(raw: tuple, checkout: Path, inventory: set, scopes: dict) -> dict | None:
+    path, line, function = raw
+    prefix = str(checkout.resolve()) + "/"
+    if path.startswith(prefix):
+        path = path[len(prefix):]
+    if (not re.fullmatch(r"[A-Za-z0-9_./-]{1,400}", path)
+            or any(part in ("", ".", "..") for part in path.split("/"))
+            or path not in inventory
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*|<(?:module|lambda|listcomp|dictcomp|setcomp|genexpr)>", function)):
+        return None
+    if path not in scopes:
+        scopes[path] = _source_scopes(checkout, path)
+    if (function, line) not in scopes[path]:
+        return None
+    return {"path": path, "line": line, "function": function}
+
+
+def _bounded_python_threads(threads: list, checkout: Path, inventory: set) -> dict:
+    ordered = sorted(threads, key=lambda thread: not thread["current"])
+    output, scopes, retained = [], {}, 0
+    omitted = sum(len(t["raw_frames"]) for t in ordered[8:])
+    for thread in ordered[:8]:
+        frames = []
+        dropped = 0
+        for raw in thread["raw_frames"]:
+            frame = _validated_python_frame(raw, checkout, inventory, scopes) if retained < 96 else None
+            if frame is None:
+                dropped += 1
+            else:
+                frames.append(frame)
+                retained += 1
+        omitted += dropped
+        output.append({key: thread[key] for key in ("ordinal", "current", "garbage_collecting", "frames_truncated")})
+        output[-1].update(frames=frames, omitted_frames=dropped)
+    result = {"threads": output, "omitted_frames": omitted, "omitted_threads": max(0, len(threads) - 8)}
+    # Reserve more than1KiB for fixed status and controller identity metadata.
+    while len(json.dumps(result, ensure_ascii=True, separators=(",", ":"))) > 14000:
+        thread = next(t for t in reversed(output) if t["frames"])
+        thread["frames"].pop()
+        thread["omitted_frames"] += 1
+        result["omitted_frames"] += 1
+    return result
+
+
+def _python_workload_stage(label: str) -> bool:
+    return label in ("main", "dashboard") or bool(re.fullmatch(r"industrial_(?:[1-9]|10)", label))
+
+
+def _python_fault_context(text: str, checkout: Path, child: dict, label: str) -> dict:
+    sig = child.get("signal")
+    if (not _python_workload_stage(label) or sig not in (4, 6, 7, 8, 11) or child.get("child_exit") != -sig
+            or child.get("timed_out") or child.get("cancelled")):
+        return _empty_python_context("not_an_eligible_native_failure", child)
+    if sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 11):
+        return _empty_python_context("mapping_compiler_unverified", child)
+    try:
+        _verify_workload(checkout)
+        inventory = {row.split("\t", 1)[1] for row in
+                     _git(checkout, "ls-tree", "-rz", FROZEN_SHA).split("\0")
+                     if re.match(r"100(?:644|755) blob [0-9a-f]{40}\t", row)
+                     and row.endswith(".py")}
+    except Exception:
+        return _empty_python_context("source_unverified", child)
+    try:
+        threads, terminated = _fatal_threads(text, sig)
+        result = _bounded_python_threads(threads, checkout, inventory)
+    except ValueError:
+        return _empty_python_context("malformed_or_untrusted_context", child)
+    except Exception:
+        return _empty_python_context("source_mapping_unavailable", child)
+    frames = sum(len(t["frames"]) for t in result["threads"])
+    complete = (terminated and not child.get("output_truncated") and not result["omitted_frames"]
+                and not result["omitted_threads"] and any(t["current"] for t in threads)
+                and not any(t["frames_truncated"] for t in threads))
+    result.update(status=("available" if complete else "partial") if frames else "unavailable",
+                  reason="validated_source_coordinates" if frames else "no_validated_source_frames",
+                  complete=bool(complete and frames), log_truncated=bool(child.get("output_truncated")))
+    return result
+
+
+def _python_context_receipt(context: dict, child: dict, label: str, receipt: dict) -> dict:
+    identity = receipt["identity"]
+    # Values originate in verified admission/controller state, never child text.
+    value = {"python_fault_context": {"run_id": identity["run_id"], "phase": PHASE,
+        "stage": label, "pid": child["pid"], "signal": child["signal"],
+        "scaffolding_sha": identity["scaffolding_sha"], "workload_sha": FROZEN_SHA,
+        "workload_tree": FROZEN_TREE, "context": context}}
+    if len(_safe_json(value).encode("ascii")) > 16384:
+        raise ValueError("python_context_output_limit")
+    return value
+
+
 def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeout: float = 120) -> dict:
     if not 0 < timeout <= 1200:
         raise ValueError("invalid_stage_timeout")
@@ -543,6 +711,11 @@ def _run_private(command: list[str], cwd: Path, root: Path, label: str, *, timeo
                        **_pytest_summary(text))
         if label in PROBE_VARIANTS:
             receipt.update(_probe_summary(text, label))
+        if receipt["signal"] and _python_workload_stage(label):
+            try:
+                receipt["python_context"] = _python_fault_context(text, cwd, receipt, label)
+            except Exception:
+                receipt["python_context"] = _empty_python_context("extraction_error", receipt)
         output.unlink()
         receipt["output_ok"] = True
     except OSError as error:
@@ -761,6 +934,19 @@ def _emit_preserving_exit(receipt: dict, result: int) -> int:
     return result
 
 
+def _publish_python_context(context, child, label, receipt, entry, result):
+    if context is None:
+        return result
+    try:
+        _emit_hosted(_python_context_receipt(context, child, label, receipt))
+        entry["python_context_receipt"] = label
+    except Exception:
+        entry["python_context_publication_error"] = True
+        result = _emit_preserving_exit({"python_context_output_error": True,
+                                       "launcher_exit": result or 70}, result or 70)
+    return result
+
+
 def _acquisition_stage(root, workload, receipt, label, command, expected, timeout, deadline=None):
     display_command = ["python", *command[1:]]
     if label in PROBE_VARIANTS:
@@ -771,7 +957,7 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
              "source_tree": FROZEN_TREE, "expected_counts": expected,
              "timeout_seconds": timeout, "started": False, "complete": False}
     receipt["stages"].append(entry)
-    result = 70
+    result, python_context, child = 70, None, None
     try:
         _verify_workload(workload)
         _capture_ready(root)
@@ -784,9 +970,12 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
             entry["timeout_seconds"] = timeout
         entry["started"] = True
         child = _run_private(command, workload, root, label, timeout=timeout)
+        if child["signal"] and _python_workload_stage(label):
+            python_context = child.pop("python_context", _empty_python_context("private_output_unavailable", child))
         entry.update(child)
         # Set terminal status before post-mortem, source verification or export.
         result = _postmortem_exit(child["child_exit"], False)
+        receipt["acquisition_exit"] = result
         capture = (_inspect_core(root, child, sys.executable) if child["signal"]
                    else {"capture": "not_needed_no_signal", "ok": True})
         entry.update(capture)
@@ -805,6 +994,8 @@ def _acquisition_stage(root, workload, receipt, label, command, expected, timeou
         entry["diagnostic_error"] = type(error).__name__
     entry["launcher_exit"] = result
     result = _emit_preserving_exit({"acquisition_stage": entry}, result)
+    result = _publish_python_context(python_context, child, label, receipt, entry, result)
+    receipt["acquisition_exit"] = result
     # Native frames are exported in the bounded stage receipt, once. The final
     # cumulative ledger references that stage without duplicating a large stack.
     if "native" in entry:
@@ -823,6 +1014,8 @@ def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
     receipt.update(stages=[], observation="INCOMPLETE_WORKLOAD", industrial_limit=10,
                    industrial_aggregate_limit_seconds=600,
                    context="prefix once; fresh processes; shared cumulative coverage")
+    epoch = receipt.get("identity", {}).get("observation_deadline_epoch")
+    job_deadline = time.monotonic() + max(0, epoch - time.time()) if epoch is not None else None
     coverage = PYTEST_ARGUMENTS[2:]
     prefix = [
         ("coverage_erase", [sys.executable, "-m", "coverage", "erase"], [], 60),
@@ -834,11 +1027,14 @@ def _acquire_sequence(root: Path, workload: Path, receipt: dict) -> int:
          ["24 passed"], 120),
     ]
     for label, command, expected, timeout in prefix:
-        result = _acquisition_stage(root, workload, receipt, label, command, expected, timeout)
+        result = _acquisition_stage(root, workload, receipt, label, command, expected, timeout,
+                                    deadline=job_deadline)
         if result:
             receipt["observation"] = _failed_observation(receipt["stages"][-1])
             return result
     deadline = time.monotonic() + 600
+    if job_deadline is not None:
+        deadline = min(deadline, job_deadline)
     for sample in range(1, 11):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -924,10 +1120,10 @@ def hosted_observe() -> int:
         receipt["environment"] = _prepare_hosted_capture(root, workload)
         _validate_runtime(receipt["environment"])
         _prove_hosted_capture(root, receipt)
-        result = _acquire_reduction(root, workload, receipt)
+        result = _acquire_sequence(root, workload, receipt)
     except Exception as error:
         receipt["diagnostic_error"] = type(error).__name__
-        result = receipt.get("reduction_exit", result) or 70
+        result = receipt.get("acquisition_exit", result) or 70
     finally:
         signal.alarm(0)
         try:
