@@ -35,10 +35,14 @@ public static class PipeFixture1043 {
     }
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Startup {
         public int size;
-        public string reserved, desktop, title;
+        public IntPtr reserved, desktop, title;
         public int x, y, width, height, xChars, yChars, fill, flags;
         public ushort show, reservedBytes;
         public IntPtr reservedData, input, output, error;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct StartupEx {
+        public Startup startup;
+        public IntPtr attributes;
     }
     [StructLayout(LayoutKind.Sequential)] struct ProcessInfo {
         public IntPtr process, thread;
@@ -48,13 +52,21 @@ public static class PipeFixture1043 {
         ExactSpelling=true)]
     static extern bool CreateProcessW(string app, StringBuilder command, IntPtr processAttributes,
         IntPtr threadAttributes, bool inherit, int flags, IntPtr environment, string directory,
-        ref Startup startup, out ProcessInfo info);
+        ref StartupEx startup, out ProcessInfo info);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true,
         ExactSpelling=true)]
     static extern IntPtr CreateFileW(string name, uint access, uint share, ref Security security,
         uint creation, uint flags, IntPtr template);
     [DllImport("kernel32.dll", SetLastError=true)]
     static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool InitializeProcThreadAttributeList(IntPtr attributes, int count, int flags,
+        ref IntPtr size);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool UpdateProcThreadAttribute(IntPtr attributes, uint flags, IntPtr attribute,
+        IntPtr value, UIntPtr size, IntPtr previous, IntPtr returnSize);
+    [DllImport("kernel32.dll")]
+    static extern void DeleteProcThreadAttributeList(IntPtr attributes);
     [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int number);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
 
@@ -77,6 +89,8 @@ public static class PipeFixture1043 {
         security.length = Marshal.SizeOf(security);
         security.inherit = true;
         IntPtr input = IntPtr.Zero, output = IntPtr.Zero, error = IntPtr.Zero;
+        IntPtr attributeList = IntPtr.Zero, handleList = IntPtr.Zero;
+        bool attributesInitialized = false;
         bool ownOutput = !inheritOutput;
         var info = new ProcessInfo();
         try {
@@ -85,25 +99,45 @@ public static class PipeFixture1043 {
                 : File(stdoutPath, 0x40000000, 2, ref security);
             error = inheritOutput ? GetStdHandle(-12)
                 : File(stderrPath, 0x40000000, 2, ref security);
-            if (Invalid(output) || Invalid(error)
+            if (Invalid(input) || Invalid(output) || Invalid(error)
+                || !SetHandleInformation(input, 1, 1)
                 || !SetHandleInformation(output, 1, 1)
                 || !SetHandleInformation(error, 1, 1))
                 throw new InvalidOperationException("fixture_handle_failed");
-            var startup = new Startup();
-            startup.size = Marshal.SizeOf(startup);
-            startup.flags = 0x100;
-            startup.input = input;
-            startup.output = output;
-            startup.error = error;
+            IntPtr attributeBytes = IntPtr.Zero;
+            if (InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeBytes)
+                || attributeBytes == IntPtr.Zero || Marshal.GetLastWin32Error() != 122)
+                throw new InvalidOperationException("fixture_attribute_failed");
+            attributeList = Marshal.AllocHGlobal(attributeBytes);
+            if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeBytes))
+                throw new InvalidOperationException("fixture_attribute_failed");
+            attributesInitialized = true;
+            handleList = Marshal.AllocHGlobal(IntPtr.Size * 3);
+            Marshal.WriteIntPtr(handleList, 0, input);
+            Marshal.WriteIntPtr(handleList, IntPtr.Size, output);
+            Marshal.WriteIntPtr(handleList, IntPtr.Size * 2, error);
+            if (!UpdateProcThreadAttribute(attributeList, 0, new IntPtr(0x00020002),
+                handleList, new UIntPtr((uint)(IntPtr.Size * 3)), IntPtr.Zero, IntPtr.Zero))
+                throw new InvalidOperationException("fixture_attribute_failed");
+            var startup = new StartupEx();
+            startup.startup.size = Marshal.SizeOf(startup);
+            startup.startup.flags = 0x100;
+            startup.startup.input = input;
+            startup.startup.output = output;
+            startup.startup.error = error;
+            startup.attributes = attributeList;
             var command = new StringBuilder(Quote(executable));
             foreach (var argument in arguments) command.Append(" ").Append(Quote(argument));
-            if (!CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08000000,
+            if (!CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x08080000,
                 IntPtr.Zero, directory, ref startup, out info))
                 throw new InvalidOperationException("fixture_start_failed");
         }
         finally {
             if (!Invalid(info.thread)) CloseHandle(info.thread);
             if (!Invalid(info.process)) CloseHandle(info.process);
+            if (attributesInitialized) DeleteProcThreadAttributeList(attributeList);
+            if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);
+            if (handleList != IntPtr.Zero) Marshal.FreeHGlobal(handleList);
             if (!Invalid(input)) CloseHandle(input);
             if (ownOutput && !Invalid(output)) CloseHandle(output);
             if (ownOutput && !Invalid(error)) CloseHandle(error);
