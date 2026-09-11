@@ -209,6 +209,7 @@ def _write_config(
             "child": str(PY_FIXTURE),
             "root": str(root),
             "state": str(state),
+            "phase": str(root / "phase.jsonl"),
             "stdout": str(root / "fixture.stdout"),
             "stderr": str(root / "fixture.stderr"),
             "scenario": scenario,
@@ -221,18 +222,83 @@ def _write_config(
     return config
 
 
-def _read_records(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+def _read_records(path: Path, *, allow_partial_final: bool = False) -> list[dict]:
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    records = []
+    for index, line in enumerate(lines):
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            # Owned cleanup may stop the optional state append mid-write. Never
+            # hide a malformed completed line, or damage to an earlier record.
+            if allow_partial_final and index == len(lines) - 1 and not line.endswith("\n"):
+                break
+            raise
+    return records
 
 
-def _read_optional(path: Path) -> list[dict]:
+def _read_optional(path: Path, *, allow_partial_final: bool = False) -> list[dict]:
     try:
-        return _read_records(path)
+        return _read_records(path, allow_partial_final=allow_partial_final)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return []
 
 
-def _record(shell, scenario, result, ready=None, probe=(), outcome=()):
+@pytest.mark.parametrize('tail,expected_prefix', [
+    ('{"schema_version":1,"stage":"parent_exi', True),
+    ('{"schema_version":1,"stage":"parent_exi\n', False),
+    ('invalid\n{"schema_version":1}', False),
+])
+def test_state_reader_preserves_only_unfinished_final_append(tmp_path, tail, expected_prefix):
+    ready = {"schema_version": 1, "stage": "child_ready", "parent_live": True}
+    path = tmp_path / "state.jsonl"
+    path.write_text(json.dumps(ready) + "\n" + tail, encoding="utf-8")
+    assert _read_optional(path, allow_partial_final=True) == ([ready] if expected_prefix else [])
+    assert _read_optional(path) == []
+
+
+def _read_phase(path: Path) -> str:
+    try:
+        rows = _read_records(path, allow_partial_final=True)
+    except FileNotFoundError:
+        return "unobserved"
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "fixture_mismatch"
+    stages = ("shell_initialized", "native_factory_ready", "child_created")
+    expected = [{"schema_version": 1, "stage": stage} for stage in stages]
+    if not rows:
+        return "unobserved"
+    if len(rows) <= len(expected) and rows == expected[:len(rows)]:
+        return stages[len(rows) - 1]
+    return "fixture_mismatch"
+
+
+@pytest.mark.parametrize('rows,expected', [
+    ([], "unobserved"),
+    ([{"schema_version": 1, "stage": "shell_initialized"}], "shell_initialized"),
+    ([{"schema_version": 1, "stage": "native_factory_ready"}], "fixture_mismatch"),
+    ([{"schema_version": 1, "stage": "SYNTHETIC_PRIVATE_CANARY"}], "fixture_mismatch"),
+    ([{"schema_version": 1, "stage": "shell_initialized", "extra": True}], "fixture_mismatch"),
+])
+def test_phase_reader_requires_closed_ordered_records(tmp_path, rows, expected):
+    path = tmp_path / "phase.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    assert _read_phase(path) == expected
+
+
+def test_phase_reader_retains_complete_prefix_only(tmp_path):
+    path = tmp_path / "phase.jsonl"
+    records = [{"schema_version": 1, "stage": stage} for stage in
+               ("shell_initialized", "native_factory_ready", "child_created")]
+    for length in (2, 3):
+        text = "".join(json.dumps(row) + "\n" for row in records[:length])
+        path.write_text(text + '{"stage":', encoding="utf-8")
+        assert _read_phase(path) == records[length - 1]["stage"]
+    path.write_text(text + '{"stage":\n', encoding="utf-8")
+    assert _read_phase(path) == "fixture_mismatch"
+
+
+def _record(shell, scenario, result, ready=None, probe=(), outcome=(), phase="unobserved"):
     directory = os.environ.get(_RECEIPTS)
     if not directory:
         return
@@ -282,13 +348,18 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=()):
     else:
         expected_stage = "shell_ready" if scenario == "live_shell" else "child_ready"
         fixture_ready = fixture_stage == expected_stage
+    fixture_phase = phase if phase in {
+        "unobserved", "shell_initialized", "native_factory_ready", "child_created",
+    } else "fixture_mismatch"
+    expected_phase = "shell_initialized" if scenario == "live_shell" else "child_created"
     completed = (
         result.reason == "completed" and outer_exit_code == 0
         and result.cleanup_complete and result.tree_empty and fixture_ready
         and (
             scenario == "preflight"
             or (
-                invoke_state == "returned" and invoke_exit_code == 0
+                fixture_phase == expected_phase
+                and invoke_state == "returned" and invoke_exit_code == 0
                 and invoke_process_exit_code == 0
                 and invoke_reason == "completed" and invoke_cleanup == "complete"
                 and final.get("output_limited") is False
@@ -309,6 +380,7 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=()):
         "stderr_pipe": ready.get("stderr_pipe") is True,
         "shell_state": shell_state,
         "fixture_stage": fixture_stage,
+        "fixture_phase": fixture_phase,
         "invoke_state": invoke_state,
         "invoke_reason": invoke_reason,
         "invoke_cleanup": invoke_cleanup,
@@ -359,7 +431,7 @@ def _run_scenario(
 
     def observer():
         while not stop.is_set():
-            records = _read_optional(state)
+            records = _read_optional(state, allow_partial_final=True)
             if any(row.get("stage") in {"child_ready", "shell_ready"} for row in records):
                 observed["ns"] = time.monotonic_ns()
                 return
@@ -377,10 +449,12 @@ def _run_scenario(
     )
     stop.set()
     watcher.join(timeout=1)
-    records = _read_optional(state)
+    records = _read_optional(state, allow_partial_final=True)
     probe = _read_optional(probe_path)
     outcome = _read_optional(outcome_path)
-    _record(shell, scenario, result, records[0] if records else {}, probe, outcome)
+    phase = _read_phase(root / "phase.jsonl")
+    _record(shell, scenario, result, records[0] if records else {}, probe, outcome, phase)
+    assert phase == ("shell_initialized" if scenario == "live_shell" else "child_created")
     assert result.cleanup_complete and result.tree_empty
     assert math.isfinite(result.elapsed_s) and result.elapsed_s <= 27.5
     assert started <= observed.get("ns", 0) < started + 22_000_000_000

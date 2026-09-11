@@ -77,6 +77,8 @@ jobs:
                              'not_completed', 'output_limit'},
                   'shell_state': {'exited', 'live', 'wait_failed', 'unobserved'},
                   'fixture_stage': {'child_ready', 'shell_ready', 'fixture_mismatch', 'unobserved'},
+                  'fixture_phase': {'unobserved', 'shell_initialized', 'native_factory_ready',
+                                    'child_created', 'fixture_mismatch'},
                   'invoke_state': {'returned', 'timeout_returned', 'failed', 'unobserved'},
                   'invoke_reason': {'completed', 'timeout', 'cancelled', 'containment_unavailable',
                                     'startup_failed', 'assignment_failed', 'resume_failed',

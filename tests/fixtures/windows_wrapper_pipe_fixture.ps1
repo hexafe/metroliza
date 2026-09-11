@@ -6,6 +6,9 @@ Set-StrictMode -Version Latest
 $config = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
 $ready = [Threading.EventWaitHandle]::OpenExisting($config.ready)
 $hold = [Threading.EventWaitHandle]::OpenExisting($config.hold)
+$record = @{schema_version=1; stage='shell_initialized'} | ConvertTo-Json -Compress
+[IO.File]::AppendAllText($config.phase, $record + [Environment]::NewLine,
+    [Text.UTF8Encoding]::new($false))
 
 try {
     if ($config.scenario -eq 'live_shell') {
@@ -145,6 +148,9 @@ public static class PipeFixture1043 {
     }
 }
 '@
+        $record = @{schema_version=1; stage='native_factory_ready'} | ConvertTo-Json -Compress
+        [IO.File]::AppendAllText($config.phase, $record + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false))
         [PipeFixture1043]::Start(
             $config.python,
             [string[]]@('-I', '-S', $config.child, 'child', $ConfigPath),
@@ -153,6 +159,9 @@ public static class PipeFixture1043 {
             $config.stdout,
             $config.stderr
         )
+        $record = @{schema_version=1; stage='child_created'} | ConvertTo-Json -Compress
+        [IO.File]::AppendAllText($config.phase, $record + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false))
         if (-not $ready.WaitOne(10000)) { throw 'fixture_ready_failed' }
         if (-not $release.Set()) { throw 'fixture_release_failed' }
     }

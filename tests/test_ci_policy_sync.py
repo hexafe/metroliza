@@ -287,7 +287,8 @@ def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> No
 
 
 @pytest.mark.parametrize('mutation', ['valid', 'extra', 'domain', 'boolean', 'huge', 'missing',
-                                    'invoke_reason', 'invoke_cleanup', 'invoke_process_exit_code'])
+                                    'invoke_reason', 'invoke_cleanup', 'invoke_process_exit_code',
+                                    'fixture_phase'])
 def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation) -> None:
     import ast
     import json
@@ -306,6 +307,7 @@ def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation)
              'elapsed_ms': 1500, 'shell_exited_before_timeout': True,
              'stdout_pipe': True, 'stderr_pipe': False,
              'shell_state': 'exited', 'fixture_stage': 'child_ready',
+             'fixture_phase': 'child_created',
              'invoke_state': 'unobserved', 'invoke_reason': 'unobserved',
              'invoke_cleanup': 'unobserved', 'invoke_process_exit_code': None,
              'cleanup_complete': True, 'outer_exit_code': 1, 'invoke_exit_code': None}
@@ -315,7 +317,7 @@ def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation)
         value['shell'] = 'SYNTHETIC_PRIVATE_CANARY'
     elif mutation == 'boolean':
         value['elapsed_ms'] = True
-    elif mutation in {'invoke_reason', 'invoke_cleanup'}:
+    elif mutation in {'invoke_reason', 'invoke_cleanup', 'fixture_phase'}:
         value[mutation] = 'SYNTHETIC_PRIVATE_CANARY'
     elif mutation == 'invoke_process_exit_code':
         value[mutation] = True
@@ -389,7 +391,7 @@ def test_windows_wrapper_receipt_cannot_hide_inner_failure(
                 'stage': stage, 'returncode': code, 'reason': 'completed',
                 'cleanup_complete': True, 'tree_empty': True, 'process_returncode': code,
                 'output_limited': False,
-            }])
+            }], phase='shell_initialized')
     row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
     assert row['result'] == expected
     assert row['outer_exit_code'] == 0 and row['invoke_exit_code'] == code
@@ -414,7 +416,7 @@ def test_windows_wrapper_receipt_rejects_contradictory_success(
         'cleanup_complete': True, 'tree_empty': True, **contradiction,
     }
     _record('pwsh', 'live_shell', OwnedProcessResult(0, 'completed', True, True, False, 2),
-            ready={'stage': 'shell_ready'}, outcome=[outcome])
+            ready={'stage': 'shell_ready'}, outcome=[outcome], phase='shell_initialized')
     row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
     assert row['result'] == 'bounded_failure'
 
