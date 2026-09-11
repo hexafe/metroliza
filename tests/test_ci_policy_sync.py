@@ -277,12 +277,17 @@ def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> No
     assert "'--basetemp=' + str(root / 'fixtures')" in invocation
     assert 'sys.exit(result)' in invocation
     assert "'-x'" in invocation
-    assert invocation.index('::test_00_native_containment_preflight') < invocation.index(
-        '::test_opt_in_original_invoke_pipe_discriminator'
+    assert invocation.index("'tests/test_windows_ocr_wrapper_completion.py'") < invocation.index(
+        "'tests/test_windows_ocr_powershell.py'"
     )
+    for path in ('test_windows_ocr_runtime_diagnostics.py',
+                 'test_header_ocr_diagnostics_script.py', 'test_windows_ocr_invoke.py'):
+        assert path in invocation
+    assert 'METROLIZA_WINDOWS_WRAPPER_BASELINE' not in invocation
 
 
-@pytest.mark.parametrize('mutation', ['valid', 'extra', 'domain', 'boolean', 'huge', 'missing'])
+@pytest.mark.parametrize('mutation', ['valid', 'extra', 'domain', 'boolean', 'huge', 'missing',
+                                    'invoke_reason', 'invoke_cleanup', 'invoke_process_exit_code'])
 def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation) -> None:
     import ast
     import json
@@ -301,7 +306,8 @@ def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation)
              'elapsed_ms': 1500, 'shell_exited_before_timeout': True,
              'stdout_pipe': True, 'stderr_pipe': False,
              'shell_state': 'exited', 'fixture_stage': 'child_ready',
-             'invoke_state': 'unobserved',
+             'invoke_state': 'unobserved', 'invoke_reason': 'unobserved',
+             'invoke_cleanup': 'unobserved', 'invoke_process_exit_code': None,
              'cleanup_complete': True, 'outer_exit_code': 1, 'invoke_exit_code': None}
     if mutation == 'extra':
         value['raw_output'] = 'SYNTHETIC_PRIVATE_CANARY'
@@ -309,6 +315,10 @@ def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation)
         value['shell'] = 'SYNTHETIC_PRIVATE_CANARY'
     elif mutation == 'boolean':
         value['elapsed_ms'] = True
+    elif mutation in {'invoke_reason', 'invoke_cleanup'}:
+        value[mutation] = 'SYNTHETIC_PRIVATE_CANARY'
+    elif mutation == 'invoke_process_exit_code':
+        value[mutation] = True
     path = tmp_path / 'windows-ocr-wrapper-receipts.jsonl'
     if mutation != 'missing':
         path.write_text('x' * 32769 if mutation == 'huge' else json.dumps(value), encoding='utf-8')
@@ -375,10 +385,38 @@ def test_windows_wrapper_receipt_cannot_hide_inner_failure(
 
     monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
     _record('pwsh', 'live_shell', OwnedProcessResult(0, 'completed', True, True, False, 2),
-            ready={'stage': 'shell_ready'}, outcome=[{'stage': stage, 'returncode': code}])
+            ready={'stage': 'shell_ready'}, outcome=[{
+                'stage': stage, 'returncode': code, 'reason': 'completed',
+                'cleanup_complete': True, 'tree_empty': True, 'process_returncode': code,
+                'output_limited': False,
+            }])
     row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
     assert row['result'] == expected
     assert row['outer_exit_code'] == 0 and row['invoke_exit_code'] == code
+
+
+@pytest.mark.parametrize('contradiction', [
+    {'process_returncode': 17}, {'output_limited': True},
+    {'cleanup_complete': False}, {'tree_empty': False},
+])
+def test_windows_wrapper_receipt_rejects_contradictory_success(
+    tmp_path, monkeypatch, contradiction
+):
+    import json
+
+    from tests.test_windows_ocr_wrapper_completion import _record
+    from tests.windows_ocr_process import OwnedProcessResult
+
+    monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
+    outcome = {
+        'stage': 'invoke_returned', 'returncode': 0, 'reason': 'completed',
+        'process_returncode': 0, 'output_limited': False,
+        'cleanup_complete': True, 'tree_empty': True, **contradiction,
+    }
+    _record('pwsh', 'live_shell', OwnedProcessResult(0, 'completed', True, True, False, 2),
+            ready={'stage': 'shell_ready'}, outcome=[outcome])
+    row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
+    assert row['result'] == 'bounded_failure'
 
 
 def test_windows_wrapper_real_receipt_producer_matches_private_lane(tmp_path, monkeypatch):

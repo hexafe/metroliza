@@ -6,22 +6,45 @@ replaced in its disposable copy before execution; all machine-changing commands
 are trapped. The production diagnostic validation/completion flow is unchanged.
 """
 
+from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
+import tempfile
+import time
 
 import pytest
 
 from scripts import ocr_diagnostic_contract as contract
+from tests import windows_ocr_process as process
 
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32", reason="Requires native Windows PowerShell"
 )
 CANARY = "SYNTHETIC_PRIVATE_1002"
+_INVOKE_REASONS = {
+    "completed", "timeout", "cancelled", "containment_unavailable", "startup_failed",
+    "assignment_failed", "resume_failed", "not_completed", "output_limit",
+}
+
+
+@dataclass(frozen=True)
+class InvokeResult:
+    """Bounded public result from one owned PowerShell process tree."""
+
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+    reason: process.Reason
+    process_returncode: int | None
+    cleanup_complete: bool
+    tree_empty: bool
+    output_limited: bool
+    elapsed_s: float
 
 
 @pytest.fixture(params=["powershell", "pwsh"])
@@ -72,6 +95,10 @@ args = sys.argv[1:]
         source += "os.write(2, b'x'*100000)\n"
     elif mode == "timeout":
         source += "time.sleep(30)\n"
+    elif mode == "malformed":
+        source += f"os.write(1, b'{{invalid:' + {CANARY.encode()!r}); raise SystemExit(0)\n"
+    elif mode == "partial":
+        source += f"os.write(1, b'{{\"private\":' + {CANARY.encode()!r}); raise SystemExit(0)\n"
     source += f"value = {contract.payload(checks)!r}\n"
     source += """for flag, check_id in [('--pdf','pdf'),('--db-file','database')]:
  if flag in args:
@@ -85,26 +112,161 @@ else: print(text)
     (root / "scripts/windows_ocr_runtime_diagnostics.py").write_text(source)
 
 
-def invoke(shell, root, script, *args, timeout_s=45):
+def _read_captures(stdout_file, stderr_file):
+    """Return both bounded streams, or one closed failure reason and no bytes."""
+    try:
+        sizes = (
+            os.fstat(stdout_file.fileno()).st_size,
+            os.fstat(stderr_file.fileno()).st_size,
+        )
+        if any(size > contract.MAX_OUTPUT for size in sizes):
+            return "output_limit", b"", b""
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read(contract.MAX_OUTPUT + 1)
+        stderr = stderr_file.read(contract.MAX_OUTPUT + 1)
+        if len(stdout) > contract.MAX_OUTPUT or len(stderr) > contract.MAX_OUTPUT:
+            return "output_limit", b"", b""
+        return None, stdout, stderr
+    except (OSError, ValueError):
+        return "not_completed", b"", b""
+
+
+def invoke(shell, root, script, *args, timeout_s=45, cancel_event=None):
+    started = time.monotonic()
+    if (
+        isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, (int, float))
+        or not math.isfinite(timeout_s)
+        or timeout_s <= 0
+    ):
+        return InvokeResult(
+            1, b"", b"startup_failed", "startup_failed", None, True, True, False, 0.0
+        )
+
+    deadline = started + timeout_s
+    cleanup_s = min(5.0, timeout_s / 3.0)
+    read_margin_s = min(0.25, timeout_s / 20.0)
     env = os.environ.copy()
     # Select the CI interpreter, not another user's venv or launcher.
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
-    return subprocess.run(
-        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / script), *args],
-        capture_output=True,
-        env=env,
-        timeout=timeout_s,
+    command = [
+        shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / script), *args,
+    ]
+    owned = None
+    reason: process.Reason = "startup_failed"
+    stdout = stderr = b""
+    output_limited = False
+    private_cleanup_complete = False
+    try:
+        with tempfile.TemporaryDirectory(prefix="metroliza-invoke-") as private:
+            capture_root = Path(private)
+            with (
+                tempfile.TemporaryFile(mode="w+b", dir=capture_root) as stdout_file,
+                tempfile.TemporaryFile(mode="w+b", dir=capture_root) as stderr_file,
+            ):
+                execution_s = deadline - time.monotonic() - cleanup_s - read_margin_s
+                if execution_s <= 0:
+                    reason = "timeout"
+                else:
+                    owned = process.run_owned(
+                        command,
+                        cwd=root,
+                        env=env,
+                        timeout_s=execution_s,
+                        cleanup_timeout_s=cleanup_s,
+                        cancel_event=cancel_event,
+                        stdout_target=stdout_file,
+                        stderr_target=stderr_file,
+                        output_limit=contract.MAX_OUTPUT,
+                    )
+                    reason = (
+                        owned.reason
+                        if type(owned.reason) is str and owned.reason in _INVOKE_REASONS
+                        else "not_completed"
+                    )
+                    output_limited = owned.output_limited is True
+                    if output_limited:
+                        reason = "output_limit"
+                    publishable = (
+                        reason == "completed"
+                        and owned.cleanup_complete is True
+                        and owned.tree_empty is True
+                        and not output_limited
+                        and type(owned.returncode) is int
+                    )
+                    if publishable:
+                        capture_reason, stdout, stderr = _read_captures(
+                            stdout_file, stderr_file
+                        )
+                        if capture_reason is not None:
+                            reason = capture_reason
+                            output_limited = capture_reason == "output_limit"
+                    elif reason == "completed":
+                        reason = "not_completed"
+        private_cleanup_complete = True
+    except (OSError, ValueError):
+        reason = "startup_failed" if owned is None else "not_completed"
+
+    finished = time.monotonic()
+    if finished > deadline:
+        reason = "timeout"
+    process_returncode = owned.returncode if owned is not None else None
+    cleanup_complete = (
+        (owned.cleanup_complete is True if owned is not None else True)
+        and private_cleanup_complete
+    )
+    tree_empty = owned.tree_empty is True if owned is not None else True
+    publishable = (
+        reason == "completed"
+        and cleanup_complete
+        and tree_empty
+        and type(process_returncode) is int
+    )
+    if not publishable:
+        stdout, stderr = b"", reason.encode("ascii")
+    returncode = (
+        process_returncode
+        if publishable or (type(process_returncode) is int and process_returncode != 0)
+        else 1
+    )
+    return InvokeResult(
+        returncode,
+        stdout,
+        stderr,
+        reason,
+        process_returncode,
+        cleanup_complete,
+        tree_empty,
+        output_limited or reason == "output_limit",
+        max(0.0, finished - started),
     )
 
 
+def assert_owned_completion(result):
+    assert result.reason == "completed"
+    assert result.cleanup_complete and result.tree_empty
+    assert not result.output_limited
+    assert result.process_returncode == result.returncode
+    assert len(result.stdout) <= contract.MAX_OUTPUT
+    assert len(result.stderr) <= contract.MAX_OUTPUT
+
+
 def public_text(result):
+    assert_owned_completion(result)
     text = (result.stdout + result.stderr).decode("utf-8", errors="replace")
     assert CANARY not in text
     assert "TEST_FORBIDDEN" not in text
     return text
 
 
-@pytest.mark.parametrize("mode,expected", [("pass", 0), ("fail", 1), ("noise", 1), ("flood", 1)])
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        ("pass", 0), ("fail", 1), ("noise", 1), ("flood", 1),
+        ("malformed", 1), ("partial", 1),
+    ],
+)
 def test_native_wrapper_output_and_exit(powershell, fixture_repo, mode, expected):
     write_child(fixture_repo, mode)
     result = invoke(
@@ -163,6 +325,7 @@ def test_native_wrapper_timeout_and_start_failure(powershell, fixture_repo):
 def test_native_required_setup_propagation(powershell, fixture_repo, mode, flags, success):
     write_child(fixture_repo, mode)
     result = invoke(powershell, fixture_repo, "setup_windows_runtime.ps1", *flags)
+    assert_owned_completion(result)
     # Generic setup activation guidance is outside the diagnostic seam and may
     # include its disposable venv path. Only the actual diagnostic flow is public-safe.
     text = (result.stdout + result.stderr).decode("utf-8", errors="replace")

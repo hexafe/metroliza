@@ -1,9 +1,10 @@
 """Bounded Windows process-tree containment for native wrapper tests.
 
 The guarded command is trusted test code, but its output is not.  This helper
-therefore discards all three standard streams and returns only closed status
-values.  Tests that need phase evidence must write their own fixed-schema,
-synthetic state file in their disposable fixture.
+discards stdin and defaults output to DEVNULL. Callers may supply distinct
+empty regular files for private capture; this helper only polls their sizes
+and returns closed status values, never their bytes. Phase evidence uses
+fixed-schema synthetic state files in a disposable fixture.
 """
 
 from __future__ import annotations

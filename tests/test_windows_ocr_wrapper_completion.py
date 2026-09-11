@@ -27,7 +27,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PY_FIXTURE = Path(__file__).with_name("windows_ocr_fixture.py")
 PS_FIXTURE = Path(__file__).parent / "fixtures/windows_wrapper_pipe_fixture.ps1"
 _NATIVE = pytest.mark.skipif(sys.platform != "win32", reason="Requires native Windows")
-_BASELINE = os.environ.get("METROLIZA_WINDOWS_WRAPPER_BASELINE") == "1"
 _RECEIPTS = "METROLIZA_WRAPPER_RECEIPTS"
 _REASONS = {
     "completed", "timeout", "cancelled", "containment_unavailable", "startup_failed",
@@ -198,7 +197,9 @@ def _write_config(
     scenario: str,
     state: Path,
     events: dict[str, str],
-    expected_type: int,
+    expected_types: tuple[int, ...],
+    *,
+    cancel: bool = False,
 ) -> Path:
     config = root / "fixture-config.json"
     config.write_text(
@@ -211,7 +212,8 @@ def _write_config(
             "stdout": str(root / "fixture.stdout"),
             "stderr": str(root / "fixture.stderr"),
             "scenario": scenario,
-            "expected_type": expected_type,
+            "expected_types": list(expected_types),
+            "cancel": cancel,
             "parent_pid": 0,
         }, separators=(",", ":")),
         encoding="utf-8",
@@ -251,8 +253,27 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=()):
         "timeout_returned": "timeout_returned",
         "invoke_failed": "failed",
     }.get(final.get("stage"), "unobserved")
+    raw_invoke_reason = final.get("reason")
+    invoke_reason = (
+        raw_invoke_reason
+        if type(raw_invoke_reason) is str and raw_invoke_reason in _REASONS
+        else "unobserved"
+    )
+    cleanup_values = (final.get("cleanup_complete"), final.get("tree_empty"))
+    if all(type(value) is bool for value in cleanup_values):
+        invoke_cleanup = (
+            "complete" if all(value is True for value in cleanup_values) else "incomplete"
+        )
+    else:
+        invoke_cleanup = "unobserved"
     raw_code = final.get("returncode")
     invoke_exit_code = raw_code if type(raw_code) is int and -(2**31) <= raw_code < 2**32 else None
+    raw_process_code = final.get("process_returncode")
+    invoke_process_exit_code = (
+        raw_process_code
+        if type(raw_process_code) is int and -(2**31) <= raw_process_code < 2**32
+        else None
+    )
     outer_exit_code = result.returncode if type(result.returncode) is int else None
     if scenario == "preflight":
         fixture_ready = all(ready.get(key) is True for key in (
@@ -264,7 +285,15 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=()):
     completed = (
         result.reason == "completed" and outer_exit_code == 0
         and result.cleanup_complete and result.tree_empty and fixture_ready
-        and (scenario == "preflight" or (invoke_state == "returned" and invoke_exit_code == 0))
+        and (
+            scenario == "preflight"
+            or (
+                invoke_state == "returned" and invoke_exit_code == 0
+                and invoke_process_exit_code == 0
+                and invoke_reason == "completed" and invoke_cleanup == "complete"
+                and final.get("output_limited") is False
+            )
+        )
     )
     receipt = {
         "schema_version": 1,
@@ -281,9 +310,12 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=()):
         "shell_state": shell_state,
         "fixture_stage": fixture_stage,
         "invoke_state": invoke_state,
+        "invoke_reason": invoke_reason,
+        "invoke_cleanup": invoke_cleanup,
         "cleanup_complete": result.cleanup_complete,
         "outer_exit_code": outer_exit_code,
         "invoke_exit_code": invoke_exit_code,
+        "invoke_process_exit_code": invoke_process_exit_code,
     }
     target = Path(directory) / "windows-ocr-wrapper-receipts.jsonl"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -291,7 +323,6 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=()):
         handle.write(json.dumps(receipt, separators=(",", ":")) + "\n")
 
 
-@pytest.mark.skipif(not _BASELINE, reason="Set METROLIZA_WINDOWS_WRAPPER_BASELINE=1")
 @_NATIVE
 def test_00_native_containment_preflight(tmp_path):
     state = tmp_path / "preflight.json"
@@ -311,12 +342,19 @@ def test_00_native_containment_preflight(tmp_path):
     assert result.cleanup_complete and result.tree_empty
 
 
-def _run_scenario(shell: str, root: Path, scenario: str, *, expected_type: int):
+def _run_scenario(
+    shell: str,
+    root: Path,
+    scenario: str,
+    *,
+    expected_types: tuple[int, ...],
+    cancel: bool = False,
+):
     state = root / "state.jsonl"
     probe_path = root / "timeout-probe.jsonl"
     outcome_path = root / "invoke-outcome.jsonl"
     events = {name: _event() for name in ("ready", "release", "exited", "hold")}
-    config = _write_config(root, scenario, state, events, expected_type)
+    config = _write_config(root, scenario, state, events, expected_types, cancel=cancel)
     stop, observed = threading.Event(), {}
 
     def observer():
@@ -349,55 +387,73 @@ def _run_scenario(shell: str, root: Path, scenario: str, *, expected_type: int):
     return result, records, probe, outcome
 
 
-@pytest.mark.skipif(not _BASELINE, reason="Set METROLIZA_WINDOWS_WRAPPER_BASELINE=1")
 @pytest.mark.parametrize("scenario", ["no_inherited_pipe", "live_shell", "retained_pipes"])
 @_NATIVE
-def test_opt_in_original_invoke_pipe_discriminator(powershell, tmp_path, scenario):
-    expected_type = 3 if scenario == "retained_pipes" else 1
+def test_native_invoke_completion_matrix(powershell, tmp_path, scenario):
+    expected_types = (1, 3) if scenario == "retained_pipes" else (1,)
     result, records, probe, outcome = _run_scenario(
-        powershell, tmp_path, scenario, expected_type=expected_type
+        powershell, tmp_path, scenario, expected_types=expected_types
     )
     ready = records[0]
-    assert probe[0] == {
-        "schema_version": 1, "stage": "communicate_entered", "ready_seen": True,
-    }
+    assert probe == []
     if scenario == "no_inherited_pipe":
         assert ready == {
             "schema_version": 1, "stage": "child_ready", "stdout_pipe": False,
             "stderr_pipe": False, "stdout_type": 1, "stderr_type": 1, "parent_live": True,
         }
-        assert records[1]["stage"] == "parent_exited"
-        assert records[1]["release_observed"] and records[1]["parent_exited"]
-        assert len(probe) == 1
-        assert outcome == [{"schema_version": 1, "stage": "invoke_returned", "returncode": 0}]
-        assert result.reason == "completed" and result.returncode == 0
+        expected_type = 1
     elif scenario == "live_shell":
         assert records == [{"schema_version": 1, "stage": "shell_ready"}]
-        assert probe[1] == {
-            "schema_version": 1, "stage": "timeout_before_kill", "shell_state": "live",
-            "exited_seen": False,
-        }
-        assert outcome == [{"schema_version": 1, "stage": "timeout_returned"}]
+        assert len(outcome) == 1
+        assert outcome[0]["schema_version"] == 1
+        assert outcome[0]["stage"] == "invoke_returned"
+        assert outcome[0]["returncode"] != 0
+        assert outcome[0]["reason"] == "timeout"
+        assert type(outcome[0]["process_returncode"]) is int
+        assert outcome[0]["cleanup_complete"] and outcome[0]["tree_empty"]
+        assert not outcome[0]["output_limited"]
+        assert not outcome[0]["cancel_ready_seen"]
+        assert 0 <= outcome[0]["elapsed_ms"] <= 15500
         assert result.reason == "completed" and result.returncode == 0
+        return
     else:
-        assert ready["stdout_pipe"] is True and ready["stderr_pipe"] is True
-        assert ready["stdout_type"] == 3 and ready["stderr_type"] == 3
-        assert records[1]["stage"] == "parent_exited"
-        assert probe[1] == {
-            "schema_version": 1, "stage": "timeout_before_kill", "shell_state": "exited",
-            "exited_seen": True,
+        assert ready == {
+            "schema_version": 1, "stage": "child_ready", "stdout_pipe": False,
+            "stderr_pipe": False, "stdout_type": 1, "stderr_type": 1, "parent_live": True,
         }
-        assert outcome == [] and result.reason == "timeout"
+        expected_type = 1
+    assert 1 <= len(records) <= 2
+    if len(records) == 2:
+        assert records[1] == {
+            "schema_version": 1, "stage": "parent_exited", "release_observed": True,
+            "parent_exited": True, "stdout_pipe": expected_type == 3,
+            "stderr_pipe": expected_type == 3, "stdout_type": expected_type,
+            "stderr_type": expected_type,
+        }
+    assert len(outcome) == 1
+    assert outcome[0]["schema_version"] == 1
+    assert outcome[0]["stage"] == "invoke_returned"
+    assert outcome[0]["returncode"] == outcome[0]["process_returncode"] == 0
+    assert outcome[0]["reason"] == "completed"
+    assert outcome[0]["cleanup_complete"] and outcome[0]["tree_empty"]
+    assert not outcome[0]["output_limited"]
+    assert not outcome[0]["cancel_ready_seen"]
+    assert 0 <= outcome[0]["elapsed_ms"] <= 15000
+    assert result.reason == "completed" and result.returncode == 0
 
 
 @_NATIVE
-def test_invoke_retained_descendant_is_bounded(powershell, tmp_path):
+def test_native_invoke_cancellation(powershell, tmp_path):
     result, records, probe, outcome = _run_scenario(
-        powershell, tmp_path, "retained_pipes", expected_type=1
+        powershell, tmp_path, "live_shell", expected_types=(1,), cancel=True
     )
-    ready = records[0]
-    assert ready["stdout_pipe"] is False and ready["stderr_pipe"] is False
-    assert ready["stdout_type"] == 1 and ready["stderr_type"] == 1
-    assert probe == []
-    assert outcome == [{"schema_version": 1, "stage": "invoke_returned", "returncode": 0}]
+    assert records == [{"schema_version": 1, "stage": "shell_ready"}]
+    assert probe == [] and len(outcome) == 1
+    final = outcome[0]
+    assert final["schema_version"] == 1 and final["stage"] == "invoke_returned"
+    assert final["returncode"] != 0 and final["reason"] == "cancelled"
+    assert type(final["process_returncode"]) is int
+    assert final["cleanup_complete"] and final["tree_empty"]
+    assert final["cancel_ready_seen"] and not final["output_limited"]
+    assert 0 <= final["elapsed_ms"] <= 15000
     assert result.reason == "completed" and result.returncode == 0

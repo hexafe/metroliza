@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -125,11 +126,18 @@ def _child(config_path: Path) -> int:
         stdout_type, stderr_type = file_types
         stdout_pipe, stderr_pipe = stdout_type == 3, stderr_type == 3
         parent_live = bool(parent) and kernel.WaitForSingleObject(parent, 0) == WAIT_TIMEOUT
-        expected_type = config["expected_type"]
-        if expected_type not in {1, 3}:
-            expected_type = 0
-        ready = all(handles) and parent_live and (stdout_type, stderr_type) == (
-            expected_type, expected_type
+        expected_types = config["expected_types"]
+        if (
+            type(expected_types) is not list
+            or not expected_types
+            or any(type(value) is not int or value not in {1, 3} for value in expected_types)
+        ):
+            expected_types = []
+        ready = (
+            all(handles)
+            and parent_live
+            and stdout_type == stderr_type
+            and stdout_type in expected_types
         )
         _append(
             config["state"],
@@ -172,12 +180,71 @@ def _child(config_path: Path) -> int:
             kernel.CloseHandle(parent)
 
 
+def _cancel_after_ready(kernel, ready, stop, cancel, state) -> None:
+    while not stop.is_set():
+        wait = kernel.WaitForSingleObject(ready, 50)
+        if wait == WAIT_OBJECT_0:
+            state["ready_seen"] = True
+            cancel.set()
+            return
+        if wait != WAIT_TIMEOUT:
+            return
+
+
+def _closed_outcome(result, cancel_ready_seen: bool) -> dict:
+    allowed_reasons = {
+        "completed", "timeout", "cancelled", "containment_unavailable",
+        "startup_failed", "assignment_failed", "resume_failed",
+        "not_completed", "output_limit",
+    }
+    raw_reason = getattr(result, "reason", "not_completed")
+    reason = (
+        raw_reason
+        if type(raw_reason) is str and raw_reason in allowed_reasons
+        else "not_completed"
+    )
+    raw_returncode = getattr(result, "returncode", None)
+    returncode = raw_returncode if type(raw_returncode) is int else 1
+    raw_process_code = getattr(result, "process_returncode", None)
+    process_returncode = raw_process_code if type(raw_process_code) is int else None
+    raw_elapsed = getattr(result, "elapsed_s", 0.0)
+    elapsed_ms = (
+        max(0, min(60000, round(raw_elapsed * 1000)))
+        if type(raw_elapsed) in {int, float} and math.isfinite(raw_elapsed)
+        else 0
+    )
+    return {
+        "schema_version": 1,
+        "stage": "invoke_returned",
+        "returncode": returncode,
+        "reason": reason,
+        "process_returncode": process_returncode,
+        "cleanup_complete": getattr(result, "cleanup_complete", False) is True,
+        "tree_empty": getattr(result, "tree_empty", False) is True,
+        "output_limited": getattr(result, "output_limited", False) is True,
+        "elapsed_ms": elapsed_ms,
+        "cancel_ready_seen": cancel_ready_seen,
+    }
+
+
+def _create_events(kernel, config) -> dict | None:
+    events = {}
+    for name in ("ready", "release", "exited", "hold"):
+        handle = kernel.CreateEventW(None, True, False, config[name])
+        if not handle:
+            for created in events.values():
+                kernel.CloseHandle(created)
+            return None
+        events[name] = handle
+    return events
+
+
 def _driver(
     repo: Path,
     shell: str,
     script: Path,
     config_path: Path,
-    probe: Path,
+    _probe: Path,
     outcome: Path,
 ) -> int:
     sys.path.insert(0, str(repo))
@@ -185,65 +252,34 @@ def _driver(
 
     config = json.loads(config_path.read_text(encoding="utf-8"))
     kernel = _kernel()
-    events = {}
-    for name in ("ready", "release", "exited", "hold"):
-        handle = kernel.CreateEventW(None, True, False, config[name])
-        if not handle:
-            for created in events.values():
-                kernel.CloseHandle(created)
-            return 25
-        events[name] = handle
+    events = _create_events(kernel, config)
+    if events is None:
+        return 25
+
+    cancel = threading.Event()
+    cancel_stop = threading.Event()
+    cancel_state = {"ready_seen": False}
+    cancel_watcher = None
+    if config.get("cancel") is True:
+        cancel_watcher = threading.Thread(
+            target=_cancel_after_ready,
+            args=(kernel, events["ready"], cancel_stop, cancel, cancel_state),
+            daemon=True,
+        )
+        cancel_watcher.start()
 
     try:
-        original_communicate = harness.subprocess.Popen._communicate
-        first_timed_communicate = True
-
-        def observed(process, input_data, endtime, original_timeout):
-            nonlocal first_timed_communicate
-            if first_timed_communicate and original_timeout is not None:
-                first_timed_communicate = False
-                ready_seen = kernel.WaitForSingleObject(events["ready"], 10000) == WAIT_OBJECT_0
-                _append(
-                    probe,
-                    {"schema_version": 1, "stage": "communicate_entered", "ready_seen": ready_seen},
-                )
-            try:
-                return original_communicate(process, input_data, endtime, original_timeout)
-            except subprocess.TimeoutExpired:
-                shell_wait = kernel.WaitForSingleObject(int(process._handle), 0)
-                shell_state = {WAIT_OBJECT_0: "exited", WAIT_TIMEOUT: "live"}.get(
-                    shell_wait, "wait_failed"
-                )
-                exited_seen = kernel.WaitForSingleObject(events["exited"], 0) == WAIT_OBJECT_0
-                _append(
-                    probe,
-                    {
-                        "schema_version": 1,
-                        "stage": "timeout_before_kill",
-                        "shell_state": shell_state,
-                        "exited_seen": exited_seen,
-                    },
-                )
-                raise
-
-        harness.subprocess.Popen._communicate = observed
         try:
+            invoke_options = {"timeout_s": 15}
+            if cancel_watcher is not None:
+                invoke_options["cancel_event"] = cancel
             result = harness.invoke(
-                shell,
-                script.parent,
-                script.name,
-                "-ConfigPath",
-                str(config_path),
-                timeout_s=15,
+                shell, script.parent, script.name, "-ConfigPath", str(config_path),
+                **invoke_options,
             )
-            _append(
-                outcome,
-                {
-                    "schema_version": 1,
-                    "stage": "invoke_returned",
-                    "returncode": result.returncode,
-                },
-            )
+            if cancel_watcher is not None:
+                cancel_watcher.join(timeout=1)
+            _append(outcome, _closed_outcome(result, cancel_state["ready_seen"]))
             return 0
         except subprocess.TimeoutExpired:
             _append(outcome, {"schema_version": 1, "stage": "timeout_returned"})
@@ -251,9 +287,10 @@ def _driver(
         except (OSError, subprocess.SubprocessError):
             _append(outcome, {"schema_version": 1, "stage": "invoke_failed"})
             return 24
-        finally:
-            harness.subprocess.Popen._communicate = original_communicate
     finally:
+        cancel_stop.set()
+        if cancel_watcher is not None:
+            cancel_watcher.join(timeout=1)
         for event in events.values():
             kernel.CloseHandle(event)
 

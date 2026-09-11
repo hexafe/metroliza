@@ -78,10 +78,14 @@ jobs:
                   'shell_state': {'exited', 'live', 'wait_failed', 'unobserved'},
                   'fixture_stage': {'child_ready', 'shell_ready', 'fixture_mismatch', 'unobserved'},
                   'invoke_state': {'returned', 'timeout_returned', 'failed', 'unobserved'},
+                  'invoke_reason': {'completed', 'timeout', 'cancelled', 'containment_unavailable',
+                                    'startup_failed', 'assignment_failed', 'resume_failed',
+                                    'not_completed', 'output_limit', 'unobserved'},
+                  'invoke_cleanup': {'complete', 'incomplete', 'unobserved'},
               }
               bools = {'shell_exited_before_timeout', 'stdout_pipe', 'stderr_pipe',
                        'cleanup_complete'}
-              codes = {'outer_exit_code', 'invoke_exit_code'}
+              codes = {'outer_exit_code', 'invoke_exit_code', 'invoke_process_exit_code'}
               keys = set(domains) | bools | codes | {'schema_version', 'elapsed_ms'}
               result = []
               for line in lines:
@@ -110,14 +114,16 @@ jobs:
                   root = Path(private)
                   report = root / 'results.xml'
                   env = os.environ.copy()
-                  env['METROLIZA_WINDOWS_WRAPPER_BASELINE'] = '1'
                   env['METROLIZA_WRAPPER_RECEIPTS'] = str(root)
                   command = [sys.executable, '-m', 'pytest', '-q', '-x', '--tb=no',
                              '--show-capture=no', '-p', 'no:cacheprovider',
                              '--basetemp=' + str(root / 'fixtures'),
                              '--junitxml=' + str(report),
-                             'tests/test_windows_ocr_wrapper_completion.py::test_00_native_containment_preflight',
-                             'tests/test_windows_ocr_wrapper_completion.py::test_opt_in_original_invoke_pipe_discriminator']
+                             'tests/test_windows_ocr_wrapper_completion.py',
+                             'tests/test_windows_ocr_powershell.py',
+                             'tests/test_windows_ocr_runtime_diagnostics.py',
+                             'tests/test_header_ocr_diagnostics_script.py',
+                             'tests/test_windows_ocr_invoke.py']
                   try:
                       completed = subprocess.run(command, env=env, timeout=1500,
                                                  stdout=subprocess.DEVNULL,
