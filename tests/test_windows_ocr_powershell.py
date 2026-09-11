@@ -85,7 +85,7 @@ else: print(text)
     (root / "scripts/windows_ocr_runtime_diagnostics.py").write_text(source)
 
 
-def invoke(shell, root, script, *args):
+def invoke(shell, root, script, *args, timeout_s=45):
     env = os.environ.copy()
     # Select the CI interpreter, not another user's venv or launcher.
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
@@ -93,7 +93,7 @@ def invoke(shell, root, script, *args):
         [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / script), *args],
         capture_output=True,
         env=env,
-        timeout=45,
+        timeout=timeout_s,
     )
 
 
