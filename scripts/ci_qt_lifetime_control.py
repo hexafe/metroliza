@@ -13,35 +13,12 @@ import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 LIMIT = 65536
-PHASES = {
-    "bootstrap",
-    "preflight",
-    "a_loaded",
-    "b_visible",
-    "a_closed",
-    "collected",
-    "workload_complete",
-    "complete",
-    "failure_cleaned",
-    "cleanup_incomplete",
-}
-QT_MODES = {"boundary_close_only", "boundary_owned_cleanup"}
-MODES = {"exit0", "exit23", "output", "cancel", "timeout", "preflight"} | QT_MODES
-LIFETIME_KEYS = {
-    "parent_python_owned",
-    "parent_alive",
-    "progress_alive",
-    "parent_cpp_alive",
-    "progress_cpp_alive",
-    "survivors_disposed",
-    "gc_restored",
-    "parent_cpp_alive_at_next_load",
-}
-LIVENESS_KEYS = {"parent_alive", "progress_alive", "parent_cpp_alive", "progress_cpp_alive"}
+PHASES = {"bootstrap", "complete"}
+MODES = {"exit0", "exit23", "output", "cancel", "timeout", "functional"}
+EXPECTED_COUNTS = {"collected": 16, "passed": 16, "failed": 0, "skipped": 0, "errors": 0}
 _CANCELLED = False
 
 
@@ -112,6 +89,7 @@ def _run(mode, root):
         "TMPDIR": str(folder),
         "LANG": "C.UTF-8",
         "QT_QPA_PLATFORM": "offscreen",
+        "METROLIZA_EXPECT_QT_PLATFORM": "offscreen",
         "PYTHONPATH": "src:.",
         "PYTHONUNBUFFERED": "1",
         "PYTHONNOUSERSITE": "1",
@@ -179,47 +157,16 @@ def _run(mode, root):
         pass
     # Only closed primitives leave the private directory.
     phase = state.get("phase") if state.get("phase") in PHASES else "bootstrap"
-    observations = state.get("observations", [])
-    if not isinstance(observations, list):
-        observations = []
-    observations = [
-        item
-        for item in observations[:4]
-        if item
-        in [
-            "parent:gui",
-            "parent:worker",
-            "parent:other",
-            "progress:gui",
-            "progress:worker",
-            "progress:other",
-            "control:gui",
-        ]
-    ]
-    during = state.get("during_observations", [])
-    during = (
-        [item for item in during[:4] if item in observations] if isinstance(during, list) else []
-    )
-    boundaries = state.get("boundaries", {})
-    boundaries = (
-        {
-            key: [item for item in value[:4] if item in observations]
-            for key, value in boundaries.items()
-            if key in {"teardown", "next_load", "workload"} and isinstance(value, list)
-        }
-        if isinstance(boundaries, dict)
-        else {}
-    )
     no_core = state.get("no_core") is True
     credentials_absent = state.get("credentials_absent") is True
-    lifetime = state.get("lifetime", {})
-    lifetime = (
+    counts = state.get("test_counts", {})
+    counts = (
         {
             key: value
-            for key, value in lifetime.items()
-            if key in LIFETIME_KEYS and type(value) is bool
+            for key, value in counts.items()
+            if key in EXPECTED_COUNTS and type(value) is int and 0 <= value <= 1000
         }
-        if isinstance(lifetime, dict)
+        if isinstance(counts, dict)
         else {}
     )
     receipt = dict(
@@ -231,12 +178,9 @@ def _run(mode, root):
         tree_empty=empty,
         no_core_verified=no_core,
         credentials_absent=credentials_absent,
-        observations=observations,
-        during_observations=during,
-        boundaries=boundaries,
+        test_counts=counts,
         elapsed_s=round(time.monotonic() - began),
         output_sizes=sizes,
-        lifetime=lifetime,
     )
     try:
         shutil.rmtree(folder)
@@ -256,14 +200,7 @@ def _run(mode, root):
         and credentials_absent
         else 70
     )
-    if mode in QT_MODES and (
-        phase != "complete"
-        or set(lifetime) != LIFETIME_KEYS
-        or not all(
-            lifetime.get(key) is True
-            for key in ("parent_python_owned", "survivors_disposed", "gc_restored")
-        )
-    ):
+    if mode == "functional" and (phase != "complete" or counts != EXPECTED_COUNTS):
         status = 70
     return status, receipt
 
@@ -295,213 +232,31 @@ def _child(mode, folder, parent_pid):
     if mode in {"timeout", "cancel"}:
         time.sleep(30)
         return 0
-    import gc
-    import weakref
-    from PyQt6 import sip
-    from PyQt6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QTimer, Qt, pyqtSlot
-    from PyQt6.QtWidgets import QApplication
+    import pytest
 
-    app = QApplication([])
-    app.setQuitOnLastWindowClosed(False)
-    gui_ident = threading.get_ident()
-    worker_ident = [None]
+    class CountReports:
+        def __init__(self):
+            self.counts = {key: 0 for key in EXPECTED_COUNTS}
 
-    class DestructionRecorder(QObject):
-        def __init__(self, label):
-            super().__init__()
-            self.label = label
+        def pytest_collection_finish(self, session):
+            self.counts["collected"] = len(session.items)
 
-        @pyqtSlot()
-        def destroyed_without_argument(self):
-            ident = threading.get_ident()
-            role = (
-                "gui" if ident == gui_ident else "worker" if ident == worker_ident[0] else "other"
-            )
-            state["observations"].append(self.label + ":" + role)
+        def pytest_runtest_logreport(self, report):
+            if report.skipped:
+                self.counts["skipped"] += 1
+            elif report.when == "call":
+                self.counts["passed" if report.passed else "failed"] += 1
+            elif report.failed:
+                self.counts["errors"] += 1
 
-    if mode == "preflight":
-        control = QObject()
-        recorder = DestructionRecorder("control")
-        control.destroyed.connect(
-            recorder.destroyed_without_argument, Qt.ConnectionType.DirectConnection
-        )
-        control.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        assert sip.isdeleted(control), "preflight_deletion_failed"
-        assert state["observations"] == ["control:gui"], "preflight_recorder_failed"
-        record("preflight")
-        return 0
-
-    gc_was_enabled = gc.isenabled()
-    gc.disable()
-    state["lifetime"] = {}
-    state["boundaries"] = {}
-    from metroliza.ui.industrial_analytics_dialog import (
-        IndustrialAnalyticsDialog,
-        SOURCE_TABULAR_FILE,
+    reports = CountReports()
+    result = pytest.main(
+        ["-q", "-s", "--tb=no", "--disable-warnings", "tests/test_industrial_qt_lifecycle.py"],
+        plugins=[reports],
     )
-    from metroliza.industrial import industrial_workers
-    from tests.test_industrial_analytics_dialog import _dispose_dialog
-
-    original_loader = industrial_workers.load_tabular_analytics_files
-    release = threading.Event()
-    collected = threading.Event()
-    active = [False]
-
-    def gated_loader(*args, **kwargs):
-        worker_ident[0] = threading.get_ident()
-        if not release.wait(15):
-            raise RuntimeError("barrier_timeout")
-        if active[0]:
-            gc.collect()
-        collected.set()
-        return original_loader(*args, **kwargs)
-
-    industrial_workers.load_tabular_analytics_files = gated_loader
-    source = folder / "synthetic.csv"
-    source.write_text("TraceCode,Batch,Length mm\nTC-001,B1,10.0\nTC-002,B1,10.2\nTC-003,B2,10.4\n")
-
-    def wait_until(predicate):
-        loop = QEventLoop()
-        poller = QTimer()
-        timeout = QTimer()
-        timeout.setSingleShot(True)
-        poller.timeout.connect(lambda: loop.quit() if predicate() else None)
-        timeout.timeout.connect(loop.quit)
-        poller.start(10)
-        timeout.start(10000)
-        if not predicate():
-            loop.exec()
-        poller.stop()
-        timeout.stop()
-        assert predicate(), "gui_barrier_timeout"
-
-    def start_load():
-        dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
-        dialog.input_file = str(source)
-        dialog.load_metrics()
-        wait_until(lambda: dialog.loading_dialog.isVisible())
-        return dialog
-
-    a = b = None
-    parent_ref = progress_ref = None
-    recorders = []
-    workload_succeeded = False
-    try:
-        a = start_load()
-        assert threading.get_ident() == gui_ident
-        state["lifetime"]["parent_python_owned"] = sip.ispyowned(a)
-        assert state["lifetime"]["parent_python_owned"], "unexpected_parent_ownership"
-        # Independent native slots accept zero arguments and never retain senders.
-        for obj, label in ((a, "parent"), (a.loading_dialog, "progress")):
-            recorder = DestructionRecorder(label)
-            obj.destroyed.connect(
-                recorder.destroyed_without_argument, Qt.ConnectionType.DirectConnection
-            )
-            recorders.append(recorder)
-        obj = None
-        parent_ref = weakref.ref(a)
-        progress_ref = weakref.ref(a.loading_dialog)
-        release.set()
-        wait_until(lambda: a.tabular_load_thread is None)
-        assert a.tabular_load_result.row_count == 3
-        record("a_loaded")
-        release.clear()
-        collected.clear()
-        active[0] = True
-        if mode == "boundary_owned_cleanup":
-            _dispose_dialog(a)
-            assert sip.isdeleted(a), "owned_disposal_failed"
-        else:
-            assert a.close(), "close_failed"
-        state["boundaries"]["teardown"] = list(state["observations"])
-        a = None
-        record("a_closed")
-        b = start_load()
-        state["boundaries"]["next_load"] = list(state["observations"])
-        previous_parent = parent_ref()
-        state["lifetime"]["parent_cpp_alive_at_next_load"] = (
-            previous_parent is not None and not sip.isdeleted(previous_parent)
-        )
-        previous_parent = None
-        record("b_visible")
-        release.set()
-        # Scheduling control only: let the gated worker collect before GUI allocations.
-        assert collected.wait(10), "collection_timeout"
-        assert threading.get_ident() == gui_ident
-        # Freeze the discriminator BEFORE generic final cleanup can emit signals.
-        state["during_observations"] = list(state["observations"])
-        for label, reference in (("parent", parent_ref), ("progress", progress_ref)):
-            watched = reference()
-            state["lifetime"][label + "_alive"] = watched is not None
-            state["lifetime"][label + "_cpp_alive"] = watched is not None and not sip.isdeleted(
-                watched
-            )
-            watched = None
-        record("collected")
-        wait_until(lambda: b.tabular_load_thread is None)
-        assert b.tabular_load_result.row_count == 3
-        state["boundaries"]["workload"] = list(state["observations"])
-        record("workload_complete")
-        workload_succeeded = True
-    finally:
-        release.set()
-        industrial_workers.load_tabular_analytics_files = original_loader
-        # Child cleanup is useful on normal exits; the controller owns crash cleanup.
-        surviving_parent = parent_ref() if parent_ref is not None else a
-        surviving_progress = progress_ref() if progress_ref is not None else None
-        for dialog in (surviving_parent, b):
-            if dialog is not None and not sip.isdeleted(dialog):
-                thread = dialog.tabular_load_thread
-                if thread is not None and not sip.isdeleted(thread):
-                    try:
-                        thread.cancel()
-                        joined = thread.wait(10000)
-                    except Exception:
-                        joined = False
-                    if not joined:
-                        try:
-                            record("cleanup_incomplete")
-                        finally:
-                            os._exit(71)
-                dialog.close()
-                dialog.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        if surviving_progress is not None and not sip.isdeleted(surviving_progress):
-            surviving_progress.deleteLater()
-            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        # Retained wrappers make actual C++ cleanup observable on the GUI thread.
-        survivors = (surviving_parent, surviving_progress, b)
-        state["lifetime"]["survivors_disposed"] = all(
-            obj is None or sip.isdeleted(obj) for obj in survivors
-        )
-        if gc_was_enabled:
-            gc.enable()
-        state["lifetime"]["gc_restored"] = gc.isenabled() == gc_was_enabled
-        cleanup_ok = state["lifetime"]["survivors_disposed"] and state["lifetime"]["gc_restored"]
-        record(
-            ("complete" if workload_succeeded else "failure_cleaned")
-            if cleanup_ok
-            else "cleanup_incomplete"
-        )
-    if not workload_succeeded or not cleanup_ok:
-        return 71
-    if not _boundary_proved(
-        mode, state["lifetime"], state["boundaries"], state["during_observations"]
-    ):
-        return 72
-    return 42 if mode == "boundary_close_only" else 0
-
-
-def _boundary_proved(mode, lifetime, boundaries, during):
-    terminal = ["progress:gui", "parent:gui"]
-    before = ["progress:gui"] if mode == "boundary_close_only" else terminal
-    return (
-        boundaries == {"teardown": before, "next_load": before, "workload": terminal}
-        and during == before
-        and lifetime["parent_cpp_alive_at_next_load"] is (mode == "boundary_close_only")
-        and not any(lifetime[key] for key in LIVENESS_KEYS)
-    )
+    state["test_counts"] = reports.counts
+    record("complete")
+    return int(result)
 
 
 def _github(route):
@@ -567,7 +322,7 @@ def _admit():
     ):
         return False
     phase = env["QT_CONTROL_PHASE"]
-    if phase not in {"lifetime-4"}:
+    if phase not in {"functional-5"}:
         return False
     title = "Qt lifetime " + phase + " "
     current = int(env["GITHUB_RUN_ID"])
@@ -620,37 +375,10 @@ def main():
                 or not receipt["credentials_absent"]
             ):
                 return 70
-        for mode in ("preflight", "boundary_close_only", "boundary_owned_cleanup"):
-            result, _receipt = _run(mode, root)
-            if mode == "boundary_close_only" and result == 42:
-                valid = (
-                    _receipt["phase"] == "complete"
-                    and _receipt["reason"] == "completed"
-                    and _receipt["returncode"] == 42
-                    and _receipt["signal"] is None
-                    and _receipt["tree_empty"]
-                    and _receipt["cleanup_complete"]
-                    and _receipt["no_core_verified"]
-                    and _receipt["credentials_absent"]
-                    and set(_receipt["lifetime"]) == LIFETIME_KEYS
-                    and all(
-                        _receipt["lifetime"][key]
-                        for key in ("parent_python_owned", "survivors_disposed", "gc_restored")
-                    )
-                    and _boundary_proved(
-                        mode,
-                        _receipt["lifetime"],
-                        _receipt["boundaries"],
-                        _receipt["during_observations"],
-                    )
-                )
-                if not valid or _CANCELLED:
-                    return result
-                # Preserve the proven failing baseline; only its predeclared fix follows.
-                continue
-            if result or _CANCELLED:
-                return result or 130
-        print('{"baseline_invariant_violation":true,"corrected_disposal_passed":true}', flush=True)
+        result, receipt = _run("functional", root)
+        if result or _CANCELLED:
+            return result or 130
+        print('{"functional_cases_passed":16,"native_process_completed":true}', flush=True)
         return 0
     except Exception:
         print('{"reason":"controller_incomplete"}', flush=True)

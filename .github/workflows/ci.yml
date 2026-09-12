@@ -38,6 +38,7 @@ concurrency:
 
 jobs:
   static-checks:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_qt_lifetime_control != '1'
     name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -151,6 +152,7 @@ jobs:
         run: python scripts/security_audit.py --ci --sibling-root artifacts/security_siblings
 
   unit-tests:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_qt_lifetime_control != '1'
     name: Unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -335,6 +337,7 @@ jobs:
 
 
   native-artifacts:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_qt_lifetime_control != '1'
     name: Native wheel build and smoke checks
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -512,6 +515,7 @@ jobs:
         run: PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
 
   cmm-parser-perf-gate:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_qt_lifetime_control != '1'
     name: CMM parser perf guardrail
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -599,6 +603,7 @@ jobs:
           if-no-files-found: warn
 
   perf-benchmarks:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_qt_lifetime_control != '1'
     name: Performance benchmark trend check (non-blocking)
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -711,7 +716,7 @@ jobs:
     timeout-minutes: 90
     needs: [static-checks, unit-tests, native-artifacts]
     # Intentionally opt-in/release-only: packaging smoke build signal is manual and non-blocking for regular PR CI.
-    if: github.event_name == 'workflow_dispatch' && inputs.run_packaging_smoke == '1'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_packaging_smoke == '1' && inputs.run_qt_lifetime_control != '1'
     env:
       METROLIZA_RUN_PACKAGING_SMOKE: ${{ inputs.run_packaging_smoke }}
     steps:
@@ -794,6 +799,7 @@ jobs:
           if-no-files-found: warn
 
   windows-core-smoke:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_qt_lifetime_control != '1'
     name: Windows core smoke
     runs-on: windows-latest
     timeout-minutes: 30
@@ -837,6 +843,13 @@ jobs:
           "tests/test_csv_pipeline_performance.py::test_benchmark_cli_help_without_resource"
           "tests/test_csv_pipeline_performance.py::test_benchmark_worker_requires_resource_before_setup"
 
+      - name: Run native Windows Qt lifecycle tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: python -m pytest -vv tests/test_industrial_qt_lifecycle.py
+
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
           PYTHONPATH: src;.
@@ -851,7 +864,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     needs: [static-checks, unit-tests]
-    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_startup_benchmark == '1'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_startup_benchmark == '1' && inputs.run_qt_lifetime_control != '1'
     env:
       METROLIZA_RUN_WINDOWS_STARTUP_BENCHMARK: ${{ inputs.run_windows_startup_benchmark }}
     steps:
