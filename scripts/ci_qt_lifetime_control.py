@@ -29,7 +29,7 @@ PHASES = {
     "failure_cleaned",
     "cleanup_incomplete",
 }
-QT_MODES = {"slot_close_only", "slot_owned_cleanup"}
+QT_MODES = {"boundary_close_only", "boundary_owned_cleanup"}
 MODES = {"exit0", "exit23", "output", "cancel", "timeout", "preflight"} | QT_MODES
 LIFETIME_KEYS = {
     "parent_python_owned",
@@ -39,6 +39,7 @@ LIFETIME_KEYS = {
     "progress_cpp_alive",
     "survivors_disposed",
     "gc_restored",
+    "parent_cpp_alive_at_next_load",
 }
 LIVENESS_KEYS = {"parent_alive", "progress_alive", "parent_cpp_alive", "progress_cpp_alive"}
 _CANCELLED = False
@@ -199,6 +200,16 @@ def _run(mode, root):
     during = (
         [item for item in during[:4] if item in observations] if isinstance(during, list) else []
     )
+    boundaries = state.get("boundaries", {})
+    boundaries = (
+        {
+            key: [item for item in value[:4] if item in observations]
+            for key, value in boundaries.items()
+            if key in {"teardown", "next_load", "workload"} and isinstance(value, list)
+        }
+        if isinstance(boundaries, dict)
+        else {}
+    )
     no_core = state.get("no_core") is True
     credentials_absent = state.get("credentials_absent") is True
     lifetime = state.get("lifetime", {})
@@ -222,6 +233,7 @@ def _run(mode, root):
         credentials_absent=credentials_absent,
         observations=observations,
         during_observations=during,
+        boundaries=boundaries,
         elapsed_s=round(time.monotonic() - began),
         output_sizes=sizes,
         lifetime=lifetime,
@@ -323,6 +335,7 @@ def _child(mode, folder, parent_pid):
     gc_was_enabled = gc.isenabled()
     gc.disable()
     state["lifetime"] = {}
+    state["boundaries"] = {}
     from metroliza.ui.industrial_analytics_dialog import (
         IndustrialAnalyticsDialog,
         SOURCE_TABULAR_FILE,
@@ -396,15 +409,22 @@ def _child(mode, folder, parent_pid):
         release.clear()
         collected.clear()
         active[0] = True
-        b = start_load()
-        record("b_visible")
-        if mode == "slot_owned_cleanup":
+        if mode == "boundary_owned_cleanup":
             _dispose_dialog(a)
             assert sip.isdeleted(a), "owned_disposal_failed"
         else:
             assert a.close(), "close_failed"
+        state["boundaries"]["teardown"] = list(state["observations"])
         a = None
         record("a_closed")
+        b = start_load()
+        state["boundaries"]["next_load"] = list(state["observations"])
+        previous_parent = parent_ref()
+        state["lifetime"]["parent_cpp_alive_at_next_load"] = (
+            previous_parent is not None and not sip.isdeleted(previous_parent)
+        )
+        previous_parent = None
+        record("b_visible")
         release.set()
         # Scheduling control only: let the gated worker collect before GUI allocations.
         assert collected.wait(10), "collection_timeout"
@@ -421,6 +441,7 @@ def _child(mode, folder, parent_pid):
         record("collected")
         wait_until(lambda: b.tabular_load_thread is None)
         assert b.tabular_load_result.row_count == 3
+        state["boundaries"]["workload"] = list(state["observations"])
         record("workload_complete")
         workload_succeeded = True
     finally:
@@ -465,12 +486,22 @@ def _child(mode, folder, parent_pid):
         )
     if not workload_succeeded or not cleanup_ok:
         return 71
-    expected = ["progress:gui", "parent:worker" if mode == "slot_close_only" else "parent:gui"]
-    if state["during_observations"] != expected or any(
-        state["lifetime"][key] for key in LIVENESS_KEYS
+    if not _boundary_proved(
+        mode, state["lifetime"], state["boundaries"], state["during_observations"]
     ):
         return 72
-    return 42 if mode == "slot_close_only" else 0
+    return 42 if mode == "boundary_close_only" else 0
+
+
+def _boundary_proved(mode, lifetime, boundaries, during):
+    terminal = ["progress:gui", "parent:gui"]
+    before = ["progress:gui"] if mode == "boundary_close_only" else terminal
+    return (
+        boundaries == {"teardown": before, "next_load": before, "workload": terminal}
+        and during == before
+        and lifetime["parent_cpp_alive_at_next_load"] is (mode == "boundary_close_only")
+        and not any(lifetime[key] for key in LIVENESS_KEYS)
+    )
 
 
 def _github(route):
@@ -536,7 +567,7 @@ def _admit():
     ):
         return False
     phase = env["QT_CONTROL_PHASE"]
-    if phase not in {"lifetime-3"}:
+    if phase not in {"lifetime-4"}:
         return False
     title = "Qt lifetime " + phase + " "
     current = int(env["GITHUB_RUN_ID"])
@@ -589,9 +620,9 @@ def main():
                 or not receipt["credentials_absent"]
             ):
                 return 70
-        for mode in ("preflight", "slot_close_only", "slot_owned_cleanup"):
+        for mode in ("preflight", "boundary_close_only", "boundary_owned_cleanup"):
             result, _receipt = _run(mode, root)
-            if mode == "slot_close_only" and result == 42:
+            if mode == "boundary_close_only" and result == 42:
                 valid = (
                     _receipt["phase"] == "complete"
                     and _receipt["reason"] == "completed"
@@ -606,8 +637,12 @@ def main():
                         _receipt["lifetime"][key]
                         for key in ("parent_python_owned", "survivors_disposed", "gc_restored")
                     )
-                    and not any(_receipt["lifetime"][key] for key in LIVENESS_KEYS)
-                    and _receipt["during_observations"] == ["progress:gui", "parent:worker"]
+                    and _boundary_proved(
+                        mode,
+                        _receipt["lifetime"],
+                        _receipt["boundaries"],
+                        _receipt["during_observations"],
+                    )
                 )
                 if not valid or _CANCELLED:
                     return result
