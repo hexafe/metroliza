@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import http.client
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.request
 
 LIMIT = 65536
 PHASES = {
@@ -29,7 +29,8 @@ PHASES = {
     "failure_cleaned",
     "cleanup_incomplete",
 }
-MODES = {"exit0", "exit23", "output", "cancel", "timeout", "preflight", "reference", "worker_gc"}
+QT_MODES = {"slot_close_only", "slot_owned_cleanup"}
+MODES = {"exit0", "exit23", "output", "cancel", "timeout", "preflight"} | QT_MODES
 LIFETIME_KEYS = {
     "parent_python_owned",
     "parent_alive",
@@ -39,6 +40,7 @@ LIFETIME_KEYS = {
     "survivors_disposed",
     "gc_restored",
 }
+LIVENESS_KEYS = {"parent_alive", "progress_alive", "parent_cpp_alive", "progress_cpp_alive"}
 _CANCELLED = False
 
 
@@ -193,6 +195,10 @@ def _run(mode, root):
             "control:gui",
         ]
     ]
+    during = state.get("during_observations", [])
+    during = (
+        [item for item in during[:4] if item in observations] if isinstance(during, list) else []
+    )
     no_core = state.get("no_core") is True
     credentials_absent = state.get("credentials_absent") is True
     lifetime = state.get("lifetime", {})
@@ -215,6 +221,7 @@ def _run(mode, root):
         no_core_verified=no_core,
         credentials_absent=credentials_absent,
         observations=observations,
+        during_observations=during,
         elapsed_s=round(time.monotonic() - began),
         output_sizes=sizes,
         lifetime=lifetime,
@@ -237,7 +244,7 @@ def _run(mode, root):
         and credentials_absent
         else 70
     )
-    if mode in {"reference", "worker_gc"} and (
+    if mode in QT_MODES and (
         phase != "complete"
         or set(lifetime) != LIFETIME_KEYS
         or not all(
@@ -279,17 +286,37 @@ def _child(mode, folder, parent_pid):
     import gc
     import weakref
     from PyQt6 import sip
-    from PyQt6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QTimer
+    from PyQt6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QTimer, Qt, pyqtSlot
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
     gui_ident = threading.get_ident()
+    worker_ident = [None]
+
+    class DestructionRecorder(QObject):
+        def __init__(self, label):
+            super().__init__()
+            self.label = label
+
+        @pyqtSlot()
+        def destroyed_without_argument(self):
+            ident = threading.get_ident()
+            role = (
+                "gui" if ident == gui_ident else "worker" if ident == worker_ident[0] else "other"
+            )
+            state["observations"].append(self.label + ":" + role)
+
     if mode == "preflight":
         control = QObject()
+        recorder = DestructionRecorder("control")
+        control.destroyed.connect(
+            recorder.destroyed_without_argument, Qt.ConnectionType.DirectConnection
+        )
         control.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         assert sip.isdeleted(control), "preflight_deletion_failed"
+        assert state["observations"] == ["control:gui"], "preflight_recorder_failed"
         record("preflight")
         return 0
 
@@ -301,6 +328,7 @@ def _child(mode, folder, parent_pid):
         SOURCE_TABULAR_FILE,
     )
     from metroliza.industrial import industrial_workers
+    from tests.test_industrial_analytics_dialog import _dispose_dialog
 
     original_loader = industrial_workers.load_tabular_analytics_files
     release = threading.Event()
@@ -308,9 +336,10 @@ def _child(mode, folder, parent_pid):
     active = [False]
 
     def gated_loader(*args, **kwargs):
+        worker_ident[0] = threading.get_ident()
         if not release.wait(15):
             raise RuntimeError("barrier_timeout")
-        if active[0] and mode == "worker_gc":
+        if active[0]:
             gc.collect()
         collected.set()
         return original_loader(*args, **kwargs)
@@ -343,13 +372,21 @@ def _child(mode, folder, parent_pid):
 
     a = b = None
     parent_ref = progress_ref = None
+    recorders = []
     workload_succeeded = False
     try:
         a = start_load()
         assert threading.get_ident() == gui_ident
         state["lifetime"]["parent_python_owned"] = sip.ispyowned(a)
         assert state["lifetime"]["parent_python_owned"], "unexpected_parent_ownership"
-        # No destroyed connections, weakref callbacks or retained object arguments.
+        # Independent native slots accept zero arguments and never retain senders.
+        for obj, label in ((a, "parent"), (a.loading_dialog, "progress")):
+            recorder = DestructionRecorder(label)
+            obj.destroyed.connect(
+                recorder.destroyed_without_argument, Qt.ConnectionType.DirectConnection
+            )
+            recorders.append(recorder)
+        obj = None
         parent_ref = weakref.ref(a)
         progress_ref = weakref.ref(a.loading_dialog)
         release.set()
@@ -361,13 +398,19 @@ def _child(mode, folder, parent_pid):
         active[0] = True
         b = start_load()
         record("b_visible")
-        assert a.close(), "close_failed"
+        if mode == "slot_owned_cleanup":
+            _dispose_dialog(a)
+            assert sip.isdeleted(a), "owned_disposal_failed"
+        else:
+            assert a.close(), "close_failed"
         a = None
         record("a_closed")
         release.set()
         # Scheduling control only: let the gated worker collect before GUI allocations.
         assert collected.wait(10), "collection_timeout"
         assert threading.get_ident() == gui_ident
+        # Freeze the discriminator BEFORE generic final cleanup can emit signals.
+        state["during_observations"] = list(state["observations"])
         for label, reference in (("parent", parent_ref), ("progress", progress_ref)):
             watched = reference()
             state["lifetime"][label + "_alive"] = watched is not None
@@ -420,18 +463,30 @@ def _child(mode, folder, parent_pid):
             if cleanup_ok
             else "cleanup_incomplete"
         )
-    return 0 if workload_succeeded and cleanup_ok else 71
+    if not workload_succeeded or not cleanup_ok:
+        return 71
+    expected = ["progress:gui", "parent:worker" if mode == "slot_close_only" else "parent:gui"]
+    if state["during_observations"] != expected or any(
+        state["lifetime"][key] for key in LIVENESS_KEYS
+    ):
+        return 72
+    return 42 if mode == "slot_close_only" else 0
 
 
 def _github(route):
-    request = urllib.request.Request(
-        "https://api.github.com/" + route,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "metroliza-998-public-admission",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=15) as response:
+    connection = http.client.HTTPSConnection("api.github.com", timeout=15)
+    try:
+        connection.request(
+            "GET",
+            "/" + route,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "metroliza-998-public-admission",
+            },
+        )
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ValueError("admission_http_status")
         raw = response.read(4 * 1024 * 1024 + 1)
         if len(raw) > 4 * 1024 * 1024:
             raise ValueError("admission_response_limit")
@@ -439,6 +494,8 @@ def _github(route):
         if not isinstance(result, dict):
             raise ValueError("admission_schema")
         return result
+    finally:
+        connection.close()
 
 
 def _admit():
@@ -479,7 +536,7 @@ def _admit():
     ):
         return False
     phase = env["QT_CONTROL_PHASE"]
-    if phase not in {"lifetime-2"}:
+    if phase not in {"lifetime-3"}:
         return False
     title = "Qt lifetime " + phase + " "
     current = int(env["GITHUB_RUN_ID"])
@@ -532,10 +589,33 @@ def main():
                 or not receipt["credentials_absent"]
             ):
                 return 70
-        for mode in ("preflight", "reference", "worker_gc"):
+        for mode in ("preflight", "slot_close_only", "slot_owned_cleanup"):
             result, _receipt = _run(mode, root)
+            if mode == "slot_close_only" and result == 42:
+                valid = (
+                    _receipt["phase"] == "complete"
+                    and _receipt["reason"] == "completed"
+                    and _receipt["returncode"] == 42
+                    and _receipt["signal"] is None
+                    and _receipt["tree_empty"]
+                    and _receipt["cleanup_complete"]
+                    and _receipt["no_core_verified"]
+                    and _receipt["credentials_absent"]
+                    and set(_receipt["lifetime"]) == LIFETIME_KEYS
+                    and all(
+                        _receipt["lifetime"][key]
+                        for key in ("parent_python_owned", "survivors_disposed", "gc_restored")
+                    )
+                    and not any(_receipt["lifetime"][key] for key in LIVENESS_KEYS)
+                    and _receipt["during_observations"] == ["progress:gui", "parent:worker"]
+                )
+                if not valid or _CANCELLED:
+                    return result
+                # Preserve the proven failing baseline; only its predeclared fix follows.
+                continue
             if result or _CANCELLED:
                 return result or 130
+        print('{"baseline_invariant_violation":true,"corrected_disposal_passed":true}', flush=True)
         return 0
     except Exception:
         print('{"reason":"controller_incomplete"}', flush=True)

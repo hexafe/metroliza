@@ -653,6 +653,7 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.analytics_thread = None
         self.tabular_load_thread = None
+        self._tabular_load_progress = {}
         self.metric_candidates: tuple[ProductionMetricSelection, ...] = ()
         self.metric_spec_limits: dict[str, tuple[float | None, float | None]] = {}
         self.dashboard_visual_settings = load_dashboard_visual_settings()
@@ -2428,6 +2429,11 @@ class IndustrialAnalyticsDialog(QDialog):
             timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
             reference_column=self._selected_tabular_column(self.reference_column_combo),
         )
+        # Terminal handlers can enter a nested event loop. Retain each worker's
+        # own widgets so late cleanup cannot dispose a newer analytics window.
+        self._tabular_load_progress[self.tabular_load_thread] = (
+            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
+        )
         self.tabular_load_thread.result_ready.connect(self.on_tabular_load_finished)
         self.tabular_load_thread.error_occurred.connect(self.on_tabular_load_error)
         self.tabular_load_thread.cancelled.connect(self.on_tabular_load_cancelled)
@@ -2471,9 +2477,25 @@ class IndustrialAnalyticsDialog(QDialog):
         if thread is not None:
             thread.wait()
             thread.deleteLater()
+            self._dispose_tabular_load_progress(thread)
         if self.tabular_load_thread is thread:
             self.tabular_load_thread = None
         self._sync_ui_state()
+
+    def _dispose_tabular_load_progress(self, thread) -> None:
+        progress = self._tabular_load_progress.pop(thread, None)
+        if progress is None:
+            return
+        dialog, _label, _bar, movie = progress
+        # Closing only hides the dialog; its parent still owns the running movie.
+        movie.stop()
+        dialog.close()
+        dialog.deleteLater()
+        for name, widget in zip(
+            ("loading_dialog", "loading_label", "loading_bar", "loading_gif"), progress
+        ):
+            if getattr(self, name, None) is widget:
+                delattr(self, name)
 
     def _build_analytics_request(self, *, require_runnable: bool = False) -> IndustrialAnalyticsRequest:
         return validate_industrial_analytics_request(
