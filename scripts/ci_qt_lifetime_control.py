@@ -18,7 +18,7 @@ import time
 LIMIT = 65536
 PHASES = {"bootstrap", "complete"}
 MODES = {"exit0", "exit23", "output", "cancel", "timeout", "functional"}
-EXPECTED_COUNTS = {"collected": 16, "passed": 16, "failed": 0, "skipped": 0, "errors": 0}
+EXPECTED_COUNTS = {"collected": 18, "passed": 18, "failed": 0, "skipped": 0, "errors": 0}
 _CANCELLED = False
 
 
@@ -251,7 +251,14 @@ def _child(mode, folder, parent_pid):
 
     reports = CountReports()
     result = pytest.main(
-        ["-q", "-s", "--tb=no", "--disable-warnings", "tests/test_industrial_qt_lifecycle.py"],
+        [
+            "-q",
+            "-s",
+            "--tb=no",
+            "--disable-warnings",
+            "tests/test_export_presets.py::TestExportPresetFlowIntegration::test_selected_preset_changes_payload_deterministically",
+            "tests/test_industrial_qt_lifecycle.py",
+        ],
         plugins=[reports],
     )
     state["test_counts"] = reports.counts
@@ -322,7 +329,7 @@ def _admit():
     ):
         return False
     phase = env["QT_CONTROL_PHASE"]
-    if phase not in {"functional-5"}:
+    if phase not in {"functional-6"}:
         return False
     title = "Qt lifetime " + phase + " "
     current = int(env["GITHUB_RUN_ID"])
@@ -378,7 +385,7 @@ def main():
         result, receipt = _run("functional", root)
         if result or _CANCELLED:
             return result or 130
-        print('{"functional_cases_passed":16,"native_process_completed":true}', flush=True)
+        print('{"functional_cases_passed":18,"native_process_completed":true}', flush=True)
         return 0
     except Exception:
         print('{"reason":"controller_incomplete"}', flush=True)

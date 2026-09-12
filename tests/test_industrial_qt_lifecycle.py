@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import importlib
 import os
 from pathlib import Path
+import sys
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -545,6 +548,7 @@ def _drive_real_grouping(parent, *, expected_records: tuple[tuple[int, str], ...
     ("terminal", "expected_notice"),
     [
         ("success", None),
+        ("success_stale_package_attribute", None),
         ("error", "Could not create analytics: controlled analytics error"),
         ("cancel", "controlled analytics cancellation"),
     ],
@@ -557,10 +561,25 @@ def test_analytics_terminal_stops_and_releases_progress_while_parent_remains_ali
 ):
     notices: list[str] = []
     exports: list[tuple[object, ...]] = []
+    trap_calls: list[str] = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *_args: notices.append(_args[-1]))
     monkeypatch.setattr(QMessageBox, "information", lambda *_args: notices.append(_args[-1]))
+    export_dialog_module = importlib.import_module("metroliza.ui.export_dialog")
+    assert sys.modules["metroliza.ui.export_dialog"] is export_dialog_module
+    if terminal == "success_stale_package_attribute":
+        ui_package = importlib.import_module("metroliza.ui")
+        stale_export_dialog = SimpleNamespace(
+            show_export_result_message=lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(ui_package, "export_dialog", stale_export_dialog)
+        monkeypatch.setattr(
+            export_dialog_module,
+            "show_export_result_message",
+            lambda *_args, **_kwargs: trap_calls.append("actual producer"),
+        )
     monkeypatch.setattr(
-        "metroliza.ui.export_dialog.show_export_result_message",
+        export_dialog_module,
+        "show_export_result_message",
         lambda *args, **_kwargs: exports.append(args),
     )
     started = _start_visible_analytics(monkeypatch, tmp_path, terminal=terminal)
@@ -571,8 +590,9 @@ def test_analytics_terminal_stops_and_releases_progress_while_parent_remains_ali
             started.dialog.cancel_analytics()
         _complete_analytics(started)
 
-        if terminal == "success":
+        if terminal.startswith("success"):
             assert len(exports) == 1
+            assert trap_calls == []
         else:
             assert notices == [expected_notice]
         assert started.gate.cancel_observed.is_set() is (terminal == "cancel")
