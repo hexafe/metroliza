@@ -193,6 +193,17 @@ def _wait_for_gate(gate: _WorkerGate) -> None:
     assert gate.entered_event.is_set(), "timed out waiting for worker entry"
 
 
+def _wait_for_gui_owner_cleanup(owner, attribute: str, worker, description: str) -> None:
+    """Pump GUI events until the finished slot clears this worker's owner reference."""
+
+    live_worker = worker
+    deadline = QElapsedTimer()
+    deadline.start()
+    while getattr(owner, attribute) is live_worker and deadline.elapsed() < _WAIT_MS:
+        _app().processEvents()
+    assert getattr(owner, attribute) is None, f"timed out waiting for {description}"
+
+
 def _drain_deferred_deletes() -> None:
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     _app().processEvents()
@@ -342,7 +353,13 @@ def _start_visible_load(monkeypatch, tmp_path: Path, *, terminal: str = "success
 def _complete(started: _StartedLoad) -> None:
     started.gate.release.set()
     _wait(started.thread_finished, "tabular worker finish")
-    assert started.dialog.tabular_load_thread is None
+    _wait_for_gui_owner_cleanup(
+        started.dialog,
+        "tabular_load_thread",
+        started.worker,
+        "tabular GUI owner cleanup",
+    )
+    assert started.worker not in started.dialog._worker_progress
     assert sip.isdeleted(started.progress_dialog) or not started.progress_dialog.isVisible()
     _drain_deferred_deletes()
     assert sip.isdeleted(started.worker), "finished tabular worker remained alive after deleteLater"
@@ -473,7 +490,13 @@ def _finish_analytics(started: _StartedAnalytics) -> None:
 def _complete_analytics(started: _StartedAnalytics) -> None:
     started.gate.release.set()
     _wait(started.thread_finished, "analytics worker finish")
-    assert started.dialog.analytics_thread is None
+    _wait_for_gui_owner_cleanup(
+        started.dialog,
+        "analytics_thread",
+        started.worker,
+        "analytics GUI owner cleanup",
+    )
+    assert started.worker not in started.dialog._worker_progress
     assert sip.isdeleted(started.progress_dialog) or not started.progress_dialog.isVisible()
     _drain_deferred_deletes()
 
@@ -607,6 +630,50 @@ def test_analytics_terminal_stops_and_releases_progress_while_parent_remains_ali
         assert sip.isdeleted(started.worker)
     finally:
         _finish_analytics(started)
+        _dispose_dialog(started.dialog)
+
+
+@pytest.mark.parametrize(
+    ("family", "owner_attribute"),
+    [
+        ("tabular", "tabular_load_thread"),
+        ("analytics", "analytics_thread"),
+    ],
+)
+def test_native_joined_worker_waits_for_gui_owner_cleanup(
+    monkeypatch, tmp_path, family, owner_attribute
+):
+    """A native join does not itself deliver the queued GUI finished slot."""
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: None)
+    if family == "tabular":
+        started = _start_visible_load(monkeypatch, tmp_path, terminal="cancel")
+        cancel = started.dialog.cancel_tabular_load
+        complete = _complete
+        finish = _finish_worker
+    else:
+        started = _start_visible_analytics(monkeypatch, tmp_path, terminal="cancel")
+        cancel = started.dialog.cancel_analytics
+        complete = _complete_analytics
+        finish = _finish_analytics
+
+    try:
+        cancel()
+        started.gate.release.set()
+        assert started.worker.wait(_WAIT_MS), f"{family} worker did not join"
+        assert len(started.thread_finished) > 0
+        assert getattr(started.dialog, owner_attribute) is started.worker
+        assert started.worker in started.dialog._worker_progress
+
+        complete(started)
+
+        assert getattr(started.dialog, owner_attribute) is None
+        assert started.worker not in started.dialog._worker_progress
+        assert sip.isdeleted(started.worker)
+        assert sip.isdeleted(started.progress_dialog)
+    finally:
+        finish(started)
         _dispose_dialog(started.dialog)
 
 
