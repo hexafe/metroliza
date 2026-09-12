@@ -1,4 +1,5 @@
 """Temporary #998 hosted-only, no-core lifecycle discriminator; never a product tool."""
+
 from __future__ import annotations
 
 import ctypes
@@ -16,8 +17,28 @@ import time
 import urllib.request
 
 LIMIT = 65536
-PHASES = {"bootstrap", "preflight", "a_loaded", "b_visible", "a_closed", "collected", "complete", "cleanup_incomplete"}
+PHASES = {
+    "bootstrap",
+    "preflight",
+    "a_loaded",
+    "b_visible",
+    "a_closed",
+    "collected",
+    "workload_complete",
+    "complete",
+    "failure_cleaned",
+    "cleanup_incomplete",
+}
 MODES = {"exit0", "exit23", "output", "cancel", "timeout", "preflight", "reference", "worker_gc"}
+LIFETIME_KEYS = {
+    "parent_python_owned",
+    "parent_alive",
+    "progress_alive",
+    "parent_cpp_alive",
+    "progress_cpp_alive",
+    "survivors_disposed",
+    "gc_restored",
+}
 _CANCELLED = False
 
 
@@ -83,9 +104,15 @@ def _run(mode, root):
     folder = root / mode
     folder.mkdir(mode=0o700)
     environment = {
-        "PATH": "/usr/bin:/bin", "HOME": str(folder), "TMPDIR": str(folder),
-        "LANG": "C.UTF-8", "QT_QPA_PLATFORM": "offscreen", "PYTHONPATH": "src:.",
-        "PYTHONUNBUFFERED": "1", "PYTHONNOUSERSITE": "1", "MPLCONFIGDIR": str(folder / "mpl"),
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(folder),
+        "TMPDIR": str(folder),
+        "LANG": "C.UTF-8",
+        "QT_QPA_PLATFORM": "offscreen",
+        "PYTHONPATH": "src:.",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONNOUSERSITE": "1",
+        "MPLCONFIGDIR": str(folder / "mpl"),
     }
     process = None
     reason = "completed"
@@ -97,8 +124,12 @@ def _run(mode, root):
         with (folder / "out").open("xb") as output, (folder / "err").open("xb") as errors:
             process = subprocess.Popen(
                 [sys.executable, __file__, "child", mode, str(folder), str(os.getpid())],
-                stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
-                env=environment, start_new_session=True, close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=errors,
+                env=environment,
+                start_new_session=True,
+                close_fds=True,
             )
             deadline = began + (0.2 if mode == "timeout" else 180)
             while True:
@@ -148,15 +179,46 @@ def _run(mode, root):
     observations = state.get("observations", [])
     if not isinstance(observations, list):
         observations = []
-    observations = [item for item in observations[:4] if item in
-                    ["parent:gui", "parent:worker", "parent:other", "progress:gui", "progress:worker", "progress:other", "control:gui"]]
+    observations = [
+        item
+        for item in observations[:4]
+        if item
+        in [
+            "parent:gui",
+            "parent:worker",
+            "parent:other",
+            "progress:gui",
+            "progress:worker",
+            "progress:other",
+            "control:gui",
+        ]
+    ]
     no_core = state.get("no_core") is True
     credentials_absent = state.get("credentials_absent") is True
-    receipt = dict(mode=mode, phase=phase, returncode=code,
-                   signal=-code if code is not None and code < 0 else None,
-                   reason=reason, tree_empty=empty, no_core_verified=no_core,
-                   credentials_absent=credentials_absent, observations=observations,
-                   elapsed_s=round(time.monotonic() - began), output_sizes=sizes)
+    lifetime = state.get("lifetime", {})
+    lifetime = (
+        {
+            key: value
+            for key, value in lifetime.items()
+            if key in LIFETIME_KEYS and type(value) is bool
+        }
+        if isinstance(lifetime, dict)
+        else {}
+    )
+    receipt = dict(
+        mode=mode,
+        phase=phase,
+        returncode=code,
+        signal=-code if code is not None and code < 0 else None,
+        reason=reason,
+        tree_empty=empty,
+        no_core_verified=no_core,
+        credentials_absent=credentials_absent,
+        observations=observations,
+        elapsed_s=round(time.monotonic() - began),
+        output_sizes=sizes,
+        lifetime=lifetime,
+    )
     try:
         shutil.rmtree(folder)
     except OSError:
@@ -166,15 +228,38 @@ def _run(mode, root):
     print(json.dumps(receipt, sort_keys=True), flush=True)
     if code not in (None, 0):
         return (128 - code if code < 0 else code), receipt
-    status = 0 if code == 0 and reason == "completed" and receipt["cleanup_complete"] and no_core and credentials_absent else 70
+    status = (
+        0
+        if code == 0
+        and reason == "completed"
+        and receipt["cleanup_complete"]
+        and no_core
+        and credentials_absent
+        else 70
+    )
+    if mode in {"reference", "worker_gc"} and (
+        phase != "complete"
+        or set(lifetime) != LIFETIME_KEYS
+        or not all(
+            lifetime.get(key) is True
+            for key in ("parent_python_owned", "survivors_disposed", "gc_restored")
+        )
+    ):
+        status = 70
     return status, receipt
 
 
 def _child(mode, folder, parent_pid):
     _secure_child(parent_pid)
-    state = {"phase": "bootstrap", "no_core": resource.getrlimit(resource.RLIMIT_CORE) == (0, 0),
-             "credentials_absent": not any(key.startswith(("GITHUB", "ACTIONS", "GH_")) or "TOKEN" in key or "SECRET" in key for key in os.environ),
-             "observations": []}
+    state = {
+        "phase": "bootstrap",
+        "no_core": resource.getrlimit(resource.RLIMIT_CORE) == (0, 0),
+        "credentials_absent": not any(
+            key.startswith(("GITHUB", "ACTIONS", "GH_")) or "TOKEN" in key or "SECRET" in key
+            for key in os.environ
+        ),
+        "observations": [],
+    }
 
     def record(phase):
         state["phase"] = phase
@@ -191,45 +276,41 @@ def _child(mode, folder, parent_pid):
     if mode in {"timeout", "cancel"}:
         time.sleep(30)
         return 0
+    import gc
+    import weakref
     from PyQt6 import sip
-    from PyQt6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QTimer, Qt
+    from PyQt6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QTimer
     from PyQt6.QtWidgets import QApplication
+
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
     gui_ident = threading.get_ident()
-    worker_ident = [None]
-    callbacks = []
-
-    def watch(obj, label):
-        def destroyed():
-            ident = threading.get_ident()
-            affinity = "gui" if ident == gui_ident else "worker" if ident == worker_ident[0] else "other"
-            state["observations"].append(label + ":" + affinity)
-        callbacks.append(destroyed)
-        obj.destroyed.connect(destroyed, Qt.ConnectionType.DirectConnection)
-
     if mode == "preflight":
         control = QObject()
-        watch(control, "control")
         control.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        assert state["observations"] == ["control:gui"]
+        assert sip.isdeleted(control), "preflight_deletion_failed"
         record("preflight")
         return 0
 
-    from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    state["lifetime"] = {}
+    from metroliza.ui.industrial_analytics_dialog import (
+        IndustrialAnalyticsDialog,
+        SOURCE_TABULAR_FILE,
+    )
     from metroliza.industrial import industrial_workers
+
     original_loader = industrial_workers.load_tabular_analytics_files
     release = threading.Event()
     collected = threading.Event()
     active = [False]
 
     def gated_loader(*args, **kwargs):
-        worker_ident[0] = threading.get_ident()
         if not release.wait(15):
             raise RuntimeError("barrier_timeout")
         if active[0] and mode == "worker_gc":
-            import gc
             gc.collect()
         collected.set()
         return original_loader(*args, **kwargs)
@@ -261,10 +342,16 @@ def _child(mode, folder, parent_pid):
         return dialog
 
     a = b = None
+    parent_ref = progress_ref = None
+    workload_succeeded = False
     try:
         a = start_load()
-        watch(a, "parent")
-        watch(a.loading_dialog, "progress")
+        assert threading.get_ident() == gui_ident
+        state["lifetime"]["parent_python_owned"] = sip.ispyowned(a)
+        assert state["lifetime"]["parent_python_owned"], "unexpected_parent_ownership"
+        # No destroyed connections, weakref callbacks or retained object arguments.
+        parent_ref = weakref.ref(a)
+        progress_ref = weakref.ref(a.loading_dialog)
         release.set()
         wait_until(lambda: a.tabular_load_thread is None)
         assert a.tabular_load_result.row_count == 3
@@ -280,16 +367,26 @@ def _child(mode, folder, parent_pid):
         release.set()
         # Scheduling control only: let the gated worker collect before GUI allocations.
         assert collected.wait(10), "collection_timeout"
+        assert threading.get_ident() == gui_ident
+        for label, reference in (("parent", parent_ref), ("progress", progress_ref)):
+            watched = reference()
+            state["lifetime"][label + "_alive"] = watched is not None
+            state["lifetime"][label + "_cpp_alive"] = watched is not None and not sip.isdeleted(
+                watched
+            )
+            watched = None
         record("collected")
         wait_until(lambda: b.tabular_load_thread is None)
         assert b.tabular_load_result.row_count == 3
-        record("complete")
-        return 42 if any(item.endswith((":worker", ":other")) for item in state["observations"]) else 0
+        record("workload_complete")
+        workload_succeeded = True
     finally:
         release.set()
         industrial_workers.load_tabular_analytics_files = original_loader
         # Child cleanup is useful on normal exits; the controller owns crash cleanup.
-        for dialog in (a, b):
+        surviving_parent = parent_ref() if parent_ref is not None else a
+        surviving_progress = progress_ref() if progress_ref is not None else None
+        for dialog in (surviving_parent, b):
             if dialog is not None and not sip.isdeleted(dialog):
                 thread = dialog.tabular_load_thread
                 if thread is not None and not sip.isdeleted(thread):
@@ -306,13 +403,34 @@ def _child(mode, folder, parent_pid):
                 dialog.close()
                 dialog.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        if surviving_progress is not None and not sip.isdeleted(surviving_progress):
+            surviving_progress.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        # Retained wrappers make actual C++ cleanup observable on the GUI thread.
+        survivors = (surviving_parent, surviving_progress, b)
+        state["lifetime"]["survivors_disposed"] = all(
+            obj is None or sip.isdeleted(obj) for obj in survivors
+        )
+        if gc_was_enabled:
+            gc.enable()
+        state["lifetime"]["gc_restored"] = gc.isenabled() == gc_was_enabled
+        cleanup_ok = state["lifetime"]["survivors_disposed"] and state["lifetime"]["gc_restored"]
+        record(
+            ("complete" if workload_succeeded else "failure_cleaned")
+            if cleanup_ok
+            else "cleanup_incomplete"
+        )
+    return 0 if workload_succeeded and cleanup_ok else 71
 
 
 def _github(route):
-    request = urllib.request.Request("https://api.github.com/" + route, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "metroliza-998-public-admission",
-    })
+    request = urllib.request.Request(
+        "https://api.github.com/" + route,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "metroliza-998-public-admission",
+        },
+    )
     with urllib.request.urlopen(request, timeout=15) as response:
         raw = response.read(4 * 1024 * 1024 + 1)
         if len(raw) > 4 * 1024 * 1024:
@@ -325,31 +443,52 @@ def _github(route):
 
 def _admit():
     env = os.environ
-    expected = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "hexafe/metroliza",
-                "GITHUB_ACTOR": "hexafe", "GITHUB_RUN_ATTEMPT": "1",
-                "GITHUB_REF": "refs/heads/fix/998-qt-stability",
-                "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux", "ImageOS": "ubuntu24"}
+    expected = {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_REPOSITORY": "hexafe/metroliza",
+        "GITHUB_ACTOR": "hexafe",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_REF": "refs/heads/fix/998-qt-stability",
+        "RUNNER_ENVIRONMENT": "github-hosted",
+        "RUNNER_OS": "Linux",
+        "ImageOS": "ubuntu24",
+    }
     if sys.platform != "linux" or any(env.get(key) != value for key, value in expected.items()):
         return False
+
     def git(*args):
         return subprocess.check_output(["git", *args], stderr=subprocess.DEVNULL, text=True).strip()
-    if git("rev-parse", "HEAD") != env["QT_CONTROL_HEAD"] or env["GITHUB_SHA"] != env["QT_CONTROL_HEAD"] or git("rev-parse", "HEAD^{tree}") != env["QT_CONTROL_TREE"]:
+
+    if (
+        git("rev-parse", "HEAD") != env["QT_CONTROL_HEAD"]
+        or env["GITHUB_SHA"] != env["QT_CONTROL_HEAD"]
+        or git("rev-parse", "HEAD^{tree}") != env["QT_CONTROL_TREE"]
+    ):
         return False
-    credentials = subprocess.run(["git", "config", "--local", "--get-regexp", "extraheader"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    credentials = subprocess.run(
+        ["git", "config", "--local", "--get-regexp", "extraheader"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     if credentials.returncode != 1:
         return False
     repository = _github("repos/hexafe/metroliza")
-    if repository.get("private") is not False or repository.get("owner", {}).get("login") != "hexafe":
+    if (
+        repository.get("private") is not False
+        or repository.get("owner", {}).get("login") != "hexafe"
+    ):
         return False
     phase = env["QT_CONTROL_PHASE"]
-    if phase not in {"lifetime-1"}:
+    if phase not in {"lifetime-2"}:
         return False
     title = "Qt lifetime " + phase + " "
     current = int(env["GITHUB_RUN_ID"])
     seen_current = False
     # Bounded complete recent history; refuse if pagination cannot prove uniqueness.
     for page in range(1, 6):
-        rows = _github(f"repos/hexafe/metroliza/actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100&page={page}")["workflow_runs"]
+        rows = _github(
+            f"repos/hexafe/metroliza/actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=100&page={page}"
+        )["workflow_runs"]
         for row in rows:
             if row["id"] == current:
                 seen_current = True
@@ -376,12 +515,22 @@ def main():
         signal.signal(signal.SIGINT, _cancel)
         root = Path(tempfile.mkdtemp(prefix="qt-lifetime-private-", dir=os.environ["RUNNER_TEMP"]))
         root.chmod(0o700)
-        for mode, expected in (("exit0", "completed"), ("exit23", "completed"),
-                               ("output", "output_limit"), ("cancel", "cancelled"),
-                               ("timeout", "timeout")):
+        for mode, expected in (
+            ("exit0", "completed"),
+            ("exit23", "completed"),
+            ("output", "output_limit"),
+            ("cancel", "cancelled"),
+            ("timeout", "timeout"),
+        ):
             _status, receipt = _run(mode, root)
             expected_code = 23 if mode == "exit23" else 0 if mode == "exit0" else -signal.SIGTERM
-            if receipt["reason"] != expected or receipt["returncode"] != expected_code or not receipt["cleanup_complete"] or not receipt["no_core_verified"] or not receipt["credentials_absent"]:
+            if (
+                receipt["reason"] != expected
+                or receipt["returncode"] != expected_code
+                or not receipt["cleanup_complete"]
+                or not receipt["no_core_verified"]
+                or not receipt["credentials_absent"]
+            ):
                 return 70
         for mode in ("preflight", "reference", "worker_gc"):
             result, _receipt = _run(mode, root)
