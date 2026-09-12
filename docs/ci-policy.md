@@ -163,5 +163,3 @@ When a PR touches parser plugin contracts/registry/plugins, also complete the go
 
 - [`docs/release_checks/parser_plugin_rollout_runbook.md`](./release_checks/parser_plugin_rollout_runbook.md)
 - [`docs/parser_plugins/README.md`](./parser_plugins/README.md)
-
-Temporary #998 contained functional confirmation uses the owner-only `qt-lifetime-control` job with phase `functional-6`; this temporary lane is removed before final delivery.
