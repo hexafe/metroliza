@@ -11,6 +11,8 @@ from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 from modules.contracts import DashboardInteractivityOptions
 
 try:
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent, QThread
     from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
     from modules.industrial_analytics_dialog import (
         build_analytics_completion_message,
@@ -38,6 +40,10 @@ except ImportError as exc:  # pragma: no cover - environment/order dependent
     DashboardPopulationLayerOptionsDialog = None
     QDialog = None
     QMessageBox = None
+    QCoreApplication = None
+    QEvent = None
+    QThread = None
+    sip = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
     IndustrialAnalyticsThread = None
@@ -53,6 +59,7 @@ else:
     PYQT_IMPORT_ERROR = None
 
 _APP = None
+_WORKER_JOIN_MS = 5_000
 
 
 def _app():
@@ -63,6 +70,25 @@ def _app():
     global _APP
     _APP = QApplication.instance() or _APP or QApplication([])
     return _APP
+
+
+def _dispose_dialog(dialog) -> None:
+    """Cancel an actual running worker before bounded Qt owner disposal."""
+
+    if dialog is None or sip.isdeleted(dialog):
+        return
+    for attribute in ("tabular_load_thread", "analytics_thread"):
+        worker = getattr(dialog, attribute, None)
+        if not isinstance(worker, QThread) or not worker.isRunning():
+            continue
+        cancel = getattr(worker, "cancel", None)
+        assert callable(cancel), f"running {attribute} has no cancellation method"
+        cancel()
+        assert worker.wait(_WORKER_JOIN_MS), f"running {attribute} did not join"
+    assert dialog.close(), "dialog rejected close after running workers joined"
+    dialog.deleteLater()
+    QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+    assert sip.isdeleted(dialog), "dialog C++ object remained after DeferredDelete"
 
 
 def _wait_for_tabular_load(dialog, *, timeout_seconds: float = 5.0) -> None:
@@ -98,7 +124,7 @@ def test_production_analytics_dialog_loads_cached_metric_candidates(tmp_path) ->
         assert not dialog.parameter_sheets_checkbox.isEnabled()
         assert dialog.start_button.isEnabled()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_reference_cohort_labels_describe_pasted_reference_action(tmp_path) -> None:
@@ -115,7 +141,7 @@ def test_reference_cohort_labels_describe_pasted_reference_action(tmp_path) -> N
         assert "comma, semicolon, space, or new line" in dialog.references_edit.placeholderText()
         assert "only this analytics run" in dialog.reference_mode_hint_label.text()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_production_analytics_dialog_passes_filter_state_to_worker(tmp_path) -> None:
@@ -133,7 +159,7 @@ def test_production_analytics_dialog_passes_filter_state_to_worker(tmp_path) -> 
         assert thread.filter_state.references == ("REF-100",)
         assert thread.filter_state.stations == ("S1",)
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_production_filter_dialog_builds_fixed_and_dynamic_filters() -> None:
@@ -164,7 +190,7 @@ def test_production_filter_dialog_builds_fixed_and_dynamic_filters() -> None:
         assert state.dynamic_filters[0].operator == "gt"
         assert state.dynamic_filters[2].values == ("1", "2")
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) -> None:
@@ -215,7 +241,7 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         assert thread.timestamp_column == "time_stamp"
         assert thread.reference_column == "reference_id"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_load_thread_stop_joins_and_schedules_cleanup(tmp_path, monkeypatch) -> None:
@@ -260,7 +286,7 @@ def test_tabular_load_thread_stop_joins_and_schedules_cleanup(tmp_path, monkeypa
         assert delete_later_receipts == [thread]
         assert dialog.tabular_load_thread is None
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path) -> None:
@@ -297,7 +323,7 @@ def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path
         assert enabled_thread.output_workbook_file == str(workbook_file)
         assert enabled_thread.separate_parameter_sheets is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_part_id_wording_and_hides_reference_cohort() -> None:
@@ -312,7 +338,7 @@ def test_tabular_analytics_dialog_uses_part_id_wording_and_hides_reference_cohor
         assert dialog.reference_mode_hint_label.isHidden()
         assert dialog._cohort_state().references == ()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_full_dashboard_detail_without_selector() -> None:
@@ -324,7 +350,7 @@ def test_tabular_analytics_dialog_uses_full_dashboard_detail_without_selector() 
 
         assert request.dashboard_detail_mode == "full"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_request() -> None:
@@ -381,7 +407,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
             size_limit_mb=128,
         )
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_default() -> None:
@@ -410,7 +436,7 @@ def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_def
         assert dialog.advanced_toggle_button.text() == "Hide advanced options"
         assert not dialog.advanced_options_container.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_dashboard_interactivity_dialog_keeps_population_layer_separate() -> None:
@@ -443,7 +469,7 @@ def test_dashboard_interactivity_dialog_keeps_population_layer_separate() -> Non
             size_limit_mb=24,
         )
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_population_layer_dialog_updates_only_population_layer_mode() -> None:
@@ -475,7 +501,7 @@ def test_population_layer_dialog_updates_only_population_layer_mode() -> None:
             population_layer_mode="static",
         )
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_production_analytics_dialog_hides_interactivity_controls() -> None:
@@ -489,7 +515,7 @@ def test_production_analytics_dialog_hides_interactivity_controls() -> None:
         assert dialog.population_layer_summary_label.isHidden()
         assert dialog.population_layer_button.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_preloaded_industrial_cache_uses_csv_summary_without_file_controls() -> None:
@@ -555,7 +581,7 @@ def test_preloaded_industrial_cache_uses_csv_summary_without_file_controls() -> 
         assert dialog.start_button.isEnabled()
     finally:
         dialog.tabular_load_result = None
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> None:
@@ -597,7 +623,7 @@ def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> 
         )
         assert dialog.population_layer_summary_label.text() == "Auto"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_population_layer_button_launches_dialog(monkeypatch) -> None:
@@ -643,7 +669,7 @@ def test_tabular_analytics_population_layer_button_launches_dialog(monkeypatch) 
         )
         assert dialog.population_layer_summary_label.text() == "Static image"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_large_tabular_dashboard_auto_mode_starts_without_interactivity_prompt(monkeypatch) -> None:
@@ -686,7 +712,7 @@ def test_large_tabular_dashboard_auto_mode_starts_without_interactivity_prompt(m
         assert dialog.dashboard_interactivity_options == DashboardInteractivityOptions()
     finally:
         dialog.tabular_load_result = None
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabular(monkeypatch) -> None:
@@ -717,7 +743,7 @@ def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabula
             assert "Adjust dashboard style" in dialog.dashboard_visuals_button.toolTip()
     finally:
         for dialog in dialogs:
-            dialog.close()
+            _dispose_dialog(dialog)
 
 
 def test_analytics_dashboard_visuals_button_launches_dialog(monkeypatch) -> None:
@@ -763,7 +789,7 @@ def test_analytics_dashboard_visuals_button_launches_dialog(monkeypatch) -> None
         assert dialog.dashboard_visual_settings["preset"] == "distinct"
         assert dialog.dashboard_visuals_summary_label.text() == "Distinct groups"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
@@ -816,7 +842,7 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         assert dialog.filters_button.isHidden()
         assert not dialog.start_button.isEnabled()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_loads_multiple_csv_files(
@@ -874,7 +900,7 @@ def test_tabular_analytics_dialog_loads_multiple_csv_files(
         assert set(dialog.df_for_grouping["GROUP"]) == {"line_a", "line_b"}
         assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_can_decline_multi_file_auto_groups(
@@ -910,7 +936,7 @@ def test_tabular_analytics_dialog_can_decline_multi_file_auto_groups(
         assert dialog.df_for_grouping is None
         assert dialog.grouping_summary_label.text() == "Groups: not applied"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_rejects_mixed_multi_file_without_group_prompt(
@@ -947,7 +973,7 @@ def test_tabular_analytics_dialog_rejects_mixed_multi_file_without_group_prompt(
         assert warning_calls
         assert "Select only CSV files" in warning_calls[0][2]
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_grouping_dialog_uses_sqlite_store_without_materializing_rows(
@@ -1029,7 +1055,7 @@ def test_tabular_grouping_dialog_uses_sqlite_store_without_materializing_rows(
         assert calls["column_filters"] == (TabularColumnFilter("line", selected_values=("A",)),)
         assert calls["executed"] is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
         cleanup_tabular_load_result(loaded)
 
 
@@ -1077,7 +1103,7 @@ def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(
         assert dialog.metrics_list.count() == 1
         assert dialog.metrics_list.item(0).text() == "Width Mm"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping(
@@ -1141,7 +1167,7 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
         assert calls["column_mapping"]["TraceCode"] == "tracecode"
         assert calls["executed"] is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
@@ -1193,7 +1219,7 @@ def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
         assert dialog.tabular_filter_columns == ()
         assert dialog.tabular_filter_keys == ()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
@@ -1207,7 +1233,7 @@ def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
         assert dialog.filters_button.isHidden()
         assert dialog.clear_filter_button.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> None:
@@ -1234,7 +1260,7 @@ def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> 
         assert thread.aggregation_state.group_fields == ("GROUP",)
         assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> None:
@@ -1280,7 +1306,7 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert not dialog.groupstats_checkbox.isChecked()
         assert "at least 2 non-empty manual groups" in dialog.groupstats_checkbox.toolTip()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -> None:
@@ -1316,7 +1342,7 @@ def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -
         assert dialog.groupstats_checkbox.isEnabled()
         assert dialog.analytics_thread is None
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_grouping_summary_and_groupstats_do_not_require_population_group() -> None:
@@ -1340,7 +1366,7 @@ def test_tabular_grouping_summary_and_groupstats_do_not_require_population_group
         assert dialog.groupstats_checkbox.isEnabled()
         assert dialog.groupstats_reason_label.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_sqlite_grouping_summary_accepts_sparse_row_table_assignments(tmp_path) -> None:
@@ -1367,7 +1393,7 @@ def test_sqlite_grouping_summary_accepts_sparse_row_table_assignments(tmp_path) 
 
         assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
         cleanup_tabular_load_result(loaded)
 
 
@@ -1412,7 +1438,7 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
         assert not dialog.clear_groups_button.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_metric_limits_dialog_applies_absolute_one_sided_limits_to_worker_metric() -> None:
@@ -1430,7 +1456,7 @@ def test_metric_limits_dialog_applies_absolute_one_sided_limits_to_worker_metric
         assert thread.metric_selection[0].lsl == 9.5
         assert thread.metric_selection[0].usl is None
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels(
@@ -1487,7 +1513,7 @@ def test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels(
         assert calls["grouping_dataframe"] is existing_grouping
         assert calls["executed"] is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> None:
@@ -1512,7 +1538,7 @@ def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> N
         ]
         assert dialog.summary_label.text() == "2 of 2 metrics selected"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_metric_selection_dialog_filters_visible_metrics_without_losing_selection() -> None:
@@ -1538,7 +1564,7 @@ def test_metric_selection_dialog_filters_visible_metrics_without_losing_selectio
             "cycle_time_s",
         ]
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_completion_message_uses_export_style_file_links(tmp_path, monkeypatch) -> None:
@@ -1582,7 +1608,7 @@ def test_analytics_completion_message_uses_export_style_file_links(tmp_path, mon
         assert f"Workbook: {workbook_file.resolve().as_uri()}" in calls[0][3]
         assert calls[0][4] == str(workbook_file)
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_completion_message_opens_dashboard_normally_when_workbook_disabled(
@@ -1623,7 +1649,7 @@ def test_analytics_completion_message_opens_dashboard_normally_when_workbook_dis
         assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in calls[0][3]
         assert calls[0][4] == ""
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path) -> None:
@@ -1673,4 +1699,4 @@ def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path)
     finally:
         if hasattr(dialog, "loading_dialog"):
             dialog.loading_dialog.close()
-        dialog.close()
+        _dispose_dialog(dialog)

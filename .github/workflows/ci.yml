@@ -823,6 +823,13 @@ jobs:
           "tests/test_csv_pipeline_performance.py::test_benchmark_cli_help_without_resource"
           "tests/test_csv_pipeline_performance.py::test_benchmark_worker_requires_resource_before_setup"
 
+      - name: Run native Windows Qt lifecycle tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: python -m pytest -vv tests/test_industrial_qt_lifecycle.py
+
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
           PYTHONPATH: src;.
