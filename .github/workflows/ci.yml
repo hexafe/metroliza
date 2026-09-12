@@ -14,15 +14,159 @@ on:
         description: "Set to 1 to build Windows artifacts and measure packaged startup"
         required: false
         default: "0"
+      run_windows_wrapper_diagnostics:
+        description: "Set to 1 for the owner-only bounded Windows wrapper discriminator"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1') }}
 
 jobs:
+  windows-wrapper-diagnostics:
+    name: Windows wrapper discriminator (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 30
+    concurrency:
+      group: windows-wrapper-discriminator-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Install declared test requirements
+        run: python -m pip install --no-cache-dir -r requirements-dev.txt
+
+      - name: Run bounded discriminator with private receipts
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tempfile
+          import xml.etree.ElementTree as ET
+
+          def safe_receipts(root):
+              path = root / 'windows-ocr-wrapper-receipts.jsonl'
+              if not path.is_file() or not 0 < path.stat().st_size <= 32768:
+                  raise ValueError('receipt_unavailable')
+              lines = path.read_text(encoding='utf-8').splitlines()
+              if not 1 <= len(lines) <= 32:
+                  raise ValueError('receipt_limit')
+              domains = {
+                  'shell': {'powershell', 'pwsh', 'python'},
+                  'scenario': {'preflight', 'retained_pipes', 'no_inherited_pipe', 'live_shell'},
+                  'stage': {'pre_timeout_state', 'completion'},
+                  'result': {'completed', 'bounded_failure'},
+                  'reason': {'completed', 'timeout', 'cancelled', 'containment_unavailable',
+                             'startup_failed', 'assignment_failed', 'resume_failed',
+                             'not_completed', 'output_limit'},
+                  'shell_state': {'exited', 'live', 'wait_failed', 'unobserved'},
+                  'fixture_stage': {'child_ready', 'shell_ready', 'fixture_mismatch', 'unobserved'},
+                  'fixture_phase': {'unobserved', 'shell_initialized', 'native_factory_ready',
+                                    'child_created', 'fixture_mismatch'},
+                  'invoke_state': {'returned', 'timeout_returned', 'failed', 'unobserved'},
+                  'invoke_reason': {'completed', 'timeout', 'cancelled', 'containment_unavailable',
+                                    'startup_failed', 'assignment_failed', 'resume_failed',
+                                    'not_completed', 'output_limit', 'unobserved'},
+                  'invoke_cleanup': {'complete', 'incomplete', 'unobserved'},
+              }
+              bools = {'shell_exited_before_timeout', 'stdout_pipe', 'stderr_pipe',
+                       'cleanup_complete'}
+              codes = {'outer_exit_code', 'invoke_exit_code', 'invoke_process_exit_code'}
+              keys = set(domains) | bools | codes | {'schema_version', 'elapsed_ms'}
+              result = []
+              for line in lines:
+                  row = json.loads(line)
+                  if type(row) is not dict or set(row) != keys:
+                      raise ValueError('receipt_schema')
+                  if type(row['schema_version']) is not int or row['schema_version'] != 1:
+                      raise ValueError('receipt_schema')
+                  if any(type(row[key]) is not str or row[key] not in values
+                         for key, values in domains.items()):
+                      raise ValueError('receipt_domain')
+                  if any(type(row[key]) is not bool for key in bools):
+                      raise ValueError('receipt_domain')
+                  if type(row['elapsed_ms']) is not int or not 0 <= row['elapsed_ms'] <= 60000:
+                      raise ValueError('receipt_domain')
+                  for key in codes:
+                      code = row[key]
+                      if code is not None and (type(code) is not int or not -(2**31) <= code < 2**32):
+                          raise ValueError('receipt_domain')
+                  result.append(row)
+              return result
+
+          result = 1
+          try:
+              with tempfile.TemporaryDirectory(prefix='metroliza-wrapper-') as private:
+                  root = Path(private)
+                  report = root / 'results.xml'
+                  env = os.environ.copy()
+                  env['METROLIZA_WRAPPER_RECEIPTS'] = str(root)
+                  command = [sys.executable, '-m', 'pytest', '-q', '-x', '--tb=no',
+                             '--show-capture=no', '-p', 'no:cacheprovider',
+                             '--basetemp=' + str(root / 'fixtures'),
+                             '--junitxml=' + str(report),
+                             'tests/test_windows_ocr_wrapper_completion.py',
+                             'tests/test_windows_ocr_powershell.py',
+                             'tests/test_windows_ocr_runtime_diagnostics.py',
+                             'tests/test_header_ocr_diagnostics_script.py',
+                             'tests/test_windows_ocr_invoke.py']
+                  try:
+                      completed = subprocess.run(command, env=env, timeout=1500,
+                                                 stdout=subprocess.DEVNULL,
+                                                 stderr=subprocess.DEVNULL)
+                      result = completed.returncode
+                      counts = {'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0}
+                      if report.is_file() and report.stat().st_size <= 2097152:
+                          for suite in ET.parse(report).getroot().iter('testsuite'):
+                              for key in counts:
+                                  value = int(suite.get(key, '0'))
+                                  if not 0 <= value <= 1000:
+                                      raise ValueError('report_counts')
+                                  counts[key] += value
+                          if not 0 <= counts['skipped'] < counts['tests'] <= 1000:
+                              raise ValueError('report_counts')
+                          if result == 0 and (counts['failures'] or counts['errors']):
+                              result = 1
+                          print(json.dumps({'stage': 'pytest_complete', 'exit_code': result,
+                                            **counts}, sort_keys=True))
+                          for receipt in safe_receipts(root):
+                              print(json.dumps(receipt, sort_keys=True))
+                      else:
+                          print('{"stage":"pytest_incomplete","reason":"report_unavailable"}')
+                          result = 1
+                  except subprocess.TimeoutExpired:
+                      print('{"stage":"pytest_incomplete","reason":"outer_timeout"}')
+                      result = 1
+                  except (OSError, ValueError, ET.ParseError):
+                      print(json.dumps({'stage': 'pytest_incomplete',
+                                        'reason': 'invalid_private_receipt', 'exit_code': result}))
+                      result = 1
+          except KeyboardInterrupt:
+              print('{"stage":"private_scope_failed","reason":"cancelled"}')
+              result = 130
+          except Exception:
+              print('{"stage":"private_scope_failed","reason":"private_cleanup_failed"}')
+              result = 1
+          else:
+              print('{"stage":"private_receipts_removed"}')
+          sys.exit(result)
+
   static-checks:
     name: Static checks
     runs-on: ubuntu-latest
