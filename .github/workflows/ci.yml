@@ -1,4 +1,5 @@
 name: CI
+run-name: ${{ inputs.run_qt_lifetime_control == '1' && format('Qt lifetime {0} {1}', inputs.qt_control_phase, inputs.qt_control_head) || github.workflow }}
 
 on:
   pull_request:
@@ -6,6 +7,19 @@ on:
     branches: ['**']
   workflow_dispatch:
     inputs:
+      qt_control_head:
+        description: "Exact reviewed Qt control commit"
+        required: false
+      qt_control_tree:
+        description: "Exact reviewed Qt control tree"
+        required: false
+      qt_control_phase:
+        description: "One-use Qt control phase"
+        required: false
+      run_qt_lifetime_control:
+        description: "Owner-only temporary no-core Qt lifetime discriminator"
+        required: false
+        default: "0"
       run_packaging_smoke:
         description: "Set to 1 to run manual packaging smoke build"
         required: false
@@ -19,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.run_qt_lifetime_control == '1' && github.run_id || 'ordinary' }}
   cancel-in-progress: true
 
 jobs:
@@ -896,3 +910,55 @@ jobs:
           name: windows-startup-artifacts
           path: startup-artifacts
           if-no-files-found: warn
+
+  qt-lifetime-control:
+    name: Qt lifetime control (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_qt_lifetime_control == '1' && github.actor == github.repository_owner && github.event.repository.private == false && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: metroliza-998-native-experiment
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+      - name: Install ordinary Qt system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Install declared requirements
+        run: python -m pip install -r requirements-dev.txt
+      - name: Record exact source and dependency revisions
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          python -m pip list --format=json
+          dpkg-query -W libc6 libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+          sha256sum "$(readlink -f "$(command -v python)")" /lib/x86_64-linux-gnu/libc.so.6
+      - name: Bounded no-core lifetime control
+        env:
+          QT_CONTROL_HEAD: ${{ inputs.qt_control_head }}
+          QT_CONTROL_TREE: ${{ inputs.qt_control_tree }}
+          QT_CONTROL_PHASE: ${{ inputs.qt_control_phase }}
+        run: python scripts/ci_qt_lifetime_control.py
+      - name: Remove owned private data
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          import os, pathlib, shutil, sys
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          complete = False
+          try:
+              for path in root.glob('qt-lifetime-private-*'):
+                  if path.is_dir() and not path.is_symlink():
+                      shutil.rmtree(path)
+              complete = not any(root.glob('qt-lifetime-private-*'))
+          except OSError:
+              pass
+          print('owned_private_cleanup_complete' if complete else 'owned_private_cleanup_failed')
+          sys.exit(0 if complete else 70)
+          PYCODE

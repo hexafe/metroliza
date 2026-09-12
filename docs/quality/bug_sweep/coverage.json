@@ -2534,6 +2534,7 @@
       "include": [
         "scripts/benchmark_realtime_detectors.py",
         "scripts/calibrate_realtime_anomaly_models.py",
+        "scripts/ci_qt_lifetime_control.py",
         "scripts/generate_realtime_industrial_fixtures.py",
         "scripts/replay_industrial_stream.py"
       ],

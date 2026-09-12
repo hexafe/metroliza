@@ -56,6 +56,7 @@ These checks are explicitly non-blocking for normal PR CI:
 | Check | Workflow job name (`ci.yml`) | Trigger model | Blocking status |
 |---|---|---|---|
 | Performance benchmark trend check | `perf-benchmarks` | Automatic on PRs and branch pushes after static checks and unit tests pass | **Non-blocking** advisory signal; compares medians with a 12% threshold and 0.100s absolute slowdown floor, reports export stage medians for review, and keeps the PR check green while artifacts preserve the advisory failure details |
+| Qt lifetime discriminator (#998, temporary) | `qt-lifetime-control` | Owner-only public-repository dispatch with `run_qt_lifetime_control=1`, attempt1 | Synthetic no-core guest control; private bounded output and unconditional cleanup; disabled for ordinary CI |
 | Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
 | Google conversion smoke (release-only) | Local secure workstation command documented in `docs/google_conversion_smoke_runbook.md` | Explicit local opt-in with sandbox `credentials.json` and `token.json` | Not a hosted CI job; **release-blocking** evidence for promoted RC artifacts |
 | Windows startup benchmark (release-only) | `windows-startup-benchmark` | Manual `workflow_dispatch` with `run_windows_startup_benchmark=1` | **Non-blocking** for regular PRs and pushes |
