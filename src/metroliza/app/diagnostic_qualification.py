@@ -159,7 +159,13 @@ def write_receipt(scenario: str, stage: str) -> None:
     stage_path = root / (".receipt-" + uuid.uuid4().hex)
     with stage_path.open("x", encoding="ascii") as stream:
         json.dump(payload, stream, sort_keys=True)
-    name = "startup.json" if stage == "startup_ready" else "qualification.json"
+    names = {
+        "startup_ready": "startup.json",
+        "ready": "qualification-ready.json",
+        "complete": "qualification-complete.json",
+        "failed": "qualification-failed.json",
+    }
+    name = names[stage]
     stage_path.replace(root / name)
 
 

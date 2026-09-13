@@ -209,6 +209,272 @@ def test_entry_failure_receipt_maps_only_closed_stage_and_reason(tmp_path) -> No
     }
 
 
+def test_driver_phase_closes_unexpected_failure_without_private_text() -> None:
+    def fail() -> None:
+        raise LookupError("PRIVATE_PATH_AND_NATIVE_TEXT")
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._run_driver_phase("startups", fail)
+
+    assert error.value.failure_id == "scenario_failed"
+    assert error.value.qualification_stage == "startups"
+    assert error.value.qualification_reason == "unexpected"
+    assert "PRIVATE_PATH" not in str(error.value)
+
+
+def test_driver_phase_preserves_safe_early_process_exit_evidence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class _NoReceiptApi(_FakeApi):
+        def launch(self, executable, environment, cwd):
+            process = super().launch(executable, environment, cwd)
+            (cwd / "startup.json").unlink()
+            (cwd / qualification.QUALIFICATION_RECEIPT_NAMES[self.stage]).unlink()
+            return process
+
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    api = _NoReceiptApi(3221225477, "failed")
+    artifact = tmp_path / "artifact"
+    work = tmp_path / "work"
+    state = tmp_path / "state"
+    for path in (artifact, work, state):
+        path.mkdir()
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._run_driver_phase(
+            "startups",
+            lambda: qualification._run_scenario(
+                api,
+                artifact / "metroliza_application.exe",
+                artifact,
+                work,
+                state,
+                "normal",
+                time.monotonic() + 1,
+                expected_exit=0,
+                expected_stage="complete",
+            ),
+        )
+
+    assert error.value.qualification_stage == "startups"
+    assert error.value.qualification_reason == "process_exited_before_startup"
+    assert error.value.qualification_exit_code == 3221225477
+
+
+def test_startup_failure_retains_exact_host_and_child_stage(monkeypatch) -> None:
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.store = object()
+    runner.application = Path("metroliza_application.exe")
+    monkeypatch.setattr(qualification, "_reports", lambda _store: ())
+
+    def fail_scenario(*_arguments, **_keywords) -> None:
+        raise qualification.QualificationFailure(
+            "scenario_failed",
+            qualification_reason="qualification_result_mismatch",
+            qualification_child_stage="workflows",
+        )
+
+    runner._scenario = fail_scenario
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        runner.run_startups()
+
+    assert error.value.qualification_stage == "direct_normal_1"
+    assert error.value.qualification_child_stage == "workflows"
+    assert error.value.qualification_reason == "qualification_result_mismatch"
+
+
+def test_job_observation_omits_only_confirmed_disappeared_pid(monkeypatch) -> None:
+    class _ProcessIds(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", ctypes.c_uint32),
+            ("NumberOfProcessIdsInList", ctypes.c_uint32),
+            ("ProcessIdList", ctypes.c_size_t * 16),
+        ]
+
+    class _Accounting(ctypes.Structure):
+        _fields_ = [
+            ("TotalUserTime", ctypes.c_longlong),
+            ("TotalKernelTime", ctypes.c_longlong),
+            ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+            ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+            ("TotalPageFaultCount", ctypes.c_uint32),
+            ("TotalProcesses", ctypes.c_uint32),
+            ("ActiveProcesses", ctypes.c_uint32),
+            ("TotalTerminatedProcesses", ctypes.c_uint32),
+        ]
+
+    class _Kernel:
+        process_queries = 0
+
+        def QueryInformationJobObject(self, _job, kind, value, _size, _returned):
+            if kind == 1:
+                accounting = ctypes.cast(value, ctypes.POINTER(_Accounting)).contents
+                accounting.TotalProcesses = 1
+                accounting.ActiveProcesses = 0
+                return 1
+            info = ctypes.cast(value, ctypes.POINTER(_ProcessIds)).contents
+            self.process_queries += 1
+            if self.process_queries == 1:
+                info.NumberOfAssignedProcesses = 1
+                info.NumberOfProcessIdsInList = 1
+                info.ProcessIdList[0] = 404
+            return 1
+
+        def OpenProcess(self, _access, _inherit, process_id):
+            assert process_id == 404
+            return 0
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.PROCESS_IDS = _ProcessIds
+    api.BASIC_ACCOUNTING = _Accounting
+    api.kernel = _Kernel()
+    monkeypatch.setattr(
+        qualification.ctypes,
+        "get_last_error",
+        lambda: qualification.WINDOWS_ERROR_INVALID_PARAMETER,
+        raising=False,
+    )
+
+    observations, active, assigned = api.job_observations(object())
+
+    assert observations == ()
+    assert (active, assigned) == (0, 1)
+    topology = qualification._classify_topology(
+        observations,
+        assigned,
+        active,
+        True,
+        Path("launcher"),
+        Path("application"),
+    )
+    assert topology.unexpected_processes_observed == 1
+
+
+def test_job_observation_keeps_other_open_failures_fatal(monkeypatch) -> None:
+    class _ProcessIds(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", ctypes.c_uint32),
+            ("NumberOfProcessIdsInList", ctypes.c_uint32),
+            ("ProcessIdList", ctypes.c_size_t * 16),
+        ]
+
+    class _Kernel:
+        def QueryInformationJobObject(self, _job, _kind, value, _size, _returned):
+            info = ctypes.cast(value, ctypes.POINTER(_ProcessIds)).contents
+            info.NumberOfAssignedProcesses = 1
+            info.NumberOfProcessIdsInList = 1
+            info.ProcessIdList[0] = 405
+            return 1
+
+        def OpenProcess(self, *_arguments):
+            return 0
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.PROCESS_IDS = _ProcessIds
+    api.kernel = _Kernel()
+    monkeypatch.setattr(
+        qualification.ctypes,
+        "get_last_error",
+        lambda: 5,
+        raising=False,
+    )
+
+    with pytest.raises(qualification.QualificationFailure):
+        api.job_observations(object())
+
+
+def test_job_observation_keeps_pid_listed_after_open_failure_fatal(monkeypatch) -> None:
+    class _ProcessIds(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", ctypes.c_uint32),
+            ("NumberOfProcessIdsInList", ctypes.c_uint32),
+            ("ProcessIdList", ctypes.c_size_t * 16),
+        ]
+
+    class _Kernel:
+        def QueryInformationJobObject(self, _job, _kind, value, _size, _returned):
+            info = ctypes.cast(value, ctypes.POINTER(_ProcessIds)).contents
+            info.NumberOfAssignedProcesses = 1
+            info.NumberOfProcessIdsInList = 1
+            info.ProcessIdList[0] = 406
+            return 1
+
+        def OpenProcess(self, *_arguments):
+            return 0
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.PROCESS_IDS = _ProcessIds
+    api.kernel = _Kernel()
+    monkeypatch.setattr(
+        qualification.ctypes,
+        "get_last_error",
+        lambda: qualification.WINDOWS_ERROR_INVALID_PARAMETER,
+        raising=False,
+    )
+
+    with pytest.raises(qualification.QualificationFailure):
+        api.job_observations(object())
+
+
+def test_job_accounting_exposes_unobserved_short_lived_processes() -> None:
+    class _ProcessIds(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", ctypes.c_uint32),
+            ("NumberOfProcessIdsInList", ctypes.c_uint32),
+            ("ProcessIdList", ctypes.c_size_t * 16),
+        ]
+
+    class _Accounting(ctypes.Structure):
+        _fields_ = [
+            ("TotalUserTime", ctypes.c_longlong),
+            ("TotalKernelTime", ctypes.c_longlong),
+            ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+            ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+            ("TotalPageFaultCount", ctypes.c_uint32),
+            ("TotalProcesses", ctypes.c_uint32),
+            ("ActiveProcesses", ctypes.c_uint32),
+            ("TotalTerminatedProcesses", ctypes.c_uint32),
+        ]
+
+    class _Kernel:
+        def QueryInformationJobObject(self, _job, kind, value, _size, _returned):
+            if kind == 1:
+                accounting = ctypes.cast(value, ctypes.POINTER(_Accounting)).contents
+                accounting.TotalProcesses = 3
+                accounting.ActiveProcesses = 0
+                accounting.TotalTerminatedProcesses = 3
+                return 1
+            info = ctypes.cast(value, ctypes.POINTER(_ProcessIds)).contents
+            info.NumberOfAssignedProcesses = 0
+            info.NumberOfProcessIdsInList = 0
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.PROCESS_IDS = _ProcessIds
+    api.BASIC_ACCOUNTING = _Accounting
+    api.kernel = _Kernel()
+
+    observations, active, total = api.job_observations(object())
+
+    assert observations == ()
+    assert (active, total) == (0, 3)
+    topology = qualification._classify_topology(
+        observations,
+        total,
+        active,
+        True,
+        Path("launcher"),
+        Path("application"),
+    )
+    assert topology.unexpected_processes_observed == 3
+
+
 def _write_pe(path: Path, subsystem: int = 2) -> None:
     image = bytearray(512)
     image[0:2] = b"MZ"
@@ -503,6 +769,104 @@ def test_output_receipt_is_closed_bounded_and_atomic(tmp_path) -> None:
     assert not tuple(second.iterdir())
 
 
+def test_late_payload_failure_removes_only_created_artifacts_for_failure_receipt(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source"
+    tested = tmp_path / "tested"
+    output = tmp_path / "output"
+    for path in (source, tested, output):
+        path.mkdir()
+    (source / "component.bin").write_bytes(b"approved")
+    (tested / "component.bin").write_bytes(b"approved")
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = tested
+    runner.results = {}
+    runner.direct_idle_write_bytes = 0
+    runner.supervised_idle_write_bytes = 0
+    runner.hard_ready_to_report_ms = 0
+    runner.handled_ready_to_report_ms = 0
+    runner.hard_assembly_to_verification_ms = 0
+    runner.handled_assembly_to_verification_ms = 0
+    runner.flood_loss = {}
+    for name in (
+        "run_startups",
+        "run_concurrent_instances",
+        "run_ui_smoke",
+        "run_hard_exit",
+        "run_handled_failure",
+        "run_preview",
+        "run_idle",
+        "run_flood",
+        "run_unavailable_store",
+        "run_missing_components",
+        "run_missing_qt_resource",
+    ):
+        setattr(runner, name, lambda: None)
+
+    def fail_payload(*_arguments, **_keywords):
+        raise qualification.QualificationFailure("scenario_failed")
+
+    monkeypatch.setattr(qualification, "_success_payload", fail_payload)
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        runner.run({}, source, output)
+
+    assert caught.value.qualification_stage == "receipt"
+    assert not tuple(output.iterdir())
+    failure_payload = {
+        "schema_version": 1,
+        "status": "failed",
+        "failure_id": caught.value.failure_id,
+        "qualification_failure": {
+            "stage": caught.value.qualification_stage,
+            "reason": caught.value.qualification_reason,
+        },
+        "package": None,
+        "environment": None,
+        "topology": None,
+        "checks": [],
+        "metrics": None,
+        "operational_cost": None,
+    }
+    destination = qualification._write_receipt(output, failure_payload)
+    assert {path.name for path in output.iterdir()} == {qualification.OUTPUT_NAME}
+    assert json.loads(destination.read_text(encoding="ascii"))["status"] == "failed"
+
+
+def test_main_replaces_late_created_artifacts_with_closed_failure_receipt(
+    tmp_path, monkeypatch
+) -> None:
+    artifact = tmp_path / "artifact"
+    output = tmp_path / "output"
+    artifact.mkdir()
+
+    class _Arguments:
+        artifact_dir = artifact
+        output_dir = output
+
+    class _Parser:
+        def parse_args(self, _arguments):
+            return _Arguments()
+
+    def fail_after_artifacts(_artifact, output_dir, _deadline):
+        (output_dir / qualification.PACKAGE_ARCHIVE_NAME).write_bytes(b"partial")
+        (output_dir / qualification.PACKAGE_MANIFEST_NAME).write_bytes(b"partial")
+        raise qualification.QualificationFailure("scenario_failed")
+
+    monkeypatch.setattr(qualification, "_parser", lambda: _Parser())
+    monkeypatch.setattr(qualification, "_qualification_payload", fail_after_artifacts)
+    monkeypatch.setattr(qualification.os, "name", "nt")
+
+    assert qualification.main([]) == 1
+    assert {path.name for path in output.iterdir()} == {qualification.OUTPUT_NAME}
+    receipt = json.loads((output / qualification.OUTPUT_NAME).read_text(encoding="ascii"))
+    assert receipt["status"] == "failed"
+    assert receipt["qualification_failure"] == {
+        "stage": "runner",
+        "reason": "unexpected",
+    }
+
+
 def test_package_relocation_rejects_links_and_entry_overflow(tmp_path, monkeypatch) -> None:
     source = tmp_path / "package"
     source.mkdir()
@@ -555,7 +919,9 @@ def test_output_failure_detail_accepts_only_closed_qualification_evidence() -> N
         "failure_id": "scenario_failed",
         "qualification_failure": {
             "stage": "preview",
+            "child_stage": "preview",
             "reason": "qualification_preview_unavailable",
+            "exit_code": 3221225477,
         },
         "package": None,
         "environment": None,
@@ -565,6 +931,10 @@ def test_output_failure_detail_accepts_only_closed_qualification_evidence() -> N
         "operational_cost": None,
     }
     qualification._validate_output_payload(payload)
+    payload["qualification_failure"]["exit_code"] = True
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_output_payload(payload)
+    payload["qualification_failure"]["exit_code"] = 3221225477
     payload["qualification_failure"]["reason"] = "PRIVATE_PATH"
     with pytest.raises(qualification.QualificationFailure):
         qualification._validate_output_payload(payload)
@@ -754,11 +1124,41 @@ class _FakeApi:
         startup = {**common, "stage": "startup_ready"}
         payload = {**common, "stage": self.stage}
         (cwd / "startup.json").write_text(json.dumps(startup), encoding="ascii")
-        (cwd / "qualification.json").write_text(json.dumps(payload), encoding="ascii")
+        (cwd / qualification.QUALIFICATION_RECEIPT_NAMES[self.stage]).write_text(
+            json.dumps(payload), encoding="ascii"
+        )
         self.process = _FakeProcess(
             self.exit_code, supervised=Path(executable).name == "metroliza.exe"
         )
         return self.process
+
+
+def test_immutable_receipts_preserve_ready_during_complete_observation(
+    tmp_path,
+) -> None:
+    process = _FakeProcess(0, supervised=True)
+    common = {
+        "schema_version": 1,
+        "scenario": "normal",
+        "packaged": True,
+        "console_none": True,
+        "ordinary_user": True,
+        "integrity_level": "medium",
+    }
+    for stage in ("ready", "complete"):
+        (tmp_path / qualification.QUALIFICATION_RECEIPT_NAMES[stage]).write_text(
+            json.dumps({**common, "stage": stage}), encoding="ascii"
+        )
+    called: list[qualification._WindowsProcess] = []
+
+    receipt, ready_called = qualification._observe_qualification_receipt(
+        tmp_path, "normal", process, called.append, False
+    )
+
+    assert receipt is not None and receipt["stage"] == "complete"
+    assert ready_called is True
+    assert called == [process]
+    assert (tmp_path / qualification.QUALIFICATION_RECEIPT_NAMES["ready"]).is_file()
 
 
 def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypatch) -> None:
@@ -807,6 +1207,15 @@ def test_platform_and_relative_arguments_fail_without_creating_output(
             "failed", "unsupported_platform", None
         )
     assert not (tmp_path / "output").exists()
+
+
+def test_qualification_build_pins_observed_onnxruntime_version() -> None:
+    requirements = (qualification.REPO_ROOT / "requirements-ocr.txt").read_text(
+        encoding="utf-8"
+    )
+    assert [
+        line for line in requirements.splitlines() if line.startswith("onnxruntime")
+    ] == ["onnxruntime==1.30.0"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")

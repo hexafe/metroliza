@@ -16,11 +16,14 @@ def test_qualification_receipt_includes_closed_integrity_level(tmp_path, monkeyp
     monkeypatch.setattr(diagnostic_qualification, "_ordinary_user", lambda: True)
     monkeypatch.setattr(diagnostic_qualification, "_integrity_level", lambda: "medium")
 
+    diagnostic_qualification.write_receipt("normal", "ready")
     diagnostic_qualification.write_receipt("normal", "complete")
 
-    receipt = json.loads((tmp_path / "qualification.json").read_bytes())
+    receipt = json.loads((tmp_path / "qualification-complete.json").read_bytes())
+    ready = json.loads((tmp_path / "qualification-ready.json").read_bytes())
     assert receipt["ordinary_user"] is True
     assert receipt["integrity_level"] == "medium"
+    assert ready["stage"] == "ready"
 
 
 def test_destructive_synthetic_scenario_requires_both_explicit_test_flags(monkeypatch):
@@ -46,7 +49,8 @@ def test_actual_package_entry_runs_only_the_pinned_synthetic_workflow(tmp_path, 
     result = run_with_store([sys.executable, str(root / "packaging/metroliza_package_entry.py")],
                             store=store, env=env, cwd=work)
     assert result.observation.exit_code == code
-    receipt = json.loads((work / "qualification.json").read_bytes())
+    receipt_name = "qualification-ready.json" if code else "qualification-complete.json"
+    receipt = json.loads((work / receipt_name).read_bytes())
     assert set(receipt) == {
         "schema_version", "scenario", "stage", "packaged", "console_none",
         "ordinary_user", "integrity_level",
@@ -103,7 +107,9 @@ def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
     result = run_with_store([sys.executable, str(root / "packaging/metroliza_package_entry.py")],
                             store=store, env=env, cwd=work)
     assert result.observation.exit_code == 0
-    assert json.loads((work / "qualification.json").read_bytes())["stage"] == "complete"
+    assert json.loads((work / "qualification-complete.json").read_bytes())[
+        "stage"
+    ] == "complete"
     import zipfile
 
     with zipfile.ZipFile(work / "selected.zip") as bundle:
