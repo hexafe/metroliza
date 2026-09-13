@@ -653,6 +653,7 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.analytics_thread = None
         self.tabular_load_thread = None
+        self._worker_progress = {}
         self.metric_candidates: tuple[ProductionMetricSelection, ...] = ()
         self.metric_spec_limits: dict[str, tuple[float | None, float | None]] = {}
         self.dashboard_visual_settings = load_dashboard_visual_settings()
@@ -2406,7 +2407,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if not input_files:
             QMessageBox.warning(self, self.windowTitle(), "Select a CSV or Excel file first.")
             return
-        if self.tabular_load_thread is not None and self.tabular_load_thread.isRunning():
+        if self.tabular_load_thread is not None or self.analytics_thread is not None:
             return
         self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = (
             create_worker_progress_dialog(
@@ -2427,6 +2428,11 @@ class IndustrialAnalyticsDialog(QDialog):
             sheet_name=self._selected_sheet_name(),
             timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
             reference_column=self._selected_tabular_column(self.reference_column_combo),
+        )
+        # Terminal handlers can enter a nested event loop. Retain each worker's
+        # own widgets so late cleanup cannot dispose a newer analytics window.
+        self._worker_progress[self.tabular_load_thread] = (
+            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
         )
         self.tabular_load_thread.result_ready.connect(self.on_tabular_load_finished)
         self.tabular_load_thread.error_occurred.connect(self.on_tabular_load_error)
@@ -2449,19 +2455,16 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_tabular_load_finished(self, loaded) -> None:
-        if hasattr(self, "loading_dialog"):
-            self.loading_dialog.close()
+        self._close_worker_progress()
         self._apply_tabular_load_result(loaded)
 
     def on_tabular_load_error(self, message: str) -> None:
-        if hasattr(self, "loading_dialog"):
-            self.loading_dialog.close()
+        self._close_worker_progress()
         QMessageBox.warning(self, self.windowTitle(), f"Could not load metrics: {message}")
         self._sync_ui_state()
 
     def on_tabular_load_cancelled(self, message: str) -> None:
-        if hasattr(self, "loading_dialog"):
-            self.loading_dialog.close()
+        self._close_worker_progress()
         QMessageBox.information(self, self.windowTitle(), message or "CSV/Excel loading was canceled.")
 
     def on_tabular_load_thread_stopped(self) -> None:
@@ -2471,9 +2474,34 @@ class IndustrialAnalyticsDialog(QDialog):
         if thread is not None:
             thread.wait()
             thread.deleteLater()
+            self._dispose_worker_progress(thread)
         if self.tabular_load_thread is thread:
             self.tabular_load_thread = None
         self._sync_ui_state()
+
+    def _close_worker_progress(self) -> None:
+        thread = self.sender()
+        progress = self._worker_progress.get(thread)
+        if progress is not None:
+            progress[0].close()
+        elif thread is None and hasattr(self, "loading_dialog"):
+            # Direct handler calls have no signal sender.
+            self.loading_dialog.close()
+
+    def _dispose_worker_progress(self, thread) -> None:
+        progress = self._worker_progress.pop(thread, None)
+        if progress is None:
+            return
+        dialog, _label, _bar, movie = progress
+        # Closing only hides the dialog; its parent still owns the running movie.
+        movie.stop()
+        dialog.close()
+        dialog.deleteLater()
+        for name, widget in zip(
+            ("loading_dialog", "loading_label", "loading_bar", "loading_gif"), progress
+        ):
+            if getattr(self, name, None) is widget:
+                delattr(self, name)
 
     def _build_analytics_request(self, *, require_runnable: bool = False) -> IndustrialAnalyticsRequest:
         return validate_industrial_analytics_request(
@@ -2539,6 +2567,8 @@ class IndustrialAnalyticsDialog(QDialog):
         )
 
     def show_loading_screen(self) -> None:
+        if self.tabular_load_thread is not None or self.analytics_thread is not None:
+            return
         try:
             request = self._build_analytics_request(require_runnable=True)
         except ValueError as exc:
@@ -2562,6 +2592,9 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.loading_bar.setRange(0, 0)
         self.analytics_thread = self.create_analytics_thread()
+        self._worker_progress[self.analytics_thread] = (
+            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
+        )
         self.analytics_thread.result_ready.connect(self.on_analytics_finished)
         self.analytics_thread.error_occurred.connect(self.on_analytics_error)
         self.analytics_thread.cancelled.connect(self.on_analytics_cancelled)
@@ -2583,8 +2616,7 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_analytics_finished(self, result) -> None:
-        if hasattr(self, "loading_dialog"):
-            self.loading_dialog.close()
+        self._close_worker_progress()
         level, title, message, reveal_path = build_analytics_completion_message(result)
         try:
             from metroliza.ui.export_dialog import show_export_result_message
@@ -2594,17 +2626,23 @@ class IndustrialAnalyticsDialog(QDialog):
             QMessageBox.information(self, title, message)
 
     def on_analytics_error(self, message: str) -> None:
-        if hasattr(self, "loading_dialog"):
-            self.loading_dialog.close()
+        self._close_worker_progress()
         QMessageBox.warning(self, self.windowTitle(), f"Could not create analytics: {message}")
 
     def on_analytics_cancelled(self, message: str) -> None:
-        if hasattr(self, "loading_dialog"):
-            self.loading_dialog.close()
+        self._close_worker_progress()
         QMessageBox.information(self, self.windowTitle(), message or "Analytics generation was canceled.")
 
     def on_analytics_thread_stopped(self) -> None:
-        self.analytics_thread = None
+        thread = self.sender()
+        if not isinstance(thread, IndustrialAnalyticsThread):
+            thread = self.analytics_thread
+        if thread is not None:
+            thread.wait()
+            thread.deleteLater()
+            self._dispose_worker_progress(thread)
+        if self.analytics_thread is thread:
+            self.analytics_thread = None
         self._sync_ui_state()
 
     def reject(self) -> None:
