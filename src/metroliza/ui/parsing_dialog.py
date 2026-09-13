@@ -311,7 +311,9 @@ class ParsingDialog(QDialog):
 
         # Set the window title and geometry
         self.setWindowTitle("Import reports")
-        configure_window_size(self, minimum=(620, 440), initial=(1000, 680))
+        # Keep the compact workspace within the native frame allowance, including
+        # 200% scaling on a 1080px desktop with its taskbar present.
+        configure_window_size(self, minimum=(620, 440), initial=(1000, 680), screen_margin=32)
 
         # Initialize variables
         self.directory = directory

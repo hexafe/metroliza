@@ -163,7 +163,7 @@ def _assert_requested_size(dialog: ParsingDialog, size: tuple[int, int]) -> None
         )
     }
     assert dialog.size() == QSize(*size), (
-        f"dialog silently grew from requested {size} to "
+        f"dialog did not keep requested {size}: "
         f"{dialog.size().width()}x{dialog.size().height()}; heights(actual,minimum,hint)={heights}"
     )
 
@@ -360,6 +360,9 @@ def test_windows_scale_inner_geometry(app):
         dialog.resize(720, 480)
         app.processEvents()
         _assert_requested_size(dialog, (720, 480))
+        available = dialog.screen().availableGeometry()
+        assert dialog.frameGeometry().width() <= available.width()
+        assert dialog.frameGeometry().height() <= available.height()
         _assert_geometry(dialog, app, pane="details")
         _assert_geometry(dialog, app, pane="outcome")
     finally:
