@@ -28,6 +28,9 @@ from metroliza.reports.db import (
 )
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.shared.datetime_parsing import parse_datetime_literal
+from metroliza.shared.finite_numeric import (
+    sqlite_numeric_filter, sqlite_numeric_membership, sqlite_prefer_integer_source,
+)
 from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
 from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
@@ -3855,6 +3858,14 @@ def _compile_sqlite_text_membership_filter_spec(
     return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
+def _sqlite_numeric_filter_source(column: str, mapping: Mapping[str, str] | None) -> str:
+    source = _quote_identifier(column)
+    sidecar = (mapping or {}).get(column, column)
+    if sidecar == column:
+        return source
+    return sqlite_prefer_integer_source(source, _quote_identifier(sidecar))
+
+
 def _compile_sqlite_numeric_membership_filter_spec(
     spec: Any,
     column: str,
@@ -3863,23 +3874,11 @@ def _compile_sqlite_numeric_membership_filter_spec(
     numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
     del spec
-    numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
-        column,
-        numeric_filter_columns,
+    params: list[Any] = []
+    clause = sqlite_numeric_membership(
+        _sqlite_numeric_filter_source(column, numeric_filter_columns),
+        values, negate=negate, params=params,
     )
-    parsed_values = tuple(
-        _sqlite_filter_number_value(value, field_name="IN value")
-        for value in values
-    )
-    predicate, params = _sqlite_membership_in_predicate(
-        numeric_expr,
-        parsed_values,
-        negate=negate,
-    )
-    if negate:
-        clause = f"((NOT ({numeric_guard})) OR {predicate})"
-    else:
-        clause = f"(({numeric_guard}) AND {predicate})"
     return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
@@ -3915,37 +3914,12 @@ def _compile_sqlite_number_filter_spec(
     operator: str,
     numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
-    numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
-        column,
-        numeric_filter_columns,
+    params: list[Any] = []
+    clause = sqlite_numeric_filter(
+        _sqlite_numeric_filter_source(column, numeric_filter_columns), operator,
+        getattr(spec, "value", None), getattr(spec, "second_value", None), params=params,
     )
-    if operator == "is_blank":
-        return TabularSqliteFilterExpression(clause=f"(NOT ({numeric_guard}))", columns=(column,))
-    if operator == "is_not_blank":
-        return TabularSqliteFilterExpression(clause=f"({numeric_guard})", columns=(column,))
-
-    if operator == "between":
-        value = _sqlite_filter_number_value(getattr(spec, "value", None), field_name="value")
-        second_value = _sqlite_filter_number_value(
-            getattr(spec, "second_value", None),
-            field_name="second_value",
-        )
-        lower, upper = sorted((value, second_value))
-        return TabularSqliteFilterExpression(
-            clause=f"(({numeric_guard}) AND {numeric_expr} BETWEEN ? AND ?)",
-            params=(lower, upper),
-            columns=(column,),
-        )
-
-    sql_operator = _SQLITE_NUMBER_OPERATOR_SQL.get(operator)
-    if sql_operator is None:
-        raise ValueError(f"Unsupported number filter operator: {operator}")
-    value = _sqlite_filter_number_value(getattr(spec, "value", None), field_name="value")
-    if sql_operator == "!=":
-        clause = f"((NOT ({numeric_guard})) OR {numeric_expr} != ?)"
-    else:
-        clause = f"(({numeric_guard}) AND {numeric_expr} {sql_operator} ?)"
-    return TabularSqliteFilterExpression(clause=clause, params=(value,), columns=(column,))
+    return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
 def _compile_sqlite_date_filter_spec(

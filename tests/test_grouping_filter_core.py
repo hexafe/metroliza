@@ -3,7 +3,7 @@ import warnings
 import pandas as pd
 import pytest
 
-from modules.grouping_filter_core import (
+from metroliza.shared.grouping_filter_core import (
     DataFrameGroupingIndex,
     DateFilterSpec,
     MembershipFilterSpec,
@@ -17,6 +17,78 @@ from modules.grouping_filter_core import (
     parse_filter_expression,
     resolve_filter_column,
 )
+from tests.numeric_filter_cases import (
+    ROUNDING_CASES, ROUNDING_VALUES,
+    PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES, SOURCE_CASES,
+)
+
+
+@pytest.mark.parametrize("dtype", [object, "string"])
+@pytest.mark.parametrize("spec, expected_ids", PROBE_CASES)
+def test_finite_numeric_probe_expected_ids(spec, expected_ids, dtype):
+    frame = pd.DataFrame({"reference": pd.Series(PROBE_VALUES, dtype=dtype)})
+    frame.index = range(1, 24)
+    before = frame.copy(deep=True)
+    for _ in range(2):
+        assert frame.index[spec.mask(frame)].tolist() == expected_ids
+    pd.testing.assert_frame_equal(frame, before)
+
+
+@pytest.mark.parametrize("spec, expected_ids", PRECISION_CASES)
+def test_finite_numeric_precision_ids(spec, expected_ids):
+    frame = pd.DataFrame({"reference": pd.Series(PRECISION_VALUES, dtype=object)})
+    frame.index = range(1, len(frame) + 1)
+    assert frame.index[spec.mask(frame)].tolist() == expected_ids
+
+
+@pytest.mark.parametrize("source, expected", SOURCE_CASES)
+def test_finite_numeric_source_boundary(source, expected):
+    frame = pd.DataFrame({"reference": pd.Series([source], dtype=object)}, index=[0])
+    assert NumberFilterSpec("reference", "is_blank").mask(frame).tolist() == [expected is None]
+    if expected is not None:
+        assert NumberFilterSpec("reference", "eq", expected).mask(frame).tolist() == [True]
+        assert MembershipFilterSpec("reference", (expected,)).mask(frame).tolist() == [True]
+
+
+@pytest.mark.parametrize("dtype", ["int64", "Int64", object])
+def test_finite_numeric_integer_column_preserves_precision(dtype):
+    values = [2**53, 2**53 + 1, 2**63 - 1]
+    if dtype != "int64":
+        values.append(pd.NA)
+    frame = pd.DataFrame({"reference": pd.Series(values, dtype=dtype)})
+    assert frame.index[NumberFilterSpec("reference", "eq", 2**53).mask(frame)].tolist() == [0]
+    assert frame.index[MembershipFilterSpec("reference", (2**53,)).mask(frame)].tolist() == [0]
+
+
+@pytest.mark.parametrize("dtype", ["uint64", "UInt64", object])
+def test_finite_numeric_uint64_membership_remains_exact(dtype):
+    values = [2**63, 2**63 + 1, 2**64 - 1]
+    if dtype != "uint64":
+        values.append(pd.NA)
+    frame = pd.DataFrame({"reference": pd.Series(values, dtype=dtype)})
+    assert frame.index[MembershipFilterSpec("reference", (2**63,)).mask(frame)].tolist() == [0]
+
+
+@pytest.mark.parametrize("dtype", ["float64", "Float64", object])
+def test_finite_numeric_nullable_float_negative_and_blank(dtype):
+    frame = pd.DataFrame({"reference": pd.Series([0., 1., float("inf"), float("nan")], dtype=dtype)})
+    assert frame.index[NumberFilterSpec("reference", "ne", 0).mask(frame)].tolist() == [1, 2, 3]
+    assert frame.index[NumberFilterSpec("reference", "is_blank").mask(frame)].tolist() == [2, 3]
+
+
+@pytest.mark.parametrize("dtype", [bool, "boolean"])
+def test_finite_numeric_boolean_column(dtype):
+    values = [True, False] if dtype is bool else [True, False, pd.NA]
+    frame = pd.DataFrame({"reference": pd.Series(values, dtype=dtype)})
+    assert frame.index[NumberFilterSpec("reference", "eq", 1).mask(frame)].tolist() == [0]
+    assert frame.index[MembershipFilterSpec("reference", (0,)).mask(frame)].tolist() == [1]
+
+
+@pytest.mark.parametrize("values", [[], [None, "bad", "Inf"], ["1", 2, ".5"]])
+def test_finite_numeric_empty_and_uniform_populations(values):
+    frame = pd.DataFrame({"reference": pd.Series(values, dtype=object)})
+    valid = [] if not values or values[0] is None else [0, 1, 2]
+    assert frame.index[NumberFilterSpec("reference", "is_not_blank").mask(frame)].tolist() == valid
 
 
 def test_grouping_index_preview_filter_count_and_child_keys() -> None:
@@ -538,3 +610,9 @@ def test_parse_filter_expression_rejects_invalid_membership_lists() -> None:
         parse_filter_expression("Part IN A", frame.columns)
     with pytest.raises(ValueError, match="trailing comma"):
         parse_filter_expression("Part IN (A,)", frame.columns)
+
+
+@pytest.mark.parametrize("spec, expected_ids", ROUNDING_CASES)
+def test_finite_numeric_binary64_rounding_ids(spec, expected_ids):
+    frame = pd.DataFrame({"reference": pd.Series(ROUNDING_VALUES, dtype=object)})
+    assert (frame.index[spec.mask(frame)] + 1).tolist() == expected_ids

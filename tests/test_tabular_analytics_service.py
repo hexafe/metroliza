@@ -12,9 +12,11 @@ import pandas as pd
 import pytest
 
 import metroliza.tabular.tabular_analytics_service as canonical_tabular_service
+from metroliza.shared.grouping_filter_core import MembershipFilterSpec
+from tests.numeric_filter_cases import PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES
 
 
-from modules.grouping_filter_core import (
+from metroliza.shared.grouping_filter_core import (
     NumberFilterSpec,
     TextFilterSpec,
     apply_filter_specs,
@@ -55,6 +57,59 @@ from modules.tabular_analytics_service import (
 
 
 _GENUINE_XLS_DATE_WORKBOOK = "0M8R4KGxGuEAAAAAAAAAAAAAAAAAAAAAOwADAP7/CQAGAAAAAAAAAAAAAAABAAAACAAAAAAAAAAAEAAAAgAAAAEAAAD+////AAAAAAAAAAD////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////9//////////7///8EAAAABQAAAAYAAAAHAAAA/v///wkAAAD+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////1IAbwBvAHQAIABFAG4AdAByAHkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWAAUA////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP///////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP7///8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA////////////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/v///wAAAAAAAAAAAQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAAgAAAAJAAAACgAAAAsAAAAMAAAADQAAAA4AAAAPAAAAEAAAABEAAAASAAAAEwAAABQAAAAVAAAAFgAAABcAAAAYAAAAGQAAABoAAAD+////HAAAAP7////+////HwAAACAAAAAhAAAA/v///yMAAAAkAAAA/v////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////8JCBAAAAYFALsNzAcAAAAABgAAAOEAAgCwBMEAAgAAAOIAAABcAHAABAAAQ2FsYyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIEIAAgCwBGEBAgAAAMABAAA9AQIAAQCcAAIADgCvAQIAAAC8AQIAAAA9ABIAAAAAAABAACA4AAAAAAABAFgCQAACAAAAjQACAAAAIgACAAAADgACAAEAtwECAAAA2gACAAAAMQAeANwAAAAIAJABAAAAAgEABwFDAGEAbABpAGIAcgBpADEAGgDIAAAA/3+QAQAAAAAAAAUBQQByAGkAYQBsADEAGgDIAAAA/3+QAQAAAAAAAAUBQQByAGkAYQBsADEAGgDIAAAA/3+QAQAAAAAAAAUBQQByAGkAYQBsAB4EDACkAAcAAEdlbmVyYWweBBsApQAWAAB5eXl5XC1tbVwtZGRcIGhoOm1tOnNz4AAUAAAApAD1/yAAAAAAAAAAAAAAAMAg4AAUAAEAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAEAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAIAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAIAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQAAAAAAAAAAMAg4AAUAAAAAAD1/yAAAPQA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"
+
+
+@pytest.mark.parametrize("spec, expected_ids, source_values", [
+    *[(spec, ids, PROBE_VALUES) for spec, ids in PROBE_CASES],
+    *[(spec, ids, PRECISION_VALUES) for spec, ids in PRECISION_CASES],
+])
+@pytest.mark.parametrize("mapped", [False, True])
+def test_sqlite_finite_numeric_shared_spec_probe(spec, expected_ids, source_values, mapped):
+    compiled = canonical_tabular_service.compile_tabular_sqlite_grouping_filter(
+        ("reference",), (spec,), numeric_filter_columns={"reference": "numeric_reference"} if mapped else None,
+    )
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (row_id INTEGER PRIMARY KEY, reference, numeric_reference)")
+        conn.executemany(
+            "INSERT INTO probe VALUES (?, ?, ?)",
+            [(row_id, value, value) for row_id, value in enumerate(source_values, start=1)],
+        )
+        rows = conn.execute(
+            f"SELECT row_id FROM probe WHERE {compiled.clause} ORDER BY row_id", compiled.params,
+        )
+        assert [row[0] for row in rows] == expected_ids
+
+
+@pytest.mark.parametrize("negate", [False, True])
+def test_sqlite_finite_numeric_large_membership(negate):
+    spec = MembershipFilterSpec("reference", (*range(1100), 2**63), negate=negate)
+    compiled = canonical_tabular_service.compile_tabular_sqlite_grouping_filter(("reference",), (spec,))
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE probe (reference)")
+        conn.executemany("INSERT INTO probe VALUES (?)", [
+            (499,), (1200,), ("bad",), (None,), ("9223372036854775808",), ("9223372036854775809",), ("499.0",), ("1100.0",),
+        ])
+        rows = conn.execute(
+            f"SELECT rowid FROM probe WHERE {compiled.clause} ORDER BY rowid", compiled.params,
+        ).fetchall()
+        assert rows == ([(2,), (3,), (4,), (6,), (8,)] if negate else [(1,), (5,), (7,)])
+
+
+def test_sqlite_finite_numeric_quotes_identifiers_and_rejects_injected_values():
+    column = 'value"; DROP TABLE sentinel; --'
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute('CREATE TABLE sentinel ("value""; DROP TABLE sentinel; --")')
+        conn.execute("INSERT INTO sentinel VALUES (1)")
+        for spec in (NumberFilterSpec(column, "eq", 1), MembershipFilterSpec(column, (1,))):
+            compiled = canonical_tabular_service.compile_tabular_sqlite_grouping_filter((column,), (spec,))
+            assert compiled.params == (1,)
+            assert conn.execute(f"SELECT rowid FROM sentinel WHERE {compiled.clause}", compiled.params).fetchall() == [(1,)]
+        for value in ("0); DROP TABLE sentinel; --", "1 OR 1=1", "1; SELECT 1"):
+            with pytest.raises(ValueError, match="numeric"):
+                canonical_tabular_service.compile_tabular_sqlite_grouping_filter(
+                    (column,), (NumberFilterSpec(column, "eq", value),),
+                )
+        assert conn.execute("SELECT count(*) FROM sentinel").fetchone() == (1,)
 
 
 def _sample_table() -> pd.DataFrame:
@@ -2059,3 +2114,52 @@ def test_tabular_workbook_export_includes_groupstats_distribution_rows(tmp_path)
     posthoc = groupstats_sheet[groupstats_sheet["row_type"] == "posthoc"].iloc[0]
     assert posthoc["test_used"] == "Games-Howell"
     assert posthoc["effect_type"] == "hedges_g"
+
+
+@pytest.mark.parametrize("suffix", ["csv", "xlsx"])
+def test_sqlite_finite_numeric_loaded_integer_scope(tmp_path, suffix):
+    import csv
+    from openpyxl import Workbook
+
+    values = ["9007199254740992", "9007199254740993", "bad", None,
+              "9223372036854775808", "9223372036854775809",
+              " +9007199254740993 ", "-9007199254740993", "1,5"]
+    path = tmp_path / ("integer_scope." + suffix)
+    if suffix == "csv":
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["Code", "Metric"])
+            writer.writerows((value, index) for index, value in enumerate(values, 1))
+    else:
+        workbook = Workbook()
+        workbook.active.append(["Code", "Metric"])
+        for index, value in enumerate(values, 1):
+            workbook.active.append([value, index])
+        workbook.save(path)
+        workbook.close()
+    loaded = canonical_tabular_service.load_tabular_analytics_file(path)
+    try:
+        assert loaded.sqlite_store is not None
+        with closing(sqlite3.connect(loaded.sqlite_store.path)) as conn:
+            before = conn.execute("SELECT * FROM tabular_rows ORDER BY rowid").fetchall()
+        cases = [
+            ("Code = 9007199254740992", [1]),
+            ("Code = 9007199254740993", [2, 7]),
+            ("Code != 9007199254740992", [2, 3, 4, 5, 6, 7, 8, 9]),
+            ("Code = 9223372036854775808", [5]),
+            ("Code > 9223372036854775808", [6]),
+            ("Code IN (9007199254740992,9223372036854775808)", [1, 5]),
+            ("Code NOT IN (9007199254740992,9223372036854775808)", [2, 3, 4, 6, 7, 8, 9]),
+            ("Code = -9007199254740993", [8]),
+            ("Code = 15", [9]),  # default decimal=".": comma remains a grouping separator
+        ]
+        for expression, expected in cases * 2:
+            assert loaded.sqlite_store.row_ids(grouping_filter_expression=expression) == expected
+            result = canonical_tabular_service.materialize_tabular_dataframe(
+                loaded, row_filter_expression=expression, required_columns=("source_row_number",),
+            )
+            assert result.dataframe["source_row_number"].tolist() == expected
+        with closing(sqlite3.connect(loaded.sqlite_store.path)) as conn:
+            assert conn.execute("SELECT * FROM tabular_rows ORDER BY rowid").fetchall() == before
+    finally:
+        canonical_tabular_service.cleanup_tabular_load_result(loaded)

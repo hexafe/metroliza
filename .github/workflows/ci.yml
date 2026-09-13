@@ -983,6 +983,18 @@ jobs:
           tests/test_header_ocr_diagnostics_script.py
           tests/test_windows_ocr_powershell.py
 
+      - name: Run finite numeric filter and query-consumer parity on Windows
+        env:
+          PYTHONPATH: src;.
+        run: >-
+          python -m pytest -v
+          tests/test_grouping_filter_core.py
+          tests/test_report_query_service.py
+          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_shared_spec_probe
+          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_large_membership
+          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_loaded_integer_scope
+          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_quotes_identifiers_and_rejects_injected_values
+
   windows-startup-benchmark:
     name: Windows startup benchmark (manual/opt-in)
     runs-on: windows-latest
