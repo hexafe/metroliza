@@ -86,7 +86,10 @@ def test_unavailable_default_store_still_runs_and_preserves_actual_child_exit(tm
 
 
 @pytest.mark.parametrize("cleanup_status", ["complete", "failed"])
-def test_preview_requires_the_real_normal_help_action(tmp_path, monkeypatch, cleanup_status):
+@pytest.mark.parametrize("menu_fault", ["missing_action", "hidden_help", "disabled_help"])
+def test_preview_requires_the_real_normal_help_action(
+    tmp_path, monkeypatch, cleanup_status, menu_fault
+):
     from metroliza.app.bootstrap import get_or_create_qapplication
     from metroliza.ui.main_window import MainWindow
 
@@ -102,13 +105,20 @@ def test_preview_requires_the_real_normal_help_action(tmp_path, monkeypatch, cle
     monkeypatch.chdir(work)
     original_setup = MainWindow.setup_menu_actions
 
-    def without_incident_action(window):
+    def with_unavailable_menu(window):
         original_setup(window)
-        for action in window.help_menu.actions():
-            if action.text().replace("&", "").replace("…", "...") == "Diagnostic incidents...":
-                window.help_menu.removeAction(action)
+        action = window.diagnostic_incidents_action
+        assert action in window.help_menu.actions()
+        assert action.isEnabled() and action.isVisible()
+        assert action.text() == "Diagnostic incidents…"
+        if menu_fault == "missing_action":
+            window.help_menu.removeAction(action)
+        elif menu_fault == "hidden_help":
+            window.help_menu.menuAction().setVisible(False)
+        else:
+            window.help_menu.menuAction().setEnabled(False)
 
-    monkeypatch.setattr(MainWindow, "setup_menu_actions", without_incident_action)
+    monkeypatch.setattr(MainWindow, "setup_menu_actions", with_unavailable_menu)
     app = get_or_create_qapplication()
     assert app is not None
     windows = []
