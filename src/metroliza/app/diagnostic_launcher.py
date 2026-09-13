@@ -28,6 +28,9 @@ from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_wire import decode_event
 
 
+_PUBLISH_CLOSE_SECONDS = 0.75
+
+
 @dataclass(frozen=True)
 class LaunchDelivery:
     observation: SupervisedResult
@@ -82,6 +85,7 @@ class _OperationPublisher:
         self.marker_status: StoreStatus | None = None
         self.authentication_status: StoreStatus | None = None
         self.final_status = StoreStatus.IO_FAILED
+        self.close_deadline: float | None = None
         self.worker = threading.Thread(target=self._run, name="incident-publisher", daemon=True)
 
     def start(self) -> bool:
@@ -185,11 +189,18 @@ class _OperationPublisher:
         return status
 
     @staticmethod
-    def _retry_lock(callback: Callable[[], StoreStatus]) -> StoreStatus:
-        deadline = time.monotonic() + 1.0
+    def _retry_lock(
+        callback: Callable[[], StoreStatus], *, deadline: float | None = None
+    ) -> StoreStatus:
+        deadline = deadline if deadline is not None else time.monotonic() + 1.0
         status = callback()
-        while status is StoreStatus.LOCK_UNAVAILABLE and time.monotonic() < deadline:
-            time.sleep(0.025)
+        while status is StoreStatus.LOCK_UNAVAILABLE:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return status
+            time.sleep(min(0.025, remaining))
+            if time.monotonic() >= deadline:
+                return status
             status = callback()
         return status
 
@@ -209,7 +220,10 @@ class _OperationPublisher:
         if observed is None:
             return StoreStatus.IO_FAILED
         if observed.needs_incident or _has_caught_failure(observed):
-            return persist_observation(self.store, observed, self.git_sha)
+            return self._retry_lock(
+                lambda: persist_observation(self.store, observed, self.git_sha),
+                deadline=self.close_deadline,
+            )
         if observed.launch == "started":
             self._ensure_begin()
             if observed.handshake == "accepted":
@@ -219,15 +233,17 @@ class _OperationPublisher:
         return self.authentication_status or self.marker_status or StoreStatus.IO_FAILED
 
     def close(self, observed: SupervisedResult) -> StoreStatus:
+        deadline = time.monotonic() + _PUBLISH_CLOSE_SECONDS
         with self.lock:
             self.closing = True
             if not self.started:
                 return StoreStatus.IO_FAILED
+            self.close_deadline = deadline
             self.controls.clear()
             self.pending = None
             self.final = observed
             self.wake.set()
-        self.done.wait(0.75)
+        self.done.wait(max(0.0, deadline - time.monotonic()))
         if self.worker.is_alive():
             return StoreStatus.PUBLISH_INCOMPLETE
         return self.final_status

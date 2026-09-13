@@ -185,6 +185,87 @@ def test_transient_cross_process_store_lock_does_not_lose_live_incident(tmp_path
         lock.release()
 
 
+def test_final_incident_retries_real_store_lock_within_close_deadline(
+    tmp_path, monkeypatch
+):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+    from metroliza.shared.diagnostic_store import _StoreLock
+
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    lock = _StoreLock(store.root)
+    assert lock.acquire()
+    observed = replace(_live_observation(), termination="observed_exit", exit_code=9)
+    first_finished = threading.Event()
+    attempted_statuses = []
+    original_publish = store.publish
+
+    def recorded_publish(incident):
+        result = original_publish(incident)
+        attempted_statuses.append(result.status)
+        if len(attempted_statuses) == 1:
+            first_finished.set()
+        return result
+
+    def unnecessary_marker_call(*_args, **_kwargs):
+        raise AssertionError("final incident must not create marker controls")
+
+    monkeypatch.setattr(store, "publish", recorded_publish)
+    monkeypatch.setattr(store, "begin_session", unnecessary_marker_call)
+    monkeypatch.setattr(store, "authenticate_session", unnecessary_marker_call)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    statuses = []
+    closer = threading.Thread(target=lambda: statuses.append(publisher.close(observed)))
+    closer.start()
+    try:
+        assert first_finished.wait(0.6)
+        assert attempted_statuses == [StoreStatus.LOCK_UNAVAILABLE]
+        lock.release()
+        closer.join(1)
+    finally:
+        lock.release()
+        closer.join(1)
+
+    assert statuses == [StoreStatus.SAVED]
+    assert attempted_statuses == [StoreStatus.LOCK_UNAVAILABLE, StoreStatus.SAVED]
+    reports = store.list_reports().reports
+    assert len(reports) == 1
+    incident = store.load(reports[0].report_id).incident
+    assert incident is not None
+    assert incident.session_id.hex == observed.session_id
+    assert incident.events == observed.history.events
+    assert incident.ring_loss == observed.history.loss
+    assert store.list_unclean_sessions().sessions == ()
+
+
+def test_final_incident_store_lock_past_close_deadline_is_bounded(tmp_path, monkeypatch):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+    from metroliza.shared.diagnostic_store import _StoreLock
+
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    lock = _StoreLock(store.root)
+    assert lock.acquire()
+    observed = replace(_live_observation(), termination="observed_exit", exit_code=9)
+
+    def unnecessary_marker_call(*_args, **_kwargs):
+        raise AssertionError("final incident must not create marker controls")
+
+    monkeypatch.setattr(store, "begin_session", unnecessary_marker_call)
+    monkeypatch.setattr(store, "authenticate_session", unnecessary_marker_call)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    started = time.monotonic()
+    try:
+        assert publisher.close(observed) is StoreStatus.PUBLISH_INCOMPLETE
+        assert time.monotonic() - started < 1.0
+    finally:
+        lock.release()
+        publisher.worker.join(1)
+    assert not publisher.worker.is_alive()
+
+
 def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(
     tmp_path, monkeypatch
 ):
