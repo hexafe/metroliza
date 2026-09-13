@@ -394,6 +394,7 @@ def test_final_incident_skips_unnecessary_marker_retries(
     from metroliza.app.diagnostic_launcher import _OperationPublisher
 
     store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
     observed = _failed_history_observation() if caught_failure else _live_observation()
     if caught_failure:
         observed = replace(
