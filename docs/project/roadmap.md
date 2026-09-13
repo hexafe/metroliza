@@ -74,9 +74,22 @@ is complete early:
 |---|---|---|
 | #917 result/provenance/error schema | baseline contracts begin in Phase 1 and support Phase 2 services | complete cross-renderer/report integration in Phase 3 |
 | #920 compatibility/version/platform policy | version and compatibility rules begin in Phase 1 | packaged-platform and release-process closeout in Phase 7 |
-| #944 diagnostics/redaction | shared envelope, redaction, bundle writer and reference adapters in Phase 1 | workflow-specific payload integrations continue in Phases 2–7 |
+| #944 diagnostics/redaction | Partial #1011 safe-event/managed-log foundation; S1a startup/build events [#1039](https://github.com/hexafe/metroliza/issues/1039) | Supervised V1 Planned / direction accepted; staged delivery below, workflow integrations continue in Phases 2–7 |
 | #952 performance envelopes | workload/telemetry/bounded-behavior foundation begins in Phase 1 and closes after its #903/#904 prerequisites in Phase 3 | workflow-specific evidence continues in Phases 4–7 |
 | #946 accessibility | cross-product hardening required by #947 occurs in Phase 5 | complete manual release evidence in Phase 7 |
+
+### #944 accepted diagnostic delivery stages
+
+The [PO acceptance](https://github.com/hexafe/metroliza/issues/1037#issuecomment-5625839939) selects
+supervised V1's direction; it does not activate all proposed components. The existing #1011
+foundation remains **Partial** and supervised V1 **Planned / direction accepted**.
+[S1a #1039](https://github.com/hexafe/metroliza/issues/1039) adds safe correlated startup/provenance
+events using current managed logs. Next: selected import/export adapters S1b → supervisor and
+bounded local store with source/Windows PyInstaller onedir qualification → operator preview/export
+and explicit migration away from dual home/CWD logs. Other packagers, responsiveness and sensitive
+native capture remain later individual gates. S1a neither survives process loss nor provides packaged
+Windows V1 acceptance. #944 owns the shared contract; downstream workflows consume it and are not
+reverse prerequisites. Existing #917/#920 provenance/platform obligations remain in force.
 
 ## 4. Phase 0 — Project control and branch truth
 

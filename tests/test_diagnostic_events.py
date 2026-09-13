@@ -674,3 +674,258 @@ def test_structured_output_is_bounded_by_closed_field_limits():
 
     output = serialize_diagnostic_event(event)
     assert len(output) < 700
+
+
+def _startup_fields():
+    return {
+        "invocation_id": uuid.uuid4(),
+        "startup_id": uuid.uuid4(),
+        "sequence": 1,
+        "mode": diagnostic_events.StartupMode.INTERACTIVE,
+        "callsite": diagnostic_events.StartupCallsite.EVENT_LOOP_EXEC_REQUEST,
+        "outcome": diagnostic_events.StartupOutcome.STARTUP_COMPLETED,
+    }
+
+
+def _provenance_fields():
+    return {
+        "invocation_id": uuid.uuid4(),
+        "startup_id": uuid.uuid4(),
+        "sequence": 1,
+        "runtime": diagnostic_events.RuntimeMode.SOURCE,
+        "packager": diagnostic_events.BuildPackager.SOURCE,
+        "release_year": 2026, "release_month": 6, "release_candidate": 2,
+    }
+
+
+class _HostileStartupValue:
+    def __init__(self):
+        self.calls = []
+
+    def _fail(self, name):
+        self.calls.append(name)
+        raise AssertionError("unexpected input hook executed")
+
+    def __str__(self):
+        return self._fail("str")
+
+    def __repr__(self):
+        return self._fail("repr")
+
+    def __eq__(self, other):
+        return self._fail("eq")
+
+    def __bool__(self):
+        return self._fail("bool")
+
+    @property
+    def value(self):
+        return self._fail("value")
+
+
+@pytest.mark.parametrize("event_name,fields", [
+    ("StartupDiagnosticEvent", _startup_fields),
+    ("RuntimeProvenanceEvent", _provenance_fields),
+])
+def test_new_event_fields_reject_hostile_mutation_at_serializer_and_formatter(event_name, fields):
+    import logging
+    from metroliza.shared.logging_utils import ManagedSafeFormatter
+
+    event_type = getattr(diagnostic_events, event_name)
+    base = fields()
+    if event_name == "StartupDiagnosticEvent":
+        names = tuple(base) + ("exit_code", "exception")
+    else:
+        names = tuple(base) + ("git_sha", "dirty")
+    for name in names:
+        hostile = _HostileStartupValue()
+        event = event_type(**base)
+        object.__setattr__(event, name, hostile)
+        with pytest.raises(DiagnosticEventValidationError):
+            serialize_diagnostic_event(event)
+        record = logging.LogRecord("metroliza.startup", logging.INFO, "synthetic", 1, event, (), None)
+        output = ManagedSafeFormatter().format(record)
+        assert json.loads(output.split(" ", 2)[2]) == {
+            "event_code": "invalid_diagnostic_event", "source_class": "application",
+        }
+        assert not hostile.calls
+
+
+@pytest.mark.parametrize("field,value", [
+    ("sequence", True), ("sequence", 0), ("sequence", 17), ("sequence", 10**100),
+    ("sequence", float("nan")), ("sequence", float("inf")),
+    ("invocation_id", "input-derived-id"), ("startup_id", uuid.UUID(int=0)),
+    ("exit_code", True), ("exit_code", 2**32), ("exit_code", -(2**31)-1),
+    ("exit_code", float("nan")),
+])
+def test_new_startup_numeric_and_uuid_mutations_are_rejected(field, value):
+    event = diagnostic_events.StartupDiagnosticEvent(**_startup_fields())
+    object.__setattr__(event, field, value)
+    with pytest.raises(DiagnosticEventValidationError):
+        serialize_diagnostic_event(event)
+
+
+@pytest.mark.parametrize("field,value", [
+    pytest.param("git_sha", "x" * 100_000, id="oversized-sha"), ("git_sha", "a" * 41),
+    ("git_sha", "A" * 40), ("dirty", 1), ("dirty", "false"),
+    ("packager", "source"), ("runtime", "source"),
+    ("release_year", True), ("release_year", 10000),
+    ("release_month", 0), ("release_month", 13),
+    ("release_candidate", 0), ("release_candidate", 1000),
+    ("release_candidate", "synthetic-version-secret"),
+])
+def test_new_provenance_mutations_are_rejected(field, value):
+    event = diagnostic_events.RuntimeProvenanceEvent(**_provenance_fields())
+    object.__setattr__(event, field, value)
+    with pytest.raises(DiagnosticEventValidationError):
+        serialize_diagnostic_event(event)
+
+
+def test_new_events_reject_forgery_extra_fields_and_subclasses():
+    for event_type, fields in (
+        (diagnostic_events.StartupDiagnosticEvent, _startup_fields()),
+        (diagnostic_events.RuntimeProvenanceEvent, _provenance_fields()),
+    ):
+        with pytest.raises(TypeError):
+            event_type(**fields, details="synthetic-secret")
+        with pytest.raises(DiagnosticEventValidationError):
+            serialize_diagnostic_event(object.__new__(event_type))
+        subclass = type("UnapprovedEvent", (event_type,), {})
+        with pytest.raises(DiagnosticEventValidationError):
+            serialize_diagnostic_event(subclass(**fields))
+        for name, member in fields.items():
+            if isinstance(member, diagnostic_events.Enum):
+                event = event_type(**fields)
+                forged = _forged_enum_member(type(member), str.__str__(member), "synthetic-secret")
+                object.__setattr__(event, name, forged)
+                with pytest.raises(DiagnosticEventValidationError):
+                    serialize_diagnostic_event(event)
+
+
+def test_new_enum_literals_do_not_read_mutable_metadata(monkeypatch):
+    enum_types = (
+        diagnostic_events.StartupMode, diagnostic_events.StartupCallsite,
+        diagnostic_events.StartupOutcome, diagnostic_events.RuntimeMode,
+        diagnostic_events.BuildPackager,
+    )
+    hostile = _HostileStartupValue()
+    for enum_type in enum_types:
+        monkeypatch.setattr(enum_type, "value", property(lambda _self: hostile._fail("value")), raising=False)
+        monkeypatch.setattr(enum_type, "name", property(lambda _self: hostile._fail("name")), raising=False)
+    assert json.loads(serialize_diagnostic_event(
+        diagnostic_events.StartupDiagnosticEvent(**_startup_fields())
+    ))["callsite"] == "event_loop_exec_request"
+    assert json.loads(serialize_diagnostic_event(
+        diagnostic_events.RuntimeProvenanceEvent(**_provenance_fields())
+    ))["packager"] == "source"
+    assert not hostile.calls
+
+
+def test_startup_failure_reuses_bounded_exception_shape_without_payload():
+    marker = "synthetic-private-SQL-path-document-secret"
+    error = ExceptionGroup(marker, [ValueError(marker) for _ in range(100)])
+    shape = build_exception_diagnostic_event(error, operation=DiagnosticOperation.UNHANDLED_EXCEPTION)
+    fields = _startup_fields()
+    event = diagnostic_events.StartupDiagnosticEvent(**{
+        **fields, "outcome": diagnostic_events.StartupOutcome.APPLICATION_FAILED, "exception": shape,
+    })
+    output = serialize_diagnostic_event(event)
+    parsed = json.loads(output)
+    assert marker not in output
+    assert parsed["exception"]["exception_kind"] == "exception_group"
+    assert parsed["exception"]["structure_truncated"] is True
+    assert parsed["exception"]["group_member_count"] == 32
+    assert "correlation_id" not in parsed["exception"]
+    assert len(output.encode("utf-8")) <= 4096
+    object.__setattr__(shape, "traceback_frames", 65)
+    with pytest.raises(DiagnosticEventValidationError):
+        serialize_diagnostic_event(event)
+
+
+@pytest.mark.parametrize("changes", [
+    {"exit_code": 0},
+    {"callsite": diagnostic_events.StartupCallsite.LOGGING_READY},
+    {"mode": diagnostic_events.StartupMode.PDF_SMOKE},
+    {"outcome": diagnostic_events.StartupOutcome.STARTUP_FAILED},
+    {"exception": RuntimeError("synthetic-secret")},
+])
+def test_impossible_startup_combinations_fail_closed(changes):
+    with pytest.raises(DiagnosticEventValidationError):
+        diagnostic_events.StartupDiagnosticEvent(**{**_startup_fields(), **changes})
+
+
+@pytest.mark.parametrize("phase", ["constructor", "serializer", "formatter"])
+@pytest.mark.parametrize("callsite,mode,outcome", [
+    (diagnostic_events.StartupCallsite.APPLICATION_RETURN,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.APPLICATION_RETURNED),
+    (diagnostic_events.StartupCallsite.APPLICATION_RETURN,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.LICENSE_REJECTED,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.SMOKE_RETURN,
+     diagnostic_events.StartupMode.PDF_SMOKE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.EVENT_LOOP_EXEC_REQUEST,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.BOOTSTRAP,
+     diagnostic_events.StartupMode.UNKNOWN, diagnostic_events.StartupOutcome.MILESTONE),
+    (diagnostic_events.StartupCallsite.LICENSE_REJECTED,
+     diagnostic_events.StartupMode.INTERACTIVE, diagnostic_events.StartupOutcome.STARTUP_FAILED),
+    (diagnostic_events.StartupCallsite.SMOKE_RETURN,
+     diagnostic_events.StartupMode.PDF_SMOKE, diagnostic_events.StartupOutcome.STARTUP_FAILED),
+])
+def test_terminal_outcomes_are_revalidated_at_every_boundary(phase, callsite, mode, outcome):
+    import logging
+    from metroliza.shared.logging_utils import ManagedSafeFormatter
+
+    changes = {"callsite": callsite, "mode": mode, "outcome": outcome}
+    if outcome is diagnostic_events.StartupOutcome.STARTUP_FAILED:
+        changes["exception"] = build_exception_diagnostic_event(
+            RuntimeError("synthetic-private-exception"), operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+        )
+    if phase == "constructor":
+        with pytest.raises(DiagnosticEventValidationError):
+            diagnostic_events.StartupDiagnosticEvent(**{**_startup_fields(), **changes})
+        return
+    event = diagnostic_events.StartupDiagnosticEvent(**_startup_fields())
+    for name, value in changes.items():
+        object.__setattr__(event, name, value)
+    if phase == "serializer":
+        with pytest.raises(DiagnosticEventValidationError):
+            serialize_diagnostic_event(event)
+        return
+    record = logging.LogRecord("metroliza.startup", logging.INFO, "synthetic", 1, event, (), None)
+    output = ManagedSafeFormatter().format(record)
+    assert json.loads(output.split(" ", 2)[2]) == {
+        "event_code": "invalid_diagnostic_event", "source_class": "application",
+    }
+
+
+def test_unapproved_event_metaclass_equality_is_not_executed():
+    import logging
+    from metroliza.shared.logging_utils import ManagedSafeFormatter
+
+    calls = []
+    class HostileType(type):
+        def __eq__(cls, other):
+            calls.append("eq")
+            raise AssertionError("event metaclass compared")
+    class Unsupported(metaclass=HostileType):
+        pass
+    event = Unsupported()
+    with pytest.raises(DiagnosticEventValidationError):
+        serialize_diagnostic_event(event)
+    record = logging.LogRecord("metroliza.startup", logging.INFO, "synthetic", 1, event, (), None)
+    assert "legacy_log_suppressed" in ManagedSafeFormatter().format(record)
+    assert not calls
+
+
+def test_new_uuid_integer_bounds_and_distinctness_are_revalidated():
+    fields = _startup_fields()
+    event = diagnostic_events.StartupDiagnosticEvent(**fields)
+    object.__setattr__(event, "startup_id", event.invocation_id)
+    with pytest.raises(DiagnosticEventValidationError):
+        serialize_diagnostic_event(event)
+    event = diagnostic_events.StartupDiagnosticEvent(**_startup_fields())
+    object.__setattr__(event.invocation_id, "int", 1 << 200_000)
+    with pytest.raises(DiagnosticEventValidationError):
+        serialize_diagnostic_event(event)

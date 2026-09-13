@@ -867,3 +867,161 @@ def test_source_classification_is_closed_and_does_not_emit_source():
         assert f'"source_class":"{source_class}"' in output
 
     _assert_marker_absent(marker, outputs)
+
+
+def test_runtime_provenance_is_useful_through_real_managed_sinks(tmp_path, monkeypatch):
+    """The legacy record was suppressed; the replacement must retain approved facts."""
+    import json
+
+    from metroliza.app import bootstrap
+    from metroliza.app.build_provenance import BuildProvenance
+    from metroliza.app.version import RELEASE_VERSION, VERSION_LABEL
+
+    marker = "synthetic-private-path-SQL-document-secret"
+    provenance = BuildProvenance(
+        release_label=VERSION_LABEL,
+        git_sha="a" * 40,
+        dirty=False,
+        built_at_utc=marker,
+        packager="pyinstaller",
+        python_version=marker,
+    )
+    monkeypatch.setattr(bootstrap, "load_build_provenance", lambda: provenance)
+    monkeypatch.setattr(bootstrap, "runtime_mode", lambda: "frozen")
+    with _managed_sinks(
+        tmp_path, config=LoggingConfig(logging.INFO, logging.INFO, logging.INFO)
+    ) as sinks:
+        sinks.logger.info("Runtime provenance executable=%s", marker)
+        bootstrap.log_runtime_provenance(sinks.logger)
+        outputs = _outputs(sinks)
+
+    assert outputs[0] == outputs[1] == outputs[2]
+    _assert_marker_absent(marker, outputs)
+    records = [json.loads(line.split(" ", 2)[2]) for line in outputs[0].splitlines()]
+    assert records[0]["event_code"] == "legacy_log_suppressed"
+    assert records[1]["event_code"] == "runtime_provenance"
+    assert records[1]["release_version"] == RELEASE_VERSION
+    assert records[1]["git_sha"] == "a" * 40
+    assert records[1]["runtime"] == "frozen"
+    assert records[1]["packager"] == "pyinstaller"
+    assert records[1]["dirty"] is False
+    assert uuid.UUID(hex=records[1]["invocation_id"]).version == 4
+    assert uuid.UUID(hex=records[1]["startup_id"]).version == 4
+    assert set(records[1]) == {
+        "event_code", "invocation_id", "startup_id", "sequence", "release_version",
+        "git_sha", "runtime", "packager", "dirty",
+    }
+    assert len(outputs[0].encode("utf-8")) < 4096
+
+
+@pytest.mark.parametrize("field,value", [
+    ("release_label", "synthetic-stale-private-version"),
+    ("schema_version", 99), ("schema_version", True),
+    ("git_sha", "synthetic-secret"), pytest.param("git_sha", "a" * 100_000, id="oversized-sha"),
+    ("git_sha", "a" * 41), ("dirty", 1), ("packager", "synthetic-private-packager"),
+])
+def test_malformed_manifest_projection_is_unknown_in_real_sinks(tmp_path, monkeypatch, field, value):
+    import json
+    from metroliza.app import bootstrap
+    from metroliza.app.build_provenance import BuildProvenance
+    from metroliza.app.version import VERSION_LABEL
+
+    provenance = BuildProvenance(VERSION_LABEL, "a" * 40, False, "not-projected", "pyinstaller", "not-projected")
+    object.__setattr__(provenance, field, value)
+    monkeypatch.setattr(bootstrap, "runtime_mode", lambda: "frozen")
+    monkeypatch.setattr(bootstrap, "load_build_provenance", lambda: provenance)
+    with _managed_sinks(tmp_path) as sinks:
+        bootstrap.log_runtime_provenance(sinks.logger)
+        outputs = _outputs(sinks)
+    for output in outputs:
+        event = json.loads(output.split(" ", 2)[2])
+        assert event["event_code"] == "runtime_provenance"
+        assert event["runtime"] == "frozen"
+        assert event["packager"] == "unknown"
+        assert event["git_sha"] == "unknown"
+        assert event["dirty"] is None
+        assert "synthetic-" not in output
+
+
+def test_manifest_properties_and_subclasses_are_never_read(tmp_path, monkeypatch):
+    import json
+    from metroliza.app import bootstrap
+    from metroliza.app.build_provenance import BuildProvenance
+    from metroliza.app.version import VERSION_LABEL
+
+    calls = []
+    class Hostile:
+        def fail(self, *args):
+            calls.append(True)
+            raise AssertionError("untrusted manifest hook executed")
+        __str__ = __repr__ = __eq__ = __bool__ = fail
+        release_label = property(fail)
+        git_sha = property(fail)
+        packager = property(fail)
+        dirty = property(fail)
+    class HostileStr(str):
+        def __eq__(self, other):
+            calls.append(True)
+            raise AssertionError("string subclass compared")
+    class HostileManifest(BuildProvenance):
+        @property
+        def release_label(self):
+            calls.append(True)
+            raise AssertionError("manifest subclass property read")
+
+    candidates = [Hostile(), object.__new__(HostileManifest)]
+    for name in ("release_label", "git_sha", "dirty", "packager"):
+        for value in (Hostile(), HostileStr("synthetic-secret")):
+            candidate = BuildProvenance(VERSION_LABEL, "a" * 40, False, None, "pyinstaller", "ignored")
+            object.__setattr__(candidate, name, value)
+            candidates.append(candidate)
+    monkeypatch.setattr(bootstrap, "runtime_mode", lambda: "frozen")
+    with _managed_sinks(tmp_path) as sinks:
+        for candidate in candidates:
+            monkeypatch.setattr(bootstrap, "load_build_provenance", lambda: candidate)
+            bootstrap.log_runtime_provenance(sinks.logger)
+        outputs = _outputs(sinks)
+    assert not calls
+    events = [json.loads(line.split(" ", 2)[2]) for line in outputs[0].splitlines()]
+    assert len(events) == len(candidates)
+    assert all(event["packager"] == "unknown" and event["git_sha"] == "unknown" for event in events)
+    assert "synthetic-secret" not in outputs[0]
+
+
+def test_source_and_missing_frozen_manifest_keep_distinct_unknowns(tmp_path, monkeypatch):
+    import json
+    from metroliza.app import bootstrap
+    from metroliza.app.build_provenance import load_build_provenance
+
+    monkeypatch.setattr(bootstrap, "load_build_provenance", lambda: load_build_provenance(tmp_path / "missing.json"))
+    with _managed_sinks(tmp_path) as sinks:
+        for mode in ("source", "frozen", "unsupported"):
+            monkeypatch.setattr(bootstrap, "runtime_mode", lambda: mode)
+            bootstrap.log_runtime_provenance(sinks.logger)
+        outputs = _outputs(sinks)
+    events = [json.loads(line.split(" ", 2)[2]) for line in outputs[0].splitlines()]
+    assert [(event["runtime"], event["packager"]) for event in events] == [
+        ("source", "source"), ("frozen", "unknown"), ("unknown", "unknown"),
+    ]
+    assert all(event["git_sha"] == "unknown" and event["dirty"] is None for event in events)
+
+
+def test_new_typed_events_obey_existing_info_filter_and_reject_arguments(tmp_path):
+    import json
+
+    event = diagnostic_events.RuntimeProvenanceEvent(
+        uuid.uuid4(), uuid.uuid4(), 1,
+        diagnostic_events.RuntimeMode.SOURCE, diagnostic_events.BuildPackager.SOURCE,
+        release_year=2026, release_month=6, release_candidate=2,
+    )
+    with _managed_sinks(tmp_path, config=LoggingConfig(logging.INFO, logging.ERROR, logging.ERROR)) as sinks:
+        sinks.logger.info(event)
+        assert _outputs(sinks) == ("", "", "")
+        sinks.logger.error(event)
+        valid = _outputs(sinks)
+        record = logging.LogRecord("metroliza.startup", logging.ERROR, "synthetic-secret", 1, event, (), None)
+        record.args = (object(),)
+        sinks.logger.handle(record)
+        outputs = _outputs(sinks)
+    assert all(json.loads(value.split(" ", 2)[2])["event_code"] == "runtime_provenance" for value in valid)
+    assert all(json.loads(value.splitlines()[-1].split(" ", 2)[2])["event_code"] == "invalid_diagnostic_event" for value in outputs)
