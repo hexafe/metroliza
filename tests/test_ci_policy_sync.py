@@ -34,6 +34,21 @@ def test_native_windows_report_planner_step_preserves_real_platform_and_scope() 
     assert 'do not qualify a packaged EXE' in policy
 
 
+def test_native_windows_report_workspace_step_keeps_one_real_owner_and_dpi_gate() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows report workspace tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_WORKSPACE_SCREEN: 1920x1080' in step
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
+    assert 'pytest -vv -s' in step
+    for test in ('report_workspace_shell', 'report_workspace_geometry', 'main_window_metadata_ui', 'active_dialog_close_guards'):
+        assert f'tests/test_{test}.py' in step
+    assert name in policy
+
+
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 

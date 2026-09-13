@@ -208,7 +208,8 @@ Make the central import-to-analysis workflow versioned, headless and independent
 |---:|---|
 | [#926](https://github.com/hexafe/metroliza/issues/926) | Workspace schema foundation, initially for the canonical slice |
 | [#927](https://github.com/hexafe/metroliza/issues/927) | Import orchestration, preflight, queue and parser/OCR ports |
-| [#1015](https://github.com/hexafe/metroliza/issues/1015) | Persistent review/selection with the merged #1014/#1019/#1020 import contracts; reusable planner implemented in the Parsing host. #1016 shell binding follows external #1015 merge; Windows package acceptance remains separate. |
+| [#1015](https://github.com/hexafe/metroliza/issues/1015) | Persistent review/selection with the merged #1014/#1019/#1020 import contracts; reusable planner implemented in the Parsing host. Windows package acceptance remains separate. |
+| [#1016](https://github.com/hexafe/metroliza/issues/1016) | One persistent Reports owner in the main Home/Reports/Tools composition, with real selected import, context/task/result continuity and a lazy optional diagnostic-menu binding. Implemented on the declared #1015 dependency; final Ready requires its external integration and current shell-only CI/reviews. No portable workspace persistence or diagnostic viewer internals. |
 | [#928](https://github.com/hexafe/metroliza/issues/928) | Parser-profile/plugin lifecycle consuming the #927 resolver port |
 | [#929](https://github.com/hexafe/metroliza/issues/929) | Reviewable OCR extraction consuming #927/#928 contracts |
 | [#930](https://github.com/hexafe/metroliza/issues/930) | Database/cache schema migration, backup, integrity and repair |

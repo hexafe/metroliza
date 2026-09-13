@@ -49,8 +49,12 @@ release evidence are complete.
 
 Within #927, [#1015](https://github.com/hexafe/metroliza/issues/1015) implements persistent
 report review and exact subset selection in the Parsing host using the merged #1014/#1019/#1020
-contracts. Integration and Windows package acceptance remain pending; #1016 binds the reusable
-planner into the main Reports page after external #1015 integration.
+contracts. [#1016](https://github.com/hexafe/metroliza/issues/1016) embeds the same report
+operations in the main Reports page; Home reflects its context/task/result and Tools provides
+utilities and domain shortcuts. Navigation preserves selection and active work; no portable
+workspace persistence is introduced. External integration and Windows package acceptance
+remain separate gates. The optional diagnostic-menu binding consumes the separately owned
+viewer without qualifying its packaged preview/export.
 
 ## 2. Selection, preparation, and reusable configuration
 

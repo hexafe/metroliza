@@ -23,6 +23,15 @@ The following checks must pass on every PR and branch push.
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
 
+The additive `Run native Windows report workspace tests` step in `windows-core-smoke`
+checks the main Home/Reports/Tools composition: one real report owner, scratch-SQLite
+subset import across navigation, accepted/rejected context changes, cancellation and
+main-window close, and lazy diagnostic-menu availability/failure handling. Its native
+geometry matrix verifies the actual Windows Qt plugin, physical 1920x1080 display and
+scale factors 1, 1.25, 1.5 and 2, including compact client/frame fit and keyboard use.
+Existing planner, industrial lifecycle and OCR steps remain independent. These source
+checks do not qualify a packaged EXE or the separately owned diagnostic preview/export.
+
 ### Coverage Reporting Semantics
 
 - The `unit-tests` job emits coverage output in two places:

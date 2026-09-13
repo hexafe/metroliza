@@ -1,8 +1,10 @@
 # Import reports
 
 Use **Reports** to review report files and import a chosen subset into a local SQLite
-**database file**. The current main-window **Parse Reports** entry opens this planner.
-Moving the planner into the main Reports page is the separate #1016 shell delivery.
+**database file**. The planner lives in the main **Reports** workspace. The recommended
+action on **Home** returns to this same planner and focuses the next available control.
+Moving between Home, Reports and Tools preserves the review, global selection, filters,
+active operation and last outcome during the session.
 
 ## Review and select
 
@@ -45,10 +47,12 @@ are stable member-relative paths, rather than temporary extraction folders.
 
 The progress window shows the current stage and cooperative **Cancel** action. Cancellation
 waits for the active unit of work to finish safely; reports already committed remain saved.
-Closing the planner while work is active requests cancellation and defers closing until the
-worker stops. A second review or import cannot start during an active operation.
+Closing the main window while work is active requests cancellation and defers closing until
+the worker stops. Home also shows the active report stage and a cancellation button.
+A second review or import cannot start during an active operation. Source and database
+changes are rejected while work is active, so the displayed context stays with that operation.
 
-The completion message and persistent **Last import outcome** distinguish saved reports,
+The persistent **Last import outcome** and its Home summary distinguish saved reports,
 already-present reports, intentionally excluded reports, changed reports, failures and
 cancellation. The review snapshot and metadata-enrichment result remain separate groups.
 A successful import does not imply enrichment succeeded.
@@ -64,5 +68,6 @@ At compact window sizes secondary columns are available through details; the tab
 the main scrolling region. Larger windows expose resizable parser/confidence/reason columns.
 
 After checking the actual import outcome, continue to [Modify Database](modify_database.md)
-or [Export overview](export_overview.md) using the existing main-window actions. The planner
-remains open until you close it.
+or [Export overview](export_overview.md) using the actions below the Reports planner.
+The standalone Parsing window used by older entry points shares the same report controls
+and operation behavior; the main application does not open a second report window.

@@ -1,5 +1,6 @@
 import base64
 import importlib
+import importlib.util
 from pathlib import Path
 import tempfile
 from time import perf_counter
@@ -13,6 +14,7 @@ from PyQt6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QListWidget,
@@ -40,7 +42,6 @@ from metroliza.ui.ui_foundation import (
     configure_window_size,
     section_label,
     secondary_label,
-    separator,
     set_button_role,
     set_status_variant,
     status_chip,
@@ -133,12 +134,12 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Metroliza [{version_label}]")
         else:
             self.setWindowTitle(f"Metroliza [{version_label}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
-        configure_window_size(self, minimum=(720, 480), initial=(980, 660))
+        configure_window_size(self, minimum=(720, 480), initial=(1100, 740), screen_margin=32)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(16, 16, 16, 16)
-        self.layout.setSpacing(10)
+        self.layout.setContentsMargins(8, 8, 8, 8)
+        self.layout.setSpacing(4)
         self.central_widget.setLayout(self.layout)
         self.days_until_expiration = days_until_expiration
 
@@ -160,6 +161,7 @@ class MainWindow(QMainWindow):
         self._recovered_realtime_db_paths: set[str] = set()
         self._close_deferred_for_realtime = False
         self._close_deferred_for_children = False
+        self._close_deferred_for_reports = False
         self._deferred_close_blockers: set[str] = set()
         self._deferred_child_close_retry_scheduled = False
         self.parser_plugin_wizard_dialog = None
@@ -173,7 +175,6 @@ class MainWindow(QMainWindow):
             self._on_coordinated_close_deferral_cancelled
         )
         self._coordinated_window_attributes = {
-            "parsing": "parsing_dialog",
             "modify_database": "modifydb_dialog",
             "export": "export_dialog",
             "industrial_data": "industrial_data_dialog",
@@ -195,9 +196,7 @@ class MainWindow(QMainWindow):
         self.context_label = section_label("Current context")
         self.source_status_label = status_chip("Source: not selected", "neutral")
         self.database_status_label = status_chip("Database: not selected", "neutral")
-        self.workflow_hint_label = secondary_label(
-            "Parse reports, clean database values when needed, match names, then export the workbook."
-        )
+        self.workflow_hint_label = secondary_label("Review and import reports in Reports, then prepare or export the database.")
         self.workflow_next_step_label = status_chip(
             "Next step: choose reports and create or select a database.",
             "warning",
@@ -205,6 +204,10 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label = status_chip("Workspace ready", "neutral")
         self.workspace_notice_label.setVisible(False)
         self.parse_button = QPushButton("Parse Reports")
+        self.home_next_action = self.parse_button
+        self.home_report_result = secondary_label("")
+        self.home_report_progress = secondary_label("")
+        self.home_cancel_report = QPushButton("Cancel report operation")
         self.modifydb_button = QPushButton("Modify Database")
         self.export_button = QPushButton("Export Workbook")
         self.map_characteristics_button = QPushButton("Match Characteristic Names")
@@ -346,21 +349,21 @@ class MainWindow(QMainWindow):
         self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
         self.csv_summary_action = QAction("CSV Summary...", self)
         self.csv_summary_action.setToolTip("Analyze CSV or Excel data with dashboards and workbook output.")
-        self.csv_summary_action.triggered.connect(self.launch_csv_summary_dialog)
+        self.csv_summary_action.triggered.connect(lambda: self._show_workspace_page("csv_analytics"))
         self.enrich_metadata_action = QAction("Enrich existing database metadata...", self)
         self.enrich_metadata_action.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
         self.enrich_metadata_action.triggered.connect(self.launch_metadata_enrichment)
         self.industrial_data_action = QAction("Industrial data...", self)
         self.industrial_data_action.setToolTip("Configure, sync, link, and export cached Oznak industrial data")
-        self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
+        self.industrial_data_action.triggered.connect(lambda: self._show_workspace_page("industrial_data"))
         self.realtime_monitoring_action = QAction("Real-time Industrial Monitoring...", self)
         self.realtime_monitoring_action.setToolTip(
             "Configure and run realtime polling for industrial source databases."
         )
-        self.realtime_monitoring_action.triggered.connect(self.launch_realtime_industrial_monitoring_dialog)
+        self.realtime_monitoring_action.triggered.connect(lambda: self._show_workspace_page("realtime_monitor"))
         self.parser_profiles_action = QAction("Parser profiles...", self)
         self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
-        self.parser_profiles_action.triggered.connect(self.launch_parser_plugin_wizard)
+        self.parser_profiles_action.triggered.connect(lambda: self._show_workspace_page("parser_profiles"))
         self.tools_menu = self.menuBar().addMenu("Tools")
         self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
@@ -399,149 +402,174 @@ class MainWindow(QMainWindow):
         if hasattr(self.help_menu, "addSeparator"):
             self.help_menu.addSeparator()
         self.help_menu.addAction(self.release_notes_action)
+        self.diagnostic_incidents_action = QAction("Diagnostic incidents…", self)
+        self.diagnostic_incidents_action.triggered.connect(self.open_diagnostic_incidents)
+        self.help_menu.addAction(self.diagnostic_incidents_action)
+        self.help_menu.aboutToShow.connect(self._refresh_incident_action)
+        self._refresh_incident_action()
         self.help_menu.addAction(self.about_button)
 
-    def setup_buttons_layout(self):
-        """Add the buttons to the layout and connect the signals."""
-        self.layout.addWidget(self.context_label)
-        context_row = QHBoxLayout()
-        context_row.setContentsMargins(0, 0, 0, 0)
-        context_row.setSpacing(8)
-        context_row.addWidget(self.source_status_label, 1)
-        context_row.addWidget(self.database_status_label, 1)
-        self.layout.addLayout(context_row)
-        self.layout.addWidget(self.workspace_notice_label)
-        self.layout.addWidget(separator())
+    def _refresh_incident_action(self):
+        available = importlib.util.find_spec("metroliza.ui.incident_dialog") is not None
+        self.diagnostic_incidents_action.setEnabled(available)
+        explanation = (
+            "Inspect and export selected local diagnostic incidents."
+            if available else "Diagnostic incidents are unavailable in this build."
+        )
+        self.diagnostic_incidents_action.setToolTip(explanation)
+        self.diagnostic_incidents_action.setStatusTip(explanation)
 
+    def open_diagnostic_incidents(self):
+        """Use the normal lazy viewer entry; report absent and broken features separately."""
+        try:
+            module = importlib.import_module("metroliza.ui.incident_dialog")
+        except ModuleNotFoundError as exc:
+            if exc.name == "metroliza.ui.incident_dialog":
+                self.diagnostic_incidents_action.setEnabled(False)
+                message = "Diagnostic incidents are unavailable in this build."
+            else:
+                message = "Diagnostic incidents could not load because an installed dependency is unavailable."
+            QMessageBox.warning(self, "Diagnostic incidents", message)
+            return False
+        except Exception:
+            QMessageBox.warning(self, "Diagnostic incidents", "The installed diagnostic feature could not be loaded.")
+            return False
+        try:
+            module.open_incident_viewer(self)
+        except Exception:
+            QMessageBox.warning(self, "Diagnostic incidents", "The diagnostic viewer could not be opened.")
+            return False
+        return True
+
+    def setup_buttons_layout(self):
+        """Compose primary workspaces around one persistent report owner."""
+        from metroliza.ui.parsing_dialog import ReportsWorkspace
+        from metroliza.ui.report_planner import PLANNER_ACTION_STYLE
+
+        self.layout.addWidget(self.workspace_notice_label)
+        self.navigation_combo = QComboBox()
+        self.navigation_combo.setAccessibleName("Metroliza workspace navigation")
+        self.layout.addWidget(self.navigation_combo)
         shell_row = QHBoxLayout()
         shell_row.setContentsMargins(0, 0, 0, 0)
-        shell_row.setSpacing(12)
+        shell_row.setSpacing(8)
         self.navigation_list = QListWidget()
         self.navigation_list.setObjectName("workspaceNavigation")
-        self.navigation_list.setMaximumWidth(210)
-        self.navigation_list.setMinimumWidth(168)
-        self.navigation_list.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Expanding,
-        )
+        self.navigation_list.setFixedWidth(168)
         self.workspace_stack = QStackedWidget()
         self.workspace_stack.setObjectName("workspacePages")
+        # A hidden page's size hint must not force the current page wider/taller.
+        self.workspace_stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         shell_row.addWidget(self.navigation_list)
         shell_row.addWidget(self.workspace_stack, 1)
         self.layout.addLayout(shell_row, 1)
 
-        home_page = QWidget()
-        home_layout = QVBoxLayout(home_page)
+        self.home_page = QWidget()
+        home_layout = QVBoxLayout(self.home_page)
         home_layout.setContentsMargins(4, 4, 4, 4)
-        home_layout.setSpacing(10)
-        home_layout.addWidget(section_label("Home"))
-        home_layout.addWidget(self.workflow_label)
-        home_layout.addWidget(self.workflow_hint_label)
-        home_layout.addWidget(self.workflow_next_step_label)
-
-        primary_row = QHBoxLayout()
-        primary_row.setContentsMargins(0, 0, 0, 0)
-        primary_row.setSpacing(8)
-        primary_row.addWidget(self.parse_button)
-        primary_row.addWidget(self.export_button)
-        home_layout.addLayout(primary_row)
-
-        prep_row = QHBoxLayout()
-        prep_row.setContentsMargins(0, 0, 0, 0)
-        prep_row.setSpacing(8)
-        prep_row.addWidget(self.modifydb_button)
-        prep_row.addWidget(self.map_characteristics_button)
-        home_layout.addLayout(prep_row)
+        home_layout.setSpacing(8)
+        for widget in (
+            section_label("Home"), self.context_label, self.source_status_label,
+            self.database_status_label, self.workflow_hint_label,
+            self.workflow_next_step_label, self.home_report_progress,
+            self.home_report_result, self.home_next_action, self.home_cancel_report,
+        ):
+            home_layout.addWidget(widget)
         home_layout.addStretch(1)
+        self._add_workspace_page("Home", self.home_page)
 
-        self._add_workspace_page("Home", home_page)
-        self._add_workspace_page(
-            "Reports",
-            self._build_workspace_landing_page(
-                "Reports",
-                "Scan report content, import supported measurements, review the database, "
-                "and export verified deliverables.",
-                (
-                    ("Scan and import reports", self.launch_parsing_dialog),
-                    ("Export workbook or dashboard", self.launch_export_dialog),
-                    ("Review or modify database", self.launch_modifydb_dialog),
-                    ("Match characteristic names", self.launch_characteristic_mapping_dialog),
-                ),
-            ),
-        )
-        self._add_workspace_page(
-            "CSV Analytics",
-            self._build_workspace_landing_page(
-                "CSV Analytics",
-                "Review a CSV or Excel source, configure metrics and grouping, then create "
-                "the required dashboard with an optional workbook.",
-                (("Open CSV Summary", self.launch_csv_summary_dialog),),
-            ),
-        )
-        self._add_workspace_page(
-            "Industrial Data",
-            self._build_workspace_landing_page(
-                "Industrial Data",
-                "Configure a read-only production source, test access, fetch a bounded local "
-                "cache, and analyze it without modifying production data.",
-                (("Open Industrial Data", self.launch_industrial_data_dialog),),
-            ),
-        )
-        self._add_workspace_page(
-            "Realtime Monitor",
-            self._build_workspace_landing_page(
-                "Realtime Monitor",
-                "Monitor saved and reviewed source configurations, inspect source lag, and "
-                "review explainable anomaly events.",
-                (("Open Realtime Monitor", self.launch_realtime_industrial_monitoring_dialog),),
-            ),
-        )
-        self._add_workspace_page(
-            "Parser Profiles",
-            self._build_workspace_landing_page(
-                "Parser Profiles",
-                "Inspect unsupported report content and create a local parser-profile handoff "
-                "without relying on filenames.",
-                (("Manage Parser Profiles", self.launch_parser_plugin_wizard),),
-            ),
-        )
-        self.navigation_list.currentRowChanged.connect(self.workspace_stack.setCurrentIndex)
+        self.reports_page = QWidget()
+        reports_layout = QVBoxLayout(self.reports_page)
+        reports_layout.setContentsMargins(0, 0, 0, 0)
+        reports_layout.setSpacing(2)
+        self.reports_workspace = ReportsWorkspace(self.reports_page)
+        # Compatibility alias refers to this exact owner, never another dialog.
+        self.parsing_dialog = self.reports_workspace
+        self.reports_workspace.source_change_requested.connect(self.set_directory)
+        self.reports_workspace.database_change_requested.connect(self.set_db_file)
+        self.reports_workspace.metadata_enrichment_requested.connect(self.start_metadata_enrichment_from_parsing)
+        self.reports_workspace.state_changed.connect(self._sync_workflow_next_step)
+        self.reports_workspace.shutdown_ready.connect(self._on_reports_shutdown_ready)
+        reports_layout.addWidget(self.reports_workspace, 1)
+        downstream_row = QHBoxLayout()
+        downstream_row.setSpacing(4)
+        for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+            button.setStyleSheet(PLANNER_ACTION_STYLE)
+            downstream_row.addWidget(button)
+        reports_layout.addLayout(downstream_row)
+        self._add_workspace_page("Reports", self.reports_page)
+        for title, description, action, callback in (
+            ("CSV Analytics", "Analyze CSV or Excel data and prepare dashboards or workbooks.",
+             "Open CSV Summary", self.launch_csv_summary_dialog),
+            ("Industrial Data", "Configure read-only sources and work with their bounded local cache.",
+             "Open Industrial Data", self.launch_industrial_data_dialog),
+            ("Realtime Monitor", "Monitor reviewed source configurations and inspect source lag and events.",
+             "Open Realtime Monitor", self.launch_realtime_industrial_monitoring_dialog),
+            ("Parser Profiles", "Inspect unsupported formats and prepare a local parser-profile handoff.",
+             "Manage Parser Profiles", self.launch_parser_plugin_wizard),
+            ("Tools", "Maintenance utilities for the current database. Domain shortcuts in the Tools menu open their primary workspace.",
+             "Enrich existing database metadata", self.launch_metadata_enrichment),
+        ):
+            self._add_workspace_page(title, self._build_workspace_landing_page(
+                title, description, ((action, callback),),
+            ))
+        self.navigation_list.currentRowChanged.connect(self._on_navigation_changed)
+        self.navigation_combo.currentIndexChanged.connect(self.navigation_list.setCurrentRow)
         self.navigation_list.setCurrentRow(0)
-        # Connect persistence after establishing the default row so startup
-        # does not overwrite a previously saved navigation choice with zero
-        # before `_restore_ui_preferences()` can read it.
         self.navigation_list.currentRowChanged.connect(self._persist_navigation_index)
 
-        self.layout.addWidget(separator())
-        self.layout.addWidget(section_label("Task center"))
-        self.layout.addWidget(self.metadata_enrichment_status_label)
-        self.layout.addWidget(self.metadata_enrichment_progress_bar)
-        self.layout.addWidget(self.cancel_metadata_enrichment_button)
-        self.parse_button.clicked.connect(self.launch_parsing_dialog)
+        task_row = QHBoxLayout()
+        task_row.setSpacing(4)
+        task_row.addWidget(self.metadata_enrichment_status_label, 1)
+        task_row.addWidget(self.metadata_enrichment_progress_bar)
+        task_row.addWidget(self.cancel_metadata_enrichment_button)
+        self.layout.addLayout(task_row)
+        self.home_next_action.clicked.connect(self.launch_parsing_dialog)
+        self.home_cancel_report.clicked.connect(self.reports_workspace._request_active_worker_cancellation)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
         self.cancel_metadata_enrichment_button.clicked.connect(self.stop_metadata_enrichment)
-        self.metadata_enrichment_status_label.setVisible(False)
-        self.metadata_enrichment_progress_bar.setVisible(False)
-        self.cancel_metadata_enrichment_button.setVisible(False)
-        configure_accessibility(self.parse_button, name="Parse Reports")
+        self.metadata_enrichment_status_label.hide()
+        self.metadata_enrichment_progress_bar.hide()
+        self.cancel_metadata_enrichment_button.hide()
         configure_accessibility(self.export_button, name="Export Workbook")
         configure_accessibility(self.modifydb_button, name="Modify Database")
         configure_accessibility(self.map_characteristics_button, name="Match Characteristic Names")
         configure_accessibility(self.workflow_next_step_label, name="Recommended next workflow step")
         configure_accessibility(self.cancel_metadata_enrichment_button, name="Cancel metadata enrichment")
-        configure_accessibility(
-            self.navigation_list,
-            name="Metroliza workspace navigation",
-            description="Choose a workflow without closing other work.",
-        )
+        configure_accessibility(self.navigation_list, name="Metroliza workspace navigation",
+                                description="Choose a workflow without closing other work.")
+        self._update_navigation_layout()
 
     def _add_workspace_page(self, label: str, page: QWidget) -> None:
+        page_id = label.lower().replace(" ", "_")
         item = QListWidgetItem(label)
-        item.setData(Qt.ItemDataRole.UserRole, label.lower().replace(" ", "_"))
+        item.setData(Qt.ItemDataRole.UserRole, page_id)
         self.navigation_list.addItem(item)
+        self.navigation_combo.addItem(label, page_id)
         self.workspace_stack.addWidget(page)
+
+    def _show_workspace_page(self, page_id):
+        index = self.navigation_combo.findData(page_id)
+        if index >= 0:
+            self.navigation_list.setCurrentRow(index)
+
+    def _on_navigation_changed(self, index):
+        self.workspace_stack.setCurrentIndex(index)
+        self.navigation_combo.blockSignals(True)
+        self.navigation_combo.setCurrentIndex(index)
+        self.navigation_combo.blockSignals(False)
+
+    def _update_navigation_layout(self):
+        compact = self.width() < 1000
+        self.navigation_list.setVisible(not compact)
+        self.navigation_combo.setVisible(compact)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "navigation_list"):
+            self._update_navigation_layout()
 
     def _build_workspace_landing_page(
         self,
@@ -567,6 +595,7 @@ class MainWindow(QMainWindow):
     def _on_workspace_snapshot_changed(self, current, _previous) -> None:
         self.directory = current.source_directory
         self.db_file = current.database_file
+        self.reports_workspace.apply_workspace_snapshot(current)
         self._sync_context_rows()
 
     def _restore_ui_preferences(self) -> None:
@@ -579,13 +608,14 @@ class MainWindow(QMainWindow):
             theme_mode = "system"
         self._set_theme_mode(theme_mode, persist=False)
 
-        navigation_index = self.ui_preferences.get(
-            "presentation/navigation/current",
-            0,
-            expected_type=int,
-        )
-        if 0 <= navigation_index < self.navigation_list.count():
-            self.navigation_list.setCurrentRow(navigation_index)
+        page_id = self.ui_preferences.get("presentation/navigation/page", "", expected_type=str)
+        if page_id:
+            self._show_workspace_page(page_id)
+        else:
+            # Existing six-page integer preferences retain their original meaning.
+            navigation_index = self.ui_preferences.get("presentation/navigation/current", 0, expected_type=int)
+            if 0 <= navigation_index < 6:
+                self.navigation_list.setCurrentRow(navigation_index)
 
         geometry = self.ui_preferences.get(
             "windows/main/geometry",
@@ -606,6 +636,7 @@ class MainWindow(QMainWindow):
     def _persist_navigation_index(self, index: int) -> None:
         if index >= 0 and hasattr(self, "ui_preferences"):
             self.ui_preferences.set("presentation/navigation/current", int(index))
+            self.ui_preferences.set("presentation/navigation/page", self.navigation_combo.itemData(index))
 
     def _sync_context_rows(self):
         source_text = self.directory if self.directory else "not selected"
@@ -619,22 +650,32 @@ class MainWindow(QMainWindow):
     def _sync_workflow_next_step(self):
         if not hasattr(self, "workflow_next_step_label"):
             return
-        has_source = bool(self.directory)
-        has_database = bool(self.db_file)
-        if has_source and has_database:
-            text = "Next step: parse reports, then export or clean the database if needed."
-            variant = "success"
-        elif has_database:
-            text = "Next step: export this database, or choose reports to add more data."
-            variant = "info"
-        elif has_source:
-            text = "Next step: select or create a database file for these reports."
-            variant = "warning"
+        reports = self.reports_workspace
+        busy = not reports.can_change_workspace()
+        if busy:
+            caption = "View active report operation"
+        elif not self.directory:
+            caption = "Choose reports in Reports"
+        elif not self.db_file:
+            caption = "Choose database in Reports"
+        elif reports.parse_button.isEnabled():
+            caption = "Continue selected import in Reports"
         else:
-            text = "Next step: choose reports and create or select a database."
-            variant = "warning"
-        self.workflow_next_step_label.setText(text)
-        set_status_variant(self.workflow_next_step_label, variant)
+            caption = "Review reports in Reports"
+        self.home_next_action.setText(caption)
+        self.home_next_action.setAccessibleName(caption)
+        self.workflow_next_step_label.setText(reports.readiness_label.text())
+        set_status_variant(self.workflow_next_step_label, reports.readiness_label.property("statusVariant"))
+        self.home_cancel_report.setVisible(busy)
+        self.home_report_progress.setVisible(busy)
+        phase = "Reviewing reports" if reports.preflight_thread is not None else "Importing reports"
+        self.home_report_progress.setText(f"{phase}: {reports._operation_progress}%" if busy else "")
+        outcome = reports.report_planner.outcome.toPlainText()
+        summary = " · ".join(line for line in outcome.splitlines() if line)[:300]
+        self.home_report_result.setText(summary)
+        self.home_report_result.setVisible(bool(summary))
+        for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+            button.setEnabled(bool(self.db_file) and not busy)
 
     def is_metadata_enrichment_active(self):
         return (
@@ -720,6 +761,13 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def closeEvent(self, event):
+        if not self.reports_workspace.request_shutdown():
+            self._close_deferred_for_reports = True
+            self.workspace_notice_label.setText("Waiting for the report operation to stop before closing Metroliza.")
+            self.workspace_notice_label.show()
+            event.ignore()
+            return
+        self._close_deferred_for_reports = False
         if self.is_metadata_enrichment_active():
             self.stop_metadata_enrichment()
             event.ignore()
@@ -792,6 +840,11 @@ class MainWindow(QMainWindow):
         self.ui_preferences.set("windows/main/geometry", self.saveGeometry())
         self._persist_navigation_index(self.navigation_list.currentRow())
         super().closeEvent(event)
+
+    def _on_reports_shutdown_ready(self):
+        if self._close_deferred_for_reports:
+            self._close_deferred_for_reports = False
+            QTimer.singleShot(0, self.close)
 
     def _show_close_blocked_notice(
         self,
@@ -887,46 +940,17 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label.setVisible(True)
 
     def launch_parsing_dialog(self):
-        """Launch or focus parsing without silently closing other workflows."""
-        try:
-            from metroliza.ui.parsing_dialog import ParsingDialog
-
-            if self._is_qwidget_type(ParsingDialog):
-                def create_parsing(snapshot):
-                    dialog = ParsingDialog(
-                        self,
-                        snapshot.source_directory,
-                        snapshot.database_file,
-                    )
-                    enrichment_signal = getattr(dialog, "metadata_enrichment_requested", None)
-                    if enrichment_signal is not None:
-                        enrichment_signal.connect(self.start_metadata_enrichment_from_parsing)
-                    return dialog
-
-                self.parsing_dialog = self._open_coordinated_window(
-                    "parsing",
-                    create_parsing,
-                    context_policy=WindowContextPolicy.KEEP,
-                )
-            elif not self.parsing_dialog or not self.parsing_dialog.isVisible():
-                self.parsing_dialog = ParsingDialog(self, self.directory, self.db_file)
-                enrichment_signal = getattr(self.parsing_dialog, "metadata_enrichment_requested", None)
-                if enrichment_signal is not None:
-                    enrichment_signal.connect(self.start_metadata_enrichment_from_parsing)
-                self.parsing_dialog.show()
-            self.parsing_dialog.raise_()
-            self.parsing_dialog.activateWindow()
-        except Exception as e:
-            self.log_and_exit(e)
+        """Compatibility action: focus the one persistent Reports owner."""
+        self._show_workspace_page("reports")
+        self.reports_workspace.focus_primary_action()
+        return self.reports_workspace
 
     def start_metadata_enrichment_from_parsing(self, db_file):
-        """Receive a successful light import request and start modeless enrichment."""
-        try:
-            if db_file:
-                self.set_db_file(db_file)
-            self.launch_metadata_enrichment()
-        except Exception as e:
-            self.log_and_exit(e)
+        if db_file != self.workspace_context.snapshot.database_file:
+            self.workspace_notice_label.setText("Report completion belongs to a different database.")
+            self.workspace_notice_label.show()
+            return
+        self.launch_metadata_enrichment()
 
     def launch_modifydb_dialog(self):
         try:
@@ -1349,6 +1373,8 @@ class MainWindow(QMainWindow):
 
     def set_db_file(self, db_file):
         try:
+            if db_file != self.db_file and not self._report_context_change_allowed():
+                return False
             if self.industrial_data_dialog and self.industrial_data_dialog.isVisible():
                 updated = self.industrial_data_dialog.update_db_file(db_file)
                 if updated is False:
@@ -1357,7 +1383,7 @@ class MainWindow(QMainWindow):
                     )
                     set_status_variant(self.workspace_notice_label, "warning")
                     self.workspace_notice_label.setVisible(True)
-                    return
+                    return False
             self.workspace_notice_label.setVisible(False)
             recovery_result = self._recover_abandoned_realtime_staging(db_file)
             self.workspace_context.set_database_file(db_file)
@@ -1394,13 +1420,13 @@ class MainWindow(QMainWindow):
                     f"{recovery_result.get('rows_discarded', 0)} row(s) discarded.",
                     8000,
                 )
+            return True
         except Exception as e:
             self.log_and_exit(e)
 
     def _workflows_using_previous_database(self, database_file) -> tuple[str, ...]:
         labels = []
         for label, dialog in (
-            ("Report import", self.parsing_dialog),
             ("Export", self.export_dialog),
             ("Database editor", self.modifydb_dialog),
         ):
@@ -1430,9 +1456,20 @@ class MainWindow(QMainWindow):
 
     def set_directory(self, directory):
         try:
+            if directory != self.directory and not self._report_context_change_allowed():
+                return False
             self.workspace_context.set_source_directory(directory)
+            return True
         except Exception as e:
             self.log_and_exit(e)
+
+    def _report_context_change_allowed(self):
+        if self.reports_workspace.can_change_workspace():
+            return True
+        self.workspace_notice_label.setText("Finish or cancel the report operation before changing its source or database.")
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
 
     def _track_modeless_dialog(self, attribute: str, dialog) -> None:
         if hasattr(dialog, "setAttribute"):
