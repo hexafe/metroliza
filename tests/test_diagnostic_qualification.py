@@ -6,8 +6,21 @@ import sys
 import pytest
 
 from metroliza.app.diagnostic_launcher import run_with_store
+from metroliza.app import diagnostic_qualification
 from metroliza.app.diagnostic_qualification import requested_scenario
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
+
+
+def test_qualification_receipt_includes_closed_integrity_level(tmp_path, monkeypatch):
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", str(tmp_path))
+    monkeypatch.setattr(diagnostic_qualification, "_ordinary_user", lambda: True)
+    monkeypatch.setattr(diagnostic_qualification, "_integrity_level", lambda: "medium")
+
+    diagnostic_qualification.write_receipt("normal", "complete")
+
+    receipt = json.loads((tmp_path / "qualification.json").read_bytes())
+    assert receipt["ordinary_user"] is True
+    assert receipt["integrity_level"] == "medium"
 
 
 def test_destructive_synthetic_scenario_requires_both_explicit_test_flags(monkeypatch):
@@ -34,9 +47,15 @@ def test_actual_package_entry_runs_only_the_pinned_synthetic_workflow(tmp_path, 
                             store=store, env=env, cwd=work)
     assert result.observation.exit_code == code
     receipt = json.loads((work / "qualification.json").read_bytes())
-    assert set(receipt) == {"schema_version", "scenario", "stage", "packaged", "console_none", "ordinary_user"}
+    assert set(receipt) == {
+        "schema_version", "scenario", "stage", "packaged", "console_none",
+        "ordinary_user", "integrity_level",
+    }
     assert receipt["stage"] == ("ready" if code else "complete")
     assert receipt["packaged"] is False
+    assert receipt["integrity_level"] in {
+        "low", "medium", "high", "system", "other", "unavailable", "not_windows"
+    }
     events = [json.loads(event) for event in result.observation.history.events]
     assert {event.get("operation") for event in events if event["event_code"] == "workflow_diagnostic"} == {
         "selected_import", "local_export",

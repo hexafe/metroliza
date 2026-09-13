@@ -65,6 +65,9 @@ MAX_SUPERVISOR_MEMORY_OVERHEAD_BYTES = 128 * 1024 * 1024
 MAX_IDLE_WRITE_BYTES = 64 * 1024
 MAX_INCIDENT_ASSEMBLY_TO_VERIFICATION_MILLISECONDS = 10_000
 MAX_FLOOD_ELAPSED_MILLISECONDS = 90_000
+TOKEN_INTEGRITY_LEVEL = 25
+MEDIUM_INTEGRITY_RID = 0x2000
+MAX_TOKEN_INFORMATION_BYTES = 256
 NOTICE_FILES = ("THIRD_PARTY_NOTICES.md", "third_party_inventory_260711.json")
 CHECK_IDS = (
     "package_identity",
@@ -583,6 +586,12 @@ class _WindowsApi:
         class SID_AND_ATTRIBUTES(ctypes.Structure):
             _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wt.DWORD)]
 
+        class SID_IDENTIFIER_AUTHORITY(ctypes.Structure):
+            _fields_ = [("Value", wt.BYTE * 6)]
+
+        class TOKEN_MANDATORY_LABEL(ctypes.Structure):
+            _fields_ = [("Label", SID_AND_ATTRIBUTES)]
+
         class IO_COUNTERS(ctypes.Structure):
             _fields_ = [
                 ("ReadOperationCount", ctypes.c_ulonglong),
@@ -629,6 +638,8 @@ class _WindowsApi:
         self.STARTUPINFOW = STARTUPINFOW
         self.PROCESS_INFORMATION = PROCESS_INFORMATION
         self.SID_AND_ATTRIBUTES = SID_AND_ATTRIBUTES
+        self.SID_IDENTIFIER_AUTHORITY = SID_IDENTIFIER_AUTHORITY
+        self.TOKEN_MANDATORY_LABEL = TOKEN_MANDATORY_LABEL
         self.EXTENDED_LIMITS = JOBOBJECT_EXTENDED_LIMIT_INFORMATION
         self.FILETIME = FILETIME
         self.PROCESS_IDS = JOBOBJECT_BASIC_PROCESS_ID_LIST
@@ -708,6 +719,49 @@ class _WindowsApi:
             ctypes.POINTER(wt.HANDLE),
         ]
         self.advapi.CreateRestrictedToken.restype = wt.BOOL
+        self.advapi.AllocateAndInitializeSid.argtypes = [
+            ctypes.POINTER(self.SID_IDENTIFIER_AUTHORITY),
+            wt.BYTE,
+            wt.DWORD,
+            wt.DWORD,
+            wt.DWORD,
+            wt.DWORD,
+            wt.DWORD,
+            wt.DWORD,
+            wt.DWORD,
+            wt.DWORD,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self.advapi.AllocateAndInitializeSid.restype = wt.BOOL
+        self.advapi.FreeSid.argtypes = [ctypes.c_void_p]
+        self.advapi.FreeSid.restype = ctypes.c_void_p
+        self.advapi.GetLengthSid.argtypes = [ctypes.c_void_p]
+        self.advapi.GetLengthSid.restype = wt.DWORD
+        self.advapi.SetTokenInformation.argtypes = [
+            wt.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wt.DWORD,
+        ]
+        self.advapi.SetTokenInformation.restype = wt.BOOL
+        self.advapi.GetTokenInformation.argtypes = [
+            wt.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wt.DWORD,
+            ctypes.POINTER(wt.DWORD),
+        ]
+        self.advapi.GetTokenInformation.restype = wt.BOOL
+        self.advapi.IsValidSid.argtypes = [ctypes.c_void_p]
+        self.advapi.IsValidSid.restype = wt.BOOL
+        self.advapi.GetSidIdentifierAuthority.argtypes = [ctypes.c_void_p]
+        self.advapi.GetSidIdentifierAuthority.restype = ctypes.POINTER(
+            self.SID_IDENTIFIER_AUTHORITY
+        )
+        self.advapi.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+        self.advapi.GetSidSubAuthorityCount.restype = ctypes.POINTER(wt.BYTE)
+        self.advapi.GetSidSubAuthority.argtypes = [ctypes.c_void_p, wt.DWORD]
+        self.advapi.GetSidSubAuthority.restype = ctypes.POINTER(wt.DWORD)
         self.advapi.DuplicateToken.argtypes = [
             wt.HANDLE,
             ctypes.c_int,
@@ -763,11 +817,81 @@ class _WindowsApi:
         finally:
             self.kernel.CloseHandle(impersonation)
 
+    def _set_medium_integrity(self, token) -> None:
+        authority = self.SID_IDENTIFIER_AUTHORITY((0, 0, 0, 0, 0, 16))
+        medium_sid = ctypes.c_void_p()
+        if not self.advapi.AllocateAndInitializeSid(
+            ctypes.byref(authority),
+            1,
+            MEDIUM_INTEGRITY_RID,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            ctypes.byref(medium_sid),
+        ):
+            raise QualificationFailure("restricted_launch_unavailable")
+        try:
+            sid_length = int(self.advapi.GetLengthSid(medium_sid))
+            if not 0 < sid_length <= 68:
+                raise QualificationFailure("restricted_launch_unavailable")
+            label = self.TOKEN_MANDATORY_LABEL(
+                self.SID_AND_ATTRIBUTES(medium_sid, 0x20)
+            )
+            if not self.advapi.SetTokenInformation(
+                token,
+                TOKEN_INTEGRITY_LEVEL,
+                ctypes.byref(label),
+                ctypes.sizeof(label) + sid_length,
+            ):
+                raise QualificationFailure("restricted_launch_unavailable")
+        finally:
+            self.advapi.FreeSid(medium_sid)
+
+    def _integrity_rid(self, token) -> int:
+        wt = self.wintypes
+        required = wt.DWORD()
+        self.advapi.GetTokenInformation(
+            token, TOKEN_INTEGRITY_LEVEL, None, 0, ctypes.byref(required)
+        )
+        if not 0 < required.value <= MAX_TOKEN_INFORMATION_BYTES:
+            raise QualificationFailure("restricted_launch_unavailable")
+        buffer = ctypes.create_string_buffer(required.value)
+        if not self.advapi.GetTokenInformation(
+            token,
+            TOKEN_INTEGRITY_LEVEL,
+            buffer,
+            required.value,
+            ctypes.byref(required),
+        ):
+            raise QualificationFailure("restricted_launch_unavailable")
+        label = ctypes.cast(
+            buffer, ctypes.POINTER(self.TOKEN_MANDATORY_LABEL)
+        ).contents.Label
+        if not label.Sid or not self.advapi.IsValidSid(label.Sid):
+            raise QualificationFailure("restricted_launch_unavailable")
+        authority = self.advapi.GetSidIdentifierAuthority(label.Sid)
+        count = self.advapi.GetSidSubAuthorityCount(label.Sid)
+        if (
+            not authority
+            or not count
+            or tuple(authority.contents.Value) != (0, 0, 0, 0, 0, 16)
+            or not 0 < count.contents.value <= 8
+        ):
+            raise QualificationFailure("restricted_launch_unavailable")
+        rid = self.advapi.GetSidSubAuthority(label.Sid, count.contents.value - 1)
+        if not rid:
+            raise QualificationFailure("restricted_launch_unavailable")
+        return int(rid.contents.value)
+
     def _restricted_token(self):
         wt = self.wintypes
         current = wt.HANDLE()
         restricted = wt.HANDLE()
-        token_access = 0x0001 | 0x0002 | 0x0008
+        token_access = 0x0001 | 0x0002 | 0x0008 | 0x0080
         if not self.advapi.OpenProcessToken(
             self.kernel.GetCurrentProcess(), token_access, ctypes.byref(current)
         ):
@@ -791,6 +915,9 @@ class _WindowsApi:
                 None,
                 ctypes.byref(restricted),
             ):
+                raise QualificationFailure("restricted_launch_unavailable")
+            self._set_medium_integrity(restricted)
+            if self._integrity_rid(restricted) != MEDIUM_INTEGRITY_RID:
                 raise QualificationFailure("restricted_launch_unavailable")
             if self._has_effective_admin_membership(restricted, sid):
                 raise QualificationFailure("restricted_launch_unavailable")
@@ -977,6 +1104,7 @@ def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
             "packaged",
             "console_none",
             "ordinary_user",
+            "integrity_level",
         }:
             raise ValueError("invalid_receipt")
         if (
@@ -987,6 +1115,7 @@ def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
             or payload["packaged"] is not True
             or payload["console_none"] is not True
             or payload["ordinary_user"] is not True
+            or payload["integrity_level"] != "medium"
         ):
             raise ValueError("invalid_receipt")
         return payload

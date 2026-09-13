@@ -64,6 +64,87 @@ def _ordinary_user() -> bool:
     return os.geteuid() != 0
 
 
+def _integrity_level() -> str:
+    if os.name != "nt":
+        return "not_windows"
+    import ctypes
+    from ctypes import wintypes
+
+    class SID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+    class TOKEN_MANDATORY_LABEL(ctypes.Structure):
+        _fields_ = [("Label", SID_AND_ATTRIBUTES)]
+
+    class SID_IDENTIFIER_AUTHORITY(ctypes.Structure):
+        _fields_ = [("Value", wintypes.BYTE * 6)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    advapi.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi.IsValidSid.argtypes = [ctypes.c_void_p]
+    advapi.GetSidIdentifierAuthority.argtypes = [ctypes.c_void_p]
+    advapi.GetSidIdentifierAuthority.restype = ctypes.POINTER(SID_IDENTIFIER_AUTHORITY)
+    advapi.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+    advapi.GetSidSubAuthorityCount.restype = ctypes.POINTER(wintypes.BYTE)
+    advapi.GetSidSubAuthority.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    advapi.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
+    token = wintypes.HANDLE()
+    try:
+        if not advapi.OpenProcessToken(
+            kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)
+        ):
+            return "unavailable"
+        required = wintypes.DWORD()
+        advapi.GetTokenInformation(token, 25, None, 0, ctypes.byref(required))
+        if not 0 < required.value <= 256:
+            return "unavailable"
+        buffer = ctypes.create_string_buffer(required.value)
+        if not advapi.GetTokenInformation(
+            token, 25, buffer, required.value, ctypes.byref(required)
+        ):
+            return "unavailable"
+        sid = ctypes.cast(buffer, ctypes.POINTER(TOKEN_MANDATORY_LABEL)).contents.Label.Sid
+        if not sid or not advapi.IsValidSid(sid):
+            return "unavailable"
+        authority = advapi.GetSidIdentifierAuthority(sid)
+        count = advapi.GetSidSubAuthorityCount(sid)
+        if (
+            not authority
+            or tuple(authority.contents.Value) != (0, 0, 0, 0, 0, 16)
+            or not count
+            or not 0 < count.contents.value <= 8
+        ):
+            return "unavailable"
+        rid = advapi.GetSidSubAuthority(sid, count.contents.value - 1)
+        if not rid:
+            return "unavailable"
+        return {
+            0x1000: "low",
+            0x2000: "medium",
+            0x3000: "high",
+            0x4000: "system",
+        }.get(int(rid.contents.value), "other")
+    except Exception:
+        return "unavailable"
+    finally:
+        if token:
+            kernel.CloseHandle(token)
+
+
 def write_receipt(scenario: str, stage: str) -> None:
     if scenario not in SCENARIOS or stage not in {"startup_ready", "ready", "complete", "failed"}:
         raise ValueError("invalid_qualification_receipt")
@@ -72,6 +153,7 @@ def write_receipt(scenario: str, stage: str) -> None:
         "packaged": bool(getattr(sys, "frozen", False)),
         "console_none": sys.stdout is None and sys.stderr is None,
         "ordinary_user": _ordinary_user(),
+        "integrity_level": _integrity_level(),
     }
     root = _root()
     stage_path = root / (".receipt-" + uuid.uuid4().hex)

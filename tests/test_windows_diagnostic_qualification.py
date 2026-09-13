@@ -27,6 +27,20 @@ from scripts import qualify_windows_diagnostics as qualification
 class _TokenWinTypes:
     HANDLE = ctypes.c_void_p
     BOOL = ctypes.c_long
+    BYTE = ctypes.c_ubyte
+    DWORD = ctypes.c_uint32
+
+
+class _SidAndAttributes(ctypes.Structure):
+    _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", ctypes.c_uint32)]
+
+
+class _SidIdentifierAuthority(ctypes.Structure):
+    _fields_ = [("Value", ctypes.c_ubyte * 6)]
+
+
+class _TokenMandatoryLabel(ctypes.Structure):
+    _fields_ = [("Label", _SidAndAttributes)]
 
 
 class _TokenKernel:
@@ -63,6 +77,9 @@ def _token_api(*, membership_ok: bool = True, is_admin: bool = False):
     api.wintypes = _TokenWinTypes
     api.kernel = _TokenKernel()
     api.advapi = _TokenAdvapi(membership_ok=membership_ok, is_admin=is_admin)
+    api.SID_AND_ATTRIBUTES = _SidAndAttributes
+    api.SID_IDENTIFIER_AUTHORITY = _SidIdentifierAuthority
+    api.TOKEN_MANDATORY_LABEL = _TokenMandatoryLabel
     return api
 
 
@@ -87,6 +104,90 @@ def test_admin_membership_closes_duplicate_when_check_fails() -> None:
     assert error.value.failure_id == "restricted_launch_unavailable"
     assert api.advapi.checked == [202]
     assert api.kernel.closed == [202]
+
+
+class _IntegrityAdvapi:
+    def __init__(self, *, set_ok: bool = True, rid: int = 0x2000) -> None:
+        self.set_ok = set_ok
+        self.rid = ctypes.c_uint32(rid)
+        self.authority = _SidIdentifierAuthority((0, 0, 0, 0, 0, 16))
+        self.count = ctypes.c_ubyte(1)
+        self.freed: list[int] = []
+        self.set_calls: list[tuple[int, int, int]] = []
+
+    def AllocateAndInitializeSid(self, *_arguments) -> int:
+        ctypes.cast(_arguments[-1], ctypes.POINTER(ctypes.c_void_p))[0] = 303
+        return 1
+
+    def FreeSid(self, sid) -> None:
+        self.freed.append(sid.value)
+
+    def GetLengthSid(self, sid) -> int:
+        assert sid.value == 303
+        return 12
+
+    def SetTokenInformation(self, token, info_class, label, length) -> int:
+        value = ctypes.cast(label, ctypes.POINTER(_TokenMandatoryLabel)).contents
+        assert value.Label.Sid == 303
+        assert value.Label.Attributes == 0x20
+        self.set_calls.append((token.value, info_class, length))
+        return self.set_ok
+
+    def GetTokenInformation(self, token, info_class, output, length, returned) -> int:
+        assert token.value == 101
+        assert info_class == qualification.TOKEN_INTEGRITY_LEVEL
+        required = ctypes.cast(returned, ctypes.POINTER(ctypes.c_uint32))
+        required[0] = ctypes.sizeof(_TokenMandatoryLabel)
+        if output is None:
+            return 0
+        assert length == required[0]
+        label = _TokenMandatoryLabel(_SidAndAttributes(ctypes.c_void_p(303), 0x20))
+        ctypes.memmove(output, ctypes.byref(label), ctypes.sizeof(label))
+        return 1
+
+    def IsValidSid(self, sid) -> int:
+        return int(sid == 303)
+
+    def GetSidIdentifierAuthority(self, sid):
+        assert sid == 303
+        return ctypes.pointer(self.authority)
+
+    def GetSidSubAuthorityCount(self, sid):
+        assert sid == 303
+        return ctypes.pointer(self.count)
+
+    def GetSidSubAuthority(self, sid, index):
+        assert sid == 303
+        assert index == 0
+        return ctypes.pointer(self.rid)
+
+
+@pytest.mark.parametrize("set_ok", [True, False])
+def test_medium_integrity_sid_is_freed_on_every_set_path(set_ok) -> None:
+    api = _token_api()
+    api.advapi = _IntegrityAdvapi(set_ok=set_ok)
+
+    if set_ok:
+        api._set_medium_integrity(ctypes.c_void_p(101))
+    else:
+        with pytest.raises(qualification.QualificationFailure):
+            api._set_medium_integrity(ctypes.c_void_p(101))
+    assert api.advapi.set_calls == [
+        (
+            101,
+            qualification.TOKEN_INTEGRITY_LEVEL,
+            ctypes.sizeof(_TokenMandatoryLabel) + 12,
+        )
+    ]
+    assert api.advapi.freed == [303]
+
+
+@pytest.mark.parametrize("rid", [0x1000, 0x2000, 0x3000, 0x4000])
+def test_integrity_query_reads_final_mandatory_sid_subauthority(rid) -> None:
+    api = _token_api()
+    api.advapi = _IntegrityAdvapi(rid=rid)
+
+    assert api._integrity_rid(ctypes.c_void_p(101)) == rid
 
 
 def test_entry_failure_receipt_maps_only_closed_stage_and_reason(tmp_path) -> None:
@@ -253,7 +354,7 @@ def test_pe_subsystem_requires_a_gui_executable(tmp_path) -> None:
     assert error.value.failure_id == "artifact_invalid"
 
 
-def test_child_receipt_requires_packaged_console_none_and_ordinary_user(tmp_path) -> None:
+def test_child_receipt_requires_packaged_medium_integrity_ordinary_user(tmp_path) -> None:
     path = tmp_path / "qualification.json"
     payload = {
         "schema_version": 1,
@@ -262,6 +363,7 @@ def test_child_receipt_requires_packaged_console_none_and_ordinary_user(tmp_path
         "packaged": True,
         "console_none": True,
         "ordinary_user": True,
+        "integrity_level": "medium",
     }
     path.write_text(json.dumps(payload), encoding="ascii")
     assert qualification._validate_child_receipt(path, "normal") == payload
@@ -269,6 +371,12 @@ def test_child_receipt_requires_packaged_console_none_and_ordinary_user(tmp_path
     for field in ("packaged", "console_none", "ordinary_user"):
         changed = dict(payload)
         changed[field] = False
+        path.write_text(json.dumps(changed), encoding="ascii")
+        with pytest.raises(qualification.QualificationFailure):
+            qualification._validate_child_receipt(path, "normal")
+
+    for value in ("low", "high", "system", "other", "unavailable", "not_windows"):
+        changed = {**payload, "integrity_level": value}
         path.write_text(json.dumps(changed), encoding="ascii")
         with pytest.raises(qualification.QualificationFailure):
             qualification._validate_child_receipt(path, "normal")
@@ -641,6 +749,7 @@ class _FakeApi:
             "packaged": True,
             "console_none": True,
             "ordinary_user": True,
+            "integrity_level": "medium",
         }
         startup = {**common, "stage": "startup_ready"}
         payload = {**common, "stage": self.stage}
@@ -703,6 +812,11 @@ def test_platform_and_relative_arguments_fail_without_creating_output(
 @pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")
 def test_native_windows_restricted_token_job_launches_without_console(tmp_path) -> None:
     api = qualification._WindowsApi()
+    token = api._restricted_token()
+    try:
+        assert api._integrity_rid(token) == qualification.MEDIUM_INTEGRITY_RID
+    finally:
+        api.kernel.CloseHandle(token)
     system_root = Path(os.environ["SYSTEMROOT"])
     executable = system_root / "System32" / "whoami.exe"
     environment = qualification._sanitized_environment(
