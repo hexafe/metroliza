@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import importlib.util
+import inspect
 import os
 from pathlib import Path
 import sys
+from typing import Any, Iterator
 
 try:
     from PyInstaller.utils.hooks import (
@@ -36,6 +39,12 @@ ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES = (
     "onnxruntime.quantization",
     "onnxruntime.tools",
     "onnxruntime.transformers",
+)
+_ONEDIR_SCANNER_PYINSTALLER_VERSION = "6.22.3"
+_ONEDIR_SCANNER_PARAMETERS = (
+    "binaries",
+    "import_packages",
+    "symlink_suppression_patterns",
 )
 
 
@@ -157,6 +166,80 @@ def filter_onedir_hiddenimports(hiddenimports: list[str]) -> list[str]:
         or module_name == inference_prefix
         or module_name.startswith(f"{inference_prefix}.")
     ]
+
+
+def stable_onedir_binary_scan_packages(import_packages: list[str]) -> list[str]:
+    """Place ONNX Runtime inference packages first without changing membership."""
+    onnxruntime_root = []
+    onnxruntime_capi = []
+    other_packages = []
+    for package in import_packages:
+        if package == "onnxruntime":
+            onnxruntime_root.append(package)
+        elif package == "onnxruntime.capi" or package.startswith("onnxruntime.capi."):
+            onnxruntime_capi.append(package)
+        else:
+            other_packages.append(package)
+    return onnxruntime_root + onnxruntime_capi + other_packages
+
+
+def _load_pyinstaller_binary_scanner() -> tuple[str, Any]:
+    import PyInstaller
+    from PyInstaller.building import build_main
+
+    return PyInstaller.__version__, build_main
+
+
+def _scanner_signature_is_supported(scanner: object) -> bool:
+    try:
+        parameters = tuple(inspect.signature(scanner).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    return tuple(parameter.name for parameter in parameters) == _ONEDIR_SCANNER_PARAMETERS and all(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        and parameter.default is inspect.Parameter.empty
+        for parameter in parameters
+    )
+
+
+@contextmanager
+def onedir_binary_scanner_ordering() -> Iterator[None]:
+    """Prioritize ONNX Runtime in the pinned Windows onedir dependency scanner.
+
+    PyInstaller 6.22.3 has no public control for its persistent Windows scanner
+    child's package order. This scoped wrapper preserves the scanner's Qt
+    priority, DLL-path tracking, binary analysis, return value, and failures.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+
+    version, build_main = _load_pyinstaller_binary_scanner()
+    original = getattr(build_main, "find_binary_dependencies", None)
+    if version != _ONEDIR_SCANNER_PYINSTALLER_VERSION or not _scanner_signature_is_supported(
+        original
+    ):
+        raise RuntimeError(
+            "Windows onedir scanner ordering requires PyInstaller 6.22.3 "
+            "with its expected binary dependency scanner API"
+        )
+
+    def _ordered_find_binary_dependencies(
+        binaries: object,
+        import_packages: list[str],
+        symlink_suppression_patterns: object,
+    ) -> object:
+        return original(
+            binaries,
+            stable_onedir_binary_scan_packages(import_packages),
+            symlink_suppression_patterns,
+        )
+
+    build_main.find_binary_dependencies = _ordered_find_binary_dependencies
+    try:
+        yield
+    finally:
+        build_main.find_binary_dependencies = original
 
 
 def collect_optional_distribution_metadata(distribution_name: str) -> list[tuple[str, str]]:

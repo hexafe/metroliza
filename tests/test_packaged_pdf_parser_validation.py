@@ -579,6 +579,169 @@ def test_pyinstaller_onedir_collects_only_onnx_inference_runtime_graph():
         )
 
 
+def _load_pyinstaller_common(module_name: str):
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_onedir_binary_scan_order_is_stable_and_preserves_every_package():
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_scan_order_test")
+    packages = [
+        "cv2",
+        "openvino.frontend",
+        "onnxruntime.capi._pybind_state",
+        "numpy",
+        "onnxruntime",
+        "onnxruntime.capi",
+        "rapidocr",
+        "onnxruntime.capi._pybind_state",
+    ]
+
+    ordered = module.stable_onedir_binary_scan_packages(packages)
+
+    assert ordered == [
+        "onnxruntime",
+        "onnxruntime.capi._pybind_state",
+        "onnxruntime.capi",
+        "onnxruntime.capi._pybind_state",
+        "cv2",
+        "openvino.frontend",
+        "numpy",
+        "rapidocr",
+    ]
+    assert sorted(ordered) == sorted(packages)
+
+
+def test_windows_onedir_binary_scanner_delegates_and_restores(monkeypatch):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_scan_delegate_test")
+    calls = []
+
+    def original(binaries, import_packages, symlink_suppression_patterns):
+        calls.append((binaries, import_packages, symlink_suppression_patterns))
+        return ["expanded"]
+
+    build_main = types.SimpleNamespace(find_binary_dependencies=original)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: ("6.22.3", build_main),
+    )
+    packages = ["cv2", "onnxruntime.capi", "onnxruntime", "openvino"]
+
+    with module.onedir_binary_scanner_ordering():
+        installed = build_main.find_binary_dependencies
+        assert installed is not original
+        assert installed(["binary"], packages, {"pattern"}) == ["expanded"]
+
+    assert build_main.find_binary_dependencies is original
+    assert calls == [
+        (
+            ["binary"],
+            ["onnxruntime", "onnxruntime.capi", "cv2", "openvino"],
+            {"pattern"},
+        )
+    ]
+
+
+def test_windows_onedir_binary_scanner_propagates_failure_and_restores(monkeypatch):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_scan_failure_test")
+
+    def original(binaries, import_packages, symlink_suppression_patterns):
+        raise LookupError("scanner failed")
+
+    build_main = types.SimpleNamespace(find_binary_dependencies=original)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: ("6.22.3", build_main),
+    )
+
+    with pytest.raises(LookupError, match="scanner failed"):
+        with module.onedir_binary_scanner_ordering():
+            build_main.find_binary_dependencies([], ["onnxruntime"], set())
+
+    assert build_main.find_binary_dependencies is original
+
+
+def test_onedir_binary_scanner_restores_after_analysis_body_failure(monkeypatch):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_scan_body_failure_test")
+
+    def original(binaries, import_packages, symlink_suppression_patterns):
+        return []
+
+    build_main = types.SimpleNamespace(find_binary_dependencies=original)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: ("6.22.3", build_main),
+    )
+
+    with pytest.raises(RuntimeError, match="analysis failed"):
+        with module.onedir_binary_scanner_ordering():
+            raise RuntimeError("analysis failed")
+
+    assert build_main.find_binary_dependencies is original
+
+
+@pytest.mark.parametrize(
+    ("version", "scanner"),
+    [
+        ("6.22.4", lambda binaries, import_packages, symlink_suppression_patterns: []),
+        ("6.22.3", lambda binaries, import_packages: []),
+    ],
+)
+def test_windows_onedir_binary_scanner_fails_closed_on_pyinstaller_drift(
+    monkeypatch,
+    version,
+    scanner,
+):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_scan_drift_test")
+    build_main = types.SimpleNamespace(find_binary_dependencies=scanner)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: (version, build_main),
+    )
+
+    with pytest.raises(RuntimeError, match="PyInstaller 6.22.3"):
+        with module.onedir_binary_scanner_ordering():
+            pass
+
+    assert build_main.find_binary_dependencies is scanner
+
+
+def test_onedir_binary_scanner_is_windows_application_analysis_only(monkeypatch):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_scan_scope_test")
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: (_ for _ in ()).throw(AssertionError("must not load PyInstaller")),
+    )
+
+    with module.onedir_binary_scanner_ordering():
+        pass
+
+    onedir = Path("packaging/metroliza_onedir.spec").read_text(encoding="utf-8")
+    onefile = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
+    application_analysis, launcher_analysis = onedir.split("launcher_analysis = Analysis(", maxsplit=1)
+    assert application_analysis.count("with onedir_binary_scanner_ordering():") == 1
+    assert "a = Analysis(" in application_analysis
+    assert "with onedir_binary_scanner_ordering():" not in launcher_analysis
+    assert "onedir_binary_scanner_ordering" not in onefile
+
+
 def test_vendored_plotly_dashboard_asset_is_checked_in():
     asset = Path('src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js')
 

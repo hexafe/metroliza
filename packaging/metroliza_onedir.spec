@@ -14,6 +14,7 @@ from pyinstaller_common import (
     ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES,
     build_pyinstaller_collection,
     filter_onedir_hiddenimports,
+    onedir_binary_scanner_ordering,
     read_version_label,
 )
 
@@ -27,21 +28,25 @@ ICON_PATH = SPEC_DIR / "metroliza_icon2.ico"
 COLLECTION = build_pyinstaller_collection(ROOT_DIR)
 
 
-a = Analysis(
-    [str(SPEC_DIR / "metroliza_package_entry.py")],
-    pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
-    binaries=COLLECTION["binaries"],
-    datas=COLLECTION["datas"],
-    hiddenimports=filter_onedir_hiddenimports(COLLECTION["hiddenimports"]),
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES),
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-)
+# The pinned PyInstaller 6.22.3 Windows scanner imports every collected package
+# into one child. Keep the application's supported ONNX Runtime preload order;
+# the helper fails closed if that internal scanner API changes.
+with onedir_binary_scanner_ordering():
+    a = Analysis(
+        [str(SPEC_DIR / "metroliza_package_entry.py")],
+        pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
+        binaries=COLLECTION["binaries"],
+        datas=COLLECTION["datas"],
+        hiddenimports=filter_onedir_hiddenimports(COLLECTION["hiddenimports"]),
+        hookspath=[],
+        hooksconfig={},
+        runtime_hooks=[],
+        excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES),
+        win_no_prefer_redirects=False,
+        win_private_assemblies=False,
+        cipher=block_cipher,
+        noarchive=False,
+    )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
