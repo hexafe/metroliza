@@ -155,6 +155,38 @@ def test_preview_failure_receipt_revalidates_cleanup_without_private_text(tmp_pa
     }
 
 
+@pytest.mark.parametrize("has_window", [False, True])
+def test_preview_cleanup_survives_widget_import_failure(monkeypatch, has_window):
+    import builtins
+
+    from metroliza.app.bootstrap import get_or_create_qapplication
+    from PyQt6.QtWidgets import QMainWindow
+
+    app = get_or_create_qapplication()
+    assert app is not None
+    window = QMainWindow() if has_window else None
+    if window is not None:
+        window.show()
+        assert window.isVisible()
+    original_import = builtins.__import__
+
+    def unavailable_dialog(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "PyQt6.QtWidgets" and "QDialog" in fromlist:
+            raise ImportError("PRIVATE_IMPORT_FAILURE")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable_dialog)
+    try:
+        assert diagnostic_qualification._close_preview_windows(window) == (
+            "failed" if has_window else "not_attempted"
+        )
+        if window is not None:
+            assert not window.isVisible()
+    finally:
+        if window is not None:
+            window.close()
+
+
 @pytest.mark.parametrize("headless_environment", [False, True], ids=["desktop-env", "headless-env"])
 def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
     tmp_path, headless_environment

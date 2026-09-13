@@ -338,12 +338,12 @@ def _preview_dialog_from_help(app, window):
 
 
 def _close_preview_windows(window) -> str:
-    from PyQt6.QtWidgets import QDialog
-
     if window is None:
         return "not_attempted"
     status = "complete"
     try:
+        from PyQt6.QtWidgets import QDialog
+
         widgets = [*window.findChildren(QDialog), window]
     except Exception:
         widgets = [window]
