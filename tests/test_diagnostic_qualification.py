@@ -62,7 +62,10 @@ def test_unavailable_default_store_still_runs_and_preserves_actual_child_exit(tm
     assert list(tmp_path.iterdir()) == []
 
 
-def test_next_actual_entry_previews_and_exports_previous_surviving_incident(tmp_path):
+@pytest.mark.parametrize("headless_environment", [False, True], ids=["desktop-env", "headless-env"])
+def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
+    tmp_path, headless_environment
+):
     root = Path(__file__).resolve().parents[1]
     state = tmp_path / "application-state"
     store = IncidentStore(state / ("Metroliza" if os.name == "nt" else "metroliza") / "diagnostics")
@@ -75,6 +78,9 @@ def test_next_actual_entry_previews_and_exports_previous_surviving_incident(tmp_
                METROLIZA_DIAGNOSTIC_QUALIFICATION="preview",
                METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT=str(work),
                XDG_STATE_HOME=str(state), LOCALAPPDATA=str(state))
+    if headless_environment:
+        for key in ("DISPLAY", "WAYLAND_DISPLAY", "QT_QPA_PLATFORMTHEME", "QT_STYLE_OVERRIDE"):
+            env.pop(key, None)
     result = run_with_store([sys.executable, str(root / "packaging/metroliza_package_entry.py")],
                             store=store, env=env, cwd=work)
     assert result.observation.exit_code == 0
