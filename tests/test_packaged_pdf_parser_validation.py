@@ -515,24 +515,66 @@ def test_pyinstaller_installed_optional_collection_does_not_hide_hook_failures(m
         module.collect_optional_runtime_assets("optional_dependency")
 
 
-def test_pyinstaller_onedir_excludes_only_offline_onnx_quantization_graph():
+def test_pyinstaller_onedir_collects_only_onnx_inference_runtime_graph():
     onedir = Path("packaging/metroliza_onedir.spec").read_text(encoding="utf-8")
     onefile = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
     common = Path("packaging/pyinstaller_common.py").read_text(encoding="utf-8")
+    module_name = "_metroliza_pyinstaller_onedir_onnx_runtime_test"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    hiddenimports = [
+        "onnxruntime",
+        "onnxruntime.backend",
+        "onnxruntime.capi",
+        "onnxruntime.capi.onnxruntime_inference_collection",
+        "onnxruntime.capi._pybind_state",
+        "onnxruntime.datasets",
+        "onnxruntime.future_offline",
+        "onnxruntime.quantization",
+        "onnxruntime.tools",
+        "onnxruntime.transformers.models.gpt2",
+        "rapidocr.inference_engine.onnxruntime",
+        "metroliza.parsing.header_ocr_backend",
+    ]
 
-    assert 'hiddenimports=COLLECTION["hiddenimports"]' in onedir
-    assert 'excludes=["onnxruntime.quantization"]' in onedir
-    assert "filter_onedir_hiddenimports" not in onedir
-    assert "filter_onedir_hiddenimports" not in common
+    assert module.filter_onedir_hiddenimports(hiddenimports) == [
+        "onnxruntime",
+        "onnxruntime.capi",
+        "onnxruntime.capi.onnxruntime_inference_collection",
+        "onnxruntime.capi._pybind_state",
+        "rapidocr.inference_engine.onnxruntime",
+        "metroliza.parsing.header_ocr_backend",
+    ]
+    assert module.ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES == (
+        "onnxruntime.backend",
+        "onnxruntime.datasets",
+        "onnxruntime.quantization",
+        "onnxruntime.tools",
+        "onnxruntime.transformers",
+    )
+
+    assert 'filter_onedir_hiddenimports(COLLECTION["hiddenimports"])' in onedir
+    assert "excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES)" in onedir
     assert 'collect_required_runtime_assets("onnxruntime")' in common
+    assert "+ onnxruntime_binaries" in common
+    assert "+ onnxruntime_datas" in common
     assert "*onnxruntime_hiddenimports" in common
     assert 'collect_optional_distribution_metadata("onnxruntime")' in common
+    assert "collect_optional_vendored_model_data(root_dir)" in common
     assert 'hiddenimports=COLLECTION["hiddenimports"]' in onefile
-    assert "onnxruntime.quantization" not in onefile
     assert "filter_onedir_hiddenimports" not in onefile
     for root in (Path("src/metroliza"), Path("modules")):
         assert not any(
-            "onnxruntime.quantization" in source.read_text(encoding="utf-8")
+            any(
+                namespace in source.read_text(encoding="utf-8")
+                for namespace in module.ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES
+            )
             for source in root.rglob("*.py")
         )
 

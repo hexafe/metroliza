@@ -30,6 +30,15 @@ else:
     _PYINSTALLER_IMPORT_ERROR = None
 
 
+ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES = (
+    "onnxruntime.backend",
+    "onnxruntime.datasets",
+    "onnxruntime.quantization",
+    "onnxruntime.tools",
+    "onnxruntime.transformers",
+)
+
+
 def read_version_label(root_dir: Path) -> str:
     """Return the release label used by packaged artifact names."""
     version_ns: dict[str, str] = {}
@@ -136,6 +145,18 @@ def collect_optional_runtime_assets(
     if not _package_is_installed(package_name):
         return [], [], []
     return _collect_runtime_assets(package_name)
+
+
+def filter_onedir_hiddenimports(hiddenimports: list[str]) -> list[str]:
+    """Keep ONNX Runtime inference modules and all unrelated hidden imports."""
+    inference_prefix = "onnxruntime.capi"
+    return [
+        module_name
+        for module_name in hiddenimports
+        if not module_name.startswith("onnxruntime.")
+        or module_name == inference_prefix
+        or module_name.startswith(f"{inference_prefix}.")
+    ]
 
 
 def collect_optional_distribution_metadata(distribution_name: str) -> list[tuple[str, str]]:
