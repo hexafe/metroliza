@@ -282,6 +282,7 @@ class QualificationResult:
     qualification_reason: str | None = None
     qualification_child_stage: str | None = None
     qualification_exit_code: int | None = None
+    output_identity: tuple[int, int] | None = None
 
 
 def _sha256(path: Path, *, maximum: int = MAX_FILE_BYTES) -> str:
@@ -1263,7 +1264,7 @@ def _validate_child_failure(path: Path) -> dict[str, object]:
             or type(payload["schema_version"]) is not int
             or type(payload["stage"]) is not str
             or type(payload["reason"]) is not str
-            or payload["stage"] not in QUALIFICATION_FAILURE_STAGES
+            or payload["stage"] not in CHILD_FAILURE_STAGES
             or payload["reason"] not in QUALIFICATION_FAILURE_REASONS
         ):
             raise ValueError("invalid_failure")
@@ -1991,7 +1992,22 @@ def _validate_development_artifacts(output_dir: Path, package: dict[str, object]
         raise QualificationFailure("output_failed") from None
 
 
-def _write_receipt(output_dir: Path, payload: dict[str, object]) -> Path:
+def _write_receipt(
+    output_dir: Path,
+    payload: dict[str, object],
+    *,
+    expected_output_identity: tuple[int, int] | None = None,
+) -> Path:
+    if expected_output_identity is not None:
+        try:
+            metadata = output_dir.lstat()
+        except OSError:
+            raise QualificationFailure("output_failed") from None
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != expected_output_identity
+        ):
+            raise QualificationFailure("output_failed")
     expected_existing = (
         {output_dir / PACKAGE_MANIFEST_NAME, output_dir / PACKAGE_ARCHIVE_NAME}
         if payload.get("status") == "passed"
@@ -3003,7 +3019,12 @@ def qualify_windows_diagnostics(
                 qualification_reason="unexpected",
             )
         destination = _run_driver_phase(
-            "receipt", lambda: _write_receipt(output_dir, payload)
+            "receipt",
+            lambda: _write_receipt(
+                output_dir,
+                payload,
+                expected_output_identity=output_identity,
+            ),
         )
         return QualificationResult("passed", None, destination)
     except QualificationFailure as error:
@@ -3017,6 +3038,7 @@ def qualify_windows_diagnostics(
             qualification_reason=error.qualification_reason,
             qualification_child_stage=error.qualification_child_stage,
             qualification_exit_code=error.qualification_exit_code,
+            output_identity=output_identity,
         )
     except Exception:
         if output_identity is not None:
@@ -3027,6 +3049,7 @@ def qualify_windows_diagnostics(
                 None,
                 qualification_stage="runner",
                 qualification_reason="unexpected",
+                output_identity=output_identity,
             )
         return QualificationResult("failed", "scenario_failed", None)
 
@@ -3038,6 +3061,23 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _failure_output_identity(
+    output: Path, result: QualificationResult
+) -> tuple[int, int] | None:
+    if result.output_identity is not None:
+        return result.output_identity
+    if result.failure_id == "output_failed" or not output.is_absolute():
+        return None
+    try:
+        output.mkdir(mode=0o700, parents=True, exist_ok=False)
+        metadata = output.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISDIR(metadata.st_mode):
+        return None
+    return metadata.st_dev, metadata.st_ino
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         arguments = _parser().parse_args(argv)
@@ -3046,12 +3086,11 @@ def main(argv: list[str] | None = None) -> int:
     result = qualify_windows_diagnostics(arguments.artifact_dir, arguments.output_dir)
     if result.status == "passed":
         return 0
-    if result.failure_id in FAILURE_IDS and result.failure_id != "output_failed":
+    if result.failure_id in FAILURE_IDS:
         try:
             output = arguments.output_dir
-            if output.is_absolute() and not output.exists():
-                output.mkdir(mode=0o700, parents=True)
-            if output.is_dir() and not set(output.iterdir()):
+            output_identity = _failure_output_identity(output, result)
+            if output_identity is not None and not set(output.iterdir()):
                 _write_receipt(
                     output,
                     {
@@ -3084,6 +3123,7 @@ def main(argv: list[str] | None = None) -> int:
                         "metrics": None,
                         "operational_cost": None,
                     },
+                    expected_output_identity=output_identity,
                 )
         except (OSError, QualificationFailure):
             pass

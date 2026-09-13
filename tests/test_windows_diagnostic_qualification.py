@@ -851,7 +851,7 @@ def test_main_replaces_late_created_artifacts_with_closed_failure_receipt(
     def fail_after_artifacts(_artifact, output_dir, _deadline):
         (output_dir / qualification.PACKAGE_ARCHIVE_NAME).write_bytes(b"partial")
         (output_dir / qualification.PACKAGE_MANIFEST_NAME).write_bytes(b"partial")
-        raise qualification.QualificationFailure("scenario_failed")
+        raise qualification.QualificationFailure("output_failed")
 
     monkeypatch.setattr(qualification, "_parser", lambda: _Parser())
     monkeypatch.setattr(qualification, "_qualification_payload", fail_after_artifacts)
@@ -861,10 +861,37 @@ def test_main_replaces_late_created_artifacts_with_closed_failure_receipt(
     assert {path.name for path in output.iterdir()} == {qualification.OUTPUT_NAME}
     receipt = json.loads((output / qualification.OUTPUT_NAME).read_text(encoding="ascii"))
     assert receipt["status"] == "failed"
+    assert receipt["failure_id"] == "output_failed"
     assert receipt["qualification_failure"] == {
         "stage": "runner",
         "reason": "unexpected",
     }
+
+
+def test_main_does_not_write_output_failure_into_preexisting_directory(
+    tmp_path, monkeypatch
+) -> None:
+    artifact = tmp_path / "artifact"
+    output = tmp_path / "output"
+    artifact.mkdir()
+    output.mkdir()
+    sentinel = output / "existing.txt"
+    sentinel.write_bytes(b"preserve")
+
+    class _Arguments:
+        artifact_dir = artifact
+        output_dir = output
+
+    class _Parser:
+        def parse_args(self, _arguments):
+            return _Arguments()
+
+    monkeypatch.setattr(qualification, "_parser", lambda: _Parser())
+    monkeypatch.setattr(qualification.os, "name", "nt")
+
+    assert qualification.main([]) == 1
+    assert {path.name for path in output.iterdir()} == {sentinel.name}
+    assert sentinel.read_bytes() == b"preserve"
 
 
 def test_package_relocation_rejects_links_and_entry_overflow(tmp_path, monkeypatch) -> None:
@@ -1159,6 +1186,46 @@ def test_immutable_receipts_preserve_ready_during_complete_observation(
     assert ready_called is True
     assert called == [process]
     assert (tmp_path / qualification.QUALIFICATION_RECEIPT_NAMES["ready"]).is_file()
+
+
+def test_failed_child_receipt_retains_host_stage_and_closed_child_evidence(
+    tmp_path,
+) -> None:
+    process = _FakeProcess(21, supervised=True)
+    receipt = {
+        "schema_version": 1,
+        "scenario": "handled_failure",
+        "stage": "failed",
+        "packaged": True,
+        "console_none": True,
+        "ordinary_user": True,
+        "integrity_level": "medium",
+    }
+    (tmp_path / qualification.QUALIFICATION_RECEIPT_NAMES["failed"]).write_text(
+        json.dumps(receipt), encoding="ascii"
+    )
+    (tmp_path / "failure.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "stage": "workflows",
+                "reason": "qualification_result_mismatch",
+            }
+        ),
+        encoding="ascii",
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_driver_phase(
+            "handled_failure",
+            lambda: qualification._observe_qualification_receipt(
+                tmp_path, "handled_failure", process, None, False
+            ),
+        )
+
+    assert caught.value.qualification_stage == "handled_failure"
+    assert caught.value.qualification_child_stage == "workflows"
+    assert caught.value.qualification_reason == "qualification_result_mismatch"
 
 
 def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypatch) -> None:
