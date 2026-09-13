@@ -38,9 +38,24 @@ FAILURE_REASONS = frozenset(
         "qualification_filename_control_unavailable",
         "qualification_preview_unavailable",
         "qualification_menu_unavailable",
+        "qualification_cleanup_failed",
         "unexpected",
     }
 )
+PREVIEW_CLEANUP_STATUSES = frozenset({"not_attempted", "complete", "failed"})
+
+
+class _PreviewFailure(ValueError):
+    def __init__(self, reason: str, cleanup: str):
+        super().__init__(reason if reason in FAILURE_REASONS else "unexpected")
+        self.cleanup = (
+            cleanup if type(cleanup) is str and cleanup in PREVIEW_CLEANUP_STATUSES else "failed"
+        )
+
+
+def _failure_reason(error: Exception) -> str:
+    candidate = error.args[0] if error.args and type(error.args[0]) is str else None
+    return candidate if candidate in FAILURE_REASONS else "unexpected"
 
 
 def requested_scenario() -> str | None:
@@ -173,9 +188,13 @@ def write_receipt(scenario: str, stage: str) -> None:
 def _write_failure(root: Path, stage: str, error: Exception) -> None:
     if stage not in FAILURE_STAGES:
         stage = "application"
-    candidate = error.args[0] if error.args and type(error.args[0]) is str else None
-    reason = candidate if candidate in FAILURE_REASONS else "unexpected"
-    payload = {"schema_version": 1, "stage": stage, "reason": reason}
+    payload = {"schema_version": 1, "stage": stage, "reason": _failure_reason(error)}
+    if type(error) is _PreviewFailure:
+        payload["cleanup"] = (
+            error.cleanup
+            if type(error.cleanup) is str and error.cleanup in PREVIEW_CLEANUP_STATUSES
+            else "failed"
+        )
     stage_path = root / (".failure-" + uuid.uuid4().hex)
     with stage_path.open("x", encoding="ascii") as stream:
         json.dump(payload, stream, sort_keys=True)
@@ -293,7 +312,13 @@ def _preview_dialog_from_help(app, window):
     window.show()
     app.processEvents()
     menu = window.help_menu
-    if menu.menuAction() not in window.menuBar().actions():
+    menu_action = menu.menuAction()
+    if (
+        not window.isVisible()
+        or menu_action not in window.menuBar().actions()
+        or not menu_action.isVisible()
+        or not menu_action.isEnabled()
+    ):
         raise ValueError("qualification_menu_unavailable")
     actions = [
         action for action in menu.actions()
@@ -312,14 +337,30 @@ def _preview_dialog_from_help(app, window):
     return dialogs[0]
 
 
-def _preview_export(root: Path) -> None:
-    from PyQt6.QtCore import Qt, QTimer
-    from PyQt6.QtWidgets import QApplication
+def _close_preview_windows(window) -> str:
+    from PyQt6.QtWidgets import QDialog
 
-    app = QApplication.instance()
+    if window is None:
+        return "not_attempted"
+    status = "complete"
+    try:
+        widgets = [*window.findChildren(QDialog), window]
+    except Exception:
+        widgets = [window]
+        status = "failed"
+    for widget in widgets:
+        try:
+            if not widget.close():
+                status = "failed"
+        except Exception:
+            status = "failed"
+    return status
+
+
+def _export_preview_dialog(app, dialog, root: Path) -> None:
+    from PyQt6.QtCore import Qt, QTimer
+
     app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
-    window = _preview_main_window(root)
-    dialog = _preview_dialog_from_help(app, window)
     if dialog.reports_table.rowCount() < 1:
         raise ValueError("qualification_incident_missing")
     dialog.reports_table.selectRow(0)
@@ -339,12 +380,30 @@ def _preview_export(root: Path) -> None:
     timer.start()
     dialog.export_button.click()
     timer.stop()
-    dialog.close()
-    window.close()
     if not automation["filename_control_available"]:
         raise ValueError("qualification_filename_control_unavailable")
     if not chosen.is_file():
         raise ValueError("qualification_export_unavailable")
+
+
+def _preview_export(root: Path) -> None:
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    window = None
+    failure = None
+    try:
+        window = _preview_main_window(root)
+        dialog = _preview_dialog_from_help(app, window)
+        _export_preview_dialog(app, dialog, root)
+    except Exception as error:
+        failure = _failure_reason(error)
+    finally:
+        cleanup = _close_preview_windows(window)
+    if failure is not None:
+        raise _PreviewFailure(failure, cleanup)
+    if cleanup == "failed":
+        raise _PreviewFailure("qualification_cleanup_failed", cleanup)
 
 
 def _flood() -> None:

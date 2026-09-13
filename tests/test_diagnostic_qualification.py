@@ -85,7 +85,8 @@ def test_unavailable_default_store_still_runs_and_preserves_actual_child_exit(tm
     assert list(tmp_path.iterdir()) == []
 
 
-def test_preview_requires_the_real_normal_help_action(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cleanup_status", ["complete", "failed"])
+def test_preview_requires_the_real_normal_help_action(tmp_path, monkeypatch, cleanup_status):
     from metroliza.app.bootstrap import get_or_create_qapplication
     from metroliza.ui.main_window import MainWindow
 
@@ -110,9 +111,48 @@ def test_preview_requires_the_real_normal_help_action(tmp_path, monkeypatch):
     monkeypatch.setattr(MainWindow, "setup_menu_actions", without_incident_action)
     app = get_or_create_qapplication()
     assert app is not None
-    with pytest.raises(ValueError, match="^qualification_menu_unavailable$"):
-        diagnostic_qualification._preview_export(work)
+    windows = []
+    close_methods = []
+    create_window = diagnostic_qualification._preview_main_window
+
+    def capture_window(root):
+        window = create_window(root)
+        windows.append(window)
+        close_methods.append(window.close)
+        if cleanup_status == "failed":
+            monkeypatch.setattr(window, "close", lambda: False)
+        return window
+
+    monkeypatch.setattr(diagnostic_qualification, "_preview_main_window", capture_window)
+    try:
+        with pytest.raises(ValueError, match="^qualification_menu_unavailable$") as failure:
+            diagnostic_qualification._preview_export(work)
+        assert failure.value.cleanup == cleanup_status
+        assert len(windows) == 1
+        assert windows[0].isVisible() is (cleanup_status == "failed")
+        diagnostic_qualification._write_failure(work, "preview", failure.value)
+        assert json.loads((work / "failure.json").read_bytes()) == {
+            "schema_version": 1,
+            "stage": "preview",
+            "reason": "qualification_menu_unavailable",
+            "cleanup": cleanup_status,
+        }
+    finally:
+        for close in close_methods:
+            close()
     assert not (work / "selected.zip").exists()
+
+
+def test_preview_failure_receipt_revalidates_cleanup_without_private_text(tmp_path):
+    failure = diagnostic_qualification._PreviewFailure("qualification_menu_unavailable", "complete")
+    failure.cleanup = "PRIVATE_CLEANUP_DETAIL"
+    diagnostic_qualification._write_failure(tmp_path, "preview", failure)
+    assert json.loads((tmp_path / "failure.json").read_bytes()) == {
+        "schema_version": 1,
+        "stage": "preview",
+        "reason": "qualification_menu_unavailable",
+        "cleanup": "failed",
+    }
 
 
 @pytest.mark.parametrize("headless_environment", [False, True], ids=["desktop-env", "headless-env"])
