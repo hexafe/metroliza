@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -158,7 +159,7 @@ def test_sanitized_environment_has_only_fixed_runtime_inputs(tmp_path) -> None:
     assert environment["PATH"].split(";") == [
         str(artifact),
         str(artifact / "_internal"),
-        r"C:\Windows/System32",
+        str(Path(r"C:\Windows") / "System32"),
         r"C:\Windows",
     ]
     assert environment["METROLIZA_STARTUP_SMOKE"] == "1"
@@ -324,6 +325,7 @@ def test_output_receipt_is_closed_bounded_and_atomic(tmp_path) -> None:
     with pytest.raises(qualification.QualificationFailure) as error:
         qualification._write_receipt(second, unsafe)
     assert error.value.failure_id == "output_failed"
+
     assert not tuple(second.iterdir())
 
 
@@ -359,6 +361,17 @@ def test_operational_cost_is_truthful_and_environment_is_closed() -> None:
     with pytest.raises(qualification.QualificationFailure) as error:
         qualification._validate_output_payload(payload)
     assert error.value.failure_id == "output_failed"
+
+    payload = _success_payload()
+    threshold = qualification.MAX_SUPERVISOR_MEMORY_OVERHEAD_BYTES
+    payload["metrics"]["direct_peak_process_tree_memory_bytes"] = [threshold * 2, 1]
+    payload["metrics"]["supervised_peak_process_tree_memory_bytes"] = [
+        threshold * 2,
+        threshold + 2,
+    ]
+    cost = qualification._operational_cost(payload["metrics"])
+    assert cost["observed"]["max_supervisor_memory_overhead_bytes"] == threshold + 1
+    assert cost["status"] == "unresolved"
 
 
 def test_output_failure_detail_accepts_only_closed_qualification_evidence() -> None:
@@ -418,6 +431,82 @@ def test_full_tree_identity_rejects_post_copy_change(tmp_path) -> None:
         qualification._write_development_artifacts(source, tested, output)
     assert error.value.failure_id == "artifact_invalid"
     assert not tuple(output.iterdir())
+
+
+@pytest.mark.parametrize("replacement", [b"two", b"unexpected growth"])
+def test_archive_copy_rejects_change_after_inventory(
+    tmp_path, monkeypatch, replacement
+) -> None:
+    source = tmp_path / "source"
+    tested = tmp_path / "tested"
+    output = tmp_path / "output"
+    for path in (source, tested, output):
+        path.mkdir()
+    (source / "one.bin").write_bytes(b"one")
+    tested_file = tested / "one.bin"
+    tested_file.write_bytes(b"one")
+    inventory = qualification._package_inventory
+
+    def mutate_after_inventory(root):
+        result = inventory(root)
+        if root == tested:
+            tested_file.write_bytes(replacement)
+        return result
+
+    monkeypatch.setattr(qualification, "_package_inventory", mutate_after_inventory)
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._write_development_artifacts(source, tested, output)
+    assert error.value.failure_id == "artifact_invalid"
+    assert not tuple(output.iterdir())
+
+
+def test_published_archive_revalidates_each_member_sha(tmp_path) -> None:
+    source = tmp_path / "source"
+    tested = tmp_path / "tested"
+    output = tmp_path / "output"
+    for path in (source, tested, output):
+        path.mkdir()
+    (source / "one.bin").write_bytes(b"one")
+    (tested / "one.bin").write_bytes(b"one")
+    package = qualification._write_development_artifacts(source, tested, output)
+    archive_path = output / qualification.PACKAGE_ARCHIVE_NAME
+    archive_path.unlink()
+    with zipfile.ZipFile(archive_path, "x", compression=zipfile.ZIP_STORED) as bundle:
+        bundle.writestr("one.bin", b"two")
+    manifest_path = output / qualification.PACKAGE_MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    archive_sha256 = qualification._sha256(
+        archive_path, maximum=qualification.MAX_PACKAGE_ARCHIVE_BYTES
+    )
+    manifest["archive"].update(
+        sha256=archive_sha256, size_bytes=archive_path.stat().st_size
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        encoding="ascii",
+    )
+    package.update(
+        archive_sha256=archive_sha256,
+        archive_size_bytes=archive_path.stat().st_size,
+        package_manifest_sha256=qualification._sha256(
+            manifest_path, maximum=qualification.MAX_PACKAGE_MANIFEST_BYTES
+        ),
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._validate_development_artifacts(output, package)
+    assert error.value.failure_id == "output_failed"
+
+
+def test_package_inventory_rejects_empty_directories(tmp_path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "component.bin").write_bytes(b"one")
+    (package / "required-empty").mkdir()
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._package_inventory(package)
+    assert error.value.failure_id == "artifact_invalid"
 
 
 def test_hard_exit_rejects_a_valid_incident_with_empty_history() -> None:

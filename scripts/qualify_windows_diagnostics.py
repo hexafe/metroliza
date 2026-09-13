@@ -708,8 +708,12 @@ class _WindowsApi:
             ctypes.POINTER(wt.HANDLE),
         ]
         self.advapi.CreateRestrictedToken.restype = wt.BOOL
-        self.advapi.IsTokenRestricted.argtypes = [wt.HANDLE]
-        self.advapi.IsTokenRestricted.restype = wt.BOOL
+        self.advapi.CheckTokenMembership.argtypes = [
+            wt.HANDLE,
+            ctypes.c_void_p,
+            ctypes.POINTER(wt.BOOL),
+        ]
+        self.advapi.CheckTokenMembership.restype = wt.BOOL
         process_arguments = [
             wt.HANDLE,
             wt.LPCWSTR,
@@ -767,7 +771,10 @@ class _WindowsApi:
                 ctypes.byref(restricted),
             ):
                 raise QualificationFailure("restricted_launch_unavailable")
-            if not self.advapi.IsTokenRestricted(restricted):
+            is_admin = wt.BOOL()
+            if not self.advapi.CheckTokenMembership(
+                restricted, sid, ctypes.byref(is_admin)
+            ) or is_admin.value:
                 raise QualificationFailure("restricted_launch_unavailable")
             return restricted
         except Exception:
@@ -1033,6 +1040,11 @@ def _package_item(root: Path, path: Path) -> PackageEntry | None:
     )
 
 
+def _reject_empty_package_directory(names: list[str], files: list[str]) -> None:
+    if not names and not files:
+        raise QualificationFailure("artifact_invalid")
+
+
 def _package_inventory(root: Path) -> tuple[PackageEntry, ...]:
     entries = 0
     total_bytes = 0
@@ -1053,6 +1065,7 @@ def _package_inventory(root: Path) -> tuple[PackageEntry, ...]:
         ):
             names.sort()
             files.sort()
+            _reject_empty_package_directory(names, files)
             for name in (*names, *files):
                 entries += 1
                 if entries > MAX_PACKAGE_ENTRIES:
@@ -1434,6 +1447,42 @@ def _remove_generated_paths(paths: tuple[Path, ...]) -> None:
             pass
 
 
+def _bounded_stream_sha256(source, size_bytes: int, *, destination=None) -> str:
+    remaining = size_bytes
+    digest = hashlib.sha256()
+    while remaining:
+        block = source.read(min(1024 * 1024, remaining))
+        if not block:
+            raise ValueError("archive_member_size_mismatch")
+        remaining -= len(block)
+        digest.update(block)
+        if destination is not None:
+            destination.write(block)
+    if source.read(1):
+        raise ValueError("archive_member_size_mismatch")
+    return digest.hexdigest()
+
+
+def _validate_archive_entries(
+    bundle: zipfile.ZipFile,
+    entries: tuple[PackageEntry, ...],
+) -> None:
+    members = bundle.infolist()
+    if [member.filename for member in members] != [entry.path for entry in entries]:
+        raise ValueError("archive_member_mismatch")
+    for member, entry in zip(members, entries, strict=True):
+        if (
+            member.is_dir()
+            or member.flag_bits & 0x1
+            or member.file_size != entry.size_bytes
+        ):
+            raise ValueError("archive_member_mismatch")
+        with bundle.open(member, "r") as stream:
+            digest = _bounded_stream_sha256(stream, entry.size_bytes)
+        if digest != entry.sha256:
+            raise ValueError("archive_member_mismatch")
+
+
 def _write_development_artifacts(
     source: Path,
     tested: Path,
@@ -1458,14 +1507,17 @@ def _write_development_artifacts(
                 info.external_attr = 0o100600 << 16
                 with (tested / Path(entry.path)).open("rb") as source_stream:
                     with archive.open(info, "w", force_zip64=True) as destination:
-                        shutil.copyfileobj(source_stream, destination, length=1024 * 1024)
+                        copied_sha256 = _bounded_stream_sha256(
+                            source_stream,
+                            entry.size_bytes,
+                            destination=destination,
+                        )
+                if copied_sha256 != entry.sha256:
+                    raise ValueError("archive_member_mismatch")
         if archive_stage.stat().st_size > MAX_PACKAGE_ARCHIVE_BYTES:
             raise QualificationFailure("artifact_invalid")
         with zipfile.ZipFile(archive_stage) as archive:
-            if archive.namelist() != [entry.path for entry in tested_inventory]:
-                raise QualificationFailure("artifact_invalid")
-            if archive.testzip() is not None:
-                raise QualificationFailure("artifact_invalid")
+            _validate_archive_entries(archive, tested_inventory)
         archive_sha256 = _sha256(archive_stage, maximum=MAX_PACKAGE_ARCHIVE_BYTES)
         manifest = {
             "schema_version": 1,
@@ -1592,14 +1644,7 @@ def _validate_development_artifacts(output_dir: Path, package: dict[str, object]
         ):
             raise QualificationFailure("output_failed")
         with zipfile.ZipFile(archive_path) as bundle:
-            if bundle.namelist() != [entry.path for entry in entries]:
-                raise QualificationFailure("output_failed")
-            if [item.file_size for item in bundle.infolist()] != [
-                entry.size_bytes for entry in entries
-            ]:
-                raise QualificationFailure("output_failed")
-            if bundle.testzip() is not None:
-                raise QualificationFailure("output_failed")
+            _validate_archive_entries(bundle, entries)
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):
         raise QualificationFailure("output_failed") from None
 
@@ -1788,7 +1833,8 @@ def _operational_cost(metrics: dict[str, object]) -> dict[str, object]:
             for direct, supervised in zip(direct_startup, supervised_startup, strict=True)
         ),
         "max_supervisor_memory_overhead_bytes": max(
-            0, max(supervised_memory) - max(direct_memory)
+            max(0, supervised - direct)
+            for direct, supervised in zip(direct_memory, supervised_memory, strict=True)
         ),
         "direct_idle_write_bytes": metrics["direct_idle_write_bytes"],
         "supervised_idle_write_bytes": metrics["supervised_idle_write_bytes"],
