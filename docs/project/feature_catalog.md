@@ -47,6 +47,11 @@ release evidence are complete.
 | Versioned report database and industrial-cache migration, backup, integrity, and repair | [#930](https://github.com/hexafe/metroliza/issues/930) | Release-candidate | 2 | #915, #917, #920, #944 |
 | Report browser, validation review, transactional correction, and curation | [#954](https://github.com/hexafe/metroliza/issues/954) | Release-candidate | 2 | #915, #929, #930, #932 |
 
+Within #927, [#1015](https://github.com/hexafe/metroliza/issues/1015) implements persistent
+report review and exact subset selection in the Parsing host using the merged #1014/#1019/#1020
+contracts. Integration and Windows package acceptance remain pending; #1016 binds the reusable
+planner into the main Reports page after external #1015 integration.
+
 ## 2. Selection, preparation, and reusable configuration
 
 | Capability | Issue | Current maturity | Target phase | Strict prerequisites |

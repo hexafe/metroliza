@@ -974,6 +974,16 @@ jobs:
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: python -m pytest -vv tests/test_industrial_qt_lifecycle.py
 
+      - name: Run native Windows report planner tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_PLANNER_SCREEN: 1920x1080
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py
+
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
           PYTHONPATH: src;.
