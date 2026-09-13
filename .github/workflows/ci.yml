@@ -974,6 +974,16 @@ jobs:
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: python -m pytest -vv tests/test_industrial_qt_lifecycle.py
 
+      - name: Run native Windows specialist geometry tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_INDUSTRIAL_SCREEN: 1920x1080
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -vv -s tests/test_industrial_native_geometry.py
+
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
           PYTHONPATH: src;.

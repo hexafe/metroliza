@@ -26,6 +26,13 @@ line already contains substantial implementations. A capability remains open unt
 release contract, acceptance tests, documentation, diagnostics, compatibility behavior, and
 release evidence are complete.
 
+### Corrective quality trackers
+
+[#1018](https://github.com/hexafe/metroliza/issues/1018) corrects evidenced desktop geometry in
+the cache-first industrial source workflow and its scalable keyboard/accessibility surface. It
+supports the existing #940 and #946 capability rows; it is not a new product capability or a
+strict prerequisite, so the #926–#957 inventory and dependency graph remain unchanged.
+
 ## Maturity legend
 
 | Maturity | Meaning |
