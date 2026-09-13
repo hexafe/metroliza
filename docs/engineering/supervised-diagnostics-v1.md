@@ -14,6 +14,8 @@ This extra bootloader process is part of the observed topology and startup cost.
 application bootstrap are excluded from that launcher. It validates fixed child/runtime component
 hashes and equality with the embedded build SHA before launching the exact adjacent child.
 The manifest is build provenance and consistency evidence, not a cryptographic signature.
+Frozen entrypoints preserve the bundled loader's import paths. Adding the repository source
+directory is confined to direct source execution.
 
 The supervisor retains the `Popen` identity of its launched child. Two anonymous inherited pipes
 carry a fresh session ID and challenge/response token; Windows uses an explicit handle inheritance

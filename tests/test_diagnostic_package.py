@@ -66,3 +66,40 @@ def test_minimal_entry_precedes_application_imports():
     subprocess.run([sys.executable, "-c", code, str(root / "packaging/metroliza_supervisor_entry.py")],
                    check=True, capture_output=True,
                    env=dict(os.environ, PYTHONPATH=str(root / "src")))
+
+
+@pytest.mark.parametrize("entry", ["metroliza_supervisor_entry.py", "metroliza_package_entry.py"])
+@pytest.mark.parametrize("frozen", [False, True], ids=["source", "frozen-flag"])
+def test_frozen_entry_preserves_loader_import_paths(tmp_path, entry, frozen):
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    entry_path = root / "packaging" / entry
+    if frozen:
+        # A frozen entry resides beside the extracted bundle, independently of
+        # the source package used here to simulate the frozen import loader.
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        copied = bundle / entry
+        copied.write_bytes(entry_path.read_bytes())
+        entry_path = copied
+    code = """
+import os, runpy, sys
+sys.frozen = sys.argv[2] == '1'
+if sys.frozen:
+    sys.path = [path for path in sys.path if path not in ('', os.getcwd())]
+before = tuple(sys.path)
+runpy.run_path(sys.argv[1], run_name='import_probe')
+if sys.frozen:
+    assert tuple(sys.path) == before, 'frozen_entry_changed_import_path'
+else:
+    assert sys.path[0] == sys.argv[3], 'source_entry_missing_owned_source_root'
+"""
+    subprocess.run(
+        [sys.executable, "-c", code, str(entry_path),
+         "1" if frozen else "0", str(root / "src")],
+        check=True, capture_output=True,
+        env=dict(os.environ, PYTHONPATH=str(root / "src")),
+    )

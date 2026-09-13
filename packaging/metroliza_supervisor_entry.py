@@ -3,8 +3,9 @@
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT_DIR / "src"))
+if not getattr(sys, "frozen", False):
+    ROOT_DIR = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(ROOT_DIR / "src"))
 
 from metroliza.app.diagnostic_launcher import main  # noqa: E402
 
