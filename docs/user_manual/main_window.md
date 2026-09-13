@@ -13,7 +13,10 @@ the next available control. It does not start an import without a reviewed selec
 review the files, select ready reports and import exactly that selection. Changing pages
 preserves the review, filters, selection, task and outcome. Source/database changes take
 effect only when accepted; they clear the old review. Changes are rejected while a report
-operation is active. Closing the main window requests cancellation and waits for the worker.
+operation is active. Database workflow actions wait for the report operation to finish, while
+navigation and cancellation remain available. Finish or close a same-database editing/export
+or industrial window before starting another report operation; its work is preserved.
+Closing the main window requests cancellation and waits for the worker.
 
 **CSV Analytics**, **Industrial Data**, **Realtime Monitor** and **Parser Profiles** keep
 their own primary pages. Their **Tools** menu shortcuts navigate to those same pages;

@@ -162,6 +162,9 @@ class MainWindow(QMainWindow):
         self._close_deferred_for_realtime = False
         self._close_deferred_for_children = False
         self._close_deferred_for_reports = False
+        self._reports_workspace = None
+        self._reports_first_paint = False
+        self._database_workflow_buttons = []
         self._deferred_close_blockers: set[str] = set()
         self._deferred_child_close_retry_scheduled = False
         self.parser_plugin_wizard_dialog = None
@@ -335,7 +338,7 @@ class MainWindow(QMainWindow):
 
     def setup_button_tooltips(self):
         """Set up the tooltips for the buttons."""
-        self.parse_button.setToolTip("Import measurements from PDF reports into a SQLite database.")
+        self.parse_button.setToolTip("Open Reports and focus the next available report action.")
         self.modifydb_button.setToolTip("Clean stored references, sample numbers, headers, and record values.")
         self.export_button.setToolTip("Filter, group, and export database measurements to an Excel workbook.")
         self.map_characteristics_button.setToolTip("Map different report names to one common characteristic name.")
@@ -443,9 +446,6 @@ class MainWindow(QMainWindow):
 
     def setup_buttons_layout(self):
         """Compose primary workspaces around one persistent report owner."""
-        from metroliza.ui.parsing_dialog import ReportsWorkspace
-        from metroliza.ui.report_planner import PLANNER_ACTION_STYLE
-
         self.layout.addWidget(self.workspace_notice_label)
         self.navigation_combo = QComboBox()
         self.navigation_combo.setAccessibleName("Metroliza workspace navigation")
@@ -480,21 +480,12 @@ class MainWindow(QMainWindow):
 
         self.reports_page = QWidget()
         reports_layout = QVBoxLayout(self.reports_page)
+        self._reports_layout = reports_layout
         reports_layout.setContentsMargins(0, 0, 0, 0)
         reports_layout.setSpacing(2)
-        self.reports_workspace = ReportsWorkspace(self.reports_page)
-        # Compatibility alias refers to this exact owner, never another dialog.
-        self.parsing_dialog = self.reports_workspace
-        self.reports_workspace.source_change_requested.connect(self.set_directory)
-        self.reports_workspace.database_change_requested.connect(self.set_db_file)
-        self.reports_workspace.metadata_enrichment_requested.connect(self.start_metadata_enrichment_from_parsing)
-        self.reports_workspace.state_changed.connect(self._sync_workflow_next_step)
-        self.reports_workspace.shutdown_ready.connect(self._on_reports_shutdown_ready)
-        reports_layout.addWidget(self.reports_workspace, 1)
         downstream_row = QHBoxLayout()
         downstream_row.setSpacing(4)
         for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
-            button.setStyleSheet(PLANNER_ACTION_STYLE)
             downstream_row.addWidget(button)
         reports_layout.addLayout(downstream_row)
         self._add_workspace_page("Reports", self.reports_page)
@@ -525,7 +516,7 @@ class MainWindow(QMainWindow):
         task_row.addWidget(self.cancel_metadata_enrichment_button)
         self.layout.addLayout(task_row)
         self.home_next_action.clicked.connect(self.launch_parsing_dialog)
-        self.home_cancel_report.clicked.connect(self.reports_workspace._request_active_worker_cancellation)
+        self.home_cancel_report.clicked.connect(self._cancel_report_operation)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
@@ -556,6 +547,8 @@ class MainWindow(QMainWindow):
             self.navigation_list.setCurrentRow(index)
 
     def _on_navigation_changed(self, index):
+        if self._reports_first_paint and self.navigation_combo.itemData(index) == "reports":
+            self._ensure_reports_workspace()
         self.workspace_stack.setCurrentIndex(index)
         self.navigation_combo.blockSignals(True)
         self.navigation_combo.setCurrentIndex(index)
@@ -570,6 +563,43 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "navigation_list"):
             self._update_navigation_layout()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._reports_first_paint:
+            self._reports_first_paint = True
+            if self.navigation_combo.currentData() == "reports":
+                QTimer.singleShot(0, self._ensure_reports_workspace)
+
+    @property
+    def reports_workspace(self):
+        return self._ensure_reports_workspace()
+
+    def _ensure_reports_workspace(self):
+        """Create the sole owner on entry, preserving startup's first-paint boundary."""
+        if self._reports_workspace is None:
+            from metroliza.ui.parsing_dialog import ReportsWorkspace
+            from metroliza.ui.report_planner import PLANNER_ACTION_STYLE
+
+            host = ReportsWorkspace(self.reports_page)
+            host.operation_start_allowed = self._report_start_allowed
+            self._reports_workspace = host
+            self.parsing_dialog = host
+            host.source_change_requested.connect(self.set_directory)
+            host.database_change_requested.connect(self.set_db_file)
+            host.metadata_enrichment_requested.connect(self.start_metadata_enrichment_from_parsing)
+            host.state_changed.connect(self._sync_workflow_next_step)
+            host.shutdown_ready.connect(self._on_reports_shutdown_ready)
+            self._reports_layout.insertWidget(0, host, 1)
+            for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+                button.setStyleSheet(PLANNER_ACTION_STYLE)
+            host.apply_workspace_snapshot(self.workspace_context.snapshot)
+            self._sync_workflow_next_step()
+        return self._reports_workspace
+
+    def _cancel_report_operation(self):
+        if self._reports_workspace is not None:
+            self._reports_workspace._request_active_worker_cancellation()
 
     def _build_workspace_landing_page(
         self,
@@ -588,6 +618,8 @@ class MainWindow(QMainWindow):
             button = QPushButton(label)
             set_button_role(button, "primary" if index == 0 else "secondary")
             button.clicked.connect(callback)
+            if title in ("Industrial Data", "Realtime Monitor", "Tools"):
+                self._database_workflow_buttons.append(button)
             layout.addWidget(button)
         layout.addStretch(1)
         return page
@@ -595,7 +627,8 @@ class MainWindow(QMainWindow):
     def _on_workspace_snapshot_changed(self, current, _previous) -> None:
         self.directory = current.source_directory
         self.db_file = current.database_file
-        self.reports_workspace.apply_workspace_snapshot(current)
+        if self._reports_workspace is not None:
+            self._reports_workspace.apply_workspace_snapshot(current)
         self._sync_context_rows()
 
     def _restore_ui_preferences(self) -> None:
@@ -650,32 +683,45 @@ class MainWindow(QMainWindow):
     def _sync_workflow_next_step(self):
         if not hasattr(self, "workflow_next_step_label"):
             return
-        reports = self.reports_workspace
-        busy = not reports.can_change_workspace()
+        reports = self._reports_workspace
+        busy = reports is not None and not reports.can_change_workspace()
         if busy:
             caption = "View active report operation"
         elif not self.directory:
             caption = "Choose reports in Reports"
         elif not self.db_file:
             caption = "Choose database in Reports"
-        elif reports.parse_button.isEnabled():
+        elif reports is not None and reports.parse_button.isEnabled():
             caption = "Continue selected import in Reports"
         else:
             caption = "Review reports in Reports"
         self.home_next_action.setText(caption)
         self.home_next_action.setAccessibleName(caption)
-        self.workflow_next_step_label.setText(reports.readiness_label.text())
-        set_status_variant(self.workflow_next_step_label, reports.readiness_label.property("statusVariant"))
+        if reports is not None:
+            guidance = reports.readiness_label.text()
+            variant = reports.readiness_label.property("statusVariant")
+        else:
+            guidance = (
+                "Select a source and database to review reports." if not self.directory
+                else "Select or create a database before reviewing reports." if not self.db_file
+                else "Ready to review. No database changes are made until you import."
+            )
+            variant = "warning"
+        self.workflow_next_step_label.setText(guidance)
+        set_status_variant(self.workflow_next_step_label, variant)
         self.home_cancel_report.setVisible(busy)
         self.home_report_progress.setVisible(busy)
-        phase = "Reviewing reports" if reports.preflight_thread is not None else "Importing reports"
+        phase = "Reviewing reports" if busy and reports.preflight_thread is not None else "Processing selected reports"
         self.home_report_progress.setText(f"{phase}: {reports._operation_progress}%" if busy else "")
-        outcome = reports.report_planner.outcome.toPlainText()
+        outcome = reports.report_planner.outcome.toPlainText() if reports is not None else ""
         summary = " · ".join(line for line in outcome.splitlines() if line)[:300]
         self.home_report_result.setText(summary)
         self.home_report_result.setVisible(bool(summary))
         for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
             button.setEnabled(bool(self.db_file) and not busy)
+        for button in self._database_workflow_buttons:
+            button.setEnabled(not busy)
+        self.enrich_metadata_action.setEnabled(not busy and not self.is_metadata_enrichment_active())
 
     def is_metadata_enrichment_active(self):
         return (
@@ -685,6 +731,8 @@ class MainWindow(QMainWindow):
 
     def launch_metadata_enrichment(self):
         """Start modeless OCR metadata enrichment for the selected database."""
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.parsing.metadata_enrichment_thread import MetadataEnrichmentThread
 
@@ -721,6 +769,7 @@ class MainWindow(QMainWindow):
 
     def _clear_metadata_enrichment_thread(self):
         self.metadata_enrichment_thread = None
+        self._sync_workflow_next_step()
 
     def stop_metadata_enrichment(self):
         try:
@@ -739,7 +788,9 @@ class MainWindow(QMainWindow):
 
     def on_metadata_enrichment_finished(self):
         try:
-            self.enrich_metadata_action.setEnabled(True)
+            self.enrich_metadata_action.setEnabled(
+                self._reports_workspace is None or self._reports_workspace.can_change_workspace()
+            )
             self.cancel_metadata_enrichment_button.setEnabled(False)
             self.cancel_metadata_enrichment_button.setVisible(False)
             if self.metadata_enrichment_error_message:
@@ -761,7 +812,7 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def closeEvent(self, event):
-        if not self.reports_workspace.request_shutdown():
+        if self._reports_workspace is not None and not self._reports_workspace.request_shutdown():
             self._close_deferred_for_reports = True
             self.workspace_notice_label.setText("Waiting for the report operation to stop before closing Metroliza.")
             self.workspace_notice_label.show()
@@ -953,6 +1004,8 @@ class MainWindow(QMainWindow):
         self.launch_metadata_enrichment()
 
     def launch_modifydb_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.modify_db import ModifyDB
 
@@ -974,6 +1027,8 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def launch_export_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.export_dialog import ExportDialog
 
@@ -1026,6 +1081,8 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def launch_industrial_data_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.industrial_data_dialog import IndustrialDataDialog
 
@@ -1050,6 +1107,8 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def launch_realtime_industrial_monitoring_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             dashboard_db_path, using_session_db = self._realtime_dashboard_db_file()
             from metroliza.ui.realtime_industrial_monitoring_dialog import (
@@ -1363,6 +1422,8 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def launch_characteristic_mapping_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.characteristic_mapping_dialog import CharacteristicMappingDialog
 
@@ -1464,9 +1525,50 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def _report_context_change_allowed(self):
-        if self.reports_workspace.can_change_workspace():
+        if self._reports_workspace is None or self._reports_workspace.can_change_workspace():
             return True
         self.workspace_notice_label.setText("Finish or cancel the report operation before changing its source or database.")
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _report_database_action_allowed(self):
+        if self._reports_workspace is None or self._reports_workspace.can_change_workspace():
+            return True
+        self.workspace_notice_label.setText("Finish or cancel the report operation before starting another database workflow.")
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _report_start_allowed(self):
+        """Keep existing same-database windows safe without closing their work."""
+        if not self.db_file:
+            return True
+        blockers = []
+        if self.is_metadata_enrichment_active():
+            blockers.append("metadata enrichment")
+        for label, dialog in (
+            ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
+            ("Industrial Data", self.industrial_data_dialog),
+            ("Realtime Monitor", self.realtime_monitoring_dialog),
+        ):
+            if dialog is None:
+                continue
+            try:
+                if not dialog.isVisible():
+                    continue
+            except RuntimeError:
+                continue
+            databases = tuple(path for path in (
+                getattr(dialog, "db_file", None), getattr(dialog, "report_db_file", None),
+            ) if path)
+            if not databases or any(Path(path).resolve() == Path(self.db_file).resolve() for path in databases):
+                blockers.append(label)
+        if not blockers:
+            return True
+        self.workspace_notice_label.setText(
+            f"Finish or close {', '.join(blockers)} before reviewing or importing reports in this database."
+        )
         set_status_variant(self.workspace_notice_label, "warning")
         self.workspace_notice_label.show()
         return False
