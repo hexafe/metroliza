@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from pathlib import Path
+import errno
 import os
 import sys
 import time
@@ -432,8 +433,46 @@ def _process_alive(pid):
             kernel.CloseHandle(handle)
     try:
         return Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1][0] != "Z"
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux /proc observation oracle")
+@pytest.mark.parametrize("observation,expected", [
+    pytest.param(FileNotFoundError(errno.ENOENT, "synthetic missing process"), False, id="enoent"),
+    pytest.param(ProcessLookupError(errno.ESRCH, "synthetic vanished process"), False, id="esrch"),
+    pytest.param("424242 (synthetic) R 1 2 3", True, id="running"),
+    pytest.param("424242 (synthetic) S 1 2 3", True, id="sleeping"),
+    pytest.param("424242 (synthetic) T 1 2 3", True, id="stopped"),
+    pytest.param("424242 (synthetic) Z 1 2 3", False, id="zombie"),
+    pytest.param(PermissionError(errno.EACCES, "synthetic denied read"), PermissionError, id="eacces"),
+    pytest.param(PermissionError(errno.EPERM, "synthetic denied access"), PermissionError, id="eperm"),
+    pytest.param(OSError(errno.EIO, "synthetic read failure"), OSError, id="eio"),
+    pytest.param(UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic invalid text"),
+                 UnicodeDecodeError, id="decode"),
+    pytest.param("", IndexError, id="empty"),
+    pytest.param("424242 (synthetic)", IndexError, id="missing-separator"),
+    pytest.param("424242 (synthetic) ", IndexError, id="missing-state"),
+])
+def test_process_alive_proc_observation(monkeypatch, observation, expected):
+    reads = []
+
+    def read_text(path):
+        reads.append(path)
+        if isinstance(observation, Exception):
+            raise observation
+        return observation
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_text)
+        if isinstance(expected, type):
+            with pytest.raises(expected) as caught:
+                _process_alive(424242)
+            if isinstance(observation, Exception):
+                assert caught.value is observation
+        else:
+            assert _process_alive(424242) is expected
+    assert reads == [Path("/proc/424242/stat")]
 
 
 def _startup_hook_fixture(tmp_path, monkeypatch):
