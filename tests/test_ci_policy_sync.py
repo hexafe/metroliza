@@ -26,8 +26,7 @@ def test_native_windows_report_planner_step_preserves_real_platform_and_scope() 
     assert 'QT_QPA_PLATFORM: windows' in step
     assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
     assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
-    assert 'Get-DisplayResolution' in step
-    assert 'throw' in step
+    assert 'METROLIZA_EXPECT_PLANNER_SCREEN: 1920x1080' in step
     for test in ('model', 'integration', 'geometry'):
         assert f'tests/test_report_planner_{test}.py' in step
     assert name in policy

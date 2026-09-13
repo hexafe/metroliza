@@ -50,6 +50,13 @@ def app():
     expected_platform = os.environ.get("METROLIZA_EXPECT_QT_PLATFORM")
     if expected_platform:
         assert application.platformName().casefold() == expected_platform.casefold()
+    expected_screen = os.environ.get("METROLIZA_EXPECT_PLANNER_SCREEN")
+    if expected_screen:
+        assert expected_screen == "1920x1080", "Unknown planner display qualification"
+        screen = application.primaryScreen()
+        ratio = screen.devicePixelRatio()
+        physical_size = (round(screen.size().width() * ratio), round(screen.size().height() * ratio))
+        assert physical_size == (1920, 1080), f"Required native display unavailable: {physical_size}"
     return application
 
 
@@ -356,3 +363,4 @@ def test_windows_scale_factor_subprocess(scale):
     assert completed.returncode == 0, (
         f"QT_SCALE_FACTOR={scale} failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
+    assert "1 passed" in completed.stdout, "Native scale body did not execute"
