@@ -2163,3 +2163,88 @@ def test_sqlite_finite_numeric_loaded_integer_scope(tmp_path, suffix):
             assert conn.execute("SELECT * FROM tabular_rows ORDER BY rowid").fetchall() == before
     finally:
         canonical_tabular_service.cleanup_tabular_load_result(loaded)
+
+
+_COLUMN_INTEGER_CASES = [
+    ("=", "9007199254740992", [1]),
+    ("=", "9007199254740993", [2, 7]),
+    ("=", 9007199254740993, [2, 7]),
+    (">", "9007199254740992", [2, 5, 6, 7]),
+    (">=", "9007199254740993", [2, 5, 6, 7]),
+    ("<", "9007199254740993", [1, 8, 9]),
+    ("<=", "9007199254740992", [1, 8, 9]),
+    ("!=", "9007199254740992", [2, 5, 6, 7, 8, 9]),
+    ("=", "-9007199254740993", [8]),
+    ("=", "9223372036854775808", [5]),
+    (">", "9223372036854775808", [6]),
+    ("=", "1,5", [9]),  # Existing comma/grouping literal and sidecar behavior.
+]
+
+
+@pytest.mark.parametrize("suffix", ["csv", "xlsx"])
+@pytest.mark.parametrize("operator,value,expected", _COLUMN_INTEGER_CASES)
+def test_sqlite_finite_numeric_loaded_column_filter_scope(tmp_path, suffix, operator, value, expected):
+    import csv
+    from openpyxl import Workbook
+
+    sources = ["9007199254740992", "9007199254740993", "bad", None,
+               "9223372036854775808", "9223372036854775809",
+               " +9007199254740993 ", "-9007199254740993", "1,5", "Inf", "1e309"]
+    path = tmp_path / ("column_integer_scope." + suffix)
+    rows = [(source, f"row-{index}") for index, source in enumerate(sources, 1)]
+    if suffix == "csv":
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["code", "bucket"])
+            writer.writerows(rows)
+    else:
+        workbook = Workbook()
+        workbook.active.append(["code", "bucket"])
+        for row in rows:
+            workbook.active.append(row)
+        workbook.save(path)
+        workbook.close()
+    loaded = canonical_tabular_service.load_tabular_analytics_file(path, force_sqlite=True)
+    try:
+        store = loaded.sqlite_store
+        assert store is not None
+        with closing(sqlite3.connect(store.path)) as connection:
+            before = connection.execute("SELECT *, typeof(code) FROM tabular_rows ORDER BY rowid").fetchall()
+        filters = (TabularColumnFilter("code", numeric_operator=operator, numeric_value=value),)
+        for _ in range(2):
+            assert store.row_ids(column_filters=filters) == expected
+            assert canonical_tabular_service.count_tabular_materialized_rows(
+                loaded, column_filters=filters,
+            ) == len(expected)
+            result = canonical_tabular_service.materialize_tabular_dataframe(
+                loaded, column_filters=filters, required_columns=("source_row_number",),
+            )
+            assert result.dataframe["source_row_number"].tolist() == expected
+            assert store.preview_group_keys(("bucket",), base_column_filters=filters) == tuple(
+                (f"row-{index}",) for index in expected
+            )
+        with closing(sqlite3.connect(store.path)) as connection:
+            assert connection.execute("SELECT *, typeof(code) FROM tabular_rows ORDER BY rowid").fetchall() == before
+    finally:
+        canonical_tabular_service.cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("operator,value,expected", [
+    ("=", "9007199254740992", [1]),
+    ("=", "9007199254740993", [2]),
+    (">", "9007199254740992", [2]),
+    ("!=", "9007199254740992", [2, 5]),
+    ("=", "-9007199254740993", [5]),
+])
+def test_tabular_column_filter_exact_object_sources(operator, value, expected):
+    frame = pd.DataFrame({
+        "code": pd.Series([9007199254740992, "9007199254740993", "bad", None,
+                           "-9007199254740993", "Inf", "1e309"], dtype=object),
+        "source_row_number": list(range(1, 8)),
+    })
+    before = frame.copy(deep=True)
+    result = apply_tabular_row_filter(
+        frame, column_filters=(TabularColumnFilter("code", numeric_operator=operator, numeric_value=value),),
+    )
+    assert result.dataframe["source_row_number"].tolist() == expected
+    pd.testing.assert_frame_equal(frame, before)
