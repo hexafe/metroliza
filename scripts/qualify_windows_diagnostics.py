@@ -70,6 +70,7 @@ MAX_SUPERVISOR_MEMORY_OVERHEAD_BYTES = 128 * 1024 * 1024
 MAX_IDLE_WRITE_BYTES = 64 * 1024
 MAX_INCIDENT_ASSEMBLY_TO_VERIFICATION_MILLISECONDS = 10_000
 MAX_FLOOD_ELAPSED_MILLISECONDS = 90_000
+MAX_TERMINATION_DRAIN_MILLISECONDS = 5_000
 TOKEN_INTEGRITY_LEVEL = 25
 MEDIUM_INTEGRITY_RID = 0x2000
 MAX_TOKEN_INFORMATION_BYTES = 256
@@ -157,6 +158,7 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "qualification_export_unavailable",
         "qualification_filename_control_unavailable",
         "qualification_preview_unavailable",
+        "qualification_cleanup_failed",
         "process_exited_before_startup",
         "process_exited_before_result",
         "process_exit_mismatch",
@@ -620,7 +622,15 @@ class _WindowsProcess:
         if self._closed:
             return
         self._closed = True
-        self._api.close_process(self._process, self._job, terminate=terminate)
+        preserve_primary = sys.exc_info()[0] is not None
+        try:
+            self._api.close_process(self._process, self._job, terminate=terminate)
+        except Exception:
+            if not preserve_primary:
+                raise QualificationFailure(
+                    "scenario_failed",
+                    qualification_reason="qualification_cleanup_failed",
+                ) from None
 
 
 class _WindowsApi:
@@ -776,6 +786,8 @@ class _WindowsApi:
         self.kernel.GetExitCodeProcess.restype = wt.BOOL
         self.kernel.TerminateProcess.argtypes = [wt.HANDLE, wt.UINT]
         self.kernel.TerminateProcess.restype = wt.BOOL
+        self.kernel.TerminateJobObject.argtypes = [wt.HANDLE, wt.UINT]
+        self.kernel.TerminateJobObject.restype = wt.BOOL
         self.kernel.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
         self.kernel.OpenProcess.restype = wt.HANDLE
         self.kernel.QueryFullProcessImageNameW.argtypes = [
@@ -1215,10 +1227,28 @@ class _WindowsApi:
         )
 
     def close_process(self, process, job, *, terminate: bool) -> None:
-        if terminate:
-            self.kernel.TerminateProcess(process, 23)
-        self.kernel.CloseHandle(job)
-        self.kernel.CloseHandle(process)
+        drained = not terminate
+        try:
+            if terminate:
+                if not self.kernel.TerminateJobObject(job, 23):
+                    self.kernel.TerminateProcess(process, 23)
+                deadline = (
+                    time.monotonic() + MAX_TERMINATION_DRAIN_MILLISECONDS / 1000
+                )
+                while time.monotonic() < deadline:
+                    active, _total = self._job_accounting(job)
+                    if active == 0:
+                        drained = True
+                        break
+                    time.sleep(0.01)
+        finally:
+            self.kernel.CloseHandle(job)
+            self.kernel.CloseHandle(process)
+        if not drained:
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="qualification_cleanup_failed",
+            )
 
 
 def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
@@ -2978,8 +3008,8 @@ def _qualification_payload(
     _run_driver_phase("package", validate_fixture)
     if time.monotonic() >= deadline:
         raise QualificationFailure("scenario_timeout")
-    with tempfile.TemporaryDirectory(prefix="Metroliza kwalifikacja żółć ") as private:
-        private_root = Path(private)
+
+    def qualify_private(private_root: Path) -> dict[str, object]:
         relocated = _run_driver_phase(
             "relocation",
             lambda: _relocate_package(artifact, private_root, deadline),
@@ -2997,6 +3027,29 @@ def _qualification_payload(
             "runner", lambda: _QualificationRunner(relocated, private_root, deadline)
         )
         return runner.run(package, artifact, output_dir)
+
+    return _run_in_private_directory(qualify_private)
+
+
+def _run_in_private_directory(action: Callable[[Path], _T]) -> _T:
+    temporary = tempfile.TemporaryDirectory(prefix="Metroliza kwalifikacja żółć ")
+    try:
+        result = action(Path(temporary.name))
+    except BaseException:
+        try:
+            temporary.cleanup()
+        except Exception:
+            pass
+        raise
+    try:
+        temporary.cleanup()
+    except Exception:
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_stage="runner",
+            qualification_reason="qualification_cleanup_failed",
+        ) from None
+    return result
 
 
 def _prepare_qualification_paths(

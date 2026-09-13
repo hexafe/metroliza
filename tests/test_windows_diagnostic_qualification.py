@@ -222,6 +222,130 @@ def test_driver_phase_closes_unexpected_failure_without_private_text() -> None:
     assert "PRIVATE_PATH" not in str(error.value)
 
 
+def test_private_cleanup_failure_does_not_replace_classified_primary(
+    tmp_path, monkeypatch
+) -> None:
+    class _Temporary:
+        name = str(tmp_path)
+
+        def cleanup(self) -> None:
+            raise PermissionError("PRIVATE_LOCKED_PATH")
+
+    monkeypatch.setattr(
+        qualification.tempfile, "TemporaryDirectory", lambda **_keywords: _Temporary()
+    )
+    primary = qualification.QualificationFailure(
+        "scenario_failed",
+        qualification_stage="direct_normal_1",
+        qualification_reason="process_exit_mismatch",
+        qualification_exit_code=7,
+    )
+
+    def fail(_root: Path) -> None:
+        raise primary
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_in_private_directory(fail)
+
+    assert caught.value is primary
+
+
+def test_private_cleanup_failure_after_success_is_closed_failure(
+    tmp_path, monkeypatch
+) -> None:
+    class _Temporary:
+        name = str(tmp_path)
+
+        def cleanup(self) -> None:
+            raise PermissionError("PRIVATE_LOCKED_PATH")
+
+    monkeypatch.setattr(
+        qualification.tempfile, "TemporaryDirectory", lambda **_keywords: _Temporary()
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_in_private_directory(lambda _root: "complete")
+
+    assert caught.value.qualification_stage == "runner"
+    assert caught.value.qualification_reason == "qualification_cleanup_failed"
+    assert "PRIVATE_LOCKED_PATH" not in str(caught.value)
+
+
+def test_process_close_preserves_primary_when_cleanup_raises() -> None:
+    class _Api:
+        def close_process(self, *_arguments, **_keywords) -> None:
+            raise OSError("PRIVATE_HANDLE_FAILURE")
+
+    process = object.__new__(qualification._WindowsProcess)
+    process._api = _Api()
+    process._process = object()
+    process._job = object()
+    process._closed = False
+    primary = qualification.QualificationFailure(
+        "scenario_timeout",
+        qualification_stage="direct_normal_1",
+        qualification_reason="unexpected",
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        try:
+            raise primary
+        except qualification.QualificationFailure:
+            process.close(terminate=True)
+            raise
+
+    assert caught.value is primary
+
+
+def test_process_close_cleanup_failure_is_not_treated_as_success() -> None:
+    class _Api:
+        def close_process(self, *_arguments, **_keywords) -> None:
+            raise OSError("PRIVATE_HANDLE_FAILURE")
+
+    process = object.__new__(qualification._WindowsProcess)
+    process._api = _Api()
+    process._process = object()
+    process._job = object()
+    process._closed = False
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        process.close(terminate=False)
+
+    assert caught.value.qualification_reason == "qualification_cleanup_failed"
+    assert "PRIVATE_HANDLE_FAILURE" not in str(caught.value)
+
+
+def test_owned_job_termination_waits_for_zero_active_before_closing() -> None:
+    class _Kernel:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def TerminateJobObject(self, job, code):
+            self.calls.append(("terminate_job", job, code))
+            return 1
+
+        def TerminateProcess(self, process, code):
+            self.calls.append(("terminate_process", process, code))
+            return 1
+
+        def CloseHandle(self, handle):
+            self.calls.append(("close", handle))
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    accounting = iter(((1, 2), (0, 2)))
+    api._job_accounting = lambda _job: next(accounting)
+
+    api.close_process("primary", "owned-job", terminate=True)
+
+    assert api.kernel.calls == [
+        ("terminate_job", "owned-job", 23),
+        ("close", "owned-job"),
+        ("close", "primary"),
+    ]
+
+
 def test_driver_phase_preserves_safe_early_process_exit_evidence(
     tmp_path,
     monkeypatch,
