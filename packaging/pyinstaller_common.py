@@ -138,16 +138,6 @@ def collect_optional_runtime_assets(
     return _collect_runtime_assets(package_name)
 
 
-def filter_onedir_hiddenimports(hiddenimports: list[str]) -> list[str]:
-    """Omit ONNX Runtime's offline quantization tools from the onedir build."""
-    prefix = "onnxruntime.quantization"
-    return [
-        module_name
-        for module_name in hiddenimports
-        if module_name != prefix and not module_name.startswith(f"{prefix}.")
-    ]
-
-
 def collect_optional_distribution_metadata(distribution_name: str) -> list[tuple[str, str]]:
     """Collect distribution metadata if the package is installed."""
     try:
