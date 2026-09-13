@@ -236,6 +236,32 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
 
 
+def test_windows_core_runs_complete_startup_diagnostics_selection() -> None:
+    import shlex
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-core-smoke']
+    assert job['runs-on'] == 'windows-latest'
+    assert 'if' not in job
+    step_name = 'Run native Windows startup diagnostics tests'
+    steps = [step for step in job['steps'] if step['name'] == step_name]
+    assert len(steps) == 1
+    step = steps[0]
+    assert 'if' not in step
+    assert 'continue-on-error' not in step
+    assert step['env']['PYTHONPATH'] == 'src;.'
+    assert shlex.split(step['run']) == [
+        'python', '-m', 'pytest', '-v',
+        'tests/test_bootstrap_startup.py',
+        'tests/test_diagnostic_events.py',
+        'tests/test_logging_utils.py',
+        'tests/test_build_provenance.py',
+    ]
+    assert step_name in CI_POLICY_PATH.read_text(encoding='utf-8')
+
+
 def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> None:
     import yaml
 
