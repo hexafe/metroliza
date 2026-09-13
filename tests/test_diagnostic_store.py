@@ -142,6 +142,53 @@ def test_publish_list_and_load_revalidate_private_complete_incident(tmp_path) ->
     assert report_path.stat().st_nlink == 1
 
 
+def test_inventory_uses_full_path_metadata_when_direntry_identity_is_zero(
+    tmp_path, monkeypatch
+) -> None:
+    store = IncidentStore(tmp_path / "diagnostics")
+    incident = _incident()
+    assert store.publish(incident).status is StoreStatus.SAVED
+    real_scandir = os.scandir
+    with real_scandir(store.root) as entries:
+        scanned = tuple((entry.name, entry.path) for entry in entries)
+    weak_stat_calls: list[str] = []
+
+    class WeakWindowsEntry:
+        def __init__(self, name, path):
+            self.name, self.path = name, path
+
+        def stat(self, *, follow_symlinks=True):
+            weak_stat_calls.append(self.name)
+            metadata = os.stat(self.path, follow_symlinks=follow_symlinks)
+            return types.SimpleNamespace(
+                st_mode=metadata.st_mode,
+                st_ino=0,
+                st_dev=0,
+                st_nlink=0,
+                st_uid=metadata.st_uid,
+                st_size=metadata.st_size,
+                st_file_attributes=getattr(metadata, "st_file_attributes", 0),
+            )
+
+    class WeakWindowsScan:
+        def __enter__(self):
+            return iter(WeakWindowsEntry(*entry) for entry in scanned)
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(diagnostic_store.os, "scandir", lambda _root: WeakWindowsScan())
+
+    inventory = store._inventory()
+
+    assert inventory is not None
+    assert inventory.reports == (
+        store.root / f"incident-{incident.report_id.hex}.json",
+    )
+    assert inventory.total_bytes == len(encode_incident(incident))
+    assert weak_stat_calls == []
+
+
 def test_quota_failure_preserves_previous_complete_report(tmp_path, monkeypatch) -> None:
     store = IncidentStore(tmp_path / "diagnostics")
     first = _incident()

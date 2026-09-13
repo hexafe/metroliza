@@ -409,13 +409,19 @@ def _valid_inventory_metadata(metadata: os.stat_result) -> bool:
             and (os.name == "nt" or metadata.st_uid == os.getuid()))
 
 
+def _scanned_metadata(entry: os.DirEntry) -> os.stat_result:
+    # Python 3.11's Windows DirEntry.stat() reports zero for device, inode,
+    # and link count. The path-based call returns the full no-follow identity.
+    return os.stat(entry.path, follow_symlinks=False)
+
+
 def _recovery_pairs(root: Path) -> list[tuple[Path, Path, tuple[int, int]]]:
     linked: dict[tuple[int, int], list[Path]] = {}
     with os.scandir(root) as entries:
         for index, entry in enumerate(entries):
             if index >= MAX_SCAN_ENTRIES:
                 raise OSError("diagnostic_scan_limit")
-            metadata = entry.stat(follow_symlinks=False)
+            metadata = _scanned_metadata(entry)
             if metadata.st_nlink != 2 or not stat.S_ISREG(metadata.st_mode):
                 continue
             if (_is_reparse_or_link(metadata)
@@ -493,7 +499,7 @@ class IncidentStore:
                     if entry.name == _LOCK_NAME:
                         continue
                     path = Path(entry.path)
-                    metadata = entry.stat(follow_symlinks=False)
+                    metadata = _scanned_metadata(entry)
                     if not _valid_inventory_metadata(metadata):
                         return None
                     if _REPORT_NAME.fullmatch(entry.name):

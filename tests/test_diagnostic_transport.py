@@ -64,15 +64,105 @@ class SyntheticDiagnosticFailure(Exception):
     pass
 
 
+def _duplicate_windows_handle(descriptor):
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    current_process = kernel.GetCurrentProcess
+    current_process.argtypes = []
+    current_process.restype = wintypes.HANDLE
+    duplicate = kernel.DuplicateHandle
+    duplicate.argtypes = [
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+        ctypes.POINTER(wintypes.HANDLE),
+        wintypes.DWORD,
+        wintypes.BOOL,
+        wintypes.DWORD,
+    ]
+    duplicate.restype = wintypes.BOOL
+    process = current_process()
+    copied = wintypes.HANDLE()
+    if not duplicate(
+        process,
+        wintypes.HANDLE(msvcrt.get_osfhandle(descriptor)),
+        process,
+        ctypes.byref(copied),
+        0,
+        True,
+        0x00000002,
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return copied.value
+
+
+def _owned_channel():
+    incoming, parent_write = os.pipe()
+    parent_read, outgoing = os.pipe()
+    if os.name != "nt":
+        return f"{incoming}:{outgoing}", (incoming, outgoing), (parent_write, parent_read)
+    handles = []
+    try:
+        handles.append(_duplicate_windows_handle(incoming))
+        handles.append(_duplicate_windows_handle(outgoing))
+    except BaseException:
+        diagnostic_transport._close_windows_handles(handles)
+        raise
+    finally:
+        os.close(incoming)
+        os.close(outgoing)
+    return f"{handles[0]}:{handles[1]}", tuple(handles), (parent_write, parent_read)
+
+
+def _windows_handle_open(handle):
+    import ctypes
+    from ctypes import wintypes
+
+    get_information = ctypes.WinDLL(
+        "kernel32", use_last_error=True
+    ).GetHandleInformation
+    get_information.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    get_information.restype = wintypes.BOOL
+    flags = wintypes.DWORD()
+    return bool(get_information(wintypes.HANDLE(handle), ctypes.byref(flags)))
+
+
+def _assert_owned_channel_closed(owned):
+    for descriptor in owned:
+        if os.name == "nt":
+            assert not _windows_handle_open(descriptor)
+        else:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
+
+
+def _close_test_channel(owned, peers):
+    for descriptor in peers:
+        os.close(descriptor)
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    close_handle = ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    for handle in owned:
+        if _windows_handle_open(handle):
+            close_handle(wintypes.HANDLE(handle))
+
+
 @pytest.mark.parametrize("failure_type", [RuntimeError, SyntheticDiagnosticFailure])
 def test_attach_thread_start_failure_closes_channels_and_preserves_attempted_mode(
     monkeypatch, failure_type
 ):
-    incoming, parent_write = os.pipe()
-    parent_read, outgoing = os.pipe()
+    channel, owned, peers = _owned_channel()
     monkeypatch.setattr(diagnostic_transport, "_recorder", object())
     monkeypatch.setattr(diagnostic_transport, "_supervised_requested", False)
-    monkeypatch.setenv(diagnostic_transport.CHANNEL_ENV, f"{incoming}:{outgoing}")
+    monkeypatch.setenv(diagnostic_transport.CHANNEL_ENV, channel)
 
     def fail_start(_thread):
         raise failure_type("synthetic_thread_start_failure")
@@ -83,12 +173,9 @@ def test_attach_thread_start_failure_closes_channels_and_preserves_attempted_mod
         assert diagnostic_transport.current_recorder() is None
         assert diagnostic_transport.supervised_mode_requested()
         assert diagnostic_transport.CHANNEL_ENV not in os.environ
-        for descriptor in (incoming, outgoing):
-            with pytest.raises(OSError):
-                os.fstat(descriptor)
+        _assert_owned_channel_closed(owned)
     finally:
-        os.close(parent_write)
-        os.close(parent_read)
+        _close_test_channel(owned, peers)
 
 
 def test_windows_partial_channel_conversion_closes_crt_fd_and_raw_handle(
@@ -139,8 +226,7 @@ def test_windows_partial_channel_conversion_closes_crt_fd_and_raw_handle(
 
 
 def test_channel_inheritability_failure_closes_both_owned_descriptors(monkeypatch):
-    incoming, incoming_peer = os.pipe()
-    outgoing_peer, outgoing = os.pipe()
+    channel, owned, peers = _owned_channel()
     calls = 0
 
     def fail_second(_descriptor, _inheritable):
@@ -152,13 +238,10 @@ def test_channel_inheritability_failure_closes_both_owned_descriptors(monkeypatc
     monkeypatch.setattr(diagnostic_transport.os, "set_inheritable", fail_second)
     try:
         with pytest.raises(SyntheticDiagnosticFailure):
-            diagnostic_transport._open_channel(f"{incoming}:{outgoing}")
-        for descriptor in (incoming, outgoing):
-            with pytest.raises(OSError):
-                os.fstat(descriptor)
+            diagnostic_transport._open_channel(channel)
+        _assert_owned_channel_closed(owned)
     finally:
-        os.close(incoming_peer)
-        os.close(outgoing_peer)
+        _close_test_channel(owned, peers)
 
 
 def _run_package_entry(monkeypatch, *, setup_fails: bool, close_fails: bool):
