@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import sys
+import shutil
 
 block_cipher = None
 SPEC_DIR = Path(SPECPATH).resolve()
@@ -14,6 +15,9 @@ from pyinstaller_common import build_pyinstaller_collection, read_version_label
 VERSION_LABEL = read_version_label(ROOT_DIR)
 OUTPUT_DIR_NAME = f"metroliza_P_{VERSION_LABEL}_onedir"
 EXE_NAME = "metroliza"
+SUPERVISED_WINDOWS = sys.platform == "win32"
+if SUPERVISED_WINDOWS:
+    EXE_NAME = "metroliza_application"
 ICON_PATH = SPEC_DIR / "metroliza_icon2.ico"
 COLLECTION = build_pyinstaller_collection(ROOT_DIR)
 
@@ -64,3 +68,29 @@ coll = COLLECT(
     upx_exclude=[],
     name=OUTPUT_DIR_NAME,
 )
+
+if SUPERVISED_WINDOWS:
+    # The minimal launcher carries its own stdlib runtime. It can still report
+    # a missing/incompatible child Python DLL instead of dying before observation.
+    launcher_analysis = Analysis(
+        [str(SPEC_DIR / "metroliza_supervisor_entry.py")],
+        pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
+        binaries=[], datas=[], hiddenimports=[], hookspath=[], hooksconfig={},
+        runtime_hooks=[],
+        excludes=["PyQt6", "numpy", "matplotlib", "pymupdf", "fitz", "rapidocr",
+                  "onnxruntime", "openvino", "cv2", "metroliza.app.bootstrap",
+                  "metroliza.parsing", "metroliza.exporting", "metroliza.ui"],
+        noarchive=False,
+    )
+    launcher_pyz = PYZ(launcher_analysis.pure)
+    launcher_exe = EXE(
+        launcher_pyz, launcher_analysis.scripts, launcher_analysis.binaries,
+        launcher_analysis.datas, [], name="metroliza", debug=False,
+        bootloader_ignore_signals=False, strip=False, upx=True, console=False,
+        disable_windowed_traceback=True, icon=[str(ICON_PATH)],
+    )
+    output_directory = Path(DISTPATH) / OUTPUT_DIR_NAME
+    shutil.copy2(launcher_exe.name, output_directory / "metroliza.exe")
+    from scripts.build_diagnostic_manifest import write_supervision_manifest
+
+    write_supervision_manifest(output_directory)

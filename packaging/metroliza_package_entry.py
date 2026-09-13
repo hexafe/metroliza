@@ -18,8 +18,22 @@ if src_text in sys.path:
     sys.path.remove(src_text)
 sys.path.insert(0, src_text)
 
+from metroliza.shared.diagnostic_transport import (  # noqa: E402
+    attach_child_recorder, supervised_mode_requested,
+)
+
+recorder = attach_child_recorder()
+if supervised_mode_requested():
+    from metroliza.shared.logging_utils import ensure_application_logging
+
+    ensure_application_logging()
+
 from metroliza.app.bootstrap import run_application  # noqa: E402
 
 
 if __name__ == "__main__":
-    raise SystemExit(run_application())
+    try:
+        raise SystemExit(run_application())
+    finally:
+        if recorder is not None:
+            recorder.close()

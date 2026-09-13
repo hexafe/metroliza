@@ -21,6 +21,7 @@ from metroliza.shared.diagnostic_events import (
     SourceClass,
     RuntimeProvenanceEvent,
     StartupDiagnosticEvent,
+    WorkflowDiagnosticEvent,
     serialize_diagnostic_event,
 )
 from metroliza.shared.env_utils import parse_bool
@@ -49,6 +50,7 @@ _STRUCTURED_EVENT_TYPES = (
     ExceptionDiagnosticEvent,
     RuntimeProvenanceEvent,
     StartupDiagnosticEvent,
+    WorkflowDiagnosticEvent,
 )
 
 
@@ -134,6 +136,38 @@ class ManagedSafeFormatter(logging.Formatter):
 
 class _ManagedTerminalHandler(logging.NullHandler):
     """Consume records without rendering when no managed sink is available."""
+
+
+class _ManagedDiagnosticHandler(logging.Handler):
+    """Already-safe bounded queue only; no file or transport wait on producers."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        from metroliza.shared.diagnostic_transport import current_recorder
+
+        try:
+            recorder = current_recorder()
+            if recorder is not None:
+                recorder.enqueue(_safe_event(record))
+        except Exception:
+            return
+
+
+def _configure_supervised_handler(logger, formatter, level) -> bool:
+    from metroliza.shared.diagnostic_transport import supervised_mode_requested
+
+    requested = supervised_mode_requested()
+    existing = [handler for handler in tuple(logger.handlers)
+                if getattr(handler, "_metroliza_diagnostic_handler", False)]
+    for handler in existing:
+        _remove_and_close_handler(logger, handler, formatter)
+    if not requested:
+        return False
+    # A broken channel keeps attempted mode: it must not silently recreate CWD logs.
+    _collect_managed_file_handlers(logger, set(), formatter)
+    handler = _ManagedDiagnosticHandler()
+    _add_managed_handler(logger, handler, marker="_metroliza_diagnostic_handler",
+                         level=level, formatter=formatter)
+    return True
 
 
 class _ManagedRotatingFileHandler(logging.handlers.RotatingFileHandler):
@@ -445,11 +479,12 @@ def ensure_application_logging(
         logger.setLevel(resolved.global_level)
         formatter = ManagedSafeFormatter()
         _configure_terminal_handler(logger, formatter, enabled=True)
-        file_available = _configure_file_handlers(logger, formatter, resolved.file_level)
+        supervised = _configure_supervised_handler(logger, formatter, resolved.file_level)
+        file_available = False if supervised else _configure_file_handlers(logger, formatter, resolved.file_level)
         console_available = _configure_console_handler(logger, formatter, resolved.console_level)
         _configure_terminal_handler(
             logger,
             formatter,
-            enabled=not (file_available or console_available),
+            enabled=not (file_available or console_available or supervised),
         )
         return resolved
