@@ -37,6 +37,8 @@ class ReportPlanner(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._compact_columns = None
+        self._column_widths = [60, 260, 170, 170, 100, 240]
         self.model = ReportPlannerModel(self)
         self.proxy = ReportPlannerFilterModel(self)
         self.proxy.setSourceModel(self.model)
@@ -92,12 +94,6 @@ class ReportPlanner(QWidget):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(0, 38)
-        self.table.setColumnWidth(1, 205)
-        self.table.setColumnWidth(2, 150)
-        self.table.setColumnWidth(3, 140)
-        self.table.setColumnWidth(4, 80)
-        self.table.setColumnWidth(5, 210)
         self.details_button = QPushButton("Report details")
         self.details_button.setCheckable(True)
         self.details = QPlainTextEdit()
@@ -124,14 +120,15 @@ class ReportPlanner(QWidget):
         )
         controls = QGridLayout()
         controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(4)
         controls.addWidget(self.search, 0, 0, 1, 2)
-        controls.addWidget(self.status_filter, 0, 2, 1, 2)
-        controls.addWidget(self.parser_filter, 1, 0, 1, 2)
-        controls.addWidget(self.attention_filter, 1, 2, 1, 2)
-        controls.addWidget(self.select_ready, 2, 0)
-        controls.addWidget(self.clear, 2, 1)
-        controls.addWidget(self.details_button, 2, 2)
-        controls.addWidget(self.outcome_button, 2, 3)
+        controls.addWidget(self.status_filter, 0, 2)
+        controls.addWidget(self.parser_filter, 0, 3, 1, 2)
+        controls.addWidget(self.attention_filter, 1, 0)
+        controls.addWidget(self.select_ready, 1, 1)
+        controls.addWidget(self.clear, 1, 2)
+        controls.addWidget(self.details_button, 1, 3)
+        controls.addWidget(self.outcome_button, 1, 4)
         controls.setColumnStretch(0, 1)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -148,7 +145,13 @@ class ReportPlanner(QWidget):
         self._update_counts()
 
     def set_review(self, result):
+        self._remember_column_widths()
         self.model.set_review(result)
+        # Resetting an initially empty proxy also resets Qt's header sections.
+        # Apply the review's starting widths after the columns actually exist.
+        for column, width in enumerate(self._column_widths):
+            self.table.setColumnWidth(column, width)
+        self._configure_columns()
         self.parser_filter.clear()
         self.parser_filter.addItem("All parsers", "")
         for parser in self.model.parser_ids:
@@ -161,6 +164,7 @@ class ReportPlanner(QWidget):
         self._update_counts()
 
     def invalidate(self):
+        self._remember_column_widths()
         self.model.invalidate()
         self.details.clear()
         self._update_counts()
@@ -197,9 +201,29 @@ class ReportPlanner(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._configure_columns()
+
+    def _configure_columns(self):
         compact = self.width() < 850
+        if compact and self._compact_columns is False:
+            self._remember_column_widths()
         for column in (3, 4, 5):
             self.table.setColumnHidden(column, compact)
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch if compact else QHeaderView.ResizeMode.Interactive
         )
+        self.table.horizontalHeader().setSectionResizeMode(
+            5, QHeaderView.ResizeMode.Interactive if compact else QHeaderView.ResizeMode.Stretch
+        )
+        if not compact and self._compact_columns:
+            self.table.setColumnWidth(1, self._column_widths[1])
+        self._compact_columns = compact
+
+    def _remember_column_widths(self):
+        if not self.model.rowCount():
+            return
+        header = self.table.horizontalHeader()
+        for column in range(self.model.columnCount()):
+            if (not self.table.isColumnHidden(column)
+                    and header.sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive):
+                self._column_widths[column] = self.table.columnWidth(column)

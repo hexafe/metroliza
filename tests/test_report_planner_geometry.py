@@ -144,11 +144,13 @@ def _assert_requested_size(dialog: ParsingDialog, size: tuple[int, int]) -> None
 
 def _assert_geometry(dialog: ParsingDialog, app, *, pane: str | None = None) -> None:
     planner = dialog.report_planner
+    requested_size = dialog.size()
     if pane == "details":
         planner.details_button.setChecked(True)
     elif pane == "outcome":
         planner.show_outcome("Synthetic import outcome for compact layout coverage.")
     app.processEvents()
+    assert dialog.size() == requested_size, "Opening an evidence pane grew the dialog"
     controls = (
         dialog.directory_button,
         dialog.archive_button,
@@ -201,10 +203,23 @@ def test_report_planner_controls_fit_compact_and_large_dialogs(dialog, app, size
             return
         size = (min(size[0], available.width() - 40), min(size[1], available.height() - 40))
         assert size[0] >= 850 and size[1] >= 600, "Native runner cannot host a large planner"
+    if size[0] >= 850:
+        # Expanding a previously compact table must release the location stretch.
+        dialog.resize(720, 480)
+        app.processEvents()
     dialog.resize(*size)
     app.processEvents()
     _assert_requested_size(dialog, size)
     _assert_geometry(dialog, app, pane=pane)
+    if size[0] >= 850:
+        assert not dialog.report_planner.table.isColumnHidden(3)
+        assert dialog.report_planner.table.columnWidth(2) >= 150
+        assert dialog.report_planner.table.columnWidth(5) >= 150
+        planner = dialog.report_planner
+        planner.table.setColumnWidth(2, 185)
+        planner.invalidate()
+        planner.set_review(_review())
+        assert planner.table.columnWidth(2) == 185
 
 
 def test_compact_dialog_preserves_table_while_switching_details_and_outcome(dialog, app):
@@ -304,8 +319,10 @@ def test_windows_scale_inner_geometry(app):
     )
     try:
         dialog.on_preflight_completed(_review())
-        dialog.resize(720, 480)
         dialog.show()
+        QTest.qWait(5)
+        app.processEvents()
+        dialog.resize(720, 480)
         app.processEvents()
         _assert_requested_size(dialog, (720, 480))
         _assert_geometry(dialog, app, pane="details")

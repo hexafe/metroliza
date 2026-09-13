@@ -124,6 +124,54 @@ def test_empty_selection_never_starts_worker_or_writes(reviewed):
     assert not database.exists()
 
 
+@pytest.mark.parametrize("stage", ["review", "import"])
+def test_worker_start_failure_releases_busy_state_and_allows_retry(app, reviewed, monkeypatch, stage):
+    from metroliza.ui import parsing_dialog
+
+    dialog, _source, database = reviewed
+    worker_type = (parsing_dialog.ParsePreflightThread if stage == "review"
+                   else parsing_dialog.ParseReportsThread)
+    errors = []
+    monkeypatch.setattr(dialog, "log_and_exit", errors.append)
+
+    def start_failed(_worker):
+        raise RuntimeError("Synthetic thread startup failure")
+
+    with monkeypatch.context() as startup:
+        startup.setattr(worker_type, "start", start_failed)
+        if stage == "review":
+            dialog.scan_reports()
+        else:
+            dialog._import_reviewed_reports()
+    assert len(errors) == 1
+    assert dialog.preflight_thread is None and dialog.parse_thread is None
+    assert dialog.scan_button.isEnabled()
+    assert not dialog.parse_button.isEnabled()
+    assert "could not start" in dialog.readiness_label.text()
+    assert not database.exists()
+    dialog.scan_reports()
+    wait_until(app, lambda: dialog.preflight_thread is None)
+    assert dialog.parse_button.isEnabled()
+    assert len(dialog.report_planner.model.selected_ids) == 5
+
+
+@pytest.mark.parametrize("terminal", ["missing", "failed", "cancelled"])
+def test_persistent_outcome_never_invents_success_without_result(reviewed, terminal):
+    from types import SimpleNamespace
+
+    dialog, _source, database = reviewed
+    dialog.parse_thread = SimpleNamespace(last_parse_result=None)
+    dialog.parse_error_message = "Synthetic worker failure" if terminal == "failed" else None
+    dialog.parsing_canceled = terminal == "cancelled"
+    dialog.on_parse_finished()
+    dialog._on_parse_thread_stopped(dialog.parse_thread)
+    text = dialog.report_planner.outcome.toPlainText()
+    assert "outcome unavailable" in text
+    assert "successful" not in text
+    assert "saved to" not in text
+    assert not database.exists()
+
+
 @pytest.mark.parametrize("field", ["source", "destination", "metadata"])
 def test_input_change_invalidates_review_and_selection(reviewed, monkeypatch, field):
     dialog, source, database = reviewed
@@ -242,7 +290,7 @@ def test_archive_selection_uses_member_location_and_real_import(app, reports, mo
         planner = dialog.report_planner
         model = planner.model
         assert set(model.selected_ids) == {f"nested/report-{n}.pdf" for n in range(5)}
-        assert model.data(model.index(0, 1)) == "nested/report-0.pdf"
+        assert Path(model.data(model.index(0, 1))).as_posix() == "nested/report-0.pdf"
         assert str(source.parent) not in model.details_text(0)
         model.clear_selection()
         model.setData(model.index(2, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)

@@ -24,6 +24,8 @@ from metroliza.parsing.preflight import (
 # They are identifiers, never exception text or a source path.  This permits
 # approved plugin/template ids without permitting an arbitrary diagnostic string.
 _SAFE_PARSER_ID = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
+_UNKNOWN_REASON_PLACEHOLDER = "review_reason_unavailable"
+_UNKNOWN_WARNING_PLACEHOLDER = "review_warning"
 _SAFE_REASON_CODES = frozenset(
     {
         "already_in_destination",
@@ -33,6 +35,8 @@ _SAFE_REASON_CODES = frozenset(
         "content_inspection_failed",
         "dimension_marker",
         "duplicate_in_selected_source",
+        "detector_exception",
+        "detector_invalid_probe_result",
         "empty_embedded_text",
         "invalid_probe_contract",
         "measurement_header_marker",
@@ -48,6 +52,10 @@ _SAFE_REASON_CODES = frozenset(
         "parser_inspection_failed",
         "pdf_backend_text_probe",
         "pdf_backend_text_probe_empty",
+        "pdf_extension",
+        "probe_exception",
+        "probe_invalid_probe_result",
+        "partial_cmm_markers",
         "reject_marker_found",
         "required_markers_found",
         "semantic_measurements",
@@ -58,6 +66,12 @@ _SAFE_REASON_CODES = frozenset(
         "source_reader_not_configured",
         "strong_cmm_marker",
         "template_markers",
+        "nominal_marker",
+        "tolerance_marker",
+        "measured_marker",
+        "deviation_marker",
+        "out_of_tolerance_marker",
+        "bonus_marker",
         "unsupported_extension",
         "unsupported_report_format",
         "unsupported_source_format",
@@ -81,20 +95,30 @@ def safe_parser_id(value: object) -> str:
 def safe_review_detail(item: ParseFilePreflight) -> str:
     """Render allowlisted reason identifiers without exposing diagnostics."""
 
-    return ", ".join(
-        reason
-        for reason in item.reason_codes
-        if type(reason) is str and reason in _SAFE_REASON_CODES
-    )
+    return ", ".join(_safe_reason_codes(item.reason_codes))
+
+
+def _safe_reason_codes(values: Iterable[object]) -> tuple[str, ...]:
+    """Keep known protocol codes and represent unknown evidence without its text."""
+
+    safe: list[str] = []
+    has_unknown = False
+    for value in values:
+        if type(value) is str and value in _SAFE_REASON_CODES:
+            safe.append(value)
+        elif value:
+            has_unknown = True
+    if has_unknown:
+        safe.append(_UNKNOWN_REASON_PLACEHOLDER)
+    return tuple(dict.fromkeys(safe))
 
 
 def _safe_candidate_warnings(values: Iterable[object]) -> tuple[str, ...]:
     """Keep warning presence useful without rendering raw plugin text."""
 
-    safe = tuple(
-        value for value in values if type(value) is str and value in _SAFE_REASON_CODES
-    )
-    return safe or (("review_warning",) if tuple(values) else ())
+    values = tuple(values)
+    safe = tuple(value for value in values if type(value) is str and value in _SAFE_REASON_CODES)
+    return safe or ((_UNKNOWN_WARNING_PLACEHOLDER,) if values else ())
 
 
 def _short_digest(value: object) -> str:
@@ -257,10 +281,7 @@ class ReportPlannerModel(QAbstractTableModel):
             parts = [parser_id, outcome]
             if type(candidate.confidence) is int:
                 parts.append(f"confidence {candidate.confidence}")
-            reasons = ", ".join(
-                value for value in candidate.reasons
-                if type(value) is str and value in _SAFE_REASON_CODES
-            )
+            reasons = ", ".join(_safe_reason_codes(candidate.reasons))
             warnings = ", ".join(_safe_candidate_warnings(candidate.warnings))
             if reasons:
                 parts.append(f"reasons {reasons}")

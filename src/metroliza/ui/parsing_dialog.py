@@ -420,20 +420,11 @@ class ParsingDialog(QDialog):
 
         # Initialize the layout
         self.layout = QGridLayout()
-        try:
-            attach_help_menu_to_layout(self.layout, self, [("Parsing manual", 'parsing')])
-        except TypeError:
-            # Parent-none safety tests install lightweight Qt stubs after the
-            # help-menu module may already be imported with real Qt classes.
-            pass
-        if hasattr(self.layout, "setContentsMargins"):
-            self.layout.setContentsMargins(10, 10, 10, 10)
-        if hasattr(self.layout, "setHorizontalSpacing"):
-            self.layout.setHorizontalSpacing(10)
-        if hasattr(self.layout, "setVerticalSpacing"):
-            self.layout.setVerticalSpacing(4)
-        if hasattr(self.layout, "setColumnStretch"):
-            self.layout.setColumnStretch(1, 1)
+        attach_help_menu_to_layout(self.layout, self, [("Parsing manual", 'parsing')])
+        self.layout.setContentsMargins(10, 10, 10, 10)
+        self.layout.setHorizontalSpacing(10)
+        self.layout.setVerticalSpacing(4)
+        self.layout.setColumnStretch(1, 1)
 
         # Keep one expanding table region usable at compact desktop sizes.
         self.layout.addWidget(self.directory_label, 0, 0)
@@ -547,7 +538,8 @@ class ParsingDialog(QDialog):
         elif current and selected and not approved:
             message = "Changed since review. Refresh review before importing."
         elif current:
-            message = self._preflight_summary_text(self._preflight_result)
+            ready = self._preflight_result.status_counts[ParsePreflightStatus.READY]
+            message = f"Review complete: {ready} ready. No database changes were made."
             if not selected:
                 message += " Select ready reports to enable import."
         elif self._review_status:
@@ -560,6 +552,9 @@ class ParsingDialog(QDialog):
             message = "Select a source and database to review reports."
         self.readiness_label.setText(message)
         self.readiness_label.setAccessibleDescription(message)
+        self.readiness_label.setToolTip(
+            self._preflight_summary_text(self._preflight_result) if current else message
+        )
         self.parse_button.setToolTip(
             f"Import exactly {count} selected reports, including selected rows hidden by filters."
             if approved and not busy else message
@@ -738,19 +733,22 @@ class ParsingDialog(QDialog):
                 database_path=request.db_file,
                 metadata_parsing_mode=request.metadata_parsing_mode,
             )
+            self.preflight_thread.finished.connect(
+                lambda thread=self.preflight_thread: self._on_preflight_thread_stopped(thread)
+            )
             self.preflight_thread.update_label.connect(self.scan_loading_label.setText)
             self.preflight_thread.update_progress.connect(self.scan_loading_bar.setValue)
             self.preflight_thread.completed.connect(self.on_preflight_completed)
             self.preflight_thread.failed.connect(self.on_preflight_failed)
-            self.preflight_thread.finished.connect(
-                lambda thread=self.preflight_thread: self._on_preflight_thread_stopped(thread)
-            )
             self.preflight_thread.start()
             self._sync_readiness_state()
             self.scan_loading_dialog.show()
         except Exception as exc:
             dismiss_worker_progress_dialog(getattr(self, "scan_loading_dialog", None), rejected=True)
+            self._recover_worker_start_failure("preflight_thread", "stop_scan")
+            self._invalidate_preflight("Review could not start. Review reports again to retry.")
             self._sync_readiness_state()
+            self.scan_button.setFocus()
             self.log_and_exit(exc)
 
     @pyqtSlot()
@@ -878,20 +876,35 @@ class ParsingDialog(QDialog):
             elif self._preflight_result is not None:
                 execution_request = ImportPlan.all_atomic_candidates(request, self._preflight_result)
             self.parse_thread = ParseReportsThread(execution_request)
-            self.parse_thread.update_label.connect(self.loading_label.setText)
-            self.parse_thread.update_progress.connect(self.loading_bar.setValue)
-            self.parse_thread.error_occurred.connect(self.on_parse_error)
             self.parse_thread.finished.connect(self.on_parse_finished)
             self.parse_thread.finished.connect(
                 lambda thread=self.parse_thread: self._on_parse_thread_stopped(thread)
             )
+            self.parse_thread.update_label.connect(self.loading_label.setText)
+            self.parse_thread.update_progress.connect(self.loading_bar.setValue)
+            self.parse_thread.error_occurred.connect(self.on_parse_error)
             self.parse_thread.start()
             self._sync_readiness_state()
             self.loading_dialog.show()
         except Exception as e:
             dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None), rejected=True)
+            self._recover_worker_start_failure("parse_thread", "stop_parsing")
+            self._invalidate_preflight("Import could not start. Review reports again before retrying.")
             self._sync_readiness_state()
+            self.scan_button.setFocus()
             self.log_and_exit(e)
+
+    def _recover_worker_start_failure(self, attribute, cancel_method):
+        thread = getattr(self, attribute)
+        if thread is None:
+            return
+        if self._thread_is_running(thread):
+            # A partially started operation keeps its lifetime owner and the
+            # finished cleanup connected above. Never block the GUI waiting.
+            getattr(thread, cancel_method)()
+        else:
+            setattr(self, attribute, None)
+            thread.deleteLater()
 
     @pyqtSlot()
     def stop_parsing(self):
@@ -967,7 +980,17 @@ class ParsingDialog(QDialog):
             )
             dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
 
-            self.report_planner.show_outcome(feedback[1] + "\n\n" + feedback[2])
+            outcome_title, outcome_message = feedback[1:]
+            if result is None:
+                outcome_title = "Completion evidence unavailable"
+                outcome_message = "Import outcome unavailable. Review the destination before retrying."
+                if enrichment_requested:
+                    outcome_message += "\n\n" + _enrichment_completion_group(enrichment_result)[1]
+            if self.parse_error_message:
+                outcome_title = "Import failed"
+            elif self.parsing_canceled and result is None:
+                outcome_title = "Import cancelled"
+            self.report_planner.show_outcome(outcome_title + "\n\n" + outcome_message)
             if not close_requested:
                 self._show_parse_completion(feedback, enrichment_requested, should_request_modeless_enrichment)
 

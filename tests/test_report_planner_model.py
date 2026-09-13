@@ -238,3 +238,57 @@ def test_candidate_outcome_never_renders_raw_diagnostic_content():
     model.set_review(replace(review, files=(row,)))
     assert "CONFIDENTIAL" not in model.details_text(0)
     assert "unavailable" in model.details_text(0)
+
+
+def test_reason_sanitizer_keeps_known_cmm_and_factory_codes_without_raw_exception_text():
+    from dataclasses import replace
+
+    from metroliza.ui.report_planner_model import ReportPlannerModel, safe_review_detail
+
+    review = _review()
+    candidate = replace(
+        review.files[0].candidates[0],
+        reasons=(
+            "pdf_extension",
+            "partial_cmm_markers",
+            "nominal_marker",
+            "tolerance_marker",
+            "measured_marker",
+            "deviation_marker",
+            "out_of_tolerance_marker",
+            "bonus_marker",
+            "probe_exception",
+            "detector_invalid_probe_result",
+            "pdf_backend_text_probe_failed:RuntimeError: /private/report.pdf",
+        ),
+        warnings=("CMM probe exploded at /private/report.pdf: secret",),
+    )
+    item = replace(
+        review.files[0],
+        reason_codes=candidate.reasons,
+        candidates=(candidate,),
+        diagnostic_detail="RuntimeError: secret content at /private/report.pdf",
+    )
+    model = ReportPlannerModel()
+    model.set_review(replace(review, files=(item,)))
+
+    detail = safe_review_detail(item)
+    for known in (
+        "pdf_extension",
+        "partial_cmm_markers",
+        "nominal_marker",
+        "tolerance_marker",
+        "measured_marker",
+        "deviation_marker",
+        "out_of_tolerance_marker",
+        "bonus_marker",
+        "probe_exception",
+        "detector_invalid_probe_result",
+    ):
+        assert known in detail
+    assert "review_reason_unavailable" in detail
+    rendered = model.details_text(0)
+    assert "review_reason_unavailable" in rendered
+    assert "review_warning" in rendered
+    assert "/private/report.pdf" not in rendered
+    assert "secret content" not in rendered
