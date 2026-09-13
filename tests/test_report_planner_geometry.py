@@ -159,6 +159,7 @@ def _assert_requested_size(dialog: ParsingDialog, size: tuple[int, int]) -> None
             ("status", dialog.readiness_label), ("planner", planner),
             ("search", planner.search), ("selection", planner.select_ready),
             ("counts", planner.counts), ("table", planner.table), ("import", dialog.parse_button),
+            ("details", planner.details), ("outcome", planner.outcome),
         )
     }
     assert dialog.size() == QSize(*size), (
@@ -175,7 +176,7 @@ def _assert_geometry(dialog: ParsingDialog, app, *, pane: str | None = None) -> 
     elif pane == "outcome":
         planner.show_outcome("Synthetic import outcome for compact layout coverage.")
     app.processEvents()
-    assert dialog.size() == requested_size, "Opening an evidence pane grew the dialog"
+    _assert_requested_size(dialog, (requested_size.width(), requested_size.height()))
     controls = (
         dialog.directory_button,
         dialog.archive_button,
@@ -194,8 +195,12 @@ def _assert_geometry(dialog: ParsingDialog, app, *, pane: str | None = None) -> 
     )
     if pane == "details":
         controls += (planner.details,)
+        assert planner.details.height() >= 40
+        assert planner.details.viewport().height() >= planner.details.fontMetrics().height()
     elif pane == "outcome":
         controls += (planner.outcome_button, planner.outcome)
+        assert planner.outcome.height() >= 40
+        assert planner.outcome.viewport().height() >= planner.outcome.fontMetrics().height()
     for control in controls:
         _assert_contained(dialog, control)
     rectangles = [QRect(control.mapTo(dialog, QPoint(0, 0)), control.size()) for control in controls]
@@ -356,6 +361,7 @@ def test_windows_scale_inner_geometry(app):
         app.processEvents()
         _assert_requested_size(dialog, (720, 480))
         _assert_geometry(dialog, app, pane="details")
+        _assert_geometry(dialog, app, pane="outcome")
     finally:
         dialog.close()
         app.processEvents()

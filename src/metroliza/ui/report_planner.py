@@ -122,6 +122,11 @@ class ReportPlanner(QWidget):
         self.outcome_button.toggled.connect(
             lambda checked: self.details_button.setChecked(False) if checked else None
         )
+        for pane in (self.details, self.outcome):
+            # These are scrolling evidence panes, so native text-edit size hints
+            # must not force the whole compact host taller at high DPI.
+            pane.setStyleSheet("QPlainTextEdit { min-height: 32px; }")
+            pane.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         controls = QGridLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(2)
@@ -139,9 +144,9 @@ class ReportPlanner(QWidget):
         layout.setSpacing(2)
         layout.addLayout(controls)
         layout.addWidget(self.counts)
-        layout.addWidget(self.table, 1)
-        layout.addWidget(self.details)
-        layout.addWidget(self.outcome)
+        layout.addWidget(self.table, 3)
+        layout.addWidget(self.details, 1)
+        layout.addWidget(self.outcome, 1)
         self.model.selection_changed.connect(self._selection_updated)
         self.proxy.rowsInserted.connect(self._update_counts)
         self.proxy.rowsRemoved.connect(self._update_counts)
