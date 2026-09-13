@@ -4251,7 +4251,8 @@ def _parse_tabular_filter_date(value: str | None):
 def _parse_tabular_filter_number(value: float | int | str | None) -> int | float | None:
     if value is None:
         return None
-    exact = parse_numeric_literal(value)
+    # Normalize exactly the comma grouping already accepted by the fallback.
+    exact = parse_numeric_literal(_display_cell_text(value).replace(",", ""))
     if isinstance(exact, int):
         return exact
     # Retain the existing comma/grouping and float-compatible literal language.

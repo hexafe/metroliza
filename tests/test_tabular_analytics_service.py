@@ -2248,3 +2248,69 @@ def test_tabular_column_filter_exact_object_sources(operator, value, expected):
     )
     assert result.dataframe["source_row_number"].tolist() == expected
     pd.testing.assert_frame_equal(frame, before)
+
+
+@pytest.mark.parametrize("backend", ["csv", "xlsx", "pandas"])
+@pytest.mark.parametrize("operator,value,expected", [
+    ("=", "9,223,372,036,854,775,807", [1]),
+    ("!=", "9,223,372,036,854,775,807", [2, 3, 4, 5, 6, 7, 8, 9]),
+    (">", "9,223,372,036,854,775,807", [2, 3]),
+    (">=", "9,223,372,036,854,775,807", [1, 2, 3]),
+    ("<", "9,223,372,036,854,775,807", [4, 5, 6, 7, 8, 9]),
+    ("<=", "9,223,372,036,854,775,807", [1, 4, 5, 6, 7, 8, 9]),
+    ("=", "-9,223,372,036,854,775,807", [4]),
+    ("=", "-9,223,372,036,854,775,808", [5]),
+    ("=", " +9,007,199,254,740,993 ", [7]),
+    ("=", ",9,007,199,254,740,993,", [7]),  # Existing comma placement remains accepted.
+    ("=", "1,5", [8]),  # The established default-decimal grammar means 15.
+    ("=", "1,500.5", [9]),
+    ("=", "1,500.5e0", [9]),
+    ("=", "9,223,372,036,854,775,808", [2]),  # Existing binary64 fallback beyond signed64.
+])
+def test_tabular_column_filter_grouped_integer_literals(tmp_path, backend, operator, value, expected):
+    import csv
+    from openpyxl import Workbook
+
+    sources = ["9223372036854775807", "9223372036854775808", "9223372036854775809",
+               "-9223372036854775807", "-9223372036854775808",
+               "9007199254740992", "9007199254740993", "15", "1500.5", "bad", None, "Inf"]
+    filters = (TabularColumnFilter("code", numeric_operator=operator, numeric_value=value),)
+    if backend == "pandas":
+        frame = pd.DataFrame({"code": pd.Series(sources, dtype=object),
+                              "source_row_number": list(range(1, len(sources) + 1))})
+        before = frame.copy(deep=True)
+        assert apply_tabular_row_filter(frame, column_filters=filters).dataframe["source_row_number"].tolist() == expected
+        pd.testing.assert_frame_equal(frame, before)
+        return
+
+    path = tmp_path / ("grouped_integer_literals." + backend)
+    rows = [(source, f"row-{index}") for index, source in enumerate(sources, 1)]
+    if backend == "csv":
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["code", "bucket"])
+            writer.writerows(rows)
+    else:
+        workbook = Workbook()
+        workbook.active.append(["code", "bucket"])
+        for row in rows:
+            workbook.active.append(row)
+        workbook.save(path)
+        workbook.close()
+    loaded = canonical_tabular_service.load_tabular_analytics_file(path, force_sqlite=True)
+    try:
+        store = loaded.sqlite_store
+        with closing(sqlite3.connect(store.path)) as connection:
+            before = connection.execute("SELECT *, typeof(code) FROM tabular_rows ORDER BY rowid").fetchall()
+        for _ in range(2):
+            assert store.row_ids(column_filters=filters) == expected
+            assert canonical_tabular_service.count_tabular_materialized_rows(loaded, column_filters=filters) == len(expected)
+            result = canonical_tabular_service.materialize_tabular_dataframe(
+                loaded, column_filters=filters, required_columns=("source_row_number",),
+            )
+            assert result.dataframe["source_row_number"].tolist() == expected
+            assert store.preview_group_keys(("bucket",), base_column_filters=filters) == tuple((f"row-{index}",) for index in expected)
+        with closing(sqlite3.connect(store.path)) as connection:
+            assert connection.execute("SELECT *, typeof(code) FROM tabular_rows ORDER BY rowid").fetchall() == before
+    finally:
+        canonical_tabular_service.cleanup_tabular_load_result(loaded)
