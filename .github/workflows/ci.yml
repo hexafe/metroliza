@@ -989,6 +989,7 @@ jobs:
         run: >-
           python -m pytest -v
           tests/test_measurement_chart_labels.py
+          tests/test_phase4_integration_happy_path.py::TestPhase4ParseToExportHappyPath::test_export_workbook_chart_ranges_match_expected_parity
           tests/test_export_chart_writer.py
           tests/test_export_backends.py
           tests/test_export_workbook_output.py
