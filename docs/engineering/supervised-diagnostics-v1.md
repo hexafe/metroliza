@@ -56,9 +56,10 @@ process is created before marker admission; handshake callbacks only enqueue lif
 An actual failed workflow admits live publication while the app continues. Transient
 store-lock failures are retried only on the worker. Publication backlog is not relabeled as
 channel/event loss. Retained failed workflow history has a reserved final publication path.
-A filesystem call still outstanding after
-the close budget returns `publish_incomplete`, whose final persistence outcome is unknown. It is
-never relabeled as saved or failed. The normal process outcome remains independent of storage.
+A final incident that completed publication and readback is `saved` even when marker resolution
+is still outstanding; that status does not claim the marker was resolved. Without verified durable
+publication, a filesystem call still outstanding after the close budget returns
+`publish_incomplete`. The normal process outcome remains independent of storage.
 
 Healthy sessions write minimal markers rather than event files. Incidents distinguish observed
 process return, POSIX signal where actually observed, missing handshake, caught workflow failure

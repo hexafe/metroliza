@@ -38,7 +38,11 @@ class LaunchDelivery:
 
 
 def persist_observation(
-    store: IncidentStore, observed: SupervisedResult, git_sha: str
+    store: IncidentStore,
+    observed: SupervisedResult,
+    git_sha: str,
+    *,
+    on_saved: Callable[[], None] | None = None,
 ) -> StoreStatus:
     try:
         incident = build_incident(
@@ -57,6 +61,8 @@ def persist_observation(
             history=observed.history,
         )
         result = store.publish(incident)
+        if result.status is StoreStatus.SAVED and on_saved is not None:
+            on_saved()
         if result.status is StoreStatus.SAVED and observed.termination != "still_running":
             store.resolve_session(observed.session_id, result.report_id)
         return result.status
@@ -80,6 +86,7 @@ class _OperationPublisher:
         self.wake = threading.Event()
         self.done = threading.Event()
         self.failed = threading.Event()
+        self.final_saved = threading.Event()
         self.started = False
         self.closing = False
         self.marker_status: StoreStatus | None = None
@@ -221,7 +228,12 @@ class _OperationPublisher:
             return StoreStatus.IO_FAILED
         if observed.needs_incident or _has_caught_failure(observed):
             return self._retry_lock(
-                lambda: persist_observation(self.store, observed, self.git_sha),
+                lambda: persist_observation(
+                    self.store,
+                    observed,
+                    self.git_sha,
+                    on_saved=self.final_saved.set,
+                ),
                 deadline=self.close_deadline,
             )
         if observed.launch == "started":
@@ -244,6 +256,8 @@ class _OperationPublisher:
             self.final = observed
             self.wake.set()
         self.done.wait(max(0.0, deadline - time.monotonic()))
+        if self.final_saved.is_set():
+            return StoreStatus.SAVED
         if self.worker.is_alive():
             return StoreStatus.PUBLISH_INCOMPLETE
         return self.final_status

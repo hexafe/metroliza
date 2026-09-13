@@ -59,6 +59,7 @@ def main():
     worker = ParseReportsThread(ImportPlan.all_ready(request, preflight))
     if sys.argv[2] == "handled_failure":
         (source / "SYNTHETIC_PRIVATE_FILENAME.pdf").unlink()
+        (scratch / "operation_ready").touch()
     worker.run()
     if sys.argv[2] == "handled_failure":
         return _finish_handled_failure(worker, scratch, recorder)

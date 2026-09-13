@@ -88,6 +88,13 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
     )
     thread.start()
     try:
+        readiness_deadline = time.monotonic() + 10
+        while (
+            not (scratch / "operation_ready").exists()
+            and time.monotonic() < readiness_deadline
+        ):
+            time.sleep(0.02)
+        assert (scratch / "operation_ready").exists(), "fixture_setup_not_ready"
         deadline = time.monotonic() + 7
         reports = store.list_reports().reports
         operation_returned = (scratch / "operation_returned").exists()
@@ -264,6 +271,62 @@ def test_final_incident_store_lock_past_close_deadline_is_bounded(tmp_path, monk
         lock.release()
         publisher.worker.join(1)
     assert not publisher.worker.is_alive()
+
+
+@pytest.mark.parametrize("resolution", ("stalled", "raised"))
+def test_saved_final_incident_is_authoritative_before_marker_resolution(
+    tmp_path, monkeypatch, resolution
+):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    store = IncidentStore(tmp_path / "state")
+    observed = replace(_live_observation(), termination="observed_exit", exit_code=9)
+    marker = store.root / f"marker-{observed.session_id}.json"
+    assert store.begin_session(observed.session_id, "unknown").status is StoreStatus.MARKER_STARTED
+    assert (
+        store.authenticate_session(observed.session_id).status
+        is StoreStatus.MARKER_AUTHENTICATED
+    )
+    resolve_entered, release_resolve = threading.Event(), threading.Event()
+    original_resolve = store.resolve_session
+
+    def stalled_resolve(*args, **kwargs):
+        resolve_entered.set()
+        if resolution == "raised":
+            raise OSError("synthetic marker resolution failure")
+        release_resolve.wait(2)
+        return original_resolve(*args, **kwargs)
+
+    def unnecessary_marker_call(*_args, **_kwargs):
+        raise AssertionError("final incident must not create marker controls")
+
+    monkeypatch.setattr(store, "resolve_session", stalled_resolve)
+    monkeypatch.setattr(store, "begin_session", unnecessary_marker_call)
+    monkeypatch.setattr(store, "authenticate_session", unnecessary_marker_call)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    started = time.monotonic()
+    try:
+        assert publisher.close(observed) is StoreStatus.SAVED
+        assert resolve_entered.is_set()
+        assert time.monotonic() - started < 1.0
+        reports = store.list_reports().reports
+        assert len(reports) == 1
+        incident = store.load(reports[0].report_id).incident
+        assert incident is not None
+        assert incident.session_id.hex == observed.session_id
+        assert incident.events == observed.history.events
+        assert incident.ring_loss == observed.history.loss
+        assert marker.is_file()
+    finally:
+        release_resolve.set()
+        publisher.worker.join(1)
+    assert not publisher.worker.is_alive()
+    if resolution == "stalled":
+        assert not marker.exists()
+        assert store.list_unclean_sessions().sessions == ()
+    else:
+        assert marker.is_file()
 
 
 def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(
