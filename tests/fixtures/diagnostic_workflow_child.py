@@ -13,6 +13,29 @@ from metroliza.shared.diagnostic_transport import attach_child_recorder
 from metroliza.shared.logging_utils import ensure_application_logging
 
 
+def _wait_for_marker(path):
+    deadline = time.monotonic() + 8
+    while not path.exists():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
+
+def _finish_handled_failure(worker, scratch, recorder):
+    if worker.last_parse_result.imported_files != 0:
+        return 14
+    # Make the valid event-before-operation-return ordering deterministic.
+    if not _wait_for_marker(scratch / "allow_operation_return"):
+        return 15
+    # Keep the real app alive until the external test has loaded its incident.
+    (scratch / "operation_returned").touch()
+    _wait_for_marker(scratch / "finish")
+    if recorder is not None:
+        recorder.close()
+    return 0
+
+
 def main():
     recorder = attach_child_recorder()
     ensure_application_logging()
@@ -41,22 +64,7 @@ def main():
         (source / "SYNTHETIC_PRIVATE_FILENAME.pdf").unlink()
     worker.run()
     if sys.argv[2] == "handled_failure":
-        if worker.last_parse_result.imported_files != 0:
-            return 14
-        # Make the valid event-before-operation-return ordering deterministic.
-        deadline = time.monotonic() + 8
-        while not (scratch / "allow_operation_return").exists():
-            if time.monotonic() >= deadline:
-                return 15
-            time.sleep(0.02)
-        # Keep the real app alive until the external test has loaded its incident.
-        (scratch / "operation_returned").touch()
-        deadline = time.monotonic() + 8
-        while not (scratch / "finish").exists() and time.monotonic() < deadline:
-            time.sleep(0.02)
-        if recorder is not None:
-            recorder.close()
-        return 0
+        return _finish_handled_failure(worker, scratch, recorder)
     if worker.last_parse_result.imported_files != 1:
         return 11
     with closing(sqlite3.connect(database)) as connection:
