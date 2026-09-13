@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+import pytest
+
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
 NATIVE_BUILD_DISTRIBUTION_PATH = Path('docs/native_build_distribution.md')
@@ -208,7 +210,10 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
     assert all(re.fullmatch(r'[^@]+@[0-9a-f]{40}', ref) for ref in action_refs)
     assert 'permissions:\n  contents: read' in workflow
     assert 'concurrency:' in workflow
-    assert 'cancel-in-progress: true' in workflow
+    assert (
+        "cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_wrapper_diagnostics == '1') }}"
+    ) in workflow
     assert workflow.count('uses: actions/checkout@') == workflow.count(
         'persist-credentials: false'
     )
@@ -229,6 +234,222 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert 'tests/test_db_utils.py' in workflow
     assert 'tests/test_packaging_spec_hiddenimports.py' in workflow
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
+
+
+def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-wrapper-diagnostics']
+    gate = job['if']
+    assert "github.event_name == 'workflow_dispatch'" in gate
+    assert "inputs.run_windows_wrapper_diagnostics == '1'" in gate
+    assert 'github.actor == github.repository_owner' in gate
+    assert 'github.event.repository.private == false' in gate
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_wrapper_diagnostics'][
+        'default'
+    ] == '0'
+    assert job['runs-on'] == 'windows-latest'
+    assert int(job['timeout-minutes']) <= 30
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    assert job['concurrency']['group'] == 'windows-wrapper-discriminator-${{ github.repository }}'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert workflow['concurrency']['group'] == (
+        "ci-${{ github.workflow }}-${{ github.ref }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}"
+    )  # Only the opted-in experiment gets a separate group; ordinary CI keeps its key.
+    assert workflow['concurrency']['cancel-in-progress'] == (
+        "${{ !(github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_wrapper_diagnostics == '1') }}"
+    )
+    for step in job['steps']:
+        assert 'actions/upload-artifact@' not in step.get('uses', '')
+        assert 'actions/cache@' not in step.get('uses', '')
+        assert 'cache' not in step.get('with', {})
+        if step.get('uses', '').startswith('actions/checkout@'):
+            assert step['with']['persist-credentials'] == 'false'
+    invocation = job['steps'][-1]['run']
+    assert 'timeout=1500' in invocation  # Five minutes remain for owner/job cleanup.
+    assert 'stdout=subprocess.DEVNULL' in invocation
+    assert 'stderr=subprocess.DEVNULL' in invocation
+    assert 'TemporaryDirectory(' in invocation
+    assert "'--basetemp=' + str(root / 'fixtures')" in invocation
+    assert 'sys.exit(result)' in invocation
+    assert "'-x'" in invocation
+    assert invocation.index("'tests/test_windows_ocr_wrapper_completion.py'") < invocation.index(
+        "'tests/test_windows_ocr_powershell.py'"
+    )
+    for path in ('test_windows_ocr_runtime_diagnostics.py',
+                 'test_header_ocr_diagnostics_script.py', 'test_windows_ocr_invoke.py'):
+        assert path in invocation
+    assert 'METROLIZA_WINDOWS_WRAPPER_BASELINE' not in invocation
+
+
+@pytest.mark.parametrize('mutation', ['valid', 'extra', 'domain', 'boolean', 'huge', 'missing',
+                                    'invoke_reason', 'invoke_cleanup', 'invoke_process_exit_code',
+                                    'fixture_phase'])
+def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation) -> None:
+    import ast
+    import json
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+    function = next(node for node in ast.parse(code).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'safe_receipts')
+    namespace = {'json': json}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<receipt-validator>', 'exec'),
+         namespace)
+    value = {'schema_version': 1, 'shell': 'pwsh', 'scenario': 'retained_pipes',
+             'stage': 'completion', 'result': 'bounded_failure', 'reason': 'timeout',
+             'elapsed_ms': 1500, 'shell_exited_before_timeout': True,
+             'stdout_pipe': True, 'stderr_pipe': False,
+             'shell_state': 'exited', 'fixture_stage': 'child_ready',
+             'fixture_phase': 'child_created',
+             'invoke_state': 'unobserved', 'invoke_reason': 'unobserved',
+             'invoke_cleanup': 'unobserved', 'invoke_process_exit_code': None,
+             'cleanup_complete': True, 'outer_exit_code': 1, 'invoke_exit_code': None}
+    if mutation == 'extra':
+        value['raw_output'] = 'SYNTHETIC_PRIVATE_CANARY'
+    elif mutation == 'domain':
+        value['shell'] = 'SYNTHETIC_PRIVATE_CANARY'
+    elif mutation == 'boolean':
+        value['elapsed_ms'] = True
+    elif mutation in {'invoke_reason', 'invoke_cleanup', 'fixture_phase'}:
+        value[mutation] = 'SYNTHETIC_PRIVATE_CANARY'
+    elif mutation == 'invoke_process_exit_code':
+        value[mutation] = True
+    path = tmp_path / 'windows-ocr-wrapper-receipts.jsonl'
+    if mutation != 'missing':
+        path.write_text('x' * 32769 if mutation == 'huge' else json.dumps(value), encoding='utf-8')
+    if mutation == 'valid':
+        assert namespace['safe_receipts'](tmp_path) == [value]
+    else:
+        with pytest.raises(ValueError) as caught:
+            namespace['safe_receipts'](tmp_path)
+        assert 'SYNTHETIC_PRIVATE_CANARY' not in str(caught.value)
+
+
+@pytest.mark.parametrize('failure', ['cleanup', 'timeout'])
+def test_windows_wrapper_lane_never_prints_private_failure_context(
+    tmp_path, monkeypatch, capsys, failure
+) -> None:
+    import subprocess
+    import tempfile
+    from types import SimpleNamespace
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+
+    class PrivateScope:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return str(tmp_path)
+
+        def __exit__(self, *_args):
+            if failure == 'cleanup':
+                raise PermissionError('SYNTHETIC_PRIVATE_CANARY')
+
+    def runner(*_args, **_kwargs):
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(['SYNTHETIC_PRIVATE_CANARY'], 1500)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(tempfile, 'TemporaryDirectory', PrivateScope)
+    monkeypatch.setattr(subprocess, 'run', runner)
+    with pytest.raises(SystemExit) as caught:
+        exec(compile(code, '<native-lane>', 'exec'), {})
+    assert caught.value.code == 1
+    output = capsys.readouterr()
+    assert 'SYNTHETIC_PRIVATE_CANARY' not in output.out + output.err
+    assert 'private_cleanup_failed' in output.out if failure == 'cleanup' else 'outer_timeout' in output.out
+
+
+@pytest.mark.parametrize('stage,code,expected', [
+    ('invoke_returned', 1, 'bounded_failure'),
+    ('invoke_failed', None, 'bounded_failure'),
+    ('timeout_returned', None, 'bounded_failure'),
+    ('invoke_returned', 0, 'completed'),
+])
+def test_windows_wrapper_receipt_cannot_hide_inner_failure(
+    tmp_path, monkeypatch, stage, code, expected
+):
+    import json
+
+    from tests.test_windows_ocr_wrapper_completion import _record
+    from tests.windows_ocr_process import OwnedProcessResult
+
+    monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
+    _record('pwsh', 'live_shell', OwnedProcessResult(0, 'completed', True, True, False, 2),
+            ready={'stage': 'shell_ready'}, outcome=[{
+                'stage': stage, 'returncode': code, 'reason': 'completed',
+                'cleanup_complete': True, 'tree_empty': True, 'process_returncode': code,
+                'output_limited': False,
+            }], phase='shell_initialized')
+    row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
+    assert row['result'] == expected
+    assert row['outer_exit_code'] == 0 and row['invoke_exit_code'] == code
+
+
+@pytest.mark.parametrize('contradiction', [
+    {'process_returncode': 17}, {'output_limited': True},
+    {'cleanup_complete': False}, {'tree_empty': False},
+])
+def test_windows_wrapper_receipt_rejects_contradictory_success(
+    tmp_path, monkeypatch, contradiction
+):
+    import json
+
+    from tests.test_windows_ocr_wrapper_completion import _record
+    from tests.windows_ocr_process import OwnedProcessResult
+
+    monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
+    outcome = {
+        'stage': 'invoke_returned', 'returncode': 0, 'reason': 'completed',
+        'process_returncode': 0, 'output_limited': False,
+        'cleanup_complete': True, 'tree_empty': True, **contradiction,
+    }
+    _record('pwsh', 'live_shell', OwnedProcessResult(0, 'completed', True, True, False, 2),
+            ready={'stage': 'shell_ready'}, outcome=[outcome], phase='shell_initialized')
+    row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
+    assert row['result'] == 'bounded_failure'
+
+
+def test_windows_wrapper_real_receipt_producer_matches_private_lane(tmp_path, monkeypatch):
+    import ast
+    import json
+
+    import yaml
+
+    from tests.test_windows_ocr_wrapper_completion import _record
+    from tests.windows_ocr_process import OwnedProcessResult
+
+    monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
+    _record(
+        'pwsh', 'retained_pipes',
+        OwnedProcessResult(1, 'timeout', True, True, False, 2.0),
+        ready={'stage': 'SYNTHETIC_PRIVATE_CANARY', 'stdout_pipe': True, 'stderr_pipe': False},
+        probe=[{'stage': 'timeout_before_kill', 'shell_state': 'SYNTHETIC_PRIVATE_CANARY'}],
+        outcome=[{'stage': 'SYNTHETIC_PRIVATE_CANARY'}],
+    )
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+    function = next(node for node in ast.parse(code).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'safe_receipts')
+    namespace = {'json': json}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<receipt-validator>', 'exec'),
+         namespace)
+    rows = namespace['safe_receipts'](tmp_path)
+    assert len(rows) == 1
+    assert rows[0]['stdout_pipe'] is True and rows[0]['stderr_pipe'] is False
+    assert rows[0]['shell_state'] == rows[0]['fixture_stage'] == rows[0]['invoke_state'] == 'unobserved'
+    assert 'SYNTHETIC_PRIVATE_CANARY' not in json.dumps(rows)
 
 
 def test_perf_benchmark_trend_filters_to_baseline_backed_scenarios() -> None:
