@@ -983,6 +983,16 @@ jobs:
           tests/test_header_ocr_diagnostics_script.py
           tests/test_windows_ocr_powershell.py
 
+      - name: Run measurement chart-label and workbook publication tests on Windows
+        env:
+          PYTHONPATH: src;.
+        run: >-
+          python -m pytest -v
+          tests/test_measurement_chart_labels.py
+          tests/test_export_chart_writer.py
+          tests/test_export_backends.py
+          tests/test_export_workbook_output.py
+
   windows-startup-benchmark:
     name: Windows startup benchmark (manual/opt-in)
     runs-on: windows-latest
