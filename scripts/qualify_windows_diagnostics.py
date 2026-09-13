@@ -163,6 +163,7 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "qualification_export_unavailable",
         "qualification_filename_control_unavailable",
         "qualification_preview_unavailable",
+        "qualification_menu_unavailable",
         "qualification_cleanup_failed",
         "process_exited_before_startup",
         "process_exited_before_result",
@@ -1448,11 +1449,14 @@ def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
 def _validate_child_failure(path: Path) -> dict[str, object]:
     try:
         payload = _bounded_json(path, 4096)
-        if type(payload) is not dict or set(payload) != {
+        required = {
             "schema_version",
             "stage",
             "reason",
-        }:
+        }
+        if type(payload) is not dict or (
+            set(payload) != required and set(payload) != required | {"cleanup"}
+        ):
             raise ValueError("invalid_failure")
         if (
             payload["schema_version"] != 1
@@ -1461,6 +1465,14 @@ def _validate_child_failure(path: Path) -> dict[str, object]:
             or type(payload["reason"]) is not str
             or payload["stage"] not in CHILD_FAILURE_STAGES
             or payload["reason"] not in QUALIFICATION_FAILURE_REASONS
+            or (
+                "cleanup" in payload
+                and (
+                    payload["stage"] != "preview"
+                    or type(payload["cleanup"]) is not str
+                    or payload["cleanup"] not in QUALIFICATION_CLEANUP_STATUSES
+                )
+            )
         ):
             raise ValueError("invalid_failure")
         return payload
@@ -1648,6 +1660,7 @@ def _observe_qualification_receipt(
             "scenario_failed",
             qualification_reason=failure["reason"],
             qualification_child_stage=failure["stage"],
+            qualification_cleanup=failure.get("cleanup", "not_attempted"),
         )
     if on_ready is not None and not ready_called:
         on_ready(process)
