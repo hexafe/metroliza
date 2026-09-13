@@ -917,7 +917,7 @@ def test_runtime_provenance_is_useful_through_real_managed_sinks(tmp_path, monke
 @pytest.mark.parametrize("field,value", [
     ("release_label", "synthetic-stale-private-version"),
     ("schema_version", 99), ("schema_version", True),
-    ("git_sha", "synthetic-secret"), ("git_sha", "a" * 100_000),
+    ("git_sha", "synthetic-secret"), pytest.param("git_sha", "a" * 100_000, id="oversized-sha"),
     ("git_sha", "a" * 41), ("dirty", 1), ("packager", "synthetic-private-packager"),
 ])
 def test_malformed_manifest_projection_is_unknown_in_real_sinks(tmp_path, monkeypatch, field, value):

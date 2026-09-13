@@ -766,7 +766,7 @@ def test_new_startup_numeric_and_uuid_mutations_are_rejected(field, value):
 
 
 @pytest.mark.parametrize("field,value", [
-    ("git_sha", "x" * 100_000), ("git_sha", "a" * 41),
+    pytest.param("git_sha", "x" * 100_000, id="oversized-sha"), ("git_sha", "a" * 41),
     ("git_sha", "A" * 40), ("dirty", 1), ("dirty", "false"),
     ("packager", "source"), ("runtime", "source"),
     ("release_year", True), ("release_year", 10000),

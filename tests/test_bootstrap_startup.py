@@ -413,12 +413,24 @@ def startup_trace(tmp_path, monkeypatch):
     pdf_module.run_pdf_parser_smoke = lambda *args: state["calls"].append("pdf_smoke")
     monkeypatch.setitem(sys.modules, pdf_module.__name__, pdf_module)
 
-    def records():
+    def records(*, concurrent=False):
         outputs = (
             (home / ".metroliza" / "metroliza.log").read_text(),
             (cwd / "metroliza.log").read_text(), stream.getvalue(),
         )
-        assert outputs[0] == outputs[1] == outputs[2]
+        if concurrent:
+            # Each sink locks independently; ordering across invocations may vary.
+            # Preserve every full line and its order within the same invocation.
+            by_sink = []
+            for output in outputs:
+                invocations = {}
+                for line in output.splitlines():
+                    invocation_id = json.loads(line.split(" ", 2)[2])["invocation_id"]
+                    invocations.setdefault(invocation_id, []).append(line)
+                by_sink.append(invocations)
+            assert by_sink[0] == by_sink[1] == by_sink[2]
+        else:
+            assert outputs[0] == outputs[1] == outputs[2]
         return [json.loads(line.split(" ", 2)[2]) for line in outputs[0].splitlines()]
 
     yield types.SimpleNamespace(
@@ -599,7 +611,7 @@ def test_repeated_and_concurrent_invocations_do_not_mix_ids(startup_trace):
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert list(executor.map(lambda _: bootstrap.run_application(), range(2))) == [0, 0]
     grouped = {}
-    for event in startup_trace.records():
+    for event in startup_trace.records(concurrent=True):
         grouped.setdefault(event["invocation_id"], []).append(event)
     assert len(grouped) == 4
     for events in grouped.values():
