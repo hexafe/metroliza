@@ -1112,12 +1112,11 @@ class TabularSqliteStore:
                 )
                 # Column filters exclude invalid sources even for !=; grouping
                 # expressions deliberately use the shared predicate's total NE.
-                numeric_guard = sqlite_numeric_filter(source, "is_not_blank")
                 comparison = sqlite_numeric_filter(
                     source, _TABULAR_NUMERIC_ALIASES[column_filter.numeric_operator],
-                    numeric_value, params=params,
+                    numeric_value, params=params, exclude_invalid=True,
                 )
-                filter_clauses.append(f"({numeric_guard} AND {comparison})")
+                filter_clauses.append(comparison)
         if not filter_clauses:
             return "", []
         return f"({' AND '.join(filter_clauses)})", params

@@ -235,26 +235,50 @@ def _sqlite_comparison(operator: str, value: int | float, params: list[Any] | No
             f"WHEN typeof(n) = 'text' THEN {unsigned} ELSE n {operator} {literal} END)")
 
 
+def _sqlite_numeric_dispatch(column_sql: str, predicate: str, fast_predicate: str) -> str:
+    """Evaluate one source once; tokenize only values outside a proven fast subset."""
+    # At most 18 unsigned ASCII digits always fit signed64, including leading
+    # zeros. NUL, signs, whitespace, longer integers and every decimal/exponent
+    # remain the exact parser's responsibility. Native nonfinite values become
+    # NULL in the numeric branch, retaining each predicate's invalid semantics.
+    fast_guard = """typeof(_nf_value) IN ('integer','real','null') OR
+        (typeof(_nf_value) = 'text' AND length(_nf_value) BETWEEN 1 AND 18
+         AND instr(_nf_value,char(0)) = 0 AND _nf_value NOT GLOB '*[^0-9]*')"""
+    number = "CASE WHEN _nf_value - _nf_value = 0 THEN CAST(_nf_value AS NUMERIC) END"
+    # CASE is lazy. The outer OFFSET boundary prevents flattening the source
+    # expression into the dispatch checks and either scalar predicate branch.
+    return (f"(SELECT CASE WHEN {fast_guard} THEN "
+            f"(SELECT {fast_predicate} FROM (SELECT {number} AS n)) ELSE "
+            f"(SELECT {predicate} FROM ({_sqlite_normalized_source('_nf_value')})) END "
+            f"FROM (SELECT {column_sql} AS _nf_value LIMIT -1 OFFSET 0))")
+
+
 def sqlite_numeric_filter(
     column_sql: str, operator: str, value: Any = None, second_value: Any = None,
-    *, params: list[Any] | None = None,
+    *, params: list[Any] | None = None, exclude_invalid: bool = False,
 ) -> str:
-    """Compile total finite-number predicates using a validated SQL identifier."""
+    """Compile finite predicates; column filters can exclude invalid negative rows."""
     operator = operator.strip().lower()
     if operator == "is_blank":
         predicate = "n IS NULL AND d IS NULL"
+        fast_predicate = "n IS NULL"
     elif operator == "is_not_blank":
         predicate = "n IS NOT NULL OR d IS NOT NULL"
+        fast_predicate = "n IS NOT NULL"
     elif operator == "between":
         lower, upper = sorted((_required_literal(value), _required_literal(second_value)))
         predicate = f"COALESCE({_sqlite_comparison('>=', lower, params)} AND {_sqlite_comparison('<=', upper, params)}, 0)"
+        fast_predicate = f"COALESCE(n >= {_exact_sql_number(lower)} AND n <= {_exact_sql_number(upper)}, 0)"
     else:
         sql_operator = _OPERATORS.get(operator)
         if sql_operator is None:
             raise ValueError(f"Unsupported number filter operator: {operator}")
-        comparison = _sqlite_comparison(sql_operator, _required_literal(value), params)
-        predicate = f"COALESCE({comparison}, {1 if sql_operator == '!=' else 0})"
-    return f"(SELECT {predicate} FROM ({_sqlite_normalized_source(column_sql)}))"
+        number = _required_literal(value)
+        comparison = _sqlite_comparison(sql_operator, number, params)
+        invalid_match = int(sql_operator == "!=" and not exclude_invalid)
+        predicate = f"COALESCE({comparison}, {invalid_match})"
+        fast_predicate = f"COALESCE(n {sql_operator} {_exact_sql_number(number)}, {invalid_match})"
+    return _sqlite_numeric_dispatch(column_sql, predicate, fast_predicate)
 
 
 def _decimal_membership(numbers: tuple[int | float, ...]) -> str:
@@ -292,6 +316,9 @@ def sqlite_numeric_membership(
     unsigned = f"n COLLATE BINARY IN ({','.join(unsigned_values)})" if unsigned_values else "0"
     predicate = (f"COALESCE(CASE WHEN d IS NOT NULL THEN {_decimal_membership(numbers)} "
                  f"WHEN typeof(n) = 'text' THEN {unsigned} ELSE n IN ({values_sql}) END, 0)")
+    fast_values = ",".join(_exact_sql_number(number) for number in numbers)
+    fast_predicate = f"COALESCE(n IN ({fast_values}), 0)"
     if negate:
         predicate = f"NOT ({predicate})"
-    return f"(SELECT {predicate} FROM ({_sqlite_normalized_source(column_sql)}))"
+        fast_predicate = f"NOT ({fast_predicate})"
+    return _sqlite_numeric_dispatch(column_sql, predicate, fast_predicate)

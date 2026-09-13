@@ -600,3 +600,44 @@ def test_finite_numeric_binary64_rounding_ids(spec, expected_ids):
         conn.executemany("INSERT INTO probe VALUES (?)", [(value,) for value in ROUNDING_VALUES])
         clause = canonical_query._filter_expression_spec_to_sql(spec)
         assert [row[0] for row in conn.execute(f"SELECT rowid FROM probe WHERE {clause} ORDER BY rowid")] == expected_ids
+
+
+@pytest.mark.parametrize("bound", [False, True])
+@pytest.mark.parametrize("operator,value,second,exclude_invalid,expected", [
+    ("eq", 7, None, False, [1, 2, 3, 4, 10, 11, 12, 18]),
+    ("ne", 7, None, False, [5, 6, 7, 8, 9, 13, 14, 15, 16, 17, 19, 20]),
+    ("ne", 7, None, True, [5, 6, 7, 8, 9, 20]),
+    ("between", -7, 7, False, [1, 2, 3, 4, 9, 10, 11, 12, 18]),
+    ("gt", 9007199254740992, None, False, [5, 6, 7, 8, 20]),
+    ("is_blank", None, None, False, [13, 14, 15, 16, 17, 19]),
+    ("is_not_blank", None, None, False, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 20]),
+    ("in", (7, 9007199254740993), None, False, [1, 2, 3, 4, 5, 10, 11, 12, 18]),
+    ("not_in", (7, 9007199254740993), None, False, [6, 7, 8, 9, 13, 14, 15, 16, 17, 19, 20]),
+])
+def test_finite_numeric_dispatch_preserves_scope_with_one_source_evaluation(bound, operator, value, second, exclude_invalid, expected):
+    from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
+
+    values = [7, 7.0, "7", "000000000000000007", "9007199254740993", "999999999999999999",
+              "9223372036854775807", "9223372036854775808", "-7", " +7 ", "7.0", "7e0",
+              None, float("inf"), "7\0bad", "7junk", "1e309", "0000000000000000007", b"7",
+              "18446744073709551615"]
+    observations = []
+
+    def observe(source):
+        observations.append(source)
+        return source
+
+    with closing(sqlite3.connect(":memory:")) as connection:
+        connection.execute("CREATE TABLE source_values (value)")
+        connection.executemany("INSERT INTO source_values VALUES (?)", [(item,) for item in values])
+        # Observation only: generated production SQL needs no registered function.
+        # The counter detects duplicated evaluation of a caller's source expression.
+        connection.create_function("observe", 1, observe)
+        params = [] if bound else None
+        if operator in {"in", "not_in"}:
+            predicate = sqlite_numeric_membership("observe(value)", value, negate=operator == "not_in", params=params)
+        else:
+            predicate = sqlite_numeric_filter("observe(value)", operator, value, second, params=params, exclude_invalid=exclude_invalid)
+        selected = connection.execute(f"SELECT rowid FROM source_values WHERE {predicate} ORDER BY rowid", params or ()).fetchall()
+        assert [row[0] for row in selected] == expected
+        assert observations == values

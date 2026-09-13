@@ -1102,7 +1102,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "446704edfb5321f68308a19e9da2b47ff840a5b8866f6ad37a4de6dc4769edff",
+      "fingerprint": "d674d9c929b3f1b468dd44246b1cba3a8a25785af41d9e8c1f2b759176fd96a5",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
@@ -1147,7 +1147,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "78ebce6c7190a43acc318ea5a667949574294b66fb8afb46edae98b239ba4d09",
+      "fingerprint": "ac91c056342ac91896485f5897ed550dba541906183ba3e5d912d7b8d137d3f5",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
@@ -1156,7 +1156,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6688d4b7c00314a7fd9cb8766174be603b90467b22f8fa8f411e38e7c5f4d4cc",
+      "fingerprint": "3fa5f7a94ce300f5eb9a74a6390fcd427eedcedfbebc4487a3362a2d28d15e10",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
@@ -1210,7 +1210,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c404b9e7dc9f73740a8a0108a900a03c17afe2eb7b29da735145e8c040d23811",
+      "fingerprint": "3fd31c389895c452234640db4d75c1035830b077e63ddfed75e6ec1cd58e788a",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
@@ -1273,7 +1273,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4dd87dde08fbd378dff471ae818e64108bcb6e17532910af3f8ba25f192233b1",
+      "fingerprint": "68c0c4b9c9d6203e161beff5eee07df6c7d7186d074b50fe5e1b91df37f1f20e",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
@@ -1291,7 +1291,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2a6c32d5cbcc2b773d8fe855e9bb74010379902ffce20b9d7cdc6cba3bf4bd79",
+      "fingerprint": "53587e3b2f185e72d146088076197e96231fe25b61262d0b09576a19f293515d",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
@@ -1300,7 +1300,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ba986798a56098aca4713b6629faa51fa9b863c4b2b5cceab1ee2ab7b1e9ef8d",
+      "fingerprint": "cd055ba9aa43f3301cf51e84d19f3bcb9fdca2597ef30e9a2cc412461370ac83",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
@@ -1399,7 +1399,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "35a8bce07166bd36a3e24ddb5f4be9f0d36a43ea695eb2517d860164cd4c4b4b",
+      "fingerprint": "0e12616dcaf6c69075ee63164ef6feff3fbd339c3ede802f26c3bec91ad2f793",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
@@ -1408,20 +1408,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c278d0739e913fb55ede877c2e09872e6901046bb8271cdeffd7fb358cf394e9",
+      "fingerprint": "b06be99611430e3ae2e9b8a6a46779f631ee08092b24b9dad81f82b86b845dcd",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
-      "rationale": "Issue #995 query-boundary review: callers validate and quote identifiers; operators and query fragments are compiler-owned. Decimal rounding keys and exact power-of-two literals derive only from normalized finite builtin numbers; key text contains computed digits only. Tabular values remain bound. No raw source value is interpolated. Renewal remains owned by #906.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "bea441764d59bd4b0d5976a842651e30652913b34d1e0de04f9daf8a5fd15e0a",
-      "test_id": "B608",
-      "path": "src/metroliza/shared/finite_numeric.py",
-      "owner": "Security review",
-      "rationale": "Issue #995 query-boundary review: callers validate and quote identifiers; operators and query fragments are compiler-owned. Decimal rounding keys and exact power-of-two literals derive only from normalized finite builtin numbers; key text contains computed digits only. Tabular values remain bound. No raw source value is interpolated. Renewal remains owned by #906.",
+      "rationale": "Reviewed finite numeric dispatch accepts column_sql only from quoted/validated identifiers or compiler-owned source expressions. Predicates and operators are closed compiler-owned fragments; inline fast literals are canonical finite builtin numbers from the shared literal parser. Row values are never interpolated, and supplied fallback parameter bindings retain their order. Native/short-integer fast dispatch preserves exact fallback semantics; bound/unbound row-ID, source-evaluation, precision and injection regressions cover this boundary.",
       "expires_on": "2026-10-31"
     }
   ]
