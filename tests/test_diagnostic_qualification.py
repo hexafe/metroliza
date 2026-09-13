@@ -85,6 +85,36 @@ def test_unavailable_default_store_still_runs_and_preserves_actual_child_exit(tm
     assert list(tmp_path.iterdir()) == []
 
 
+def test_preview_requires_the_real_normal_help_action(tmp_path, monkeypatch):
+    from metroliza.app.bootstrap import get_or_create_qapplication
+    from metroliza.ui.main_window import MainWindow
+
+    state = tmp_path / "application-state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    monkeypatch.setenv("LOCALAPPDATA", str(state))
+    store = IncidentStore()
+    child = Path(__file__).parent / "fixtures/diagnostic_child.py"
+    crashed = run_with_store([sys.executable, str(child), "hard_exit"], store=store)
+    assert crashed.storage_status is StoreStatus.SAVED
+    work = tmp_path / "preview"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    original_setup = MainWindow.setup_menu_actions
+
+    def without_incident_action(window):
+        original_setup(window)
+        for action in window.help_menu.actions():
+            if action.text().replace("&", "").replace("…", "...") == "Diagnostic incidents...":
+                window.help_menu.removeAction(action)
+
+    monkeypatch.setattr(MainWindow, "setup_menu_actions", without_incident_action)
+    app = get_or_create_qapplication()
+    assert app is not None
+    with pytest.raises(ValueError, match="^qualification_menu_unavailable$"):
+        diagnostic_qualification._preview_export(work)
+    assert not (work / "selected.zip").exists()
+
+
 @pytest.mark.parametrize("headless_environment", [False, True], ids=["desktop-env", "headless-env"])
 def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
     tmp_path, headless_environment

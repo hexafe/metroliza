@@ -37,6 +37,7 @@ FAILURE_REASONS = frozenset(
         "qualification_export_unavailable",
         "qualification_filename_control_unavailable",
         "qualification_preview_unavailable",
+        "qualification_menu_unavailable",
         "unexpected",
     }
 )
@@ -274,15 +275,51 @@ def _complete_preview_save_dialog(app, chosen: Path, deadline: float, automation
         return
 
 
+def _preview_main_window(root: Path):
+    from PyQt6.QtCore import QSettings
+
+    main_module = import_module("metroliza.ui.main_window")
+    preferences_module = import_module("metroliza.ui.ui_preferences")
+    settings = QSettings(str(root / "qualification-ui.ini"), QSettings.Format.IniFormat)
+    return main_module.MainWindow(
+        "diagnostic-qualification", None,
+        ui_preferences=preferences_module.UiPreferences(settings),
+    )
+
+
+def _preview_dialog_from_help(app, window):
+    incident_module = import_module("metroliza.ui.incident_dialog")
+
+    window.show()
+    app.processEvents()
+    menu = window.help_menu
+    if menu.menuAction() not in window.menuBar().actions():
+        raise ValueError("qualification_menu_unavailable")
+    actions = [
+        action for action in menu.actions()
+        if action.text().replace("&", "").replace("…", "...") == "Diagnostic incidents..."
+    ]
+    if len(actions) != 1 or not actions[0].isEnabled() or not actions[0].isVisible():
+        raise ValueError("qualification_menu_unavailable")
+    actions[0].trigger()
+    app.processEvents()
+    dialogs = [
+        dialog for dialog in window.findChildren(incident_module.IncidentDialog)
+        if dialog.isVisible() and dialog.parent() is window
+    ]
+    if len(dialogs) != 1:
+        raise ValueError("qualification_preview_unavailable")
+    return dialogs[0]
+
+
 def _preview_export(root: Path) -> None:
     from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance()
     app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
-    module = import_module("metroliza.ui.incident_dialog")
-    dialog = module.open_incident_viewer()
-    app.processEvents()
+    window = _preview_main_window(root)
+    dialog = _preview_dialog_from_help(app, window)
     if dialog.reports_table.rowCount() < 1:
         raise ValueError("qualification_incident_missing")
     dialog.reports_table.selectRow(0)
@@ -303,6 +340,7 @@ def _preview_export(root: Path) -> None:
     dialog.export_button.click()
     timer.stop()
     dialog.close()
+    window.close()
     if not automation["filename_control_available"]:
         raise ValueError("qualification_filename_control_unavailable")
     if not chosen.is_file():
