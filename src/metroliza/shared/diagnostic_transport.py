@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections import deque
 import json
 import os
 import struct
 import threading
 import uuid
+from collections import deque
 
 from metroliza.shared.diagnostic_wire import MAX_EVENT_BYTES, encode_event
 
@@ -99,17 +99,39 @@ def _open_channel(value: str) -> tuple[int, int]:
     parts = value.split(":")
     if len(parts) != 2 or any(not p.isascii() or not p.isdecimal() or len(p) > 20 for p in parts):
         raise ValueError("invalid_channel")
-    incoming, outgoing = (int(p) for p in parts)
-    if incoming == outgoing or min(incoming, outgoing) < 3:
+    incoming_handle, outgoing_handle = (int(p) for p in parts)
+    if incoming_handle == outgoing_handle or min(incoming_handle, outgoing_handle) < 3:
         raise ValueError("invalid_channel")
-    if os.name == "nt":
-        import msvcrt
+    owned: list[int] = []
+    try:
+        if os.name == "nt":
+            import msvcrt
 
-        incoming = msvcrt.open_osfhandle(incoming, os.O_RDONLY | os.O_BINARY)
-        outgoing = msvcrt.open_osfhandle(outgoing, os.O_WRONLY | os.O_BINARY)
-    os.set_inheritable(incoming, False)
-    os.set_inheritable(outgoing, False)
-    return incoming, outgoing
+            incoming = msvcrt.open_osfhandle(
+                incoming_handle, os.O_RDONLY | os.O_BINARY
+            )
+            owned.append(incoming)
+            outgoing = msvcrt.open_osfhandle(
+                outgoing_handle, os.O_WRONLY | os.O_BINARY
+            )
+            owned.append(outgoing)
+        else:
+            incoming, outgoing = incoming_handle, outgoing_handle
+            owned.extend((incoming, outgoing))
+        os.set_inheritable(incoming, False)
+        os.set_inheritable(outgoing, False)
+        return incoming, outgoing
+    except (OSError, OverflowError, RuntimeError, ValueError):
+        _close_fds(owned)
+        raise
+
+
+def _close_fds(descriptors: list[int] | tuple[int, ...]) -> None:
+    for descriptor in descriptors:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
 
 class ChildRecorder:
@@ -123,6 +145,7 @@ class ChildRecorder:
         self._unquantified_loss = False
         self._incoming = incoming
         self._outgoing = outgoing
+        self._fd_lock = threading.Lock()
         self._queue: deque[tuple[bytes, bool]] = deque()
         self._bytes = 0
         self._lock = threading.Lock()
@@ -145,18 +168,29 @@ class ChildRecorder:
 
     def enqueue_bytes(self, payload: bytes) -> bool:
         from metroliza.shared.diagnostic_events import (
-            RuntimeProvenanceEvent, StartupDiagnosticEvent, WorkflowDiagnosticEvent,
+            RuntimeProvenanceEvent,
+            StartupDiagnosticEvent,
+            WorkflowDiagnosticEvent,
         )
         from metroliza.shared.diagnostic_wire import decode_event
 
         try:
             event = decode_event(payload)
-            if type(event) not in (RuntimeProvenanceEvent, StartupDiagnosticEvent, WorkflowDiagnosticEvent):
+            if type(event) not in (
+                RuntimeProvenanceEvent,
+                StartupDiagnosticEvent,
+                WorkflowDiagnosticEvent,
+            ):
                 return False
             # Classification uses a validated closed serializer projection, never user text.
             del event
             fields = json.loads(payload)
-            terminal = fields.get("outcome") not in (None, "milestone", "started", "invocation_started")
+            terminal = fields.get("outcome") not in (
+                None,
+                "milestone",
+                "started",
+                "invocation_started",
+            )
             terminal = terminal or fields.get("event_code") == "runtime_provenance"
         except Exception:
             return False
@@ -181,7 +215,16 @@ class ChildRecorder:
     def close(self, timeout: float = 0.25) -> None:
         self._closing = True
         self._wake.set()
+        if self._worker.ident is None:
+            self._close_channels()
+            return
         self._worker.join(timeout)
+
+    def _close_channels(self) -> None:
+        with self._fd_lock:
+            descriptors = (self._incoming, self._outgoing)
+            self._incoming = self._outgoing = -1
+        _close_fds(tuple(fd for fd in descriptors if fd >= 0))
 
     def _handshake(self) -> None:
         challenge = read_frame(self._incoming)
@@ -190,7 +233,12 @@ class ChildRecorder:
         if (not valid_id(value["session_id"]) or type(token) is not str
                 or len(token) != 64 or any(c not in "0123456789abcdef" for c in token)):
             raise ValueError("invalid_handshake")
-        write_frame(self._outgoing, control_bytes("hello", **{k: value[k] for k in ("session_id", "token")}))
+        write_frame(
+            self._outgoing,
+            control_bytes(
+                "hello", **{key: value[key] for key in ("session_id", "token")}
+            ),
+        )
         acknowledgement = read_frame(self._incoming)
         if acknowledgement != control_bytes("accepted"):
             raise ValueError("handshake_unavailable")
@@ -220,11 +268,7 @@ class ChildRecorder:
         finally:
             self.connected = False
             self._ready.set()
-            for fd in (self._incoming, self._outgoing):
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+            self._close_channels()
 
 
 def attach_child_recorder() -> ChildRecorder | None:
@@ -234,12 +278,24 @@ def attach_child_recorder() -> ChildRecorder | None:
     if channel is None:
         return None
     _supervised_requested = True
+    _recorder = None
+    opened: tuple[int, int] | None = None
+    recorder: ChildRecorder | None = None
     try:
-        recorder = ChildRecorder(*_open_channel(channel))
+        opened = _open_channel(channel)
+        recorder = ChildRecorder(*opened)
         _recorder = recorder
         recorder.start()
         return recorder
-    except (OSError, ValueError):
+    except (OSError, OverflowError, RuntimeError, ValueError):
+        _recorder = None
+        if recorder is not None:
+            try:
+                recorder.close()
+            except (OSError, RuntimeError):
+                recorder._close_channels()
+        elif opened is not None:
+            _close_fds(opened)
         return None
 
 

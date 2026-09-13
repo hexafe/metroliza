@@ -7,8 +7,8 @@ can shadow the canonical ``metroliza`` package during hidden-import analysis.
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
@@ -19,17 +19,20 @@ if src_text in sys.path:
 sys.path.insert(0, src_text)
 
 from metroliza.shared.diagnostic_transport import (  # noqa: E402
-    attach_child_recorder, supervised_mode_requested,
+    attach_child_recorder,
+    supervised_mode_requested,
 )
 
 recorder = attach_child_recorder()
 if supervised_mode_requested():
-    from metroliza.shared.logging_utils import ensure_application_logging
+    try:
+        from metroliza.shared.logging_utils import ensure_application_logging
 
-    ensure_application_logging()
+        ensure_application_logging()
+    except Exception:
+        pass
 
 from metroliza.app.bootstrap import run_application  # noqa: E402
-
 
 if __name__ == "__main__":
     try:
@@ -43,4 +46,7 @@ if __name__ == "__main__":
         raise SystemExit(code)
     finally:
         if recorder is not None:
-            recorder.close()
+            try:
+                recorder.close()
+            except Exception:
+                pass
