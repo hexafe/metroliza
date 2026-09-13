@@ -52,6 +52,8 @@ jobs:
 
       - name: Build actual Windows onedir and minimal incident launcher
         shell: pwsh
+        env:
+          METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
         run: .\build_windows_exe.ps1 -Mode onedir
 
       - name: Qualify actual packaged incident flow with public synthetic inputs

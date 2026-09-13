@@ -14,7 +14,7 @@ from pyinstaller_common import (
     ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES,
     build_pyinstaller_collection,
     filter_onedir_hiddenimports,
-    onedir_binary_scanner_ordering,
+    onedir_binary_scanner_probe,
     read_version_label,
 )
 
@@ -28,10 +28,10 @@ ICON_PATH = SPEC_DIR / "metroliza_icon2.ico"
 COLLECTION = build_pyinstaller_collection(ROOT_DIR)
 
 
-# The pinned PyInstaller 6.22.3 Windows scanner imports every collected package
-# into one child. Keep the application's supported ONNX Runtime preload order;
-# the helper fails closed if that internal scanner API changes.
-with onedir_binary_scanner_ordering():
+# Windows builds preload ONNX Runtime after scanner path tracking begins. The
+# targeted qualification additionally runs closed controls at this exact point.
+# The adapter is pinned to PyInstaller 6.22.3 and fails closed on API drift.
+with onedir_binary_scanner_probe():
     a = Analysis(
         [str(SPEC_DIR / "metroliza_package_entry.py")],
         pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
