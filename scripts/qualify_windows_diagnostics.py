@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import importlib.metadata
@@ -149,9 +150,11 @@ CHILD_FAILURE_STAGES = frozenset(
 QUALIFICATION_FAILURE_REASONS = frozenset(
     {
         "invalid_qualification_root",
+        "invalid_qualification_arguments",
         "qualification_barrier_timeout",
         "qualification_fixture_mismatch",
         "qualification_output_exists",
+        "qualification_output_unavailable",
         "qualification_result_mismatch",
         "qualification_import_failed",
         "qualification_incident_missing",
@@ -167,6 +170,9 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "unexpected",
     }
 )
+QUALIFICATION_CLEANUP_STATUSES = frozenset(
+    {"not_attempted", "complete", "failed"}
+)
 
 
 class QualificationFailure(RuntimeError):
@@ -180,6 +186,7 @@ class QualificationFailure(RuntimeError):
         qualification_reason: str | None = None,
         qualification_child_stage: str | None = None,
         qualification_exit_code: int | None = None,
+        qualification_cleanup: str = "not_attempted",
     ) -> None:
         if failure_id not in FAILURE_IDS:
             failure_id = "scenario_failed"
@@ -197,7 +204,19 @@ class QualificationFailure(RuntimeError):
             and -(2**31) <= qualification_exit_code <= 2**32 - 1
             else None
         )
+        self.qualification_cleanup = (
+            qualification_cleanup
+            if type(qualification_cleanup) is str
+            and qualification_cleanup in QUALIFICATION_CLEANUP_STATUSES
+            else "not_attempted"
+        )
         super().__init__(failure_id)
+
+    def record_cleanup(self, *, succeeded: bool) -> None:
+        if not succeeded:
+            self.qualification_cleanup = "failed"
+        elif self.qualification_cleanup == "not_attempted":
+            self.qualification_cleanup = "complete"
 
 
 _T = TypeVar("_T")
@@ -224,6 +243,7 @@ def _run_driver_phase(stage: str, action: Callable[[], _T]) -> _T:
             ),
             qualification_child_stage=error.qualification_child_stage,
             qualification_exit_code=error.qualification_exit_code,
+            qualification_cleanup=error.qualification_cleanup,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -286,7 +306,36 @@ class QualificationResult:
     qualification_reason: str | None = None
     qualification_child_stage: str | None = None
     qualification_exit_code: int | None = None
+    qualification_cleanup: str = "not_attempted"
     output_identity: tuple[int, int] | None = None
+
+
+def _attempt_cleanup(action: Callable[[], None]) -> None:
+    primary = sys.exc_info()[1]
+    try:
+        action()
+    except Exception:
+        if isinstance(primary, QualificationFailure):
+            primary.record_cleanup(succeeded=False)
+            return
+        if primary is not None and not isinstance(primary, Exception):
+            return
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_reason=(
+                "unexpected" if isinstance(primary, Exception)
+                else "qualification_cleanup_failed"
+            ),
+            qualification_cleanup="failed",
+        ) from None
+    if isinstance(primary, QualificationFailure):
+        primary.record_cleanup(succeeded=True)
+    elif isinstance(primary, Exception):
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_reason="unexpected",
+            qualification_cleanup="complete",
+        ) from None
 
 
 def _sha256(path: Path, *, maximum: int = MAX_FILE_BYTES) -> str:
@@ -624,15 +673,11 @@ class _WindowsProcess:
         if self._closed:
             return
         self._closed = True
-        preserve_primary = sys.exc_info()[0] is not None
-        try:
-            self._api.close_process(self._process, self._job, terminate=terminate)
-        except Exception:
-            if not preserve_primary:
-                raise QualificationFailure(
-                    "scenario_failed",
-                    qualification_reason="qualification_cleanup_failed",
-                ) from None
+        _attempt_cleanup(
+            lambda: self._api.close_process(
+                self._process, self._job, terminate=terminate
+            )
+        )
 
 
 class _WindowsApi:
@@ -916,6 +961,103 @@ class _WindowsApi:
         ]
         self.advapi.CreateProcessWithTokenW.restype = wt.BOOL
 
+    def _close_handles(self, *handles) -> bool:
+        complete = True
+        for handle in handles:
+            if not handle:
+                continue
+            try:
+                if not self.kernel.CloseHandle(handle):
+                    complete = False
+            except Exception:
+                complete = False
+        return complete
+
+    def _require_closed_handles(self, *handles) -> None:
+        if not self._close_handles(*handles):
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="qualification_cleanup_failed",
+                qualification_cleanup="failed",
+            )
+
+    def _free_sid(self, sid) -> None:
+        if self.advapi.FreeSid(sid):
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="qualification_cleanup_failed",
+                qualification_cleanup="failed",
+            )
+
+    def _cleanup_created_process(self, process, job) -> bool:
+        with contextlib.suppress(Exception):
+            self.kernel.TerminateJobObject(job, 22)
+        with contextlib.suppress(Exception):
+            self.kernel.TerminateProcess(process.hProcess, 22)
+        deadline = time.monotonic() + MAX_TERMINATION_DRAIN_MILLISECONDS / 1000
+        drained = False
+        while time.monotonic() < deadline:
+            try:
+                wait_result = self.kernel.WaitForSingleObject(process.hProcess, 0)
+                active, _total = self._job_accounting(job)
+            except Exception:
+                break
+            if wait_result == WAIT_OBJECT_0 and active == 0:
+                drained = True
+                break
+            if wait_result not in {WAIT_OBJECT_0, WAIT_TIMEOUT}:
+                break
+            time.sleep(0.01)
+        return self._close_handles(process.hThread, process.hProcess, job) and drained
+
+    def _create_suspended_process(
+        self,
+        token,
+        executable: Path,
+        command,
+        flags: int,
+        environment_block,
+        cwd: Path,
+        startup,
+        process,
+    ) -> bool:
+        created = self.advapi.CreateProcessAsUserW(
+            token,
+            str(executable),
+            command,
+            None,
+            None,
+            False,
+            flags,
+            environment_block,
+            str(cwd),
+            ctypes.byref(startup),
+            ctypes.byref(process),
+        )
+        if created or ctypes.get_last_error() != 1314:
+            return bool(created)
+        fallback_command = ctypes.create_unicode_buffer(
+            subprocess.list2cmdline([str(executable)])
+        )
+        return bool(
+            self.advapi.CreateProcessWithTokenW(
+                token,
+                0,
+                str(executable),
+                fallback_command,
+                flags,
+                environment_block,
+                str(cwd),
+                ctypes.byref(startup),
+                ctypes.byref(process),
+            )
+        )
+
+    def _finish_launched_process(self, process, job, started, initial):
+        if not self._close_handles(process.hThread):
+            raise QualificationFailure("restricted_launch_unavailable")
+        return _WindowsProcess(self, process.hProcess, job, started, initial)
+
     def _has_effective_admin_membership(self, token, sid) -> bool:
         wt = self.wintypes
         impersonation = wt.HANDLE()
@@ -929,7 +1071,9 @@ class _WindowsApi:
                 raise QualificationFailure("restricted_launch_unavailable")
             return bool(is_admin.value)
         finally:
-            self.kernel.CloseHandle(impersonation)
+            _attempt_cleanup(
+                lambda: self._require_closed_handles(impersonation)
+            )
 
     def _set_medium_integrity(self, token) -> None:
         authority = self.SID_IDENTIFIER_AUTHORITY((0, 0, 0, 0, 0, 16))
@@ -963,7 +1107,7 @@ class _WindowsApi:
             ):
                 raise QualificationFailure("restricted_launch_unavailable")
         finally:
-            self.advapi.FreeSid(medium_sid)
+            _attempt_cleanup(lambda: self._free_sid(medium_sid))
 
     def _integrity_rid(self, token) -> int:
         wt = self.wintypes
@@ -1038,10 +1182,19 @@ class _WindowsApi:
             return restricted
         except Exception:
             if restricted:
-                self.kernel.CloseHandle(restricted)
+                _attempt_cleanup(
+                    lambda: self._require_closed_handles(restricted)
+                )
             raise
         finally:
-            self.kernel.CloseHandle(current)
+            try:
+                _attempt_cleanup(lambda: self._require_closed_handles(current))
+            except QualificationFailure as error:
+                if restricted:
+                    error.record_cleanup(
+                        succeeded=self._close_handles(restricted)
+                    )
+                raise
 
     def launch(
         self,
@@ -1050,60 +1203,44 @@ class _WindowsApi:
         cwd: Path,
     ) -> _WindowsProcess:
         token = self._restricted_token()
-        job = self.kernel.CreateJobObjectW(None, None)
-        if not job:
-            self.kernel.CloseHandle(token)
-            raise QualificationFailure("restricted_launch_unavailable")
-        limits = self.EXTENDED_LIMITS()
-        limits.BasicLimitInformation.LimitFlags = 0x2000
-        if not self.kernel.SetInformationJobObject(
-            job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
-        ):
-            self.kernel.CloseHandle(job)
-            self.kernel.CloseHandle(token)
-            raise QualificationFailure("restricted_launch_unavailable")
-        startup = self.STARTUPINFOW()
-        startup.cb = ctypes.sizeof(startup)
         process = self.PROCESS_INFORMATION()
-        command = ctypes.create_unicode_buffer(subprocess.list2cmdline([str(executable)]))
-        environment_block = ctypes.create_unicode_buffer(
-            "\0".join(f"{key}={value}" for key, value in sorted(environment.items())) + "\0\0"
-        )
-        flags = 0x00000400 | 0x08000000 | 0x00000004
-        started = time.perf_counter()
-        created = self.advapi.CreateProcessAsUserW(
-            token,
-            str(executable),
-            command,
-            None,
-            None,
-            False,
-            flags,
-            environment_block,
-            str(cwd),
-            ctypes.byref(startup),
-            ctypes.byref(process),
-        )
-        if not created and ctypes.get_last_error() == 1314:
+        job = None
+        token_open = True
+        try:
+            job = self.kernel.CreateJobObjectW(None, None)
+            if not job:
+                raise QualificationFailure("restricted_launch_unavailable")
+            limits = self.EXTENDED_LIMITS()
+            limits.BasicLimitInformation.LimitFlags = 0x2000
+            if not self.kernel.SetInformationJobObject(
+                job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
+            ):
+                raise QualificationFailure("restricted_launch_unavailable")
+            startup = self.STARTUPINFOW()
+            startup.cb = ctypes.sizeof(startup)
             command = ctypes.create_unicode_buffer(
                 subprocess.list2cmdline([str(executable)])
             )
-            created = self.advapi.CreateProcessWithTokenW(
+            environment_block = ctypes.create_unicode_buffer(
+                "\0".join(
+                    f"{key}={value}" for key, value in sorted(environment.items())
+                )
+                + "\0\0"
+            )
+            flags = 0x00000400 | 0x08000000 | 0x00000004
+            started = time.perf_counter()
+            created = self._create_suspended_process(
                 token,
-                0,
-                str(executable),
+                executable,
                 command,
                 flags,
                 environment_block,
-                str(cwd),
-                ctypes.byref(startup),
-                ctypes.byref(process),
+                cwd,
+                startup,
+                process,
             )
-        self.kernel.CloseHandle(token)
-        if not created:
-            self.kernel.CloseHandle(job)
-            raise QualificationFailure("restricted_launch_unavailable")
-        try:
+            if not created:
+                raise QualificationFailure("restricted_launch_unavailable")
             if not self.kernel.AssignProcessToJobObject(job, process.hProcess):
                 raise QualificationFailure("restricted_launch_unavailable")
             initial = self._process_observation(
@@ -1111,14 +1248,23 @@ class _WindowsApi:
             )
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
-        except QualificationFailure:
-            self.kernel.TerminateProcess(process.hProcess, 22)
-            self.kernel.CloseHandle(process.hThread)
-            self.kernel.CloseHandle(process.hProcess)
-            self.kernel.CloseHandle(job)
-            raise
-        self.kernel.CloseHandle(process.hThread)
-        return _WindowsProcess(self, process.hProcess, job, started, initial)
+            self._require_closed_handles(token)
+            token_open = False
+            return self._finish_launched_process(process, job, started, initial)
+        except Exception as error:
+            primary = (
+                error
+                if isinstance(error, QualificationFailure)
+                else QualificationFailure("restricted_launch_unavailable")
+            )
+            if process.hProcess:
+                cleanup_succeeded = self._cleanup_created_process(process, job)
+            else:
+                cleanup_succeeded = self._close_handles(job)
+            if token_open:
+                cleanup_succeeded = self._close_handles(token) and cleanup_succeeded
+            primary.record_cleanup(succeeded=cleanup_succeeded)
+            raise primary from None
 
     def _process_observation(self, process, process_id: int) -> _ProcessObservation:
         wt = self.wintypes
@@ -1197,7 +1343,9 @@ class _WindowsApi:
             try:
                 observations.append(self._process_observation(process, process_id))
             finally:
-                self.kernel.CloseHandle(process)
+                _attempt_cleanup(
+                    lambda process=process: self._require_closed_handles(process)
+                )
         active, total = self._job_accounting(job)
         return tuple(observations), active, total
 
@@ -1230,6 +1378,7 @@ class _WindowsApi:
 
     def close_process(self, process, job, *, terminate: bool) -> None:
         drained = not terminate
+        handles_closed = True
         try:
             if terminate:
                 if not self.kernel.TerminateJobObject(job, 23):
@@ -1250,12 +1399,17 @@ class _WindowsApi:
                         break
                     time.sleep(0.01)
         finally:
-            self.kernel.CloseHandle(job)
-            self.kernel.CloseHandle(process)
-        if not drained:
+            for handle in (job, process):
+                try:
+                    if not self.kernel.CloseHandle(handle):
+                        handles_closed = False
+                except Exception:
+                    handles_closed = False
+        if not drained or not handles_closed:
             raise QualificationFailure(
                 "scenario_failed",
                 qualification_reason="qualification_cleanup_failed",
+                qualification_cleanup="failed",
             )
 
 
@@ -1285,7 +1439,10 @@ def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
             raise ValueError("invalid_receipt")
         return payload
     except (OSError, ValueError, KeyError, TypeError):
-        raise QualificationFailure("scenario_failed") from None
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_reason="qualification_result_mismatch",
+        ) from None
 
 
 def _validate_child_failure(path: Path) -> dict[str, object]:
@@ -1308,17 +1465,42 @@ def _validate_child_failure(path: Path) -> dict[str, object]:
             raise ValueError("invalid_failure")
         return payload
     except (OSError, ValueError, KeyError, TypeError):
-        raise QualificationFailure("scenario_failed") from None
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_reason="qualification_result_mismatch",
+        ) from None
 
 
 def _prepare_work_root(parent: Path, label: str) -> Path:
     root = parent / f"{label}-{uuid.uuid4().hex}" / "próba ze spacjami"
-    root.mkdir(parents=True)
+    try:
+        root.mkdir(parents=True)
+    except OSError:
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_reason="invalid_qualification_root",
+        ) from None
     fixture = root / "fixture.pdf"
-    shutil.copyfile(FIXTURE, fixture)
-    if _sha256(fixture, maximum=128 * 1024) != FIXTURE_SHA256:
-        raise QualificationFailure("fixture_invalid")
+    try:
+        shutil.copyfile(FIXTURE, fixture)
+        if _sha256(fixture, maximum=128 * 1024) != FIXTURE_SHA256:
+            raise QualificationFailure("fixture_invalid")
+    except (OSError, QualificationFailure):
+        raise QualificationFailure(
+            "fixture_invalid",
+            qualification_reason="qualification_fixture_mismatch",
+        ) from None
     return root
+
+
+def _write_control(path: Path) -> None:
+    try:
+        path.touch(exist_ok=False)
+    except OSError:
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_reason="qualification_filename_control_unavailable",
+        ) from None
 
 
 def _relative_package_path(root: Path, path: Path) -> str:
@@ -1569,10 +1751,23 @@ def _launch_concurrent_pair(
                 )
             )
     except Exception:
-        for process in processes:
-            process.close(terminate=True)
+        _close_processes(tuple(processes), terminate=True)
         raise
     return processes[0], processes[1]
+
+
+def _close_processes(
+    processes: tuple[_WindowsProcess, ...], *, terminate: bool
+) -> None:
+    first_failure: QualificationFailure | None = None
+    for process in processes:
+        try:
+            process.close(terminate=terminate)
+        except QualificationFailure as error:
+            if first_failure is None:
+                first_failure = error
+    if first_failure is not None:
+        raise first_failure
 
 
 def _finish_concurrent_processes(
@@ -1808,27 +2003,33 @@ def _validate_selected_export(path: Path, report_id: uuid.UUID) -> None:
         raise QualificationFailure("export_invalid") from None
 
 
-def _remove_generated_paths(paths: tuple[Path, ...]) -> None:
+def _remove_generated_paths(paths: tuple[Path, ...]) -> bool:
+    complete = True
     for path in paths:
         try:
             path.unlink()
+        except FileNotFoundError:
+            continue
         except OSError:
-            pass
+            complete = False
+    return complete
 
 
 def _remove_owned_development_artifacts(
     output_dir: Path, identity: tuple[int, int]
-) -> None:
+) -> bool:
     try:
         metadata = output_dir.lstat()
+    except FileNotFoundError:
+        return True
     except OSError:
-        return
+        return False
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or (metadata.st_dev, metadata.st_ino) != identity
     ):
-        return
-    _remove_generated_paths(
+        return False
+    return _remove_generated_paths(
         (output_dir / PACKAGE_ARCHIVE_NAME, output_dir / PACKAGE_MANIFEST_NAME)
     )
 
@@ -1952,12 +2153,24 @@ def _write_development_artifacts(
             "archive_size_bytes": archive_path.stat().st_size,
         }
     except Exception as error:
-        _remove_generated_paths((archive_path, manifest_path))
-        if isinstance(error, QualificationFailure):
-            raise
-        raise QualificationFailure("artifact_invalid") from None
+        primary = (
+            error
+            if isinstance(error, QualificationFailure)
+            else QualificationFailure("artifact_invalid")
+        )
+        primary.record_cleanup(
+            succeeded=_remove_generated_paths((archive_path, manifest_path))
+        )
+        raise primary from None
     finally:
-        _remove_generated_paths((archive_stage, manifest_stage))
+        primary = sys.exc_info()[1]
+        stages_removed = _remove_generated_paths((archive_stage, manifest_stage))
+        if isinstance(primary, QualificationFailure):
+            primary.record_cleanup(succeeded=stages_removed)
+        elif primary is None and not stages_removed:
+            raise QualificationFailure(
+                "artifact_invalid", qualification_cleanup="failed"
+            ) from None
 
 
 def _manifest_entries(payload: object) -> tuple[PackageEntry, ...]:
@@ -2081,11 +2294,14 @@ def _write_receipt(
         os.replace(stage, destination)
         return destination
     except OSError:
-        try:
-            stage.unlink()
-        except OSError:
-            pass
-        raise QualificationFailure("output_failed") from None
+        raise QualificationFailure(
+            "output_failed",
+            qualification_cleanup=(
+                "complete"
+                if _remove_generated_paths((stage,))
+                else "failed"
+            ),
+        ) from None
 
 
 def _bounded_counter(value: object) -> bool:
@@ -2386,6 +2602,48 @@ def _validate_topology(topology: object, package: dict[str, object]) -> None:
         _validate_topology_record(record, supervised=True)
 
 
+def _valid_failure_detail(detail: object) -> bool:
+    detail_keys = set(detail) if type(detail) is dict else set()
+    return bool(
+        type(detail) is dict
+        and {"stage", "reason"} <= detail_keys
+        and detail_keys <= {"stage", "reason", "child_stage", "exit_code"}
+        and type(detail["stage"]) is str
+        and type(detail["reason"]) is str
+        and detail["stage"] in QUALIFICATION_FAILURE_STAGES
+        and detail["reason"] in QUALIFICATION_FAILURE_REASONS
+        and (
+            "child_stage" not in detail
+            or type(detail["child_stage"]) is str
+            and detail["child_stage"] in CHILD_FAILURE_STAGES
+        )
+        and (
+            "exit_code" not in detail
+            or type(detail["exit_code"]) is int
+            and -(2**31) <= detail["exit_code"] <= 2**32 - 1
+        )
+    )
+
+
+def _validate_failed_output_payload(
+    payload: dict[str, object], expected: set[str]
+) -> None:
+    if (
+        set(payload) != expected | {"qualification_cleanup"}
+        or payload["failure_id"] not in FAILURE_IDS
+        or not _valid_failure_detail(payload["qualification_failure"])
+        or type(payload["qualification_cleanup"]) is not str
+        or payload["qualification_cleanup"] not in QUALIFICATION_CLEANUP_STATUSES
+        or payload["package"] is not None
+        or payload["environment"] is not None
+        or payload["topology"] is not None
+        or payload["checks"] != []
+        or payload["metrics"] is not None
+        or payload["operational_cost"] is not None
+    ):
+        raise QualificationFailure("output_failed")
+
+
 def _validate_output_payload(payload: object) -> None:
     expected = {
         "schema_version",
@@ -2399,44 +2657,18 @@ def _validate_output_payload(payload: object) -> None:
         "metrics",
         "operational_cost",
     }
-    if type(payload) is not dict or set(payload) != expected:
+    if (
+        type(payload) is not dict
+        or not {"schema_version", "status"} <= set(payload)
+    ):
         raise QualificationFailure("output_failed")
     if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
         raise QualificationFailure("output_failed")
     if payload["status"] == "failed":
-        detail = payload["qualification_failure"]
-        detail_keys = set(detail) if type(detail) is dict else set()
-        valid_detail = detail is None or (
-            type(detail) is dict
-            and {"stage", "reason"} <= detail_keys
-            and detail_keys <= {"stage", "reason", "child_stage", "exit_code"}
-            and type(detail["stage"]) is str
-            and type(detail["reason"]) is str
-            and detail["stage"] in QUALIFICATION_FAILURE_STAGES
-            and detail["reason"] in QUALIFICATION_FAILURE_REASONS
-            and (
-                "child_stage" not in detail
-                or type(detail["child_stage"]) is str
-                and detail["child_stage"] in CHILD_FAILURE_STAGES
-            )
-            and (
-                "exit_code" not in detail
-                or type(detail["exit_code"]) is int
-                and -(2**31) <= detail["exit_code"] <= 2**32 - 1
-            )
-        )
-        if (
-            payload["failure_id"] not in FAILURE_IDS
-            or not valid_detail
-            or payload["package"] is not None
-            or payload["environment"] is not None
-            or payload["topology"] is not None
-            or payload["checks"] != []
-            or payload["metrics"] is not None
-            or payload["operational_cost"] is not None
-        ):
-            raise QualificationFailure("output_failed")
+        _validate_failed_output_payload(payload, expected)
         return
+    if set(payload) != expected:
+        raise QualificationFailure("output_failed")
     if payload["status"] != "passed" or payload["failure_id"] is not None:
         raise QualificationFailure("output_failed")
     if payload["qualification_failure"] is not None:
@@ -2535,7 +2767,13 @@ class _QualificationRunner:
         self.deadline = deadline
         self.api = _WindowsApi()
         self.state_base = private_root / "stan lokalny"
-        (self.state_base / "Roaming").mkdir(parents=True)
+        try:
+            (self.state_base / "Roaming").mkdir(parents=True)
+        except OSError:
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="invalid_qualification_root",
+            ) from None
         self.store = IncidentStore(self.state_base / "Metroliza" / "diagnostics")
         self.launcher = artifact / "metroliza.exe"
         self.application = artifact / "metroliza_application.exe"
@@ -2613,15 +2851,14 @@ class _QualificationRunner:
                 processes, roots, scenario_deadline
             )
             for root in roots:
-                (root / "start").touch(exist_ok=False)
+                _write_control(root / "start")
             results = _finish_concurrent_processes(
                 processes, roots, startup_ms, self.artifact, scenario_deadline
             )
             self.results["concurrent_1"], self.results["concurrent_2"] = results
             completed = True
         finally:
-            for process in processes:
-                process.close(terminate=not completed)
+            _close_processes(processes, terminate=not completed)
         new_records = [
             record for record in _reports(self.store) if record.report_id not in before
         ]
@@ -2721,7 +2958,7 @@ class _QualificationRunner:
             self.handled_assembly_to_verification_ms = max(
                 0, time.time_ns() // 1_000_000 - incident.created_at_ms
             )
-            (root / "finish").touch(exist_ok=False)
+            _write_control(root / "finish")
 
         self.results["handled_failure"] = _run_scenario(
             self.api,
@@ -2763,7 +3000,7 @@ class _QualificationRunner:
             observed["write_bytes"] = max(
                 0, process.metrics().write_bytes - before
             )
-            (root / "finish").touch(exist_ok=False)
+            _write_control(root / "finish")
 
         self.results[key] = _run_scenario(
             self.api,
@@ -2884,7 +3121,13 @@ class _QualificationRunner:
             self.artifact, root, self.state_base, "normal"
         )
         environment["QT_QPA_PLATFORM"] = "windows"
-        resource.replace(hidden)
+        try:
+            resource.replace(hidden)
+        except OSError:
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="qualification_filename_control_unavailable",
+            ) from None
         try:
             process = self.api.launch(self.launcher, environment, root)
             terminate = True
@@ -2915,7 +3158,7 @@ class _QualificationRunner:
             finally:
                 process.close(terminate=terminate)
         finally:
-            hidden.replace(resource)
+            _attempt_cleanup(lambda: hidden.replace(resource))
         if _sha256(resource) != digest:
             raise QualificationFailure("artifact_invalid")
         incident = _newest_incident(self.store, before)
@@ -2996,9 +3239,21 @@ class _QualificationRunner:
                 )
 
             return _run_driver_phase("receipt", success_payload)
-        except Exception:
+        except Exception as error:
             if artifacts_created:
-                _remove_owned_development_artifacts(output_dir, output_identity)
+                cleanup_succeeded = _remove_owned_development_artifacts(
+                    output_dir, output_identity
+                )
+                if isinstance(error, QualificationFailure):
+                    error.record_cleanup(succeeded=cleanup_succeeded)
+                    raise
+                raise QualificationFailure(
+                    "scenario_failed",
+                    qualification_reason="unexpected",
+                    qualification_cleanup=(
+                        "complete" if cleanup_succeeded else "failed"
+                    ),
+                ) from None
             raise
 
 
@@ -3040,14 +3295,35 @@ def _qualification_payload(
 
 
 def _run_in_private_directory(action: Callable[[Path], _T]) -> _T:
-    temporary = tempfile.TemporaryDirectory(prefix="Metroliza kwalifikacja żółć ")
+    try:
+        temporary = tempfile.TemporaryDirectory(
+            prefix="Metroliza kwalifikacja żółć "
+        )
+    except Exception:
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_stage="runner",
+            qualification_reason="invalid_qualification_root",
+        ) from None
     try:
         result = action(Path(temporary.name))
-    except BaseException:
+    except BaseException as error:
+        cleanup_succeeded = True
         try:
             temporary.cleanup()
         except Exception:
-            pass
+            cleanup_succeeded = False
+        if isinstance(error, QualificationFailure):
+            error.record_cleanup(succeeded=cleanup_succeeded)
+        elif isinstance(error, Exception):
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_stage="runner",
+                qualification_reason="unexpected",
+                qualification_cleanup=(
+                    "complete" if cleanup_succeeded else "failed"
+                ),
+            ) from None
         raise
     try:
         temporary.cleanup()
@@ -3056,6 +3332,7 @@ def _run_in_private_directory(action: Callable[[Path], _T]) -> _T:
             "scenario_failed",
             qualification_stage="runner",
             qualification_reason="qualification_cleanup_failed",
+            qualification_cleanup="failed",
         ) from None
     return result
 
@@ -3069,20 +3346,46 @@ def _prepare_qualification_paths(
         and artifact_dir.is_absolute()
         and output_dir.is_absolute()
     ):
-        raise QualificationFailure("invalid_arguments")
+        raise QualificationFailure(
+            "invalid_arguments",
+            qualification_stage="runner",
+            qualification_reason="invalid_qualification_arguments",
+        )
     if artifact_dir.is_symlink():
-        raise QualificationFailure("artifact_invalid")
+        raise QualificationFailure(
+            "artifact_invalid",
+            qualification_stage="package",
+            qualification_reason="unexpected",
+        )
     try:
         artifact = artifact_dir.resolve(strict=True)
     except OSError:
-        raise QualificationFailure("artifact_invalid") from None
+        raise QualificationFailure(
+            "artifact_invalid",
+            qualification_stage="package",
+            qualification_reason="unexpected",
+        ) from None
     if not artifact.is_dir():
-        raise QualificationFailure("artifact_invalid")
+        raise QualificationFailure(
+            "artifact_invalid",
+            qualification_stage="package",
+            qualification_reason="unexpected",
+        )
     try:
         output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
         output_metadata = output_dir.lstat()
+    except FileExistsError:
+        raise QualificationFailure(
+            "output_failed",
+            qualification_stage="receipt",
+            qualification_reason="qualification_output_exists",
+        ) from None
     except OSError:
-        raise QualificationFailure("output_failed") from None
+        raise QualificationFailure(
+            "output_failed",
+            qualification_stage="receipt",
+            qualification_reason="qualification_output_unavailable",
+        ) from None
     return artifact, (output_metadata.st_dev, output_metadata.st_ino)
 
 
@@ -3093,7 +3396,13 @@ def qualify_windows_diagnostics(
     timeout_seconds: int = MAX_TOTAL_SECONDS,
 ) -> QualificationResult:
     if os.name != "nt":
-        return QualificationResult("failed", "unsupported_platform", None)
+        return QualificationResult(
+            "failed",
+            "unsupported_platform",
+            None,
+            qualification_stage="runner",
+            qualification_reason="unexpected",
+        )
     output_identity: tuple[int, int] | None = None
     try:
         artifact, output_identity = _prepare_qualification_paths(
@@ -3121,7 +3430,11 @@ def qualify_windows_diagnostics(
         return QualificationResult("passed", None, destination)
     except QualificationFailure as error:
         if output_identity is not None:
-            _remove_owned_development_artifacts(output_dir, output_identity)
+            error.record_cleanup(
+                succeeded=_remove_owned_development_artifacts(
+                    output_dir, output_identity
+                )
+            )
         return QualificationResult(
             "failed",
             error.failure_id,
@@ -3130,20 +3443,34 @@ def qualify_windows_diagnostics(
             qualification_reason=error.qualification_reason,
             qualification_child_stage=error.qualification_child_stage,
             qualification_exit_code=error.qualification_exit_code,
+            qualification_cleanup=error.qualification_cleanup,
             output_identity=output_identity,
         )
     except Exception:
+        cleanup_status = "not_attempted"
         if output_identity is not None:
-            _remove_owned_development_artifacts(output_dir, output_identity)
+            cleanup_status = (
+                "complete"
+                if _remove_owned_development_artifacts(output_dir, output_identity)
+                else "failed"
+            )
             return QualificationResult(
                 "failed",
                 "scenario_failed",
                 None,
                 qualification_stage="runner",
                 qualification_reason="unexpected",
+                qualification_cleanup=cleanup_status,
                 output_identity=output_identity,
             )
-        return QualificationResult("failed", "scenario_failed", None)
+        return QualificationResult(
+            "failed",
+            "scenario_failed",
+            None,
+            qualification_stage="runner",
+            qualification_reason="unexpected",
+            qualification_cleanup=cleanup_status,
+        )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -3189,25 +3516,21 @@ def main(argv: list[str] | None = None) -> int:
                         "schema_version": 1,
                         "status": "failed",
                         "failure_id": result.failure_id,
-                        "qualification_failure": (
-                            {
-                                "stage": result.qualification_stage,
-                                "reason": result.qualification_reason,
-                                **(
-                                    {"child_stage": result.qualification_child_stage}
-                                    if result.qualification_child_stage is not None
-                                    else {}
-                                ),
-                                **(
-                                    {"exit_code": result.qualification_exit_code}
-                                    if result.qualification_exit_code is not None
-                                    else {}
-                                ),
-                            }
-                            if result.qualification_stage is not None
-                            and result.qualification_reason is not None
-                            else None
-                        ),
+                        "qualification_failure": {
+                            "stage": result.qualification_stage,
+                            "reason": result.qualification_reason,
+                            **(
+                                {"child_stage": result.qualification_child_stage}
+                                if result.qualification_child_stage is not None
+                                else {}
+                            ),
+                            **(
+                                {"exit_code": result.qualification_exit_code}
+                                if result.qualification_exit_code is not None
+                                else {}
+                            ),
+                        },
+                        "qualification_cleanup": result.qualification_cleanup,
                         "package": None,
                         "environment": None,
                         "topology": None,

@@ -107,8 +107,11 @@ def test_admin_membership_closes_duplicate_when_check_fails() -> None:
 
 
 class _IntegrityAdvapi:
-    def __init__(self, *, set_ok: bool = True, rid: int = 0x2000) -> None:
+    def __init__(
+        self, *, set_ok: bool = True, rid: int = 0x2000, free_result=None
+    ) -> None:
         self.set_ok = set_ok
+        self.free_result = free_result
         self.rid = ctypes.c_uint32(rid)
         self.authority = _SidIdentifierAuthority((0, 0, 0, 0, 0, 16))
         self.count = ctypes.c_ubyte(1)
@@ -119,8 +122,9 @@ class _IntegrityAdvapi:
         ctypes.cast(_arguments[-1], ctypes.POINTER(ctypes.c_void_p))[0] = 303
         return 1
 
-    def FreeSid(self, sid) -> None:
+    def FreeSid(self, sid):
         self.freed.append(sid.value)
+        return self.free_result
 
     def GetLengthSid(self, sid) -> int:
         assert sid.value == 303
@@ -180,6 +184,17 @@ def test_medium_integrity_sid_is_freed_on_every_set_path(set_ok) -> None:
         )
     ]
     assert api.advapi.freed == [303]
+
+
+def test_medium_integrity_sid_cleanup_failure_is_not_reported_complete() -> None:
+    api = _token_api()
+    api.advapi = _IntegrityAdvapi(free_result=ctypes.c_void_p(303))
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api._set_medium_integrity(ctypes.c_void_p(101))
+
+    assert api.advapi.freed == [303]
+    assert caught.value.qualification_cleanup == "failed"
 
 
 @pytest.mark.parametrize("rid", [0x1000, 0x2000, 0x3000, 0x4000])
@@ -248,6 +263,7 @@ def test_private_cleanup_failure_does_not_replace_classified_primary(
         qualification._run_in_private_directory(fail)
 
     assert caught.value is primary
+    assert caught.value.qualification_cleanup == "failed"
 
 
 def test_private_cleanup_failure_after_success_is_closed_failure(
@@ -268,7 +284,37 @@ def test_private_cleanup_failure_after_success_is_closed_failure(
 
     assert caught.value.qualification_stage == "runner"
     assert caught.value.qualification_reason == "qualification_cleanup_failed"
+    assert caught.value.qualification_cleanup == "failed"
     assert "PRIVATE_LOCKED_PATH" not in str(caught.value)
+
+
+def test_private_cleanup_success_is_independent_from_classified_primary(
+    tmp_path, monkeypatch
+) -> None:
+    class _Temporary:
+        name = str(tmp_path)
+
+        def cleanup(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        qualification.tempfile, "TemporaryDirectory", lambda **_keywords: _Temporary()
+    )
+    primary = qualification.QualificationFailure(
+        "scenario_failed",
+        qualification_stage="hard_exit",
+        qualification_reason="process_exit_mismatch",
+        qualification_exit_code=7,
+    )
+
+    def fail(_root: Path) -> None:
+        raise primary
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_in_private_directory(fail)
+
+    assert caught.value is primary
+    assert caught.value.qualification_cleanup == "complete"
 
 
 def test_process_close_preserves_primary_when_cleanup_raises() -> None:
@@ -295,6 +341,7 @@ def test_process_close_preserves_primary_when_cleanup_raises() -> None:
             raise
 
     assert caught.value is primary
+    assert caught.value.qualification_cleanup == "failed"
 
 
 def test_process_close_cleanup_failure_is_not_treated_as_success() -> None:
@@ -312,6 +359,7 @@ def test_process_close_cleanup_failure_is_not_treated_as_success() -> None:
         process.close(terminate=False)
 
     assert caught.value.qualification_reason == "qualification_cleanup_failed"
+    assert caught.value.qualification_cleanup == "failed"
     assert "PRIVATE_HANDLE_FAILURE" not in str(caught.value)
 
 
@@ -377,6 +425,160 @@ def test_owned_job_zero_active_does_not_hide_unsignaled_primary(monkeypatch) -> 
         api.close_process("primary", "owned-job", terminate=True)
 
     assert caught.value.qualification_reason == "qualification_cleanup_failed"
+
+
+def test_owned_job_close_checks_both_handle_results() -> None:
+    class _Kernel:
+        def __init__(self) -> None:
+            self.closed = []
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return handle != "owned-job"
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.close_process("primary", "owned-job", terminate=False)
+
+    assert api.kernel.closed == ["owned-job", "primary"]
+    assert caught.value.qualification_cleanup == "failed"
+
+
+def test_failed_launch_cleanup_drains_job_and_closes_every_handle() -> None:
+    class _Kernel:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def TerminateJobObject(self, job, code):
+            self.calls.append(("terminate_job", job, code))
+            return 1
+
+        def TerminateProcess(self, process, code):
+            self.calls.append(("terminate_process", process, code))
+            return 1
+
+        def WaitForSingleObject(self, process, milliseconds):
+            self.calls.append(("wait", process, milliseconds))
+            return qualification.WAIT_OBJECT_0
+
+        def CloseHandle(self, handle):
+            self.calls.append(("close", handle))
+            return 1
+
+    class _Process:
+        hThread = "thread"
+        hProcess = "primary"
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    accounting = iter(((1, 2), (0, 2)))
+    api._job_accounting = lambda _job: next(accounting)
+
+    assert api._cleanup_created_process(_Process(), "owned-job")
+    assert api.kernel.calls == [
+        ("terminate_job", "owned-job", 22),
+        ("terminate_process", "primary", 22),
+        ("wait", "primary", 0),
+        ("wait", "primary", 0),
+        ("close", "thread"),
+        ("close", "primary"),
+        ("close", "owned-job"),
+    ]
+
+
+def test_launch_ordinary_exception_cleans_created_process_and_fixed_primary(
+    tmp_path, monkeypatch
+) -> None:
+    class _Limits:
+        class _Basic:
+            LimitFlags = 0
+
+        BasicLimitInformation = _Basic()
+
+    class _Startup:
+        cb = 0
+
+    class _Process:
+        hThread = "thread"
+        hProcess = "primary"
+        dwProcessId = 123
+
+    class _Kernel:
+        def __init__(self) -> None:
+            self.closed = []
+
+        def CreateJobObjectW(self, _security, _name):
+            return "owned-job"
+
+        def SetInformationJobObject(self, *_arguments):
+            return 1
+
+        def AssignProcessToJobObject(self, _job, _process):
+            raise RuntimeError("PRIVATE_NATIVE_TEXT")
+
+        def TerminateJobObject(self, _job, _code):
+            return 1
+
+        def TerminateProcess(self, _process, _code):
+            return 1
+
+        def WaitForSingleObject(self, _process, _milliseconds):
+            return qualification.WAIT_OBJECT_0
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    class _Advapi:
+        def CreateProcessAsUserW(self, *_arguments):
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    api.advapi = _Advapi()
+    api.EXTENDED_LIMITS = _Limits
+    api.STARTUPINFOW = _Startup
+    api.PROCESS_INFORMATION = _Process
+    api._restricted_token = lambda: "token"
+    api._job_accounting = lambda _job: (0, 1)
+    monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
+    monkeypatch.setattr(qualification.ctypes, "sizeof", lambda _value: 1)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.launch(tmp_path / "app.exe", {"SYSTEMROOT": "fixed"}, tmp_path)
+
+    assert caught.value.failure_id == "restricted_launch_unavailable"
+    assert caught.value.qualification_cleanup == "complete"
+    assert api.kernel.closed == ["thread", "primary", "owned-job", "token"]
+    assert "PRIVATE_NATIVE_TEXT" not in str(caught.value)
+
+
+def test_concurrent_cleanup_attempts_every_owned_process() -> None:
+    calls = []
+
+    class _Process:
+        def __init__(self, label, fail):
+            self.label = label
+            self.fail = fail
+
+        def close(self, *, terminate):
+            calls.append((self.label, terminate))
+            if self.fail:
+                raise qualification.QualificationFailure(
+                    "scenario_failed",
+                    qualification_reason="qualification_cleanup_failed",
+                    qualification_cleanup="failed",
+                )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._close_processes(
+            (_Process("first", True), _Process("second", False)), terminate=True
+        )
+
+    assert calls == [("first", True), ("second", True)]
+    assert caught.value.qualification_cleanup == "failed"
 
 
 def test_driver_phase_preserves_safe_early_process_exit_evidence(
@@ -978,6 +1180,7 @@ def test_late_payload_failure_removes_only_created_artifacts_for_failure_receipt
             "stage": caught.value.qualification_stage,
             "reason": caught.value.qualification_reason,
         },
+        "qualification_cleanup": caught.value.qualification_cleanup,
         "package": None,
         "environment": None,
         "topology": None,
@@ -1023,6 +1226,48 @@ def test_main_replaces_late_created_artifacts_with_closed_failure_receipt(
         "stage": "runner",
         "reason": "unexpected",
     }
+    assert receipt["qualification_cleanup"] == "complete"
+
+
+def test_main_preserves_primary_and_independent_failed_cleanup(
+    tmp_path, monkeypatch
+) -> None:
+    artifact = tmp_path / "artifact"
+    output = tmp_path / "output"
+    artifact.mkdir()
+
+    class _Arguments:
+        artifact_dir = artifact
+        output_dir = output
+
+    class _Parser:
+        def parse_args(self, _arguments):
+            return _Arguments()
+
+    monkeypatch.setattr(qualification, "_parser", lambda: _Parser())
+    monkeypatch.setattr(
+        qualification,
+        "qualify_windows_diagnostics",
+        lambda *_arguments: qualification.QualificationResult(
+            "failed",
+            "scenario_failed",
+            None,
+            qualification_stage="missing_qt_resource",
+            qualification_reason="process_exit_mismatch",
+            qualification_exit_code=7,
+            qualification_cleanup="failed",
+        ),
+    )
+
+    assert qualification.main([]) == 1
+    receipt = json.loads((output / qualification.OUTPUT_NAME).read_text("ascii"))
+    qualification._validate_output_payload(receipt)
+    assert receipt["qualification_failure"] == {
+        "stage": "missing_qt_resource",
+        "reason": "process_exit_mismatch",
+        "exit_code": 7,
+    }
+    assert receipt["qualification_cleanup"] == "failed"
 
 
 def test_main_does_not_write_output_failure_into_preexisting_directory(
@@ -1107,6 +1352,7 @@ def test_output_failure_detail_accepts_only_closed_qualification_evidence() -> N
             "reason": "qualification_preview_unavailable",
             "exit_code": 3221225477,
         },
+        "qualification_cleanup": "complete",
         "package": None,
         "environment": None,
         "topology": None,
@@ -1120,6 +1366,13 @@ def test_output_failure_detail_accepts_only_closed_qualification_evidence() -> N
         qualification._validate_output_payload(payload)
     payload["qualification_failure"]["exit_code"] = 3221225477
     payload["qualification_failure"]["reason"] = "PRIVATE_PATH"
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_output_payload(payload)
+    payload["qualification_failure"]["reason"] = "qualification_preview_unavailable"
+    payload["qualification_cleanup"] = "PRIVATE_PATH"
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_output_payload(payload)
+    payload["qualification_cleanup"] = []
     with pytest.raises(qualification.QualificationFailure):
         qualification._validate_output_payload(payload)
 
@@ -1323,6 +1576,55 @@ class _FakeApi:
             active_processes=self.active_processes,
         )
         return self.process
+
+
+def test_missing_qt_restore_failure_preserves_classified_primary(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    artifact = tmp_path / "artifact"
+    resource = (
+        artifact
+        / "_internal"
+        / "PyQt6"
+        / "Qt6"
+        / "plugins"
+        / "platforms"
+        / "qwindows.dll"
+    )
+    resource.parent.mkdir(parents=True)
+    resource.write_bytes(b"fixed qwindows")
+    work = tmp_path / "work"
+    state = tmp_path / "state"
+    work.mkdir()
+    state.mkdir()
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = artifact
+    runner.state_base = state
+    runner.launcher = artifact / "metroliza.exe"
+    runner.store = qualification.IncidentStore(state / "diagnostics")
+    runner.results = {}
+    runner.api = _FakeApi(1, "ready")
+    runner._root = lambda _label: work
+    primary = qualification.QualificationFailure(
+        "scenario_failed",
+        qualification_stage="missing_qt_resource",
+        qualification_reason="process_exit_mismatch",
+        qualification_exit_code=7,
+    )
+
+    def fail_after_hiding(_process):
+        resource.with_name("qwindows.qualification-missing").unlink()
+        raise primary
+
+    runner._wait_missing_exit = fail_after_hiding
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        runner.run_missing_qt_resource()
+
+    assert caught.value is primary
+    assert caught.value.qualification_cleanup == "failed"
+    assert caught.value.qualification_exit_code == 7
 
 
 def test_immutable_receipts_preserve_ready_during_complete_observation(
@@ -1590,7 +1892,11 @@ def test_platform_and_relative_arguments_fail_without_creating_output(
         assert result.failure_id == "invalid_arguments"
     else:
         assert result == qualification.QualificationResult(
-            "failed", "unsupported_platform", None
+            "failed",
+            "unsupported_platform",
+            None,
+            qualification_stage="runner",
+            qualification_reason="unexpected",
         )
     assert not (tmp_path / "output").exists()
 
