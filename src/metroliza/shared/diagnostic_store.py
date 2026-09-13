@@ -25,7 +25,6 @@ from metroliza.shared.diagnostic_incident import (
     encode_incident,
 )
 
-
 MAX_REPORTS = 20
 MAX_MARKERS = 32
 MAX_STORE_BYTES = 32 * 1024 * 1024
@@ -333,9 +332,15 @@ def _publish_stage(stage: Path, final: Path) -> tuple[int, int]:
         raise FileExistsError("diagnostic_target_exists")
     staged = stage.lstat()
     identity = (staged.st_dev, staged.st_ino)
-    os.link(stage, final, follow_symlinks=False)
+    if os.name == "nt":
+        # Windows rename is atomic and fails when the destination exists. It
+        # avoids retaining a hidden hardlink beside a selected export on crash.
+        os.rename(stage, final)
+    else:
+        os.link(stage, final, follow_symlinks=False)
     try:
-        stage.unlink()
+        if os.name != "nt":
+            stage.unlink()
         if os.name != "nt":
             descriptor = os.open(final.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
@@ -404,6 +409,65 @@ def _valid_inventory_metadata(metadata: os.stat_result) -> bool:
             and (os.name == "nt" or metadata.st_uid == os.getuid()))
 
 
+def _recovery_pairs(root: Path) -> list[tuple[Path, Path, tuple[int, int]]]:
+    linked: dict[tuple[int, int], list[Path]] = {}
+    with os.scandir(root) as entries:
+        for index, entry in enumerate(entries):
+            if index >= MAX_SCAN_ENTRIES:
+                raise OSError("diagnostic_scan_limit")
+            metadata = entry.stat(follow_symlinks=False)
+            if metadata.st_nlink != 2 or not stat.S_ISREG(metadata.st_mode):
+                continue
+            if (_is_reparse_or_link(metadata)
+                    or (os.name != "nt" and metadata.st_uid != os.getuid())):
+                raise OSError("unsafe_diagnostic_pair")
+            identity = metadata.st_dev, metadata.st_ino
+            linked.setdefault(identity, []).append(Path(entry.path))
+    return [_exact_recovery_pair(paths, identity) for identity, paths in linked.items()]
+
+
+def _exact_recovery_pair(
+    paths: list[Path], identity: tuple[int, int]
+) -> tuple[Path, Path, tuple[int, int]]:
+    stages = [path for path in paths if _STAGE_NAME.fullmatch(path.name)]
+    finals = [
+        path
+        for path in paths
+        if _REPORT_NAME.fullmatch(path.name) or _MARKER_NAME.fullmatch(path.name)
+    ]
+    if len(paths) != 2 or len(stages) != 1 or len(finals) != 1:
+        raise OSError("unsafe_diagnostic_pair")
+    return stages[0], finals[0], identity
+
+
+def _recover_publication_pairs(root: Path) -> bool:
+    """Recover only the interrupted two-name link publication under the store lock.
+
+    Removing the staging alias retains every byte under the final name. Existing
+    strict single-link readers still validate its complete schema before any use.
+    """
+    try:
+        pairs = _recovery_pairs(root)
+        for stage, final, identity in pairs:
+            before = final.lstat()
+            if (before.st_dev, before.st_ino) != identity or before.st_nlink != 2:
+                return False
+            _unlink_if_identity(stage, identity)
+            after = final.lstat()
+            if (stage.exists() or (after.st_dev, after.st_ino) != identity
+                    or not _valid_inventory_metadata(after)):
+                return False
+        if pairs and os.name != "nt":
+            descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        return True
+    except OSError:
+        return False
+
+
 class IncidentStore:
     """Serialize incident and marker operations under one private local lock."""
 
@@ -452,14 +516,23 @@ class IncidentStore:
             for path in inventory.staging:
                 _safe_file_bytes(path, MAX_INCIDENT_BYTES)
                 path.unlink()
+            now_ms = time.time_ns() // 1_000_000
             clean_markers: list[tuple[int, Path]] = []
+            expired_clean: list[Path] = []
             for path in inventory.markers:
                 marker = _decode_marker(_safe_file_bytes(path, 4096))
                 if marker["phase"] == "clean_ended":
-                    clean_markers.append((marker["created_at_ms"], path))
+                    created_at_ms = marker["created_at_ms"]
+                    if now_ms - created_at_ms > MAX_AGE_MS:
+                        expired_clean.append(path)
+                    else:
+                        clean_markers.append((created_at_ms, path))
+            for path in expired_clean:
+                path.unlink()
             clean_markers.sort(key=lambda item: (item[0], item[1].name))
             remove_count = max(0, len(clean_markers) - 20)
-            if marker_headroom and len(inventory.markers) - remove_count >= MAX_MARKERS:
+            remaining_markers = len(inventory.markers) - len(expired_clean)
+            if marker_headroom and remaining_markers - remove_count >= MAX_MARKERS:
                 remove_count += 1
             for _created_at, path in clean_markers[:remove_count]:
                 path.unlink()
@@ -502,6 +575,9 @@ class IncidentStore:
             yield StoreStatus.LOCK_UNAVAILABLE
             return
         try:
+            if not _recover_publication_pairs(self.root):
+                yield StoreStatus.ROOT_UNAVAILABLE
+                return
             yield StoreStatus.AVAILABLE
         finally:
             lock.release()
@@ -540,7 +616,9 @@ class IncidentStore:
                 return StoreResult(StoreStatus.QUOTA_EXCEEDED)
             return self._publish_validated_incident(validated, encoded)
 
-    def _publish_validated_incident(self, validated: DiagnosticIncident, encoded: bytes) -> StoreResult:
+    def _publish_validated_incident(
+        self, validated: DiagnosticIncident, encoded: bytes
+    ) -> StoreResult:
         final = self.root / f"incident-{validated.report_id.hex}.json"
         stage: Path | None = None
         published_identity: tuple[int, int] | None = None

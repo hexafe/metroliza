@@ -1,10 +1,11 @@
-from dataclasses import asdict
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
+import types
+from dataclasses import asdict
+from pathlib import Path
 
 import pytest
 
@@ -116,7 +117,9 @@ def test_concurrent_real_instances_keep_their_own_event_history():
     assert len({result.session_id for result in results}) == 3
     for result in results:
         assert result.history.events
-        assert {json.loads(event)["invocation_id"] for event in result.history.events} == {result.session_id}
+        assert {json.loads(event)["invocation_id"] for event in result.history.events} == {
+            result.session_id
+        }
 
 
 def test_contended_source_counter_is_unknown_instead_of_a_fabricated_exact_zero():
@@ -179,3 +182,81 @@ def test_platform_observed_status_is_separate_from_numeric_exit139():
         expected = ("posix_signal", -15)
     result = launch_supervised([sys.executable, "-c", script])
     assert (result.termination, result.exit_code) == expected
+
+
+@pytest.mark.parametrize("callback_fails", [False, True])
+def test_windows_spawn_temporarily_cleans_and_restores_dll_directory(
+    monkeypatch, callback_fails
+):
+    from metroliza.app import diagnostic_supervisor
+
+    state = {"directory": "C:/synthetic bundle"}
+    transitions: list[str | None] = []
+
+    class Buffer:
+        value = ""
+
+        def __len__(self):
+            return 32_768
+
+    fake_ctypes = types.SimpleNamespace(
+        create_unicode_buffer=lambda _size: Buffer(),
+        get_last_error=lambda: 0,
+        set_last_error=lambda _value: None,
+    )
+
+    def get_directory(_size, buffer):
+        buffer.value = state["directory"] or ""
+        return len(buffer.value)
+
+    def set_directory(value):
+        state["directory"] = value
+        transitions.append(value)
+        return 1
+
+    monkeypatch.setattr(diagnostic_supervisor.os, "name", "nt")
+    monkeypatch.setattr(
+        diagnostic_supervisor,
+        "_windows_dll_directory_api",
+        lambda: (fake_ctypes, get_directory, set_directory),
+    )
+    calls = 0
+
+    def callback():
+        nonlocal calls
+        calls += 1
+        assert state["directory"] is None
+        if callback_fails:
+            raise OSError("synthetic_popen_failure")
+        return "child"
+
+    if callback_fails:
+        with pytest.raises(OSError, match="synthetic_popen_failure"):
+            diagnostic_supervisor._call_with_clean_windows_dll_directory(callback)
+    else:
+        assert diagnostic_supervisor._call_with_clean_windows_dll_directory(callback) == "child"
+    assert calls == 1
+    assert transitions == [None, "C:/synthetic bundle"]
+    assert state["directory"] == "C:/synthetic bundle"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows DLL search state")
+def test_native_windows_spawn_callback_observes_clean_dll_directory_and_restores_state():
+    from metroliza.app import diagnostic_supervisor
+
+    ctypes, get_directory, _set_directory = diagnostic_supervisor._windows_dll_directory_api()
+
+    def current_directory():
+        buffer = ctypes.create_unicode_buffer(32_768)
+        length = get_directory(len(buffer), buffer)
+        assert length < len(buffer)
+        return buffer.value if length else None
+
+    before = current_directory()
+
+    def observe_clean():
+        assert current_directory() is None
+        return "observed"
+
+    assert diagnostic_supervisor._call_with_clean_windows_dll_directory(observe_clean) == "observed"
+    assert current_directory() == before

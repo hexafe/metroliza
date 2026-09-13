@@ -1,12 +1,25 @@
 import json
-from pathlib import Path
-import sys
 import os
+import sys
 import threading
 import time
+import uuid
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
 
 from metroliza.app.diagnostic_launcher import run_with_store
+from metroliza.shared.diagnostic_events import (
+    WorkflowDiagnosticEvent,
+    WorkflowError,
+    WorkflowOperation,
+    WorkflowOutcome,
+    WorkflowStage,
+)
+from metroliza.shared.diagnostic_ring import DiagnosticRing
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
+from metroliza.shared.diagnostic_wire import encode_event
 
 
 def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path):
@@ -63,9 +76,16 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
     env = dict(os.environ, METROLIZA_STARTUP_SMOKE="1", METROLIZA_LICENSE_VERIFICATION="0",
                PYTHONPATH=os.pathsep.join((str(root / "src"), str(root))))
     deliveries = []
-    thread = threading.Thread(target=lambda: deliveries.append(run_with_store(
-        [sys.executable, str(child), str(scratch), "handled_failure"], store=store, env=env, cwd=scratch,
-    )))
+    thread = threading.Thread(
+        target=lambda: deliveries.append(
+            run_with_store(
+                [sys.executable, str(child), str(scratch), "handled_failure"],
+                store=store,
+                env=env,
+                cwd=scratch,
+            )
+        )
+    )
     thread.start()
     try:
         deadline = time.monotonic() + 7
@@ -82,7 +102,8 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
         assert terminal["operation"] == "selected_import"
         assert terminal["outcome"] == "failed"
         assert terminal["validation_status"] == "not_performed"
-        assert store.export(reports[0].report_id, tmp_path / "selected.zip").status is StoreStatus.EXPORTED
+        export = store.export(reports[0].report_id, tmp_path / "selected.zip")
+        assert export.status is StoreStatus.EXPORTED
     finally:
         (scratch / "finish").touch()
         thread.join(10)
@@ -93,12 +114,29 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
 
 
 def _live_observation():
-    from dataclasses import replace
     from metroliza.app.diagnostic_supervisor import launch_supervised
 
     child = Path(__file__).parent / "fixtures/diagnostic_child.py"
     observed = launch_supervised([sys.executable, str(child), "hard_exit"])
     return replace(observed, termination="still_running", exit_code=None)
+
+
+def _failed_history_observation():
+    observed = _live_observation()
+    ring = DiagnosticRing()
+    now = time.monotonic()
+    for sequence in range(1, 4):
+        event = WorkflowDiagnosticEvent(
+            invocation_id=uuid.UUID(hex=observed.session_id),
+            operation_id=uuid.UUID(f"{sequence:08x}-0000-4000-8000-000000000000"),
+            sequence=1,
+            operation=WorkflowOperation.LOCAL_EXPORT,
+            stage=WorkflowStage.FINISHED,
+            outcome=WorkflowOutcome.FAILED,
+            error=WorkflowError.OUTPUT_FAILED,
+        )
+        assert ring.add(encode_event(event), now=now)
+    return replace(observed, history=ring.snapshot(now=now))
 
 
 def test_transient_cross_process_store_lock_does_not_lose_live_incident(tmp_path):
@@ -109,23 +147,33 @@ def test_transient_cross_process_store_lock_does_not_lose_live_incident(tmp_path
     assert store.list_reports().status is StoreStatus.AVAILABLE
     lock = _StoreLock(store.root)
     assert lock.acquire()
-    publisher = _OperationPublisher(store, "unknown")
-    publisher.worker.start()
+    observed = _live_observation()
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
     try:
-        assert publisher.submit(_live_observation())
+        assert publisher.submit(observed)
         time.sleep(0.3)  # Exceeds the first real store lock attempt's 0.25s bound.
         lock.release()
         deadline = time.monotonic() + 2
         while not store.list_reports().reports and time.monotonic() < deadline:
             time.sleep(0.02)
         assert len(store.list_reports().reports) == 1
-        assert publisher.close() is StoreStatus.AVAILABLE
+        final = replace(
+            observed,
+            channel="complete",
+            clean_terminal_received=True,
+            source_loss_known=True,
+            exit_code=0,
+            termination="observed_exit",
+        )
+        assert publisher.close(final) is StoreStatus.MARKER_CLEAN_ENDED
     finally:
         lock.release()
-        publisher.close()
 
 
-def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(tmp_path, monkeypatch):
+def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(
+    tmp_path, monkeypatch
+):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
     from metroliza.shared.diagnostic_store import StoreResult
 
@@ -136,18 +184,127 @@ def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(tm
         release.wait(3)
         return StoreResult(StoreStatus.IO_FAILED)
     monkeypatch.setattr(store, "publish", stalled)
-    publisher = _OperationPublisher(store, "unknown")
-    publisher.worker.start()
     observed = _live_observation()
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
     try:
         assert publisher.submit(observed)
         assert entered.wait(1)
         assert publisher.submit(observed)
         assert not publisher.submit(observed)
         started = time.monotonic()
-        assert publisher.close() is StoreStatus.PUBLISH_INCOMPLETE
+        assert publisher.close(observed) is StoreStatus.PUBLISH_INCOMPLETE
         assert time.monotonic() - started < 1.5
     finally:
         release.set()
         publisher.worker.join(2)
     assert not publisher.worker.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("method", "scenario", "expected_exit"),
+    (("begin_session", "normal", 0), ("publish", "hard_exit", 9), ("end_session", "normal", 0)),
+)
+def test_stalled_store_io_is_bounded_and_preserves_actual_child_exit(
+    tmp_path, monkeypatch, method, scenario, expected_exit
+):
+    store = IncidentStore(tmp_path / "state")
+    entered, release = threading.Event(), threading.Event()
+    original = getattr(store, method)
+
+    def stalled(*args, **kwargs):
+        entered.set()
+        release.wait(3)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(store, method, stalled)
+    child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
+    started = time.monotonic()
+    try:
+        delivery = run_with_store([sys.executable, str(child), scenario], store=store)
+        assert entered.is_set()
+        assert delivery.observation.exit_code == expected_exit
+        assert delivery.storage_status is StoreStatus.PUBLISH_INCOMPLETE
+        assert time.monotonic() - started < 2.5
+    finally:
+        release.set()
+
+
+def test_final_control_survives_three_failed_terminal_backlog(tmp_path, monkeypatch):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+    from metroliza.shared.diagnostic_store import StoreResult
+
+    store = IncidentStore(tmp_path / "state")
+    observed = _failed_history_observation()
+    entered, release = threading.Event(), threading.Event()
+    original = store.publish
+    first = True
+
+    def fail_first(incident):
+        nonlocal first
+        if first:
+            first = False
+            entered.set()
+            release.wait(3)
+            return StoreResult(StoreStatus.IO_FAILED)
+        return original(incident)
+
+    monkeypatch.setattr(store, "publish", fail_first)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    assert publisher.submit(observed)
+    assert entered.wait(1)
+    assert publisher.submit(observed)
+    assert not publisher.submit(observed)
+    final = replace(
+        observed,
+        channel="complete",
+        clean_terminal_received=True,
+        source_loss_known=True,
+        exit_code=0,
+        termination="observed_exit",
+    )
+    statuses = []
+    closer = threading.Thread(target=lambda: statuses.append(publisher.close(final)))
+    closer.start()
+    try:
+        deadline = time.monotonic() + 1
+        while not publisher.closing and time.monotonic() < deadline:
+            time.sleep(0.01)
+        release.set()
+        closer.join(2)
+    finally:
+        release.set()
+        closer.join(2)
+    assert statuses == [StoreStatus.SAVED]
+    reports = store.list_reports().reports
+    assert len(reports) == 1
+    incident = store.load(reports[0].report_id).incident
+    assert incident is not None
+    assert incident.observation.channel.value == "complete"
+    assert incident.observation.exit_code == 0
+    assert len(incident.events) == 3
+
+
+@pytest.mark.parametrize("failed_thread", ["diagnostic-receiver", "incident-publisher"])
+def test_diagnostic_thread_exhaustion_does_not_prevent_actual_app_start(
+    tmp_path, monkeypatch, failed_thread
+):
+    start = threading.Thread.start
+    def exhausted(self):
+        if self.name == failed_thread:
+            raise RuntimeError("SYNTHETIC_THREAD_LIMIT")
+        return start(self)
+    monkeypatch.setattr(threading.Thread, "start", exhausted)
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, METROLIZA_STARTUP_SMOKE="1", METROLIZA_LICENSE_VERIFICATION="0")
+    delivery = run_with_store(
+        [sys.executable, str(root / "packaging/metroliza_package_entry.py")],
+        store=IncidentStore(tmp_path / "state"), env=env, cwd=tmp_path,
+    )
+    assert delivery.observation.exit_code == 0
+    if failed_thread == "diagnostic-receiver":
+        assert delivery.observation.handshake == "missing"
+        assert delivery.storage_status is StoreStatus.SAVED
+    else:
+        assert delivery.storage_status is StoreStatus.IO_FAILED

@@ -2,27 +2,33 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hmac
 import json
 import os
-from pathlib import Path
 import secrets
 import subprocess
 import threading
 import time
 import uuid
-from typing import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, TypeVar
 
 from metroliza.shared.diagnostic_ring import DiagnosticRing, RingSnapshot
 from metroliza.shared.diagnostic_transport import (
-    CHANNEL_ENV, MAX_COUNTER, control_bytes, parse_control, read_frame, write_frame,
+    CHANNEL_ENV,
+    MAX_COUNTER,
+    control_bytes,
+    parse_control,
+    read_frame,
+    write_frame,
 )
 
 _SPAWN_LOCK = threading.Lock()
 HANDSHAKE_SECONDS = 2.0
 DRAIN_SECONDS = 0.35
 MAX_FRAMES_PER_SECOND = 2000
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -105,8 +111,7 @@ class _Receiver:
                     self.ring.snapshot(now=time.monotonic()),
                     min(86_400_000, round((time.monotonic() - self.started) * 1000)),
                 )
-                if not self.on_operation_failure(observed):
-                    self.recording_loss = True
+                self.on_operation_failure(observed)
         return True
 
     def _run(self) -> None:
@@ -150,6 +155,50 @@ def _child_channel(incoming: int, outgoing: int) -> tuple[str, dict]:
     return f"{incoming}:{outgoing}", {"pass_fds": (incoming, outgoing)}
 
 
+def _windows_dll_directory_api():
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_directory = kernel.GetDllDirectoryW
+    get_directory.argtypes = [wintypes.DWORD, wintypes.LPWSTR]
+    get_directory.restype = wintypes.DWORD
+    set_directory = kernel.SetDllDirectoryW
+    set_directory.argtypes = [wintypes.LPCWSTR]
+    set_directory.restype = wintypes.BOOL
+    return ctypes, get_directory, set_directory
+
+
+def _call_with_clean_windows_dll_directory(callback: Callable[[], _T]) -> _T:
+    """Temporarily undo PyInstaller's process-wide DLL directory under the spawn lock."""
+    if os.name != "nt":
+        return callback()
+    sanitized = False
+    previous: str | None = None
+    try:
+        ctypes, get_directory, set_directory = _windows_dll_directory_api()
+        buffer = ctypes.create_unicode_buffer(32_768)
+        ctypes.set_last_error(0)
+        length = get_directory(len(buffer), buffer)
+        captured = length < len(buffer) and not (
+            length == 0 and ctypes.get_last_error()
+        )
+        if captured:
+            previous = buffer.value if length else None
+            sanitized = bool(set_directory(None))
+    except Exception:
+        pass
+    if not sanitized:
+        return callback()
+    try:
+        return callback()
+    finally:
+        try:
+            set_directory(previous)
+        except Exception:
+            pass
+
+
 def _spawn_child(argv, env, cwd, child_read, child_write, descriptors):
     with _SPAWN_LOCK:
         channel, options = _child_channel(child_read, child_write)
@@ -158,10 +207,17 @@ def _spawn_child(argv, env, cwd, child_read, child_write, descriptors):
         for fd in (child_read, child_write):
             os.set_inheritable(fd, True)
         try:
-            return subprocess.Popen(
-                argv, cwd=cwd, env=child_env, stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                close_fds=True, **options,
+            return _call_with_clean_windows_dll_directory(
+                lambda: subprocess.Popen(
+                    argv,
+                    cwd=cwd,
+                    env=child_env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    **options,
+                )
             )
         finally:
             for fd in (child_read, child_write):
@@ -181,11 +237,23 @@ def _await_handshake(receiver: _Receiver, on_authenticated) -> None:
             pass
 
 
+def _close_descriptors(descriptors: set[int]) -> None:
+    for fd in descriptors:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    descriptors.clear()
+
+
 def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
                       cwd: str | Path | None = None,
                       session_id: str | None = None,
+                      on_started: Callable[[], object] | None = None,
                       on_authenticated: Callable[[str], object] | None = None,
-                      on_operation_failure: Callable[[SupervisedResult], bool] | None = None) -> SupervisedResult:
+                      on_operation_failure: Callable[
+                          [SupervisedResult], bool
+                      ] | None = None) -> SupervisedResult:
     """Launch one exact child and observe it; never terminate or restart it.
 
     Only the two anonymous-pipe capabilities are inherited. Child stdout/stderr,
@@ -210,6 +278,11 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         token = secrets.token_hex(32)
         receiver = _Receiver(parent_read, parent_write, session, token, on_operation_failure)
         child = _spawn_child(argv, env, cwd, child_read, child_write, descriptors)
+        if on_started is not None:
+            try:
+                on_started()
+            except Exception:
+                pass
         receiver.thread.start()
         descriptors.difference_update((parent_read, parent_write))
         write_frame(parent_write, control_bytes("challenge", session_id=session, token=token))
@@ -218,7 +291,8 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         receiver.thread.join(DRAIN_SECONDS)
         receiver.stop.set()
         termination = "posix_signal" if os.name != "nt" and exit_code < 0 else "observed_exit"
-    except OSError:
+    except (OSError, RuntimeError):
+        _close_descriptors(descriptors)
         if child is not None:
             # Pipe failure cannot orphan/restart/kill the real product operation.
             exit_code = child.wait()
@@ -229,11 +303,7 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         else:
             exit_code, termination = None, "not_started"
     finally:
-        for fd in descriptors:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+        _close_descriptors(descriptors)
     if receiver is None:
         return SupervisedResult(
             session, "failed", "missing", "incomplete", None, "not_started",

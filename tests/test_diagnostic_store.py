@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
+import sys
 import threading
 import time
 import types
@@ -29,7 +31,6 @@ from metroliza.shared.diagnostic_incident import (
 from metroliza.shared.diagnostic_ring import LOSS_ACCOUNTING_BYTES, RingLoss, RingSnapshot
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_wire import encode_event
-
 
 SESSION_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 REPORT_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -72,6 +73,53 @@ def _incident(
         observation=observation,
         history=history,
     )
+
+
+def test_interrupted_link_publication_recovers_exact_pair_without_losing_prior_incidents(tmp_path):
+    store = IncidentStore(tmp_path / "state")
+    prior = _incident()
+    assert store.publish(prior).status is StoreStatus.SAVED
+    later = _incident(report_id=uuid.uuid4())
+    stage = diagnostic_store._write_stage(store.root, encode_incident(later))
+    final = store.root / f"incident-{later.report_id.hex}.json"
+    os.link(stage, final)
+    assert final.stat().st_nlink == 2
+    reopened = IncidentStore(store.root)
+    listing = reopened.list_reports()
+    assert listing.status is StoreStatus.AVAILABLE
+    assert {row.report_id for row in listing.reports} == {prior.report_id, later.report_id}
+    assert not stage.exists()
+    assert final.stat().st_nlink == 1
+    assert reopened.load(prior.report_id).incident == prior
+    assert reopened.load(later.report_id).incident == later
+
+
+def test_recovery_rejects_internal_pair_with_an_external_alias(tmp_path):
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    incident = _incident()
+    stage = diagnostic_store._write_stage(store.root, encode_incident(incident))
+    final = store.root / f"incident-{incident.report_id.hex}.json"
+    alias = tmp_path / "external-alias.json"
+    os.link(stage, final)
+    os.link(stage, alias)
+
+    assert store.list_reports().status is StoreStatus.ROOT_UNAVAILABLE
+    assert stage.exists()
+    assert final.exists()
+    assert alias.exists()
+
+
+def test_recovery_rejects_unmatched_internal_hardlink_pair(tmp_path):
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    first = diagnostic_store._write_stage(store.root, b"bounded")
+    second = store.root / f".stage-{uuid.uuid4().hex}.tmp"
+    os.link(first, second)
+
+    assert store.list_reports().status is StoreStatus.ROOT_UNAVAILABLE
+    assert first.exists()
+    assert second.exists()
 
 
 def test_publish_list_and_load_revalidate_private_complete_incident(tmp_path) -> None:
@@ -196,6 +244,61 @@ def test_two_concurrent_publications_are_serialized(tmp_path) -> None:
     assert {record.report_id for record in store.list_reports().reports} == set(identifiers)
 
 
+def test_two_cross_process_publications_keep_distinct_session_history(tmp_path) -> None:
+    root = tmp_path / "diagnostics"
+    first_report = REPORT_ID
+    second_report = uuid.UUID("44444444-4444-4444-8444-444444444444")
+    first_session = SESSION_ID
+    second_session = uuid.UUID("55555555-5555-4555-8555-555555555555")
+    payloads = (
+        (tmp_path / "first.incident", _incident(report_id=first_report, session_id=first_session)),
+        (
+            tmp_path / "second.incident",
+            _incident(report_id=second_report, session_id=second_session),
+        ),
+    )
+    script = (
+        "from pathlib import Path; import sys; "
+        "from metroliza.shared.diagnostic_store import IncidentStore; "
+        "print(IncidentStore(Path(sys.argv[1])).publish(Path(sys.argv[2]).read_bytes()).status.value)"
+    )
+    children = []
+    for path, incident in payloads:
+        path.write_bytes(encode_incident(incident))
+        children.append(
+            subprocess.Popen(
+                [sys.executable, "-c", script, str(root), str(path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+    statuses = []
+    for child in children:
+        stdout, _stderr = child.communicate(timeout=5)
+        assert child.returncode == 0
+        statuses.append(stdout.strip())
+    assert set(statuses) <= {StoreStatus.SAVED.value, StoreStatus.LOCK_UNAVAILABLE.value}
+    assert StoreStatus.SAVED.value in statuses
+
+    store = IncidentStore(root)
+    listing = store.list_reports()
+    assert listing.status is StoreStatus.AVAILABLE
+    expected_sessions = {first_report: first_session, second_report: second_session}
+    reports_by_status = zip((first_report, second_report), statuses)
+    assert {record.report_id for record in listing.reports} == {
+        report for report, status in reports_by_status if status == StoreStatus.SAVED.value
+    }
+    for record in listing.reports:
+        incident = store.load(record.report_id).incident
+        assert incident is not None
+        expected = expected_sessions[record.report_id]
+        assert incident.session_id == expected
+        assert {json.loads(event)["invocation_id"] for event in incident.events} == {
+            expected.hex
+        }
+
+
 def test_list_distinguishes_unavailable_store_from_empty_store(tmp_path, monkeypatch) -> None:
     store = IncidentStore(tmp_path / "diagnostics")
     assert store.list_reports().status is StoreStatus.AVAILABLE
@@ -242,7 +345,7 @@ def test_symlink_root_and_hardlinked_report_fail_closed(tmp_path) -> None:
     report = store.root / f"incident-{REPORT_ID.hex}.json"
     os.link(report, tmp_path / "alias.json")
 
-    assert store.load(REPORT_ID).status is StoreStatus.INVALID
+    assert store.load(REPORT_ID).status is StoreStatus.ROOT_UNAVAILABLE
     assert store.list_reports().status is StoreStatus.ROOT_UNAVAILABLE
 
 
@@ -344,6 +447,38 @@ def test_abandoned_stage_and_excess_clean_markers_are_boundedly_cleaned(tmp_path
     assert not abandoned.exists()
     marker_count = len(list(store.root.glob("marker-*.json")))
     assert marker_count <= 21
+
+
+def test_cleanup_expires_only_old_clean_markers(tmp_path) -> None:
+    store = IncidentStore(tmp_path / "diagnostics")
+    clean_id = uuid.UUID("66666666-6666-4666-8666-666666666666")
+    unknown_id = uuid.UUID("77777777-7777-4777-8777-777777777777")
+    next_id = uuid.UUID("88888888-8888-4888-8888-888888888888")
+    assert store.begin_session(clean_id).status is StoreStatus.MARKER_STARTED
+    assert store.authenticate_session(clean_id).status is StoreStatus.MARKER_AUTHENTICATED
+    assert store.end_session(clean_id, clean=True).status is StoreStatus.MARKER_CLEAN_ENDED
+    assert store.begin_session(unknown_id).status is StoreStatus.MARKER_STARTED
+
+    old_ms = time.time_ns() // 1_000_000 - diagnostic_store.MAX_AGE_MS - 1
+    process_identity = diagnostic_store._process_start_identity(os.getpid())
+    assert process_identity is not None
+    for identifier, phase in ((clean_id, "clean_ended"), (unknown_id, "started")):
+        path = store.root / f"marker-{identifier.hex}.json"
+        path.write_bytes(
+            diagnostic_store._marker_bytes(
+                identifier,
+                "unknown",
+                os.getpid(),
+                process_identity,
+                phase,
+                old_ms,
+            )
+        )
+        path.chmod(0o600)
+
+    assert store.begin_session(next_id).status is StoreStatus.MARKER_STARTED
+    assert not (store.root / f"marker-{clean_id.hex}.json").exists()
+    assert (store.root / f"marker-{unknown_id.hex}.json").exists()
 
 
 def test_windows_process_identity_uses_pointer_width_handle_and_filetime(monkeypatch) -> None:

@@ -1,10 +1,11 @@
 """Real selected-import and workbook services on a public synthetic PDF only."""
 
 import os
-from pathlib import Path
 import sqlite3
 import sys
 import time
+from contextlib import closing
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -19,11 +20,11 @@ def main():
 
     if run_application() != 0:
         return 10
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
     from metroliza.parsing.parse_reports_thread import ParseReportsThread
     from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
     from metroliza.shared.parse_contracts import ParseRequest
-    from metroliza.exporting.export_data_thread import ExportDataThread
-    from metroliza.exporting.contracts import AppPaths, ExportRequest, ExportOptions
 
     scratch = Path(sys.argv[1])
     source = scratch / "reports"
@@ -52,9 +53,10 @@ def main():
         return 0
     if worker.last_parse_result.imported_files != 1:
         return 11
-    with sqlite3.connect(database) as connection:
-        if connection.execute("SELECT COUNT(*) FROM report_measurements").fetchone()[0] < 1:
-            return 12
+    with closing(sqlite3.connect(database)) as connection:
+        with connection:
+            if connection.execute("SELECT COUNT(*) FROM report_measurements").fetchone()[0] < 1:
+                return 12
     export = ExportDataThread(ExportRequest(
         paths=AppPaths(db_file=str(database), excel_file=str(workbook)),
         options=ExportOptions(generate_summary_sheet=False),
