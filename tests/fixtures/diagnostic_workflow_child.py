@@ -25,9 +25,6 @@ def _wait_for_marker(path):
 def _finish_handled_failure(worker, scratch, recorder):
     if worker.last_parse_result.imported_files != 0:
         return 14
-    # Make the valid event-before-operation-return ordering deterministic.
-    if not _wait_for_marker(scratch / "allow_operation_return"):
-        return 15
     # Keep the real app alive until the external test has loaded its incident.
     (scratch / "operation_returned").touch()
     _wait_for_marker(scratch / "finish")

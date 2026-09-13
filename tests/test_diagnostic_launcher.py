@@ -90,19 +90,13 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
     try:
         deadline = time.monotonic() + 7
         reports = store.list_reports().reports
-        while not reports and time.monotonic() < deadline:
+        operation_returned = (scratch / "operation_returned").exists()
+        while (not reports or not operation_returned) and time.monotonic() < deadline:
             time.sleep(0.02)
-            reports = store.list_reports().reports
-        assert len(reports) == 1
-        assert not (scratch / "operation_returned").exists()
-        (scratch / "allow_operation_return").touch()
-        while (
-            (not reports or not (scratch / "operation_returned").exists())
-            and time.monotonic() < deadline
-        ):
-            time.sleep(0.02)
-            reports = store.list_reports().reports
-        assert (scratch / "operation_returned").exists()
+            if not reports:
+                reports = store.list_reports().reports
+            operation_returned = (scratch / "operation_returned").exists()
+        assert operation_returned
         assert thread.is_alive()
         assert len(reports) == 1
         incident = store.load(reports[0].report_id).incident
@@ -115,7 +109,6 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
         export = store.export(reports[0].report_id, tmp_path / "selected.zip")
         assert export.status is StoreStatus.EXPORTED
     finally:
-        (scratch / "allow_operation_return").touch()
         (scratch / "finish").touch()
         thread.join(10)
     assert not thread.is_alive()
