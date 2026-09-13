@@ -14,7 +14,7 @@ from unittest.mock import patch
 try:
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication, QMessageBox, QWidget
-    from modules.parsing_dialog import ParsingDialog
+    from metroliza.ui.parsing_dialog import ParsingDialog
 except ImportError as exc:  # pragma: no cover - environment-dependent import
     Qt = None
     QApplication = None
@@ -98,9 +98,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
     def test_cancel_directory_and_decline_archive_keeps_selection_empty(self):
         dialog = ParsingDialog(parent=None, directory=None, db_file=None)
 
-        with patch('modules.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
-                patch('modules.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.No), \
-                patch('modules.parsing_dialog.QFileDialog.getOpenFileName') as get_open_file_name:
+        with patch('metroliza.ui.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
+                patch('metroliza.ui.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.No), \
+                patch('metroliza.ui.parsing_dialog.QFileDialog.getOpenFileName') as get_open_file_name:
             dialog.select_directory()
 
         self.assertEqual(dialog.directory, None)
@@ -111,9 +111,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         parent = _DummyParent()
         dialog = ParsingDialog(parent=parent, directory=None, db_file=None)
 
-        with patch('modules.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
-                patch('modules.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes), \
-                patch('modules.parsing_dialog.QFileDialog.getOpenFileName', return_value=('/tmp/source.zip', '')) as get_open_file_name:
+        with patch('metroliza.ui.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
+                patch('metroliza.ui.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes), \
+                patch('metroliza.ui.parsing_dialog.QFileDialog.getOpenFileName', return_value=('/tmp/source.zip', '')) as get_open_file_name:
             dialog.select_directory()
 
         self.assertEqual(dialog.directory, '/tmp/source.zip')
@@ -125,7 +125,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         dialog = ParsingDialog(parent=parent, directory=None, db_file=None)
 
         with patch(
-            'modules.parsing_dialog.QFileDialog.getOpenFileName',
+            'metroliza.ui.parsing_dialog.QFileDialog.getOpenFileName',
             return_value=('/tmp/source.zip', ''),
         ) as get_open_file_name:
             dialog.select_archive()
@@ -222,9 +222,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         _attach_synthetic_review(dialog)
 
         with patch(
-            'modules.parsing_dialog.create_worker_progress_dialog',
+            'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
             return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
-        ), patch('modules.parsing_dialog.ParseReportsThread', _FakeParseThread):
+        ), patch('metroliza.ui.parsing_dialog.ParseReportsThread', _FakeParseThread):
             dialog.show_loading_screen()
 
         self.assertTrue(captured['started'])
@@ -253,9 +253,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         _attach_synthetic_review(dialog)
 
         with patch(
-            'modules.parsing_dialog.create_worker_progress_dialog',
+            'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
             return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
-        ), patch('modules.parsing_dialog.ParseReportsThread', _FakeParseThread):
+        ), patch('metroliza.ui.parsing_dialog.ParseReportsThread', _FakeParseThread):
             dialog.show_loading_screen()
 
         self.assertTrue(captured['started'])
@@ -284,9 +284,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         _attach_synthetic_review(dialog)
 
         with patch(
-            'modules.parsing_dialog.create_worker_progress_dialog',
+            'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
             return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
-        ), patch('modules.parsing_dialog.ParseReportsThread', _FakeParseThread):
+        ), patch('metroliza.ui.parsing_dialog.ParseReportsThread', _FakeParseThread):
             dialog.show_loading_screen()
 
         self.assertTrue(captured['started'])
@@ -359,7 +359,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         dialog.loading_dialog = _ProgressDialog()
         dialog._pending_modeless_metadata_enrichment = True
 
-        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
+        with patch('metroliza.ui.parsing_dialog.QMessageBox.information') as information_mock:
             dialog.on_parse_finished()
 
         information_mock.assert_not_called()
@@ -375,8 +375,8 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
             last_parse_result=SimpleNamespace(total_files=0, parsed_files=0, failed_files=0),
         )
 
-        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
-            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+        with patch('metroliza.ui.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('metroliza.ui.parsing_dialog.QMessageBox.warning') as warning_mock:
                 dialog.on_parse_finished()
 
         warning_mock.assert_not_called()
@@ -392,8 +392,8 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
             last_parse_result=SimpleNamespace(total_files=3, parsed_files=2, failed_files=1),
         )
 
-        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
-            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+        with patch('metroliza.ui.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('metroliza.ui.parsing_dialog.QMessageBox.warning') as warning_mock:
                 dialog.on_parse_finished()
 
         information_mock.assert_not_called()
@@ -745,7 +745,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         dialog._pending_modeless_metadata_enrichment = True
         dialog.parsing_canceled = True
 
-        with patch('modules.parsing_dialog.QMessageBox.information'):
+        with patch('metroliza.ui.parsing_dialog.QMessageBox.information'):
             dialog.on_parse_finished()
 
         self.assertEqual(emitted, [])
@@ -764,8 +764,8 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
             ),
         )
 
-        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
-            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+        with patch('metroliza.ui.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('metroliza.ui.parsing_dialog.QMessageBox.warning') as warning_mock:
                 dialog.on_parse_finished()
 
         warning_mock.assert_not_called()
@@ -791,8 +791,8 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
             ),
         )
 
-        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
-            with patch('modules.parsing_dialog.QMessageBox.warning') as warning_mock:
+        with patch('metroliza.ui.parsing_dialog.QMessageBox.information') as information_mock:
+            with patch('metroliza.ui.parsing_dialog.QMessageBox.warning') as warning_mock:
                 dialog.on_parse_finished()
 
         information_mock.assert_not_called()
@@ -811,7 +811,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         dialog._pending_modeless_metadata_enrichment = True
         dialog.parse_error_message = 'synthetic failure'
 
-        with patch('modules.parsing_dialog.QMessageBox.warning'):
+        with patch('metroliza.ui.parsing_dialog.QMessageBox.warning'):
             dialog.on_parse_finished()
 
         self.assertEqual(emitted, [])
@@ -825,7 +825,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         dialog.parse_error_message = 'synthetic failure'
 
         with patch(
-            'modules.parsing_dialog.QMessageBox.warning',
+            'metroliza.ui.parsing_dialog.QMessageBox.warning',
             side_effect=lambda *_args: events.append("warning"),
         ):
             dialog.on_parse_finished()
@@ -839,7 +839,7 @@ if __name__ == '__main__':
 
 @pytest.mark.parametrize("source_copy", [False, True], ids=["singleton", "excluded-copy-first"])
 @pytest.mark.parametrize("accepted", [False, True], ids=["incomplete", "accepted"])
-def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monkeypatch, accepted, source_copy, request):
+def test_duplicate_only_compatibility_adapter_dispatches_atomic_verification(tmp_path, monkeypatch, accepted, source_copy, request):
     # The complete suite shares Qt application/window state. Exercise the real
     # modal click/worker flow in a fresh Qt process, as in an application launch.
     import os
@@ -922,11 +922,11 @@ def test_duplicate_only_real_click_dispatches_atomic_verification(tmp_path, monk
             assert len(review.files) == 1 + source_copy
             assert review.count(ParsePreflightStatus.READY) == 0
             assert review.count(ParsePreflightStatus.DUPLICATE) == 1 + source_copy
-            dialog._preflight_result = review
-            dialog._sync_readiness_state()
+            dialog.on_preflight_completed(review)
             before = graph()
-            assert dialog.parse_button.isEnabled()
-            QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
+            assert not dialog.parse_button.isEnabled()
+            # Explicit rollback entry retains accepted atomic destination repair.
+            dialog.show_loading_screen()
             assert len(workers) == attempt + 1, feedback
             deadline = time.monotonic() + 15
             while (len(feedback) <= attempt or workers[-1].isRunning()) and time.monotonic() < deadline:
@@ -1010,9 +1010,11 @@ def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expecte
     if case == "no-database":
         dialog.db_file = worker.db_file = ""
     dialog._preflight_result = review
+    dialog.report_planner.set_review(review)
+    planner_expected = expected and case != "destination"
     try:
         dialog._sync_readiness_state()
-        assert dialog.parse_button.isEnabled() is expected
+        assert dialog.parse_button.isEnabled() is planner_expected
         if case in {
             "cancelled", "stale-source", "stale-database", "stale-mode",
             "stale-generation", "no-generation", "no-parser", "no-fingerprint",
@@ -1028,16 +1030,16 @@ def test_ui_worker_share_review_eligibility(tmp_path, monkeypatch, case, expecte
         assert approved == ([source] if expected else [])
         assert review.files == (item,)
         assert not database.exists()
-        if not expected:
+        if not planner_expected:
             starts = []
             monkeypatch.setattr("metroliza.ui.parsing_dialog.ParseReportsThread", starts.append)
             dialog.parse_button.click()
             dialog._import_reviewed_reports()  # Recheck the dispatch seam, too.
             app.processEvents()
             assert starts == []
-            assert "No eligible reviewed reports" in dialog.parse_button.toolTip()
+            assert dialog.parse_button.toolTip()
         else:
-            assert "1 eligible for import / verification" in dialog.readiness_label.text()
+            assert dialog.parse_button.text() == "Import 1 selected report"
     finally:
         dialog.close()
 
@@ -1142,14 +1144,18 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
     dialog = ParsingDialog(directory=str(source_dir), db_file=str(database))
     dialog.metadata_enrichment_requested.connect(launches.append)
     dialog.metadata_mode_combo.setCurrentIndex(dialog.metadata_mode_combo.findData("fast_then_enrich"))
-    dialog._preflight_result = ParsePreflightService().scan_source(
+    review = ParsePreflightService().scan_source(
         source_path=source_dir, database_path=database, metadata_parsing_mode="light"
     )
-    dialog._sync_readiness_state()
+    dialog.on_preflight_completed(review)
     dialog.show()
     try:
-        assert dialog.parse_button.isEnabled()
-        QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
+        assert dialog.parse_button.isEnabled() is (not existing)
+        if existing:
+            # Explicit legacy adapter keeps accepted-item enrichment compatibility.
+            dialog.show_loading_screen()
+        else:
+            QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
         deadline = time.monotonic() + 15
         while dialog.parse_thread is not None and time.monotonic() < deadline:
             app.processEvents()

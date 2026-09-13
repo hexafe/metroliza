@@ -42,6 +42,7 @@ release evidence are complete.
 |---|---:|---|---|---|
 | Save, reopen, relink, and reproduce a complete analysis workspace | [#926](https://github.com/hexafe/metroliza/issues/926) | Planned / partial settings persistence | 2 and 5 | #915, #917, #920 |
 | Unified import preflight, queue, cancellation, retry, and partial-batch recovery | [#927](https://github.com/hexafe/metroliza/issues/927) | Release-candidate | 2 | #912, #915, #916 |
+| Persistent report review and exact subset selection in the Parsing host | [#1015](https://github.com/hexafe/metroliza/issues/1015) | Implemented; integration and Windows package acceptance pending | 2 | #1014, #1019, #1020 |
 | Declarative parser profiles and controlled external plugin lifecycle | [#928](https://github.com/hexafe/metroliza/issues/928) | Release-candidate | 2 and 6 | #915, #927, #944 |
 | Reviewable OCR header metadata extraction, correction, and enrichment | [#929](https://github.com/hexafe/metroliza/issues/929) | Release-candidate | 2 | #927, #928, #917, #944 |
 | Versioned report database and industrial-cache migration, backup, integrity, and repair | [#930](https://github.com/hexafe/metroliza/issues/930) | Release-candidate | 2 | #915, #917, #920, #944 |

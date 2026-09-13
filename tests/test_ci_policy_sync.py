@@ -18,6 +18,20 @@ GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
 GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 
 
+def test_native_windows_report_planner_step_preserves_real_platform_and_scope() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows report planner tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    for test in ('model', 'integration', 'geometry'):
+        assert f'tests/test_report_planner_{test}.py' in step
+    assert name in policy
+    assert 'scale factors 1, 1.25, 1.5 and 2' in policy
+    assert 'do not qualify a packaged EXE' in policy
+
+
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
