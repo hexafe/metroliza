@@ -198,45 +198,67 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 
         window = self._main_window()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            window.launch_realtime_industrial_monitoring_dialog()
-            dialog = window.realtime_monitoring_dialog
-            session_db = Path(dialog.db_file)
-            IndustrialDataRepository(str(session_db)).upsert_source_profile(
-                profile_key="line-a",
-                profile_name="Line A",
-                source_db_alias="line-a",
-                database_type="sqlite",
-                source_object_name="events",
-            )
-            durable_db = str(Path(temp_dir) / "durable.db")
-            saved_copy = Path(temp_dir) / "saved-session.sqlite"
+        errors = []
+        warnings = []
 
-            with (
-                patch(
-                    "metroliza.ui.main_window.QMessageBox.question",
-                    return_value=QMessageBox.StandardButton.Save,
-                ),
-                patch(
-                    "metroliza.ui.main_window.QFileDialog.getSaveFileName",
-                    return_value=(str(saved_copy), "SQLite database"),
-                ),
+        def capture_error(exception, **_kwargs):
+            cause = exception.__cause__
+            errors.append({
+                "exception_class": type(exception).__name__,
+                "cause_class": type(cause).__name__ if cause is not None else None,
+                "errno": getattr(cause or exception, "errno", None),
+                "winerror": getattr(cause or exception, "winerror", None),
+            })
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                window.launch_realtime_industrial_monitoring_dialog()
+                dialog = window.realtime_monitoring_dialog
+                session_db = Path(dialog.db_file)
+                IndustrialDataRepository(str(session_db)).upsert_source_profile(
+                    profile_key="line-a",
+                    profile_name="Line A",
+                    source_db_alias="line-a",
+                    database_type="sqlite",
+                    source_object_name="events",
+                )
+                durable_db = str(Path(temp_dir) / "durable.db")
+                saved_copy = Path(temp_dir) / "saved-session.sqlite"
+
+                with (
+                    patch(
+                        "metroliza.ui.main_window.QMessageBox.question",
+                        return_value=QMessageBox.StandardButton.Save,
+                    ),
+                    patch(
+                        "metroliza.ui.main_window.QFileDialog.getSaveFileName",
+                        return_value=(str(saved_copy), "SQLite database"),
+                    ),
+                    patch("metroliza.ui.main_window.CustomLogger", side_effect=capture_error),
+                    patch("metroliza.ui.main_window.QMessageBox.warning", side_effect=lambda *_: warnings.append(True)),
+                ):
+                    window.set_db_file(durable_db)
+                    self.assertFalse(errors, f"Unexpected archive error (closed fields only): {errors}")
+                    self.assertFalse(warnings, "Unexpected archive warning")
+
+                self.assertFalse(session_db.exists())
+                self.assertTrue(saved_copy.exists())
+                self.assertEqual(dialog.db_file, durable_db)
+                self.assertEqual(
+                    len(
+                        IndustrialDataRepository(str(saved_copy)).list_source_profiles(
+                            include_disabled=True
+                        )
+                    ),
+                    1,
+                )
+                self.assertIn("Durable storage", dialog.storage_lifecycle_label.text())
+        finally:
+            with patch(
+                "metroliza.ui.main_window.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Discard,
             ):
-                window.set_db_file(durable_db)
-
-            self.assertFalse(session_db.exists())
-            self.assertTrue(saved_copy.exists())
-            self.assertEqual(dialog.db_file, durable_db)
-            self.assertEqual(
-                len(
-                    IndustrialDataRepository(str(saved_copy)).list_source_profiles(
-                        include_disabled=True
-                    )
-                ),
-                1,
-            )
-            self.assertIn("Durable storage", dialog.storage_lifecycle_label.text())
-        window.close()
+                window.close()
 
     def test_realtime_temp_session_archive_cannot_replace_active_database(self):
         import sqlite3

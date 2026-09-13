@@ -1546,7 +1546,9 @@ class MainWindow(QMainWindow):
             return True
         blockers = []
         if self.is_metadata_enrichment_active():
-            blockers.append("metadata enrichment")
+            enrichment_database = getattr(self.metadata_enrichment_thread, "db_file", None)
+            if not enrichment_database or Path(enrichment_database).resolve() == Path(self.db_file).resolve():
+                blockers.append("metadata enrichment")
         for label, dialog in (
             ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
             ("Industrial Data", self.industrial_data_dialog),

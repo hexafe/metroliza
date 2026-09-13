@@ -272,6 +272,45 @@ def test_existing_database_window_blocks_report_start_without_losing_its_work(ap
         writer.deleteLater()
 
 
+def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):
+    from metroliza.parsing import metadata_enrichment_thread
+
+    source, database = reports
+    other = database.with_name("metadata.sqlite")
+    entered, release = Event(), Event()
+    original = metadata_enrichment_thread.discover_metadata_enrichment_work
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(metadata_enrichment_thread, "discover_metadata_enrichment_work", gated)
+    window.set_directory(str(source))
+    window.set_db_file(str(other))
+    window.launch_metadata_enrichment()
+    worker = window.metadata_enrichment_thread
+    try:
+        wait_until(app, entered.is_set)
+        assert worker.db_file == str(other)
+        assert window._report_start_allowed() is False
+        assert window.set_db_file(str(database))
+        host = window.launch_parsing_dialog()
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+        host.parse_button.click()
+        wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        assert worker.isRunning() and worker.db_file == str(other)
+    finally:
+        release.set()
+        wait_until(app, lambda: window.metadata_enrichment_thread is None)
+        assert worker.wait(20000)
+        worker.deleteLater()
+
+
 def test_tools_shortcuts_use_existing_primary_navigation(window):
     for action, page in (
         (window.csv_summary_action, "csv_analytics"),
