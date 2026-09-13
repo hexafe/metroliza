@@ -43,6 +43,12 @@ def main():
     if sys.argv[2] == "handled_failure":
         if worker.last_parse_result.imported_files != 0:
             return 14
+        # Make the valid event-before-operation-return ordering deterministic.
+        deadline = time.monotonic() + 8
+        while not (scratch / "allow_operation_return").exists():
+            if time.monotonic() >= deadline:
+                return 15
+            time.sleep(0.02)
         # Keep the real app alive until the external test has loaded its incident.
         (scratch / "operation_returned").touch()
         deadline = time.monotonic() + 8
