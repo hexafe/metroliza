@@ -37,6 +37,11 @@ _REPORT_NAME = re.compile(r"incident-([0-9a-f]{32})\.json\Z")
 _MARKER_NAME = re.compile(r"marker-([0-9a-f]{32})\.json\Z")
 _STAGE_NAME = re.compile(r"\.stage-[0-9a-f]{32}\.tmp\Z")
 _LOCK_NAME = ".diagnostic-store.lock"
+_WINDOWS_PRIVATE_DACL = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;OW)"
+_WINDOWS_DACL_INFORMATION = 0x00000004
+_WINDOWS_PROTECTED_DACL_INFORMATION = 0x80000000
+_MAX_WINDOWS_SECURITY_DESCRIPTOR_BYTES = 65_536
+_MAX_WINDOWS_DACL_SDDL_CHARS = 4_096
 
 
 class StoreStatus(str, Enum):
@@ -146,28 +151,137 @@ def _existing_ancestors_safe(path: Path) -> bool:
     return True
 
 
+def _windows_private_dacl_sddl_is_exact(value: object) -> bool:
+    if type(value) is not str or len(value) > _MAX_WINDOWS_DACL_SDDL_CHARS:
+        return False
+    match = re.fullmatch(r"D:((?:P|AI)*)((?:\([^()]*\)){2})", value)
+    if match is None:
+        return False
+    controls = re.findall(r"P|AI", match.group(1))
+    if (
+        "P" not in controls
+        or len(controls) != len(set(controls))
+        or "".join(controls) != match.group(1)
+    ):
+        return False
+    trustees: set[str] = set()
+    for raw_entry in re.findall(r"\(([^()]*)\)", match.group(2)):
+        entry = raw_entry.split(";")
+        if len(entry) != 6 or entry[0] != "A" or entry[2:5] != ["FA", "", ""]:
+            return False
+        flags = re.findall(r"[A-Z]{2}", entry[1])
+        if (
+            len(flags) != 2
+            or "".join(flags) != entry[1]
+            or set(flags) != {"OI", "CI"}
+        ):
+            return False
+        trustee = {"SY": "S-1-5-18", "OW": "S-1-3-4"}.get(entry[5], entry[5])
+        trustees.add(trustee)
+    return trustees == {"S-1-5-18", "S-1-3-4"}
+
+
+def _windows_private_dacl_is_exact(path: Path) -> bool:
+    from ctypes import wintypes
+
+    try:
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        get_security = advapi.GetFileSecurityW
+        get_security.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        get_security.restype = wintypes.BOOL
+        required = wintypes.DWORD()
+        get_security(
+            str(path), _WINDOWS_DACL_INFORMATION, None, 0, ctypes.byref(required)
+        )
+        if not 0 < required.value <= _MAX_WINDOWS_SECURITY_DESCRIPTOR_BYTES:
+            return False
+        descriptor = ctypes.create_string_buffer(required.value)
+        if not get_security(
+            str(path),
+            _WINDOWS_DACL_INFORMATION,
+            descriptor,
+            len(descriptor),
+            ctypes.byref(required),
+        ):
+            return False
+        convert = advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW
+        convert.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.LPWSTR),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        convert.restype = wintypes.BOOL
+        string = wintypes.LPWSTR()
+        length = wintypes.DWORD()
+        if not convert(
+            ctypes.cast(descriptor, ctypes.c_void_p),
+            1,
+            _WINDOWS_DACL_INFORMATION,
+            ctypes.byref(string),
+            ctypes.byref(length),
+        ):
+            return False
+        try:
+            if not 0 < length.value <= _MAX_WINDOWS_DACL_SDDL_CHARS:
+                return False
+            return _windows_private_dacl_sddl_is_exact(string.value)
+        finally:
+            local_free = ctypes.WinDLL("kernel32", use_last_error=True).LocalFree
+            local_free.argtypes = [ctypes.c_void_p]
+            local_free.restype = ctypes.c_void_p
+            if string:
+                local_free(ctypes.cast(string, ctypes.c_void_p))
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 def _apply_windows_private_acl(path: Path) -> bool:
-    if os.name != "nt":
-        return True
+    from ctypes import wintypes
+
     descriptor = ctypes.c_void_p()
-    convert = ctypes.windll.advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    convert = advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW
     convert.argtypes = [
-        ctypes.c_wchar_p,
-        ctypes.c_uint32,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
         ctypes.POINTER(ctypes.c_void_p),
-        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.DWORD),
     ]
-    convert.restype = ctypes.c_int
-    if not convert("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;OW)", 1, ctypes.byref(descriptor), None):
+    convert.restype = wintypes.BOOL
+    if not convert(_WINDOWS_PRIVATE_DACL, 1, ctypes.byref(descriptor), None):
         return False
     try:
-        information = 0x00000004 | 0x80000000
-        apply_security = ctypes.windll.advapi32.SetFileSecurityW
-        apply_security.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_void_p]
-        apply_security.restype = ctypes.c_int
+        information = _WINDOWS_DACL_INFORMATION | _WINDOWS_PROTECTED_DACL_INFORMATION
+        apply_security = advapi.SetFileSecurityW
+        apply_security.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p]
+        apply_security.restype = wintypes.BOOL
         return bool(apply_security(str(path), information, descriptor))
     finally:
-        ctypes.windll.kernel32.LocalFree(descriptor)
+        local_free = ctypes.WinDLL("kernel32", use_last_error=True).LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        local_free(descriptor)
+
+
+def _ensure_windows_private_acl(path: Path) -> bool:
+    if _windows_private_dacl_is_exact(path):
+        return True
+    return _apply_windows_private_acl(path) and _windows_private_dacl_is_exact(path)
+
+
+def _ensure_posix_private_root(path: Path, metadata: os.stat_result) -> bool:
+    if metadata.st_uid != os.getuid():
+        return False
+    path.chmod(0o700)
+    return stat.S_IMODE(path.stat().st_mode) == 0o700
 
 
 def _ensure_private_root(path: Path) -> bool:
@@ -184,14 +298,10 @@ def _ensure_private_root(path: Path) -> bool:
         metadata = path.lstat()
         if not stat.S_ISDIR(metadata.st_mode) or _is_reparse_or_link(metadata):
             return False
-        if os.name != "nt":
-            if metadata.st_uid != os.getuid():
-                return False
-            path.chmod(0o700)
-            if stat.S_IMODE(path.stat().st_mode) != 0o700:
-                return False
-        return _apply_windows_private_acl(path)
-    except OSError:
+        if os.name == "nt":
+            return _ensure_windows_private_acl(path)
+        return _ensure_posix_private_root(path, metadata)
+    except (AttributeError, OSError, ValueError):
         return False
 
 

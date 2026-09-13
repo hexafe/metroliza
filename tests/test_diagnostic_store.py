@@ -138,6 +138,68 @@ def _assert_windows_private_dacl(path, *, protected: bool, inherited: bool) -> N
         assert all("OI" in entry[1] and "CI" in entry[1] for entry in entries)
 
 
+def test_windows_private_dacl_match_is_closed_and_exact() -> None:
+    exact = diagnostic_store._windows_private_dacl_sddl_is_exact
+    assert exact("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;OW)")
+    assert exact("D:PAI(A;OICI;FA;;;S-1-5-18)(A;OICI;FA;;;S-1-3-4)")
+    for unsafe in (
+        "D:(A;OICI;FA;;;SY)(A;OICI;FA;;;OW)",
+        "D:P(A;OICIID;FA;;;SY)(A;OICI;FA;;;OW)",
+        "D:P(A;OICIOI;FA;;;SY)(A;OICI;FA;;;OW)",
+        "D:P(A;OI;FA;;;SY)(A;OICI;FA;;;OW)",
+        "D:P(A;OICI;GR;;;SY)(A;OICI;FA;;;OW)",
+        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)",
+        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;OW)(A;OICI;FA;;;BA)",
+    ):
+        assert not exact(unsafe)
+
+
+def test_windows_private_acl_skips_exact_root_and_rechecks_repair(
+    tmp_path, monkeypatch
+) -> None:
+    applied: list[object] = []
+    monkeypatch.setattr(
+        diagnostic_store, "_windows_private_dacl_is_exact", lambda _path: True
+    )
+    monkeypatch.setattr(
+        diagnostic_store,
+        "_apply_windows_private_acl",
+        lambda path: applied.append(path) or True,
+    )
+    assert diagnostic_store._ensure_windows_private_acl(tmp_path)
+    assert applied == []
+
+    checks = iter((False, False))
+    monkeypatch.setattr(
+        diagnostic_store,
+        "_windows_private_dacl_is_exact",
+        lambda _path: next(checks),
+    )
+    assert not diagnostic_store._ensure_windows_private_acl(tmp_path)
+    assert applied == [tmp_path]
+
+
+def test_native_windows_read_only_store_calls_do_not_reapply_exact_acl(
+    tmp_path, monkeypatch
+) -> None:
+    if os.name != "nt":
+        return
+    store = IncidentStore(tmp_path / "diagnostics")
+    incident = _incident()
+    assert store.publish(incident).status is StoreStatus.SAVED
+    _assert_windows_private_dacl(store.root, protected=True, inherited=False)
+    report_path = store.root / f"incident-{REPORT_ID.hex}.json"
+    _assert_windows_private_dacl(report_path, protected=False, inherited=True)
+
+    def unexpected_acl_write(_path):
+        raise AssertionError("an exact private DACL must not be rewritten")
+
+    monkeypatch.setattr(diagnostic_store, "_apply_windows_private_acl", unexpected_acl_write)
+    for _ in range(3):
+        assert store.list_reports().status is StoreStatus.AVAILABLE
+        assert store.load(REPORT_ID).incident == incident
+
+
 def test_interrupted_link_publication_recovers_exact_pair_without_losing_prior_incidents(tmp_path):
     store = IncidentStore(tmp_path / "state")
     prior = _incident()
