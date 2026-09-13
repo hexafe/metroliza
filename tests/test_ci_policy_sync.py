@@ -7,6 +7,7 @@ import pytest
 
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
+FEATURE_CATALOG_PATH = Path('docs/project/feature_catalog.md')
 NATIVE_BUILD_DISTRIBUTION_PATH = Path('docs/native_build_distribution.md')
 RC_CHECKLIST_PATH = Path('docs/release_checks/release_candidate_checklist.md')
 RELEASE_STATUS_PATH = Path('docs/release_checks/release_status.md')
@@ -234,6 +235,37 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert 'tests/test_db_utils.py' in workflow
     assert 'tests/test_packaging_spec_hiddenimports.py' in workflow
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
+
+
+def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['windows-core-smoke']['steps']
+    specialist = next(
+        step for step in steps
+        if step.get('name') == 'Run native Windows specialist geometry tests'
+    )
+
+    assert specialist['env'] == {
+        'PYTHONPATH': 'src;.',
+        'QT_QPA_PLATFORM': 'windows',
+        'METROLIZA_EXPECT_QT_PLATFORM': 'windows',
+        'METROLIZA_EXPECT_INDUSTRIAL_SCREEN': '1920x1080',
+    }
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in specialist['run']
+    assert 'python -m pytest -vv -s tests/test_industrial_native_geometry.py' in specialist['run']
+
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    assert 'Run native Windows specialist geometry tests' in ci_policy
+    assert 'DPR 1, 1.25, 1.5, and 2' in ci_policy
+    assert 'packaged-EXE and clean-machine acceptance remain separate' in ci_policy
+
+    catalog = FEATURE_CATALOG_PATH.read_text(encoding='utf-8')
+    assert 'Corrective quality trackers' in catalog
+    assert '[#1018]' in catalog
+    assert 'supports the existing #940 and #946 capability rows' in catalog
+    assert '#926–#957 inventory and dependency graph remain unchanged' in catalog
 
 
 def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> None:
