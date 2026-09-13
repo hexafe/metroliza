@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_STYLE_OVERRIDE", "Fusion")
 
 try:
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import QPoint, QRect, Qt
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication
 
@@ -165,13 +165,30 @@ def test_sync_source_actions_do_not_overlap_and_remain_keyboard_reachable(tmp_pa
     dialog = IndustrialSyncDialog(db_file=str(db_path), config_path=tmp_path / "missing.yaml")
     app = _app()
     dialog.show()
+    QTest.qWait(5)
     app.processEvents()
     try:
+        dialog.resize(760, 520)
+        app.processEvents()
+        assert dialog.height() == 520
+        assert dialog.content_scroll.verticalScrollBar().maximum() > 0
+
         first = dialog.select_all_sources_button.geometry()
         second = dialog.current_source_only_button.geometry()
         assert first.intersected(second).isEmpty()
         assert dialog.source_check_list.height() >= max(first.height(), second.height())
         assert collect_sibling_overlaps(dialog) == []
+
+        for action in (
+            dialog.close_button,
+            dialog.test_connection_button,
+            dialog.sync_now_button,
+            dialog.fetch_csv_summary_button,
+            dialog.cancel_sync_button,
+        ):
+            assert action.isVisibleTo(dialog)
+            rectangle = QRect(action.mapTo(dialog, QPoint(0, 0)), action.size())
+            assert dialog.rect().contains(rectangle)
 
         dialog.current_source_only_button.setFocus()
         QTest.keyClick(dialog.current_source_only_button, Qt.Key.Key_Tab)

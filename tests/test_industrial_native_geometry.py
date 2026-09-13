@@ -140,8 +140,9 @@ def test_windows_scale_inner_industrial_geometry(app, tmp_path):
     )
     try:
         data, profiles, sync = dialogs
-        for dialog in dialogs:
-            _show_at_compact_size(dialog, app)
+        _show_at_compact_size(data, app)
+        _show_at_compact_size(profiles, app)
+        _show_at_compact_size(sync, app)
 
         assert data.status_label.height() >= data.status_label.sizeHint().height()
         _assert_scroll_reachable(data, data.content_scroll, data.status_label, app)
@@ -154,10 +155,22 @@ def test_windows_scale_inner_industrial_geometry(app, tmp_path):
         first = sync.select_all_sources_button.geometry()
         second = sync.current_source_only_button.geometry()
         assert first.intersected(second).isEmpty()
+        _assert_scroll_reachable(sync, sync.content_scroll, sync.source_check_list, app)
         assert sync.source_check_list.height() >= max(first.height(), second.height())
         _assert_visible_control(sync, sync.select_all_sources_button)
         _assert_visible_control(sync, sync.current_source_only_button)
         _assert_tab_reaches_visible_control(sync, sync.current_source_only_button, app)
+        for action in (
+            sync.close_button,
+            sync.test_connection_button,
+            sync.sync_now_button,
+            sync.fetch_csv_summary_button,
+            sync.cancel_sync_button,
+        ):
+            assert action.isVisibleTo(sync)
+            rectangle = QRect(action.mapTo(sync, QPoint(0, 0)), action.size())
+            assert QRect(QPoint(0, 0), sync.size()).contains(rectangle)
+        _assert_tab_reaches_visible_control(sync, sync.close_button, app)
 
         screen = app.primaryScreen()
         print(
