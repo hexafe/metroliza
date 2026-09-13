@@ -22,6 +22,30 @@ from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_wire import encode_event
 
 
+_FIXTURE_SETUP_MARKERS = (
+    ("setup_started", "started"),
+    ("setup_bootstrap_ready", "bootstrap_ready"),
+    ("setup_parser_imports_ready", "parser_imports_ready"),
+    ("setup_preflight_ready", "preflight_ready"),
+)
+
+
+def _fixture_setup_failure(scratch, thread, deliveries):
+    stage = "not_started"
+    for marker, observed_stage in _FIXTURE_SETUP_MARKERS:
+        if (scratch / marker).exists():
+            stage = observed_stage
+    if thread.is_alive():
+        child_state = "running"
+    elif not deliveries:
+        child_state = "delivery_unavailable"
+    elif deliveries[0].observation.exit_code == 0:
+        child_state = "exit_zero"
+    else:
+        child_state = "exit_nonzero"
+    return f"fixture_setup_not_ready:{stage}:{child_state}"
+
+
 def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path):
     store = IncidentStore(tmp_path / "state")
     child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
@@ -94,7 +118,9 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
             and time.monotonic() < readiness_deadline
         ):
             time.sleep(0.02)
-        assert (scratch / "operation_ready").exists(), "fixture_setup_not_ready"
+        if not (scratch / "operation_ready").exists():
+            pytest.fail(_fixture_setup_failure(scratch, thread, deliveries))
+        assert all((scratch / marker).exists() for marker, _stage in _FIXTURE_SETUP_MARKERS)
         deadline = time.monotonic() + 7
         reports = store.list_reports().reports
         operation_returned = (scratch / "operation_returned").exists()

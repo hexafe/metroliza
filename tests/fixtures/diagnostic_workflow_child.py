@@ -34,19 +34,20 @@ def _finish_handled_failure(worker, scratch, recorder):
 
 
 def main():
+    scratch = Path(sys.argv[1])
+    (scratch / "setup_started").touch()
     recorder = attach_child_recorder()
     ensure_application_logging()
     from metroliza.app.bootstrap import run_application
 
     if run_application() != 0:
         return 10
-    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
-    from metroliza.exporting.export_data_thread import ExportDataThread
+    (scratch / "setup_bootstrap_ready").touch()
     from metroliza.parsing.parse_reports_thread import ParseReportsThread
     from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
     from metroliza.shared.parse_contracts import ParseRequest
 
-    scratch = Path(sys.argv[1])
+    (scratch / "setup_parser_imports_ready").touch()
     source = scratch / "reports"
     source.mkdir()
     fixture = Path(__file__).resolve().parents[1] / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
@@ -57,12 +58,16 @@ def main():
         source_path=source, database_path=database, metadata_parsing_mode="light",
     )
     worker = ParseReportsThread(ImportPlan.all_ready(request, preflight))
+    (scratch / "setup_preflight_ready").touch()
     if sys.argv[2] == "handled_failure":
         (source / "SYNTHETIC_PRIVATE_FILENAME.pdf").unlink()
         (scratch / "operation_ready").touch()
     worker.run()
     if sys.argv[2] == "handled_failure":
         return _finish_handled_failure(worker, scratch, recorder)
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
+
     if worker.last_parse_result.imported_files != 1:
         return 11
     with closing(sqlite3.connect(database)) as connection:
