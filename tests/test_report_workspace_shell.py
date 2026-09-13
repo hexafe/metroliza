@@ -434,6 +434,135 @@ def test_temporary_industrial_cache_cannot_rebind_to_active_report_database(app,
         industrial.close()
 
 
+
+@pytest.mark.parametrize("workflow", ["industrial", "export", "modifydb"])
+@pytest.mark.parametrize("stage", ["review", "import"])
+@pytest.mark.parametrize("nested_entry", ["picker", "discard"])
+def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, window, reports, monkeypatch, workflow, stage, nested_entry):
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.ui import export_dialog, industrial_data_dialog
+
+    source, database = reports
+    database = database.with_suffix(".db")
+    previous = database.with_name("previous.db")
+    monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda _self: {})
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Cancel)
+    window.set_directory(str(source))
+    window.set_db_file(str(database if workflow == "industrial" else previous))
+    if workflow == "industrial":
+        window.launch_industrial_data_dialog()
+        writer = window.industrial_data_dialog
+        writer.use_temporary_cache()
+        previous_target = writer.cache_target
+        previous_db = writer.db_file
+        IndustrialDataRepository(previous_db).upsert_source_profile(
+            profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+            database_type="sqlite", source_object_name="events",
+        )
+    else:
+        getattr(window, f"launch_{workflow}_dialog")()
+        writer = getattr(window, f"{workflow}_dialog")
+        previous_db = writer.db_file
+        if workflow == "modifydb":
+            writer.populate_table(writer.reference_table, [("original", 1)])
+            writer.reference_table.item(0, 1).setText("retained draft")
+        assert window.set_db_file(str(database))
+    assert writer.isVisible() and writer.db_file == previous_db
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+    picker_calls, nested_calls = [], []
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    def start_in_nested_loop():
+        nested_calls.append(True)
+        assert host.can_change_workspace()
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        wait_until(app, entered.is_set)
+
+    def picker(*_args):
+        picker_calls.append(True)
+        if nested_entry == "picker":
+            start_in_nested_loop()
+        return str(database), ""
+
+    def discard(*_args):
+        if nested_entry == "discard":
+            start_in_nested_loop()
+        return QMessageBox.StandardButton.Discard
+
+    if workflow == "export" and nested_entry == "discard":
+        class DraftWindow(QDialog):
+            def closeEvent(self, event):
+                start_in_nested_loop()
+                event.accept()
+
+        writer.filter_window = DraftWindow(writer)
+        writer.filter_window.show()
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", picker)
+    monkeypatch.setattr(QMessageBox, "question", discard)
+    snapshot = window.workspace_context.snapshot
+    try:
+        if workflow == "industrial":
+            writer.select_database_file()
+            assert writer.cache_target is previous_target
+            created = []
+            create_target = industrial_data_dialog.create_temporary_industrial_cache_target
+
+            def tracked_target():
+                target = create_target()
+                created.append(target)
+                return target
+
+            monkeypatch.setattr(industrial_data_dialog, "create_temporary_industrial_cache_target", tracked_target)
+            assert writer.update_db_file(None) is False
+            assert len(created) == 1
+            assert not os.path.exists(created[0].cache_db_file)
+            assert os.path.exists(previous_target.cache_db_file)
+            assert writer.cache_target is previous_target
+        else:
+            writer.select_db_file()
+        assert picker_calls == [True]
+        assert nested_calls == [True]
+        assert not host.can_change_workspace()
+        assert writer.db_file == previous_db
+        assert window.workspace_context.snapshot is snapshot
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", lambda *_args: (str(database), ""))
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+        if workflow == "industrial":
+            writer.select_database_file()
+        else:
+            writer.select_db_file()
+        assert writer.db_file == str(database)
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+        if not sip.isdeleted(writer):
+            writer.close()
+
+
 def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):
     from metroliza.parsing import metadata_enrichment_thread
 

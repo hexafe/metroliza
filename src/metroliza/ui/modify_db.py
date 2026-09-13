@@ -441,6 +441,8 @@ class ModifyDB(QDialog):
                 self, "Select a database file", "", "SQLite database (*.db);;All files (*)"
             )
             if filename:
+                if self.database_change_allowed is not None and not self.database_change_allowed():
+                    return
                 if not filename.endswith(".db"):
                     filename += ".db"
                 logger.info("Selected DB file: %s", filename)

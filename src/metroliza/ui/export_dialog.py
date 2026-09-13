@@ -1150,6 +1150,8 @@ class ExportDialog(QDialog):
             return False
         if not self._discard_child_drafts():
             return False
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return False
         self.db_file = db_file
         self._set_path_field_value(self.database_text_label, db_file)
 

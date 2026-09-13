@@ -268,17 +268,21 @@ class IndustrialDataDialog(QDialog):
         """Point an already-open dialog at the current main-window database."""
 
         if db_file:
-            updated = self._set_cache_target(existing_metroliza_cache_target(db_file))
+            updated = self._set_cache_target(existing_metroliza_cache_target(db_file), guard_workspace=True)
         else:
-            updated = self._set_cache_target(create_temporary_industrial_cache_target())
+            updated = self._set_cache_target(create_temporary_industrial_cache_target(), guard_workspace=True)
         if not updated:
             return False
         self._workspace_db_file = db_file
         self.refresh_status()
         return True
 
-    def _set_cache_target(self, target: IndustrialCacheTarget) -> bool:
+    def _set_cache_target(self, target: IndustrialCacheTarget, *, guard_workspace: bool = False) -> bool:
         previous = getattr(self, "cache_target", None)
+        if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
+            if previous is None or previous.cache_db_file != target.cache_db_file:
+                cleanup_temporary_industrial_cache(target)
+            return False
         if previous is not None and previous != target and self._link_refresh_owns_context():
             if previous.cache_db_file != target.cache_db_file:
                 cleanup_temporary_industrial_cache(target)
@@ -289,6 +293,9 @@ class IndustrialDataDialog(QDialog):
                 previous,
                 additional_forbidden=(target.cache_db_file,),
             ):
+                cleanup_temporary_industrial_cache(target)
+                return False
+            if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
                 cleanup_temporary_industrial_cache(target)
                 return False
             cleanup_temporary_industrial_cache(previous)
@@ -331,7 +338,7 @@ class IndustrialDataDialog(QDialog):
         if not filename:
             return
 
-        if not self._set_cache_target(existing_metroliza_cache_target(filename)):
+        if not self._set_cache_target(existing_metroliza_cache_target(filename), guard_workspace=True):
             return
         self._workspace_db_file = filename
         parent = self.parent()
