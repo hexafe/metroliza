@@ -109,8 +109,18 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
         thread.join(10)
     assert not thread.is_alive()
     assert deliveries[0].observation.exit_code == 0
-    assert deliveries[0].storage_status is StoreStatus.MARKER_CLEAN_ENDED
-    assert len(store.list_reports().reports) == 1
+    assert deliveries[0].storage_status is StoreStatus.SAVED
+    reports = store.list_reports().reports
+    assert len(reports) == 2
+    incidents = [store.load(report.report_id).incident for report in reports]
+    final = next(
+        incident
+        for incident in incidents
+        if incident is not None and incident.observation.exit_code == 0
+    )
+    assert final.observation.clean_terminal_received
+    assert json.loads(final.events[-1])["outcome"] == "failed"
+    assert store.list_unclean_sessions().sessions == ()
 
 
 def _live_observation():
@@ -284,6 +294,59 @@ def test_final_control_survives_three_failed_terminal_backlog(tmp_path, monkeypa
     assert incident.observation.channel.value == "complete"
     assert incident.observation.exit_code == 0
     assert len(incident.events) == 3
+
+
+def test_real_child_final_preserves_recent_failure_after_saved_live_backlog(
+    tmp_path, monkeypatch
+):
+    from metroliza.shared.diagnostic_store import StoreResult
+
+    store = IncidentStore(tmp_path / "state")
+    original = store.publish
+    publish_count = 0
+
+    def hold_first_live_publish(incident):
+        nonlocal publish_count
+        publish_count += 1
+        if publish_count == 1:
+            (tmp_path / "live_publish_entered").touch()
+            deadline = time.monotonic() + 5
+            while not (tmp_path / "child_finished").exists():
+                if time.monotonic() >= deadline:
+                    return StoreResult(StoreStatus.IO_FAILED)
+                time.sleep(0.01)
+            time.sleep(0.15)
+        return original(incident)
+
+    monkeypatch.setattr(store, "publish", hold_first_live_publish)
+    child = Path(__file__).parent / "fixtures" / "diagnostic_protocol_child.py"
+    delivery = run_with_store(
+        [sys.executable, str(child), "failure_backlog", str(tmp_path)],
+        store=store,
+    )
+
+    assert delivery.observation.exit_code == 0
+    assert delivery.observation.clean_terminal_received
+    assert delivery.observation.channel == "complete"
+    assert delivery.storage_status is StoreStatus.SAVED
+    assert publish_count == 2
+    assert store.list_unclean_sessions().sessions == ()
+    incidents = [
+        store.load(report.report_id).incident
+        for report in store.list_reports().reports
+    ]
+    assert len(incidents) == 2
+    final = next(
+        incident
+        for incident in incidents
+        if incident is not None and incident.observation.exit_code == 0
+    )
+    assert final.session_id.hex == delivery.observation.session_id
+    assert final.observation.clean_terminal_received
+    assert len(final.events) == 2
+    recent = json.loads(final.events[-1])
+    assert recent["operation_id"] == "00000002000040008000000000000000"
+    assert recent["outcome"] == "failed"
 
 
 @pytest.mark.parametrize("failed_thread", ["diagnostic-receiver", "incident-publisher"])

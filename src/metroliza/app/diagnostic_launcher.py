@@ -81,7 +81,6 @@ class _OperationPublisher:
         self.closing = False
         self.marker_status: StoreStatus | None = None
         self.authentication_status: StoreStatus | None = None
-        self.live_saved = False
         self.final_status = StoreStatus.IO_FAILED
         self.worker = threading.Thread(target=self._run, name="incident-publisher", daemon=True)
 
@@ -203,9 +202,7 @@ class _OperationPublisher:
             with self.lock:
                 if self.final is not None:
                     return
-        if status is StoreStatus.SAVED:
-            self.live_saved = True
-        else:
+        if status is not StoreStatus.SAVED:
             self.failed.set()
 
     def _finalize(self, observed: SupervisedResult | None) -> StoreStatus:
@@ -215,8 +212,7 @@ class _OperationPublisher:
             self._ensure_begin()
             if observed.handshake == "accepted":
                 self._ensure_authenticated()
-        retain_failure = _has_caught_failure(observed) and not self.live_saved
-        if observed.needs_incident or retain_failure:
+        if observed.needs_incident or _has_caught_failure(observed):
             return persist_observation(self.store, observed, self.git_sha)
         if self.authentication_status is StoreStatus.MARKER_AUTHENTICATED:
             return self.store.end_session(self.session_id, clean=True).status
