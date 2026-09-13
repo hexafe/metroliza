@@ -513,12 +513,15 @@ class ParsingDialog(QDialog):
 
         return metadata_parsing_mode, run_background_metadata_enrichment, request_modeless_enrichment
 
-    def _sync_readiness_state(self):
+    def _sync_readiness_state(self, *, refresh_registry=False):
         inputs_ready = bool(self.directory and self.db_file)
         busy = self.preflight_thread is not None or self.parse_thread is not None
         current = inputs_ready and self._preflight_is_current()
         selected = self.report_planner.model.selected_ids
-        eligible = {item.stable_occurrence_id for item in self._atomic_import_candidates()}
+        eligible = {
+            item.stable_occurrence_id
+            for item in self._atomic_import_candidates(refresh_registry=refresh_registry)
+        }
         if current and selected and not set(selected).issubset(eligible):
             self._invalidate_preflight("Changed since review. Review reports again before importing.")
             return self._sync_readiness_state()
@@ -570,7 +573,7 @@ class ParsingDialog(QDialog):
             quiet=(self.review_scan_button,),
         )
 
-    def _atomic_import_candidates(self):
+    def _atomic_import_candidates(self, *, refresh_registry=False):
         if self._preflight_result is None:
             return ()
         metadata_mode, _background, _modeless = self._build_parse_request_fields()
@@ -578,7 +581,11 @@ class ParsingDialog(QDialog):
             source_path=self.directory,
             database_path=self.db_file,
             metadata_parsing_mode=metadata_mode,
-            registry_generation_id=report_parser_factory.get_registry_snapshot().generation_id,
+            # Checkbox edits use the published generation without filesystem
+            # hashing; the import boundary below explicitly refreshes approval.
+            registry_generation_id=report_parser_factory.get_registry_snapshot(
+                refresh=refresh_registry,
+            ).generation_id,
         )
 
     def _preflight_is_current(self):
@@ -815,7 +822,7 @@ class ParsingDialog(QDialog):
     @pyqtSlot()
     def _import_reviewed_reports(self):
         """Dispatch the exact global selection through the accepted import contract."""
-        self._sync_readiness_state()
+        self._sync_readiness_state(refresh_registry=True)
         if not self.parse_button.isEnabled():
             return
         metadata, enrich, _modeless = self._build_parse_request_fields()

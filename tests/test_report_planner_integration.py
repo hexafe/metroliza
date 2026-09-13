@@ -265,15 +265,46 @@ def test_parser_generation_drift_clears_ui_approval(reviewed, monkeypatch):
 
     dialog, _source, database = reviewed
     snapshot = report_parser_factory.get_registry_snapshot()
-    monkeypatch.setattr(report_parser_factory, "get_registry_snapshot", lambda: replace(
-        snapshot, generation_id=snapshot.generation_id + 1,
-    ))
+    monkeypatch.setattr(
+        report_parser_factory, "get_registry_snapshot",
+        lambda *, refresh=True: replace(snapshot, generation_id=snapshot.generation_id + 1)
+        if refresh else snapshot,
+    )
     dialog._import_reviewed_reports()
     assert dialog.parse_thread is None
     assert dialog.report_planner.model.selected_ids == ()
     assert not dialog.parse_button.isEnabled()
     assert "Changed since review" in dialog.readiness_label.text()
     assert not database.exists()
+
+
+def test_selection_uses_cached_registry_but_import_refreshes_before_real_execution(app, reviewed, monkeypatch):
+    from metroliza.parsing import report_parser_factory
+
+    dialog, _source, database = reviewed
+    original_refresh = report_parser_factory._ensure_external_plugins_loaded_once
+    refreshes = []
+
+    def track_filesystem_refresh():
+        refreshes.append(True)
+        return original_refresh()
+
+    monkeypatch.setattr(report_parser_factory, "_ensure_external_plugins_loaded_once", track_filesystem_refresh)
+    planner = dialog.report_planner
+    planner.clear.click()
+    planner.model.setData(planner.model.index(2, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+    planner.search.setText("report-0")
+    assert refreshes == [], "Selection and filters must not refresh external parser files"
+    assert dialog.parse_button.text() == "Import 1 selected report"
+    dialog._import_reviewed_reports()
+    assert refreshes, "Import must refresh the authoritative registry before dispatch"
+    worker = dialog.parse_thread
+    wait_until(app, lambda: dialog.parse_thread is None)
+    assert worker.last_parse_result.imported_files == 1
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT file_name FROM source_file_locations").fetchall() == [
+            ("report-2.pdf",),
+        ]
 
 
 def test_archive_selection_uses_member_location_and_real_import(app, reports, monkeypatch):
