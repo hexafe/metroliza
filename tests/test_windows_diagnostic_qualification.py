@@ -1259,6 +1259,50 @@ def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypa
     assert not any(key.startswith("PYTHON") for key in api.environment)
 
 
+def test_ui_process_exit_mismatch_retains_observed_numeric_code(tmp_path) -> None:
+    process = _FakeProcess(3221225477, supervised=True)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_driver_phase(
+            "ui_smoke",
+            lambda: qualification._finish_process_without_receipt(
+                process,
+                tmp_path,
+                time.monotonic() + 1,
+                0,
+            ),
+        )
+
+    assert caught.value.qualification_stage == "ui_smoke"
+    assert caught.value.qualification_reason == "process_exit_mismatch"
+    assert caught.value.qualification_exit_code == 3221225477
+
+
+def test_idle_early_exit_retains_exact_mode_and_numeric_code(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = tmp_path / "artifact"
+    runner.state_base = tmp_path / "state"
+    runner.application = runner.artifact / "metroliza_application.exe"
+    runner.launcher = runner.artifact / "metroliza.exe"
+    runner.deadline = time.monotonic() + 1
+    runner.api = _FakeApi(3221225477, "ready")
+    runner.results = {}
+    work = tmp_path / "work"
+    for path in (runner.artifact, runner.state_base, work):
+        path.mkdir()
+    runner._root = lambda _label: work
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        runner.run_idle()
+
+    assert caught.value.qualification_stage == "direct_idle"
+    assert caught.value.qualification_reason == "process_exit_mismatch"
+    assert caught.value.qualification_exit_code == 3221225477
+
+
 def test_platform_and_relative_arguments_fail_without_creating_output(
     tmp_path, monkeypatch
 ) -> None:

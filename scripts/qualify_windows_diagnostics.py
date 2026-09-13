@@ -1460,8 +1460,16 @@ def _finish_process_without_receipt(
         if exit_code is not None:
             break
         time.sleep(0.02)
-    if exit_code != expected_exit or not _wait_for_job_exit(process, deadline):
-        raise QualificationFailure("scenario_failed")
+    if exit_code is None:
+        raise QualificationFailure("scenario_timeout")
+    if exit_code != expected_exit:
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_reason="process_exit_mismatch",
+            qualification_exit_code=exit_code,
+        )
+    if not _wait_for_job_exit(process, deadline):
+        raise QualificationFailure("scenario_timeout")
     return ScenarioResult(
         exit_code,
         round((time.perf_counter() - process.started) * 1000),
@@ -2704,8 +2712,13 @@ class _QualificationRunner:
                 time.monotonic() + IDLE_SAMPLE_MILLISECONDS / 1000,
             )
             while time.monotonic() < hold_until:
-                if process.poll() is not None:
-                    raise QualificationFailure("scenario_failed")
+                exit_code = process.poll()
+                if exit_code is not None:
+                    raise QualificationFailure(
+                        "scenario_failed",
+                        qualification_reason="process_exit_mismatch",
+                        qualification_exit_code=exit_code,
+                    )
                 time.sleep(0.05)
             observed["write_bytes"] = max(
                 0, process.metrics().write_bytes - before
@@ -2785,11 +2798,19 @@ class _QualificationRunner:
         terminate = True
         try:
             exit_code = self._wait_missing_exit(process)
-            if exit_code != 1 or _has_qualification_receipt(root):
+            if exit_code is None:
+                raise QualificationFailure("scenario_timeout")
+            if exit_code != 1:
+                raise QualificationFailure(
+                    "scenario_failed",
+                    qualification_reason="process_exit_mismatch",
+                    qualification_exit_code=exit_code,
+                )
+            if _has_qualification_receipt(root):
                 raise QualificationFailure("scenario_failed")
             all_exited = _wait_for_job_exit(process, self.deadline)
             if not all_exited:
-                raise QualificationFailure("scenario_failed")
+                raise QualificationFailure("scenario_timeout")
             terminate = False
             self.results["missing_components"] = ScenarioResult(
                 1,
@@ -2829,11 +2850,19 @@ class _QualificationRunner:
             terminate = True
             try:
                 exit_code = self._wait_missing_exit(process)
-                if exit_code in (None, 0) or _has_qualification_receipt(root):
+                if exit_code is None:
+                    raise QualificationFailure("scenario_timeout")
+                if exit_code == 0:
+                    raise QualificationFailure(
+                        "scenario_failed",
+                        qualification_reason="process_exit_mismatch",
+                        qualification_exit_code=exit_code,
+                    )
+                if _has_qualification_receipt(root):
                     raise QualificationFailure("scenario_failed")
                 all_exited = _wait_for_job_exit(process, self.deadline)
                 if not all_exited:
-                    raise QualificationFailure("scenario_failed")
+                    raise QualificationFailure("scenario_timeout")
                 terminate = False
                 self.results["missing_qt_resource"] = ScenarioResult(
                     exit_code,
