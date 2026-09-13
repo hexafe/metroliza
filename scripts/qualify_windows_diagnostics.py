@@ -1151,13 +1151,13 @@ class _WindowsApi:
         current = wt.HANDLE()
         restricted = wt.HANDLE()
         token_access = 0x0001 | 0x0002 | 0x0008 | 0x0080
-        if not self.advapi.OpenProcessToken(
-            self.kernel.GetCurrentProcess(), token_access, ctypes.byref(current)
-        ):
-            raise QualificationFailure("restricted_launch_unavailable")
-        sid_size = wt.DWORD(68)
-        sid = ctypes.create_string_buffer(sid_size.value)
         try:
+            if not self.advapi.OpenProcessToken(
+                self.kernel.GetCurrentProcess(), token_access, ctypes.byref(current)
+            ):
+                raise QualificationFailure("restricted_launch_unavailable")
+            sid_size = wt.DWORD(68)
+            sid = ctypes.create_string_buffer(sid_size.value)
             if not self.advapi.CreateWellKnownSid(
                 26, None, sid, ctypes.byref(sid_size)
             ):
@@ -1181,7 +1181,7 @@ class _WindowsApi:
             if self._has_effective_admin_membership(restricted, sid):
                 raise QualificationFailure("restricted_launch_unavailable")
             return restricted
-        except Exception:
+        except BaseException:
             if restricted:
                 _attempt_cleanup(
                     lambda: self._require_closed_handles(restricted)
@@ -1203,11 +1203,11 @@ class _WindowsApi:
         environment: dict[str, str],
         cwd: Path,
     ) -> _WindowsProcess:
-        token = self._restricted_token()
         process = self.PROCESS_INFORMATION()
+        token = None
         job = None
-        token_open = True
         try:
+            token = self._restricted_token()
             job = self.kernel.CreateJobObjectW(None, None)
             if not job:
                 raise QualificationFailure("restricted_launch_unavailable")
@@ -1250,20 +1250,22 @@ class _WindowsApi:
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
             self._require_closed_handles(token)
-            token_open = False
+            token = None
             return self._finish_launched_process(process, job, started, initial)
-        except Exception as error:
+        except BaseException as error:
+            if process.hProcess:
+                cleanup_succeeded = self._cleanup_created_process(process, job)
+            else:
+                cleanup_succeeded = self._close_handles(job)
+            if token:
+                cleanup_succeeded = self._close_handles(token) and cleanup_succeeded
+            if not isinstance(error, Exception):
+                raise
             primary = (
                 error
                 if isinstance(error, QualificationFailure)
                 else QualificationFailure("restricted_launch_unavailable")
             )
-            if process.hProcess:
-                cleanup_succeeded = self._cleanup_created_process(process, job)
-            else:
-                cleanup_succeeded = self._close_handles(job)
-            if token_open:
-                cleanup_succeeded = self._close_handles(token) and cleanup_succeeded
             primary.record_cleanup(succeeded=cleanup_succeeded)
             raise primary from None
 

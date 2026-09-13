@@ -488,9 +488,60 @@ def test_failed_launch_cleanup_drains_job_and_closes_every_handle() -> None:
     ]
 
 
-def test_launch_ordinary_exception_cleans_created_process_and_fixed_primary(
-    tmp_path, monkeypatch
+class _InterruptedLaunchKernel:
+    def __init__(self, primary, failure_phase):
+        self.primary = primary
+        self.failure_phase = failure_phase
+        self.closed = []
+        self.terminated = []
+
+    def CreateJobObjectW(self, _security, _name):
+        if self.failure_phase == "job":
+            raise self.primary
+        return "owned-job"
+
+    def SetInformationJobObject(self, *_arguments):
+        return 1
+
+    def AssignProcessToJobObject(self, _job, _process):
+        raise self.primary
+
+    def TerminateJobObject(self, _job, _code):
+        self.terminated.append("owned-job")
+        return 1
+
+    def TerminateProcess(self, _process, _code):
+        self.terminated.append("primary")
+        return 1
+
+    def WaitForSingleObject(self, _process, _milliseconds):
+        return qualification.WAIT_OBJECT_0
+
+    def CloseHandle(self, handle):
+        self.closed.append(handle)
+        return 1
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_type"),
+    [
+        (RuntimeError, qualification.QualificationFailure),
+        (KeyboardInterrupt, KeyboardInterrupt),
+        (SystemExit, SystemExit),
+    ],
+)
+@pytest.mark.parametrize(
+    ("failure_phase", "terminated", "closed"),
+    [
+        ("job", [], ["token"]),
+        ("create", ["owned-job", "primary"], ["thread", "primary", "owned-job", "token"]),
+        ("assign", ["owned-job", "primary"], ["thread", "primary", "owned-job", "token"]),
+    ],
+)
+def test_launch_failure_cleans_created_process_and_preserves_primary(
+    tmp_path, monkeypatch, failure_type, expected_type, failure_phase, terminated, closed
 ) -> None:
+    primary = failure_type("PRIVATE_NATIVE_TEXT")
     class _Limits:
         class _Basic:
             LimitFlags = 0
@@ -501,42 +552,20 @@ def test_launch_ordinary_exception_cleans_created_process_and_fixed_primary(
         cb = 0
 
     class _Process:
-        hThread = "thread"
-        hProcess = "primary"
+        hThread = None
+        hProcess = None
         dwProcessId = 123
-
-    class _Kernel:
-        def __init__(self) -> None:
-            self.closed = []
-
-        def CreateJobObjectW(self, _security, _name):
-            return "owned-job"
-
-        def SetInformationJobObject(self, *_arguments):
-            return 1
-
-        def AssignProcessToJobObject(self, _job, _process):
-            raise RuntimeError("PRIVATE_NATIVE_TEXT")
-
-        def TerminateJobObject(self, _job, _code):
-            return 1
-
-        def TerminateProcess(self, _process, _code):
-            return 1
-
-        def WaitForSingleObject(self, _process, _milliseconds):
-            return qualification.WAIT_OBJECT_0
-
-        def CloseHandle(self, handle):
-            self.closed.append(handle)
-            return 1
 
     class _Advapi:
         def CreateProcessAsUserW(self, *_arguments):
+            _arguments[-1].hThread = "thread"
+            _arguments[-1].hProcess = "primary"
+            if failure_phase == "create":
+                raise primary
             return 1
 
     api = object.__new__(qualification._WindowsApi)
-    api.kernel = _Kernel()
+    api.kernel = _InterruptedLaunchKernel(primary, failure_phase)
     api.advapi = _Advapi()
     api.EXTENDED_LIMITS = _Limits
     api.STARTUPINFOW = _Startup
@@ -546,13 +575,71 @@ def test_launch_ordinary_exception_cleans_created_process_and_fixed_primary(
     monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
     monkeypatch.setattr(qualification.ctypes, "sizeof", lambda _value: 1)
 
-    with pytest.raises(qualification.QualificationFailure) as caught:
+    with pytest.raises(expected_type) as caught:
         api.launch(tmp_path / "app.exe", {"SYSTEMROOT": "fixed"}, tmp_path)
 
-    assert caught.value.failure_id == "restricted_launch_unavailable"
-    assert caught.value.qualification_cleanup == "complete"
-    assert api.kernel.closed == ["thread", "primary", "owned-job", "token"]
-    assert "PRIVATE_NATIVE_TEXT" not in str(caught.value)
+    if failure_type is RuntimeError:
+        assert caught.value.failure_id == "restricted_launch_unavailable"
+        assert caught.value.qualification_cleanup == "complete"
+        assert "PRIVATE_NATIVE_TEXT" not in str(caught.value)
+    else:
+        assert caught.value is primary
+    assert api.kernel.terminated == terminated
+    assert api.kernel.closed == closed
+
+
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("failure_phase", ["open", "restrict", "medium"])
+def test_interrupted_token_creation_closes_acquired_handles(
+    monkeypatch, failure_type, failure_phase
+) -> None:
+    from types import SimpleNamespace
+
+    primary = failure_type("PRIVATE_INTERRUPT_DETAIL")
+    closed = []
+
+    class _Handle:
+        value = 0
+
+        def __bool__(self):
+            return bool(self.value)
+
+    class _Advapi:
+        def OpenProcessToken(self, _process, _access, current):
+            current.value = 1
+            if failure_phase == "open":
+                raise primary
+            return True
+
+        def CreateWellKnownSid(self, *_arguments):
+            return True
+
+        def CreateRestrictedToken(self, *_arguments):
+            _arguments[-1].value = 2
+            if failure_phase == "restrict":
+                raise primary
+            return True
+
+    def interrupt_medium(_token):
+        raise primary
+
+    def close(handle):
+        closed.append(handle.value)
+        return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = SimpleNamespace(HANDLE=_Handle, DWORD=qualification.ctypes.c_uint32)
+    api.kernel = SimpleNamespace(GetCurrentProcess=lambda: -1, CloseHandle=close)
+    api.advapi = _Advapi()
+    api.SID_AND_ATTRIBUTES = lambda *_arguments: object()
+    api._set_medium_integrity = interrupt_medium
+    monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
+
+    with pytest.raises(failure_type) as caught:
+        api._restricted_token()
+
+    assert caught.value is primary
+    assert closed == ([1] if failure_phase == "open" else [2, 1])
 
 
 def test_concurrent_cleanup_attempts_every_owned_process() -> None:
