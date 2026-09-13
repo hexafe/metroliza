@@ -1545,6 +1545,11 @@ class MainWindow(QMainWindow):
 
     def _report_start_allowed(self):
         """Keep existing same-database windows safe without closing their work."""
+        if getattr(self.export_dialog, "database_context_transition_active", False):
+            self.statusBar().showMessage(
+                "Report start was blocked during Export database selection.", 5000
+            )
+            return False
         if not self.db_file:
             return True
         blockers = []

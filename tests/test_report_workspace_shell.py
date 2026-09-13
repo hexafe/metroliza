@@ -490,7 +490,12 @@ def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, wind
         nested_calls.append(True)
         assert host.can_change_workspace()
         (host.parse_button if stage == "import" else host.scan_button).click()
-        wait_until(app, entered.is_set)
+        if workflow == "export" and nested_entry == "discard":
+            assert host.can_change_workspace()
+            assert not entered.is_set()
+            assert window.statusBar().currentMessage() == "Report start was blocked during Export database selection."
+        else:
+            wait_until(app, entered.is_set)
 
     def picker(*_args):
         picker_calls.append(True)
@@ -538,8 +543,16 @@ def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, wind
             writer.select_db_file()
         assert picker_calls == [True]
         assert nested_calls == [True]
-        assert not host.can_change_workspace()
-        assert writer.db_file == previous_db
+        if workflow == "export" and nested_entry == "discard":
+            assert host.can_change_workspace()
+            assert writer.db_file == str(database)
+            assert not writer.database_context_transition_active
+            writer.close()
+            release.set()
+            (host.parse_button if stage == "import" else host.scan_button).click()
+        else:
+            assert not host.can_change_workspace()
+            assert writer.db_file == previous_db
         assert window.workspace_context.snapshot is snapshot
         release.set()
         wait_until(app, host.can_change_workspace)
@@ -552,13 +565,102 @@ def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, wind
         monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
         if workflow == "industrial":
             writer.select_database_file()
-        else:
+        elif not (workflow == "export" and nested_entry == "discard"):
             writer.select_db_file()
         assert writer.db_file == str(database)
     finally:
         release.set()
         wait_until(app, host.can_change_workspace)
         monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+        if not sip.isdeleted(writer):
+            writer.close()
+
+
+
+@pytest.mark.parametrize("child_kind", ["filter", "grouping"])
+@pytest.mark.parametrize("discard", [False, True])
+@pytest.mark.parametrize("stage", ["review", "import"])
+def test_export_context_transition_protects_real_child_drafts(app, window, reports, monkeypatch, child_kind, discard, stage):
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.ui import export_dialog
+
+    source, database = reports
+    previous = database.with_name("previous.db")
+    monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda _self: {})
+    window.set_directory(str(source))
+    window.set_db_file(str(previous))
+    window.launch_export_dialog()
+    writer = window.export_dialog
+    window.set_db_file(str(database))
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+    getattr(writer, f"open_{child_kind}_window")()
+    child = getattr(writer, f"{child_kind}_window")
+    assert child.isVisible()
+    if child_kind == "filter":
+        child.expression_input.setText("MEAS > 1")
+        assert child._is_dirty()
+    else:
+        child.default_group = "RETAINED GROUP"
+        assert child._is_grouping_dirty()
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+    observations = []
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    def confirm(*_args):
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        observations.append((host.can_change_workspace(), host.preflight_thread, host.parse_thread))
+        return QMessageBox.StandardButton.Yes if discard else QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr(QMessageBox, "question", confirm)
+    selected = host.report_planner.model.selected_ids
+    snapshot = window.workspace_context.snapshot
+    notice = (window.workspace_notice_label.text(), window.workspace_notice_label.isVisible())
+    try:
+        accepted = writer._update_database_context(str(database))
+        assert observations == [(True, None, None)]
+        assert not entered.is_set()
+        assert host.report_planner.model.selected_ids == selected
+        assert window.workspace_context.snapshot is snapshot
+        assert accepted is discard
+        assert not writer.database_context_transition_active
+        assert (window.workspace_notice_label.text(), window.workspace_notice_label.isVisible()) == notice
+        assert window.statusBar().currentMessage() == "Report start was blocked during Export database selection."
+        if discard:
+            assert writer.db_file == str(database)
+            assert getattr(writer, f"{child_kind}_window") is None
+            writer.close()
+        else:
+            assert writer.db_file == str(previous)
+            assert getattr(writer, f"{child_kind}_window") is child and child.isVisible()
+            if child_kind == "filter":
+                assert child.expression_input.text() == "MEAS > 1" and child._is_dirty()
+            else:
+                assert child.default_group == "RETAINED GROUP" and child._is_grouping_dirty()
+        assert window._report_start_allowed()
+        release.set()
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
         if not sip.isdeleted(writer):
             writer.close()
 
