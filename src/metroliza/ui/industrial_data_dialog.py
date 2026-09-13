@@ -68,6 +68,7 @@ class IndustrialDataDialog(QDialog):
     def __init__(self, parent=None, db_file: str | None = None):
         super().__init__(parent)
         self.report_db_file = db_file
+        self.database_change_allowed = None
         self._workspace_db_file = db_file
         self.cache_target: IndustrialCacheTarget = (
             existing_metroliza_cache_target(db_file)
@@ -316,6 +317,8 @@ class IndustrialDataDialog(QDialog):
     def select_database_file(self) -> None:
         """Select an existing Metroliza database used for cache and links."""
 
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return
         if self._link_refresh_owns_context():
             self._show_link_refresh_context_guard()
             return

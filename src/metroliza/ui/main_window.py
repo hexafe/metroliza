@@ -1103,6 +1103,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("industrial_data_dialog", self.industrial_data_dialog)
                 self.industrial_data_dialog.show()
 
+            self.industrial_data_dialog.database_change_allowed = self._report_context_change_allowed
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
         except Exception as e:
@@ -1436,7 +1437,7 @@ class MainWindow(QMainWindow):
 
     def set_db_file(self, db_file):
         try:
-            if db_file != self.db_file and not self._report_context_change_allowed():
+            if not self._report_context_change_allowed():
                 return False
             if self.industrial_data_dialog and self.industrial_data_dialog.isVisible():
                 updated = self.industrial_data_dialog.update_db_file(db_file)

@@ -369,6 +369,71 @@ def test_preserved_window_cannot_switch_onto_active_report_database(app, window,
         writer.close()
 
 
+@pytest.mark.parametrize("stage", ["review", "import"])
+def test_temporary_industrial_cache_cannot_rebind_to_active_report_database(app, window, reports, monkeypatch, stage):
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+
+    source, database = reports
+    window.set_directory(str(source))
+    window.set_db_file(str(database))
+    window.launch_industrial_data_dialog()
+    industrial = window.industrial_data_dialog
+    industrial.use_temporary_cache()
+    temporary = industrial.cache_target
+    assert temporary.is_temporary and industrial.report_db_file is None
+    assert window.db_file == industrial._workspace_db_file == str(database)
+    repository = IndustrialDataRepository(temporary.cache_db_file)
+    repository.upsert_source_profile(
+        profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+        database_type="sqlite", source_object_name="events",
+    )
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", lambda *_args: (str(database), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+    try:
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        wait_until(app, entered.is_set)
+        snapshot = window.workspace_context.snapshot
+        # Selecting the already active database must not rebind a separate cache either.
+        assert window.set_db_file(str(database)) is False
+        assert industrial.cache_target is temporary
+        industrial.select_database_file()
+        assert industrial.cache_target is temporary
+        assert industrial.db_file == temporary.cache_db_file and industrial.report_db_file is None
+        assert window.workspace_context.snapshot is snapshot
+        assert len(repository.list_source_profiles(include_disabled=True)) == 1
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        industrial.select_database_file()
+        assert industrial.db_file == str(database) and industrial.report_db_file == str(database)
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        industrial.close()
+
+
 def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):
     from metroliza.parsing import metadata_enrichment_thread
 

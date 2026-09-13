@@ -312,6 +312,7 @@ class ExportDialog(QDialog):
     """
 
     close_deferral_cancelled = pyqtSignal()
+    database_change_allowed = None
 
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
@@ -322,7 +323,6 @@ class ExportDialog(QDialog):
         configure_window_size(self, minimum=(700, 430), initial=(760, 700))
 
         self.db_file = db_file
-        self.database_change_allowed = None
         self.excel_file = ""
         self.filter_query = DEFAULT_FILTER_QUERY
         self.filter_state = None
