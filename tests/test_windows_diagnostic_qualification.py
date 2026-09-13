@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
@@ -21,6 +22,71 @@ from metroliza.shared.diagnostic_incident import (
 )
 from metroliza.shared.diagnostic_ring import LOSS_ACCOUNTING_BYTES, RingLoss, RingSnapshot
 from scripts import qualify_windows_diagnostics as qualification
+
+
+class _TokenWinTypes:
+    HANDLE = ctypes.c_void_p
+    BOOL = ctypes.c_long
+
+
+class _TokenKernel:
+    def __init__(self) -> None:
+        self.closed: list[int] = []
+
+    def CloseHandle(self, handle) -> int:
+        self.closed.append(handle.value)
+        return 1
+
+
+class _TokenAdvapi:
+    def __init__(self, *, membership_ok: bool = True, is_admin: bool = False) -> None:
+        self.membership_ok = membership_ok
+        self.is_admin = is_admin
+        self.checked: list[int] = []
+
+    def DuplicateToken(self, token, level, duplicate) -> int:
+        assert token.value == 101
+        assert level == 1
+        ctypes.cast(duplicate, ctypes.POINTER(ctypes.c_void_p))[0] = 202
+        return 1
+
+    def CheckTokenMembership(self, token, _sid, is_member) -> int:
+        self.checked.append(token.value)
+        if not self.membership_ok:
+            return 0
+        ctypes.cast(is_member, ctypes.POINTER(ctypes.c_long))[0] = self.is_admin
+        return 1
+
+
+def _token_api(*, membership_ok: bool = True, is_admin: bool = False):
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.kernel = _TokenKernel()
+    api.advapi = _TokenAdvapi(membership_ok=membership_ok, is_admin=is_admin)
+    return api
+
+
+@pytest.mark.parametrize("is_admin", [False, True])
+def test_admin_membership_uses_impersonation_duplicate_and_closes_it(
+    is_admin,
+) -> None:
+    api = _token_api(is_admin=is_admin)
+
+    assert api._has_effective_admin_membership(
+        ctypes.c_void_p(101), object()
+    ) is is_admin
+    assert api.advapi.checked == [202]
+    assert api.kernel.closed == [202]
+
+
+def test_admin_membership_closes_duplicate_when_check_fails() -> None:
+    api = _token_api(membership_ok=False)
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        api._has_effective_admin_membership(ctypes.c_void_p(101), object())
+    assert error.value.failure_id == "restricted_launch_unavailable"
+    assert api.advapi.checked == [202]
+    assert api.kernel.closed == [202]
 
 
 def test_entry_failure_receipt_maps_only_closed_stage_and_reason(tmp_path) -> None:

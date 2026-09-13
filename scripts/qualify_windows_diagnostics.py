@@ -708,6 +708,12 @@ class _WindowsApi:
             ctypes.POINTER(wt.HANDLE),
         ]
         self.advapi.CreateRestrictedToken.restype = wt.BOOL
+        self.advapi.DuplicateToken.argtypes = [
+            wt.HANDLE,
+            ctypes.c_int,
+            ctypes.POINTER(wt.HANDLE),
+        ]
+        self.advapi.DuplicateToken.restype = wt.BOOL
         self.advapi.CheckTokenMembership.argtypes = [
             wt.HANDLE,
             ctypes.c_void_p,
@@ -742,6 +748,21 @@ class _WindowsApi:
         ]
         self.advapi.CreateProcessWithTokenW.restype = wt.BOOL
 
+    def _has_effective_admin_membership(self, token, sid) -> bool:
+        wt = self.wintypes
+        impersonation = wt.HANDLE()
+        if not self.advapi.DuplicateToken(token, 1, ctypes.byref(impersonation)):
+            raise QualificationFailure("restricted_launch_unavailable")
+        try:
+            is_admin = wt.BOOL()
+            if not self.advapi.CheckTokenMembership(
+                impersonation, sid, ctypes.byref(is_admin)
+            ):
+                raise QualificationFailure("restricted_launch_unavailable")
+            return bool(is_admin.value)
+        finally:
+            self.kernel.CloseHandle(impersonation)
+
     def _restricted_token(self):
         wt = self.wintypes
         current = wt.HANDLE()
@@ -771,10 +792,7 @@ class _WindowsApi:
                 ctypes.byref(restricted),
             ):
                 raise QualificationFailure("restricted_launch_unavailable")
-            is_admin = wt.BOOL()
-            if not self.advapi.CheckTokenMembership(
-                restricted, sid, ctypes.byref(is_admin)
-            ) or is_admin.value:
+            if self._has_effective_admin_membership(restricted, sid):
                 raise QualificationFailure("restricted_launch_unavailable")
             return restricted
         except Exception:
