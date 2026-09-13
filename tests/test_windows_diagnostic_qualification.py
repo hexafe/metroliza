@@ -4,11 +4,41 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 
 import pytest
 
+from metroliza.app import diagnostic_qualification as qualification_entry
+from metroliza.shared.diagnostic_incident import (
+    ChannelState,
+    HandshakeState,
+    IncidentObservation,
+    LaunchState,
+    TerminationState,
+    build_incident,
+)
+from metroliza.shared.diagnostic_ring import LOSS_ACCOUNTING_BYTES, RingLoss, RingSnapshot
 from scripts import qualify_windows_diagnostics as qualification
+
+
+def test_entry_failure_receipt_maps_only_closed_stage_and_reason(tmp_path) -> None:
+    qualification_entry._write_failure(
+        tmp_path, "preview", ValueError("qualification_export_unavailable")
+    )
+    assert json.loads((tmp_path / "failure.json").read_text(encoding="ascii")) == {
+        "schema_version": 1,
+        "stage": "preview",
+        "reason": "qualification_export_unavailable",
+    }
+    qualification_entry._write_failure(
+        tmp_path, "private-stage", RuntimeError("PRIVATE_PATH")
+    )
+    assert json.loads((tmp_path / "failure.json").read_text(encoding="ascii")) == {
+        "schema_version": 1,
+        "stage": "application",
+        "reason": "unexpected",
+    }
 
 
 def _write_pe(path: Path, subsystem: int = 2) -> None:
@@ -32,6 +62,30 @@ def _package_receipt() -> dict[str, object]:
             "THIRD_PARTY_NOTICES.md": "e" * 64,
             "third_party_inventory_260711.json": "f" * 64,
         },
+        "tested_tree_sha256": "1" * 64,
+        "package_manifest_sha256": "2" * 64,
+        "archive_name": qualification.PACKAGE_ARCHIVE_NAME,
+        "archive_sha256": "3" * 64,
+        "archive_size_bytes": 100,
+    }
+
+
+def _environment_receipt() -> dict[str, str]:
+    return {
+        "windows_version": "10.0.26100",
+        "architecture": "amd64",
+        "python_version": "3.11.16",
+        "pyinstaller_version": "6.16.0",
+    }
+
+
+def _flood_loss(value: int = 1) -> dict[str, object]:
+    return {
+        "source_dropped": value,
+        **{
+            field: False if field == "counters_saturated" else value
+            for field in qualification.RING_LOSS_FIELDS
+        },
     }
 
 
@@ -39,26 +93,46 @@ def _metrics(value: int = 1) -> qualification.ProcessMetrics:
     return qualification.ProcessMetrics(value, value, value, value, value)
 
 
-def _scenario(value: int = 1) -> qualification.ScenarioResult:
-    return qualification.ScenarioResult(0, value, value, "complete", _metrics(value))
+def _scenario(
+    value: int = 1, *, supervised: bool = False
+) -> qualification.ScenarioResult:
+    topology = qualification.ProcessTopology(
+        2 if supervised else 0,
+        1,
+        0,
+        3 if supervised else 1,
+        3 if supervised else 1,
+        (
+            ("launcher_bootloader", "launcher_supervisor", "application")
+            if supervised
+            else ("application",)
+        ),
+        True,
+    )
+    return qualification.ScenarioResult(
+        0, value, value, "complete", _metrics(value), topology
+    )
 
 
 def _success_payload() -> dict[str, object]:
     results = {
-        "direct_normal": _scenario(),
-        "supervised_normal_1": _scenario(2),
-        "supervised_normal_2": _scenario(3),
-        "supervised_normal_3": _scenario(4),
+        "direct_normal_1": _scenario(),
+        "direct_normal_2": _scenario(2),
+        "supervised_normal_1": _scenario(3, supervised=True),
+        "supervised_normal_2": _scenario(4, supervised=True),
         "flood": _scenario(5),
     }
     return qualification._success_payload(
         _package_receipt(),
+        _environment_receipt(),
         results,
-        idle_write_bytes=6,
+        direct_idle_write_bytes=5,
+        supervised_idle_write_bytes=6,
         hard_ready_to_report_ms=7,
         handled_ready_to_report_ms=8,
         hard_assembly_to_verification_ms=9,
         handled_assembly_to_verification_ms=10,
+        flood_loss=_flood_loss(),
     )
 
 
@@ -136,6 +210,19 @@ def test_child_receipt_requires_packaged_console_none_and_ordinary_user(tmp_path
     with pytest.raises(qualification.QualificationFailure):
         qualification._validate_child_receipt(path, "normal")
 
+    failure_path = tmp_path / "failure.json"
+    failure = {
+        "schema_version": 1,
+        "stage": "preview",
+        "reason": "qualification_export_unavailable",
+    }
+    failure_path.write_text(json.dumps(failure), encoding="ascii")
+    assert qualification._validate_child_failure(failure_path) == failure
+    failure["reason"] = "arbitrary private exception"
+    failure_path.write_text(json.dumps(failure), encoding="ascii")
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_child_failure(failure_path)
+
 
 def test_provenance_and_notices_bind_the_exact_launcher(tmp_path) -> None:
     launcher = tmp_path / "metroliza.exe"
@@ -181,23 +268,54 @@ def test_provenance_and_notices_bind_the_exact_launcher(tmp_path) -> None:
 def test_output_receipt_is_closed_bounded_and_atomic(tmp_path) -> None:
     output = tmp_path / "receipts"
     output.mkdir()
-    destination = qualification._write_receipt(output, _success_payload())
+    source = tmp_path / "source"
+    tested = tmp_path / "tested"
+    source.mkdir()
+    tested.mkdir()
+    (source / "fixed component.bin").write_bytes(b"approved package bytes")
+    (tested / "fixed component.bin").write_bytes(b"approved package bytes")
+    payload_to_write = _success_payload()
+    payload_to_write["package"].update(
+        qualification._write_development_artifacts(source, tested, output)
+    )
+    destination = qualification._write_receipt(output, payload_to_write)
 
     payload = json.loads(destination.read_text(encoding="ascii"))
-    assert set(output.iterdir()) == {destination}
+    assert {path.name for path in output.iterdir()} == {
+        qualification.OUTPUT_NAME,
+        qualification.PACKAGE_MANIFEST_NAME,
+        qualification.PACKAGE_ARCHIVE_NAME,
+    }
     assert payload["status"] == "passed"
-    assert [check["id"] for check in payload["checks"]] == list(qualification.CHECK_IDS)
+    assert [check["id"] for check in payload["checks"]] == [
+        *qualification.CHECK_IDS,
+        qualification.OPERATIONAL_CHECK_ID,
+    ]
     assert set(payload["metrics"]) == {
-        "direct_ready_ms",
-        "supervised_ready_ms",
-        "peak_process_tree_memory_bytes",
-        "idle_write_bytes",
+        "direct_startup_ready_ms",
+        "supervised_startup_ready_ms",
+        "direct_peak_process_tree_memory_bytes",
+        "supervised_peak_process_tree_memory_bytes",
+        "direct_idle_write_bytes",
+        "supervised_idle_write_bytes",
         "hard_exit_ready_receipt_to_report_verification_ms",
         "handled_ready_receipt_to_report_verification_ms",
         "hard_incident_assembly_to_verification_ms",
         "handled_incident_assembly_to_verification_ms",
         "flood_elapsed_ms",
+        "flood_loss",
     }
+    manifest = json.loads(
+        (output / qualification.PACKAGE_MANIFEST_NAME).read_text(encoding="ascii")
+    )
+    assert manifest["entries"] == [
+        {
+            "path": "fixed component.bin",
+            "sha256": hashlib.sha256(b"approved package bytes").hexdigest(),
+            "size_bytes": len(b"approved package bytes"),
+        }
+    ]
+    assert payload["package"]["archive_sha256"] == manifest["archive"]["sha256"]
 
     second = tmp_path / "second"
     second.mkdir()
@@ -226,17 +344,128 @@ def test_package_relocation_rejects_links_and_entry_overflow(tmp_path, monkeypat
         qualification._validate_package_tree(source)
 
 
+def test_operational_cost_is_truthful_and_environment_is_closed() -> None:
+    payload = _success_payload()
+    assert payload["operational_cost"]["status"] == "within_budget"
+    payload["metrics"]["supervised_idle_write_bytes"] = (
+        qualification.MAX_IDLE_WRITE_BYTES + 1
+    )
+    payload["operational_cost"] = qualification._operational_cost(payload["metrics"])
+    payload["checks"][-1]["status"] = "unresolved"
+    qualification._validate_output_payload(payload)
+    assert payload["operational_cost"]["status"] == "unresolved"
+
+    payload["environment"]["architecture"] = "x86"
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._validate_output_payload(payload)
+    assert error.value.failure_id == "output_failed"
+
+
+def test_output_failure_detail_accepts_only_closed_qualification_evidence() -> None:
+    payload = {
+        "schema_version": 1,
+        "status": "failed",
+        "failure_id": "scenario_failed",
+        "qualification_failure": {
+            "stage": "preview",
+            "reason": "qualification_preview_unavailable",
+        },
+        "package": None,
+        "environment": None,
+        "topology": None,
+        "checks": [],
+        "metrics": None,
+        "operational_cost": None,
+    }
+    qualification._validate_output_payload(payload)
+    payload["qualification_failure"]["reason"] = "PRIVATE_PATH"
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_output_payload(payload)
+
+
+def test_topology_rejects_path_selected_or_recursive_children(tmp_path) -> None:
+    launcher = tmp_path / "metroliza.exe"
+    application = tmp_path / "metroliza_application.exe"
+    unexpected = tmp_path / "elsewhere" / "metroliza_application.exe"
+    observations = (
+        qualification._ProcessObservation(1, 1, str(launcher)),
+        qualification._ProcessObservation(2, 2, str(launcher)),
+        qualification._ProcessObservation(3, 3, str(application)),
+        qualification._ProcessObservation(4, 4, str(unexpected)),
+    )
+
+    topology = qualification._classify_topology(
+        observations, 4, 4, True, launcher, application
+    )
+
+    assert topology.unexpected_processes_observed == 1
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_topology_record(
+            qualification._topology_record(topology), supervised=True
+        )
+
+
+def test_full_tree_identity_rejects_post_copy_change(tmp_path) -> None:
+    source = tmp_path / "source"
+    tested = tmp_path / "tested"
+    output = tmp_path / "output"
+    for path in (source, tested, output):
+        path.mkdir()
+    (source / "one.bin").write_bytes(b"one")
+    (tested / "one.bin").write_bytes(b"changed")
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._write_development_artifacts(source, tested, output)
+    assert error.value.failure_id == "artifact_invalid"
+    assert not tuple(output.iterdir())
+
+
+def test_hard_exit_rejects_a_valid_incident_with_empty_history() -> None:
+    incident = build_incident(
+        session_id=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+        report_id=uuid.UUID("22222222-2222-4222-8222-222222222222"),
+        created_at_ms=1_800_000_000_000,
+        build_git_sha="a" * 40,
+        observation=IncidentObservation(
+            launch=LaunchState.STARTED,
+            handshake=HandshakeState.ACCEPTED,
+            channel=ChannelState.INCOMPLETE,
+            exit_code=9,
+            termination=TerminationState.OBSERVED_EXIT,
+            clean_terminal_received=False,
+            source_dropped=0,
+            source_loss_known=False,
+            elapsed_ms=100,
+        ),
+        history=RingSnapshot((), RingLoss(), LOSS_ACCOUNTING_BYTES),
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as error:
+        qualification._validate_hard_exit_history(incident)
+    assert error.value.failure_id == "incident_invalid"
+
+
 class _FakeProcess:
-    def __init__(self, exit_code: int) -> None:
+    def __init__(self, exit_code: int, *, supervised: bool) -> None:
         self.started = time.perf_counter()
         self.exit_code = exit_code
         self.closed_with: bool | None = None
+        self.supervised = supervised
 
     def poll(self) -> int:
         return self.exit_code
 
     def metrics(self) -> qualification.ProcessMetrics:
         return _metrics()
+
+    def observe(self) -> None:
+        return None
+
+    def active_processes(self) -> int:
+        return 0
+
+    def topology(self, _artifact, *, all_exited: bool) -> qualification.ProcessTopology:
+        return _scenario(supervised=self.supervised).topology
 
     def close(self, *, terminate: bool = False) -> None:
         self.closed_with = terminate
@@ -249,18 +478,22 @@ class _FakeApi:
         self.process: _FakeProcess | None = None
         self.environment: dict[str, str] | None = None
 
-    def launch(self, _executable, environment, cwd):
+    def launch(self, executable, environment, cwd):
         self.environment = environment
-        payload = {
+        common = {
             "schema_version": 1,
             "scenario": environment["METROLIZA_DIAGNOSTIC_QUALIFICATION"],
-            "stage": self.stage,
             "packaged": True,
             "console_none": True,
             "ordinary_user": True,
         }
+        startup = {**common, "stage": "startup_ready"}
+        payload = {**common, "stage": self.stage}
+        (cwd / "startup.json").write_text(json.dumps(startup), encoding="ascii")
         (cwd / "qualification.json").write_text(json.dumps(payload), encoding="ascii")
-        self.process = _FakeProcess(self.exit_code)
+        self.process = _FakeProcess(
+            self.exit_code, supervised=Path(executable).name == "metroliza.exe"
+        )
         return self.process
 
 
@@ -288,6 +521,7 @@ def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypa
     )
 
     assert result.exit_code == 9
+    assert result.startup_ready_ms >= 0
     assert result.receipt_stage == "ready"
     assert called == [api.process]
     assert api.process.closed_with is False

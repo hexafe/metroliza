@@ -10,14 +10,36 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
-import sqlite3
 import sys
 import time
 import uuid
+from importlib import import_module
+from pathlib import Path
 
-SCENARIOS = frozenset({"normal", "hard_exit", "handled_failure", "preview", "idle", "flood"})
+SCENARIOS = frozenset(
+    {"normal", "hard_exit", "handled_failure", "preview", "idle", "flood", "concurrent"}
+)
 FIXTURE_SHA256 = "ca500bd52afc2551560e7c0009851906a0d3bec6b35282e20703c1e298da608b"
+FAILURE_STAGES = frozenset(
+    {"root", "application", "workflows", "preview", "flood", "receipt"}
+)
+FAILURE_REASONS = frozenset(
+    {
+        "invalid_qualification_root",
+        "qualification_barrier_timeout",
+        "qualification_fixture_mismatch",
+        "qualification_output_exists",
+        "qualification_result_mismatch",
+        "qualification_import_failed",
+        "qualification_incident_missing",
+        "qualification_measurements_missing",
+        "qualification_export_failed",
+        "qualification_export_unavailable",
+        "qualification_filename_control_unavailable",
+        "qualification_preview_unavailable",
+        "unexpected",
+    }
+)
 
 
 def requested_scenario() -> str | None:
@@ -43,7 +65,7 @@ def _ordinary_user() -> bool:
 
 
 def write_receipt(scenario: str, stage: str) -> None:
-    if scenario not in SCENARIOS or stage not in {"ready", "complete", "failed"}:
+    if scenario not in SCENARIOS or stage not in {"startup_ready", "ready", "complete", "failed"}:
         raise ValueError("invalid_qualification_receipt")
     payload = {
         "schema_version": 1, "scenario": scenario, "stage": stage,
@@ -55,7 +77,20 @@ def write_receipt(scenario: str, stage: str) -> None:
     stage_path = root / (".receipt-" + uuid.uuid4().hex)
     with stage_path.open("x", encoding="ascii") as stream:
         json.dump(payload, stream, sort_keys=True)
-    stage_path.replace(root / "qualification.json")
+    name = "startup.json" if stage == "startup_ready" else "qualification.json"
+    stage_path.replace(root / name)
+
+
+def _write_failure(root: Path, stage: str, error: Exception) -> None:
+    if stage not in FAILURE_STAGES:
+        stage = "application"
+    candidate = error.args[0] if error.args and type(error.args[0]) is str else None
+    reason = candidate if candidate in FAILURE_REASONS else "unexpected"
+    payload = {"schema_version": 1, "stage": stage, "reason": reason}
+    stage_path = root / (".failure-" + uuid.uuid4().hex)
+    with stage_path.open("x", encoding="ascii") as stream:
+        json.dump(payload, stream, sort_keys=True)
+    stage_path.replace(root / "failure.json")
 
 
 def _wait_for_finish(root: Path, *, seconds: float = 10) -> None:
@@ -67,12 +102,25 @@ def _wait_for_finish(root: Path, *, seconds: float = 10) -> None:
         time.sleep(0.02)
 
 
+def _wait_for_concurrent_start(root: Path, *, seconds: float = 10) -> None:
+    from PyQt6.QtWidgets import QApplication
+
+    (root / "waiting").touch(exist_ok=False)
+    deadline = time.monotonic() + seconds
+    while not (root / "start").exists() and time.monotonic() < deadline:
+        QApplication.instance().processEvents()
+        time.sleep(0.02)
+    if not (root / "start").is_file():
+        raise ValueError("qualification_barrier_timeout")
+
+
 def _workflows(root: Path, *, fail_import: bool) -> None:
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
     from metroliza.parsing.parse_reports_thread import ParseReportsThread
     from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+    from metroliza.reports.db import sqlite_connection_scope
     from metroliza.shared.parse_contracts import ParseRequest
-    from metroliza.exporting.export_data_thread import ExportDataThread
-    from metroliza.exporting.contracts import AppPaths, ExportRequest, ExportOptions
 
     with (root / "fixture.pdf").open("rb") as stream:
         fixture = stream.read(128 * 1024 + 1)
@@ -85,7 +133,11 @@ def _workflows(root: Path, *, fail_import: bool) -> None:
     database, workbook = root / "scratch.sqlite", root / "scratch.xlsx"
     if database.exists() or workbook.exists():
         raise ValueError("qualification_output_exists")
-    request = ParseRequest(source_directory=str(source), db_file=str(database), metadata_parsing_mode="light")
+    request = ParseRequest(
+        source_directory=str(source),
+        db_file=str(database),
+        metadata_parsing_mode="light",
+    )
     preflight = ParsePreflightService().scan_source(
         source_path=source, database_path=database, metadata_parsing_mode="light",
     )
@@ -99,7 +151,7 @@ def _workflows(root: Path, *, fail_import: bool) -> None:
         return
     if worker.last_parse_result.imported_files != 1:
         raise ValueError("qualification_import_failed")
-    with sqlite3.connect(database) as connection:
+    with sqlite_connection_scope(str(database)) as connection:
         if connection.execute("SELECT COUNT(*) FROM report_measurements").fetchone()[0] < 1:
             raise ValueError("qualification_measurements_missing")
     export = ExportDataThread(ExportRequest(
@@ -111,14 +163,37 @@ def _workflows(root: Path, *, fail_import: bool) -> None:
         raise ValueError("qualification_export_failed")
 
 
+def _complete_preview_save_dialog(app, chosen: Path, deadline: float, automation) -> None:
+    from PyQt6.QtWidgets import QDialogButtonBox, QFileDialog, QLineEdit
+
+    for widget in app.topLevelWidgets():
+        if not isinstance(widget, QFileDialog) or not widget.isVisible():
+            continue
+        buttons = widget.findChild(QDialogButtonBox)
+        if buttons is None:
+            continue
+        if time.monotonic() >= deadline:
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).click()
+            return
+        widget.selectFile(chosen.name)
+        filename = widget.findChild(QLineEdit, "fileNameEdit")
+        if filename is None:
+            automation["filename_control_available"] = False
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).click()
+            return
+        filename.setText(chosen.name)
+        buttons.button(QDialogButtonBox.StandardButton.Save).click()
+        return
+
+
 def _preview_export(root: Path) -> None:
-    from PyQt6.QtCore import QTimer, Qt
-    from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QFileDialog
-    from metroliza.ui.incident_dialog import open_incident_viewer
+    from PyQt6.QtCore import Qt, QTimer
+    from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance()
     app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
-    dialog = open_incident_viewer()
+    module = import_module("metroliza.ui.incident_dialog")
+    dialog = module.open_incident_viewer()
     app.processEvents()
     if dialog.reports_table.rowCount() < 1:
         raise ValueError("qualification_incident_missing")
@@ -130,24 +205,18 @@ def _preview_export(root: Path) -> None:
     timer = QTimer(dialog)
     timer.setInterval(50)
     deadline = time.monotonic() + 5
+    automation = {"filename_control_available": True}
 
     def choose_file():
-        for widget in app.topLevelWidgets():
-            if isinstance(widget, QFileDialog) and widget.isVisible():
-                buttons = widget.findChild(QDialogButtonBox)
-                if buttons is None:
-                    continue
-                if time.monotonic() >= deadline:
-                    buttons.button(QDialogButtonBox.StandardButton.Cancel).click()
-                else:
-                    widget.selectFile(str(chosen))
-                    buttons.button(QDialogButtonBox.StandardButton.Save).click()
+        _complete_preview_save_dialog(app, chosen, deadline, automation)
 
     timer.timeout.connect(choose_file)
     timer.start()
     dialog.export_button.click()
     timer.stop()
     dialog.close()
+    if not automation["filename_control_available"]:
+        raise ValueError("qualification_filename_control_unavailable")
     if not chosen.is_file():
         raise ValueError("qualification_export_unavailable")
 
@@ -162,30 +231,53 @@ def _flood() -> None:
     trace.finish_export(completed=True, cancelled=False)
 
 
+def _run_work(scenario: str, root: Path) -> None:
+    if scenario == "concurrent":
+        _wait_for_concurrent_start(root)
+    if scenario in {"normal", "hard_exit", "handled_failure", "concurrent"}:
+        _workflows(root, fail_import=scenario == "handled_failure")
+    elif scenario == "preview":
+        _preview_export(root)
+    elif scenario == "flood":
+        _flood()
+
+
 def run_qualification(scenario: str) -> int:
     if scenario != requested_scenario():
         return 20
+    root: Path | None = None
+    failure_stage = "application"
     try:
         from metroliza.app.bootstrap import get_or_create_qapplication
 
         app = get_or_create_qapplication()
+        failure_stage = "root"
         root = _root()
-        if scenario in {"normal", "hard_exit", "handled_failure"}:
-            _workflows(root, fail_import=scenario == "handled_failure")
-        elif scenario == "preview":
-            _preview_export(root)
-        elif scenario == "flood":
-            _flood()
+        failure_stage = "receipt"
+        write_receipt(scenario, "startup_ready")
+        failure_stage = {
+            "preview": "preview",
+            "flood": "flood",
+        }.get(scenario, "workflows")
+        _run_work(scenario, root)
+        failure_stage = "receipt"
         write_receipt(scenario, "ready")
         if scenario in {"handled_failure", "idle"}:
+            failure_stage = "application"
             _wait_for_finish(root)
-        if scenario == "hard_exit":
+        if scenario in {"hard_exit", "concurrent"}:
             time.sleep(0.2)
             os._exit(9)  # Explicit test-owned synthetic scenario only.
+        failure_stage = "receipt"
         write_receipt(scenario, "complete")
         app.processEvents()
         return 0
-    except Exception:
+    except Exception as error:
+        if root is not None:
+            try:
+                _write_failure(root, failure_stage, error)
+            except Exception:
+                pass
         try:
             write_receipt(scenario, "failed")
         except Exception:

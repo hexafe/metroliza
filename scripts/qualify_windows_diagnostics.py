@@ -5,25 +5,32 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hashlib
+import importlib.metadata
 import json
 import os
+import platform
+import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from metroliza.app.build_provenance import BuildProvenance
 from metroliza.shared.diagnostic_events import (
     RuntimeProvenanceEvent,
     StartupDiagnosticEvent,
+    ValidationStatus,
     WorkflowDiagnosticEvent,
+    WorkflowOperation,
     WorkflowOutcome,
+    WorkflowStage,
 )
 from metroliza.shared.diagnostic_incident import (
     ChannelState,
@@ -32,6 +39,7 @@ from metroliza.shared.diagnostic_incident import (
     decode_incident,
 )
 from metroliza.shared.diagnostic_package import MANIFEST_NAME, inspect_package
+from metroliza.shared.diagnostic_ring import RingLoss
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_wire import decode_event
 
@@ -39,12 +47,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
 FIXTURE_SHA256 = "ca500bd52afc2551560e7c0009851906a0d3bec6b35282e20703c1e298da608b"
 OUTPUT_NAME = "windows-diagnostic-qualification.json"
+PACKAGE_MANIFEST_NAME = "package-manifest.json"
+PACKAGE_ARCHIVE_NAME = "qualified-windows-development-package.zip"
 MAX_TOTAL_SECONDS = 720
 MAX_SCENARIO_SECONDS = 90
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_FILE_BYTES = 512 * 1024 * 1024
 MAX_PACKAGE_COPY_BYTES = 2 * 1024 * 1024 * 1024
+MAX_PACKAGE_ARCHIVE_BYTES = MAX_PACKAGE_COPY_BYTES + 64 * 1024 * 1024
 MAX_PACKAGE_ENTRIES = 25_000
+MAX_PACKAGE_PATH_CHARS = 512
+MAX_PACKAGE_MANIFEST_BYTES = 16 * 1024 * 1024
+IDLE_SAMPLE_MILLISECONDS = 2_000
+MAX_STARTUP_READY_MILLISECONDS = 60_000
+MAX_SUPERVISOR_STARTUP_OVERHEAD_MILLISECONDS = 10_000
+MAX_SUPERVISOR_MEMORY_OVERHEAD_BYTES = 128 * 1024 * 1024
+MAX_IDLE_WRITE_BYTES = 64 * 1024
+MAX_INCIDENT_ASSEMBLY_TO_VERIFICATION_MILLISECONDS = 10_000
+MAX_FLOOD_ELAPSED_MILLISECONDS = 90_000
 NOTICE_FILES = ("THIRD_PARTY_NOTICES.md", "third_party_inventory_260711.json")
 CHECK_IDS = (
     "package_identity",
@@ -53,6 +73,8 @@ CHECK_IDS = (
     "direct_workflow",
     "supervised_workflow",
     "repeat_starts",
+    "concurrent_instances",
+    "interactive_ui_smoke",
     "hard_exit_incident",
     "handled_failure_live",
     "selected_export",
@@ -62,6 +84,8 @@ CHECK_IDS = (
     "missing_components",
     "missing_qt_resource",
 )
+OPERATIONAL_CHECK_ID = "operational_cost"
+RING_LOSS_FIELDS = tuple(RingLoss.__dataclass_fields__)
 FAILURE_IDS = frozenset(
     {
         "invalid_arguments",
@@ -78,15 +102,43 @@ FAILURE_IDS = frozenset(
         "output_failed",
     }
 )
+QUALIFICATION_FAILURE_STAGES = frozenset(
+    {"root", "application", "workflows", "preview", "flood", "receipt"}
+)
+QUALIFICATION_FAILURE_REASONS = frozenset(
+    {
+        "invalid_qualification_root",
+        "qualification_barrier_timeout",
+        "qualification_fixture_mismatch",
+        "qualification_output_exists",
+        "qualification_result_mismatch",
+        "qualification_import_failed",
+        "qualification_incident_missing",
+        "qualification_measurements_missing",
+        "qualification_export_failed",
+        "qualification_export_unavailable",
+        "qualification_filename_control_unavailable",
+        "qualification_preview_unavailable",
+        "unexpected",
+    }
+)
 
 
 class QualificationFailure(RuntimeError):
     """A fixed failure identity which never includes native or input-controlled text."""
 
-    def __init__(self, failure_id: str) -> None:
+    def __init__(
+        self,
+        failure_id: str,
+        *,
+        qualification_stage: str | None = None,
+        qualification_reason: str | None = None,
+    ) -> None:
         if failure_id not in FAILURE_IDS:
             failure_id = "scenario_failed"
         self.failure_id = failure_id
+        self.qualification_stage = qualification_stage
+        self.qualification_reason = qualification_reason
         super().__init__(failure_id)
 
 
@@ -100,12 +152,38 @@ class ProcessMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class _ProcessObservation:
+    process_id: int
+    creation_time: int
+    image: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessTopology:
+    launcher_processes_observed: int
+    application_processes_observed: int
+    unexpected_processes_observed: int
+    assigned_processes: int
+    max_active_processes: int
+    creation_order: tuple[str, ...]
+    all_processes_exited: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ScenarioResult:
     exit_code: int
     elapsed_ms: int
-    ready_ms: int
+    startup_ready_ms: int
     receipt_stage: str | None
     metrics: ProcessMetrics
+    topology: ProcessTopology
+
+
+@dataclass(frozen=True, slots=True)
+class PackageEntry:
+    path: str
+    size_bytes: int
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +191,8 @@ class QualificationResult:
     status: str
     failure_id: str | None
     receipt_path: Path | None
+    qualification_stage: str | None = None
+    qualification_reason: str | None = None
 
 
 def _sha256(path: Path, *, maximum: int = MAX_FILE_BYTES) -> str:
@@ -128,13 +208,46 @@ def _sha256(path: Path, *, maximum: int = MAX_FILE_BYTES) -> str:
     digest = hashlib.sha256()
     remaining = maximum + 1
     with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        expected_identity = (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+        )
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_size,
+                opened.st_mtime_ns,
+            )
+            != expected_identity
+        ):
+            raise QualificationFailure("artifact_invalid")
         while remaining:
             block = stream.read(min(1024 * 1024, remaining))
             if not block:
                 break
             digest.update(block)
             remaining -= len(block)
+        closed_identity = os.fstat(stream.fileno())
     if remaining == 0:
+        raise QualificationFailure("artifact_invalid")
+    final = path.lstat()
+    if (
+        (
+            closed_identity.st_dev,
+            closed_identity.st_ino,
+            closed_identity.st_size,
+            closed_identity.st_mtime_ns,
+        )
+        != expected_identity
+        or (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns)
+        != expected_identity
+    ):
         raise QualificationFailure("artifact_invalid")
     return digest.hexdigest()
 
@@ -319,19 +432,99 @@ def _sanitized_environment(
     return environment
 
 
+def _classify_topology(
+    observations: tuple[_ProcessObservation, ...],
+    assigned_processes: int,
+    max_active_processes: int,
+    all_exited: bool,
+    launcher: Path,
+    application: Path,
+) -> ProcessTopology:
+    launcher_image = os.path.normcase(os.path.abspath(launcher))
+    application_image = os.path.normcase(os.path.abspath(application))
+    launcher_count = 0
+    application_count = 0
+    unexpected_count = 0
+    order: list[str] = []
+    for observation in sorted(
+        observations, key=lambda value: (value.creation_time, value.process_id)
+    ):
+        image = os.path.normcase(os.path.abspath(observation.image))
+        if image == launcher_image:
+            launcher_count += 1
+            order.append(
+                "launcher_bootloader" if launcher_count == 1 else "launcher_supervisor"
+            )
+        elif image == application_image:
+            application_count += 1
+            order.append("application")
+        else:
+            unexpected_count += 1
+            order.append("unexpected")
+    for _ in range(max(0, assigned_processes - len(observations))):
+        unexpected_count += 1
+        order.append("unexpected")
+    return ProcessTopology(
+        launcher_count,
+        application_count,
+        unexpected_count,
+        assigned_processes,
+        max_active_processes,
+        tuple(order),
+        all_exited,
+    )
+
+
 class _WindowsProcess:
-    def __init__(self, api, process_handle, job_handle, started: float) -> None:
+    def __init__(
+        self,
+        api,
+        process_handle,
+        job_handle,
+        started: float,
+        initial: _ProcessObservation,
+    ) -> None:
         self._api = api
         self._process = process_handle
         self._job = job_handle
         self.started = started
         self._closed = False
+        self._observations = {initial.process_id: initial}
+        self._assigned_processes = 1
+        self._max_active_processes = 1
 
     def poll(self) -> int | None:
         return self._api.poll(self._process)
 
     def metrics(self) -> ProcessMetrics:
         return self._api.job_metrics(self._job)
+
+    def observe(self) -> None:
+        observations, active, assigned = self._api.job_observations(self._job)
+        self._assigned_processes = max(self._assigned_processes, assigned)
+        self._max_active_processes = max(self._max_active_processes, active)
+        self._observations.update(
+            {observation.process_id: observation for observation in observations}
+        )
+
+    def topology(self, artifact_dir: Path, *, all_exited: bool) -> ProcessTopology:
+        return _classify_topology(
+            tuple(self._observations.values()),
+            self._assigned_processes,
+            self._max_active_processes,
+            all_exited,
+            artifact_dir / "metroliza.exe",
+            artifact_dir / "metroliza_application.exe",
+        )
+
+    def active_processes(self) -> int:
+        observations, active, assigned = self._api.job_observations(self._job)
+        self._assigned_processes = max(self._assigned_processes, assigned)
+        self._observations.update(
+            {observation.process_id: observation for observation in observations}
+        )
+        self._max_active_processes = max(self._max_active_processes, active)
+        return active
 
     def close(self, *, terminate: bool = False) -> None:
         if self._closed:
@@ -400,6 +593,16 @@ class _WindowsApi:
                 ("OtherTransferCount", ctypes.c_ulonglong),
             ]
 
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", wt.DWORD), ("dwHighDateTime", wt.DWORD)]
+
+        class JOBOBJECT_BASIC_PROCESS_ID_LIST(ctypes.Structure):
+            _fields_ = [
+                ("NumberOfAssignedProcesses", wt.DWORD),
+                ("NumberOfProcessIdsInList", wt.DWORD),
+                ("ProcessIdList", ctypes.c_size_t * 16),
+            ]
+
         class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
             _fields_ = [
                 ("PerProcessUserTimeLimit", ctypes.c_longlong),
@@ -427,6 +630,8 @@ class _WindowsApi:
         self.PROCESS_INFORMATION = PROCESS_INFORMATION
         self.SID_AND_ATTRIBUTES = SID_AND_ATTRIBUTES
         self.EXTENDED_LIMITS = JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        self.FILETIME = FILETIME
+        self.PROCESS_IDS = JOBOBJECT_BASIC_PROCESS_ID_LIST
 
     def _declare_functions(self) -> None:
         wt = self.wintypes
@@ -460,6 +665,23 @@ class _WindowsApi:
         self.kernel.GetExitCodeProcess.restype = wt.BOOL
         self.kernel.TerminateProcess.argtypes = [wt.HANDLE, wt.UINT]
         self.kernel.TerminateProcess.restype = wt.BOOL
+        self.kernel.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+        self.kernel.OpenProcess.restype = wt.HANDLE
+        self.kernel.QueryFullProcessImageNameW.argtypes = [
+            wt.HANDLE,
+            wt.DWORD,
+            wt.LPWSTR,
+            ctypes.POINTER(wt.DWORD),
+        ]
+        self.kernel.QueryFullProcessImageNameW.restype = wt.BOOL
+        self.kernel.GetProcessTimes.argtypes = [
+            wt.HANDLE,
+            ctypes.POINTER(self.FILETIME),
+            ctypes.POINTER(self.FILETIME),
+            ctypes.POINTER(self.FILETIME),
+            ctypes.POINTER(self.FILETIME),
+        ]
+        self.kernel.GetProcessTimes.restype = wt.BOOL
 
         self.advapi.OpenProcessToken.argtypes = [
             wt.HANDLE,
@@ -618,6 +840,9 @@ class _WindowsApi:
         try:
             if not self.kernel.AssignProcessToJobObject(job, process.hProcess):
                 raise QualificationFailure("restricted_launch_unavailable")
+            initial = self._process_observation(
+                process.hProcess, int(process.dwProcessId)
+            )
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
         except QualificationFailure:
@@ -627,7 +852,61 @@ class _WindowsApi:
             self.kernel.CloseHandle(job)
             raise
         self.kernel.CloseHandle(process.hThread)
-        return _WindowsProcess(self, process.hProcess, job, started)
+        return _WindowsProcess(self, process.hProcess, job, started, initial)
+
+    def _process_observation(self, process, process_id: int) -> _ProcessObservation:
+        wt = self.wintypes
+        capacity = wt.DWORD(32_768)
+        image = ctypes.create_unicode_buffer(capacity.value)
+        created = self.FILETIME()
+        exited = self.FILETIME()
+        kernel = self.FILETIME()
+        user = self.FILETIME()
+        if not self.kernel.QueryFullProcessImageNameW(
+            process, 0, image, ctypes.byref(capacity)
+        ) or not self.kernel.GetProcessTimes(
+            process,
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            raise QualificationFailure("scenario_failed")
+        creation_time = (int(created.dwHighDateTime) << 32) | int(
+            created.dwLowDateTime
+        )
+        return _ProcessObservation(process_id, creation_time, image.value)
+
+    def job_observations(
+        self, job
+    ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
+        process_ids = self.PROCESS_IDS()
+        returned = self.wintypes.DWORD()
+        if not self.kernel.QueryInformationJobObject(
+            job,
+            3,
+            ctypes.byref(process_ids),
+            ctypes.sizeof(process_ids),
+            ctypes.byref(returned),
+        ):
+            raise QualificationFailure("scenario_failed")
+        active = int(process_ids.NumberOfProcessIdsInList)
+        assigned = int(process_ids.NumberOfAssignedProcesses)
+        if active > len(process_ids.ProcessIdList) or assigned > len(
+            process_ids.ProcessIdList
+        ):
+            raise QualificationFailure("scenario_failed")
+        observations: list[_ProcessObservation] = []
+        for index in range(active):
+            process_id = int(process_ids.ProcessIdList[index])
+            process = self.kernel.OpenProcess(0x1000, False, process_id)
+            if not process:
+                raise QualificationFailure("scenario_failed")
+            try:
+                observations.append(self._process_observation(process, process_id))
+            finally:
+                self.kernel.CloseHandle(process)
+        return tuple(observations), active, assigned
 
     def poll(self, process) -> int | None:
         result = self.kernel.WaitForSingleObject(process, 0)
@@ -679,12 +958,35 @@ def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
             payload["schema_version"] != 1
             or type(payload["schema_version"]) is not int
             or payload["scenario"] != scenario
-            or payload["stage"] not in {"ready", "complete", "failed"}
+            or payload["stage"] not in {"startup_ready", "ready", "complete", "failed"}
             or payload["packaged"] is not True
             or payload["console_none"] is not True
             or payload["ordinary_user"] is not True
         ):
             raise ValueError("invalid_receipt")
+        return payload
+    except (OSError, ValueError, KeyError, TypeError):
+        raise QualificationFailure("scenario_failed") from None
+
+
+def _validate_child_failure(path: Path) -> dict[str, object]:
+    try:
+        payload = _bounded_json(path, 4096)
+        if type(payload) is not dict or set(payload) != {
+            "schema_version",
+            "stage",
+            "reason",
+        }:
+            raise ValueError("invalid_failure")
+        if (
+            payload["schema_version"] != 1
+            or type(payload["schema_version"]) is not int
+            or type(payload["stage"]) is not str
+            or type(payload["reason"]) is not str
+            or payload["stage"] not in QUALIFICATION_FAILURE_STAGES
+            or payload["reason"] not in QUALIFICATION_FAILURE_REASONS
+        ):
+            raise ValueError("invalid_failure")
         return payload
     except (OSError, ValueError, KeyError, TypeError):
         raise QualificationFailure("scenario_failed") from None
@@ -700,33 +1002,96 @@ def _prepare_work_root(parent: Path, label: str) -> Path:
     return root
 
 
-def _validate_package_tree(root: Path) -> None:
+def _relative_package_path(root: Path, path: Path) -> str:
+    relative = path.relative_to(root)
+    if (
+        not relative.parts
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or any(ord(character) < 32 or ord(character) == 127 for character in str(relative))
+    ):
+        raise QualificationFailure("artifact_invalid")
+    value = relative.as_posix()
+    if len(value) > MAX_PACKAGE_PATH_CHARS:
+        raise QualificationFailure("artifact_invalid")
+    return value
+
+
+def _package_item(root: Path, path: Path) -> PackageEntry | None:
+    metadata = path.lstat()
+    if getattr(metadata, "st_file_attributes", 0) & 0x400:
+        raise QualificationFailure("artifact_invalid")
+    if stat.S_ISDIR(metadata.st_mode):
+        return None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or not 0 <= metadata.st_size <= MAX_FILE_BYTES
+    ):
+        raise QualificationFailure("artifact_invalid")
+    return PackageEntry(
+        _relative_package_path(root, path), metadata.st_size, _sha256(path)
+    )
+
+
+def _package_inventory(root: Path) -> tuple[PackageEntry, ...]:
     entries = 0
     total_bytes = 0
+    files_found: list[PackageEntry] = []
+    normalized_paths: set[str] = set()
     try:
-        for directory, names, files in os.walk(root, followlinks=False):
+        root_metadata = root.lstat()
+        if not stat.S_ISDIR(root_metadata.st_mode) or getattr(
+            root_metadata, "st_file_attributes", 0
+        ) & 0x400:
+            raise QualificationFailure("artifact_invalid")
+
+        def walk_error(_error: OSError) -> None:
+            raise QualificationFailure("artifact_invalid")
+
+        for directory, names, files in os.walk(
+            root, followlinks=False, onerror=walk_error
+        ):
+            names.sort()
+            files.sort()
             for name in (*names, *files):
                 entries += 1
                 if entries > MAX_PACKAGE_ENTRIES:
                     raise QualificationFailure("artifact_invalid")
                 path = Path(directory) / name
-                metadata = path.lstat()
-                if getattr(metadata, "st_file_attributes", 0) & 0x400:
+                relative = _relative_package_path(root, path)
+                normalized = relative.casefold()
+                if normalized in normalized_paths:
                     raise QualificationFailure("artifact_invalid")
-                if stat.S_ISREG(metadata.st_mode):
-                    if metadata.st_nlink != 1 or metadata.st_size < 0:
-                        raise QualificationFailure("artifact_invalid")
-                    total_bytes += metadata.st_size
-                    if total_bytes > MAX_PACKAGE_COPY_BYTES:
-                        raise QualificationFailure("artifact_invalid")
-                elif not stat.S_ISDIR(metadata.st_mode):
+                normalized_paths.add(normalized)
+                item = _package_item(root, path)
+                if item is None:
+                    continue
+                total_bytes += item.size_bytes
+                if total_bytes > MAX_PACKAGE_COPY_BYTES:
                     raise QualificationFailure("artifact_invalid")
+                files_found.append(item)
     except OSError:
         raise QualificationFailure("artifact_invalid") from None
+    return tuple(sorted(files_found, key=lambda entry: entry.path))
+
+
+def _validate_package_tree(root: Path) -> None:
+    _package_inventory(root)
+
+
+def _tree_digest(entries: tuple[PackageEntry, ...]) -> str:
+    payload = [
+        {"path": entry.path, "sha256": entry.sha256, "size_bytes": entry.size_bytes}
+        for entry in entries
+    ]
+    encoded = json.dumps(
+        payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _relocate_package(artifact: Path, private_root: Path, deadline: float) -> Path:
-    _validate_package_tree(artifact)
+    source_inventory = _package_inventory(artifact)
     destination = private_root / "pakiet żółć ze spacjami"
     try:
         shutil.copytree(artifact, destination)
@@ -734,8 +1099,165 @@ def _relocate_package(artifact: Path, private_root: Path, deadline: float) -> Pa
         raise QualificationFailure("artifact_invalid") from None
     if time.monotonic() >= deadline:
         raise QualificationFailure("scenario_timeout")
-    _validate_package_tree(destination)
+    if _package_inventory(destination) != source_inventory:
+        raise QualificationFailure("artifact_invalid")
     return destination
+
+
+def _observe_startup_receipt(
+    path: Path,
+    scenario: str,
+    process: _WindowsProcess,
+    observed_ms: int | None,
+) -> int | None:
+    if observed_ms is not None or not path.exists():
+        return observed_ms
+    receipt = _validate_child_receipt(path, scenario)
+    if receipt["stage"] != "startup_ready":
+        raise QualificationFailure("scenario_failed")
+    return round((time.perf_counter() - process.started) * 1000)
+
+
+def _observe_qualification_receipt(
+    path: Path,
+    scenario: str,
+    process: _WindowsProcess,
+    on_ready: Callable[[_WindowsProcess], None] | None,
+    ready_called: bool,
+) -> tuple[dict[str, object] | None, bool]:
+    if not path.exists():
+        return None, ready_called
+    receipt = _validate_child_receipt(path, scenario)
+    if receipt["stage"] == "failed":
+        failure = _validate_child_failure(path.with_name("failure.json"))
+        raise QualificationFailure(
+            "scenario_failed",
+            qualification_stage=failure["stage"],
+            qualification_reason=failure["reason"],
+        )
+    if on_ready is not None and not ready_called:
+        on_ready(process)
+        ready_called = True
+    return receipt, ready_called
+
+
+def _wait_for_job_exit(process: _WindowsProcess, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        if process.active_processes() == 0:
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _finish_process_without_receipt(
+    process: _WindowsProcess,
+    artifact_dir: Path,
+    deadline: float,
+    expected_exit: int,
+) -> ScenarioResult:
+    exit_code: int | None = None
+    while time.monotonic() < deadline:
+        process.observe()
+        exit_code = process.poll()
+        if exit_code is not None:
+            break
+        time.sleep(0.02)
+    if exit_code != expected_exit or not _wait_for_job_exit(process, deadline):
+        raise QualificationFailure("scenario_failed")
+    return ScenarioResult(
+        exit_code,
+        round((time.perf_counter() - process.started) * 1000),
+        0,
+        None,
+        process.metrics(),
+        process.topology(artifact_dir, all_exited=True),
+    )
+
+
+def _wait_concurrent_barrier(
+    processes: tuple[_WindowsProcess, _WindowsProcess],
+    roots: tuple[Path, Path],
+    scenario_deadline: float,
+) -> tuple[int, int]:
+    startup_ms: list[int | None] = [None, None]
+    while time.monotonic() < scenario_deadline:
+        for index, process in enumerate(processes):
+            process.observe()
+            if process.poll() is not None:
+                raise QualificationFailure("scenario_failed")
+            startup_ms[index] = _observe_startup_receipt(
+                roots[index] / "startup.json",
+                "concurrent",
+                process,
+                startup_ms[index],
+            )
+        if all(value is not None for value in startup_ms) and all(
+            (root / "waiting").is_file() for root in roots
+        ):
+            return startup_ms[0], startup_ms[1]
+        time.sleep(0.02)
+    raise QualificationFailure("scenario_timeout")
+
+
+def _launch_concurrent_pair(
+    api: _WindowsApi,
+    launcher: Path,
+    artifact: Path,
+    roots: tuple[Path, Path],
+    state_base: Path,
+) -> tuple[_WindowsProcess, _WindowsProcess]:
+    processes: list[_WindowsProcess] = []
+    try:
+        for root in roots:
+            processes.append(
+                api.launch(
+                    launcher,
+                    _sanitized_environment(
+                        artifact, root, state_base, "concurrent"
+                    ),
+                    root,
+                )
+            )
+    except Exception:
+        for process in processes:
+            process.close(terminate=True)
+        raise
+    return processes[0], processes[1]
+
+
+def _finish_concurrent_processes(
+    processes: tuple[_WindowsProcess, _WindowsProcess],
+    roots: tuple[Path, Path],
+    startup_ms: tuple[int, int],
+    artifact_dir: Path,
+    scenario_deadline: float,
+) -> tuple[ScenarioResult, ScenarioResult]:
+    exit_codes: list[int | None] = [None, None]
+    while time.monotonic() < scenario_deadline and any(
+        code is None for code in exit_codes
+    ):
+        for index, process in enumerate(processes):
+            process.observe()
+            if exit_codes[index] is None:
+                exit_codes[index] = process.poll()
+        time.sleep(0.02)
+    results: list[ScenarioResult] = []
+    for index, process in enumerate(processes):
+        receipt = _validate_child_receipt(roots[index] / "qualification.json", "concurrent")
+        all_exited = _wait_for_job_exit(process, scenario_deadline)
+        if exit_codes[index] != 9 or receipt["stage"] != "ready" or not all_exited:
+            raise QualificationFailure("scenario_failed")
+        results.append(
+            ScenarioResult(
+                9,
+                round((time.perf_counter() - process.started) * 1000),
+                startup_ms[index],
+                "ready",
+                process.metrics(),
+                process.topology(artifact_dir, all_exited=True),
+            )
+        )
+    return results[0], results[1]
 
 
 def _run_scenario(
@@ -753,8 +1275,9 @@ def _run_scenario(
 ) -> ScenarioResult:
     environment = _sanitized_environment(artifact_dir, work_root, state_base, scenario)
     process = api.launch(executable, environment, work_root)
+    startup_path = work_root / "startup.json"
     receipt_path = work_root / "qualification.json"
-    ready_ms: int | None = None
+    startup_ready_ms: int | None = None
     ready_called = False
     terminate = True
     try:
@@ -762,25 +1285,28 @@ def _run_scenario(
         exit_code: int | None = None
         last_receipt: dict[str, object] | None = None
         while time.monotonic() < scenario_deadline:
-            if receipt_path.exists():
-                last_receipt = _validate_child_receipt(receipt_path, scenario)
-                if ready_ms is None:
-                    ready_ms = round((time.perf_counter() - process.started) * 1000)
-                if last_receipt["stage"] == "failed":
-                    raise QualificationFailure("scenario_failed")
-                if on_ready is not None and not ready_called:
-                    ready_called = True
-                    on_ready(process)
+            process.observe()
+            startup_ready_ms = _observe_startup_receipt(
+                startup_path, scenario, process, startup_ready_ms
+            )
+            observed_receipt, ready_called = _observe_qualification_receipt(
+                receipt_path, scenario, process, on_ready, ready_called
+            )
+            if observed_receipt is not None:
+                last_receipt = observed_receipt
             exit_code = process.poll()
             if exit_code is not None:
                 break
             time.sleep(0.02)
         if exit_code is None:
             raise QualificationFailure("scenario_timeout")
-        if exit_code != expected_exit or last_receipt is None:
+        if exit_code != expected_exit or last_receipt is None or startup_ready_ms is None:
             raise QualificationFailure("scenario_failed")
         final_receipt = _validate_child_receipt(receipt_path, scenario)
         if final_receipt["stage"] != expected_stage:
+            raise QualificationFailure("scenario_failed")
+        all_exited = _wait_for_job_exit(process, scenario_deadline)
+        if not all_exited:
             raise QualificationFailure("scenario_failed")
         metrics = process.metrics()
         elapsed_ms = round((time.perf_counter() - process.started) * 1000)
@@ -788,9 +1314,10 @@ def _run_scenario(
         return ScenarioResult(
             exit_code,
             elapsed_ms,
-            ready_ms if ready_ms is not None else elapsed_ms,
+            startup_ready_ms,
             str(final_receipt["stage"]),
             metrics,
+            process.topology(artifact_dir, all_exited=all_exited),
         )
     finally:
         process.close(terminate=terminate)
@@ -827,6 +1354,64 @@ def _wait_newest_incident(
     raise QualificationFailure("incident_invalid")
 
 
+def _validate_hard_exit_history(incident) -> None:
+    events = [decode_event(event) for event in incident.events]
+    provenance = [event for event in events if type(event) is RuntimeProvenanceEvent]
+    startup = [event for event in events if type(event) is StartupDiagnosticEvent]
+    if (
+        not provenance
+        or not startup
+        or any(event.invocation_id != incident.session_id for event in events)
+        or not any(
+            left.startup_id == right.startup_id
+            for left in provenance
+            for right in startup
+        )
+    ):
+        raise QualificationFailure("incident_invalid")
+    workflows = [event for event in events if type(event) is WorkflowDiagnosticEvent]
+    expected = {
+        WorkflowOperation.SELECTED_IMPORT: (
+            WorkflowStage.STARTED,
+            WorkflowStage.PREFLIGHT_COMPLETE,
+            WorkflowStage.PROCESSING,
+            WorkflowStage.PERSISTENCE_COMPLETE,
+            WorkflowStage.FINISHED,
+        ),
+        WorkflowOperation.LOCAL_EXPORT: (
+            WorkflowStage.STARTED,
+            WorkflowStage.OUTPUT_STAGING,
+            WorkflowStage.OUTPUT_PUBLISHED,
+            WorkflowStage.FINISHED,
+        ),
+    }
+    for operation, stages in expected.items():
+        rows = [event for event in workflows if event.operation is operation]
+        if (
+            not rows
+            or tuple(event.stage for event in rows) != stages
+            or len({event.operation_id for event in rows}) != 1
+            or rows[-1].outcome is not WorkflowOutcome.COMPLETED
+            or any(
+                event.validation_status is not ValidationStatus.NOT_PERFORMED
+                for event in rows
+            )
+        ):
+            raise QualificationFailure("incident_invalid")
+
+
+def _validate_hard_exit_incident(incident) -> None:
+    observation = incident.observation
+    if (
+        observation.exit_code != 9
+        or observation.launch is not LaunchState.STARTED
+        or observation.handshake is not HandshakeState.ACCEPTED
+        or observation.channel is ChannelState.COMPLETE
+    ):
+        raise QualificationFailure("incident_invalid")
+    _validate_hard_exit_history(incident)
+
+
 def _validate_selected_export(path: Path, report_id: uuid.UUID) -> None:
     try:
         if _sha256(path, maximum=4 * 1024 * 1024) == "":
@@ -841,10 +1426,195 @@ def _validate_selected_export(path: Path, report_id: uuid.UUID) -> None:
         raise QualificationFailure("export_invalid") from None
 
 
+def _remove_generated_paths(paths: tuple[Path, ...]) -> None:
+    for path in paths:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _write_development_artifacts(
+    source: Path,
+    tested: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    source_inventory = _package_inventory(source)
+    tested_inventory = _package_inventory(tested)
+    if tested_inventory != source_inventory:
+        raise QualificationFailure("artifact_invalid")
+    archive_stage = output_dir / f".{PACKAGE_ARCHIVE_NAME}.{uuid.uuid4().hex}.tmp"
+    manifest_stage = output_dir / f".{PACKAGE_MANIFEST_NAME}.{uuid.uuid4().hex}.tmp"
+    archive_path = output_dir / PACKAGE_ARCHIVE_NAME
+    manifest_path = output_dir / PACKAGE_MANIFEST_NAME
+    try:
+        with zipfile.ZipFile(
+            archive_stage, "x", compression=zipfile.ZIP_STORED, allowZip64=True
+        ) as archive:
+            for entry in tested_inventory:
+                info = zipfile.ZipInfo(entry.path, date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_STORED
+                info.create_system = 3
+                info.external_attr = 0o100600 << 16
+                with (tested / Path(entry.path)).open("rb") as source_stream:
+                    with archive.open(info, "w", force_zip64=True) as destination:
+                        shutil.copyfileobj(source_stream, destination, length=1024 * 1024)
+        if archive_stage.stat().st_size > MAX_PACKAGE_ARCHIVE_BYTES:
+            raise QualificationFailure("artifact_invalid")
+        with zipfile.ZipFile(archive_stage) as archive:
+            if archive.namelist() != [entry.path for entry in tested_inventory]:
+                raise QualificationFailure("artifact_invalid")
+            if archive.testzip() is not None:
+                raise QualificationFailure("artifact_invalid")
+        archive_sha256 = _sha256(archive_stage, maximum=MAX_PACKAGE_ARCHIVE_BYTES)
+        manifest = {
+            "schema_version": 1,
+            "tree_sha256": _tree_digest(tested_inventory),
+            "archive": {
+                "name": PACKAGE_ARCHIVE_NAME,
+                "sha256": archive_sha256,
+                "size_bytes": archive_stage.stat().st_size,
+            },
+            "entries": [
+                {
+                    "path": entry.path,
+                    "sha256": entry.sha256,
+                    "size_bytes": entry.size_bytes,
+                }
+                for entry in tested_inventory
+            ],
+        }
+        encoded = json.dumps(
+            manifest,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("ascii")
+        if not encoded or len(encoded) > MAX_PACKAGE_MANIFEST_BYTES:
+            raise QualificationFailure("artifact_invalid")
+        with manifest_stage.open("xb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        archive_stage.replace(archive_path)
+        manifest_stage.replace(manifest_path)
+        return {
+            "tested_tree_sha256": manifest["tree_sha256"],
+            "package_manifest_sha256": _sha256(
+                manifest_path, maximum=MAX_PACKAGE_MANIFEST_BYTES
+            ),
+            "archive_name": PACKAGE_ARCHIVE_NAME,
+            "archive_sha256": archive_sha256,
+            "archive_size_bytes": archive_path.stat().st_size,
+        }
+    except Exception as error:
+        _remove_generated_paths((archive_path, manifest_path))
+        if isinstance(error, QualificationFailure):
+            raise
+        raise QualificationFailure("artifact_invalid") from None
+    finally:
+        _remove_generated_paths((archive_stage, manifest_stage))
+
+
+def _manifest_entries(payload: object) -> tuple[PackageEntry, ...]:
+    if type(payload) is not list or not 0 < len(payload) <= MAX_PACKAGE_ENTRIES:
+        raise QualificationFailure("output_failed")
+    entries: list[PackageEntry] = []
+    normalized: set[str] = set()
+    total_bytes = 0
+    for value in payload:
+        if type(value) is not dict or set(value) != {"path", "sha256", "size_bytes"}:
+            raise QualificationFailure("output_failed")
+        path = value["path"]
+        parsed = PurePosixPath(path) if type(path) is str else PurePosixPath("/")
+        if (
+            type(path) is not str
+            or not 0 < len(path) <= MAX_PACKAGE_PATH_CHARS
+            or parsed.is_absolute()
+            or any(part in {"", ".", ".."} for part in parsed.parts)
+            or "\\" in path
+            or any(ord(character) < 32 or ord(character) == 127 for character in path)
+            or path.casefold() in normalized
+            or not _valid_digest(value["sha256"])
+            or not _bounded_counter(value["size_bytes"])
+            or value["size_bytes"] > MAX_FILE_BYTES
+        ):
+            raise QualificationFailure("output_failed")
+        normalized.add(path.casefold())
+        total_bytes += value["size_bytes"]
+        if total_bytes > MAX_PACKAGE_COPY_BYTES:
+            raise QualificationFailure("output_failed")
+        entries.append(PackageEntry(path, value["size_bytes"], value["sha256"]))
+    result = tuple(entries)
+    if tuple(sorted(result, key=lambda entry: entry.path)) != result:
+        raise QualificationFailure("output_failed")
+    return result
+
+
+def _validate_development_artifacts(output_dir: Path, package: dict[str, object]) -> None:
+    manifest_path = output_dir / PACKAGE_MANIFEST_NAME
+    archive_path = output_dir / PACKAGE_ARCHIVE_NAME
+    try:
+        payload = _bounded_json(manifest_path, MAX_PACKAGE_MANIFEST_BYTES)
+        if type(payload) is not dict or set(payload) != {
+            "schema_version",
+            "tree_sha256",
+            "archive",
+            "entries",
+        }:
+            raise QualificationFailure("output_failed")
+        archive = payload["archive"]
+        if (
+            payload["schema_version"] != 1
+            or type(payload["schema_version"]) is not int
+            or type(archive) is not dict
+            or set(archive) != {"name", "sha256", "size_bytes"}
+        ):
+            raise QualificationFailure("output_failed")
+        entries = _manifest_entries(payload["entries"])
+        archive_hash = _sha256(archive_path, maximum=MAX_PACKAGE_ARCHIVE_BYTES)
+        facts = {
+            "tested_tree_sha256": payload["tree_sha256"],
+            "package_manifest_sha256": _sha256(
+                manifest_path, maximum=MAX_PACKAGE_MANIFEST_BYTES
+            ),
+            "archive_name": archive["name"],
+            "archive_sha256": archive_hash,
+            "archive_size_bytes": archive_path.stat().st_size,
+        }
+        if (
+            payload["tree_sha256"] != _tree_digest(entries)
+            or archive["name"] != PACKAGE_ARCHIVE_NAME
+            or archive["sha256"] != archive_hash
+            or archive["size_bytes"] != archive_path.stat().st_size
+            or any(package[key] != value for key, value in facts.items())
+        ):
+            raise QualificationFailure("output_failed")
+        with zipfile.ZipFile(archive_path) as bundle:
+            if bundle.namelist() != [entry.path for entry in entries]:
+                raise QualificationFailure("output_failed")
+            if [item.file_size for item in bundle.infolist()] != [
+                entry.size_bytes for entry in entries
+            ]:
+                raise QualificationFailure("output_failed")
+            if bundle.testzip() is not None:
+                raise QualificationFailure("output_failed")
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):
+        raise QualificationFailure("output_failed") from None
+
+
 def _write_receipt(output_dir: Path, payload: dict[str, object]) -> Path:
-    if set(output_dir.iterdir()):
+    expected_existing = (
+        {output_dir / PACKAGE_MANIFEST_NAME, output_dir / PACKAGE_ARCHIVE_NAME}
+        if payload.get("status") == "passed"
+        else set()
+    )
+    if set(output_dir.iterdir()) != expected_existing:
         raise QualificationFailure("output_failed")
     _validate_output_payload(payload)
+    if payload["status"] == "passed":
+        _validate_development_artifacts(output_dir, payload["package"])
     encoded = json.dumps(
         payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode("ascii")
@@ -886,6 +1656,11 @@ def _validate_package_receipt(package: object) -> None:
         "application_sha256",
         "manifest_sha256",
         "notice_hashes",
+        "tested_tree_sha256",
+        "package_manifest_sha256",
+        "archive_name",
+        "archive_sha256",
+        "archive_size_bytes",
     }
     if type(package) is not dict or set(package) != expected:
         raise QualificationFailure("output_failed")
@@ -893,7 +1668,20 @@ def _validate_package_receipt(package: object) -> None:
         raise QualificationFailure("output_failed")
     if not all(
         _valid_digest(package[key])
-        for key in ("launcher_sha256", "application_sha256", "manifest_sha256")
+        for key in (
+            "launcher_sha256",
+            "application_sha256",
+            "manifest_sha256",
+            "tested_tree_sha256",
+            "package_manifest_sha256",
+            "archive_sha256",
+        )
+    ):
+        raise QualificationFailure("output_failed")
+    if (
+        package["archive_name"] != PACKAGE_ARCHIVE_NAME
+        or not _bounded_counter(package["archive_size_bytes"])
+        or package["archive_size_bytes"] > MAX_PACKAGE_ARCHIVE_BYTES
     ):
         raise QualificationFailure("output_failed")
     notices = package["notice_hashes"]
@@ -905,86 +1693,374 @@ def _validate_package_receipt(package: object) -> None:
 
 def _validate_success_metrics(metrics: object) -> None:
     expected = {
-        "direct_ready_ms",
-        "supervised_ready_ms",
-        "peak_process_tree_memory_bytes",
-        "idle_write_bytes",
+        "direct_startup_ready_ms",
+        "supervised_startup_ready_ms",
+        "direct_peak_process_tree_memory_bytes",
+        "supervised_peak_process_tree_memory_bytes",
+        "direct_idle_write_bytes",
+        "supervised_idle_write_bytes",
         "hard_exit_ready_receipt_to_report_verification_ms",
         "handled_ready_receipt_to_report_verification_ms",
         "hard_incident_assembly_to_verification_ms",
         "handled_incident_assembly_to_verification_ms",
         "flood_elapsed_ms",
+        "flood_loss",
     }
     if type(metrics) is not dict or set(metrics) != expected:
         raise QualificationFailure("output_failed")
-    supervised = metrics["supervised_ready_ms"]
-    scalar_keys = expected - {"supervised_ready_ms"}
-    if (
-        type(supervised) is not list
-        or len(supervised) != 3
-        or not all(_bounded_counter(value) for value in supervised)
-        or not all(_bounded_counter(metrics[key]) for key in scalar_keys)
+    list_keys = {
+        "direct_startup_ready_ms",
+        "supervised_startup_ready_ms",
+        "direct_peak_process_tree_memory_bytes",
+        "supervised_peak_process_tree_memory_bytes",
+    }
+    scalar_keys = expected - list_keys - {"flood_loss"}
+    if any(
+        type(metrics[key]) is not list
+        or len(metrics[key]) != 2
+        or not all(_bounded_counter(value) for value in metrics[key])
+        for key in list_keys
+    ) or not all(_bounded_counter(metrics[key]) for key in scalar_keys):
+        raise QualificationFailure("output_failed")
+    loss = metrics["flood_loss"]
+    expected_loss = {"source_dropped", *RING_LOSS_FIELDS}
+    if type(loss) is not dict or set(loss) != expected_loss:
+        raise QualificationFailure("output_failed")
+    if type(loss["counters_saturated"]) is not bool or not all(
+        type(loss[key]) is int and 0 <= loss[key] <= 2**32 - 1
+        for key in expected_loss - {"counters_saturated"}
     ):
         raise QualificationFailure("output_failed")
 
 
+def _environment_receipt() -> dict[str, str]:
+    try:
+        version = sys.getwindowsversion()
+        windows_version = f"{version.major}.{version.minor}.{version.build}"
+        machine = platform.machine().lower()
+        architecture = {
+            "amd64": "amd64",
+            "x86_64": "amd64",
+            "arm64": "arm64",
+            "aarch64": "arm64",
+        }[machine]
+        return {
+            "windows_version": windows_version,
+            "architecture": architecture,
+            "python_version": platform.python_version(),
+            "pyinstaller_version": importlib.metadata.version("pyinstaller"),
+        }
+    except (AttributeError, KeyError, importlib.metadata.PackageNotFoundError):
+        raise QualificationFailure("artifact_invalid") from None
+
+
+def _validate_environment_receipt(environment: object) -> None:
+    expected = {
+        "windows_version",
+        "architecture",
+        "python_version",
+        "pyinstaller_version",
+    }
+    if type(environment) is not dict or set(environment) != expected:
+        raise QualificationFailure("output_failed")
+    patterns = {
+        "windows_version": r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,10}",
+        "python_version": r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}",
+        "pyinstaller_version": r"[0-9][0-9A-Za-z.+-]{0,31}",
+    }
+    if environment["architecture"] not in {"amd64", "arm64"} or any(
+        type(environment[key]) is not str
+        or re.fullmatch(pattern, environment[key]) is None
+        for key, pattern in patterns.items()
+    ):
+        raise QualificationFailure("output_failed")
+
+
+def _operational_cost(metrics: dict[str, object]) -> dict[str, object]:
+    direct_startup = metrics["direct_startup_ready_ms"]
+    supervised_startup = metrics["supervised_startup_ready_ms"]
+    direct_memory = metrics["direct_peak_process_tree_memory_bytes"]
+    supervised_memory = metrics["supervised_peak_process_tree_memory_bytes"]
+    observed = {
+        "max_startup_ready_ms": max((*direct_startup, *supervised_startup)),
+        "max_supervisor_startup_overhead_ms": max(
+            max(0, supervised - direct)
+            for direct, supervised in zip(direct_startup, supervised_startup, strict=True)
+        ),
+        "max_supervisor_memory_overhead_bytes": max(
+            0, max(supervised_memory) - max(direct_memory)
+        ),
+        "direct_idle_write_bytes": metrics["direct_idle_write_bytes"],
+        "supervised_idle_write_bytes": metrics["supervised_idle_write_bytes"],
+        "max_incident_assembly_to_verification_ms": max(
+            metrics["hard_incident_assembly_to_verification_ms"],
+            metrics["handled_incident_assembly_to_verification_ms"],
+        ),
+        "flood_elapsed_ms": metrics["flood_elapsed_ms"],
+    }
+    thresholds = {
+        "max_startup_ready_ms": MAX_STARTUP_READY_MILLISECONDS,
+        "max_supervisor_startup_overhead_ms": (
+            MAX_SUPERVISOR_STARTUP_OVERHEAD_MILLISECONDS
+        ),
+        "max_supervisor_memory_overhead_bytes": MAX_SUPERVISOR_MEMORY_OVERHEAD_BYTES,
+        "max_idle_write_bytes": MAX_IDLE_WRITE_BYTES,
+        "max_incident_assembly_to_verification_ms": (
+            MAX_INCIDENT_ASSEMBLY_TO_VERIFICATION_MILLISECONDS
+        ),
+        "max_flood_elapsed_ms": MAX_FLOOD_ELAPSED_MILLISECONDS,
+        "idle_sample_ms": IDLE_SAMPLE_MILLISECONDS,
+    }
+    within = (
+        observed["max_startup_ready_ms"] <= thresholds["max_startup_ready_ms"]
+        and observed["max_supervisor_startup_overhead_ms"]
+        <= thresholds["max_supervisor_startup_overhead_ms"]
+        and observed["max_supervisor_memory_overhead_bytes"]
+        <= thresholds["max_supervisor_memory_overhead_bytes"]
+        and observed["direct_idle_write_bytes"] <= thresholds["max_idle_write_bytes"]
+        and observed["supervised_idle_write_bytes"]
+        <= thresholds["max_idle_write_bytes"]
+        and observed["max_incident_assembly_to_verification_ms"]
+        <= thresholds["max_incident_assembly_to_verification_ms"]
+        and observed["flood_elapsed_ms"] <= thresholds["max_flood_elapsed_ms"]
+    )
+    return {
+        "status": "within_budget" if within else "unresolved",
+        "thresholds": thresholds,
+        "observed": observed,
+    }
+
+
+def _validate_operational_cost(cost: object) -> None:
+    if type(cost) is not dict or set(cost) != {"status", "thresholds", "observed"}:
+        raise QualificationFailure("output_failed")
+    expected_thresholds = {
+        "max_startup_ready_ms": MAX_STARTUP_READY_MILLISECONDS,
+        "max_supervisor_startup_overhead_ms": (
+            MAX_SUPERVISOR_STARTUP_OVERHEAD_MILLISECONDS
+        ),
+        "max_supervisor_memory_overhead_bytes": MAX_SUPERVISOR_MEMORY_OVERHEAD_BYTES,
+        "max_idle_write_bytes": MAX_IDLE_WRITE_BYTES,
+        "max_incident_assembly_to_verification_ms": (
+            MAX_INCIDENT_ASSEMBLY_TO_VERIFICATION_MILLISECONDS
+        ),
+        "max_flood_elapsed_ms": MAX_FLOOD_ELAPSED_MILLISECONDS,
+        "idle_sample_ms": IDLE_SAMPLE_MILLISECONDS,
+    }
+    observed_keys = {
+        "max_startup_ready_ms",
+        "max_supervisor_startup_overhead_ms",
+        "max_supervisor_memory_overhead_bytes",
+        "direct_idle_write_bytes",
+        "supervised_idle_write_bytes",
+        "max_incident_assembly_to_verification_ms",
+        "flood_elapsed_ms",
+    }
+    if cost["thresholds"] != expected_thresholds:
+        raise QualificationFailure("output_failed")
+    observed = cost["observed"]
+    if (
+        type(observed) is not dict
+        or set(observed) != observed_keys
+        or not all(_bounded_counter(observed[key]) for key in observed_keys)
+        or cost["status"] not in {"within_budget", "unresolved"}
+    ):
+        raise QualificationFailure("output_failed")
+
+
+def _topology_record(topology: ProcessTopology) -> dict[str, object]:
+    return {
+        "launcher_processes_observed": topology.launcher_processes_observed,
+        "application_processes_observed": topology.application_processes_observed,
+        "unexpected_processes_observed": topology.unexpected_processes_observed,
+        "assigned_processes": topology.assigned_processes,
+        "max_active_processes": topology.max_active_processes,
+        "creation_order": list(topology.creation_order),
+        "all_processes_exited": topology.all_processes_exited,
+    }
+
+
+def _validate_topology_record(value: object, *, supervised: bool) -> None:
+    expected = {
+        "launcher_processes_observed",
+        "application_processes_observed",
+        "unexpected_processes_observed",
+        "assigned_processes",
+        "max_active_processes",
+        "creation_order",
+        "all_processes_exited",
+    }
+    if type(value) is not dict or set(value) != expected:
+        raise QualificationFailure("output_failed")
+    expected_order = (
+        ["launcher_bootloader", "launcher_supervisor", "application"]
+        if supervised
+        else ["application"]
+    )
+    expected_launchers = 2 if supervised else 0
+    if (
+        value["launcher_processes_observed"] != expected_launchers
+        or value["application_processes_observed"] != 1
+        or value["unexpected_processes_observed"] != 0
+        or value["assigned_processes"] != (3 if supervised else 1)
+        or value["creation_order"] != expected_order
+        or value["all_processes_exited"] is not True
+        or type(value["max_active_processes"]) is not int
+        or not 1 <= value["max_active_processes"] <= 3
+    ):
+        raise QualificationFailure("output_failed")
+
+
+def _validate_topology(topology: object, package: dict[str, object]) -> None:
+    if type(topology) is not dict or set(topology) != {
+        "launcher_image_sha256",
+        "application_image_sha256",
+        "direct",
+        "supervised",
+    }:
+        raise QualificationFailure("output_failed")
+    if (
+        topology["launcher_image_sha256"] != package["launcher_sha256"]
+        or topology["application_image_sha256"] != package["application_sha256"]
+        or type(topology["direct"]) is not list
+        or len(topology["direct"]) != 2
+        or type(topology["supervised"]) is not list
+        or len(topology["supervised"]) != 2
+    ):
+        raise QualificationFailure("output_failed")
+    for record in topology["direct"]:
+        _validate_topology_record(record, supervised=False)
+    for record in topology["supervised"]:
+        _validate_topology_record(record, supervised=True)
+
+
 def _validate_output_payload(payload: object) -> None:
-    expected = {"schema_version", "status", "failure_id", "package", "checks", "metrics"}
+    expected = {
+        "schema_version",
+        "status",
+        "failure_id",
+        "qualification_failure",
+        "package",
+        "environment",
+        "topology",
+        "checks",
+        "metrics",
+        "operational_cost",
+    }
     if type(payload) is not dict or set(payload) != expected:
         raise QualificationFailure("output_failed")
     if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
         raise QualificationFailure("output_failed")
     if payload["status"] == "failed":
+        detail = payload["qualification_failure"]
+        valid_detail = detail is None or (
+            type(detail) is dict
+            and set(detail) == {"stage", "reason"}
+            and type(detail["stage"]) is str
+            and type(detail["reason"]) is str
+            and detail["stage"] in QUALIFICATION_FAILURE_STAGES
+            and detail["reason"] in QUALIFICATION_FAILURE_REASONS
+        )
         if (
             payload["failure_id"] not in FAILURE_IDS
+            or not valid_detail
             or payload["package"] is not None
+            or payload["environment"] is not None
+            or payload["topology"] is not None
             or payload["checks"] != []
             or payload["metrics"] is not None
+            or payload["operational_cost"] is not None
         ):
             raise QualificationFailure("output_failed")
         return
     if payload["status"] != "passed" or payload["failure_id"] is not None:
         raise QualificationFailure("output_failed")
+    if payload["qualification_failure"] is not None:
+        raise QualificationFailure("output_failed")
     checks = payload["checks"]
-    if checks != [{"id": check_id, "status": "passed"} for check_id in CHECK_IDS]:
+    operational = payload["operational_cost"]
+    _validate_operational_cost(operational)
+    expected_checks = [
+        {"id": check_id, "status": "passed"} for check_id in CHECK_IDS
+    ] + [{"id": OPERATIONAL_CHECK_ID, "status": operational.get("status")}]
+    if checks != expected_checks:
         raise QualificationFailure("output_failed")
     _validate_package_receipt(payload["package"])
+    _validate_environment_receipt(payload["environment"])
+    _validate_topology(payload["topology"], payload["package"])
     _validate_success_metrics(payload["metrics"])
+    if operational != _operational_cost(payload["metrics"]):
+        raise QualificationFailure("output_failed")
 
 
 def _success_payload(
     package: dict[str, object],
+    environment: dict[str, str],
     results: dict[str, ScenarioResult],
     *,
-    idle_write_bytes: int,
+    direct_idle_write_bytes: int,
+    supervised_idle_write_bytes: int,
     hard_ready_to_report_ms: int,
     handled_ready_to_report_ms: int,
     hard_assembly_to_verification_ms: int,
     handled_assembly_to_verification_ms: int,
+    flood_loss: dict[str, object],
 ) -> dict[str, object]:
-    peak = max(result.metrics.peak_job_memory_bytes for result in results.values())
+    metrics = {
+        "direct_startup_ready_ms": [
+            results[name].startup_ready_ms
+            for name in ("direct_normal_1", "direct_normal_2")
+        ],
+        "supervised_startup_ready_ms": [
+            results[name].startup_ready_ms
+            for name in ("supervised_normal_1", "supervised_normal_2")
+        ],
+        "direct_peak_process_tree_memory_bytes": [
+            results[name].metrics.peak_job_memory_bytes
+            for name in ("direct_normal_1", "direct_normal_2")
+        ],
+        "supervised_peak_process_tree_memory_bytes": [
+            results[name].metrics.peak_job_memory_bytes
+            for name in ("supervised_normal_1", "supervised_normal_2")
+        ],
+        "direct_idle_write_bytes": direct_idle_write_bytes,
+        "supervised_idle_write_bytes": supervised_idle_write_bytes,
+        "hard_exit_ready_receipt_to_report_verification_ms": hard_ready_to_report_ms,
+        "handled_ready_receipt_to_report_verification_ms": handled_ready_to_report_ms,
+        "hard_incident_assembly_to_verification_ms": hard_assembly_to_verification_ms,
+        "handled_incident_assembly_to_verification_ms": (
+            handled_assembly_to_verification_ms
+        ),
+        "flood_elapsed_ms": results["flood"].elapsed_ms,
+        "flood_loss": flood_loss,
+    }
+    operational_cost = _operational_cost(metrics)
+    topology = {
+        "launcher_image_sha256": package["launcher_sha256"],
+        "application_image_sha256": package["application_sha256"],
+        "direct": [
+            _topology_record(results[name].topology)
+            for name in ("direct_normal_1", "direct_normal_2")
+        ],
+        "supervised": [
+            _topology_record(results[name].topology)
+            for name in ("supervised_normal_1", "supervised_normal_2")
+        ],
+    }
     return {
         "schema_version": 1,
         "status": "passed",
         "failure_id": None,
+        "qualification_failure": None,
         "package": package,
-        "checks": [{"id": check_id, "status": "passed"} for check_id in CHECK_IDS],
-        "metrics": {
-            "direct_ready_ms": results["direct_normal"].ready_ms,
-            "supervised_ready_ms": [
-                results[name].ready_ms
-                for name in ("supervised_normal_1", "supervised_normal_2", "supervised_normal_3")
-            ],
-            "peak_process_tree_memory_bytes": peak,
-            "idle_write_bytes": idle_write_bytes,
-            "hard_exit_ready_receipt_to_report_verification_ms": hard_ready_to_report_ms,
-            "handled_ready_receipt_to_report_verification_ms": handled_ready_to_report_ms,
-            "hard_incident_assembly_to_verification_ms": hard_assembly_to_verification_ms,
-            "handled_incident_assembly_to_verification_ms": (
-                handled_assembly_to_verification_ms
-            ),
-            "flood_elapsed_ms": results["flood"].elapsed_ms,
-        },
+        "environment": environment,
+        "topology": topology,
+        "checks": [
+            {"id": check_id, "status": "passed"} for check_id in CHECK_IDS
+        ]
+        + [{"id": OPERATIONAL_CHECK_ID, "status": operational_cost["status"]}],
+        "metrics": metrics,
+        "operational_cost": operational_cost,
     }
 
 
@@ -1000,11 +2076,16 @@ class _QualificationRunner:
         self.launcher = artifact / "metroliza.exe"
         self.application = artifact / "metroliza_application.exe"
         self.results: dict[str, ScenarioResult] = {}
-        self.idle_write_bytes = 0
+        self.direct_idle_write_bytes = 0
+        self.supervised_idle_write_bytes = 0
         self.hard_ready_to_report_ms = 0
         self.handled_ready_to_report_ms = 0
         self.hard_assembly_to_verification_ms = 0
         self.handled_assembly_to_verification_ms = 0
+        self.flood_loss: dict[str, object] = {
+            "source_dropped": 0,
+            **{field: False if field == "counters_saturated" else 0 for field in RING_LOSS_FIELDS},
+        }
 
     def _root(self, label: str) -> Path:
         return _prepare_work_root(self.private_root, label)
@@ -1036,11 +2117,88 @@ class _QualificationRunner:
         return root
 
     def run_startups(self) -> None:
-        self._scenario("direct_normal", "normal", executable=self.application)
         before = {record.report_id for record in _reports(self.store)}
-        for index in range(1, 4):
+        for index in range(1, 3):
+            self._scenario(
+                f"direct_normal_{index}", "normal", executable=self.application
+            )
+        for index in range(1, 3):
             self._scenario(f"supervised_normal_{index}", "normal")
         if {record.report_id for record in _reports(self.store)} != before:
+            raise QualificationFailure("incident_invalid")
+
+    def run_concurrent_instances(self) -> None:
+        before = {record.report_id for record in _reports(self.store)}
+        roots = (self._root("concurrent-one"), self._root("concurrent-two"))
+        processes = _launch_concurrent_pair(
+            self.api, self.launcher, self.artifact, roots, self.state_base
+        )
+        completed = False
+        try:
+            scenario_deadline = min(
+                self.deadline, time.monotonic() + MAX_SCENARIO_SECONDS
+            )
+            startup_ms = _wait_concurrent_barrier(
+                processes, roots, scenario_deadline
+            )
+            for root in roots:
+                (root / "start").touch(exist_ok=False)
+            results = _finish_concurrent_processes(
+                processes, roots, startup_ms, self.artifact, scenario_deadline
+            )
+            self.results["concurrent_1"], self.results["concurrent_2"] = results
+            completed = True
+        finally:
+            for process in processes:
+                process.close(terminate=not completed)
+        new_records = [
+            record for record in _reports(self.store) if record.report_id not in before
+        ]
+        if len(new_records) != 2:
+            raise QualificationFailure("incident_invalid")
+        incidents = []
+        for record in new_records:
+            loaded = self.store.load(record.report_id)
+            if loaded.status is not StoreStatus.AVAILABLE or loaded.incident is None:
+                raise QualificationFailure("incident_invalid")
+            incidents.append(loaded.incident)
+        if len({incident.session_id for incident in incidents}) != 2:
+            raise QualificationFailure("incident_invalid")
+        for incident in incidents:
+            _validate_hard_exit_incident(incident)
+
+    def run_ui_smoke(self) -> None:
+        before = {record.report_id for record in _reports(self.store)}
+        root = self._root("interactive-ui-smoke")
+        environment = _sanitized_environment(
+            self.artifact, root, self.state_base, "normal"
+        )
+        for key in (
+            "METROLIZA_STARTUP_SMOKE",
+            "METROLIZA_DIAGNOSTIC_QUALIFICATION",
+            "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT",
+        ):
+            environment.pop(key)
+        environment["METROLIZA_STARTUP_UI_SMOKE"] = "1"
+        process = self.api.launch(self.launcher, environment, root)
+        terminate = True
+        try:
+            result = _finish_process_without_receipt(
+                process,
+                self.artifact,
+                min(self.deadline, time.monotonic() + MAX_SCENARIO_SECONDS),
+                0,
+            )
+            _validate_topology_record(_topology_record(result.topology), supervised=True)
+            self.results["ui_smoke"] = result
+            terminate = False
+        finally:
+            process.close(terminate=terminate)
+        if (
+            {record.report_id for record in _reports(self.store)} != before
+            or (root / "qualification.json").exists()
+            or (root / "startup.json").exists()
+        ):
             raise QualificationFailure("incident_invalid")
 
     def run_hard_exit(self) -> None:
@@ -1064,11 +2222,7 @@ class _QualificationRunner:
         self.hard_assembly_to_verification_ms = max(
             0, time.time_ns() // 1_000_000 - incident.created_at_ms
         )
-        if (
-            incident.observation.exit_code != 9
-            or incident.observation.channel is ChannelState.COMPLETE
-        ):
-            raise QualificationFailure("incident_invalid")
+        _validate_hard_exit_incident(incident)
 
     def run_handled_failure(self) -> None:
         before = {record.report_id for record in _reports(self.store)}
@@ -1116,22 +2270,28 @@ class _QualificationRunner:
         root = self._scenario("preview", "preview")
         _validate_selected_export(root / "selected.zip", selected)
 
-    def run_idle(self) -> None:
-        root = self._root("idle")
+    def _idle_sample(self, key: str, executable: Path) -> int:
+        root = self._root(key.replace("_", "-"))
+        observed = {"write_bytes": 0}
 
         def finish(process: _WindowsProcess) -> None:
             before = process.metrics().write_bytes
-            hold_until = min(self.deadline, time.monotonic() + 2.0)
+            hold_until = min(
+                self.deadline,
+                time.monotonic() + IDLE_SAMPLE_MILLISECONDS / 1000,
+            )
             while time.monotonic() < hold_until:
                 if process.poll() is not None:
                     raise QualificationFailure("scenario_failed")
                 time.sleep(0.05)
-            self.idle_write_bytes = max(0, process.metrics().write_bytes - before)
+            observed["write_bytes"] = max(
+                0, process.metrics().write_bytes - before
+            )
             (root / "finish").touch(exist_ok=False)
 
-        self.results["idle"] = _run_scenario(
+        self.results[key] = _run_scenario(
             self.api,
-            self.launcher,
+            executable,
             self.artifact,
             root,
             self.state_base,
@@ -1140,6 +2300,15 @@ class _QualificationRunner:
             expected_exit=0,
             expected_stage="complete",
             on_ready=finish,
+        )
+        return observed["write_bytes"]
+
+    def run_idle(self) -> None:
+        self.direct_idle_write_bytes = self._idle_sample(
+            "direct_idle", self.application
+        )
+        self.supervised_idle_write_bytes = self._idle_sample(
+            "supervised_idle", self.launcher
         )
 
     def run_flood(self) -> None:
@@ -1164,6 +2333,10 @@ class _QualificationRunner:
             incident.observation.channel is ChannelState.LOSS_OBSERVED and not explicit_loss
         ):
             raise QualificationFailure("incident_invalid")
+        self.flood_loss = {
+            "source_dropped": incident.observation.source_dropped,
+            **{field: getattr(loss, field) for field in RING_LOSS_FIELDS},
+        }
 
     def run_unavailable_store(self) -> None:
         before = {record.report_id for record in _reports(self.store)}
@@ -1189,6 +2362,9 @@ class _QualificationRunner:
             exit_code = self._wait_missing_exit(process)
             if exit_code != 1 or (root / "qualification.json").exists():
                 raise QualificationFailure("scenario_failed")
+            all_exited = _wait_for_job_exit(process, self.deadline)
+            if not all_exited:
+                raise QualificationFailure("scenario_failed")
             terminate = False
             self.results["missing_components"] = ScenarioResult(
                 1,
@@ -1196,6 +2372,7 @@ class _QualificationRunner:
                 0,
                 None,
                 process.metrics(),
+                process.topology(self.artifact, all_exited=all_exited),
             )
         finally:
             process.close(terminate=terminate)
@@ -1229,6 +2406,9 @@ class _QualificationRunner:
                 exit_code = self._wait_missing_exit(process)
                 if exit_code in (None, 0) or (root / "qualification.json").exists():
                     raise QualificationFailure("scenario_failed")
+                all_exited = _wait_for_job_exit(process, self.deadline)
+                if not all_exited:
+                    raise QualificationFailure("scenario_failed")
                 terminate = False
                 self.results["missing_qt_resource"] = ScenarioResult(
                     exit_code,
@@ -1236,6 +2416,7 @@ class _QualificationRunner:
                     0,
                     None,
                     process.metrics(),
+                    process.topology(self.artifact, all_exited=all_exited),
                 )
             finally:
                 process.close(terminate=terminate)
@@ -1261,14 +2442,22 @@ class _QualificationRunner:
     def _wait_missing_exit(self, process: _WindowsProcess) -> int | None:
         deadline = min(self.deadline, time.monotonic() + MAX_SCENARIO_SECONDS)
         while time.monotonic() < deadline:
+            process.observe()
             exit_code = process.poll()
             if exit_code is not None:
                 return exit_code
             time.sleep(0.02)
         raise QualificationFailure("scenario_timeout")
 
-    def run(self, package: dict[str, object]) -> dict[str, object]:
+    def run(
+        self,
+        package: dict[str, object],
+        source_artifact: Path,
+        output_dir: Path,
+    ) -> dict[str, object]:
         self.run_startups()
+        self.run_concurrent_instances()
+        self.run_ui_smoke()
         self.run_hard_exit()
         self.run_handled_failure()
         self.run_preview()
@@ -1277,21 +2466,29 @@ class _QualificationRunner:
         self.run_unavailable_store()
         self.run_missing_components()
         self.run_missing_qt_resource()
+        qualified_package = {
+            **package,
+            **_write_development_artifacts(source_artifact, self.artifact, output_dir),
+        }
         return _success_payload(
-            package,
+            qualified_package,
+            _environment_receipt(),
             self.results,
-            idle_write_bytes=self.idle_write_bytes,
+            direct_idle_write_bytes=self.direct_idle_write_bytes,
+            supervised_idle_write_bytes=self.supervised_idle_write_bytes,
             hard_ready_to_report_ms=self.hard_ready_to_report_ms,
             handled_ready_to_report_ms=self.handled_ready_to_report_ms,
             hard_assembly_to_verification_ms=self.hard_assembly_to_verification_ms,
             handled_assembly_to_verification_ms=(
                 self.handled_assembly_to_verification_ms
             ),
+            flood_loss=self.flood_loss,
         )
 
 
 def _qualification_payload(
     artifact: Path,
+    output_dir: Path,
     deadline: float,
 ) -> dict[str, object]:
     package = _validate_package(artifact)
@@ -1304,7 +2501,9 @@ def _qualification_payload(
         relocated = _relocate_package(artifact, private_root, deadline)
         if _validate_package(relocated) != package:
             raise QualificationFailure("artifact_invalid")
-        return _QualificationRunner(relocated, private_root, deadline).run(package)
+        return _QualificationRunner(relocated, private_root, deadline).run(
+            package, artifact, output_dir
+        )
 
 
 def qualify_windows_diagnostics(
@@ -1337,13 +2536,19 @@ def qualify_windows_diagnostics(
         except OSError:
             raise QualificationFailure("output_failed") from None
         deadline = time.monotonic() + timeout_seconds
-        payload = _qualification_payload(artifact, deadline)
+        payload = _qualification_payload(artifact, output_dir, deadline)
         if time.monotonic() >= deadline:
             raise QualificationFailure("scenario_timeout")
         destination = _write_receipt(output_dir, payload)
         return QualificationResult("passed", None, destination)
     except QualificationFailure as error:
-        return QualificationResult("failed", error.failure_id, None)
+        return QualificationResult(
+            "failed",
+            error.failure_id,
+            None,
+            error.qualification_stage,
+            error.qualification_reason,
+        )
     except Exception:
         return QualificationResult("failed", "scenario_failed", None)
 
@@ -1375,9 +2580,21 @@ def main(argv: list[str] | None = None) -> int:
                         "schema_version": 1,
                         "status": "failed",
                         "failure_id": result.failure_id,
+                        "qualification_failure": (
+                            {
+                                "stage": result.qualification_stage,
+                                "reason": result.qualification_reason,
+                            }
+                            if result.qualification_stage is not None
+                            and result.qualification_reason is not None
+                            else None
+                        ),
                         "package": None,
+                        "environment": None,
+                        "topology": None,
                         "checks": [],
                         "metrics": None,
+                        "operational_cost": None,
                     },
                 )
         except (OSError, QualificationFailure):
