@@ -1557,6 +1557,19 @@ class MainWindow(QMainWindow):
             enrichment_database = getattr(self.metadata_enrichment_thread, "db_file", None)
             if not enrichment_database or Path(enrichment_database).resolve() == Path(self.db_file).resolve():
                 blockers.append("metadata enrichment")
+        blockers.extend(self._same_database_workflow_labels())
+        if not blockers:
+            return True
+        self.workspace_notice_label.setText(
+            f"Finish or close {', '.join(blockers)} before reviewing or importing reports in this database."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _same_database_workflow_labels(self):
+        """Collect visible workflow owners of this report database or an unknown one."""
+        blockers = []
         for label, dialog in (
             ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
             ("Industrial Data", self.industrial_data_dialog),
@@ -1574,14 +1587,7 @@ class MainWindow(QMainWindow):
             ) if path)
             if not databases or any(Path(path).resolve() == Path(self.db_file).resolve() for path in databases):
                 blockers.append(label)
-        if not blockers:
-            return True
-        self.workspace_notice_label.setText(
-            f"Finish or close {', '.join(blockers)} before reviewing or importing reports in this database."
-        )
-        set_status_variant(self.workspace_notice_label, "warning")
-        self.workspace_notice_label.show()
-        return False
+        return blockers
 
     def _track_modeless_dialog(self, attribute: str, dialog) -> None:
         if hasattr(dialog, "setAttribute"):
