@@ -140,12 +140,30 @@ def _assert_contained(dialog: ParsingDialog, widget: QWidget) -> None:
         f"{widget.accessibleName() or widget.objectName()} is clipped: "
         f"{rectangle.getRect()} outside {bounds.getRect()}"
     )
+    parent = widget.parentWidget()
+    while parent is not None and parent is not dialog:
+        assert parent.contentsRect().contains(QRect(widget.mapTo(parent, QPoint(0, 0)), widget.size())), (
+            f"{widget.accessibleName() or widget.objectName()} is clipped by its parent"
+        )
+        parent = parent.parentWidget()
 
 
 def _assert_requested_size(dialog: ParsingDialog, size: tuple[int, int]) -> None:
+    planner = dialog.report_planner
+    # Fixed geometry-only evidence helps distinguish native layout constraints
+    # without including paths, report content, or arbitrary widget text.
+    heights = {
+        name: (widget.height(), widget.minimumHeight(), widget.minimumSizeHint().height())
+        for name, widget in (
+            ("source", dialog.directory_button), ("metadata", dialog.metadata_mode_combo),
+            ("status", dialog.readiness_label), ("planner", planner),
+            ("search", planner.search), ("selection", planner.select_ready),
+            ("counts", planner.counts), ("table", planner.table), ("import", dialog.parse_button),
+        )
+    }
     assert dialog.size() == QSize(*size), (
         f"dialog silently grew from requested {size} to "
-        f"{dialog.size().width()}x{dialog.size().height()}"
+        f"{dialog.size().width()}x{dialog.size().height()}; heights(actual,minimum,hint)={heights}"
     )
 
 
@@ -180,6 +198,11 @@ def _assert_geometry(dialog: ParsingDialog, app, *, pane: str | None = None) -> 
         controls += (planner.outcome_button, planner.outcome)
     for control in controls:
         _assert_contained(dialog, control)
+    rectangles = [QRect(control.mapTo(dialog, QPoint(0, 0)), control.size()) for control in controls]
+    for offset, first in enumerate(rectangles):
+        assert all(not first.intersects(second) for second in rectangles[offset + 1:]), (
+            "Planner controls overlap"
+        )
     assert planner.table.height() >= 60
 
 

@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         close = getattr(dialog, "close", None)
         if callable(close):
             close()
-from metroliza.ui.report_planner import ReportPlanner
+from metroliza.ui.report_planner import PLANNER_ACTION_STYLE, ReportPlanner
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -421,9 +421,9 @@ class ParsingDialog(QDialog):
         # Initialize the layout
         self.layout = QGridLayout()
         attach_help_menu_to_layout(self.layout, self, [("Parsing manual", 'parsing')])
-        self.layout.setContentsMargins(10, 10, 10, 10)
+        self.layout.setContentsMargins(8, 8, 8, 8)
         self.layout.setHorizontalSpacing(10)
-        self.layout.setVerticalSpacing(4)
+        self.layout.setVerticalSpacing(2)
         self.layout.setColumnStretch(1, 1)
 
         # Keep one expanding table region usable at compact desktop sizes.
@@ -466,6 +466,9 @@ class ParsingDialog(QDialog):
         for first, second in zip(focus_order, focus_order[1:]):
             self.setTabOrder(first, second)
         apply_metroliza_theme(self)
+        for button in (self.directory_button, self.archive_button, self.database_button,
+                       self.scan_button, self.parse_button):
+            button.setStyleSheet(PLANNER_ACTION_STYLE)
 
     def _selected_metadata_request_fields(self):
         selected_mode = self.metadata_mode_combo.currentData() or _METADATA_MODE_FAST

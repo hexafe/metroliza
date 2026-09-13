@@ -10,6 +10,9 @@ from metroliza.parsing.preflight import ParsePreflightStatus
 from metroliza.ui.report_planner_model import ReportPlannerFilterModel, ReportPlannerModel
 
 
+PLANNER_ACTION_STYLE = "QPushButton { padding: 3px 9px; min-height: 20px; }"
+
+
 class _ReportTable(QTableView):
     """Space operates the row checkbox even when a text column has focus."""
 
@@ -37,6 +40,7 @@ class ReportPlanner(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setStyleSheet(PLANNER_ACTION_STYLE)
         self._compact_columns = None
         self._column_widths = [60, 260, 170, 170, 100, 240]
         self.model = ReportPlannerModel(self)
@@ -120,7 +124,7 @@ class ReportPlanner(QWidget):
         )
         controls = QGridLayout()
         controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(4)
+        controls.setSpacing(2)
         controls.addWidget(self.search, 0, 0, 1, 2)
         controls.addWidget(self.status_filter, 0, 2)
         controls.addWidget(self.parser_filter, 0, 3, 1, 2)
@@ -132,7 +136,7 @@ class ReportPlanner(QWidget):
         controls.setColumnStretch(0, 1)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
         layout.addLayout(controls)
         layout.addWidget(self.counts)
         layout.addWidget(self.table, 1)
