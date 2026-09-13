@@ -18,15 +18,67 @@ on:
         description: "Set to 1 for the owner-only bounded Windows wrapper discriminator"
         required: false
         default: "0"
+      run_windows_diagnostic_qualification:
+        description: "Set to 1 for owner-only bounded Windows incident feature qualification"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1') }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1')) }}
 
 jobs:
+  windows-diagnostic-qualification:
+    name: Windows incident feature qualification (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 45
+    concurrency:
+      group: windows-incident-qualification-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Build actual Windows onedir and minimal incident launcher
+        shell: pwsh
+        run: .\build_windows_exe.ps1 -Mode onedir
+
+      - name: Qualify actual packaged incident flow with public synthetic inputs
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          $package = @(Get-ChildItem -LiteralPath dist -Directory -Filter '*_onedir')
+          if ($package.Count -ne 1) { throw 'Expected one diagnostic package' }
+          .\.venv-build\Scripts\python.exe scripts/qualify_windows_diagnostics.py --artifact-dir $package[0].FullName --output-dir (Join-Path $env:GITHUB_WORKSPACE 'diagnostic-qualification-receipts')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged diagnostic qualification failed' }
+
+      - name: Upload bounded diagnostic qualification receipts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-diagnostic-qualification-receipts
+          path: diagnostic-qualification-receipts/*.json
+          if-no-files-found: warn
+
+      - name: Upload qualified development onedir package
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-diagnostic-development-onedir
+          path: dist/*_onedir/
+          if-no-files-found: error
+
   windows-wrapper-diagnostics:
     name: Windows wrapper discriminator (manual/opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && github.actor == github.repository_owner && github.event.repository.private == false
@@ -976,6 +1028,19 @@ jobs:
           tests/test_diagnostic_events.py
           tests/test_logging_utils.py
           tests/test_build_provenance.py
+
+      - name: Run native Windows supervised incident tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+        run: >-
+          python -m pytest -v
+          tests/test_diagnostic_wire.py tests/test_diagnostic_ring.py
+          tests/test_diagnostic_incident.py tests/test_diagnostic_store.py
+          tests/test_diagnostic_transport.py tests/test_diagnostic_supervisor.py
+          tests/test_diagnostic_launcher.py tests/test_diagnostic_package.py
+          tests/test_workflow_diagnostics.py tests/test_incident_dialog.py
+          tests/test_diagnostic_qualification.py tests/test_windows_diagnostic_qualification.py
 
       - name: Run native Windows Qt lifecycle tests
         env:

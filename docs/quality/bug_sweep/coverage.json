@@ -2429,7 +2429,9 @@
         "scripts/sync_release_metadata.py",
         "scripts/validate_packaged_pdf_parser.py",
         "scripts/validate_qt_runtime.py",
-        "scripts/windows_ocr_runtime_diagnostics.py"
+        "scripts/windows_ocr_runtime_diagnostics.py",
+        "scripts/build_diagnostic_manifest.py",
+        "scripts/qualify_windows_diagnostics.py"
       ],
       "exclude": [],
       "class": "script/tooling",

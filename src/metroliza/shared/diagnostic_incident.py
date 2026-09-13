@@ -129,6 +129,23 @@ def _observation_payload(observation: IncidentObservation) -> dict[str, object]:
     handshake = _literal(observation.handshake, HandshakeState)
     channel = _literal(observation.channel, ChannelState)
     termination = _literal(observation.termination, TerminationState)
+    _validate_observation_scalars(observation)
+    _validate_observation_termination(observation)
+    _validate_observation_channel(observation)
+    return {
+        "launch": launch,
+        "handshake": handshake,
+        "channel": channel,
+        "exit_code": observation.exit_code,
+        "termination": termination,
+        "clean_terminal_received": observation.clean_terminal_received,
+        "source_dropped": observation.source_dropped,
+        "source_loss_known": observation.source_loss_known,
+        "elapsed_ms": observation.elapsed_ms,
+    }
+
+
+def _validate_observation_scalars(observation: IncidentObservation) -> None:
     if observation.exit_code is not None and (
         type(observation.exit_code) is not int or not -(2**31) <= observation.exit_code <= 2**32 - 1
     ):
@@ -149,6 +166,9 @@ def _observation_payload(observation: IncidentObservation) -> dict[str, object]:
             or not observation.clean_terminal_received
         ):
             raise IncidentValidationError(_INCIDENT_ERROR)
+
+
+def _validate_observation_termination(observation: IncidentObservation) -> None:
     if observation.launch is LaunchState.FAILED:
         valid = (
             observation.termination is TerminationState.NOT_STARTED
@@ -167,6 +187,9 @@ def _observation_payload(observation: IncidentObservation) -> dict[str, object]:
         raise IncidentValidationError(_INCIDENT_ERROR)
     if observation.termination is TerminationState.POSIX_SIGNAL and observation.exit_code >= 0:
         raise IncidentValidationError(_INCIDENT_ERROR)
+
+
+def _validate_observation_channel(observation: IncidentObservation) -> None:
     if observation.clean_terminal_received:
         valid = (
             observation.handshake is HandshakeState.ACCEPTED
@@ -177,17 +200,7 @@ def _observation_payload(observation: IncidentObservation) -> dict[str, object]:
             raise IncidentValidationError(_INCIDENT_ERROR)
     if observation.channel is ChannelState.COMPLETE and not observation.clean_terminal_received:
         raise IncidentValidationError(_INCIDENT_ERROR)
-    return {
-        "launch": launch,
-        "handshake": handshake,
-        "channel": channel,
-        "exit_code": observation.exit_code,
-        "termination": termination,
-        "clean_terminal_received": observation.clean_terminal_received,
-        "source_dropped": observation.source_dropped,
-        "source_loss_known": observation.source_loss_known,
-        "elapsed_ms": observation.elapsed_ms,
-    }
+
 
 
 def _loss_payload(loss: RingLoss) -> dict[str, object]:

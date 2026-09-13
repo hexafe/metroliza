@@ -945,6 +945,13 @@ def _workflow_identity(event: WorkflowDiagnosticEvent) -> dict[str, object]:
 
 
 def _validate_workflow_state(event: WorkflowDiagnosticEvent) -> None:
+    _validate_workflow_outcome(event)
+    _validate_workflow_error(event)
+    _validate_workflow_validation(event)
+    _validate_workflow_counts(event)
+
+
+def _validate_workflow_outcome(event: WorkflowDiagnosticEvent) -> None:
     if not any(event.stage is stage for stage in _WORKFLOW_STAGES[event.operation]):
         raise DiagnosticEventValidationError("invalid workflow stage")
     if event.stage is WorkflowStage.STARTED:
@@ -964,6 +971,9 @@ def _validate_workflow_state(event: WorkflowDiagnosticEvent) -> None:
     if event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS:
         if event.operation is not WorkflowOperation.SELECTED_IMPORT:
             raise DiagnosticEventValidationError("invalid workflow warnings")
+
+
+def _validate_workflow_error(event: WorkflowDiagnosticEvent) -> None:
     failed = event.outcome is WorkflowOutcome.FAILED
     warnings = event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS
     if (failed or warnings) is (event.error is WorkflowError.NONE):
@@ -991,13 +1001,19 @@ def _validate_workflow_state(event: WorkflowDiagnosticEvent) -> None:
     }
     if not any(event.error is error for error in allowed_errors[event.operation]):
         raise DiagnosticEventValidationError("invalid workflow error")
-    if event.validation_status is ValidationStatus.FAILED and not failed:
+
+
+def _validate_workflow_validation(event: WorkflowDiagnosticEvent) -> None:
+    if event.validation_status is ValidationStatus.FAILED and event.outcome is not WorkflowOutcome.FAILED:
         raise DiagnosticEventValidationError("inconsistent validation status")
     if event.validation_status is not ValidationStatus.NOT_PERFORMED:
         if event.stage is not WorkflowStage.FINISHED:
             raise DiagnosticEventValidationError("validation before workflow terminal")
     if event.duration_ms is not None and event.stage is not WorkflowStage.FINISHED:
         raise DiagnosticEventValidationError("duration before workflow terminal")
+
+
+def _validate_workflow_counts(event: WorkflowDiagnosticEvent) -> None:
     if event.selected_report_count is not None:
         if event.operation is not WorkflowOperation.SELECTED_IMPORT:
             raise DiagnosticEventValidationError("invalid selected report count")
@@ -1024,6 +1040,7 @@ def _validate_workflow_state(event: WorkflowDiagnosticEvent) -> None:
         )
         if not valid_artifact_stage:
             raise DiagnosticEventValidationError("invalid published artifact count")
+
 
 
 def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:

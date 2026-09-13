@@ -120,6 +120,7 @@ class ChildRecorder:
         self.connected = False
         self.qualified = False
         self.dropped = 0
+        self._unquantified_loss = False
         self._incoming = incoming
         self._outgoing = outgoing
         self._queue: deque[tuple[bytes, bool]] = deque()
@@ -160,8 +161,8 @@ class ChildRecorder:
         except Exception:
             return False
         if not self._lock.acquire(blocking=False):
-            # Saturation is safe under Python's GIL; this counter is advisory loss evidence.
-            self.dropped = min(MAX_COUNTER, self.dropped + 1)
+            # Do not pretend a raced read/modify/write is an exact loss count.
+            self._unquantified_loss = True
             return False
         try:
             count_cap = MAX_QUEUE_EVENTS if terminal else MAX_QUEUE_EVENTS - RESERVED_EVENTS
@@ -208,7 +209,8 @@ class ChildRecorder:
                 if entry is not None:
                     write_frame(self._outgoing, entry[0])
                 elif self._closing:
-                    write_frame(self._outgoing, control_bytes("ended", dropped=self.dropped))
+                    if not self._unquantified_loss:
+                        write_frame(self._outgoing, control_bytes("ended", dropped=self.dropped))
                     break
                 else:
                     self._wake.wait(0.1)

@@ -40,8 +40,6 @@ from metroliza.exporting.contracts import ExportRequest, validate_export_request
 import metroliza.shared.custom_logger as custom_logger
 from metroliza.reports.db import execute_select_with_columns, read_sql_query_result, sqlite_connection_scope
 from metroliza.shared.env_utils import env_bool
-from metroliza.shared.diagnostic_events import WorkflowOperation, WorkflowStage
-from metroliza.shared.workflow_diagnostics import start_workflow_trace
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from metroliza.exporting.execution import ExportStageOutcome, normalize_export_outcome
@@ -4815,6 +4813,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         emit_completed_after_cleanup = False
+        from metroliza.shared.diagnostic_events import WorkflowOperation, WorkflowStage
+        from metroliza.shared.workflow_diagnostics import start_workflow_trace
+
         diagnostic_cancelled = False
         diagnostic = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
         try:

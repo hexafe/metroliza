@@ -479,7 +479,9 @@ def ensure_application_logging(
         logger.setLevel(resolved.global_level)
         formatter = ManagedSafeFormatter()
         _configure_terminal_handler(logger, formatter, enabled=True)
-        supervised = _configure_supervised_handler(logger, formatter, resolved.file_level)
+        supervised = _configure_supervised_handler(logger, formatter, logging.INFO)
+        if supervised:
+            logger.setLevel(min(resolved.global_level, logging.INFO))
         file_available = False if supervised else _configure_file_handlers(logger, formatter, resolved.file_level)
         console_available = _configure_console_handler(logger, formatter, resolved.console_level)
         _configure_terminal_handler(

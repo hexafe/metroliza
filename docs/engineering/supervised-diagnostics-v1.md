@@ -1,0 +1,97 @@
+# Supervised diagnostics V1
+
+[Issue #1046](https://github.com/hexafe/metroliza/issues/1046) owns this implementation.
+It consumes the separate [S1a startup contract](https://github.com/hexafe/metroliza/issues/1039).
+The feature branch's local dependency composition is development evidence until S1a is integrated
+into current `develop`; it does not itself grant Ready, merge or release acceptance.
+
+## Execution and identity
+
+The Windows Python 3.11 PyInstaller onedir contains `metroliza.exe`, a minimal launcher with its
+own bundled standard-library runtime, and `metroliza_application.exe`, the real application.
+The launcher's onefile bootloader extracts its own runtime before its Python supervisor starts.
+This extra bootloader process is part of the observed topology and startup cost. Qt, OCR and
+application bootstrap are excluded from that launcher. It validates fixed child/runtime component
+hashes and equality with the embedded build SHA before launching the exact adjacent child.
+The manifest is build provenance and consistency evidence, not a cryptographic signature.
+
+The supervisor retains the `Popen` identity of its launched child. Two anonymous inherited pipes
+carry a fresh session ID and challenge/response token; Windows uses an explicit handle inheritance
+list. There is no listener, service, executable search through PATH or automatic restart.
+Only approved canonical event bytes enter the queue and recorder. Raw stdout and stderr go to
+the OS null sink, including no-console execution. No global Qt exception hook is installed.
+
+## Limits and failure states
+
+| Resource | Hard maximum/default |
+| --- | --- |
+| Encoded event | 4096 bytes |
+| Framed payload | 4608 bytes, decoder allocated only within the cap |
+| Child queue | 256 events / 256 KiB, including 16 events / 16 KiB terminal reserve |
+| Ring | 2000 events / 2 MiB encoded accounting / 300 seconds, first limit wins |
+| Ring terminal/control reserve | 32 events / 64 KiB inside ring totals; loss accounting also inside totals |
+| Operation state | 128 tracked operations; bounded sequence and saturating loss counters |
+| Live incident publisher | One writing and one pending immutable snapshot; each retains at most the ring cap |
+| Local reports | 20 reports / 32 MiB including staging / 14 days; report envelope at most 3 MiB |
+| Directory scan / markers | 256 entries / 32 markers |
+| Store lock / shutdown | 0.25-second lock attempt; publisher cancels retries on close and joins at most 0.75 seconds |
+
+Encoded caps are not actual RSS. Snapshots share immutable event bytes, but retaining a writing
+and pending snapshot can keep up to two additional ring-sized histories alive. RSS, startup,
+idle writes, flood/drop behavior and publication intervals are measured separately by the Windows driver.
+
+Queue admission never waits for disk, UI or pipe writes. A full queue records bounded drops.
+Contention that cannot be counted exactly leaves terminal loss evidence unknown instead of
+claiming an exact zero. Partial, wrong-session, malformed, flooded and broken channels cannot
+produce a complete-history claim. A receiver may outlive its bounded drain as a daemon when an
+inherited handle is retained; its stop flag prevents later frames from changing the returned snapshot.
+
+An actual failed workflow triggers a separate bounded publisher while the app continues. Transient
+store-lock failures are retried only on that publisher. A filesystem call still outstanding after
+the close budget returns `publish_incomplete`, whose final persistence outcome is unknown. It is
+never relabeled as saved or failed. The normal process outcome remains independent of storage.
+
+Healthy sessions write minimal markers rather than event files. Incidents distinguish observed
+process return, POSIX signal where actually observed, missing handshake, caught workflow failure
+and incomplete history. Numeric exit 139 alone never means SIGSEGV; no status establishes OOM,
+rollback or native root cause. Domain validation remains `not_performed` unless an actual approved
+validator supplied a result. V1 native stacks are unavailable.
+
+The store uses private application state, bounded nonrecursive retention, exclusive staging,
+validated atomic publication and identity checks. Missing user-state configuration is unavailable;
+it never selects CWD as a fallback. PID/start identity checks keep stale/unclean markers conservative.
+An absent clean marker is not proof of an application crash. Quota/publication failures preserve
+previous complete reports; no automatic repair, re-import, replay or process-kill policy exists.
+
+## Logging migration, preview and rollback
+
+The qualified supervised entry suppresses the ordinary duplicate home/CWD managed files. Approved
+incident events retain their INFO contract independently of retired file/global log thresholds.
+Explicit safe console logging remains controlled by its own threshold. A failed supervised channel
+does not silently recreate persistent file sinks; its unavailable state remains visible.
+
+The UI hook is `metroliza.ui.incident_dialog.open_incident_viewer(parent)`. The shell owner installs
+the Help/Tools action during composition. The dialog revalidates listed/selected content and exports
+one selected incident with its bounded manifest and summary. It does not zip a directory or upload
+anything. See the [operator guide](../user_manual/diagnostic_incidents.md).
+
+Explicit rollback/direct launch uses `metroliza_application.exe` in the same complete onedir,
+without an inherited diagnostic channel. Source and other packager entrypoints retain their direct
+safe-log route. This has no crash-surviving recorder and is a documented mode change, not a data
+migration. Raw opt-in startup profiling remains separate and is not a share-safe incident export.
+
+## Qualification boundaries
+
+Source tests use actual startup, selected import into scratch SQLite, local workbook export,
+controlled child exit, surviving storage and a subsequent Qt preview/export. The package test seam
+requires both existing startup-smoke mode and a closed explicit qualification scenario. It accepts
+only a hash-pinned public PDF and an explicit scratch directory; it cannot select a business database.
+The controlled hard exit belongs only to that synthetic test scenario.
+
+The bounded owner-only Windows lane builds with normal `build_windows_exe.ps1 -Mode onedir` tooling,
+checks artifact/provenance/notices, launches restricted ordinary-user processes without development
+Python on their PATH, and exercises the complete package from a path with spaces/non-ASCII text.
+Its receipts are necessary package evidence. Source mocks or native source pytest alone do not
+establish that result. Current full CI, Qt19, independent exact-head audit, configured review and
+the Ready-triggered review remain separate gates. Final operational composition and release/real-data
+acceptance belong to their respective delivery tracks; this feature does not authorize self-merge.

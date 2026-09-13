@@ -43,6 +43,15 @@ def test_manifest_cannot_select_an_arbitrary_executable(package):
     assert not inspect_package(package).valid
 
 
+def test_manifest_cannot_claim_a_different_embedded_commit(package):
+    path = package / MANIFEST_NAME
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["git_sha"] = "b" * 40
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert inspect_package(package).reason == "provenance_mismatch"
+    assert inspect_package(package).git_sha == "unknown"
+
+
 def test_minimal_entry_precedes_application_imports():
     import os
     import subprocess

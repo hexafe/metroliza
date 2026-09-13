@@ -278,15 +278,8 @@ class DiagnosticRing:
             return False
 
         priority = self._priority(event)
-        if (
-            type(event) is WorkflowDiagnosticEvent
-            and event.operation_id not in self._operation_ids()
-        ):
-            if len(self._operation_ids()) >= self.max_operations:
-                if not priority:
-                    return self._drop("normal_count_dropped_events", len(canonical))
-                if not self._evict_oldest_operation():
-                    return self._drop("terminal_dropped_events", len(canonical))
+        if not self._admit_operation(event, priority, len(canonical)):
+            return False
 
         replacement = self._coalesce_index(event)
         replacement_size = 0 if replacement is None else len(self._entries[replacement].payload)
@@ -296,49 +289,75 @@ class DiagnosticRing:
         )
 
         if not priority:
-            ordinary_count, ordinary_bytes = self._ordinary_totals(replacement)
-            if ordinary_count + 1 > self.max_events - self.terminal_reserve_events:
-                return self._drop("normal_count_dropped_events", len(canonical))
-            if ordinary_bytes + len(canonical) > self.max_bytes - self.terminal_reserve_bytes:
-                return self._drop("normal_byte_dropped_events", len(canonical))
-            if projected_count > self.max_events:
-                return self._drop("normal_count_dropped_events", len(canonical))
-            if projected_bytes > self.max_bytes:
-                return self._drop("normal_byte_dropped_events", len(canonical))
+            if not self._admit_ordinary(canonical, replacement, projected_count, projected_bytes):
+                return False
         else:
-            if len(canonical) + LOSS_ACCOUNTING_BYTES > self.max_bytes:
-                return self._drop("terminal_dropped_events", len(canonical))
-            while projected_count > self.max_events:
-                index = next((i for i, entry in enumerate(self._entries) if not entry.priority), 0)
-                self._remove(index, "count_evicted")
-                if replacement is not None:
-                    replacement = self._coalesce_index(event)
-                    replacement_size = (
-                        0 if replacement is None else len(self._entries[replacement].payload)
-                    )
-                projected_count = len(self._entries) + 1 - (replacement is not None)
-            projected_bytes = (
-                self._event_bytes + len(canonical) - replacement_size + LOSS_ACCOUNTING_BYTES
+            admitted, replacement = self._make_terminal_room(
+                event, canonical, replacement, replacement_size, projected_count, projected_bytes,
             )
-            while projected_bytes > self.max_bytes:
-                if not self._entries:
-                    return self._drop("terminal_dropped_events", len(canonical))
-                index = next((i for i, entry in enumerate(self._entries) if not entry.priority), 0)
-                self._remove(index, "byte_evicted")
-                if replacement is not None:
-                    replacement = self._coalesce_index(event)
-                    replacement_size = (
-                        0 if replacement is None else len(self._entries[replacement].payload)
-                    )
-                projected_bytes = (
-                    self._event_bytes + len(canonical) - replacement_size + LOSS_ACCOUNTING_BYTES
-                )
+            if not admitted:
+                return False
 
         if replacement is not None:
             self._remove(replacement, "coalesced")
         self._entries.append(_Entry(canonical, event, timestamp, priority))
         self._event_bytes += len(canonical)
         return True
+
+    def _admit_operation(self, event, priority: bool, size: int) -> bool:
+        if (
+            type(event) is WorkflowDiagnosticEvent
+            and event.operation_id not in self._operation_ids()
+        ):
+            if len(self._operation_ids()) >= self.max_operations:
+                if not priority:
+                    return self._drop("normal_count_dropped_events", size)
+                if not self._evict_oldest_operation():
+                    return self._drop("terminal_dropped_events", size)
+
+        return True
+
+    def _admit_ordinary(self, canonical, replacement, projected_count, projected_bytes) -> bool:
+        ordinary_count, ordinary_bytes = self._ordinary_totals(replacement)
+        if ordinary_count + 1 > self.max_events - self.terminal_reserve_events:
+            return self._drop("normal_count_dropped_events", len(canonical))
+        if ordinary_bytes + len(canonical) > self.max_bytes - self.terminal_reserve_bytes:
+            return self._drop("normal_byte_dropped_events", len(canonical))
+        if projected_count > self.max_events:
+            return self._drop("normal_count_dropped_events", len(canonical))
+        if projected_bytes > self.max_bytes:
+            return self._drop("normal_byte_dropped_events", len(canonical))
+        return True
+
+    def _make_terminal_room(self, event, canonical, replacement, replacement_size, projected_count, projected_bytes):
+        if len(canonical) + LOSS_ACCOUNTING_BYTES > self.max_bytes:
+            return self._drop("terminal_dropped_events", len(canonical)), replacement
+        while projected_count > self.max_events:
+            index = next((i for i, entry in enumerate(self._entries) if not entry.priority), 0)
+            self._remove(index, "count_evicted")
+            if replacement is not None:
+                replacement = self._coalesce_index(event)
+                replacement_size = (
+                    0 if replacement is None else len(self._entries[replacement].payload)
+                )
+            projected_count = len(self._entries) + 1 - (replacement is not None)
+        projected_bytes = (
+            self._event_bytes + len(canonical) - replacement_size + LOSS_ACCOUNTING_BYTES
+        )
+        while projected_bytes > self.max_bytes:
+            if not self._entries:
+                return self._drop("terminal_dropped_events", len(canonical)), replacement
+            index = next((i for i, entry in enumerate(self._entries) if not entry.priority), 0)
+            self._remove(index, "byte_evicted")
+            if replacement is not None:
+                replacement = self._coalesce_index(event)
+                replacement_size = (
+                    0 if replacement is None else len(self._entries[replacement].payload)
+                )
+            projected_bytes = (
+                self._event_bytes + len(canonical) - replacement_size + LOSS_ACCOUNTING_BYTES
+            )
+        return True, replacement
 
     def snapshot(self, now: float) -> RingSnapshot:
         """Return immutable retained bytes after applying the age limit."""

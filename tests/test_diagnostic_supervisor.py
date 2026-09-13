@@ -62,6 +62,88 @@ def test_supervisor_does_not_search_path():
         launch_supervised(["python"])
 
 
+@pytest.mark.parametrize("failure_at", [1, 2])
+def test_partial_channel_allocation_failure_closes_owned_handles(monkeypatch, failure_at):
+    pipe = os.pipe
+    opened = []
+    calls = 0
+    def failing_pipe():
+        nonlocal calls
+        calls += 1
+        if calls == failure_at:
+            raise OSError("SYNTHETIC_RESOURCE_FAILURE")
+        pair = pipe()
+        opened.extend(pair)
+        return pair
+    monkeypatch.setattr(os, "pipe", failing_pipe)
+    result = launch_supervised(_command("normal"))
+    assert result.launch == "failed"
+    assert result.termination == "not_started"
+    assert result.exit_code is None
+    for fd in opened:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+@pytest.mark.parametrize("scenario,handshake,channel", [
+    ("wrong_peer", "rejected", "invalid"),
+    ("cross_instance", "accepted", "invalid"),
+    ("partial", "accepted", "invalid"),
+    ("stalled", "accepted", "invalid"),
+    ("flood", "accepted", "flooded"),
+    ("dropped_terminal", "accepted", "incomplete"),
+])
+def test_owned_malformed_peer_never_produces_complete_evidence(scenario, handshake, channel):
+    started = time.monotonic()
+    result = launch_supervised([
+        sys.executable, str(CHILD.with_name("diagnostic_protocol_child.py")), scenario,
+    ])
+    assert time.monotonic() - started < 4
+    assert result.handshake == handshake
+    assert result.channel == channel
+    assert not result.clean_terminal_received
+    assert result.needs_incident
+    assert result.history.total_bytes <= 2 * 1024 * 1024
+    if scenario in {"wrong_peer", "cross_instance"}:
+        assert result.history.events == ()
+
+
+def test_concurrent_real_instances_keep_their_own_event_history():
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(lambda _: launch_supervised(_command("hard_exit")), range(3)))
+    assert len({result.session_id for result in results}) == 3
+    for result in results:
+        assert result.history.events
+        assert {json.loads(event)["invocation_id"] for event in result.history.events} == {result.session_id}
+
+
+def test_contended_source_counter_is_unknown_instead_of_a_fabricated_exact_zero():
+    result = launch_supervised(_command("contended"))
+    assert result.exit_code == 0
+    assert result.channel == "incomplete"
+    assert not result.source_loss_known
+    assert not result.clean_terminal_received
+
+
+def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
+    from metroliza.app.diagnostic_supervisor import _Receiver
+
+    receive = _Receiver._receive
+    def slow_receive(self, payload):
+        time.sleep(0.02)
+        return receive(self, payload)
+    monkeypatch.setattr(_Receiver, "_receive", slow_receive)
+    started = time.monotonic()
+    result = launch_supervised(_command("full_queue"))
+    assert time.monotonic() - started < 4
+    assert result.exit_code == 0
+    assert result.channel in {"incomplete", "loss_observed"}
+    assert result.needs_incident
+    assert result.history.total_bytes <= 2 * 1024 * 1024
+
+
 def test_supervisor_loss_does_not_kill_or_replay_child_write(tmp_path):
     destination = tmp_path / "business-write.txt"
     command = _command("supervisor_loss") + [str(destination)]

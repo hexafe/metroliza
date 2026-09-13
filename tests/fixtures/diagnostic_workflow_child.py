@@ -36,7 +36,20 @@ def main():
         source_path=source, database_path=database, metadata_parsing_mode="light",
     )
     worker = ParseReportsThread(ImportPlan.all_ready(request, preflight))
+    if sys.argv[2] == "handled_failure":
+        (source / "SYNTHETIC_PRIVATE_FILENAME.pdf").unlink()
     worker.run()
+    if sys.argv[2] == "handled_failure":
+        if worker.last_parse_result.imported_files != 0:
+            return 14
+        # Keep the real app alive until the external test has loaded its incident.
+        (scratch / "operation_returned").touch()
+        deadline = time.monotonic() + 8
+        while not (scratch / "finish").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if recorder is not None:
+            recorder.close()
+        return 0
     if worker.last_parse_result.imported_files != 1:
         return 11
     with sqlite3.connect(database) as connection:

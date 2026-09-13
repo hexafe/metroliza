@@ -47,7 +47,8 @@ class SupervisedResult:
 
 
 class _Receiver:
-    def __init__(self, incoming: int, outgoing: int, session_id: str, token: str):
+    def __init__(self, incoming: int, outgoing: int, session_id: str, token: str,
+                 on_operation_failure: Callable[[SupervisedResult], bool] | None = None):
         self.incoming, self.outgoing = incoming, outgoing
         self.session_id, self.token = session_id, token
         self.ring = DiagnosticRing()
@@ -60,6 +61,8 @@ class _Receiver:
         self.source_dropped = 0
         self.source_loss_known = False
         self.recording_loss = False
+        self.on_operation_failure = on_operation_failure
+        self.started = time.monotonic()
         self.thread = threading.Thread(target=self._run, name="diagnostic-receiver", daemon=True)
 
     def _authenticate(self) -> None:
@@ -88,8 +91,22 @@ class _Receiver:
         if type(fields) is not dict or fields.get("invocation_id") != self.session_id:
             raise ValueError("wrong_session")
         with self.lock:
-            if not self.ring.add(payload, now=time.monotonic()):
+            added = self.ring.add(payload, now=time.monotonic())
+            if not added:
                 self.recording_loss = True
+            failed_operation = (added and fields.get("event_code") == "workflow_diagnostic"
+                                and fields.get("outcome") == "failed")
+            if failed_operation and self.on_operation_failure is not None:
+                # Callback only admits a bounded snapshot to a separate publisher.
+                # No store or GUI call is permitted on this receiving thread.
+                observed = SupervisedResult(
+                    self.session_id, "started", "accepted", "incomplete", None,
+                    "still_running", False, 0, False,
+                    self.ring.snapshot(now=time.monotonic()),
+                    min(86_400_000, round((time.monotonic() - self.started) * 1000)),
+                )
+                if not self.on_operation_failure(observed):
+                    self.recording_loss = True
         return True
 
     def _run(self) -> None:
@@ -133,10 +150,42 @@ def _child_channel(incoming: int, outgoing: int) -> tuple[str, dict]:
     return f"{incoming}:{outgoing}", {"pass_fds": (incoming, outgoing)}
 
 
+def _spawn_child(argv, env, cwd, child_read, child_write, descriptors):
+    with _SPAWN_LOCK:
+        channel, options = _child_channel(child_read, child_write)
+        child_env = dict(os.environ if env is None else env)
+        child_env[CHANNEL_ENV] = channel
+        for fd in (child_read, child_write):
+            os.set_inheritable(fd, True)
+        try:
+            return subprocess.Popen(
+                argv, cwd=cwd, env=child_env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                close_fds=True, **options,
+            )
+        finally:
+            for fd in (child_read, child_write):
+                os.close(fd)
+                descriptors.discard(fd)
+
+
+def _await_handshake(receiver: _Receiver, on_authenticated) -> None:
+    receiver.accepted.wait(HANDSHAKE_SECONDS)
+    # A missing handshake is evidence only, never authority to kill the app.
+    if receiver.handshake != "accepted":
+        receiver.stop.set()
+    elif on_authenticated is not None:
+        try:
+            on_authenticated(receiver.session_id)
+        except Exception:
+            pass
+
+
 def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
                       cwd: str | Path | None = None,
                       session_id: str | None = None,
-                      on_authenticated: Callable[[str], object] | None = None) -> SupervisedResult:
+                      on_authenticated: Callable[[str], object] | None = None,
+                      on_operation_failure: Callable[[SupervisedResult], bool] | None = None) -> SupervisedResult:
     """Launch one exact child and observe it; never terminate or restart it.
 
     Only the two anonymous-pipe capabilities are inherited. Child stdout/stderr,
@@ -150,38 +199,21 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
 
     if not valid_id(session):
         raise ValueError("invalid_session")
-    parent_read, child_write = os.pipe()
-    child_read, parent_write = os.pipe()
-    token = secrets.token_hex(32)
-    receiver = _Receiver(parent_read, parent_write, session, token)
+    descriptors: set[int] = set()
+    receiver = None
     child = None
     try:
-        with _SPAWN_LOCK:
-            channel, options = _child_channel(child_read, child_write)
-            child_env = dict(os.environ if env is None else env)
-            child_env[CHANNEL_ENV] = channel
-            for fd in (child_read, child_write):
-                os.set_inheritable(fd, True)
-            try:
-                child = subprocess.Popen(
-                    argv, cwd=cwd, env=child_env, stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    close_fds=True, **options,
-                )
-            finally:
-                for fd in (child_read, child_write):
-                    os.close(fd)
+        parent_read, child_write = os.pipe()
+        descriptors.update((parent_read, child_write))
+        child_read, parent_write = os.pipe()
+        descriptors.update((child_read, parent_write))
+        token = secrets.token_hex(32)
+        receiver = _Receiver(parent_read, parent_write, session, token, on_operation_failure)
+        child = _spawn_child(argv, env, cwd, child_read, child_write, descriptors)
         receiver.thread.start()
+        descriptors.difference_update((parent_read, parent_write))
         write_frame(parent_write, control_bytes("challenge", session_id=session, token=token))
-        receiver.accepted.wait(HANDSHAKE_SECONDS)
-        # A missing handshake is evidence only, never authority to kill the app.
-        if receiver.handshake != "accepted":
-            receiver.stop.set()
-        elif on_authenticated is not None:
-            try:
-                on_authenticated(session)
-            except Exception:
-                pass
+        _await_handshake(receiver, on_authenticated)
         exit_code = child.wait()
         receiver.thread.join(DRAIN_SECONDS)
         receiver.stop.set()
@@ -192,14 +224,22 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
             exit_code = child.wait()
             termination = "posix_signal" if os.name != "nt" and exit_code < 0 else "observed_exit"
             receiver.stop.set()
-            receiver.thread.join(DRAIN_SECONDS)
+            if receiver.thread.ident is not None:
+                receiver.thread.join(DRAIN_SECONDS)
         else:
             exit_code, termination = None, "not_started"
-            for fd in (parent_read, parent_write):
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+    finally:
+        for fd in descriptors:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    if receiver is None:
+        return SupervisedResult(
+            session, "failed", "missing", "incomplete", None, "not_started",
+            False, 0, False, DiagnosticRing().snapshot(now=time.monotonic()),
+            min(86_400_000, round((time.monotonic() - started) * 1000)),
+        )
     with receiver.lock:
         history = receiver.ring.snapshot(now=time.monotonic())
     return SupervisedResult(

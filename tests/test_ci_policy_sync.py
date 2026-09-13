@@ -212,7 +212,7 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
     assert 'concurrency:' in workflow
     assert (
         "cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && "
-        "inputs.run_windows_wrapper_diagnostics == '1') }}"
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1')) }}"
     ) in workflow
     assert workflow.count('uses: actions/checkout@') == workflow.count(
         'persist-credentials: false'
@@ -284,10 +284,12 @@ def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> No
         "ci-${{ github.workflow }}-${{ github.ref }}"
         "${{ github.event_name == 'workflow_dispatch' && "
         "inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}"
-    )  # Only the opted-in experiment gets a separate group; ordinary CI keeps its key.
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}"
+    )  # Opted-in experiments get separate groups; ordinary CI keeps its key.
     assert workflow['concurrency']['cancel-in-progress'] == (
         "${{ !(github.event_name == 'workflow_dispatch' && "
-        "inputs.run_windows_wrapper_diagnostics == '1') }}"
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1')) }}"
     )
     for step in job['steps']:
         assert 'actions/upload-artifact@' not in step.get('uses', '')
@@ -560,3 +562,37 @@ def test_release_status_keeps_current_release_line_metadata() -> None:
     assert '`RELEASE_VERSION`' in release_status
     assert '`VERSION_DATE`' in release_status
     assert '`CURRENT_RELEASE_HIGHLIGHT`' in release_status
+
+
+def test_windows_incident_qualification_is_bounded_and_native_selection_is_blocking():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-diagnostic-qualification']
+    gate = job['if']
+    assert "github.event_name == 'workflow_dispatch'" in gate
+    assert "inputs.run_windows_diagnostic_qualification == '1'" in gate
+    assert 'github.actor == github.repository_owner' in gate
+    assert 'github.event.repository.private == false' in gate
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_diagnostic_qualification']['default'] == '0'
+    assert job['runs-on'] == 'windows-latest'
+    assert int(job['timeout-minutes']) <= 45
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    assert all('continue-on-error' not in step for step in job['steps'])
+    runs = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert '.\\build_windows_exe.ps1 -Mode onedir' in runs
+    assert 'scripts/qualify_windows_diagnostics.py' in runs
+    selected = [step for step in workflow['jobs']['windows-core-smoke']['steps']
+                if step['name'] == 'Run native Windows supervised incident tests']
+    assert len(selected) == 1
+    assert 'if' not in selected[0] and 'continue-on-error' not in selected[0]
+    assert selected[0]['env']['QT_QPA_PLATFORM'] == 'windows'
+    assert selected[0]['run'].split() == [
+        'python', '-m', 'pytest', '-v',
+        'tests/test_diagnostic_wire.py', 'tests/test_diagnostic_ring.py',
+        'tests/test_diagnostic_incident.py', 'tests/test_diagnostic_store.py',
+        'tests/test_diagnostic_transport.py', 'tests/test_diagnostic_supervisor.py',
+        'tests/test_diagnostic_launcher.py', 'tests/test_diagnostic_package.py',
+        'tests/test_workflow_diagnostics.py', 'tests/test_incident_dialog.py',
+        'tests/test_diagnostic_qualification.py', 'tests/test_windows_diagnostic_qualification.py',
+    ]

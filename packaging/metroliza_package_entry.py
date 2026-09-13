@@ -33,7 +33,14 @@ from metroliza.app.bootstrap import run_application  # noqa: E402
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(run_application())
+        code = run_application()
+        if code == 0:
+            from metroliza.app.diagnostic_qualification import requested_scenario, run_qualification
+
+            scenario = requested_scenario()
+            if scenario is not None:
+                code = run_qualification(scenario)
+        raise SystemExit(code)
     finally:
         if recorder is not None:
             recorder.close()

@@ -81,3 +81,22 @@ def test_real_selected_import_and_local_export_survive_child_loss(tmp_path, scen
         assert len({event["operation_id"] for event in rows}) == 1
     assert "SYNTHETIC_PRIVATE_FILENAME" not in repr(history)
     assert not (tmp_path / "metroliza.log").exists()
+
+
+def test_retired_file_threshold_cannot_suppress_the_approved_supervised_history(tmp_path):
+    script = Path(__file__).parent / "fixtures" / "diagnostic_workflow_child.py"
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, METROLIZA_STARTUP_SMOKE="1", METROLIZA_LICENSE_VERIFICATION="0",
+               METROLIZA_FILE_LOG_LEVEL="ERROR", METROLIZA_LOG_LEVEL="ERROR",
+               PYTHONPATH=os.pathsep.join((str(root / "src"), str(root))))
+    result = launch_supervised([sys.executable, str(script), str(tmp_path), "hard_exit"], env=env, cwd=tmp_path)
+    assert result.exit_code == 9
+    events = [json.loads(event) for event in result.history.events]
+    assert {event["event_code"] for event in events} == {
+        "runtime_provenance", "startup_diagnostic", "workflow_diagnostic",
+    }
+    for operation in ("selected_import", "local_export"):
+        rows = [event for event in events if event.get("operation") == operation]
+        assert rows[0]["stage"] == "started"
+        assert rows[-1]["outcome"] == "completed"
+    assert not (tmp_path / "metroliza.log").exists()

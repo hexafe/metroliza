@@ -32,6 +32,20 @@ def main():
         recorder.enqueue(event)
     if scenario == "dropped":
         recorder.dropped = 2
+    if scenario == "contended":
+        with recorder._lock:
+            recorder.enqueue(event)
+    if scenario == "full_queue":
+        from metroliza.shared.diagnostic_events import (
+            WorkflowDiagnosticEvent, WorkflowOperation, WorkflowOutcome, WorkflowStage,
+        )
+
+        operation = uuid.uuid4()
+        for sequence in range(1, 1001):
+            recorder.enqueue(WorkflowDiagnosticEvent(
+                recorder.invocation_id, operation, sequence, WorkflowOperation.LOCAL_EXPORT,
+                WorkflowStage.OUTPUT_STAGING, WorkflowOutcome.MILESTONE,
+            ))
     if scenario == "hard_exit":
         os._exit(9)
     if scenario == "numeric139":

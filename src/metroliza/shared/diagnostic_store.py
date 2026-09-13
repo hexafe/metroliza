@@ -41,6 +41,7 @@ _LOCK_NAME = ".diagnostic-store.lock"
 
 
 class StoreStatus(str, Enum):
+    PUBLISH_INCOMPLETE = "publish_incomplete"
     SAVED = "saved"
     AVAILABLE = "available"
     EXPORTED = "exported"
@@ -397,6 +398,12 @@ def _lost_history(incident: DiagnosticIncident) -> bool:
     )
 
 
+def _valid_inventory_metadata(metadata: os.stat_result) -> bool:
+    return (stat.S_ISREG(metadata.st_mode) and not _is_reparse_or_link(metadata)
+            and metadata.st_nlink == 1 and metadata.st_size >= 0
+            and (os.name == "nt" or metadata.st_uid == os.getuid()))
+
+
 class IncidentStore:
     """Serialize incident and marker operations under one private local lock."""
 
@@ -423,11 +430,7 @@ class IncidentStore:
                         continue
                     path = Path(entry.path)
                     metadata = entry.stat(follow_symlinks=False)
-                    if not stat.S_ISREG(metadata.st_mode) or _is_reparse_or_link(metadata):
-                        return None
-                    if metadata.st_nlink != 1 or metadata.st_size < 0:
-                        return None
-                    if os.name != "nt" and metadata.st_uid != os.getuid():
+                    if not _valid_inventory_metadata(metadata):
                         return None
                     if _REPORT_NAME.fullmatch(entry.name):
                         reports.append(path)
@@ -535,26 +538,29 @@ class IncidentStore:
                 or inventory.total_bytes + len(encoded) > MAX_STORE_BYTES
             ):
                 return StoreResult(StoreStatus.QUOTA_EXCEEDED)
-            final = self.root / f"incident-{validated.report_id.hex}.json"
-            stage: Path | None = None
-            published_identity: tuple[int, int] | None = None
-            try:
-                stage = _write_stage(self.root, encoded)
-                if decode_incident(_safe_file_bytes(stage, MAX_INCIDENT_BYTES)) != validated:
-                    raise OSError("staged_incident_invalid")
-                published_identity = _publish_stage(stage, final)
-                if decode_incident(_safe_file_bytes(final, MAX_INCIDENT_BYTES)) != validated:
-                    raise OSError("published_incident_invalid")
-                return StoreResult(StoreStatus.SAVED, validated.report_id)
-            except FileExistsError:
-                return StoreResult(StoreStatus.INVALID)
-            except (OSError, IncidentValidationError):
-                _unlink_if_identity(final, published_identity)
-                return StoreResult(StoreStatus.IO_FAILED)
-            finally:
-                if stage is not None and stage.exists() and not final.exists():
-                    with contextlib.suppress(OSError):
-                        stage.unlink()
+            return self._publish_validated_incident(validated, encoded)
+
+    def _publish_validated_incident(self, validated: DiagnosticIncident, encoded: bytes) -> StoreResult:
+        final = self.root / f"incident-{validated.report_id.hex}.json"
+        stage: Path | None = None
+        published_identity: tuple[int, int] | None = None
+        try:
+            stage = _write_stage(self.root, encoded)
+            if decode_incident(_safe_file_bytes(stage, MAX_INCIDENT_BYTES)) != validated:
+                raise OSError("staged_incident_invalid")
+            published_identity = _publish_stage(stage, final)
+            if decode_incident(_safe_file_bytes(final, MAX_INCIDENT_BYTES)) != validated:
+                raise OSError("published_incident_invalid")
+            return StoreResult(StoreStatus.SAVED, validated.report_id)
+        except FileExistsError:
+            return StoreResult(StoreStatus.INVALID)
+        except (OSError, IncidentValidationError):
+            _unlink_if_identity(final, published_identity)
+            return StoreResult(StoreStatus.IO_FAILED)
+        finally:
+            if stage is not None and stage.exists() and not final.exists():
+                with contextlib.suppress(OSError):
+                    stage.unlink()
 
     def list_reports(self) -> ReportListResult:
         with self._locked() as status:
@@ -753,20 +759,23 @@ class IncidentStore:
                 or inventory.total_bytes + len(payload) > MAX_STORE_BYTES
             ):
                 return StoreResult(StoreStatus.QUOTA_EXCEEDED)
-            final = self.root / f"marker-{identifier.hex}.json"
-            stage: Path | None = None
-            try:
-                stage = _write_stage(self.root, payload)
-                _publish_stage(stage, final)
-                return StoreResult(StoreStatus.MARKER_STARTED)
-            except FileExistsError:
-                return StoreResult(StoreStatus.INVALID)
-            except OSError:
-                return StoreResult(StoreStatus.IO_FAILED)
-            finally:
-                if stage is not None and stage.exists() and not final.exists():
-                    with contextlib.suppress(OSError):
-                        stage.unlink()
+            return self._publish_marker(identifier, payload)
+
+    def _publish_marker(self, identifier: uuid.UUID, payload: bytes) -> StoreResult:
+        final = self.root / f"marker-{identifier.hex}.json"
+        stage: Path | None = None
+        try:
+            stage = _write_stage(self.root, payload)
+            _publish_stage(stage, final)
+            return StoreResult(StoreStatus.MARKER_STARTED)
+        except FileExistsError:
+            return StoreResult(StoreStatus.INVALID)
+        except OSError:
+            return StoreResult(StoreStatus.IO_FAILED)
+        finally:
+            if stage is not None and stage.exists() and not final.exists():
+                with contextlib.suppress(OSError):
+                    stage.unlink()
 
     def authenticate_session(self, session_id: uuid.UUID | str) -> StoreResult:
         return self._replace_marker_phase(
@@ -832,6 +841,13 @@ class IncidentStore:
             except (OSError, IncidentValidationError, ValueError, KeyError, TypeError):
                 return StoreResult(StoreStatus.IO_FAILED)
 
+    @staticmethod
+    def _owns_marker(marker: dict, identifier: uuid.UUID, expected_phases: tuple[str, ...]) -> bool:
+        return (marker["session_id"] == identifier.hex
+                and marker["supervisor_pid"] == os.getpid()
+                and marker["process_start_id"] == _process_start_identity(os.getpid())
+                and marker["phase"] in expected_phases)
+
     def _replace_marker_phase(
         self,
         session_id: uuid.UUID | str,
@@ -850,13 +866,7 @@ class IncidentStore:
             path = self.root / f"marker-{identifier.hex}.json"
             try:
                 marker = _decode_marker(_safe_file_bytes(path, 4096))
-                if marker["session_id"] != identifier.hex:
-                    return StoreResult(StoreStatus.INVALID)
-                if marker["supervisor_pid"] != os.getpid():
-                    return StoreResult(StoreStatus.INVALID)
-                if marker["process_start_id"] != _process_start_identity(os.getpid()):
-                    return StoreResult(StoreStatus.INVALID)
-                if marker["phase"] not in expected_phases:
+                if not self._owns_marker(marker, identifier, expected_phases):
                     return StoreResult(StoreStatus.INVALID)
                 if phase is None:
                     return StoreResult(result_status)
