@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import struct
@@ -103,26 +104,31 @@ def _open_channel(value: str) -> tuple[int, int]:
     if incoming_handle == outgoing_handle or min(incoming_handle, outgoing_handle) < 3:
         raise ValueError("invalid_channel")
     owned: list[int] = []
+    unconverted_handles: list[int] = []
     try:
         if os.name == "nt":
             import msvcrt
 
+            unconverted_handles.extend((incoming_handle, outgoing_handle))
             incoming = msvcrt.open_osfhandle(
                 incoming_handle, os.O_RDONLY | os.O_BINARY
             )
             owned.append(incoming)
+            unconverted_handles.pop(0)
             outgoing = msvcrt.open_osfhandle(
                 outgoing_handle, os.O_WRONLY | os.O_BINARY
             )
             owned.append(outgoing)
+            unconverted_handles.pop(0)
         else:
             incoming, outgoing = incoming_handle, outgoing_handle
             owned.extend((incoming, outgoing))
         os.set_inheritable(incoming, False)
         os.set_inheritable(outgoing, False)
         return incoming, outgoing
-    except (OSError, OverflowError, RuntimeError, ValueError):
+    except Exception:
         _close_fds(owned)
+        _close_windows_handles(unconverted_handles)
         raise
 
 
@@ -130,7 +136,25 @@ def _close_fds(descriptors: list[int] | tuple[int, ...]) -> None:
     for descriptor in descriptors:
         try:
             os.close(descriptor)
-        except OSError:
+        except Exception:
+            pass
+
+
+def _close_windows_handles(handles: list[int]) -> None:
+    if not handles:
+        return
+    try:
+        from ctypes import wintypes
+
+        close_handle = ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+    except Exception:
+        return
+    for handle in handles:
+        try:
+            close_handle(wintypes.HANDLE(handle))
+        except Exception:
             pass
 
 
@@ -287,13 +311,16 @@ def attach_child_recorder() -> ChildRecorder | None:
         _recorder = recorder
         recorder.start()
         return recorder
-    except (OSError, OverflowError, RuntimeError, ValueError):
+    except Exception:
         _recorder = None
         if recorder is not None:
             try:
                 recorder.close()
-            except (OSError, RuntimeError):
-                recorder._close_channels()
+            except Exception:
+                try:
+                    recorder._close_channels()
+                except Exception:
+                    pass
         elif opened is not None:
             _close_fds(opened)
         return None

@@ -60,8 +60,13 @@ def test_control_round_trip():
     }
 
 
+class SyntheticDiagnosticFailure(Exception):
+    pass
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, SyntheticDiagnosticFailure])
 def test_attach_thread_start_failure_closes_channels_and_preserves_attempted_mode(
-    monkeypatch,
+    monkeypatch, failure_type
 ):
     incoming, parent_write = os.pipe()
     parent_read, outgoing = os.pipe()
@@ -70,7 +75,7 @@ def test_attach_thread_start_failure_closes_channels_and_preserves_attempted_mod
     monkeypatch.setenv(diagnostic_transport.CHANNEL_ENV, f"{incoming}:{outgoing}")
 
     def fail_start(_thread):
-        raise RuntimeError("synthetic_thread_start_failure")
+        raise failure_type("synthetic_thread_start_failure")
 
     monkeypatch.setattr(diagnostic_transport.threading.Thread, "start", fail_start)
     try:
@@ -86,11 +91,12 @@ def test_attach_thread_start_failure_closes_channels_and_preserves_attempted_mod
         os.close(parent_read)
 
 
-def test_windows_partial_channel_conversion_closes_only_converted_descriptor(
+def test_windows_partial_channel_conversion_closes_crt_fd_and_raw_handle(
     monkeypatch,
 ):
     owned, peer = os.pipe()
     calls = 0
+    closed_handles: list[int] = []
 
     def partial_open(_handle, _flags):
         nonlocal calls
@@ -100,15 +106,34 @@ def test_windows_partial_channel_conversion_closes_only_converted_descriptor(
         raise OSError("synthetic_second_conversion_failure")
 
     fake_msvcrt = types.SimpleNamespace(open_osfhandle=partial_open)
+    def close_raw(handle):
+        closed_handles.append(handle.value)
+        return 1
+
+    class CloseHandle:
+        argtypes = None
+        restype = None
+
+        def __call__(self, handle):
+            return close_raw(handle)
+
+    fake_kernel = types.SimpleNamespace(CloseHandle=CloseHandle())
     monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
     monkeypatch.setattr(diagnostic_transport.os, "name", "nt")
     monkeypatch.setattr(diagnostic_transport.os, "O_BINARY", 0, raising=False)
+    monkeypatch.setattr(
+        diagnostic_transport.ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: fake_kernel,
+        raising=False,
+    )
     try:
         with pytest.raises(OSError):
             diagnostic_transport._open_channel("100:101")
         with pytest.raises(OSError):
             os.fstat(owned)
         assert calls == 2
+        assert closed_handles == [101]
     finally:
         os.close(peer)
 
@@ -122,11 +147,11 @@ def test_channel_inheritability_failure_closes_both_owned_descriptors(monkeypatc
         nonlocal calls
         calls += 1
         if calls == 2:
-            raise RuntimeError("synthetic_inheritability_failure")
+            raise SyntheticDiagnosticFailure("synthetic_inheritability_failure")
 
     monkeypatch.setattr(diagnostic_transport.os, "set_inheritable", fail_second)
     try:
-        with pytest.raises(RuntimeError):
+        with pytest.raises(SyntheticDiagnosticFailure):
             diagnostic_transport._open_channel(f"{incoming}:{outgoing}")
         for descriptor in (incoming, outgoing):
             with pytest.raises(OSError):
