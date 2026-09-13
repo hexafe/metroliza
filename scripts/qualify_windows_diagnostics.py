@@ -1556,20 +1556,22 @@ def _finish_concurrent_processes(
     results: list[ScenarioResult] = []
     for index, process in enumerate(processes):
         def finish_one() -> ScenarioResult:
-            receipt = _validate_child_receipt(
-                roots[index] / QUALIFICATION_RECEIPT_NAMES["ready"], "concurrent"
-            )
-            all_exited = _wait_for_job_exit(process, scenario_deadline)
-            if (
-                exit_codes[index] != 9
-                or receipt["stage"] != "ready"
-                or not all_exited
-            ):
+            exit_code = exit_codes[index]
+            if exit_code is None:
+                raise QualificationFailure("scenario_timeout")
+            if exit_code != 9:
                 raise QualificationFailure(
                     "scenario_failed",
                     qualification_reason="process_exit_mismatch",
-                    qualification_exit_code=exit_codes[index],
+                    qualification_exit_code=exit_code,
                 )
+            receipt = _validate_child_receipt(
+                roots[index] / QUALIFICATION_RECEIPT_NAMES["ready"], "concurrent"
+            )
+            if receipt["stage"] != "ready":
+                raise QualificationFailure("scenario_failed")
+            if not _wait_for_job_exit(process, scenario_deadline):
+                raise QualificationFailure("scenario_timeout")
             return ScenarioResult(
                 9,
                 round((time.perf_counter() - process.started) * 1000),
@@ -1649,7 +1651,7 @@ def _run_scenario(
             raise QualificationFailure("scenario_failed")
         all_exited = _wait_for_job_exit(process, scenario_deadline)
         if not all_exited:
-            raise QualificationFailure("scenario_failed")
+            raise QualificationFailure("scenario_timeout")
         metrics = process.metrics()
         elapsed_ms = round((time.perf_counter() - process.started) * 1000)
         terminate = False

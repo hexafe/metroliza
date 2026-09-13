@@ -1106,13 +1106,16 @@ def test_hard_exit_rejects_a_valid_incident_with_empty_history() -> None:
 
 
 class _FakeProcess:
-    def __init__(self, exit_code: int, *, supervised: bool) -> None:
+    def __init__(
+        self, exit_code: int | None, *, supervised: bool, active_processes: int = 0
+    ) -> None:
         self.started = time.perf_counter()
         self.exit_code = exit_code
         self.closed_with: bool | None = None
         self.supervised = supervised
+        self._active_processes = active_processes
 
-    def poll(self) -> int:
+    def poll(self) -> int | None:
         return self.exit_code
 
     def metrics(self) -> qualification.ProcessMetrics:
@@ -1122,7 +1125,7 @@ class _FakeProcess:
         return None
 
     def active_processes(self) -> int:
-        return 0
+        return self._active_processes
 
     def topology(self, _artifact, *, all_exited: bool) -> qualification.ProcessTopology:
         return _scenario(supervised=self.supervised).topology
@@ -1132,9 +1135,12 @@ class _FakeProcess:
 
 
 class _FakeApi:
-    def __init__(self, exit_code: int, stage: str) -> None:
+    def __init__(
+        self, exit_code: int | None, stage: str, *, active_processes: int = 0
+    ) -> None:
         self.exit_code = exit_code
         self.stage = stage
+        self.active_processes = active_processes
         self.process: _FakeProcess | None = None
         self.environment: dict[str, str] | None = None
 
@@ -1155,7 +1161,9 @@ class _FakeApi:
             json.dumps(payload), encoding="ascii"
         )
         self.process = _FakeProcess(
-            self.exit_code, supervised=Path(executable).name == "metroliza.exe"
+            self.exit_code,
+            supervised=Path(executable).name == "metroliza.exe",
+            active_processes=self.active_processes,
         )
         return self.process
 
@@ -1257,6 +1265,116 @@ def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypa
     assert called == [api.process]
     assert api.process.closed_with is False
     assert not any(key.startswith("PYTHON") for key in api.environment)
+
+
+def test_scenario_expected_exit_with_active_descendant_is_timeout(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    api = _FakeApi(0, "complete", active_processes=1)
+    artifact = tmp_path / "artifact"
+    work = tmp_path / "work"
+    state = tmp_path / "state"
+    for path in (artifact, work, state):
+        path.mkdir()
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_scenario(
+            api,
+            artifact / "metroliza.exe",
+            artifact,
+            work,
+            state,
+            "normal",
+            time.monotonic() + 0.01,
+            expected_exit=0,
+            expected_stage="complete",
+        )
+
+    assert caught.value.failure_id == "scenario_timeout"
+    assert caught.value.qualification_reason is None
+    assert caught.value.qualification_exit_code is None
+    assert api.process is not None and api.process.closed_with is True
+
+
+def _concurrent_roots(tmp_path) -> tuple[Path, Path]:
+    roots = (tmp_path / "one", tmp_path / "two")
+    payload = {
+        "schema_version": 1,
+        "scenario": "concurrent",
+        "stage": "ready",
+        "packaged": True,
+        "console_none": True,
+        "ordinary_user": True,
+        "integrity_level": "medium",
+    }
+    for root in roots:
+        root.mkdir()
+        (root / qualification.QUALIFICATION_RECEIPT_NAMES["ready"]).write_text(
+            json.dumps(payload), encoding="ascii"
+        )
+    return roots
+
+
+def test_concurrent_primary_not_exited_is_timeout(tmp_path) -> None:
+    processes = (
+        _FakeProcess(None, supervised=True),
+        _FakeProcess(9, supervised=True),
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._finish_concurrent_processes(
+            processes,
+            _concurrent_roots(tmp_path),
+            (1, 1),
+            tmp_path,
+            time.monotonic() + 0.01,
+        )
+
+    assert caught.value.failure_id == "scenario_timeout"
+    assert caught.value.qualification_stage == "concurrent_1"
+    assert caught.value.qualification_exit_code is None
+
+
+def test_concurrent_expected_exit_with_active_descendant_is_timeout(tmp_path) -> None:
+    processes = (
+        _FakeProcess(9, supervised=True, active_processes=1),
+        _FakeProcess(9, supervised=True),
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._finish_concurrent_processes(
+            processes,
+            _concurrent_roots(tmp_path),
+            (1, 1),
+            tmp_path,
+            time.monotonic() + 0.01,
+        )
+
+    assert caught.value.failure_id == "scenario_timeout"
+    assert caught.value.qualification_stage == "concurrent_1"
+    assert caught.value.qualification_exit_code is None
+
+
+def test_concurrent_wrong_exit_retains_only_observed_numeric_code(tmp_path) -> None:
+    processes = (
+        _FakeProcess(7, supervised=True),
+        _FakeProcess(9, supervised=True),
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._finish_concurrent_processes(
+            processes,
+            _concurrent_roots(tmp_path),
+            (1, 1),
+            tmp_path,
+            time.monotonic() + 1,
+        )
+
+    assert caught.value.failure_id == "scenario_failed"
+    assert caught.value.qualification_stage == "concurrent_1"
+    assert caught.value.qualification_reason == "process_exit_mismatch"
+    assert caught.value.qualification_exit_code == 7
 
 
 def test_ui_process_exit_mismatch_retains_observed_numeric_code(tmp_path) -> None:
