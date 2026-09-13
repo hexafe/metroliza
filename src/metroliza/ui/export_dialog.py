@@ -322,6 +322,7 @@ class ExportDialog(QDialog):
         configure_window_size(self, minimum=(700, 430), initial=(760, 700))
 
         self.db_file = db_file
+        self.database_change_allowed = None
         self.excel_file = ""
         self.filter_query = DEFAULT_FILTER_QUERY
         self.filter_state = None
@@ -1105,6 +1106,8 @@ class ExportDialog(QDialog):
     def select_db_file(self):
         try:
             """Open a file dialog to select a database file"""
+            if self.database_change_allowed is not None and not self.database_change_allowed():
+                return
             filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
                                                     "SQLite database (*.db);;All files (*)")
             if filename:
@@ -1143,6 +1146,8 @@ class ExportDialog(QDialog):
         return accepted
 
     def _update_database_context(self, db_file):
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return False
         if not self._discard_child_drafts():
             return False
         self.db_file = db_file

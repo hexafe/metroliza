@@ -1012,7 +1012,7 @@ class MainWindow(QMainWindow):
             if self._is_qwidget_type(ModifyDB):
                 self.modifydb_dialog = self._open_coordinated_window(
                     "modify_database",
-                    lambda snapshot: ModifyDB(self, snapshot.database_file),
+                    lambda snapshot: ModifyDB(self, snapshot.database_file, modal=False),
                     context_policy=WindowContextPolicy.CLOSE,
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                 )
@@ -1021,6 +1021,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("modifydb_dialog", self.modifydb_dialog)
                 self.modifydb_dialog.show()
 
+            self.modifydb_dialog.database_change_allowed = self._report_context_change_allowed
             self.modifydb_dialog.raise_()
             self.modifydb_dialog.activateWindow()
         except Exception as e:
@@ -1044,6 +1045,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("export_dialog", self.export_dialog)
                 self.export_dialog.show()
 
+            self.export_dialog.database_change_allowed = self._report_context_change_allowed
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
         except Exception as e:

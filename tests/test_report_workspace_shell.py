@@ -64,7 +64,7 @@ def prepare_review(app, window, reports):
 def test_report_stack_initializes_after_first_paint_or_user_entry(tmp_path, saved_page):
     code = '''
 import sys
-from PyQt6.QtCore import QCoreApplication, QEvent, QSettings
+from PyQt6.QtCore import QCoreApplication, QElapsedTimer, QEvent, QSettings
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 from metroliza.ui.main_window import MainWindow
@@ -72,11 +72,28 @@ from metroliza.ui.ui_preferences import UiPreferences
 app = QApplication([])
 preferences = UiPreferences(QSettings(sys.argv[1], QSettings.Format.IniFormat))
 preferences.set("presentation/navigation/page", sys.argv[2])
-window = MainWindow("synthetic", None, ui_preferences=preferences)
+class ObservedWindow(MainWindow):
+    first_paint_seen = False
+    report_stack_present_at_first_paint = None
+
+    def paintEvent(self, event):
+        if not self.first_paint_seen:
+            self.report_stack_present_at_first_paint = "metroliza.ui.parsing_dialog" in sys.modules
+            self.first_paint_seen = True
+        super().paintEvent(event)
+
+window = ObservedWindow("synthetic", None, ui_preferences=preferences)
 try:
     assert "metroliza.ui.parsing_dialog" not in sys.modules, "Reports loaded before first paint"
     window.show()
-    QTest.qWait(20)
+    elapsed = QElapsedTimer()
+    elapsed.start()
+    while elapsed.elapsed() < 5000:
+        QTest.qWait(10)
+        if window.first_paint_seen and (sys.argv[2] == "home" or window._reports_workspace is not None):
+            break
+    assert window.first_paint_seen, "The window never painted"
+    assert window.report_stack_present_at_first_paint is False, "Reports loaded before first paint"
     if sys.argv[2] == "home":
         assert "metroliza.ui.parsing_dialog" not in sys.modules
     else:
@@ -270,6 +287,86 @@ def test_existing_database_window_blocks_report_start_without_losing_its_work(ap
         window.export_dialog = None
         writer.close()
         writer.deleteLater()
+
+
+@pytest.mark.parametrize("workflow", ["export", "modifydb"])
+@pytest.mark.parametrize("stage", ["review", "import"])
+def test_preserved_window_cannot_switch_onto_active_report_database(app, window, reports, monkeypatch, workflow, stage):
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.ui import export_dialog
+
+    source, database = reports
+    database = database.with_suffix(".db")
+    previous = database.with_name("previous.db")
+    monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda _self: {})
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Cancel)
+    window.set_directory(str(source))
+    window.set_db_file(str(previous))
+    getattr(window, f"launch_{workflow}_dialog")()
+    writer = getattr(window, f"{workflow}_dialog")
+    assert writer.windowModality() == Qt.WindowModality.NonModal
+    assert QApplication.activeModalWidget() is None
+    if workflow == "modifydb":
+        writer.populate_table(writer.reference_table, [("original", 1)])
+        writer.reference_table.item(0, 1).setText("retained draft")
+    else:
+        writer.filter_query = "WHERE 1 = 0"
+    assert window.set_db_file(str(database))
+    assert writer.isVisible() and writer.db_file == str(previous)
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", lambda *_args: (str(database), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+    try:
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        wait_until(app, entered.is_set)
+        snapshot = window.workspace_context.snapshot
+        window.activateWindow()
+        navigation = window.navigation_combo if window.navigation_combo.isVisible() else window.navigation_list
+        navigation.setFocus()
+        QTest.keyClick(navigation, Qt.Key.Key_Home)
+        app.processEvents()
+        assert window.workspace_stack.currentWidget() is window.home_page
+        assert QApplication.activeModalWidget() is None
+        writer.select_db_file()
+        assert writer.db_file == str(previous)
+        assert writer.isVisible() and writer.isEnabled()
+        assert window.workspace_context.snapshot is snapshot
+        if workflow == "modifydb":
+            assert writer.reference_table.item(0, 1).text() == "retained draft"
+            assert writer.has_pending_changes()
+        else:
+            assert writer.filter_query == "WHERE 1 = 0"
+            assert writer._update_database_context(str(database)) is False
+            assert writer.filter_query == "WHERE 1 = 0"
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        writer.select_db_file()
+        assert writer.db_file == str(database)
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        writer.close()
 
 
 def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):
