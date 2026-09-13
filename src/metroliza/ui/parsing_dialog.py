@@ -303,6 +303,7 @@ class _ReportOperations:
 
     def _initialize_report_operations(self, directory=None, db_file=None, *, external_context=False):
         self._external_context = external_context
+        self.operation_start_allowed = None
         self._operation_progress = 0
         # Initialize variables
         self.directory = directory
@@ -758,6 +759,8 @@ class _ReportOperations:
 
         if self.preflight_thread is not None or self.parse_thread is not None:
             return
+        if self.operation_start_allowed is not None and not self.operation_start_allowed():
+            return
         self._operation_progress = 0
         try:
             metadata_parsing_mode, _background, _modeless = self._build_parse_request_fields()
@@ -787,6 +790,8 @@ class _ReportOperations:
                 ),
                 on_cancel=self.stop_scanning,
             )
+            if self._external_context:
+                self.scan_loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
             self.scan_button.setEnabled(False)
             self.parse_button.setEnabled(False)
             self.preflight_thread = ParsePreflightThread(
@@ -898,6 +903,8 @@ class _ReportOperations:
         """Start a plan; direct legacy callers retain the atomic compatibility adapter."""
         if self.preflight_thread is not None or self.parse_thread is not None:
             return
+        if self.operation_start_allowed is not None and not self.operation_start_allowed():
+            return
         self._operation_progress = 0
         try:
             (
@@ -924,6 +931,8 @@ class _ReportOperations:
                 ),
                 on_cancel=self.stop_parsing,
             )
+            if self._external_context:
+                self.loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
 
             # Disable the parse button before the worker starts.
             self.parse_button.setEnabled(False)

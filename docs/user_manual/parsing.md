@@ -45,7 +45,10 @@ are stable member-relative paths, rather than temporary extraction folders.
 
 ## Progress, cancellation and outcomes
 
-The progress window shows the current stage and cooperative **Cancel** action. Cancellation
+The progress window shows the current stage and cooperative **Cancel** action while the main
+workspaces remain available. New database workflows wait until the report operation finishes.
+Before starting review/import, finish or close any existing workflow on the same database;
+Metroliza identifies the blocking window and preserves its work. Cancellation
 waits for the active unit of work to finish safely; reports already committed remain saved.
 Closing the main window while work is active requests cancellation and defers closing until
 the worker stops. Home also shows the active report stage and a cancellation button.

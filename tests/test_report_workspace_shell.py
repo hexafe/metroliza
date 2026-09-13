@@ -1,14 +1,18 @@
 """The production MainWindow owns one real report workflow across navigation."""
 
 from contextlib import closing
+import os
 import sqlite3
+import subprocess
+import sys
 from threading import Event
 from types import SimpleNamespace
 
 import pytest
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, Qt
-from PyQt6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton
 
 from metroliza.ui.main_window import MainWindow
 from metroliza.ui.ui_preferences import UiPreferences
@@ -56,6 +60,43 @@ def prepare_review(app, window, reports):
     return host, source, database
 
 
+@pytest.mark.parametrize("saved_page", ["home", "reports"])
+def test_report_stack_initializes_after_first_paint_or_user_entry(tmp_path, saved_page):
+    code = '''
+import sys
+from PyQt6.QtCore import QCoreApplication, QEvent, QSettings
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtTest import QTest
+from metroliza.ui.main_window import MainWindow
+from metroliza.ui.ui_preferences import UiPreferences
+app = QApplication([])
+preferences = UiPreferences(QSettings(sys.argv[1], QSettings.Format.IniFormat))
+preferences.set("presentation/navigation/page", sys.argv[2])
+window = MainWindow("synthetic", None, ui_preferences=preferences)
+try:
+    assert "metroliza.ui.parsing_dialog" not in sys.modules, "Reports loaded before first paint"
+    window.show()
+    QTest.qWait(20)
+    if sys.argv[2] == "home":
+        assert "metroliza.ui.parsing_dialog" not in sys.modules
+    else:
+        assert window._reports_workspace is not None
+    host = window.launch_parsing_dialog()
+    assert window.launch_parsing_dialog() is host
+    assert window.parsing_dialog is host
+finally:
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path / "startup.ini"), saved_page],
+        env=os.environ.copy(), capture_output=True, text=True, timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 def test_home_has_one_recommended_action_and_reports_has_one_owner(window):
     host = window.reports_workspace
     assert window.parsing_dialog is host
@@ -71,6 +112,7 @@ def test_home_has_one_recommended_action_and_reports_has_one_owner(window):
         assert window.reports_workspace is host
     assert window.launch_parsing_dialog() is host
     assert window.window_coordinator.get("parsing") is None
+    assert window.home_next_action.toolTip() == "Open Reports and focus the next available report action."
 
 
 def test_real_selected_import_survives_navigation_and_preserves_outcome(app, window, reports):
@@ -155,9 +197,31 @@ def test_busy_owner_rejects_duplicate_context_and_defers_main_close(app, window,
         (host.parse_button if stage == "import" else host.scan_button).click()
         wait_until(app, entered.is_set)
         worker = host.parse_thread if stage == "import" else host.preflight_thread
+        progress = host.loading_dialog if stage == "import" else host.scan_loading_dialog
+        assert progress.windowModality() == Qt.WindowModality.NonModal
+        assert QApplication.activeModalWidget() is None
         snapshot = window.workspace_context.snapshot
-        window._show_workspace_page("home")
+        # Exercise real keyboard navigation while the operation is blocked.
+        window.activateWindow()
+        navigation = window.navigation_combo if window.navigation_combo.isVisible() else window.navigation_list
+        navigation.setFocus()
+        QTest.keyClick(navigation, Qt.Key.Key_Home)
+        app.processEvents()
+        assert window.workspace_stack.currentWidget() is window.home_page
         assert not window.home_cancel_report.isHidden()
+        assert not window.enrich_metadata_action.isEnabled()
+        window.on_metadata_enrichment_finished()
+        assert not window.enrich_metadata_action.isEnabled()
+        assert all(not button.isEnabled() for button in window._database_workflow_buttons)
+        window.enrich_metadata_action.trigger()
+        for button in window._database_workflow_buttons:
+            button.click()
+        for launch in (window.launch_metadata_enrichment, window.launch_modifydb_dialog,
+                       window.launch_export_dialog, window.launch_characteristic_mapping_dialog,
+                       window.launch_industrial_data_dialog, window.launch_realtime_industrial_monitoring_dialog):
+            launch()
+        assert window.metadata_enrichment_thread is None
+        assert window.window_coordinator.open_window_ids == ()
         assert window.launch_parsing_dialog() is host
         host.scan_reports()
         host._import_reviewed_reports()
@@ -171,8 +235,41 @@ def test_busy_owner_rejects_duplicate_context_and_defers_main_close(app, window,
         release.set()
         wait_until(app, lambda: host.can_change_workspace() and not window.isVisible())
         assert not worker.isRunning()
+        assert window.enrich_metadata_action.isEnabled()
+        assert all(button.isEnabled() for button in window._database_workflow_buttons)
     finally:
         release.set()
+
+
+def test_existing_database_window_blocks_report_start_without_losing_its_work(app, window, reports):
+    host, _source, database = prepare_review(app, window, reports)
+    writer = QDialog(window)
+    writer.db_file = str(database)
+    button = QPushButton("Existing database action", writer)
+    clicks = []
+    button.clicked.connect(lambda: clicks.append(True))
+    window.export_dialog = writer
+    writer.show()
+    app.processEvents()
+    try:
+        selected = host.report_planner.model.selected_ids
+        host.scan_button.click()
+        host.parse_button.click()
+        assert host.can_change_workspace()
+        assert host.report_planner.model.selected_ids == selected
+        assert not database.exists()
+        assert writer.isVisible() and button.isEnabled()
+        assert clicks == []
+        assert "Finish or close Export" in window.workspace_notice_label.text()
+        writer.close()
+        host.parse_button.click()
+        wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+    finally:
+        window.export_dialog = None
+        writer.close()
+        writer.deleteLater()
 
 
 def test_tools_shortcuts_use_existing_primary_navigation(window):

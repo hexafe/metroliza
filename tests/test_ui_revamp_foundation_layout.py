@@ -64,6 +64,8 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
                 "parsing_size": [parsing.width(), parsing.height()],
                 "available": [available.width(), available.height()],
                 "main_buttons": button_texts,
+                "home_actions": [button.text() for button in main.home_page.findChildren(QPushButton) if not button.isHidden()],
+                "reports_owns_export": main.reports_page.isAncestorOf(main.export_button),
                 "source_status": main.source_status_label.text(),
                 "database_status": main.database_status_label.text(),
                 "parse_ready": parsing.parse_button.isEnabled(),
@@ -78,7 +80,8 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
 
         self.assertLessEqual(payload["main_size"][0], payload["available"][0])
         self.assertLessEqual(payload["parsing_size"][0], payload["available"][0])
-        self.assertIn("Parse Reports", payload["main_buttons"])
+        self.assertEqual(payload["home_actions"], ["Choose reports in Reports"])
+        self.assertTrue(payload["reports_owns_export"])
         self.assertIn("Export Workbook", payload["main_buttons"])
         self.assertIn("Source: not selected", payload["source_status"])
         self.assertIn("Database: not selected", payload["database_status"])
