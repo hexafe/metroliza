@@ -615,12 +615,38 @@ def test_finite_numeric_binary64_rounding_ids(spec, expected_ids):
     ("not_in", (7, 9007199254740993), None, False, [6, 7, 8, 9, 13, 14, 15, 16, 17, 19, 20]),
 ])
 def test_finite_numeric_dispatch_preserves_scope_with_one_source_evaluation(bound, operator, value, second, exclude_invalid, expected):
-    from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
-
     values = [7, 7.0, "7", "000000000000000007", "9007199254740993", "999999999999999999",
               "9223372036854775807", "9223372036854775808", "-7", " +7 ", "7.0", "7e0",
               None, float("inf"), "7\0bad", "7junk", "1e309", "0000000000000000007", b"7",
               "18446744073709551615"]
+    _assert_dispatch_scope_once(values, bound, operator, value, second, exclude_invalid, expected)
+
+
+@pytest.mark.parametrize("bound", [False, True])
+@pytest.mark.parametrize("operator,value,second,exclude_invalid,expected", [
+    ("eq", 123456789012345678, None, False, [1, 2, 3]),
+    ("ne", 123456789012345678, None, False, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]),
+    ("ne", 123456789012345678, None, True, [4, 5, 6, 7, 8, 9, 18, 19, 20, 21, 22, 23]),
+    ("between", -7, 7, False, [8, 9, 20, 21, 22, 23]),
+    ("lt", -7, None, False, [4, 5, 7, 18]),
+    ("is_blank", None, None, False, [10, 11, 12, 13, 14, 15, 16, 17, 24, 25, 26]),
+    ("is_not_blank", None, None, False, [1, 2, 3, 4, 5, 6, 7, 8, 9, 18, 19, 20, 21, 22, 23]),
+    ("in", (-123456789012345678, 7), None, False, [4, 5, 8, 21]),
+    ("not_in", (-123456789012345678, 7), None, False, [1, 2, 3, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26]),
+])
+def test_finite_numeric_signed_dispatch_preserves_scope_with_one_source_evaluation(bound, operator, value, second, exclude_invalid, expected):
+    values = ["123456789012345678", "+123456789012345678", " \t+123456789012345678\n\r\v\f",
+              "-123456789012345678", " \t-123456789012345678\n\r\v\f", "123456789012345679",
+              "-123456789012345679", "+000000000000000007", "-000000000000000007",
+              "++7", "--7", "+-7", "-+7", "+ 7", "7\t0", "+7\0", "\u00a07\u00a0",
+              "-9223372036854775808", "+9223372036854775807", "-7.0", "+7e0",
+              "-0000000000000000007", " \t\n\r\v\f-0 \t\n\r\v\f", None, "-1e309", b"-7"]
+    _assert_dispatch_scope_once(values, bound, operator, value, second, exclude_invalid, expected)
+
+
+def _assert_dispatch_scope_once(values, bound, operator, value, second, exclude_invalid, expected):
+    from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
+
     observations = []
 
     def observe(source):

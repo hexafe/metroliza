@@ -1399,7 +1399,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "0e12616dcaf6c69075ee63164ef6feff3fbd339c3ede802f26c3bec91ad2f793",
+      "fingerprint": "1e945eb9432f13398ca16be3b1d65c794844fc79acb83f27f7be9109daae10dd",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
@@ -1408,7 +1408,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "b06be99611430e3ae2e9b8a6a46779f631ee08092b24b9dad81f82b86b845dcd",
+      "fingerprint": "1cee3f31a648b20409f7c71dbaa882345fdd3e1cac147dc039bdbd1d3e1851a8",
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",

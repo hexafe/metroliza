@@ -237,20 +237,25 @@ def _sqlite_comparison(operator: str, value: int | float, params: list[Any] | No
 
 def _sqlite_numeric_dispatch(column_sql: str, predicate: str, fast_predicate: str) -> str:
     """Evaluate one source once; tokenize only values outside a proven fast subset."""
-    # At most 18 unsigned ASCII digits always fit signed64, including leading
-    # zeros. NUL, signs, whitespace, longer integers and every decimal/exponent
-    # remain the exact parser's responsibility. Native nonfinite values become
-    # NULL in the numeric branch, retaining each predicate's invalid semantics.
+    # Up to 18 ASCII digits with one optional sign always fit signed64.
+    # Trim only the already accepted ASCII whitespace. NUL, longer integers
+    # and every decimal/exponent remain the exact parser's responsibility.
     fast_guard = """typeof(_nf_value) IN ('integer','real','null') OR
-        (typeof(_nf_value) = 'text' AND length(_nf_value) BETWEEN 1 AND 18
-         AND instr(_nf_value,char(0)) = 0 AND _nf_value NOT GLOB '*[^0-9]*')"""
-    number = "CASE WHEN _nf_value - _nf_value = 0 THEN CAST(_nf_value AS NUMERIC) END"
-    # CASE is lazy. The outer OFFSET boundary prevents flattening the source
-    # expression into the dispatch checks and either scalar predicate branch.
+        (typeof(_nf_value) = 'text' AND length(_nf_digits) BETWEEN 1 AND 18
+         AND instr(_nf_value,char(0)) = 0 AND _nf_digits NOT GLOB '*[^0-9]*')"""
+    number = """CASE WHEN typeof(_nf_value) = 'text' THEN CAST(_nf_text AS INTEGER)
+        WHEN _nf_value - _nf_value = 0 THEN _nf_value END"""
+    # CASE is lazy. Each OFFSET boundary prevents flattening and duplicated
+    # source, trim or sign processing; native nonfinite values remain NULL.
     return (f"(SELECT CASE WHEN {fast_guard} THEN "
             f"(SELECT {fast_predicate} FROM (SELECT {number} AS n)) ELSE "
             f"(SELECT {predicate} FROM ({_sqlite_normalized_source('_nf_value')})) END "
-            f"FROM (SELECT {column_sql} AS _nf_value LIMIT -1 OFFSET 0))")
+            "FROM (SELECT *, CASE WHEN substr(_nf_text,1,1) IN ('+','-') "
+            "THEN substr(_nf_text,2) ELSE _nf_text END AS _nf_digits FROM "
+            "(SELECT *, CASE WHEN typeof(_nf_value) = 'text' "
+            "THEN trim(_nf_value,char(32,9,10,13,11,12)) END AS _nf_text FROM "
+            f"(SELECT {column_sql} AS _nf_value LIMIT -1 OFFSET 0) LIMIT -1 OFFSET 0) "
+            "LIMIT -1 OFFSET 0))")
 
 
 def sqlite_numeric_filter(
