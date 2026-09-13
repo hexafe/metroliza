@@ -178,7 +178,7 @@ def _ensure_private_root(path: Path) -> bool:
         for part in path.parts[1:]:
             current /= part
             if not current.exists():
-                current.mkdir(mode=0o700)
+                current.mkdir(mode=0o700, exist_ok=True)
         if not _existing_ancestors_safe(path):
             return False
         metadata = path.lstat()
@@ -401,7 +401,13 @@ class IncidentStore:
     """Serialize incident and marker operations under one private local lock."""
 
     def __init__(self, root: Path | None = None) -> None:
-        self.root = _default_root() if root is None else Path(root)
+        if root is not None:
+            self.root: Path | None = Path(root)
+            return
+        try:
+            self.root = _default_root()
+        except OSError:
+            self.root = None
 
     def _inventory(self) -> _Inventory | None:
         reports: list[Path] = []
@@ -485,7 +491,7 @@ class IncidentStore:
 
     @contextlib.contextmanager
     def _locked(self):
-        if not _ensure_private_root(self.root):
+        if self.root is None or not _ensure_private_root(self.root):
             yield StoreStatus.ROOT_UNAVAILABLE
             return
         lock = _StoreLock(self.root)

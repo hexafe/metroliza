@@ -207,6 +207,29 @@ def test_list_distinguishes_unavailable_store_from_empty_store(tmp_path, monkeyp
     assert unavailable.reports == ()
 
 
+def test_default_root_failure_is_lazy_and_all_store_operations_fail_closed(
+    tmp_path, monkeypatch
+) -> None:
+    def unavailable_root():
+        raise OSError("synthetic_default_root_failure")
+
+    monkeypatch.setattr(diagnostic_store, "_default_root", unavailable_root)
+    store = IncidentStore()
+    destination = tmp_path / "selected.zip"
+
+    assert store.root is None
+    assert store.publish(_incident()).status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.list_reports().status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.load(REPORT_ID).status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.export(REPORT_ID, destination).status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.begin_session(SESSION_ID).status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.authenticate_session(SESSION_ID).status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.end_session(SESSION_ID, clean=False).status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.resolve_session(SESSION_ID, REPORT_ID).status is StoreStatus.ROOT_UNAVAILABLE
+    assert store.list_unclean_sessions().status is StoreStatus.ROOT_UNAVAILABLE
+    assert not destination.exists()
+
+
 def test_symlink_root_and_hardlinked_report_fail_closed(tmp_path) -> None:
     real = tmp_path / "real"
     real.mkdir()
