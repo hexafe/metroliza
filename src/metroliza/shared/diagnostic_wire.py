@@ -217,6 +217,7 @@ def _workflow(payload: object) -> WorkflowDiagnosticEvent:
             "error",
             "validation_status",
             "selected_report_count",
+            "imported_report_count",
             "published_artifact_count",
             "duration_ms",
         ),
@@ -231,6 +232,7 @@ def _workflow(payload: object) -> WorkflowDiagnosticEvent:
         error=_enum(WorkflowError, values["error"]),
         validation_status=_enum(ValidationStatus, values["validation_status"]),
         selected_report_count=values["selected_report_count"],
+        imported_report_count=values["imported_report_count"],
         published_artifact_count=values["published_artifact_count"],
         duration_ms=values["duration_ms"],
     )

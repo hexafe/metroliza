@@ -159,6 +159,8 @@ class WorkflowOutcome(str, Enum):
     MILESTONE = "milestone"
     COMPLETED = "completed"
     COMPLETED_WITH_FALLBACK = "completed_with_fallback"
+    COMPLETED_WITH_OMISSIONS = "completed_with_omissions"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
     CANCELLED = "cancelled"
     FAILED = "failed"
 
@@ -445,6 +447,7 @@ class WorkflowDiagnosticEvent:
     error: WorkflowError = WorkflowError.NONE
     validation_status: ValidationStatus = ValidationStatus.NOT_PERFORMED
     selected_report_count: int | None = None
+    imported_report_count: int | None = None
     published_artifact_count: int | None = None
     duration_ms: int | None = None
 
@@ -917,6 +920,8 @@ _WORKFLOW_STAGES = {
 _WORKFLOW_TERMINAL_OUTCOMES = (
     WorkflowOutcome.COMPLETED,
     WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+    WorkflowOutcome.COMPLETED_WITH_OMISSIONS,
+    WorkflowOutcome.COMPLETED_WITH_WARNINGS,
     WorkflowOutcome.CANCELLED,
     WorkflowOutcome.FAILED,
 )
@@ -950,12 +955,24 @@ def _validate_workflow_state(event: WorkflowDiagnosticEvent) -> None:
         valid_outcome = event.outcome is WorkflowOutcome.MILESTONE
     if not valid_outcome:
         raise DiagnosticEventValidationError("inconsistent workflow outcome")
-    if event.outcome is WorkflowOutcome.COMPLETED_WITH_FALLBACK:
+    if event.outcome in (
+        WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+        WorkflowOutcome.COMPLETED_WITH_OMISSIONS,
+    ):
         if event.operation is not WorkflowOperation.LOCAL_EXPORT:
             raise DiagnosticEventValidationError("invalid workflow fallback")
+    if event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS:
+        if event.operation is not WorkflowOperation.SELECTED_IMPORT:
+            raise DiagnosticEventValidationError("invalid workflow warnings")
     failed = event.outcome is WorkflowOutcome.FAILED
-    if failed is (event.error is WorkflowError.NONE):
+    warnings = event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS
+    if (failed or warnings) is (event.error is WorkflowError.NONE):
         raise DiagnosticEventValidationError("inconsistent workflow error")
+    if warnings and event.error not in (
+        WorkflowError.INPUT_REJECTED,
+        WorkflowError.PROCESSING_FAILED,
+    ):
+        raise DiagnosticEventValidationError("invalid workflow warning")
     allowed_errors = {
         WorkflowOperation.SELECTED_IMPORT: (
             WorkflowError.NONE,
@@ -984,6 +1001,18 @@ def _validate_workflow_state(event: WorkflowDiagnosticEvent) -> None:
     if event.selected_report_count is not None:
         if event.operation is not WorkflowOperation.SELECTED_IMPORT:
             raise DiagnosticEventValidationError("invalid selected report count")
+    if event.imported_report_count is not None:
+        valid_imported_stage = (
+            event.operation is WorkflowOperation.SELECTED_IMPORT
+            and event.stage in (WorkflowStage.PERSISTENCE_COMPLETE, WorkflowStage.FINISHED)
+        )
+        if not valid_imported_stage:
+            raise DiagnosticEventValidationError("invalid imported report count")
+        if (
+            event.selected_report_count is not None
+            and event.imported_report_count > event.selected_report_count
+        ):
+            raise DiagnosticEventValidationError("inconsistent report counts")
     if event.published_artifact_count is not None:
         valid_artifact_stage = (
             event.operation is WorkflowOperation.LOCAL_EXPORT
@@ -1017,6 +1046,10 @@ def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
         event.published_artifact_count, 32
     ):
         raise DiagnosticEventValidationError("invalid published artifact count")
+    if event.imported_report_count is not None and not _bounded_integer(
+        event.imported_report_count, 10_000
+    ):
+        raise DiagnosticEventValidationError("invalid imported report count")
     if event.duration_ms is not None and not _bounded_integer(event.duration_ms, 86_400_000):
         raise DiagnosticEventValidationError("invalid workflow duration")
     _validate_workflow_state(event)
@@ -1029,6 +1062,7 @@ def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
         "error": error,
         "validation_status": validation_status,
         "selected_report_count": event.selected_report_count,
+        "imported_report_count": event.imported_report_count,
         "published_artifact_count": event.published_artifact_count,
         "duration_ms": event.duration_ms,
     }

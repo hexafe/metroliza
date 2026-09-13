@@ -154,6 +154,8 @@ class DiagnosticRing:
             return event.outcome in (
                 WorkflowOutcome.COMPLETED,
                 WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+                WorkflowOutcome.COMPLETED_WITH_OMISSIONS,
+                WorkflowOutcome.COMPLETED_WITH_WARNINGS,
                 WorkflowOutcome.CANCELLED,
                 WorkflowOutcome.FAILED,
             )

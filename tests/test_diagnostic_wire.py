@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 
+from metroliza.shared import diagnostic_events
 from metroliza.shared.diagnostic_events import (
     BuildPackager,
     DiagnosticOperation,
@@ -170,6 +171,51 @@ def test_workflow_completed_can_truthfully_leave_validation_not_performed() -> N
         "error",
         "validation_status",
         "selected_report_count",
+        "imported_report_count",
         "published_artifact_count",
         "duration_ms",
     }
+
+
+def test_export_omissions_are_distinct_from_fallback() -> None:
+    event = WorkflowDiagnosticEvent(
+        invocation_id=INVOCATION_ID,
+        operation_id=OPERATION_ID,
+        sequence=4,
+        operation=WorkflowOperation.LOCAL_EXPORT,
+        stage=WorkflowStage.FINISHED,
+        outcome=WorkflowOutcome.COMPLETED_WITH_OMISSIONS,
+    )
+
+    assert json.loads(encode_event(event))["outcome"] == "completed_with_omissions"
+
+
+def test_import_warnings_keep_closed_error_and_authoritative_counts() -> None:
+    event = WorkflowDiagnosticEvent(
+        invocation_id=INVOCATION_ID,
+        operation_id=OPERATION_ID,
+        sequence=4,
+        operation=WorkflowOperation.SELECTED_IMPORT,
+        stage=WorkflowStage.FINISHED,
+        outcome=WorkflowOutcome.COMPLETED_WITH_WARNINGS,
+        error=WorkflowError.PROCESSING_FAILED,
+        selected_report_count=5,
+        imported_report_count=3,
+    )
+
+    payload = json.loads(encode_event(event))
+    assert payload["outcome"] == "completed_with_warnings"
+    assert payload["imported_report_count"] == 3
+
+    with pytest.raises(diagnostic_events.DiagnosticEventValidationError):
+        WorkflowDiagnosticEvent(
+            invocation_id=INVOCATION_ID,
+            operation_id=OPERATION_ID,
+            sequence=5,
+            operation=WorkflowOperation.SELECTED_IMPORT,
+            stage=WorkflowStage.FINISHED,
+            outcome=WorkflowOutcome.COMPLETED_WITH_WARNINGS,
+            error=WorkflowError.INPUT_REJECTED,
+            selected_report_count=2,
+            imported_report_count=3,
+        )
