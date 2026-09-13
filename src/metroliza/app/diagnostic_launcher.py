@@ -208,12 +208,12 @@ class _OperationPublisher:
     def _finalize(self, observed: SupervisedResult | None) -> StoreStatus:
         if observed is None:
             return StoreStatus.IO_FAILED
+        if observed.needs_incident or _has_caught_failure(observed):
+            return persist_observation(self.store, observed, self.git_sha)
         if observed.launch == "started":
             self._ensure_begin()
             if observed.handshake == "accepted":
                 self._ensure_authenticated()
-        if observed.needs_incident or _has_caught_failure(observed):
-            return persist_observation(self.store, observed, self.git_sha)
         if self.authentication_status is StoreStatus.MARKER_AUTHENTICATED:
             return self.store.end_session(self.session_id, clean=True).status
         return self.authentication_status or self.marker_status or StoreStatus.IO_FAILED

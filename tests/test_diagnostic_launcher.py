@@ -215,6 +215,86 @@ def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(
     assert not publisher.worker.is_alive()
 
 
+@pytest.mark.parametrize("caught_failure", (False, True))
+def test_final_incident_skips_unnecessary_marker_retries(
+    tmp_path,
+    monkeypatch,
+    caught_failure,
+):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    store = IncidentStore(tmp_path / "state")
+    observed = _failed_history_observation() if caught_failure else _live_observation()
+    if caught_failure:
+        observed = replace(
+            observed,
+            channel="complete",
+            clean_terminal_received=True,
+            source_loss_known=True,
+            exit_code=0,
+            termination="observed_exit",
+        )
+
+    def unnecessary_marker_call(*_args, **_kwargs):
+        raise AssertionError("final incident must not create marker controls")
+
+    monkeypatch.setattr(store, "begin_session", unnecessary_marker_call)
+    monkeypatch.setattr(store, "authenticate_session", unnecessary_marker_call)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+
+    started = time.monotonic()
+    assert publisher.close(observed) is StoreStatus.SAVED
+    assert time.monotonic() - started < 0.75
+    reports = store.list_reports().reports
+    assert len(reports) == 1
+    assert store.load(reports[0].report_id).incident.session_id.hex == observed.session_id
+    assert store.list_unclean_sessions().sessions == ()
+
+
+def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, monkeypatch):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    store = IncidentStore(tmp_path / "state")
+    observed = replace(_live_observation(), termination="observed_exit", exit_code=9)
+    begin_entered, release_begin = threading.Event(), threading.Event()
+    sequence = []
+    original_begin = store.begin_session
+    original_publish = store.publish
+
+    def held_begin(*args, **kwargs):
+        sequence.append("begin_entered")
+        begin_entered.set()
+        release_begin.wait(2)
+        result = original_begin(*args, **kwargs)
+        sequence.append("begin_finished")
+        return result
+
+    def recorded_publish(incident):
+        sequence.append("publish")
+        return original_publish(incident)
+
+    monkeypatch.setattr(store, "begin_session", held_begin)
+    monkeypatch.setattr(store, "publish", recorded_publish)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    assert publisher.begin()
+    assert begin_entered.wait(1)
+    statuses = []
+    closer = threading.Thread(target=lambda: statuses.append(publisher.close(observed)))
+    closer.start()
+    try:
+        release_begin.set()
+        closer.join(2)
+    finally:
+        release_begin.set()
+        closer.join(2)
+
+    assert statuses == [StoreStatus.SAVED]
+    assert sequence == ["begin_entered", "begin_finished", "publish"]
+    assert store.list_unclean_sessions().sessions == ()
+
+
 @pytest.mark.parametrize(
     ("method", "scenario", "expected_exit"),
     (("begin_session", "normal", 0), ("publish", "hard_exit", 9), ("end_session", "normal", 0)),
