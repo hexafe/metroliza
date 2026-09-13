@@ -133,6 +133,24 @@ def _needs_attention(item: ParseFilePreflight) -> bool:
     )
 
 
+def _coalesced_row_ranges(rows: Iterable[int]) -> tuple[tuple[int, int], ...]:
+    """Return adjacent model rows as minimal inclusive repaint ranges."""
+
+    ordered_rows = tuple(sorted(rows))
+    if not ordered_rows:
+        return ()
+    ranges: list[tuple[int, int]] = []
+    first = last = ordered_rows[0]
+    for row in ordered_rows[1:]:
+        if row == last + 1:
+            last = row
+            continue
+        ranges.append((first, last))
+        first = last = row
+    ranges.append((first, last))
+    return tuple(ranges)
+
+
 class ReportPlannerModel(QAbstractTableModel):
     """One persistent table model over the latest parser preflight result."""
 
@@ -159,7 +177,10 @@ class ReportPlannerModel(QAbstractTableModel):
         super().__init__(parent)
         self._review: ParsePreflightResult | None = None
         self._selected_occurrence_ids: set[str] = set()
-        self._selectable_occurrence_ids: set[str] = set()
+        self._selectable_occurrence_ids: frozenset[str] = frozenset()
+        self._ready_count = 0
+        self._attention_count = 0
+        self._total_count = 0
         self._valid = False
 
     @property
@@ -181,6 +202,18 @@ class ReportPlannerModel(QAbstractTableModel):
         )
 
     @property
+    def selected_count(self) -> int:
+        """Return the current selected count without walking review rows."""
+
+        return len(self._selected_occurrence_ids)
+
+    @property
+    def selectable_ids(self) -> frozenset[str]:
+        """Return immutable cached READY IDs eligible for review selection."""
+
+        return self._selectable_occurrence_ids if self.valid else frozenset()
+
+    @property
     def parser_ids(self) -> tuple[str, ...]:
         """Safe parser identifiers available for presentation filters."""
 
@@ -192,16 +225,13 @@ class ReportPlannerModel(QAbstractTableModel):
     def counts(self) -> dict[str, int]:
         """Return review counts independent of proxy filtering or sorting."""
 
-        files = self._review.files if self.valid else ()
-        ready = sum(item.status is ParsePreflightStatus.READY for item in files)
-        attention = sum(_needs_attention(item) for item in files)
-        selected = len(self.selected_ids)
+        selected = self.selected_count
         return {
             "selected": selected,
-            "ready": ready,
-            "excluded": len(files) - selected,
-            "attention": attention,
-            "total": len(files),
+            "ready": self._ready_count,
+            "excluded": self._total_count - selected,
+            "attention": self._attention_count,
+            "total": self._total_count,
         }
 
     def set_review(self, result: ParsePreflightResult) -> None:
@@ -212,7 +242,7 @@ class ReportPlannerModel(QAbstractTableModel):
         self.beginResetModel()
         self._review = result
         self._valid = not result.cancelled
-        self._selectable_occurrence_ids = self._calculate_selectable_ids() if self._valid else set()
+        self._cache_review_summary()
         self._selected_occurrence_ids = set(self._selectable_occurrence_ids)
         self.endResetModel()
         self.selection_changed.emit()
@@ -227,7 +257,10 @@ class ReportPlannerModel(QAbstractTableModel):
         self._review = None
         self._valid = False
         self._selected_occurrence_ids.clear()
-        self._selectable_occurrence_ids.clear()
+        self._selectable_occurrence_ids = frozenset()
+        self._ready_count = 0
+        self._attention_count = 0
+        self._total_count = 0
         if had_review:
             self.endResetModel()
         if had_selection:
@@ -354,15 +387,12 @@ class ReportPlannerModel(QAbstractTableModel):
         ):
             return False
         checked = value == Qt.CheckState.Checked or value == int(Qt.CheckState.Checked.value)
-        selected = set(self._selected_occurrence_ids)
-        if checked:
-            selected.add(item.stable_occurrence_id)
-        else:
-            selected.discard(item.stable_occurrence_id)
-        self._replace_selection(selected)
+        self._set_selected(item.stable_occurrence_id, checked, index.row())
         return True
 
     def _replace_selection(self, selected_ids: Iterable[str]) -> None:
+        """Apply a bulk selection and repaint only rows whose state changed."""
+
         selected = set(selected_ids)
         if not self.valid:
             selected.clear()
@@ -370,12 +400,41 @@ class ReportPlannerModel(QAbstractTableModel):
             selected.intersection_update(self._selectable_occurrence_ids)
         if selected == self._selected_occurrence_ids:
             return
+        changed_ids = selected.symmetric_difference(self._selected_occurrence_ids)
         self._selected_occurrence_ids = selected
-        if self.rowCount():
-            top_left = self.index(0, self.CHECKBOX_COLUMN)
-            bottom_right = self.index(self.rowCount() - 1, self.CHECKBOX_COLUMN)
-            self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.CheckStateRole])
+        self._emit_checkbox_changes_for_ids(changed_ids)
         self.selection_changed.emit()
+
+    def _set_selected(self, occurrence_id: str, checked: bool, row: int) -> None:
+        """Toggle one known selectable ID in place and repaint its exact row."""
+
+        is_selected = occurrence_id in self._selected_occurrence_ids
+        if is_selected == checked:
+            return
+        if checked:
+            self._selected_occurrence_ids.add(occurrence_id)
+        else:
+            self._selected_occurrence_ids.remove(occurrence_id)
+        self._emit_checkbox_ranges(((row, row),))
+        self.selection_changed.emit()
+
+    def _emit_checkbox_changes_for_ids(self, changed_ids: set[str]) -> None:
+        if not changed_ids or not self.valid:
+            return
+        changed_rows = (
+            row
+            for row, item in enumerate(self._review.files)
+            if item.stable_occurrence_id in changed_ids
+        )
+        self._emit_checkbox_ranges(_coalesced_row_ranges(changed_rows))
+
+    def _emit_checkbox_ranges(self, ranges: Iterable[tuple[int, int]]) -> None:
+        for first_row, last_row in ranges:
+            self.dataChanged.emit(
+                self.index(first_row, self.CHECKBOX_COLUMN),
+                self.index(last_row, self.CHECKBOX_COLUMN),
+                [Qt.ItemDataRole.CheckStateRole],
+            )
 
     @staticmethod
     def _display_value(item: ParseFilePreflight, column: int) -> str:
@@ -396,18 +455,30 @@ class ReportPlannerModel(QAbstractTableModel):
             return detail
         return ""
 
-    def _calculate_selectable_ids(self) -> set[str]:
+    def _cache_review_summary(self) -> None:
+        """Calculate immutable review-wide facts once, when the review is replaced."""
+
+        self._ready_count = 0
+        self._attention_count = 0
+        self._total_count = 0
+        self._selectable_occurrence_ids = frozenset()
         if not self.valid:
-            return set()
+            return
+
         occurrence_counts: dict[str, int] = {}
         for item in self._review.files:
+            self._total_count += 1
+            if item.status is ParsePreflightStatus.READY:
+                self._ready_count += 1
+            if _needs_attention(item):
+                self._attention_count += 1
             occurrence_id = item.stable_occurrence_id
             occurrence_counts[occurrence_id] = occurrence_counts.get(occurrence_id, 0) + 1
-        return {
+        self._selectable_occurrence_ids = frozenset(
             item.stable_occurrence_id
             for item in self._review.files
             if self._is_selectable(item, occurrence_counts=occurrence_counts)
-        }
+        )
 
     def _is_current_item_selectable(self, item: ParseFilePreflight | None) -> bool:
         return item is not None and item.stable_occurrence_id in self._selectable_occurrence_ids

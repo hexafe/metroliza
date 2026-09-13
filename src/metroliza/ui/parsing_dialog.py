@@ -322,6 +322,8 @@ class ParsingDialog(QDialog):
         self._preflight_result = None
         self._preflight_error_detail = ""
         self._review_status = ""
+        self._approval_cache_key = None
+        self._approval_cache = (False, False, "")
         self._close_requested = False
 
         # Initialize the widgets
@@ -518,17 +520,12 @@ class ParsingDialog(QDialog):
     def _sync_readiness_state(self, *, refresh_registry=False):
         inputs_ready = bool(self.directory and self.db_file)
         busy = self.preflight_thread is not None or self.parse_thread is not None
-        current = inputs_ready and self._preflight_is_current()
-        selected = self.report_planner.model.selected_ids
-        eligible = {
-            item.stable_occurrence_id
-            for item in self._atomic_import_candidates(refresh_registry=refresh_registry)
-        }
-        if current and selected and not set(selected).issubset(eligible):
+        current, selectable_approved, summary = self._review_approval(refresh_registry=refresh_registry)
+        count = self.report_planner.model.selected_count
+        if current and count and not selectable_approved:
             self._invalidate_preflight("Changed since review. Review reports again before importing.")
             return self._sync_readiness_state()
-        approved = current and bool(selected) and set(selected).issubset(eligible)
-        count = len(selected)
+        approved = current and bool(count) and selectable_approved
         caption = f"Import {count} selected report{'s' if count != 1 else ''}"
         self.parse_button.setText(caption)
         self.parse_button.setAccessibleName(caption)
@@ -543,12 +540,10 @@ class ParsingDialog(QDialog):
         self.review_scan_button.setEnabled(bool(self._preflight_result))
         if busy:
             message = "Report operation in progress. Use Cancel in the progress window."
-        elif current and selected and not approved:
-            message = "Changed since review. Refresh review before importing."
         elif current:
-            ready = self._preflight_result.status_counts[ParsePreflightStatus.READY]
+            ready = self.report_planner.model.counts["ready"]
             message = f"Review complete: {ready} ready. No database changes were made."
-            if not selected:
+            if not count:
                 message += " Select ready reports to enable import."
         elif self._review_status:
             message = self._review_status
@@ -560,9 +555,7 @@ class ParsingDialog(QDialog):
             message = "Select a source and database to review reports."
         self.readiness_label.setText(message)
         self.readiness_label.setAccessibleDescription(message)
-        self.readiness_label.setToolTip(
-            self._preflight_summary_text(self._preflight_result) if current else message
-        )
+        self.readiness_label.setToolTip(summary if current else message)
         self.parse_button.setToolTip(
             f"Import exactly {count} selected reports, including selected rows hidden by filters."
             if approved and not busy else message
@@ -575,20 +568,31 @@ class ParsingDialog(QDialog):
             quiet=(self.review_scan_button,),
         )
 
-    def _atomic_import_candidates(self, *, refresh_registry=False):
+    def _review_approval(self, *, refresh_registry=False):
+        """Cache immutable review approval; selection edits only change the count."""
         if self._preflight_result is None:
-            return ()
+            return False, False, ""
         metadata_mode, _background, _modeless = self._build_parse_request_fields()
-        return self._preflight_result.atomic_import_candidates(
+        # Always refresh at the import boundary, before consulting the cache.
+        generation = report_parser_factory.get_registry_snapshot(refresh=refresh_registry).generation_id
+        key = (id(self._preflight_result), self.directory, self.db_file, metadata_mode, generation)
+        if key == self._approval_cache_key:
+            return self._approval_cache
+        current = self._preflight_is_current()
+        eligible = self._preflight_result.atomic_import_candidates(
             source_path=self.directory,
             database_path=self.db_file,
             metadata_parsing_mode=metadata_mode,
-            # Checkbox edits use the published generation without filesystem
-            # hashing; the import boundary below explicitly refreshes approval.
-            registry_generation_id=report_parser_factory.get_registry_snapshot(
-                refresh=refresh_registry,
-            ).generation_id,
+            registry_generation_id=generation,
         )
+        # The model restricts every selection to these immutable READY IDs.
+        approved = self.report_planner.model.selectable_ids.issubset(
+            item.stable_occurrence_id for item in eligible
+        )
+        summary = self._preflight_summary_text(self._preflight_result) if current else ""
+        self._approval_cache_key = key
+        self._approval_cache = (current, approved, summary)
+        return self._approval_cache
 
     def _preflight_is_current(self):
         if not self.directory or not self.db_file:
@@ -613,8 +617,14 @@ class ParsingDialog(QDialog):
             f"{counts[ParsePreflightStatus.UNREADABLE]} unreadable."
         )
 
-    def _invalidate_preflight(self, reason="Review invalidated. Review reports again before importing."):
+    def _invalidate_preflight(self, reason=None):
+        if reason is None:
+            reason = (
+                "Review invalidated. Review reports again before importing."
+                if self._preflight_result is not None else ""
+            )
         self._preflight_result = None
+        self._approval_cache_key = None
         self._preflight_error_detail = ""
         self._review_status = reason
         self.report_planner.invalidate()

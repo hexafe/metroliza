@@ -124,6 +124,50 @@ def test_empty_selection_never_starts_worker_or_writes(reviewed):
     assert not database.exists()
 
 
+def test_first_input_selection_gives_neutral_next_action_guidance(app, reports, monkeypatch):
+    source, database = reports
+    dialog = ParsingDialog()
+    try:
+        dialog._set_parse_source(str(source))
+        assert "Select or create a database" in dialog.readiness_label.text()
+        monkeypatch.setattr(
+            "metroliza.ui.parsing_dialog.QFileDialog.getSaveFileName",
+            lambda *_args: (str(database.with_suffix(".db")), ""),
+        )
+        dialog.select_database()
+        assert "Ready to review" in dialog.readiness_label.text()
+        dialog.metadata_mode_combo.setCurrentIndex(1)
+        assert "Ready to review" in dialog.readiness_label.text()
+        assert "invalidated" not in dialog.readiness_label.text()
+        assert dialog.preflight_thread is None and dialog.parse_thread is None
+        assert not Path(dialog.db_file).exists()
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
+def test_selection_does_not_recompute_immutable_review_approval(reviewed, monkeypatch):
+    from metroliza.parsing.preflight import ParsePreflightResult
+
+    dialog, _source, _database = reviewed
+
+    approval_calls = []
+    original_approval = ParsePreflightResult.atomic_import_candidates
+
+    def track_full_approval(*args, **kwargs):
+        approval_calls.append(True)
+        return original_approval(*args, **kwargs)
+
+    monkeypatch.setattr(ParsePreflightResult, "atomic_import_candidates", track_full_approval)
+    planner = dialog.report_planner
+    planner.clear.click()
+    planner.model.setData(planner.model.index(3, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+    planner.search.setText("report-0")
+    assert approval_calls == [], "Checkbox edits must not recompute every reviewed row"
+    assert dialog.parse_button.isEnabled()
+    assert dialog.parse_button.text() == "Import 1 selected report"
+
+
 @pytest.mark.parametrize("stage", ["review", "import"])
 def test_worker_start_failure_releases_busy_state_and_allows_retry(app, reviewed, monkeypatch, stage):
     from metroliza.ui import parsing_dialog

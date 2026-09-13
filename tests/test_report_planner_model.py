@@ -186,6 +186,8 @@ def test_invalidate_drops_review_and_selection():
     assert not model.valid
     assert model.rowCount() == 0
     assert model.selected_ids == ()
+    assert model.selected_count == 0
+    assert model.selectable_ids == frozenset()
     assert model.counts == {
         "selected": 0, "ready": 0, "excluded": 0, "attention": 0, "total": 0,
     }
@@ -292,3 +294,102 @@ def test_reason_sanitizer_keeps_known_cmm_and_factory_codes_without_raw_exceptio
     assert "review_warning" in rendered
     assert "/private/report.pdf" not in rendered
     assert "secret content" not in rendered
+
+
+def test_checkbox_toggle_updates_one_row_in_place_and_noop_emits_nothing():
+    from metroliza.ui.report_planner_model import ReportPlannerModel
+
+    model = ReportPlannerModel()
+    model.set_review(_review())
+    selection_set_id = id(model._selected_occurrence_ids)
+    changes = []
+    selections = []
+    model.dataChanged.connect(
+        lambda top_left, bottom_right, roles: changes.append(
+            (
+                top_left.row(),
+                bottom_right.row(),
+                tuple(int(role) for role in roles),
+            )
+        )
+    )
+    model.selection_changed.connect(lambda: selections.append(model.selected_count))
+
+    index = model.index(0, model.CHECKBOX_COLUMN)
+    assert model.setData(index, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+    assert id(model._selected_occurrence_ids) == selection_set_id
+    assert model.selected_count == 0
+    assert model.selected_ids == ()
+    assert model.counts == {
+        "selected": 0, "ready": 1, "excluded": 3, "attention": 3, "total": 3,
+    }
+    assert changes == [(0, 0, (Qt.ItemDataRole.CheckStateRole.value,))]
+    assert selections == [0]
+
+    assert model.setData(index, Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+    assert id(model._selected_occurrence_ids) == selection_set_id
+    assert changes == [(0, 0, (Qt.ItemDataRole.CheckStateRole.value,))]
+    assert selections == [0]
+
+
+def test_bulk_selection_repaints_actual_changed_range_and_keeps_cached_counts():
+    from dataclasses import replace
+
+    from metroliza.parsing.preflight import ParsePreflightStatus
+    from metroliza.ui.report_planner_model import ReportPlannerModel
+
+    review = _review()
+    all_ready = replace(
+        review,
+        files=tuple(
+            replace(
+                item,
+                status=ParsePreflightStatus.READY,
+                fingerprint=item.fingerprint or f"sha256:{index:x}".ljust(71, "0"),
+                registry_generation_id=1,
+            )
+            for index, item in enumerate(review.files)
+        ),
+    )
+    model = ReportPlannerModel()
+    model.set_review(all_ready)
+    changes = []
+    selections = []
+    model.dataChanged.connect(
+        lambda top_left, bottom_right, roles: changes.append(
+            (top_left.row(), bottom_right.row(), tuple(int(role) for role in roles))
+        )
+    )
+    model.selection_changed.connect(lambda: selections.append(model.selected_count))
+
+    assert isinstance(model.selectable_ids, frozenset)
+    assert model.selectable_ids == frozenset(item.stable_occurrence_id for item in all_ready.files)
+    assert model.selected_ids == tuple(item.stable_occurrence_id for item in all_ready.files)
+    assert model.selected_count == 3
+    assert model.counts == {
+        "selected": 3, "ready": 3, "excluded": 0, "attention": 1, "total": 3,
+    }
+
+    model.clear_selection()
+    assert model.selected_count == 0
+    assert model.counts == {
+        "selected": 0, "ready": 3, "excluded": 3, "attention": 1, "total": 3,
+    }
+    assert changes == [(0, 2, (Qt.ItemDataRole.CheckStateRole.value,))]
+    assert selections == [0]
+
+    model.clear_selection()
+    assert changes == [(0, 2, (Qt.ItemDataRole.CheckStateRole.value,))]
+    assert selections == [0]
+
+    model.select_all_ready()
+    assert model.selected_count == 3
+    assert changes == [
+        (0, 2, (Qt.ItemDataRole.CheckStateRole.value,)),
+        (0, 2, (Qt.ItemDataRole.CheckStateRole.value,)),
+    ]
+    assert selections == [0, 3]
+
+    model.select_all_ready()
+    assert len(changes) == 2
+    assert selections == [0, 3]

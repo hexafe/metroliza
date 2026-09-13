@@ -859,6 +859,8 @@ def test_duplicate_only_compatibility_adapter_dispatches_atomic_verification(tmp
         assert completed.returncode == 0, completed.stdout + completed.stderr
         return
 
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
     from PyQt6.QtTest import QTest
     from metroliza.parsing.parse_reports_thread import ParseReportsThread
     from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
@@ -954,8 +956,19 @@ def test_duplicate_only_compatibility_adapter_dispatches_atomic_verification(tmp
         assert snapshots[0] == snapshots[1]
     finally:
         for worker in workers:
-            worker.wait(15000)
+            assert worker.wait(15000)
+        # Deliver queued finished callbacks and destroy the widget tree while
+        # QApplication is still owned. close() only hides this dialog, so it
+        # does not establish widget destruction before application teardown.
+        app.processEvents()
+        assert dialog.parse_thread is None
         dialog.close()
+        dialog.deleteLater()
+        for worker in workers:
+            worker.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(dialog)
+        assert all(sip.isdeleted(worker) for worker in workers)
 
 
 @pytest.mark.parametrize("case,expected", [
