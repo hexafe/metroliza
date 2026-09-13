@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+import json
 import time
 import uuid
 import zipfile
@@ -20,6 +22,8 @@ from metroliza.shared.diagnostic_events import (
     WorkflowStage,
 )
 from metroliza.shared.diagnostic_incident import (
+    MAX_COUNTER,
+    MAX_ELAPSED_MS,
     ChannelState,
     HandshakeState,
     IncidentObservation,
@@ -29,7 +33,8 @@ from metroliza.shared.diagnostic_incident import (
 )
 from metroliza.shared.diagnostic_ring import LOSS_ACCOUNTING_BYTES, RingLoss, RingSnapshot
 from metroliza.shared.diagnostic_store import IncidentStore, StoreResult, StoreStatus
-from metroliza.shared.diagnostic_wire import encode_event
+from metroliza.shared.diagnostic_transport import ChildRecorder
+from metroliza.shared.diagnostic_wire import decode_event, encode_event
 from metroliza.ui.incident_dialog import IncidentDialog, open_incident_viewer
 
 
@@ -105,6 +110,47 @@ def test_viewer_lists_and_renders_only_closed_safe_summary(tmp_path) -> None:
     assert "local_export" not in preview
     assert str(store.root) not in preview
     assert "{" not in preview
+    dialog.close()
+
+
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+def test_saturated_values_are_lower_bounds_in_preview_and_selected_export(tmp_path, offset):
+    _app()
+    original = _incident()
+    elapsed = min(MAX_ELAPSED_MS, MAX_ELAPSED_MS + offset)
+    event = encode_event(dataclasses.replace(decode_event(original.events[0]), duration_ms=elapsed))
+    recorder = ChildRecorder(-1, -1)
+    recorder.dropped = min(MAX_COUNTER, MAX_COUNTER + offset - 1)
+    assert not recorder.enqueue_bytes(event)
+    assert recorder.dropped == min(MAX_COUNTER, MAX_COUNTER + offset)
+    incident = build_incident(
+        report_id=REPORT_ID,
+        session_id=SESSION_ID,
+        created_at_ms=original.created_at_ms,
+        build_git_sha=original.build_git_sha,
+        observation=dataclasses.replace(
+            original.observation,
+            channel=ChannelState.LOSS_OBSERVED,
+            source_dropped=recorder.dropped,
+            elapsed_ms=elapsed,
+        ),
+        history=RingSnapshot((event,), RingLoss(), len(event) + LOSS_ACCOUNTING_BYTES),
+    )
+    store = IncidentStore(tmp_path / "diagnostics")
+    assert store.publish(incident).status is StoreStatus.SAVED
+    dialog = IncidentDialog(store=store)
+    preview = dialog.preview.toPlainText()
+    qualifier = "At least " if offset >= 0 else ""
+    assert f"Elapsed: {qualifier}{elapsed} ms" in preview
+    assert f"Workflow duration: {qualifier}{elapsed} ms" in preview
+    assert f"Source queue drops: {qualifier}{recorder.dropped}" in preview
+    destination = tmp_path / "selected.zip"
+    assert store.export(REPORT_ID, destination).status is StoreStatus.EXPORTED
+    with zipfile.ZipFile(destination) as archive:
+        payload = json.loads(archive.read("incident.json"))
+    assert payload["observation"]["source_dropped"] == recorder.dropped
+    assert payload["observation"]["elapsed_ms"] == elapsed
+    assert payload["events"][0]["duration_ms"] == elapsed
     dialog.close()
 
 

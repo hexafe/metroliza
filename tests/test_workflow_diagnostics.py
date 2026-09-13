@@ -59,6 +59,19 @@ def test_emission_failure_never_replaces_the_product_result(monkeypatch):
     assert trace.finish_export(completed=True, cancelled=False) is None
 
 
+@pytest.mark.parametrize("duration", [86_399_999, 86_400_000, 86_400_001])
+def test_real_terminal_producer_preserves_v1_duration_ceiling(events, monkeypatch, duration):
+    from metroliza.shared import workflow_diagnostics
+
+    clock = SimpleNamespace(value=0.0)
+    monkeypatch.setattr(workflow_diagnostics, "time", SimpleNamespace(monotonic=lambda: clock.value))
+    trace = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
+    clock.value = duration / 1000
+    trace.finish_export(completed=True, cancelled=False)
+    assert events()[-1]["duration_ms"] == min(duration, 86_400_000)
+    assert events()[-1]["outcome"] == "completed"
+
+
 @pytest.mark.parametrize("scenario,expected", [("normal", 0), ("hard_exit", 9)])
 def test_real_selected_import_and_local_export_survive_child_loss(tmp_path, scenario, expected):
     script = Path(__file__).parent / "fixtures" / "diagnostic_workflow_child.py"

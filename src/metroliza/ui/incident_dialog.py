@@ -36,6 +36,8 @@ from metroliza.shared.diagnostic_events import (
     WorkflowStage,
 )
 from metroliza.shared.diagnostic_incident import (
+    MAX_COUNTER,
+    MAX_ELAPSED_MS,
     ChannelState,
     DiagnosticIncident,
     HandshakeState,
@@ -335,11 +337,15 @@ class IncidentDialog(QDialog):
                     else str(observation.exit_code)
                 )
             ),
-            self.tr("Elapsed: {count} ms").format(count=observation.elapsed_ms),
+            self.tr("Elapsed: {count} ms").format(
+                count=self._bounded_count(observation.elapsed_ms, MAX_ELAPSED_MS)
+            ),
             self.tr("Clean terminal record: {value}").format(
                 value=self.tr("Yes") if observation.clean_terminal_received else self.tr("No")
             ),
-            self.tr("Source queue drops: {count}").format(count=observation.source_dropped),
+            self.tr("Source queue drops: {count}").format(
+                count=self._bounded_count(observation.source_dropped, MAX_COUNTER)
+            ),
             self.tr("Source loss known: {value}").format(
                 value=self.tr("Yes") if observation.source_loss_known else self.tr("No")
             ),
@@ -349,6 +355,11 @@ class IncidentDialog(QDialog):
         lines.extend(("", self.tr("Native stack: Unavailable")))
         lines.extend(("", *self._latest_event_lines(event_objects)))
         return "\n".join(lines)
+
+    def _bounded_count(self, value: int, maximum: int) -> str:
+        # V1 reserves each timing/source-loss ceiling as a lower bound. The
+        # same interpretation applies to the raw values in the selected export.
+        return self.tr("At least {count}").format(count=value) if value >= maximum else str(value)
 
     def _history_lines(
         self,
@@ -420,7 +431,7 @@ class IncidentDialog(QDialog):
             if workflow.duration_ms is not None:
                 lines.append(
                     self.tr("Workflow duration: {count} ms").format(
-                        count=workflow.duration_ms
+                        count=self._bounded_count(workflow.duration_ms, MAX_ELAPSED_MS)
                     )
                 )
             return lines

@@ -18,6 +18,8 @@ The manifest is build provenance and consistency evidence, not a cryptographic s
 The supervisor retains the `Popen` identity of its launched child. Two anonymous inherited pipes
 carry a fresh session ID and challenge/response token; Windows uses an explicit handle inheritance
 list. There is no listener, service, executable search through PATH or automatic restart.
+Windows spawning temporarily clears the launcher's DLL search directory and restores it in a
+serialized `finally` path, so the adjacent application bootloader initializes its own runtime.
 Only approved canonical event bytes enter the queue and recorder. Raw stdout and stderr go to
 the OS null sink, including no-console execution. No global Qt exception hook is installed.
 
@@ -31,13 +33,14 @@ the OS null sink, including no-console execution. No global Qt exception hook is
 | Ring | 2000 events / 2 MiB encoded accounting / 300 seconds, first limit wins |
 | Ring terminal/control reserve | 32 events / 64 KiB inside ring totals; loss accounting also inside totals |
 | Operation state | 128 tracked operations; bounded sequence and saturating loss counters |
-| Live incident publisher | One writing and one pending immutable snapshot; each retains at most the ring cap |
+| Store worker | One daemon; two lifecycle controls, one pending live snapshot and one reserved final snapshot |
 | Local reports | 20 reports / 32 MiB including staging / 14 days; report envelope at most 3 MiB |
 | Directory scan / markers | 256 entries / 32 markers |
-| Store lock / shutdown | 0.25-second lock attempt; publisher cancels retries on close and joins at most 0.75 seconds |
+| Store lock / shutdown | 0.25-second lock attempt; caller waits at most 0.75 seconds on worker close |
 
 Encoded caps are not actual RSS. Snapshots share immutable event bytes, but retaining a writing
-and pending snapshot can keep up to two additional ring-sized histories alive. RSS, startup,
+and pending snapshot can keep up to two additional ring-sized histories alive. Final admission
+supersedes pending live history, preserving this bound. RSS, startup,
 idle writes, flood/drop behavior and publication intervals are measured separately by the Windows driver.
 
 Queue admission never waits for disk, UI or pipe writes. A full queue records bounded drops.
@@ -46,8 +49,12 @@ claiming an exact zero. Partial, wrong-session, malformed, flooded and broken ch
 produce a complete-history claim. A receiver may outlive its bounded drain as a daemon when an
 inherited handle is retained; its stop flag prevents later frames from changing the returned snapshot.
 
-An actual failed workflow triggers a separate bounded publisher while the app continues. Transient
-store-lock failures are retried only on that publisher. A filesystem call still outstanding after
+One bounded worker owns all marker, incident and resolution filesystem calls. The application
+process is created before marker admission; handshake callbacks only enqueue lifecycle controls.
+An actual failed workflow admits live publication while the app continues. Transient
+store-lock failures are retried only on the worker. Publication backlog is not relabeled as
+channel/event loss. Retained failed workflow history has a reserved final publication path.
+A filesystem call still outstanding after
 the close budget returns `publish_incomplete`, whose final persistence outcome is unknown. It is
 never relabeled as saved or failed. The normal process outcome remains independent of storage.
 
@@ -57,11 +64,23 @@ and incomplete history. Numeric exit 139 alone never means SIGSEGV; no status es
 rollback or native root cause. Domain validation remains `not_performed` unless an actual approved
 validator supplied a result. V1 native stacks are unavailable.
 
+V1 timing values reserve `86400000` milliseconds as a lower bound; source queue losses reserve
+`4294967295` as a lower bound. The viewer displays these ceilings as "At least", including a
+measurement exactly at the ceiling. Lower values remain exact bounded observations. This is also
+the interpretation of `elapsed_ms`, workflow `duration_ms` and `source_dropped` in exported V1
+`incident.json`; the schema does not imply exactness at the ceiling. Ring loss has its separate
+`counters_saturated` flag. Unquantified source loss remains explicitly unknown.
+
 The store uses private application state, bounded nonrecursive retention, exclusive staging,
 validated atomic publication and identity checks. Missing user-state configuration is unavailable;
 it never selects CWD as a fallback. PID/start identity checks keep stale/unclean markers conservative.
 An absent clean marker is not proof of an application crash. Quota/publication failures preserve
 previous complete reports; no automatic repair, re-import, replay or process-kill policy exists.
+Validated inactive clean markers expire after 14 days; active or unknown identities are retained.
+Windows publication uses an atomic no-replace rename. POSIX store recovery removes only an exact
+generated staging alias paired with its unchanged complete final inode under the store lock.
+An uncatchable POSIX export interruption can leave such a same-content hidden alias beside the
+chosen export outside managed retention; no scan or deletion of user directories is attempted.
 
 ## Logging migration, preview and rollback
 
@@ -91,6 +110,12 @@ The controlled hard exit belongs only to that synthetic test scenario.
 The bounded owner-only Windows lane builds with normal `build_windows_exe.ps1 -Mode onedir` tooling,
 checks artifact/provenance/notices, launches restricted ordinary-user processes without development
 Python on their PATH, and exercises the complete package from a path with spaces/non-ASCII text.
+The driver records the complete bounded package tree and binds its canonical manifest and exact
+development ZIP by SHA-256. CI uploads that validated ZIP. Startup readiness is measured before
+workflows, with matched direct/supervised startup and process-tree RSS samples and idle write
+controls. Flood loss, incident latency, process roles, concurrent sessions and actual main-window
+startup are separate checks. Exact Windows/build/tool versions accompany the measurements;
+operational cost is explicitly `within_budget` or `unresolved` against recorded thresholds.
 Its receipts are necessary package evidence. Source mocks or native source pytest alone do not
 establish that result. Current full CI, Qt19, independent exact-head audit, configured review and
 the Ready-triggered review remain separate gates. Final operational composition and release/real-data

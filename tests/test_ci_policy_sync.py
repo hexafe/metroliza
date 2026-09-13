@@ -582,6 +582,15 @@ def test_windows_incident_qualification_is_bounded_and_native_selection_is_block
     runs = '\n'.join(step.get('run', '') for step in job['steps'])
     assert '.\\build_windows_exe.ps1 -Mode onedir' in runs
     assert 'scripts/qualify_windows_diagnostics.py' in runs
+    uploads = [step for step in job['steps']
+               if step.get('uses', '').startswith('actions/upload-artifact@')]
+    assert {step['with']['path'] for step in uploads} == {
+        'diagnostic-qualification-receipts/*.json',
+        'diagnostic-qualification-receipts/qualified-windows-development-package.zip',
+    }
+    package_upload = next(step for step in uploads if step['with']['path'].endswith('.zip'))
+    assert 'if' not in package_upload  # A failed qualification cannot publish a package.
+    assert package_upload['with']['if-no-files-found'] == 'error'
     selected = [step for step in workflow['jobs']['windows-core-smoke']['steps']
                 if step['name'] == 'Run native Windows supervised incident tests']
     assert len(selected) == 1
