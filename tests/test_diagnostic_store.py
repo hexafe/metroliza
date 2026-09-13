@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -75,6 +76,68 @@ def _incident(
     )
 
 
+def _windows_dacl_sddl(path) -> str:
+    import ctypes
+    from ctypes import wintypes
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    get_security = advapi.GetNamedSecurityInfoW
+    get_security.argtypes = [
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    get_security.restype = wintypes.DWORD
+    convert = advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW
+    convert.argtypes = [
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPWSTR),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    convert.restype = wintypes.BOOL
+    descriptor = ctypes.c_void_p()
+    status = get_security(str(path), 1, 0x00000004, None, None, None, None,
+                          ctypes.byref(descriptor))
+    assert status == 0
+    string = wintypes.LPWSTR()
+    length = wintypes.DWORD()
+    try:
+        assert convert(descriptor, 1, 0x00000004, ctypes.byref(string), ctypes.byref(length))
+        return string.value
+    finally:
+        local_free = ctypes.WinDLL("kernel32", use_last_error=True).LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        if string:
+            local_free(ctypes.cast(string, ctypes.c_void_p))
+        if descriptor:
+            local_free(descriptor)
+
+
+def _assert_windows_private_dacl(path, *, protected: bool, inherited: bool) -> None:
+    sddl = _windows_dacl_sddl(path)
+    control = sddl.split("(", 1)[0]
+    assert ("P" in control) is protected
+    entries = [entry.split(";") for entry in re.findall(r"\(([^)]*)\)", sddl)]
+    assert len(entries) == 2
+    assert all(len(entry) == 6 for entry in entries)
+    assert all(entry[0] == "A" and entry[2] == "FA" for entry in entries)
+    trustees = {"S-1-5-18" if entry[5] == "SY" else entry[5] for entry in entries}
+    trustees = {"S-1-3-4" if trustee == "OW" else trustee for trustee in trustees}
+    assert trustees == {"S-1-5-18", "S-1-3-4"}
+    if inherited:
+        assert all("ID" in entry[1] for entry in entries)
+    else:
+        assert all("OI" in entry[1] and "CI" in entry[1] for entry in entries)
+
+
 def test_interrupted_link_publication_recovers_exact_pair_without_losing_prior_incidents(tmp_path):
     store = IncidentStore(tmp_path / "state")
     prior = _incident()
@@ -136,9 +199,13 @@ def test_publish_list_and_load_revalidate_private_complete_incident(tmp_path) ->
     assert [record.report_id for record in listing.reports] == [REPORT_ID]
     assert loaded.status is StoreStatus.AVAILABLE
     assert loaded.incident == incident
-    assert stat.S_IMODE(root.stat().st_mode) == 0o700
     report_path = root / f"incident-{REPORT_ID.hex}.json"
-    assert stat.S_IMODE(report_path.stat().st_mode) == 0o600
+    if os.name == "nt":
+        _assert_windows_private_dacl(root, protected=True, inherited=False)
+        _assert_windows_private_dacl(report_path, protected=False, inherited=True)
+    else:
+        assert stat.S_IMODE(root.stat().st_mode) == 0o700
+        assert stat.S_IMODE(report_path.stat().st_mode) == 0o600
     assert report_path.stat().st_nlink == 1
 
 
