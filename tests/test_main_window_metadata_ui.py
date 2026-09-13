@@ -511,20 +511,24 @@ class TestMainWindowMetadataUi(unittest.TestCase):
     def test_workflow_next_step_tracks_source_and_database_context(self):
         window = self._main_window()
         try:
-            self.assertIn("choose reports", window.workflow_next_step_label.text())
+            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertIn("Select a source and database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_directory("/tmp/metroliza-reports")
-            self.assertIn("select or create a database", window.workflow_next_step_label.text())
+            self.assertEqual(window.home_next_action.text(), "Choose database in Reports")
+            self.assertIn("Select or create a database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_db_file("/tmp/metroliza.db")
-            self.assertIn("parse reports", window.workflow_next_step_label.text())
-            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "success")
+            self.assertEqual(window.home_next_action.text(), "Review reports in Reports")
+            self.assertIn("Ready to review", window.workflow_next_step_label.text())
+            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
+            self.assertFalse(window.reports_workspace.parse_button.isEnabled())
 
             window.set_directory("")
-            self.assertIn("export this database", window.workflow_next_step_label.text())
-            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "info")
+            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertTrue(window.export_button.isEnabled())
         finally:
             window.close()
 
@@ -597,17 +601,18 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 return True
 
         try:
-            window.parsing_dialog = OpenWorkflow()
+            host = window.reports_workspace
             window.export_dialog = OpenWorkflow()
 
             window.set_db_file("/tmp/current.db")
 
             self.assertFalse(window.workspace_notice_label.isHidden())
-            self.assertIn("Report import", window.workspace_notice_label.text())
+            self.assertIs(window.parsing_dialog, host)
+            self.assertEqual(host.db_file, window.workspace_context.snapshot.database_file)
+            self.assertNotIn("Report import", window.workspace_notice_label.text())
             self.assertIn("Export", window.workspace_notice_label.text())
             self.assertIn("previously selected database", window.workspace_notice_label.text())
         finally:
-            window.parsing_dialog = None
             window.export_dialog = None
             window.close()
 
@@ -628,6 +633,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     "Industrial Data",
                     "Realtime Monitor",
                     "Parser Profiles",
+                    "Tools",
                 ],
             )
             self.assertEqual(window.workspace_stack.count(), len(navigation))
@@ -736,11 +742,17 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         calls = []
         try:
             window.launch_metadata_enrichment = lambda: calls.append(window.db_file)
+            window.set_db_file("/tmp/metroliza.db")
 
             window.start_metadata_enrichment_from_parsing("/tmp/metroliza.db")
 
             self.assertEqual(window.db_file, "/tmp/metroliza.db")
             self.assertEqual(calls, ["/tmp/metroliza.db"])
+
+            window.start_metadata_enrichment_from_parsing("/tmp/previous.db")
+            self.assertEqual(window.db_file, "/tmp/metroliza.db")
+            self.assertEqual(calls, ["/tmp/metroliza.db"])
+            self.assertIn("different database", window.workspace_notice_label.text())
         finally:
             window.close()
 

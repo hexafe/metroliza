@@ -2,31 +2,27 @@
 
 ## What this window is
 
-The main window is the launcher for the main Metroliza tools.
+The main window groups work into **Home**, **Reports**, the domain workspaces and
+**Tools**. Use the sidebar in a large window or the workspace selector in a compact window.
 
-From here you can open:
+**Home** shows the current source and database, the active report task or last result,
+and one recommended next action. That action opens the same Reports workspace and focuses
+the next available control. It does not start an import without a reviewed selection.
 
-- Parsing,
-- Modify Database,
-- Export,
-- Characteristic Name Matching,
-- Industrial data source setup, sync, and cached Oznak link refresh.
-- Real-time Industrial Monitoring for configured production sources.
-- Parser profile handoff for new supplier report templates.
+**Reports** contains the [report planner](parsing.md): choose the source and database,
+review the files, select ready reports and import exactly that selection. Changing pages
+preserves the review, filters, selection, task and outcome. Source/database changes take
+effect only when accepted; they clear the old review. Changes are rejected while a report
+operation is active. Closing the main window requests cancellation and waits for the worker.
 
-It also gives you quick access to the **Tools** and **Help** menus from the menu bar.
+**CSV Analytics**, **Industrial Data**, **Realtime Monitor** and **Parser Profiles** keep
+their own primary pages. Their **Tools** menu shortcuts navigate to those same pages;
+the page action opens the corresponding workflow. **Tools** also offers metadata enrichment
+for the current database. **Help** provides manuals, release notes and support actions.
 
-The main window shows the current source, current database, and a **Next step** status
-row. That row changes as you select reports or a database, so a new user can tell whether
-to parse, select/create a database, clean existing data, or export.
+## Report preparation and output
 
-## What each button does
-
-### Parse Reports
-
-Opens the [Parsing](parsing.md) dialog.
-
-Use this when you want to read report files and save their measurements into a **database file**. This is usually the first step for the main database-based workflow.
+The actions below the Reports planner open the existing database workflows.
 
 ### Modify Database
 
@@ -48,7 +44,7 @@ Use this when you already have a database file and want to create an **Excel fil
 
 ### Tools > CSV Summary...
 
-Opens the [CSV Summary](csv_summary.md) workflow from the **Tools** menu.
+Selects **CSV Analytics**; choose **Open CSV Summary** to open the [CSV Summary](csv_summary.md) workflow.
 
 This works directly from a CSV or Excel file and does **not** require the normal
 parse-to-database workflow. It can create dashboards, grouped statistics, and optional
@@ -56,7 +52,7 @@ Excel workbooks with separate sheets for selected parameters.
 
 ### Tools > Industrial data...
 
-Opens the compact [Industrial Data](industrial_data.md) launcher. It keeps cache storage
+Selects **Industrial Data**; choose **Open Industrial Data** to open the compact [Industrial Data](industrial_data.md) launcher. It keeps cache storage
 and production database access separate:
 
 - **Active local cache**: a temporary SQLite cache, an opened Metroliza report database,
@@ -131,8 +127,8 @@ Use **Edit filters...** in the fetch dialog to paste reference/ID values quickly
 
 ### Tools > Real-time Industrial Monitoring...
 
-Opens the read-only [Realtime Industrial Monitoring](realtime_industrial_monitoring.md)
-dashboard from the local realtime sample/event store. Selecting a Metroliza report
+Selects **Realtime Monitor**; **Open Realtime Monitor** opens the read-only
+[Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dashboard from the local realtime sample/event store. Selecting a Metroliza report
 database first is optional. If no database is selected, Metroliza creates a temporary
 session SQLite store so the dashboard and future monitoring setup can open without
 changing a report database. Select or create a persistent database only when you want
@@ -146,7 +142,8 @@ Use **CSV Summary...** when you need production-line grouping fields such as sta
 
 ### Tools > Real-time Industrial Monitoring...
 
-Opens the [Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dialog.
+Selects **Realtime Monitor**; choose **Open Realtime Monitor** to open the
+[Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dialog.
 
 Use this when production sources are already configured and you want Metroliza to poll
 one or more enabled sources on a timer, record samples/events, and refresh a local
@@ -155,7 +152,8 @@ the monitor so saved source configs and events remain available after the sessio
 
 ### Tools > Parser profiles...
 
-Opens the [Parser Profiles](parser_profiles.md) handoff dialog.
+Selects **Parser Profiles**; choose **Manage Parser Profiles** to open the
+[Parser Profiles](parser_profiles.md) handoff dialog.
 
 Use this when a new supplier report template needs parser support. The dialog shows the local profile store status and can create a local handoff folder with:
 
@@ -183,6 +181,12 @@ Use this as a maintenance action when an existing database was imported with fas
 
 While enrichment runs, the main window shows progress and a **Cancel** button. If no database is selected, the main window shows a message asking you to select a database first.
 
+### Help > Diagnostic incidents…
+
+Opens the local diagnostic viewer when this build includes it. The action is disabled
+when the feature is unavailable. A problem loading an installed viewer produces an error
+message. Diagnostic preview and selected export are provided by that separate viewer.
+
 ### Help > About
 
 Opens the [Help, startup, and license](help_startup_and_license.md) reference page’s **About** dialog.
@@ -199,7 +203,7 @@ Use it when you want to see what changed in the current release.
 
 For a new user, the simplest workflow is:
 
-1. Open **Parse Reports** and create or update a **database file**.
+1. Open **Reports**, review the files and import the selected reports into a **database file**.
 2. If needed, use **Modify Database** to clean up stored values.
 3. If needed, use **Match Characteristic Names** so equivalent characteristics use a common name.
 4. If needed, open **Tools > Industrial data...**, test/sync industrial data, and refresh links.
@@ -265,22 +269,17 @@ Use:
 Metroliza uses both modal and modeless dialogs.
 
 - **Modal dialogs** stay in front and block other app interaction until you close them. Examples include **About**, **Release notes**, **CSV Summary**, and **Characteristic Name Matching**.
-- **Modeless major workflow windows** such as **Parsing** and **Export** can be opened from the launcher window and then used as their own working dialog.
+- **Reports** remains embedded in the main window. **Export** and other modeless workflows can stay open while you navigate.
 
 In practice, this means some windows behave like a temporary popup, while others behave more like a separate workspace. **Modify Database** is opened as a focused editing dialog so you finish or cancel that cleanup before returning to other workflows.
 
-### Opening one major workflow can close another one
+### Working across pages and windows
 
-The app tries to keep only one major database workflow open at a time.
+Opening another workspace does not close or recreate Reports. Review and selection stay
+with its current source/database. When the selected database changes, already-open export
+or editing windows may keep their previous database; the main window identifies those
+windows. Check their displayed database before continuing.
 
-For example:
+### Context and navigation during a session
 
-- opening **Parsing** closes an open **Export** or **Modify Database** window,
-- opening **Modify Database** closes an open **Parsing** or **Export** window,
-- opening **Export** closes an open **Parsing** or **Modify Database** window.
-
-This is normal behavior. It helps avoid working in two conflicting major workflows at once.
-
-### The launcher remembers some recent context
-
-When you choose a source folder or database file in one workflow, that file path can carry into another workflow. This saves clicks, but you should still check that the selected path is the one you want before starting work.
+The main window and Reports share accepted source/database changes. Navigation preferences remember the chosen page; report selection and active operations remain session state. Check the current paths before starting work.
