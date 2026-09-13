@@ -328,6 +328,10 @@ def test_owned_job_termination_waits_for_zero_active_before_closing() -> None:
             self.calls.append(("terminate_process", process, code))
             return 1
 
+        def WaitForSingleObject(self, process, milliseconds):
+            self.calls.append(("wait", process, milliseconds))
+            return qualification.WAIT_OBJECT_0
+
         def CloseHandle(self, handle):
             self.calls.append(("close", handle))
             return 1
@@ -341,9 +345,38 @@ def test_owned_job_termination_waits_for_zero_active_before_closing() -> None:
 
     assert api.kernel.calls == [
         ("terminate_job", "owned-job", 23),
+        ("wait", "primary", 0),
+        ("wait", "primary", 0),
         ("close", "owned-job"),
         ("close", "primary"),
     ]
+
+
+def test_owned_job_zero_active_does_not_hide_unsignaled_primary(monkeypatch) -> None:
+    class _Kernel:
+        def TerminateJobObject(self, _job, _code):
+            return 1
+
+        def TerminateProcess(self, _process, _code):
+            return 1
+
+        def WaitForSingleObject(self, _process, _milliseconds):
+            return qualification.WAIT_TIMEOUT
+
+        def CloseHandle(self, _handle):
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    api._job_accounting = lambda _job: (0, 1)
+    monotonic = iter((0.0, 0.001, 6.0))
+    monkeypatch.setattr(qualification.time, "monotonic", lambda: next(monotonic))
+    monkeypatch.setattr(qualification.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.close_process("primary", "owned-job", terminate=True)
+
+    assert caught.value.qualification_reason == "qualification_cleanup_failed"
 
 
 def test_driver_phase_preserves_safe_early_process_exit_evidence(

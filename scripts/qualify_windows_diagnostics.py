@@ -71,6 +71,8 @@ MAX_IDLE_WRITE_BYTES = 64 * 1024
 MAX_INCIDENT_ASSEMBLY_TO_VERIFICATION_MILLISECONDS = 10_000
 MAX_FLOOD_ELAPSED_MILLISECONDS = 90_000
 MAX_TERMINATION_DRAIN_MILLISECONDS = 5_000
+WAIT_OBJECT_0 = 0
+WAIT_TIMEOUT = 0x00000102
 TOKEN_INTEGRITY_LEVEL = 25
 MEDIUM_INTEGRITY_RID = 0x2000
 MAX_TOKEN_INFORMATION_BYTES = 256
@@ -1237,7 +1239,13 @@ class _WindowsApi:
                 )
                 while time.monotonic() < deadline:
                     active, _total = self._job_accounting(job)
-                    if active == 0:
+                    wait_result = self.kernel.WaitForSingleObject(process, 0)
+                    if wait_result not in {WAIT_OBJECT_0, WAIT_TIMEOUT}:
+                        raise QualificationFailure(
+                            "scenario_failed",
+                            qualification_reason="qualification_cleanup_failed",
+                        )
+                    if active == 0 and wait_result == WAIT_OBJECT_0:
                         drained = True
                         break
                     time.sleep(0.01)
