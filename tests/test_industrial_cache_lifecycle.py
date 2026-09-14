@@ -63,6 +63,63 @@ def _assert_no_staging_artifacts(destination: Path) -> None:
     assert list(destination.parent.glob(f".{destination.name}.*.saving")) == []
 
 
+def test_disposable_counts_close_connection_when_database_is_unreadable(monkeypatch, tmp_path):
+    source = tmp_path / "unreadable.sqlite"
+    original = b"not a sqlite database"
+    source.write_bytes(original)
+    opened, closed = [], []
+    real_connect = sqlite3.connect
+
+    class ObservedConnection(sqlite3.Connection):
+        def close(self):
+            super().close()
+            closed.append(True)
+
+    def connect(*args, **kwargs):
+        opened.append(True)
+        return real_connect(*args, **kwargs, factory=ObservedConnection)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.DatabaseError):
+        disposable_cache_counts(source)
+
+    assert closed == opened == [True]
+    assert source.read_bytes() == original
+    assert all(not Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+    source.unlink()
+    assert not source.exists()
+
+
+def test_disposable_counts_do_not_modify_database_or_create_sidecars(tmp_path):
+    source = tmp_path / "read only cache.sqlite"
+    with closing(sqlite3.connect(source)) as connection, connection:
+        connection.execute("CREATE TABLE industrial_records (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO industrial_records VALUES (7)")
+    original = source.read_bytes()
+
+    counts = disposable_cache_counts(source)
+
+    assert counts["industrial_records"] == 1
+    assert sum(counts.values()) == 1
+    assert source.read_bytes() == original
+    assert all(not Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+
+
+def test_disposable_counts_include_committed_rows_in_live_wal(tmp_path):
+    source = tmp_path / "live wal.sqlite"
+    with closing(sqlite3.connect(source)) as connection:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        connection.execute("CREATE TABLE industrial_records (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO industrial_records VALUES (7)")
+        connection.commit()
+        assert Path(f"{source}-wal").is_file()
+
+        counts = disposable_cache_counts(source)
+
+        assert counts["industrial_records"] == 1
+        assert sum(counts.values()) == 1
+
+
 def test_failed_snapshot_does_not_create_destination(tmp_path):
     source = tmp_path / "invalid-source.sqlite"
     source.write_bytes(b"not a sqlite database")
