@@ -1,6 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import ExitStack
+import json
 import os
+import sys
+import tempfile
 import threading
 
 import pytest
@@ -1172,17 +1176,83 @@ def test_realtime_rebind_refuses_dirty_source_editor_bound_to_previous_database(
     qapp.processEvents()
 
 
-def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(qapp, tmp_path):
+def _assert_dashboard_privacy(directory, html_path):
+    if os.name == "nt":
+        from tests.windows_dashboard_privacy import inspect_dashboard_privacy
+
+        expected_python = os.environ.get("METROLIZA_EXPECT_PRIVACY_PYTHON")
+        if expected_python:
+            assert ".".join(map(str, sys.version_info[:3])) == expected_python
+        receipt = inspect_dashboard_privacy(directory, html_path)
+        print("dashboard_privacy=" + json.dumps(receipt.as_dict(), sort_keys=True))
+    else:
+        # POSIX retains its original protection contract; Windows uses the DACL.
+        assert directory.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize("parent_policy", ["default", "permissive"])
+def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
+    qapp, tmp_path, monkeypatch, parent_policy,
+):
     db_path = str(tmp_path / "dialog.db")
     IndustrialDataRepository(db_path).ensure_schema()
-    dialog = RealtimeIndustrialMonitoringDialog(None, db_path)
-    try:
-        output_directory = dialog._default_dashboard_path().parent
+    with ExitStack() as stack:
+        if os.name == "nt" and parent_policy == "default":
+            from tests.windows_dashboard_privacy import (
+                inspect_dashboard_privacy,
+                null_dacl_directory,
+            )
 
-        assert output_directory.exists()
-        assert output_directory.stat().st_mode & 0o777 == 0o700
-    finally:
-        dialog.close()
+            missing = tmp_path / "missing-private-directory"
+            with pytest.raises(AssertionError, match="privacy_oracle_get_named_security_info_failed"):
+                inspect_dashboard_privacy(missing, missing / "missing.html")
+            with pytest.raises(AssertionError, match="privacy_oracle_get_named_security_info_failed"):
+                inspect_dashboard_privacy(tmp_path, tmp_path / "missing.html")
+            null_control = tmp_path / "owned-null-dacl-control"
+            null_control.mkdir()
+            with null_dacl_directory(null_control):
+                control_html = null_control / "control.html"
+                control_html.write_text("synthetic null-DACL control", encoding="utf-8")
+                with pytest.raises(AssertionError, match="privacy_oracle_null_dacl"):
+                    inspect_dashboard_privacy(null_control, control_html)
+
+        if parent_policy == "permissive":
+            parent = tmp_path / "owned-permissive-parent"
+            parent.mkdir()
+            if os.name == "nt":
+                from tests.windows_dashboard_privacy import permissive_directory
+
+                stack.enter_context(permissive_directory(parent))
+            else:
+                parent.chmod(0o777)
+            control = parent / "permissive-control"
+            control.mkdir()
+            control_html = control / "control.html"
+            control_html.write_text("synthetic privacy control", encoding="utf-8")
+            if os.name != "nt":
+                control.chmod(0o777)
+            # The identical oracle must reject actually permissive scratch bytes.
+            expected_error = "native_privacy_broad_content" if os.name == "nt" else None
+            with pytest.raises(AssertionError, match=expected_error):
+                _assert_dashboard_privacy(control, control_html)
+            monkeypatch.setattr(tempfile, "tempdir", str(parent))
+
+        dialog = RealtimeIndustrialMonitoringDialog(
+            None, db_path, config_path=tmp_path / "unused-sources.yaml"
+        )
+        output_directory = dialog._default_dashboard_path().parent
+        try:
+            assert output_directory.exists()
+            output_path = dialog.write_dashboard()
+            assert output_path == dialog._default_dashboard_path()
+            assert "Real-time Industrial Monitoring" in output_path.read_text(encoding="utf-8")
+            _assert_dashboard_privacy(output_directory, output_path)
+        finally:
+            assert dialog.close()
+            dialog.deleteLater()
+            QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+            assert sip.isdeleted(dialog)
+            assert not output_directory.exists()
 
 
 def _poll_result(**overrides):

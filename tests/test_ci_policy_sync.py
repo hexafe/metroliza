@@ -41,7 +41,12 @@ def test_native_windows_realtime_step_keeps_the_complete_dialog_contract() -> No
     step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
     assert 'QT_QPA_PLATFORM: windows' in step
     assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
-    assert 'run: python -m pytest -vv tests/test_realtime_monitoring_dialog.py' in step
+    assert 'run: python -m pytest -vv -s --tb=short --show-capture=no tests/test_realtime_monitoring_dialog.py' in step
+    assert 'METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9' in step
+    windows = workflow.split('  windows-core-smoke:', 1)[1].split('  windows-startup-benchmark:', 1)[0]
+    assert "python-version: '3.11.9'" in windows
+    assert 'Windows owner/DACL/effective access' in policy
+    assert 'restricted_current_user' in policy
     assert name in policy
     assert 'controlled deferred-dispatch' in policy
     assert 'real QThread/SQLite/HTML' in policy

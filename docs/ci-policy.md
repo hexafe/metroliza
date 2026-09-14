@@ -49,6 +49,17 @@ Coverage threshold enforcement is blocking for the full test lane:
 
 The coverage threshold is blocking; do not lower it without recording the reason in the PR description or release evidence.
 
+The complete realtime selection also checks Windows owner/DACL/effective access on the
+owned temporary dashboard directory and its generated HTML. The native lane retains the
+observed Python 3.11.9 and asserts that version. POSIX retains its original `0700` oracle.
+A deliberately permissive inherited descriptor must fail the native oracle. The receipt
+labels this as `restricted_current_user`: actual access checks and file operations with
+Administrators disabled and no enabled privilege except traversal. It does not claim an
+actual separate ordinary-user account, a linked token, or protection from a privileged
+administrator. Only safe classifications/counts are printed; short tracebacks suppress fixture identity dumps.
+Real token access checks and impersonated file operations are required; mock access checks,
+DACL-presence-only checks, and an omitted whole-file test are not acceptance.
+
 ## Optional/manual checks (non-blocking)
 
 These checks are explicitly non-blocking for normal PR CI:

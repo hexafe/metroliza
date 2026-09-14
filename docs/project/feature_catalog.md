@@ -88,6 +88,8 @@ planner into the main Reports page after external #1015 integration.
 
 Within #941, [#1054](https://github.com/hexafe/metroliza/issues/1054) owns the bounded
 asynchronous dashboard scheduling regression: observable deferred startup, coalescing and closing.
+Its native continuation also owns privacy validation and any demonstrated narrow repair of the
+owned temporary dashboard directory and generated HTML; shared filesystem policy is separate.
 Its source/native test evidence does not establish packaged or operational acceptance.
 
 ## 6. Automation, traceability, diagnostics, and support

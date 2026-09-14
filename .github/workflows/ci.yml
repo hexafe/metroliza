@@ -936,7 +936,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.11.9'
           cache: 'pip'
           cache-dependency-path: |
             requirements.txt
@@ -989,7 +989,8 @@ jobs:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
           METROLIZA_EXPECT_QT_PLATFORM: windows
-        run: python -m pytest -vv tests/test_realtime_monitoring_dialog.py
+          METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9
+        run: python -m pytest -vv -s --tb=short --show-capture=no tests/test_realtime_monitoring_dialog.py
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
