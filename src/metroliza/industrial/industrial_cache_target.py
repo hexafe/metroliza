@@ -250,7 +250,9 @@ def _prepare_private_staging_database(source_path: Path, staging_path: Path) -> 
         sidecar_path.unlink(missing_ok=True)
 
     try:
-        with staging_path.open("rb") as staging_file:
+        # Windows requires a writable descriptor for fsync; r+b preserves the
+        # completed backup without truncating it before the required flush.
+        with staging_path.open("r+b") as staging_file:
             if _PUBLICATION_PLATFORM == "posix":
                 os.fchmod(staging_file.fileno(), _PRIVATE_DATABASE_MODE)
             os.fsync(staging_file.fileno())

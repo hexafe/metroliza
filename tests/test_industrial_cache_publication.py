@@ -259,6 +259,7 @@ def test_cleanup_error_after_commit_keeps_correct_archive_and_reports_success(
     real_unlink = Path.unlink
     real_publish = cache_target._atomic_publish_no_replace
     staging_paths: set[Path] = set()
+    cleanup_denials: list[Path] = []
 
     def remember_publish(staging, final):
         staging_paths.add(Path(staging))
@@ -266,6 +267,7 @@ def test_cleanup_error_after_commit_keeps_correct_archive_and_reports_success(
 
     def fail_only_staging_cleanup(path, *args, **kwargs):
         if Path(path) in staging_paths:
+            cleanup_denials.append(Path(path))
             raise PermissionError(errno.EACCES, "cleanup denied")
         return real_unlink(path, *args, **kwargs)
 
@@ -277,3 +279,6 @@ def test_cleanup_error_after_commit_keeps_correct_archive_and_reports_success(
     assert _database_snapshot(source) == source_snapshot
     assert _database_snapshot(destination)[1:] == source_snapshot[1:]
     assert destination.exists()
+    assert len(cleanup_denials) == 1
+    assert set(cleanup_denials) == staging_paths
+    assert all(path.exists() == (os.name != "nt") for path in staging_paths)
