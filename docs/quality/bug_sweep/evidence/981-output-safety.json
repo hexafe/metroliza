@@ -1,0 +1,567 @@
+{
+  "schema": "981-output-safety-bounded-evidence-v1",
+  "agent_id": "AUDIT-981-OUTPUT-SAFETY",
+  "parent_agent_id": "ORCH-METROLIZA",
+  "session": "ORCH-981-OUTPUT-SAFETY-20260910-1",
+  "start_utc": "2026-09-10T14:07:24Z",
+  "maximum_stop_utc": "2026-09-10T17:07:24Z",
+  "stop_recorded_utc": "2026-09-10T14:27:19Z",
+  "status": "STOPPED_ON_CONFIRMED_CHART_LABEL_DEFECT",
+  "authority": "https://github.com/hexafe/metroliza/issues/981#issuecomment-5619574205",
+  "canonical_checkpoint": "https://github.com/hexafe/metroliza/issues/981#issuecomment-5620071004",
+  "source": {
+    "branch": "develop",
+    "sha": "b645164e83898df69335713f808189de6cc1fc31",
+    "tree": "46fd6819d23fbabe19fda7b90ba9ac24e5bd6110"
+  },
+  "delivery": {
+    "branch": "research/981-output-publication-audit",
+    "target": "develop",
+    "maximum_state": "Draft",
+    "head_tree_review_ci_receipt": "canonical checkpoint and PR; no self-referential commit identity",
+    "allowed_paths": [
+      "docs/quality/bug_sweep/waves/981-output-safety.md",
+      "docs/quality/bug_sweep/evidence/981-output-safety.json",
+      "tests/audit_981_output_safety.py",
+      "tests/test_audit_981_output_safety.py"
+    ],
+    "product_changed": false,
+    "shared_ledger_changed": false,
+    "scope_deviation": null
+  },
+  "routing": {
+    "requested_coordinator": "Sol/Ultra",
+    "actual_coordinator_model": "not visible",
+    "actual_coordinator_reasoning": "not visible",
+    "reviewer_requested_model": "gpt-5.6-sol",
+    "reviewer_requested_reasoning": "high",
+    "reviewer_actual_model": "not visible",
+    "reviewer_actual_reasoning": "not visible",
+    "writers": 1,
+    "read_only_reviewers": 1
+  },
+  "environment": {
+    "platform": "Linux",
+    "python": "3.11.16",
+    "XlsxWriter": "3.2.9",
+    "pytest": "9.1.1",
+    "Ruff": "0.15.10",
+    "Pillow": "12.3.0",
+    "numpy": "2.4.6",
+    "hexafe-plotstats": "0.1.0a1",
+    "hexafe-groupstats": "0.1.0rc3",
+    "installs_or_upgrades": false
+  },
+  "initial_checkpoint_probe_file_sha256": {
+    "tests/audit_981_output_safety.py": "b5715048470db29ba78d7f56af7d0f11bd35c3a0bd32cd12f1c9c4a270409a29",
+    "tests/test_audit_981_output_safety.py": "4973674ed32a739b734b57fbb0c7e295f1edda32982249b0ed01312a505deade"
+  },
+  "commands": [
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 /home/hexaf-p15/Projects/metroliza/perf-1028-runtime/venv/bin/python -m pytest -q -p no:cacheprovider --basetemp=/tmp/metroliza-981-evidence/pytest-backends tests/test_export_backends.py",
+      "exit": 0,
+      "result": "7 passed",
+      "phase": "before STOP"
+    },
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 METROLIZA_PLOTSTATS_EXPORT_CHARTS=0 /home/hexaf-p15/Projects/metroliza/perf-1028-runtime/venv/bin/python tests/audit_981_output_safety.py --output-dir \"/tmp/metroliza-981-evidence/probe 4 żółć\"",
+      "exit": 0,
+      "result": "22 accepted cases",
+      "phase": "before STOP"
+    },
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 METROLIZA_PLOTSTATS_EXPORT_CHARTS=0 /home/hexaf-p15/Projects/metroliza/perf-1028-runtime/venv/bin/python tests/audit_981_output_safety.py --output-dir \"/tmp/metroliza-981-evidence/probe 5 żółć\"",
+      "exit": 0,
+      "result": "22 accepted cases; normalized facts byte-identical to prior run",
+      "phase": "before STOP"
+    },
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 METROLIZA_PLOTSTATS_EXPORT_CHARTS=1 /home/hexaf-p15/Projects/metroliza/perf-1028-runtime/venv/bin/python tests/audit_981_output_safety.py --output-dir \"/tmp/metroliza-981-evidence/probe default żółć\"",
+      "exit": 0,
+      "result": "22 accepted cases; 414 captured stderr characters not retained or classified; forbidden-marker assertion passed",
+      "phase": "before STOP"
+    },
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 /home/hexaf-p15/Projects/metroliza/perf-1028-runtime/venv/bin/python -m pytest -q -p no:cacheprovider --basetemp=/tmp/metroliza-981-evidence/pytest-audit-final tests/test_export_backends.py tests/test_audit_981_output_safety.py",
+      "exit": 0,
+      "result": "17 passed in 1.50s",
+      "phase": "before chart finding/controls added; not final-head all-test proof"
+    },
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 /home/hexaf-p15/Projects/metroliza/perf-1028-runtime/venv/bin/python tests/audit_981_output_safety.py --chart-label-probe --output-dir \"/tmp/metroliza-981-evidence/chart final receipt żółć\"",
+      "exit": 1,
+      "result": "CONFIRMED DEFECT; completed valid workbook; two name references and wrong cached labels",
+      "phase": "minimal stopped finding preservation"
+    },
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 /home/hexaf-p15/Projects/metroliza/perf-1028-runtime/venv/bin/python -m pytest -q -p no:cacheprovider --basetemp=/tmp/metroliza-981-evidence/pytest-chart-final tests/test_audit_981_output_safety.py -k chart_name",
+      "exit": 0,
+      "result": "4 passed, 10 deselected",
+      "phase": "stopped finding assertion validation only"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F981-01",
+      "classification": "CONFIRMED DEFECT",
+      "severity": "provisional P1",
+      "confidence": "high at serialized-artifact boundary",
+      "authoritative_issue": "https://github.com/hexafe/metroliza/issues/1035",
+      "affected_source_sha": "b645164e83898df69335713f808189de6cc1fc31",
+      "path": "src/metroliza/charts/export_chart_writer.py",
+      "symbols": [
+        "build_measurement_chart_series_specs",
+        "build_measurement_chart_format_policy",
+        "insert_measurement_chart"
+      ],
+      "source_trace": [
+        "build_export_dataframe",
+        "build_measurement_export_dataframe",
+        "ExportDataThread.add_measurements_horizontal_sheet (source-only reachability)",
+        "insert_measurement_chart",
+        "ExcelExportBackend.run",
+        "XlsxWriter chart name processing",
+        "xl/charts/chart1.xml"
+      ],
+      "expected": "Imported title and series identity remain literal; authored data ranges remain formulas",
+      "observed": "Completed ZIP with two imported-name references and cached HEADER instead of intended label",
+      "safe_fixture": "two generated rows, harmless same-workbook cell reference and ordinary axis; no external/DDE/macro payload",
+      "dedupe": "All-state symbol, chart name/title/series, formula/injection searches; #936/#981/#983 and unrelated #1028; no dedicated match",
+      "runtime_execution": "NOT TESTED",
+      "next_gate": "External orchestrator focused chart-name repair authority; no automatic audit restart"
+    }
+  ],
+  "coverage_limits": [
+    "Independent ZIP/XML and HTML token/JSON inspection; no desktop Excel or browser execution",
+    "Source-traced Qt/DB reachability only; inert callbacks, real row transformation/writers/publishers",
+    "Valid generated 2x2 PNG snapshot inputs; image renderer itself not executed",
+    "HTML cancellation is planning cancellation only; no publisher token exists",
+    "OSError seams are injected, not real Windows locks/disk exhaustion/process interruption",
+    "Non-export credential keys are synthetic schema-negative fields, not real credential-loader proof",
+    "Static local resource attributes verified; runtime CSS/JS/Plotly networking not executed",
+    "Default-enabled run stderr content not retained; count414 is not zero-warning evidence",
+    "Unsupported legacy Group Comparison candidate not reproduced; separate supported measurement finding is authoritative",
+    "Full measurement/group-analysis/industrial/tabular writers, cloud, packaged Windows, numeric parity and ledger terminalization remain outside this checkpoint",
+    "HTML reused sentinels establish aggregate presence only; individual field parity, URL reference/metadata and source-to-preview identity NOT TESTED"
+  ],
+  "stop_policy": {
+    "adjacent_runtime_probing_stopped": true,
+    "post_stop_work": "minimal finding corroboration/preservation, report correctness and safe-publication review only",
+    "ready": false,
+    "merged": false,
+    "issues_closed": false,
+    "automatic_restart": false
+  },
+  "review_and_ci": {
+    "independent": "pending exact candidate; source and preserved chart XML corroborated",
+    "configured_github_review": "pending Draft PR",
+    "ci": "pending normal owned push/PR",
+    "audit_complete": false,
+    "safe_publication": "Independent reviewer approved finding body after correcting Draft-PR timing; correction applied before #1035 creation. One review turn encountered a content-filter tool error; same reviewer resumed and approved."
+  },
+  "accepted_cases_before_stop": [
+    {
+      "format": "xlsx",
+      "mode": "success",
+      "existing": false,
+      "outcome": "completed",
+      "error_class": null,
+      "preserved": false,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0,
+      "structural_facts": {
+        "literal_cells": 8,
+        "formulas": {
+          "D2": "SUM(B2:B8)"
+        },
+        "links": 1,
+        "external_relationships": 0,
+        "hidden_sheets": 0,
+        "package_member_count": 10
+      }
+    },
+    {
+      "format": "xlsx",
+      "mode": "cancel",
+      "existing": false,
+      "outcome": "canceled",
+      "error_class": null,
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "writer",
+      "existing": false,
+      "outcome": null,
+      "error_class": "RuntimeError",
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "flush",
+      "existing": false,
+      "outcome": null,
+      "error_class": "FileCreateError",
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "close",
+      "existing": false,
+      "outcome": null,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "promote",
+      "existing": false,
+      "outcome": null,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "success",
+      "existing": false,
+      "planning_outcome": "completed",
+      "published": true,
+      "error_class": null,
+      "preserved": false,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0,
+      "structural_facts": {
+        "spec_count": 2,
+        "script_elements": 3,
+        "automatic_external_resources": 0,
+        "local_asset_count": 3
+      }
+    },
+    {
+      "format": "html",
+      "mode": "cancel",
+      "existing": false,
+      "planning_outcome": "canceled",
+      "published": false,
+      "error_class": null,
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "renderer",
+      "existing": false,
+      "planning_outcome": "completed",
+      "published": false,
+      "error_class": "RuntimeError",
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "finalize",
+      "existing": false,
+      "planning_outcome": "completed",
+      "published": false,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "promote",
+      "existing": false,
+      "planning_outcome": "completed",
+      "published": false,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": false,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "success",
+      "existing": true,
+      "outcome": "completed",
+      "error_class": null,
+      "preserved": false,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0,
+      "structural_facts": {
+        "literal_cells": 8,
+        "formulas": {
+          "D2": "SUM(B2:B8)"
+        },
+        "links": 1,
+        "external_relationships": 0,
+        "hidden_sheets": 0,
+        "package_member_count": 10
+      }
+    },
+    {
+      "format": "xlsx",
+      "mode": "cancel",
+      "existing": true,
+      "outcome": "canceled",
+      "error_class": null,
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "writer",
+      "existing": true,
+      "outcome": null,
+      "error_class": "RuntimeError",
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "flush",
+      "existing": true,
+      "outcome": null,
+      "error_class": "FileCreateError",
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "close",
+      "existing": true,
+      "outcome": null,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "xlsx",
+      "mode": "promote",
+      "existing": true,
+      "outcome": null,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "success",
+      "existing": true,
+      "planning_outcome": "completed",
+      "published": true,
+      "error_class": null,
+      "preserved": false,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0,
+      "structural_facts": {
+        "spec_count": 2,
+        "script_elements": 3,
+        "automatic_external_resources": 0,
+        "local_asset_count": 3
+      }
+    },
+    {
+      "format": "html",
+      "mode": "cancel",
+      "existing": true,
+      "planning_outcome": "canceled",
+      "published": false,
+      "error_class": null,
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": false,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "renderer",
+      "existing": true,
+      "planning_outcome": "completed",
+      "published": false,
+      "error_class": "RuntimeError",
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "finalize",
+      "existing": true,
+      "planning_outcome": "completed",
+      "published": false,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    },
+    {
+      "format": "html",
+      "mode": "promote",
+      "existing": true,
+      "planning_outcome": "completed",
+      "published": false,
+      "error_class": "OSError",
+      "preserved": true,
+      "target_exists": true,
+      "injected_exception_marker_propagated_to_caller": true,
+      "temporary_files": 0
+    }
+  ],
+  "normalized_receipts": {
+    "probe 4 żółć": {
+      "facts_sha256": "eb36d3dab879dad97ea7c2005214d52a92b08ec45da87ad60cff06bb85b0aa66",
+      "case_count": 22,
+      "captured_stderr_chars": 0
+    },
+    "probe 5 żółć": {
+      "facts_sha256": "eb36d3dab879dad97ea7c2005214d52a92b08ec45da87ad60cff06bb85b0aa66",
+      "case_count": 22,
+      "captured_stderr_chars": 0
+    },
+    "probe default żółć": {
+      "facts_sha256": "e94fad8a075cb4ddab9e9d66bdf5e317cb56f3189efc012f55f10804f9e3c0e0",
+      "case_count": 22,
+      "captured_stderr_chars": 414
+    }
+  },
+  "minimal_stopped_finding_receipt": {
+    "facts_sha256": "b7d762cddf6584f0959cbe51ee16794475c943d2dce36c7069d27f5fccd58da0",
+    "facts": {
+      "disposition": "CONFIRMED DEFECT",
+      "outcome": "completed",
+      "zip_valid": true,
+      "imported_header_became_title_formula": true,
+      "imported_header_became_series_formula": true,
+      "total_chart_formula_nodes": 8,
+      "title_formula_count": 1,
+      "series_name_formula_count": 1,
+      "title_cached_values": [
+        "HEADER"
+      ],
+      "series_cached_values": [
+        "HEADER"
+      ],
+      "title_cache_matches_imported_label": false,
+      "series_cache_matches_imported_label": false,
+      "stderr_chars": 0,
+      "excel_execution": "NOT TESTED"
+    }
+  },
+  "artifact_hygiene": [
+    {
+      "command": "python -m ruff check tests/audit_981_output_safety.py tests/test_audit_981_output_safety.py",
+      "exit": 0,
+      "result": "All checks passed"
+    },
+    {
+      "command": "python scripts/quality/validate_bug_sweep_coverage.py",
+      "exit": 0,
+      "result": "953/953 paths; zero uncovered and duplicate primary; shared ledger unchanged"
+    },
+    {
+      "command": "python scripts/security_audit.py --secret-scan-only --base-ref b645164e83898df69335713f808189de6cc1fc31",
+      "exit": 0,
+      "result": "Secret scan passed"
+    },
+    {
+      "command": "env PYTHONPATH=src:. TMPDIR=/tmp/metroliza-981-evidence/tmp PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider --basetemp=/tmp/metroliza-981-evidence/pytest-docs tests/test_docs_markdown_links.py",
+      "exit": 0,
+      "result": "5 passed"
+    },
+    {
+      "command": "python scripts/check_release_hygiene.py",
+      "exit": 0,
+      "result": "Release hygiene check passed"
+    },
+    {
+      "command": "Python compile() for both added Python files; json.loads() for evidence",
+      "exit": 0,
+      "result": "PASS; no bytecode written"
+    },
+    {
+      "command": "git diff --cached --check",
+      "exit": 0,
+      "result": "PASS"
+    }
+  ],
+  "ownership": {
+    "validator": "passed",
+    "tracked_paths": 953,
+    "uncovered": 0,
+    "duplicate_primary": 0,
+    "ledger_changed": false,
+    "ledger_terminalized": false
+  },
+  "initial_checkpoint_sha": "44daa6693a50c906db008d21d6d458cc9f9414ac",
+  "artifact_import_correction": {
+    "reason": "Initial exact-head CI Security audit rejected bare audit_981_output_safety import; child ff00a6f8ca44632a79805871984b8efdfa64d3d1 uses existing first-party tests namespace.",
+    "corrected_at_commit": "ff00a6f8ca44632a79805871984b8efdfa64d3d1",
+    "changed_test_blob_sha": "7ba2881740dd26ac63c9c0847d9fac12c8678fe8",
+    "initial_failed_ci": "https://github.com/hexafe/metroliza/actions/runs/34490497197/job/102915671838",
+    "mutation_surface": "Normal child commits/non-force owned branch updates via GitHub Git API after local exec stopped creating processes.",
+    "local_checkout_last_verified_head": "44daa6693a50c906db008d21d6d458cc9f9414ac",
+    "current_local_import_test": "NOT TESTED; local process creation unavailable",
+    "source_or_workflow_changed": false
+  },
+  "historical_publication_oracle": "The 22 local accepted-case receipts used file-only snapshots; empty HTML generation-directory residue was NOT TESTED by those receipts.",
+  "artifact_review_correction": {
+    "finding": "https://github.com/hexafe/metroliza/pull/1036#discussion_r3980316159",
+    "severity": "P2 audit assertion false-negative; not a product cleanup finding",
+    "change": "Snapshot includes directories with trailing-slash markers; added synthetic empty-generation negative control.",
+    "current_probe_file_git_blob_sha": {
+      "tests/audit_981_output_safety.py": "ed24ae81f20c02107d07a75272c6d16f64fbd509",
+      "tests/test_audit_981_output_safety.py": "b56358fc582c50971b5d0d2b56ba72d1a4c52c49"
+    },
+    "local_validation": "NOT TESTED after local exec failure; unchanged pre-STOP receipts not relabelled",
+    "current_execution_and_review": "Normal hosted CI and renewed exact-candidate reviews; canonical checkpoint owns terminal receipt",
+    "production_changed": false
+  },
+  "html_field_evidence_qualification": {
+    "review_finding": "https://github.com/hexafe/metroliza/pull/1036#discussion_r3980374501",
+    "classification": "TEST GAP / NOT TESTED",
+    "severity": "P2 audit overclaim corrected by narrowing dispositions; P3 missing per-field evidence remains",
+    "assertions": "UNCHANGED: aggregate parsed text/spec presence, embedded JSON parseability, no fixture-created element/event/script boundary",
+    "missing": "Distinct field sentinels and expected parsed contexts; URL reference/metadata value assertion; field-removal controls",
+    "historical_receipts": "Retained under original hashes; no per-field proof",
+    "stop_disposition": "No new runtime campaign; later manual audit authority required",
+    "current_driver_git_blob_sha": "ed24ae81f20c02107d07a75272c6d16f64fbd509"
+  }
+}
