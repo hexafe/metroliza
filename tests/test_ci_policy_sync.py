@@ -49,6 +49,30 @@ def test_native_windows_report_workspace_step_keeps_one_real_owner_and_dpi_gate(
     assert name in policy
 
 
+def test_native_windows_cache_publication_preserves_required_real_lifecycle() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    publication = workflow.split(
+        '- name: Run native Windows cache publication tests', 1
+    )[1].split('- name:', 1)[0]
+    lifecycle = workflow.split(
+        '- name: Run native Windows cache lifecycle tests', 1
+    )[1].split('  windows-startup-benchmark:', 1)[0]
+    assert 'tests/test_industrial_cache_publication.py' in publication
+    assert 'tests/test_industrial_cache_lifecycle.py' in lifecycle
+    assert 'QT_QPA_PLATFORM: windows' in lifecycle
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in lifecycle
+    for test in ('save_preserves_copy_before_rebind', 'rebind_cancel_keeps_operator_data',
+                 'archive_cannot_replace_active_database'):
+        assert f'::test_realtime_temp_session_{test}' in lifecycle
+    for step in (publication, lifecycle):
+        assert 'continue-on-error' not in step
+        assert 'if:' not in step
+        assert ' -k ' not in step
+    assert 'Run native Windows cache publication tests' in policy
+    assert 'Run native Windows cache lifecycle tests' in policy
+
+
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
