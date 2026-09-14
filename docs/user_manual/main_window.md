@@ -14,7 +14,11 @@ review the files, select ready reports and import exactly that selection. Changi
 preserves the review, filters, selection, task and outcome. Source/database changes take
 effect only when accepted; they clear the old review. Changes are rejected while a report
 operation is active. Database workflow actions wait for the report operation to finish, while
-navigation and cancellation remain available. Finish or close a same-database editing/export
+navigation and cancellation remain available. Open Export and Database editor windows keep
+their current work; changing their database also waits until Reports is idle. Opening another
+report database in Industrial Data follows the same guard and preserves its current cache.
+The editor
+opened from Reports allows navigation back to the main window. Finish or close a same-database editing/export
 or industrial window before starting another report operation; its work is preserved.
 Closing the main window requests cancellation and waits for the worker.
 

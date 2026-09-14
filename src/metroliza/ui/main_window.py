@@ -1012,7 +1012,7 @@ class MainWindow(QMainWindow):
             if self._is_qwidget_type(ModifyDB):
                 self.modifydb_dialog = self._open_coordinated_window(
                     "modify_database",
-                    lambda snapshot: ModifyDB(self, snapshot.database_file),
+                    lambda snapshot: ModifyDB(self, snapshot.database_file, modal=False),
                     context_policy=WindowContextPolicy.CLOSE,
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                 )
@@ -1021,6 +1021,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("modifydb_dialog", self.modifydb_dialog)
                 self.modifydb_dialog.show()
 
+            self.modifydb_dialog.database_change_allowed = self._report_context_change_allowed
             self.modifydb_dialog.raise_()
             self.modifydb_dialog.activateWindow()
         except Exception as e:
@@ -1044,6 +1045,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("export_dialog", self.export_dialog)
                 self.export_dialog.show()
 
+            self.export_dialog.database_change_allowed = self._report_context_change_allowed
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
         except Exception as e:
@@ -1101,6 +1103,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("industrial_data_dialog", self.industrial_data_dialog)
                 self.industrial_data_dialog.show()
 
+            self.industrial_data_dialog.database_change_allowed = self._report_context_change_allowed
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
         except Exception as e:
@@ -1434,7 +1437,7 @@ class MainWindow(QMainWindow):
 
     def set_db_file(self, db_file):
         try:
-            if db_file != self.db_file and not self._report_context_change_allowed():
+            if not self._report_context_change_allowed():
                 return False
             if self.industrial_data_dialog and self.industrial_data_dialog.isVisible():
                 updated = self.industrial_data_dialog.update_db_file(db_file)
@@ -1542,11 +1545,31 @@ class MainWindow(QMainWindow):
 
     def _report_start_allowed(self):
         """Keep existing same-database windows safe without closing their work."""
+        if getattr(self.export_dialog, "database_context_transition_active", False):
+            self.statusBar().showMessage(
+                "Report start was blocked during Export database selection.", 5000
+            )
+            return False
         if not self.db_file:
             return True
         blockers = []
         if self.is_metadata_enrichment_active():
-            blockers.append("metadata enrichment")
+            enrichment_database = getattr(self.metadata_enrichment_thread, "db_file", None)
+            if not enrichment_database or Path(enrichment_database).resolve() == Path(self.db_file).resolve():
+                blockers.append("metadata enrichment")
+        blockers.extend(self._same_database_workflow_labels())
+        if not blockers:
+            return True
+        self.workspace_notice_label.setText(
+            f"Finish or close {', '.join(blockers)} before reviewing or importing reports in this database."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _same_database_workflow_labels(self):
+        """Collect visible workflow owners of this report database or an unknown one."""
+        blockers = []
         for label, dialog in (
             ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
             ("Industrial Data", self.industrial_data_dialog),
@@ -1564,14 +1587,7 @@ class MainWindow(QMainWindow):
             ) if path)
             if not databases or any(Path(path).resolve() == Path(self.db_file).resolve() for path in databases):
                 blockers.append(label)
-        if not blockers:
-            return True
-        self.workspace_notice_label.setText(
-            f"Finish or close {', '.join(blockers)} before reviewing or importing reports in this database."
-        )
-        set_status_variant(self.workspace_notice_label, "warning")
-        self.workspace_notice_label.show()
-        return False
+        return blockers
 
     def _track_modeless_dialog(self, attribute: str, dialog) -> None:
         if hasattr(dialog, "setAttribute"):

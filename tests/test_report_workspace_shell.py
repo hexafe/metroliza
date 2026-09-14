@@ -64,7 +64,7 @@ def prepare_review(app, window, reports):
 def test_report_stack_initializes_after_first_paint_or_user_entry(tmp_path, saved_page):
     code = '''
 import sys
-from PyQt6.QtCore import QCoreApplication, QEvent, QSettings
+from PyQt6.QtCore import QCoreApplication, QElapsedTimer, QEvent, QSettings
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 from metroliza.ui.main_window import MainWindow
@@ -72,11 +72,28 @@ from metroliza.ui.ui_preferences import UiPreferences
 app = QApplication([])
 preferences = UiPreferences(QSettings(sys.argv[1], QSettings.Format.IniFormat))
 preferences.set("presentation/navigation/page", sys.argv[2])
-window = MainWindow("synthetic", None, ui_preferences=preferences)
+class ObservedWindow(MainWindow):
+    first_paint_seen = False
+    report_stack_present_at_first_paint = None
+
+    def paintEvent(self, event):
+        if not self.first_paint_seen:
+            self.report_stack_present_at_first_paint = "metroliza.ui.parsing_dialog" in sys.modules
+            self.first_paint_seen = True
+        super().paintEvent(event)
+
+window = ObservedWindow("synthetic", None, ui_preferences=preferences)
 try:
     assert "metroliza.ui.parsing_dialog" not in sys.modules, "Reports loaded before first paint"
     window.show()
-    QTest.qWait(20)
+    elapsed = QElapsedTimer()
+    elapsed.start()
+    while elapsed.elapsed() < 5000:
+        QTest.qWait(10)
+        if window.first_paint_seen and (sys.argv[2] == "home" or window._reports_workspace is not None):
+            break
+    assert window.first_paint_seen, "The window never painted"
+    assert window.report_stack_present_at_first_paint is False, "Reports loaded before first paint"
     if sys.argv[2] == "home":
         assert "metroliza.ui.parsing_dialog" not in sys.modules
     else:
@@ -270,6 +287,421 @@ def test_existing_database_window_blocks_report_start_without_losing_its_work(ap
         window.export_dialog = None
         writer.close()
         writer.deleteLater()
+
+
+@pytest.mark.parametrize("workflow", ["export", "modifydb"])
+@pytest.mark.parametrize("stage", ["review", "import"])
+def test_preserved_window_cannot_switch_onto_active_report_database(app, window, reports, monkeypatch, workflow, stage):
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.ui import export_dialog
+
+    source, database = reports
+    database = database.with_suffix(".db")
+    previous = database.with_name("previous.db")
+    monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda _self: {})
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Cancel)
+    window.set_directory(str(source))
+    window.set_db_file(str(previous))
+    getattr(window, f"launch_{workflow}_dialog")()
+    writer = getattr(window, f"{workflow}_dialog")
+    assert writer.windowModality() == Qt.WindowModality.NonModal
+    assert QApplication.activeModalWidget() is None
+    if workflow == "modifydb":
+        writer.populate_table(writer.reference_table, [("original", 1)])
+        writer.reference_table.item(0, 1).setText("retained draft")
+    else:
+        writer.filter_query = "WHERE 1 = 0"
+    assert window.set_db_file(str(database))
+    assert writer.isVisible() and writer.db_file == str(previous)
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", lambda *_args: (str(database), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+    try:
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        wait_until(app, entered.is_set)
+        snapshot = window.workspace_context.snapshot
+        window.activateWindow()
+        navigation = window.navigation_combo if window.navigation_combo.isVisible() else window.navigation_list
+        navigation.setFocus()
+        QTest.keyClick(navigation, Qt.Key.Key_Home)
+        app.processEvents()
+        assert window.workspace_stack.currentWidget() is window.home_page
+        assert QApplication.activeModalWidget() is None
+        writer.select_db_file()
+        assert writer.db_file == str(previous)
+        assert writer.isVisible() and writer.isEnabled()
+        assert window.workspace_context.snapshot is snapshot
+        if workflow == "modifydb":
+            assert writer.reference_table.item(0, 1).text() == "retained draft"
+            assert writer.has_pending_changes()
+        else:
+            assert writer.filter_query == "WHERE 1 = 0"
+            assert writer._update_database_context(str(database)) is False
+            assert writer.filter_query == "WHERE 1 = 0"
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        writer.select_db_file()
+        assert writer.db_file == str(database)
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        writer.close()
+
+
+@pytest.mark.parametrize("stage", ["review", "import"])
+def test_temporary_industrial_cache_cannot_rebind_to_active_report_database(app, window, reports, monkeypatch, stage):
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+
+    source, database = reports
+    window.set_directory(str(source))
+    window.set_db_file(str(database))
+    window.launch_industrial_data_dialog()
+    industrial = window.industrial_data_dialog
+    industrial.use_temporary_cache()
+    temporary = industrial.cache_target
+    assert temporary.is_temporary and industrial.report_db_file is None
+    assert window.db_file == industrial._workspace_db_file == str(database)
+    repository = IndustrialDataRepository(temporary.cache_db_file)
+    repository.upsert_source_profile(
+        profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+        database_type="sqlite", source_object_name="events",
+    )
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", lambda *_args: (str(database), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+    try:
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        wait_until(app, entered.is_set)
+        snapshot = window.workspace_context.snapshot
+        # Selecting the already active database must not rebind a separate cache either.
+        assert window.set_db_file(str(database)) is False
+        assert industrial.cache_target is temporary
+        industrial.select_database_file()
+        assert industrial.cache_target is temporary
+        assert industrial.db_file == temporary.cache_db_file and industrial.report_db_file is None
+        assert window.workspace_context.snapshot is snapshot
+        assert len(repository.list_source_profiles(include_disabled=True)) == 1
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        industrial.select_database_file()
+        assert industrial.db_file == str(database) and industrial.report_db_file == str(database)
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        industrial.close()
+
+
+
+@pytest.mark.parametrize("workflow", ["industrial", "export", "modifydb"])
+@pytest.mark.parametrize("stage", ["review", "import"])
+@pytest.mark.parametrize("nested_entry", ["picker", "discard"])
+def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, window, reports, monkeypatch, workflow, stage, nested_entry):
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.ui import export_dialog, industrial_data_dialog
+
+    source, database = reports
+    database = database.with_suffix(".db")
+    previous = database.with_name("previous.db")
+    monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda _self: {})
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Cancel)
+    window.set_directory(str(source))
+    window.set_db_file(str(database if workflow == "industrial" else previous))
+    if workflow == "industrial":
+        window.launch_industrial_data_dialog()
+        writer = window.industrial_data_dialog
+        writer.use_temporary_cache()
+        previous_target = writer.cache_target
+        previous_db = writer.db_file
+        IndustrialDataRepository(previous_db).upsert_source_profile(
+            profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+            database_type="sqlite", source_object_name="events",
+        )
+    else:
+        getattr(window, f"launch_{workflow}_dialog")()
+        writer = getattr(window, f"{workflow}_dialog")
+        previous_db = writer.db_file
+        if workflow == "modifydb":
+            writer.populate_table(writer.reference_table, [("original", 1)])
+            writer.reference_table.item(0, 1).setText("retained draft")
+        assert window.set_db_file(str(database))
+    assert writer.isVisible() and writer.db_file == previous_db
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+    picker_calls, nested_calls = [], []
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    def start_in_nested_loop():
+        nested_calls.append(True)
+        assert host.can_change_workspace()
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        if workflow == "export" and nested_entry == "discard":
+            assert host.can_change_workspace()
+            assert not entered.is_set()
+            assert window.statusBar().currentMessage() == "Report start was blocked during Export database selection."
+        else:
+            wait_until(app, entered.is_set)
+
+    def picker(*_args):
+        picker_calls.append(True)
+        if nested_entry == "picker":
+            start_in_nested_loop()
+        return str(database), ""
+
+    def discard(*_args):
+        if nested_entry == "discard":
+            start_in_nested_loop()
+        return QMessageBox.StandardButton.Discard
+
+    if workflow == "export" and nested_entry == "discard":
+        class DraftWindow(QDialog):
+            def closeEvent(self, event):
+                start_in_nested_loop()
+                event.accept()
+
+        writer.filter_window = DraftWindow(writer)
+        writer.filter_window.show()
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", picker)
+    monkeypatch.setattr(QMessageBox, "question", discard)
+    snapshot = window.workspace_context.snapshot
+    try:
+        if workflow == "industrial":
+            writer.select_database_file()
+            assert writer.cache_target is previous_target
+            created = []
+            create_target = industrial_data_dialog.create_temporary_industrial_cache_target
+
+            def tracked_target():
+                target = create_target()
+                created.append(target)
+                return target
+
+            monkeypatch.setattr(industrial_data_dialog, "create_temporary_industrial_cache_target", tracked_target)
+            assert writer.update_db_file(None) is False
+            assert len(created) == 1
+            assert not os.path.exists(created[0].cache_db_file)
+            assert os.path.exists(previous_target.cache_db_file)
+            assert writer.cache_target is previous_target
+        else:
+            writer.select_db_file()
+        assert picker_calls == [True]
+        assert nested_calls == [True]
+        if workflow == "export" and nested_entry == "discard":
+            assert host.can_change_workspace()
+            assert writer.db_file == str(database)
+            assert not writer.database_context_transition_active
+            writer.close()
+            release.set()
+            (host.parse_button if stage == "import" else host.scan_button).click()
+        else:
+            assert not host.can_change_workspace()
+            assert writer.db_file == previous_db
+        assert window.workspace_context.snapshot is snapshot
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", lambda *_args: (str(database), ""))
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+        if workflow == "industrial":
+            writer.select_database_file()
+        elif not (workflow == "export" and nested_entry == "discard"):
+            writer.select_db_file()
+        assert writer.db_file == str(database)
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+        if not sip.isdeleted(writer):
+            writer.close()
+
+
+
+@pytest.mark.parametrize("child_kind", ["filter", "grouping"])
+@pytest.mark.parametrize("discard", [False, True])
+@pytest.mark.parametrize("stage", ["review", "import"])
+def test_export_context_transition_protects_real_child_drafts(app, window, reports, monkeypatch, child_kind, discard, stage):
+    from metroliza.parsing.preflight import ParsePreflightService
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.ui import export_dialog
+
+    source, database = reports
+    previous = database.with_name("previous.db")
+    monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda _self: {})
+    window.set_directory(str(source))
+    window.set_db_file(str(previous))
+    window.launch_export_dialog()
+    writer = window.export_dialog
+    window.set_db_file(str(database))
+    host = window.launch_parsing_dialog()
+    if stage == "import":
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+    getattr(writer, f"open_{child_kind}_window")()
+    child = getattr(writer, f"{child_kind}_window")
+    assert child.isVisible()
+    if child_kind == "filter":
+        child.expression_input.setText("MEAS > 1")
+        assert child._is_dirty()
+    else:
+        child.default_group = "RETAINED GROUP"
+        assert child._is_grouping_dirty()
+    target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
+                    else (ParsePreflightService, "scan_source"))
+    original = getattr(target, name)
+    entered, release = Event(), Event()
+    observations = []
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    def confirm(*_args):
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        observations.append((host.can_change_workspace(), host.preflight_thread, host.parse_thread))
+        return QMessageBox.StandardButton.Yes if discard else QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(target, name, gated)
+    monkeypatch.setattr(QMessageBox, "question", confirm)
+    selected = host.report_planner.model.selected_ids
+    snapshot = window.workspace_context.snapshot
+    notice = (window.workspace_notice_label.text(), window.workspace_notice_label.isVisible())
+    try:
+        accepted = writer._update_database_context(str(database))
+        assert observations == [(True, None, None)]
+        assert not entered.is_set()
+        assert host.report_planner.model.selected_ids == selected
+        assert window.workspace_context.snapshot is snapshot
+        assert accepted is discard
+        assert not writer.database_context_transition_active
+        assert (window.workspace_notice_label.text(), window.workspace_notice_label.isVisible()) == notice
+        assert window.statusBar().currentMessage() == "Report start was blocked during Export database selection."
+        if discard:
+            assert writer.db_file == str(database)
+            assert getattr(writer, f"{child_kind}_window") is None
+            writer.close()
+        else:
+            assert writer.db_file == str(previous)
+            assert getattr(writer, f"{child_kind}_window") is child and child.isVisible()
+            if child_kind == "filter":
+                assert child.expression_input.text() == "MEAS > 1" and child._is_dirty()
+            else:
+                assert child.default_group == "RETAINED GROUP" and child._is_grouping_dirty()
+        assert window._report_start_allowed()
+        release.set()
+        (host.parse_button if stage == "import" else host.scan_button).click()
+        wait_until(app, host.can_change_workspace)
+        if stage == "review":
+            host.parse_button.click()
+            wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+    finally:
+        release.set()
+        wait_until(app, host.can_change_workspace)
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+        if not sip.isdeleted(writer):
+            writer.close()
+
+
+def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):
+    from metroliza.parsing import metadata_enrichment_thread
+
+    source, database = reports
+    other = database.with_name("metadata.sqlite")
+    entered, release = Event(), Event()
+    original = metadata_enrichment_thread.discover_metadata_enrichment_work
+
+    def gated(*args, **kwargs):
+        entered.set()
+        assert release.wait(15)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(metadata_enrichment_thread, "discover_metadata_enrichment_work", gated)
+    window.set_directory(str(source))
+    window.set_db_file(str(other))
+    window.launch_metadata_enrichment()
+    worker = window.metadata_enrichment_thread
+    try:
+        wait_until(app, entered.is_set)
+        assert worker.db_file == str(other)
+        assert window._report_start_allowed() is False
+        assert window.set_db_file(str(database))
+        host = window.launch_parsing_dialog()
+        host.scan_button.click()
+        wait_until(app, host.can_change_workspace)
+        assert host.report_planner.model.counts["ready"] == 5
+        host.parse_button.click()
+        wait_until(app, host.can_change_workspace)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
+        assert worker.isRunning() and worker.db_file == str(other)
+    finally:
+        release.set()
+        wait_until(app, lambda: window.metadata_enrichment_thread is None)
+        assert worker.wait(20000)
+        worker.deleteLater()
 
 
 def test_tools_shortcuts_use_existing_primary_navigation(window):
