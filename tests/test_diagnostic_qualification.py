@@ -36,6 +36,61 @@ def test_destructive_synthetic_scenario_requires_both_explicit_test_flags(monkey
     assert requested_scenario() is None
 
 
+@pytest.mark.parametrize("marker_kind", ("absent", "directory"))
+def test_finish_barrier_rejects_missing_or_nonfile_marker(tmp_path, marker_kind):
+    marker = tmp_path / "finish"
+    if marker_kind == "directory":
+        marker.mkdir()
+
+    with pytest.raises(ValueError, match="^qualification_barrier_timeout$"):
+        diagnostic_qualification._wait_for_finish(tmp_path, seconds=0)
+
+
+@pytest.mark.parametrize("delivery", ("existing", "during_wait"))
+def test_finish_barrier_accepts_file(tmp_path, monkeypatch, delivery):
+    marker = tmp_path / "finish"
+    if delivery == "existing":
+        marker.touch()
+    else:
+        from metroliza.app.bootstrap import get_or_create_qapplication
+
+        app = get_or_create_qapplication()
+        assert app is not None
+        monkeypatch.setattr(
+            diagnostic_qualification.time,
+            "sleep",
+            lambda _seconds: marker.touch(exist_ok=False),
+        )
+
+    diagnostic_qualification._wait_for_finish(
+        tmp_path, seconds=0 if delivery == "existing" else 1
+    )
+
+
+def test_handled_failure_barrier_timeout_is_a_closed_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", "handled_failure")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", str(tmp_path))
+    monkeypatch.setattr(diagnostic_qualification, "_run_work", lambda *_args: None)
+    actual_wait = diagnostic_qualification._wait_for_finish
+    monkeypatch.setattr(
+        diagnostic_qualification,
+        "_wait_for_finish",
+        lambda root: actual_wait(root, seconds=0),
+    )
+
+    assert diagnostic_qualification.run_qualification("handled_failure") == 21
+    assert json.loads((tmp_path / "failure.json").read_bytes()) == {
+        "schema_version": 1,
+        "stage": "application",
+        "reason": "qualification_barrier_timeout",
+    }
+    failed = json.loads((tmp_path / "qualification-failed.json").read_bytes())
+    assert failed["scenario"] == "handled_failure"
+    assert failed["stage"] == "failed"
+    assert not (tmp_path / "qualification-complete.json").exists()
+
+
 @pytest.mark.parametrize("scenario,code", [("normal", 0), ("hard_exit", 9)])
 def test_actual_package_entry_runs_only_the_pinned_synthetic_workflow(tmp_path, scenario, code):
     root = Path(__file__).resolve().parents[1]
