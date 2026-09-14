@@ -18,6 +18,46 @@ GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
 GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 
 
+def test_native_windows_report_planner_step_preserves_real_platform_and_scope() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows report planner tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
+    assert 'METROLIZA_EXPECT_PLANNER_SCREEN: 1920x1080' in step
+    for test in ('model', 'integration', 'geometry'):
+        assert f'tests/test_report_planner_{test}.py' in step
+    assert name in policy
+    assert 'scale factors 1, 1.25, 1.5 and 2' in policy
+    assert 'do not qualify a packaged EXE' in policy
+
+
+def test_native_windows_cache_publication_preserves_required_real_lifecycle() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    publication = workflow.split(
+        '- name: Run native Windows cache publication tests', 1
+    )[1].split('- name:', 1)[0]
+    lifecycle = workflow.split(
+        '- name: Run native Windows cache lifecycle tests', 1
+    )[1].split('  windows-startup-benchmark:', 1)[0]
+    assert 'tests/test_industrial_cache_publication.py' in publication
+    assert 'tests/test_industrial_cache_lifecycle.py' in lifecycle
+    assert 'QT_QPA_PLATFORM: windows' in lifecycle
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in lifecycle
+    for test in ('save_preserves_copy_before_rebind', 'rebind_cancel_keeps_operator_data',
+                 'archive_cannot_replace_active_database'):
+        assert f'::test_realtime_temp_session_{test}' in lifecycle
+    for step in (publication, lifecycle):
+        assert 'continue-on-error' not in step
+        assert 'if:' not in step
+        assert ' -k ' not in step
+    assert 'Run native Windows cache publication tests' in policy
+    assert 'Run native Windows cache lifecycle tests' in policy
+
+
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
