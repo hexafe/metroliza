@@ -381,6 +381,139 @@ def test_clean_marker_store_lock_past_close_deadline_is_bounded(
     assert marker.is_file()
 
 
+@pytest.mark.parametrize("inflight_method", ("begin_session", "authenticate_session"))
+def test_clean_finalize_starts_no_store_call_after_close_deadline(
+    tmp_path, monkeypatch, inflight_method
+):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    observed = replace(
+        _live_observation(),
+        channel="complete",
+        clean_terminal_received=True,
+        source_loss_known=True,
+        termination="observed_exit",
+        exit_code=0,
+    )
+    entered, release = threading.Event(), threading.Event()
+    calls = {"begin_session": 0, "authenticate_session": 0, "end_session": 0}
+    original_begin = store.begin_session
+    original_authenticate = store.authenticate_session
+    original_end = store.end_session
+
+    def recorded_begin(*args, **kwargs):
+        calls["begin_session"] += 1
+        if inflight_method == "begin_session":
+            entered.set()
+            assert release.wait(2)
+        return original_begin(*args, **kwargs)
+
+    def recorded_authenticate(*args, **kwargs):
+        calls["authenticate_session"] += 1
+        if inflight_method == "authenticate_session":
+            entered.set()
+            assert release.wait(2)
+        return original_authenticate(*args, **kwargs)
+
+    def recorded_end(*args, **kwargs):
+        calls["end_session"] += 1
+        return original_end(*args, **kwargs)
+
+    monkeypatch.setattr(store, "begin_session", recorded_begin)
+    monkeypatch.setattr(store, "authenticate_session", recorded_authenticate)
+    monkeypatch.setattr(store, "end_session", recorded_end)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    queued = (
+        publisher.begin()
+        if inflight_method == "begin_session"
+        else publisher.authenticate(observed.session_id)
+    )
+    assert queued
+    assert entered.wait(1)
+    statuses = []
+    close_returned = threading.Event()
+
+    def close_publisher():
+        statuses.append(publisher.close(observed))
+        close_returned.set()
+
+    closer = threading.Thread(target=close_publisher)
+    closer.start()
+    try:
+        assert close_returned.wait(1.2)
+        assert statuses == [StoreStatus.PUBLISH_INCOMPLETE]
+        release.set()
+        publisher.worker.join(2)
+    finally:
+        release.set()
+        closer.join(2)
+        publisher.worker.join(2)
+
+    assert not publisher.worker.is_alive()
+    expected = (
+        {"begin_session": 1, "authenticate_session": 0, "end_session": 0}
+        if inflight_method == "begin_session"
+        else {"begin_session": 1, "authenticate_session": 1, "end_session": 0}
+    )
+    assert calls == expected
+    assert (store.root / f"marker-{observed.session_id}.json").is_file()
+
+
+def test_final_incident_starts_no_publish_after_close_deadline(tmp_path, monkeypatch):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    observed = replace(_live_observation(), termination="observed_exit", exit_code=9)
+    entered, release = threading.Event(), threading.Event()
+    original_begin = store.begin_session
+    original_publish = store.publish
+    publish_calls = 0
+
+    def held_begin(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return original_begin(*args, **kwargs)
+
+    def recorded_publish(*args, **kwargs):
+        nonlocal publish_calls
+        publish_calls += 1
+        return original_publish(*args, **kwargs)
+
+    monkeypatch.setattr(store, "begin_session", held_begin)
+    monkeypatch.setattr(store, "publish", recorded_publish)
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    assert publisher.begin()
+    assert entered.wait(1)
+    statuses = []
+    close_returned = threading.Event()
+
+    def close_publisher():
+        statuses.append(publisher.close(observed))
+        close_returned.set()
+
+    closer = threading.Thread(target=close_publisher)
+    closer.start()
+    try:
+        assert close_returned.wait(1.2)
+        assert statuses == [StoreStatus.PUBLISH_INCOMPLETE]
+        release.set()
+        publisher.worker.join(2)
+    finally:
+        release.set()
+        closer.join(2)
+        publisher.worker.join(2)
+
+    assert not publisher.worker.is_alive()
+    assert publish_calls == 0
+    assert store.list_reports().reports == ()
+    assert (store.root / f"marker-{observed.session_id}.json").is_file()
+
+
 def test_final_incident_store_lock_past_close_deadline_is_bounded(tmp_path, monkeypatch):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
     from metroliza.shared.diagnostic_store import _StoreLock

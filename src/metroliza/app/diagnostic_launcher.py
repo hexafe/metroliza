@@ -168,11 +168,12 @@ class _OperationPublisher:
                 self.wake.clear()
             self.wake.wait(0.05)
 
-    def _ensure_begin(self) -> StoreStatus:
+    def _ensure_begin(self, *, deadline: float | None = None) -> StoreStatus:
         if self.marker_status is StoreStatus.MARKER_STARTED:
             return self.marker_status
         status = self._retry_lock(
-            lambda: self.store.begin_session(self.session_id, self.git_sha).status
+            lambda: self.store.begin_session(self.session_id, self.git_sha).status,
+            deadline=deadline,
         )
         if status is not StoreStatus.LOCK_UNAVAILABLE:
             self.marker_status = status
@@ -180,14 +181,15 @@ class _OperationPublisher:
             self.failed.set()
         return status
 
-    def _ensure_authenticated(self) -> StoreStatus:
-        marker = self._ensure_begin()
+    def _ensure_authenticated(self, *, deadline: float | None = None) -> StoreStatus:
+        marker = self._ensure_begin(deadline=deadline)
         if marker is not StoreStatus.MARKER_STARTED:
             return marker
         if self.authentication_status is StoreStatus.MARKER_AUTHENTICATED:
             return self.authentication_status
         status = self._retry_lock(
-            lambda: self.store.authenticate_session(self.session_id).status
+            lambda: self.store.authenticate_session(self.session_id).status,
+            deadline=deadline,
         )
         if status is not StoreStatus.LOCK_UNAVAILABLE:
             self.authentication_status = status
@@ -200,6 +202,8 @@ class _OperationPublisher:
         callback: Callable[[], StoreStatus], *, deadline: float | None = None
     ) -> StoreStatus:
         deadline = deadline if deadline is not None else time.monotonic() + 1.0
+        if time.monotonic() >= deadline:
+            return StoreStatus.LOCK_UNAVAILABLE
         status = callback()
         while status is StoreStatus.LOCK_UNAVAILABLE:
             remaining = deadline - time.monotonic()
@@ -237,9 +241,9 @@ class _OperationPublisher:
                 deadline=self.close_deadline,
             )
         if observed.launch == "started":
-            self._ensure_begin()
+            self._ensure_begin(deadline=self.close_deadline)
             if observed.handshake == "accepted":
-                self._ensure_authenticated()
+                self._ensure_authenticated(deadline=self.close_deadline)
         if self.authentication_status is StoreStatus.MARKER_AUTHENTICATED:
             return self._retry_lock(
                 lambda: self.store.end_session(self.session_id, clean=True).status,
