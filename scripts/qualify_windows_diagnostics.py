@@ -1146,6 +1146,16 @@ class _WindowsApi:
             raise QualificationFailure("restricted_launch_unavailable")
         return int(rid.contents.value)
 
+    def _close_restricted_after_current_close_failure(
+        self, restricted, primary: BaseException
+    ) -> None:
+        try:
+            cleanup_succeeded = self._close_handles(restricted)
+        except BaseException:
+            cleanup_succeeded = False
+        if isinstance(primary, QualificationFailure):
+            primary.record_cleanup(succeeded=cleanup_succeeded)
+
     def _restricted_token(self):
         wt = self.wintypes
         current = wt.HANDLE()
@@ -1190,10 +1200,10 @@ class _WindowsApi:
         finally:
             try:
                 _attempt_cleanup(lambda: self._require_closed_handles(current))
-            except QualificationFailure as error:
+            except BaseException as error:
                 if restricted:
-                    error.record_cleanup(
-                        succeeded=self._close_handles(restricted)
+                    self._close_restricted_after_current_close_failure(
+                        restricted, error
                     )
                 raise
 

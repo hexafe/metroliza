@@ -642,6 +642,60 @@ def test_interrupted_token_creation_closes_acquired_handles(
     assert closed == ([1] if failure_phase == "open" else [2, 1])
 
 
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("restricted_cleanup_fails", [False, True])
+def test_interrupted_final_current_token_close_attempts_restricted_cleanup(
+    monkeypatch, failure_type, restricted_cleanup_fails
+) -> None:
+    from types import SimpleNamespace
+
+    primary = failure_type("PRIVATE_INTERRUPT_DETAIL")
+    secondary = SystemExit("PRIVATE_CLEANUP_DETAIL")
+    closed = []
+
+    class _Handle:
+        value = 0
+
+        def __bool__(self):
+            return bool(self.value)
+
+    class _Advapi:
+        def OpenProcessToken(self, _process, _access, current):
+            current.value = 1
+            return True
+
+        def CreateWellKnownSid(self, *_arguments):
+            return True
+
+        def CreateRestrictedToken(self, *_arguments):
+            _arguments[-1].value = 2
+            return True
+
+    def close(handle):
+        closed.append(handle.value)
+        if handle.value == 1:
+            raise primary
+        if restricted_cleanup_fails:
+            raise secondary
+        return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = SimpleNamespace(HANDLE=_Handle, DWORD=qualification.ctypes.c_uint32)
+    api.kernel = SimpleNamespace(GetCurrentProcess=lambda: -1, CloseHandle=close)
+    api.advapi = _Advapi()
+    api.SID_AND_ATTRIBUTES = lambda *_arguments: object()
+    api._set_medium_integrity = lambda _token: None
+    api._integrity_rid = lambda _token: qualification.MEDIUM_INTEGRITY_RID
+    api._has_effective_admin_membership = lambda _token, _sid: False
+    monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
+
+    with pytest.raises(failure_type) as caught:
+        api._restricted_token()
+
+    assert caught.value is primary
+    assert closed == [1, 2]
+
+
 def test_concurrent_cleanup_attempts_every_owned_process() -> None:
     calls = []
 
