@@ -488,9 +488,60 @@ def test_failed_launch_cleanup_drains_job_and_closes_every_handle() -> None:
     ]
 
 
-def test_launch_ordinary_exception_cleans_created_process_and_fixed_primary(
-    tmp_path, monkeypatch
+class _InterruptedLaunchKernel:
+    def __init__(self, primary, failure_phase):
+        self.primary = primary
+        self.failure_phase = failure_phase
+        self.closed = []
+        self.terminated = []
+
+    def CreateJobObjectW(self, _security, _name):
+        if self.failure_phase == "job":
+            raise self.primary
+        return "owned-job"
+
+    def SetInformationJobObject(self, *_arguments):
+        return 1
+
+    def AssignProcessToJobObject(self, _job, _process):
+        raise self.primary
+
+    def TerminateJobObject(self, _job, _code):
+        self.terminated.append("owned-job")
+        return 1
+
+    def TerminateProcess(self, _process, _code):
+        self.terminated.append("primary")
+        return 1
+
+    def WaitForSingleObject(self, _process, _milliseconds):
+        return qualification.WAIT_OBJECT_0
+
+    def CloseHandle(self, handle):
+        self.closed.append(handle)
+        return 1
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_type"),
+    [
+        (RuntimeError, qualification.QualificationFailure),
+        (KeyboardInterrupt, KeyboardInterrupt),
+        (SystemExit, SystemExit),
+    ],
+)
+@pytest.mark.parametrize(
+    ("failure_phase", "terminated", "closed"),
+    [
+        ("job", [], ["token"]),
+        ("create", ["owned-job", "primary"], ["thread", "primary", "owned-job", "token"]),
+        ("assign", ["owned-job", "primary"], ["thread", "primary", "owned-job", "token"]),
+    ],
+)
+def test_launch_failure_cleans_created_process_and_preserves_primary(
+    tmp_path, monkeypatch, failure_type, expected_type, failure_phase, terminated, closed
 ) -> None:
+    primary = failure_type("PRIVATE_NATIVE_TEXT")
     class _Limits:
         class _Basic:
             LimitFlags = 0
@@ -501,42 +552,20 @@ def test_launch_ordinary_exception_cleans_created_process_and_fixed_primary(
         cb = 0
 
     class _Process:
-        hThread = "thread"
-        hProcess = "primary"
+        hThread = None
+        hProcess = None
         dwProcessId = 123
-
-    class _Kernel:
-        def __init__(self) -> None:
-            self.closed = []
-
-        def CreateJobObjectW(self, _security, _name):
-            return "owned-job"
-
-        def SetInformationJobObject(self, *_arguments):
-            return 1
-
-        def AssignProcessToJobObject(self, _job, _process):
-            raise RuntimeError("PRIVATE_NATIVE_TEXT")
-
-        def TerminateJobObject(self, _job, _code):
-            return 1
-
-        def TerminateProcess(self, _process, _code):
-            return 1
-
-        def WaitForSingleObject(self, _process, _milliseconds):
-            return qualification.WAIT_OBJECT_0
-
-        def CloseHandle(self, handle):
-            self.closed.append(handle)
-            return 1
 
     class _Advapi:
         def CreateProcessAsUserW(self, *_arguments):
+            _arguments[-1].hThread = "thread"
+            _arguments[-1].hProcess = "primary"
+            if failure_phase == "create":
+                raise primary
             return 1
 
     api = object.__new__(qualification._WindowsApi)
-    api.kernel = _Kernel()
+    api.kernel = _InterruptedLaunchKernel(primary, failure_phase)
     api.advapi = _Advapi()
     api.EXTENDED_LIMITS = _Limits
     api.STARTUPINFOW = _Startup
@@ -546,13 +575,71 @@ def test_launch_ordinary_exception_cleans_created_process_and_fixed_primary(
     monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
     monkeypatch.setattr(qualification.ctypes, "sizeof", lambda _value: 1)
 
-    with pytest.raises(qualification.QualificationFailure) as caught:
+    with pytest.raises(expected_type) as caught:
         api.launch(tmp_path / "app.exe", {"SYSTEMROOT": "fixed"}, tmp_path)
 
-    assert caught.value.failure_id == "restricted_launch_unavailable"
-    assert caught.value.qualification_cleanup == "complete"
-    assert api.kernel.closed == ["thread", "primary", "owned-job", "token"]
-    assert "PRIVATE_NATIVE_TEXT" not in str(caught.value)
+    if failure_type is RuntimeError:
+        assert caught.value.failure_id == "restricted_launch_unavailable"
+        assert caught.value.qualification_cleanup == "complete"
+        assert "PRIVATE_NATIVE_TEXT" not in str(caught.value)
+    else:
+        assert caught.value is primary
+    assert api.kernel.terminated == terminated
+    assert api.kernel.closed == closed
+
+
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("failure_phase", ["open", "restrict", "medium"])
+def test_interrupted_token_creation_closes_acquired_handles(
+    monkeypatch, failure_type, failure_phase
+) -> None:
+    from types import SimpleNamespace
+
+    primary = failure_type("PRIVATE_INTERRUPT_DETAIL")
+    closed = []
+
+    class _Handle:
+        value = 0
+
+        def __bool__(self):
+            return bool(self.value)
+
+    class _Advapi:
+        def OpenProcessToken(self, _process, _access, current):
+            current.value = 1
+            if failure_phase == "open":
+                raise primary
+            return True
+
+        def CreateWellKnownSid(self, *_arguments):
+            return True
+
+        def CreateRestrictedToken(self, *_arguments):
+            _arguments[-1].value = 2
+            if failure_phase == "restrict":
+                raise primary
+            return True
+
+    def interrupt_medium(_token):
+        raise primary
+
+    def close(handle):
+        closed.append(handle.value)
+        return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = SimpleNamespace(HANDLE=_Handle, DWORD=qualification.ctypes.c_uint32)
+    api.kernel = SimpleNamespace(GetCurrentProcess=lambda: -1, CloseHandle=close)
+    api.advapi = _Advapi()
+    api.SID_AND_ATTRIBUTES = lambda *_arguments: object()
+    api._set_medium_integrity = interrupt_medium
+    monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
+
+    with pytest.raises(failure_type) as caught:
+        api._restricted_token()
+
+    assert caught.value is primary
+    assert closed == ([1] if failure_phase == "open" else [2, 1])
 
 
 def test_concurrent_cleanup_attempts_every_owned_process() -> None:
@@ -1020,6 +1107,50 @@ def test_child_receipt_requires_packaged_medium_integrity_ordinary_user(tmp_path
     assert qualification._validate_child_failure(failure_path) == failure
     failure["reason"] = "arbitrary private exception"
     failure_path.write_text(json.dumps(failure), encoding="ascii")
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_child_failure(failure_path)
+
+
+def test_child_failure_accepts_closed_cleanup_and_rejects_malformed_cleanup(
+    tmp_path,
+) -> None:
+    failure_path = tmp_path / "failure.json"
+    qualification_entry._write_failure(
+        tmp_path,
+        "preview",
+        qualification_entry._PreviewFailure(
+            "qualification_menu_unavailable", "failed"
+        ),
+    )
+    expected = {
+        "schema_version": 1,
+        "stage": "preview",
+        "reason": "qualification_menu_unavailable",
+        "cleanup": "failed",
+    }
+    assert qualification._validate_child_failure(failure_path) == expected
+
+    for cleanup in qualification.QUALIFICATION_CLEANUP_STATUSES:
+        candidate = {**expected, "cleanup": cleanup}
+        failure_path.write_text(json.dumps(candidate), encoding="ascii")
+        assert qualification._validate_child_failure(failure_path) == candidate
+
+    for cleanup in ("PRIVATE_PATH", [], {"private": "value"}):
+        failure_path.write_text(
+            json.dumps({**expected, "cleanup": cleanup}), encoding="ascii"
+        )
+        with pytest.raises(qualification.QualificationFailure):
+            qualification._validate_child_failure(failure_path)
+
+    failure_path.write_text(
+        json.dumps({**expected, "private": "value"}), encoding="ascii"
+    )
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_child_failure(failure_path)
+
+    failure_path.write_text(
+        json.dumps({**expected, "stage": "workflows"}), encoding="ascii"
+    )
     with pytest.raises(qualification.QualificationFailure):
         qualification._validate_child_failure(failure_path)
 
@@ -1693,6 +1824,85 @@ def test_failed_child_receipt_retains_host_stage_and_closed_child_evidence(
     assert caught.value.qualification_stage == "handled_failure"
     assert caught.value.qualification_child_stage == "workflows"
     assert caught.value.qualification_reason == "qualification_result_mismatch"
+
+
+def test_failed_child_cleanup_survives_host_cleanup_and_public_receipt(
+    tmp_path, monkeypatch
+) -> None:
+    work = tmp_path / "work"
+    artifact = tmp_path / "artifact"
+    output = tmp_path / "output"
+    work.mkdir()
+    artifact.mkdir()
+    receipt = {
+        "schema_version": 1,
+        "scenario": "preview",
+        "stage": "failed",
+        "packaged": True,
+        "console_none": True,
+        "ordinary_user": True,
+        "integrity_level": "medium",
+    }
+    (work / qualification.QUALIFICATION_RECEIPT_NAMES["failed"]).write_text(
+        json.dumps(receipt), encoding="ascii"
+    )
+    qualification_entry._write_failure(
+        work,
+        "preview",
+        qualification_entry._PreviewFailure(
+            "qualification_menu_unavailable", "failed"
+        ),
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        try:
+            qualification._run_driver_phase(
+                "preview",
+                lambda: qualification._observe_qualification_receipt(
+                    work, "preview", _FakeProcess(21, supervised=True), None, False
+                ),
+            )
+        finally:
+            qualification._attempt_cleanup(lambda: None)
+
+    failure = caught.value
+    assert failure.qualification_stage == "preview"
+    assert failure.qualification_child_stage == "preview"
+    assert failure.qualification_reason == "qualification_menu_unavailable"
+    assert failure.qualification_cleanup == "failed"
+
+    class _Arguments:
+        artifact_dir = artifact
+        output_dir = output
+
+    class _Parser:
+        def parse_args(self, _arguments):
+            return _Arguments()
+
+    monkeypatch.setattr(qualification, "_parser", lambda: _Parser())
+    monkeypatch.setattr(
+        qualification,
+        "qualify_windows_diagnostics",
+        lambda *_arguments: qualification.QualificationResult(
+            "failed",
+            failure.failure_id,
+            None,
+            qualification_stage=failure.qualification_stage,
+            qualification_reason=failure.qualification_reason,
+            qualification_child_stage=failure.qualification_child_stage,
+            qualification_cleanup=failure.qualification_cleanup,
+        ),
+    )
+
+    assert qualification.main([]) == 1
+    payload = json.loads((output / qualification.OUTPUT_NAME).read_text("ascii"))
+    qualification._validate_output_payload(payload)
+    assert payload["qualification_failure"] == {
+        "stage": "preview",
+        "reason": "qualification_menu_unavailable",
+        "child_stage": "preview",
+    }
+    assert payload["qualification_cleanup"] == "failed"
 
 
 def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypatch) -> None:

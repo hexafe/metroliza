@@ -85,6 +85,118 @@ def test_unavailable_default_store_still_runs_and_preserves_actual_child_exit(tm
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("cleanup_status", ["complete", "failed"])
+@pytest.mark.parametrize("menu_fault", ["missing_action", "hidden_help", "disabled_help"])
+def test_preview_requires_the_real_normal_help_action(
+    tmp_path, monkeypatch, cleanup_status, menu_fault
+):
+    from metroliza.app.bootstrap import get_or_create_qapplication
+    from metroliza.ui.main_window import MainWindow
+
+    state = tmp_path / "application-state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    monkeypatch.setenv("LOCALAPPDATA", str(state))
+    store = IncidentStore()
+    child = Path(__file__).parent / "fixtures/diagnostic_child.py"
+    crashed = run_with_store([sys.executable, str(child), "hard_exit"], store=store)
+    assert crashed.storage_status is StoreStatus.SAVED
+    work = tmp_path / "preview"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    original_setup = MainWindow.setup_menu_actions
+
+    def with_unavailable_menu(window):
+        original_setup(window)
+        action = window.diagnostic_incidents_action
+        assert action in window.help_menu.actions()
+        assert action.isEnabled() and action.isVisible()
+        assert action.text() == "Diagnostic incidents…"
+        if menu_fault == "missing_action":
+            window.help_menu.removeAction(action)
+        elif menu_fault == "hidden_help":
+            window.help_menu.menuAction().setVisible(False)
+        else:
+            window.help_menu.menuAction().setEnabled(False)
+
+    monkeypatch.setattr(MainWindow, "setup_menu_actions", with_unavailable_menu)
+    app = get_or_create_qapplication()
+    assert app is not None
+    windows = []
+    close_methods = []
+    create_window = diagnostic_qualification._preview_main_window
+
+    def capture_window(root):
+        window = create_window(root)
+        windows.append(window)
+        close_methods.append(window.close)
+        if cleanup_status == "failed":
+            monkeypatch.setattr(window, "close", lambda: False)
+        return window
+
+    monkeypatch.setattr(diagnostic_qualification, "_preview_main_window", capture_window)
+    try:
+        with pytest.raises(ValueError, match="^qualification_menu_unavailable$") as failure:
+            diagnostic_qualification._preview_export(work)
+        assert failure.value.cleanup == cleanup_status
+        assert len(windows) == 1
+        assert windows[0].isVisible() is (cleanup_status == "failed")
+        diagnostic_qualification._write_failure(work, "preview", failure.value)
+        assert json.loads((work / "failure.json").read_bytes()) == {
+            "schema_version": 1,
+            "stage": "preview",
+            "reason": "qualification_menu_unavailable",
+            "cleanup": cleanup_status,
+        }
+    finally:
+        for close in close_methods:
+            close()
+    assert not (work / "selected.zip").exists()
+
+
+def test_preview_failure_receipt_revalidates_cleanup_without_private_text(tmp_path):
+    failure = diagnostic_qualification._PreviewFailure("qualification_menu_unavailable", "complete")
+    failure.cleanup = "PRIVATE_CLEANUP_DETAIL"
+    diagnostic_qualification._write_failure(tmp_path, "preview", failure)
+    assert json.loads((tmp_path / "failure.json").read_bytes()) == {
+        "schema_version": 1,
+        "stage": "preview",
+        "reason": "qualification_menu_unavailable",
+        "cleanup": "failed",
+    }
+
+
+@pytest.mark.parametrize("has_window", [False, True])
+def test_preview_cleanup_survives_widget_import_failure(monkeypatch, has_window):
+    import builtins
+
+    from metroliza.app.bootstrap import get_or_create_qapplication
+    from PyQt6.QtWidgets import QMainWindow
+
+    app = get_or_create_qapplication()
+    assert app is not None
+    window = QMainWindow() if has_window else None
+    if window is not None:
+        window.show()
+        assert window.isVisible()
+    original_import = builtins.__import__
+
+    def unavailable_dialog(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "PyQt6.QtWidgets" and "QDialog" in fromlist:
+            raise ImportError("PRIVATE_IMPORT_FAILURE")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", unavailable_dialog)
+    try:
+        assert diagnostic_qualification._close_preview_windows(window) == (
+            "failed" if has_window else "not_attempted"
+        )
+        if window is not None:
+            assert not window.isVisible()
+    finally:
+        if window is not None:
+            window.close()
+
+
 @pytest.mark.parametrize("headless_environment", [False, True], ids=["desktop-env", "headless-env"])
 def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
     tmp_path, headless_environment
