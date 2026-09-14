@@ -160,6 +160,22 @@ def sqlite_readonly_connection_scope(db_path: str) -> Iterator[sqlite3.Connectio
         yield connection
 
 
+@contextmanager
+def sqlite_query_only_connection_scope(db_path: str) -> Iterator[sqlite3.Connection]:
+    """Block SQL writes while allowing SQLite's normal WAL housekeeping on close.
+
+    Open only an existing database, without initializing its journal mode.
+    SQLite recovery/checkpoint and sidecar cleanup may still change files.
+    """
+
+    resolved_path = Path(db_path).resolve(strict=False)
+    database_uri = f"file:{quote(str(resolved_path))}?mode=rw"
+    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+        with closing(connection.cursor()) as cursor:
+            cursor.execute("PRAGMA query_only=ON")
+        yield connection
+
+
 def backup_sqlite_database(source_path: str, destination_path: str) -> None:
     """Write and integrity-check a consistent SQLite backup at ``destination_path``."""
 
