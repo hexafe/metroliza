@@ -27,6 +27,7 @@ from modules.db import (
     read_sql_dataframe,
     read_sql_query_result,
     run_transaction_with_retry,
+    sqlite_query_only_connection_scope,
     sqlite_readonly_connection_scope,
 )
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema
@@ -126,6 +127,36 @@ class TestDbUtils(unittest.TestCase):
                 connection.execute("INSERT INTO sample (name) VALUES ('blocked')")
 
         self.assertEqual(rows, [("alpha",), ("beta",)])
+
+    def test_sqlite_query_only_connection_scope_blocks_writes_and_closes(self):
+        original = Path(self.db_path).read_bytes()
+        with sqlite_query_only_connection_scope(self.db_path) as connection:
+            with closing(connection.cursor()) as cursor:
+                for statement in (
+                    "INSERT INTO sample (name) VALUES ('blocked')",
+                    "UPDATE sample SET name = 'blocked'",
+                    "DELETE FROM sample",
+                    "CREATE TABLE blocked (value TEXT)",
+                    "DROP TABLE sample",
+                ):
+                    with self.subTest(statement=statement):
+                        with self.assertRaises(sqlite3.OperationalError) as raised:
+                            cursor.execute(statement)
+                        self.assertEqual(raised.exception.sqlite_errorcode, sqlite3.SQLITE_READONLY)
+                rows = cursor.execute("SELECT name FROM sample ORDER BY id").fetchall()
+
+        self.assertEqual(rows, [("alpha",), ("beta",)])
+        self.assertEqual(Path(self.db_path).read_bytes(), original)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+
+    def test_sqlite_query_only_connection_scope_does_not_create_missing_database(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "missing.sqlite"
+            with self.assertRaises(sqlite3.OperationalError):
+                with sqlite_query_only_connection_scope(str(source)):
+                    self.fail("Missing database unexpectedly opened")
+            self.assertFalse(source.exists())
 
     def test_execute_with_retry_raises_for_non_transient_error(self):
         with self.assertRaises(sqlite3.OperationalError):
