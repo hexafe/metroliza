@@ -7,10 +7,12 @@ from contextlib import closing
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sqlite3
 import stat
 import tempfile
+from urllib.parse import quote
 
-from metroliza.reports.db import backup_sqlite_database, sqlite_readonly_connection_scope
+from metroliza.reports.db import backup_sqlite_database
 
 
 _DISPOSABLE_COUNT_QUERIES = {
@@ -145,8 +147,12 @@ def disposable_cache_counts(database: str | Path) -> dict[str, int]:
         return {table: 0 for table in _DISPOSABLE_DATA_TABLES}
 
     counts = {table: 0 for table in _DISPOSABLE_DATA_TABLES}
-    with sqlite_readonly_connection_scope(str(path)) as connection:
+    database_uri = f"file:{quote(str(path.resolve(strict=False)))}?mode=rw"
+    # Own the connection before any query can fail. A writable handle lets
+    # SQLite clean up WAL sidecars on close; query_only forbids SQL data writes.
+    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
         with closing(connection.cursor()) as cursor:
+            cursor.execute("PRAGMA query_only=ON")
             cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
             available_tables = {str(row[0]) for row in cursor.fetchall()}
             for table in _DISPOSABLE_DATA_TABLES:

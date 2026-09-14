@@ -90,12 +90,17 @@ def test_disposable_counts_close_connection_when_database_is_unreadable(monkeypa
     assert not source.exists()
 
 
-def test_disposable_counts_do_not_modify_database_or_create_sidecars(tmp_path):
-    source = tmp_path / "read only cache.sqlite"
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_disposable_counts_do_not_modify_database_or_create_sidecars(tmp_path, journal_mode):
+    source = tmp_path / "cache # próba%.sqlite"
     with closing(sqlite3.connect(source)) as connection, connection:
+        assert connection.execute(f"PRAGMA journal_mode={journal_mode}").fetchone() == (
+            journal_mode.lower(),
+        )
         connection.execute("CREATE TABLE industrial_records (id INTEGER PRIMARY KEY)")
         connection.execute("INSERT INTO industrial_records VALUES (7)")
     original = source.read_bytes()
+    assert all(not Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
 
     counts = disposable_cache_counts(source)
 
@@ -103,6 +108,26 @@ def test_disposable_counts_do_not_modify_database_or_create_sidecars(tmp_path):
     assert sum(counts.values()) == 1
     assert source.read_bytes() == original
     assert all(not Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+    with closing(sqlite3.connect(source)) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert connection.execute("SELECT id FROM industrial_records").fetchall() == [(7,)]
+
+
+def test_disposable_counts_missing_before_connect_does_not_create_database(monkeypatch, tmp_path):
+    source = tmp_path / "missing.sqlite"
+    assert not any(disposable_cache_counts(source).values())
+    assert not source.exists()
+    _write_marker_database(source)
+    real_connect = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        source.unlink()
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.OperationalError):
+        disposable_cache_counts(source)
+    assert not source.exists()
 
 
 def test_disposable_counts_include_committed_rows_in_live_wal(tmp_path):
@@ -112,12 +137,20 @@ def test_disposable_counts_include_committed_rows_in_live_wal(tmp_path):
         connection.execute("CREATE TABLE industrial_records (id INTEGER PRIMARY KEY)")
         connection.execute("INSERT INTO industrial_records VALUES (7)")
         connection.commit()
-        assert Path(f"{source}-wal").is_file()
+        wal_path = Path(f"{source}-wal")
+        assert wal_path.is_file()
+        original = source.read_bytes()
+        original_wal = wal_path.read_bytes()
 
         counts = disposable_cache_counts(source)
 
         assert counts["industrial_records"] == 1
         assert sum(counts.values()) == 1
+        assert source.read_bytes() == original
+        assert wal_path.read_bytes() == original_wal
+        connection.execute("INSERT INTO industrial_records VALUES (8)")
+        connection.commit()
+        assert disposable_cache_counts(source)["industrial_records"] == 2
 
 
 def test_failed_snapshot_does_not_create_destination(tmp_path):
