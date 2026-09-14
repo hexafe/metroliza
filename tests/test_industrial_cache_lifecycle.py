@@ -357,6 +357,7 @@ def test_posix_staging_directory_and_database_are_private_without_umask(
         cleanup_temporary_industrial_cache(target)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX publication primitive control")
 def test_posix_publication_uses_atomic_hard_link(monkeypatch, tmp_path):
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "posix.sqlite"
@@ -411,10 +412,10 @@ def test_windows_publication_uses_atomic_no_replace_rename(monkeypatch, tmp_path
 def test_unsupported_publication_primitive_fails_closed(monkeypatch, tmp_path):
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "unsupported.sqlite"
-    monkeypatch.setattr(cache_target_module, "_PUBLICATION_PLATFORM", "posix")
+    primitive = "rename" if os.name == "nt" else "link"
     monkeypatch.setattr(
         cache_target_module.os,
-        "link",
+        primitive,
         lambda *_args: (_ for _ in ()).throw(OSError("hard links unsupported")),
     )
     try:
@@ -428,6 +429,21 @@ def test_unsupported_publication_primitive_fails_closed(monkeypatch, tmp_path):
         _assert_no_staging_artifacts(destination)
     finally:
         cleanup_temporary_industrial_cache(target)
+
+
+def test_directory_destination_is_rejected_without_symlink_privileges(tmp_path):
+    source = tmp_path / "source.sqlite"
+    original = _write_marker_database(source)
+    destination = tmp_path / "directory.sqlite"
+    destination.mkdir()
+    target = IndustrialCacheTarget("temporary", str(source), is_temporary=True)
+
+    with pytest.raises(ValueError, match="regular file"):
+        persist_temporary_industrial_cache(target, destination)
+
+    assert source.read_bytes() == original
+    assert destination.is_dir()
+    _assert_no_staging_artifacts(destination)
 
 
 def test_successful_commit_has_no_post_publication_rollback(monkeypatch, tmp_path):
@@ -668,6 +684,98 @@ def test_save_cache_as_keeps_temporary_rows(tmp_path, monkeypatch):
         assert "Durable storage" in dialog.storage_lifecycle_label.text()
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize("outcome", ("success", "flush_failure", "cancel"))
+def test_realtime_archive_is_valid_before_rebind_and_session_cleanup(
+    tmp_path, monkeypatch, outcome
+):
+    from PyQt6.QtCore import QSettings
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+    import metroliza.ui.main_window as main_window_module
+    from metroliza.ui.ui_preferences import UiPreferences
+
+    _qapplication()
+    preferences = UiPreferences(QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat))
+    window = main_window_module.MainWindow(
+        version_label="test", days_until_expiration=None, ui_preferences=preferences
+    )
+    events = []
+    warnings = []
+    errors = []
+    archive = tmp_path / "saved session ź.sqlite"
+    incoming = tmp_path / "incoming.db"
+    try:
+        window.launch_realtime_industrial_monitoring_dialog()
+        dialog = window.realtime_monitoring_dialog
+        source = Path(dialog.db_file)
+        _populate_cache(str(source))
+        source_bytes = source.read_bytes()
+        real_rebind = dialog.rebind_database
+        real_cleanup = window._cleanup_realtime_session_db
+
+        def assert_archive_before_mutation(stage):
+            assert source.exists()
+            assert source.read_bytes() == source_bytes
+            assert archive.is_file()
+            with closing(sqlite3.connect(archive)) as connection:
+                assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+                assert connection.execute(
+                    "SELECT source_record_key FROM industrial_records"
+                ).fetchall() == [("row-1",)]
+            events.append(stage)
+
+        def observed_rebind(database):
+            assert_archive_before_mutation("rebind")
+            return real_rebind(database)
+
+        def observed_cleanup():
+            assert_archive_before_mutation("cleanup")
+            return real_cleanup()
+
+        def fail_flush(_descriptor):
+            raise OSError(5, "synthetic flush failure")
+
+        choice = QMessageBox.StandardButton.Cancel if outcome == "cancel" else QMessageBox.StandardButton.Save
+        with monkeypatch.context() as scoped:
+            scoped.setattr(QMessageBox, "question", lambda *_a, **_k: choice)
+            scoped.setattr(QFileDialog, "getSaveFileName", lambda *_a, **_k: (str(archive), "SQLite"))
+            scoped.setattr(QMessageBox, "warning", lambda *_a, **_k: warnings.append(True))
+            scoped.setattr(main_window_module, "CustomLogger", lambda *_a, **_k: errors.append(True))
+            scoped.setattr(dialog, "rebind_database", observed_rebind)
+            scoped.setattr(window, "_cleanup_realtime_session_db", observed_cleanup)
+            if outcome == "flush_failure":
+                scoped.setattr(cache_target_module.os, "fsync", fail_flush)
+            window.set_db_file(str(incoming))
+
+        if outcome == "success":
+            assert events == ["rebind", "cleanup"]
+            assert not source.exists()
+            assert archive.is_file()
+            with closing(sqlite3.connect(archive)) as connection:
+                assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+                assert connection.execute(
+                    "SELECT source_record_key FROM industrial_records"
+                ).fetchall() == [("row-1",)]
+            assert dialog.db_file == str(incoming)
+            assert "Durable storage" in dialog.storage_lifecycle_label.text()
+            assert not warnings and not errors
+        else:
+            assert events == []
+            assert source.read_bytes() == source_bytes
+            assert not archive.exists()
+            assert dialog.db_file == str(source)
+            assert "Durable storage" not in dialog.storage_lifecycle_label.text()
+            assert warnings == ([True] if outcome == "flush_failure" else [])
+            assert errors == ([True] if outcome == "flush_failure" else [])
+        _assert_no_staging_artifacts(archive)
+    finally:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                QMessageBox, "question", lambda *_a, **_k: QMessageBox.StandardButton.Discard
+            )
+            window.close()
 
 
 def test_dialog_save_paths_cannot_replace_active_workspace_database(
