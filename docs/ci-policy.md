@@ -59,6 +59,13 @@ actual separate ordinary-user account, a linked token, or protection from a priv
 administrator. Only safe classifications/counts are printed; short tracebacks suppress fixture identity dumps.
 Real token access checks and impersonated file operations are required; mock access checks,
 DACL-presence-only checks, and an omitted whole-file test are not acceptance.
+The product creates the owned Windows directory with a protected allowlist at creation,
+validates its pinned native handle before output, and retains that handle through worker
+completion to refuse directory replacement. Native failure controls cover real creation,
+post-ownership security validation and handle-directed cleanup; UI tests retain ownership
+and refuse false shutdown completion when cleanup fails. An unavailable private session
+blocks default output with a fixed explanation while an explicitly chosen output file
+keeps its existing operator-directed behavior.
 
 ## Optional/manual checks (non-blocking)
 

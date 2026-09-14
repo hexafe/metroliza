@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from contextlib import ExitStack
 import json
+import gc
 import os
 import sys
 import tempfile
@@ -1190,6 +1191,155 @@ def _assert_dashboard_privacy(directory, html_path):
         assert directory.stat().st_mode & 0o777 == 0o700
 
 
+def test_private_dashboard_directory_creation_failure_is_safe(tmp_path, monkeypatch):
+    from metroliza.ui.private_dashboard_directory import (
+        PrivateDashboardDirectoryError,
+        create_private_dashboard_directory,
+    )
+
+    not_directory = tmp_path / "not-a-directory"
+    not_directory.write_text("synthetic unchanged control", encoding="utf-8")
+    monkeypatch.setattr(tempfile, "tempdir", str(not_directory))
+    with pytest.raises(PrivateDashboardDirectoryError, match="^private_dashboard_directory_unavailable$"):
+        create_private_dashboard_directory()
+    assert not_directory.read_text(encoding="utf-8") == "synthetic unchanged control"
+    assert list(tmp_path.iterdir()) == [not_directory]
+
+
+def test_private_dashboard_directory_finalizer_keeps_unowned_files(tmp_path, monkeypatch):
+    from metroliza.ui.private_dashboard_directory import create_private_dashboard_directory
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    sentinel = tmp_path / "unowned.txt"
+    sentinel.write_text("retained", encoding="utf-8")
+    owner = create_private_dashboard_directory()
+    directory = Path(owner.name)
+    (directory / "synthetic.html").write_text("owned synthetic output", encoding="utf-8")
+    del owner
+    gc.collect()
+    assert not directory.exists()
+    assert sentinel.read_text(encoding="utf-8") == "retained"
+
+
+@pytest.mark.parametrize("failure_stage", ["creation", "security"])
+@pytest.mark.parametrize("dispatch", ["synchronous", "open", "queued"])
+def test_private_dashboard_storage_failure_blocks_default_output(
+    qapp, tmp_path, monkeypatch, failure_stage, dispatch,
+):
+    import metroliza.ui.realtime_industrial_monitoring_dialog as dialog_module
+    from metroliza.ui.private_dashboard_directory import PrivateDashboardDirectoryError
+
+    def unavailable():
+        raise PrivateDashboardDirectoryError(f"synthetic {failure_stage} detail")
+
+    def unexpected_output(*args, **kwargs):
+        pytest.fail("unavailable private storage must not start output")
+
+    monkeypatch.setattr(dialog_module, "create_private_dashboard_directory", unavailable)
+    monkeypatch.setattr(dialog_module, "RealtimeDashboardWriterThread", unexpected_output)
+    monkeypatch.setattr(dialog_module.RealtimeDashboardService, "dashboard_snapshot", unexpected_output)
+    monkeypatch.setattr(dialog_module.QDesktopServices, "openUrl", unexpected_output)
+    db_path = tmp_path / "unavailable.db"
+    IndustrialDataRepository(str(db_path)).ensure_schema()
+    dialog = RealtimeIndustrialMonitoringDialog(
+        None, str(db_path), config_path=tmp_path / "unused.yaml"
+    )
+    try:
+        assert dialog._dashboard_temp_dir is None
+        assert "Private temporary dashboard storage is unavailable" in dialog.dashboard_status_label.text()
+        if dispatch == "synchronous":
+            assert dialog.write_dashboard() is None
+        elif dispatch == "open":
+            dialog.open_dashboard()
+        else:
+            dispatched = QSignalSpy(dialog.dashboard_write_debounce_timer.timeout)
+            dialog._schedule_dashboard_write(open_after=False)
+            assert dialog._dashboard_write_pending
+            _wait_for(lambda: len(dispatched) == 1, "unavailable storage dispatch")
+        assert dialog.dashboard_thread is None
+        assert dialog.last_dashboard_path is None
+        assert not dialog._dashboard_write_pending
+        assert not dialog._dashboard_open_pending
+        assert not dialog.dashboard_write_debounce_timer.isActive()
+        assert "Private temporary dashboard storage is unavailable" in dialog.dashboard_status_label.text()
+        assert "synthetic" not in dialog.dashboard_status_label.text()
+        assert "synthetic" not in dialog.diagnostics_text.toPlainText()
+        assert not list(tmp_path.rglob("*.html"))
+    finally:
+        assert dialog.close()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(dialog)
+
+
+def test_private_dashboard_storage_failure_allows_explicit_output_choice(qapp, tmp_path, monkeypatch):
+    import metroliza.ui.realtime_industrial_monitoring_dialog as dialog_module
+    from metroliza.ui.private_dashboard_directory import PrivateDashboardDirectoryError
+
+    def unavailable():
+        raise PrivateDashboardDirectoryError("synthetic creation failure")
+
+    monkeypatch.setattr(dialog_module, "create_private_dashboard_directory", unavailable)
+    destination = tmp_path / "chosen.html"
+    choices = []
+
+    def choose(parent, title, initial, filters):
+        choices.append(initial)
+        return str(destination), "HTML files (*.html)"
+
+    monkeypatch.setattr(dialog_module.QFileDialog, "getSaveFileName", choose)
+    db_path = tmp_path / "chosen.db"
+    IndustrialDataRepository(str(db_path)).ensure_schema()
+    dialog = RealtimeIndustrialMonitoringDialog(None, str(db_path), config_path=tmp_path / "unused.yaml")
+    try:
+        dialog.choose_dashboard_path()
+        assert choices == ["realtime_industrial_monitoring.html"]
+        assert dialog.write_dashboard() == destination
+        assert "Real-time Industrial Monitoring" in destination.read_text(encoding="utf-8")
+    finally:
+        assert dialog.close()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(dialog)
+    assert destination.exists()  # Explicit operator output is not owned session storage.
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_private_dashboard_cleanup_failure_retains_ownership_until_retry(
+    dashboard_dialog, monkeypatch, deferred,
+):
+    dialog = dashboard_dialog
+    owned = dialog._dashboard_temp_dir
+    directory = Path(owned.name)
+    attempts = []
+
+    def cleanup():
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise OSError("synthetic cleanup detail")
+        owned.cleanup()
+
+    retained = SimpleNamespace(name=owned.name, cleanup=cleanup)
+    monkeypatch.setattr(dialog, "_dashboard_temp_dir", retained)
+    completed = QSignalSpy(dialog.shutdown_complete)
+    if deferred:
+        dialog._closing = True
+        dialog._shutdown_waiting = True
+        dialog._complete_deferred_shutdown()
+    else:
+        assert not dialog.close()
+    assert len(completed) == 0
+    assert dialog._dashboard_temp_dir is retained
+    assert directory.is_dir()
+    assert not dialog.is_close_deferred()
+    assert "Close again to retry" in dialog.dashboard_status_label.text()
+    assert "synthetic" not in dialog.dashboard_status_label.text()
+    assert dialog.close()
+    assert len(attempts) == 2
+    assert dialog._dashboard_temp_dir is None
+    assert not directory.exists()
+
+
 @pytest.mark.parametrize("parent_policy", ["default", "permissive"])
 def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
     qapp, tmp_path, monkeypatch, parent_policy,
@@ -1198,6 +1348,7 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
     IndustrialDataRepository(db_path).ensure_schema()
     with ExitStack() as stack:
         if os.name == "nt" and parent_policy == "default":
+            import metroliza.ui.private_dashboard_directory as private_directory
             from tests.windows_dashboard_privacy import (
                 inspect_dashboard_privacy,
                 null_dacl_directory,
@@ -1215,6 +1366,25 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
                 control_html.write_text("synthetic null-DACL control", encoding="utf-8")
                 with pytest.raises(AssertionError, match="privacy_oracle_null_dacl"):
                     inspect_dashboard_privacy(null_control, control_html)
+
+            # A real pinned/owned object must be removed if its security check fails.
+            failed_parent = tmp_path / "owned-security-failure"
+            failed_parent.mkdir()
+            validated = []
+            original_validate = private_directory._validate_pinned_directory
+
+            def reject_validated_directory(*args):
+                original_validate(*args)
+                validated.append(True)
+                raise private_directory.PrivateDashboardDirectoryError()
+
+            with monkeypatch.context() as failure:
+                failure.setattr(tempfile, "tempdir", str(failed_parent))
+                failure.setattr(private_directory, "_validate_pinned_directory", reject_validated_directory)
+                with pytest.raises(private_directory.PrivateDashboardDirectoryError):
+                    private_directory.create_private_dashboard_directory()
+            assert validated == [True]
+            assert list(failed_parent.iterdir()) == []
 
         if parent_policy == "permissive":
             parent = tmp_path / "owned-permissive-parent"
@@ -1243,6 +1413,11 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
         output_directory = dialog._default_dashboard_path().parent
         try:
             assert output_directory.exists()
+            if os.name == "nt":
+                with pytest.raises(OSError) as blocked:
+                    output_directory.rename(output_directory.with_name("owned-replacement-attempt"))
+                assert blocked.value.winerror == 32  # Held handle refuses delete/rename sharing.
+                assert output_directory.is_dir()
             output_path = dialog.write_dashboard()
             assert output_path == dialog._default_dashboard_path()
             assert "Real-time Industrial Monitoring" in output_path.read_text(encoding="utf-8")
