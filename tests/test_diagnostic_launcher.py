@@ -272,6 +272,115 @@ def test_final_incident_retries_real_store_lock_within_close_deadline(
     assert store.list_unclean_sessions().sessions == ()
 
 
+def test_clean_marker_retries_real_store_lock_within_close_deadline(
+    tmp_path, monkeypatch
+):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+    from metroliza.shared.diagnostic_store import _StoreLock
+
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    observed = replace(
+        _live_observation(),
+        channel="complete",
+        clean_terminal_received=True,
+        source_loss_known=True,
+        termination="observed_exit",
+        exit_code=0,
+    )
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher._ensure_begin() is StoreStatus.MARKER_STARTED
+    assert publisher._ensure_authenticated() is StoreStatus.MARKER_AUTHENTICATED
+    assert publisher.start()
+    marker = store.root / f"marker-{observed.session_id}.json"
+    lock = _StoreLock(store.root)
+    assert lock.acquire()
+    first_finished = threading.Event()
+    attempted_statuses = []
+    original_end = store.end_session
+
+    def recorded_end(*args, **kwargs):
+        result = original_end(*args, **kwargs)
+        attempted_statuses.append(result.status)
+        if len(attempted_statuses) == 1:
+            first_finished.set()
+        return result
+
+    monkeypatch.setattr(store, "end_session", recorded_end)
+    statuses = []
+    closer = threading.Thread(target=lambda: statuses.append(publisher.close(observed)))
+    closer.start()
+    try:
+        assert first_finished.wait(0.6)
+        assert attempted_statuses == [StoreStatus.LOCK_UNAVAILABLE]
+        lock.release()
+        closer.join(1)
+    finally:
+        lock.release()
+        closer.join(1)
+
+    assert statuses == [StoreStatus.MARKER_CLEAN_ENDED]
+    assert attempted_statuses == [
+        StoreStatus.LOCK_UNAVAILABLE,
+        StoreStatus.MARKER_CLEAN_ENDED,
+    ]
+    assert marker.is_file()
+    assert store.end_session(observed.session_id, clean=False).status is StoreStatus.INVALID
+
+
+def test_clean_marker_store_lock_past_close_deadline_is_bounded(
+    tmp_path, monkeypatch
+):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+    from metroliza.shared.diagnostic_store import _StoreLock
+
+    store = IncidentStore(tmp_path / "state")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    observed = replace(
+        _live_observation(),
+        channel="complete",
+        clean_terminal_received=True,
+        source_loss_known=True,
+        termination="observed_exit",
+        exit_code=0,
+    )
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher._ensure_begin() is StoreStatus.MARKER_STARTED
+    assert publisher._ensure_authenticated() is StoreStatus.MARKER_AUTHENTICATED
+    assert publisher.start()
+    marker = store.root / f"marker-{observed.session_id}.json"
+    lock = _StoreLock(store.root)
+    assert lock.acquire()
+    attempted_statuses = []
+    original_end = store.end_session
+
+    def recorded_end(*args, **kwargs):
+        result = original_end(*args, **kwargs)
+        attempted_statuses.append(result.status)
+        return result
+
+    monkeypatch.setattr(store, "end_session", recorded_end)
+    started = time.monotonic()
+    try:
+        assert publisher.close(observed) is StoreStatus.PUBLISH_INCOMPLETE
+        assert time.monotonic() - started < 1.0
+        publisher.worker.join(1)
+    finally:
+        lock.release()
+        publisher.worker.join(1)
+
+    assert not publisher.worker.is_alive()
+    assert attempted_statuses
+    assert set(attempted_statuses) == {StoreStatus.LOCK_UNAVAILABLE}
+    assert publisher.final_status is StoreStatus.LOCK_UNAVAILABLE
+    assert marker.is_file()
+    assert (
+        store.end_session(observed.session_id, clean=False).status
+        is StoreStatus.MARKER_RETAINED
+    )
+    assert marker.is_file()
+
+
 def test_final_incident_store_lock_past_close_deadline_is_bounded(tmp_path, monkeypatch):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
     from metroliza.shared.diagnostic_store import _StoreLock

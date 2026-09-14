@@ -241,7 +241,10 @@ class _OperationPublisher:
             if observed.handshake == "accepted":
                 self._ensure_authenticated()
         if self.authentication_status is StoreStatus.MARKER_AUTHENTICATED:
-            return self.store.end_session(self.session_id, clean=True).status
+            return self._retry_lock(
+                lambda: self.store.end_session(self.session_id, clean=True).status,
+                deadline=self.close_deadline,
+            )
         return self.authentication_status or self.marker_status or StoreStatus.IO_FAILED
 
     def close(self, observed: SupervisedResult) -> StoreStatus:
