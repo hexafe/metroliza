@@ -696,6 +696,67 @@ def test_interrupted_final_current_token_close_attempts_restricted_cleanup(
     assert closed == [1, 2]
 
 
+@pytest.mark.parametrize(
+    "body_failure_type", [qualification.QualificationFailure, KeyboardInterrupt]
+)
+@pytest.mark.parametrize("final_failure_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("first_restricted_close_succeeds", [True, False])
+def test_final_token_close_retries_only_a_still_owned_restricted_handle(
+    monkeypatch,
+    body_failure_type,
+    final_failure_type,
+    first_restricted_close_succeeds,
+) -> None:
+    from types import SimpleNamespace
+
+    body_failure = body_failure_type("restricted_launch_unavailable")
+    final_failure = final_failure_type("PRIVATE_FINAL_INTERRUPT")
+    closed = []
+
+    class _Handle:
+        value = 0
+
+        def __bool__(self):
+            return bool(self.value)
+
+    class _Advapi:
+        def OpenProcessToken(self, _process, _access, current):
+            current.value = 1
+            return True
+
+        def CreateWellKnownSid(self, *_arguments):
+            return True
+
+        def CreateRestrictedToken(self, *_arguments):
+            _arguments[-1].value = 2
+            return True
+
+    def close(handle):
+        closed.append(handle.value)
+        if handle.value == 1:
+            raise final_failure
+        if handle.value == 2 and closed.count(2) == 1:
+            return first_restricted_close_succeeds
+        return True
+
+    def fail_medium(_token):
+        raise body_failure
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = SimpleNamespace(HANDLE=_Handle, DWORD=qualification.ctypes.c_uint32)
+    api.kernel = SimpleNamespace(GetCurrentProcess=lambda: -1, CloseHandle=close)
+    api.advapi = _Advapi()
+    api.SID_AND_ATTRIBUTES = lambda *_arguments: object()
+    api._set_medium_integrity = fail_medium
+    monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
+
+    with pytest.raises(final_failure_type) as caught:
+        api._restricted_token()
+
+    assert caught.value is final_failure
+    assert closed == ([2, 1] if first_restricted_close_succeeds else [2, 1, 2])
+
+
 def test_concurrent_cleanup_attempts_every_owned_process() -> None:
     calls = []
 

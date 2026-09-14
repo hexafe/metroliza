@@ -1150,11 +1150,17 @@ class _WindowsApi:
         self, restricted, primary: BaseException
     ) -> None:
         try:
-            cleanup_succeeded = self._close_handles(restricted)
+            self._require_closed_owned_token(restricted)
         except BaseException:
             cleanup_succeeded = False
+        else:
+            cleanup_succeeded = True
         if isinstance(primary, QualificationFailure):
             primary.record_cleanup(succeeded=cleanup_succeeded)
+
+    def _require_closed_owned_token(self, token) -> None:
+        self._require_closed_handles(token)
+        token.value = None
 
     def _restricted_token(self):
         wt = self.wintypes
@@ -1194,7 +1200,7 @@ class _WindowsApi:
         except BaseException:
             if restricted:
                 _attempt_cleanup(
-                    lambda: self._require_closed_handles(restricted)
+                    lambda: self._require_closed_owned_token(restricted)
                 )
             raise
         finally:
