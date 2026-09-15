@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import ctypes
 import hashlib
 import importlib.metadata
@@ -339,6 +338,20 @@ def _attempt_cleanup(action: Callable[[], None]) -> None:
         ) from None
 
 
+def _prefer_cleanup_error(
+    current: BaseException | None, candidate: BaseException | None
+) -> BaseException | None:
+    if current is None:
+        return candidate
+    if (
+        candidate is not None
+        and isinstance(current, Exception)
+        and not isinstance(candidate, Exception)
+    ):
+        return candidate
+    return current
+
+
 def _sha256(path: Path, *, maximum: int = MAX_FILE_BYTES) -> str:
     metadata = path.lstat()
     if (
@@ -627,10 +640,14 @@ class _WindowsProcess:
         job_handle,
         started: float,
         initial: _ProcessObservation,
+        thread_handle=None,
+        token_handle=None,
     ) -> None:
         self._api = api
         self._process = process_handle
         self._job = job_handle
+        self._thread = thread_handle
+        self._token = token_handle
         self.started = started
         self._closed = False
         self._observations = {initial.process_id: initial}
@@ -676,7 +693,8 @@ class _WindowsProcess:
         self._closed = True
         _attempt_cleanup(
             lambda: self._api.close_process(
-                self._process, self._job, terminate=terminate
+                self._process, self._job, terminate=terminate,
+                thread=self._thread, token=self._token,
             )
         )
 
@@ -991,25 +1009,98 @@ class _WindowsApi:
             )
 
     def _cleanup_created_process(self, process, job) -> bool:
-        with contextlib.suppress(Exception):
-            self.kernel.TerminateJobObject(job, 22)
-        with contextlib.suppress(Exception):
-            self.kernel.TerminateProcess(process.hProcess, 22)
+        _, job_error = self._attempt_launch_cleanup(
+            lambda: bool(self.kernel.TerminateJobObject(job, 22))
+        )
+        _, process_error = self._attempt_launch_cleanup(
+            lambda: bool(self.kernel.TerminateProcess(process.hProcess, 22))
+        )
         deadline = time.monotonic() + MAX_TERMINATION_DRAIN_MILLISECONDS / 1000
-        drained = False
+        drained, drain_error = self._drain_created_process(process, job, deadline)
+        handles_closed, close_error = self._attempt_launch_cleanup(
+            lambda: self._close_owned_handles(
+                process.hThread, process.hProcess, job
+            )
+        )
+        first_error = None
+        for error in (job_error, process_error, drain_error, close_error):
+            first_error = _prefer_cleanup_error(first_error, error)
+        if first_error is not None:
+            raise first_error
+        return handles_closed and drained
+
+    def _drain_created_process(self, process, job, deadline):
         while time.monotonic() < deadline:
             try:
                 wait_result = self.kernel.WaitForSingleObject(process.hProcess, 0)
                 active, _total = self._job_accounting(job)
-            except Exception:
-                break
+            except BaseException as error:
+                return False, error
             if wait_result == WAIT_OBJECT_0 and active == 0:
-                drained = True
-                break
+                return True, None
             if wait_result not in {WAIT_OBJECT_0, WAIT_TIMEOUT}:
-                break
-            time.sleep(0.01)
-        return self._close_handles(process.hThread, process.hProcess, job) and drained
+                return False, None
+            try:
+                time.sleep(0.01)
+            except BaseException as error:
+                return False, error
+        return False, None
+
+    def _close_owned_handles(self, *handles) -> bool:
+        complete = True
+        first_error: BaseException | None = None
+        for handle in handles:
+            if not handle:
+                continue
+            try:
+                if not self.kernel.CloseHandle(handle):
+                    complete = False
+            except BaseException as error:
+                complete = False
+                first_error = _prefer_cleanup_error(first_error, error)
+        if first_error is not None:
+            raise first_error
+        return complete
+
+    @staticmethod
+    def _attempt_launch_cleanup(
+        action: Callable[[], bool]
+    ) -> tuple[bool, BaseException | None]:
+        try:
+            return bool(action()), None
+        except BaseException as error:
+            return False, error
+
+    def _close_launched_wrapper(self, launched: _WindowsProcess) -> bool:
+        launched._closed = True
+        self.close_process(
+            launched._process, launched._job,
+            terminate=True, thread=launched._thread, token=launched._token,
+        )
+        return True
+
+    def _cleanup_failed_launch(
+        self, process, job, token, launched
+    ) -> tuple[bool, BaseException | None]:
+        if launched is not None:
+            complete, secondary = self._attempt_launch_cleanup(
+                lambda: self._close_launched_wrapper(launched)
+            )
+        elif process.hProcess:
+            complete, secondary = self._attempt_launch_cleanup(
+                lambda: self._cleanup_created_process(process, job)
+            )
+        else:
+            complete, secondary = self._attempt_launch_cleanup(
+                lambda: self._close_handles(job)
+            )
+        if token and launched is None:
+            token_complete, token_error = self._attempt_launch_cleanup(
+                lambda: self._close_handles(token)
+            )
+            complete = token_complete and complete
+            secondary = _prefer_cleanup_error(secondary, token_error)
+        return complete, secondary
 
     def _create_suspended_process(
         self,
@@ -1054,10 +1145,10 @@ class _WindowsApi:
             )
         )
 
-    def _finish_launched_process(self, process, job, started, initial):
-        if not self._close_handles(process.hThread):
-            raise QualificationFailure("restricted_launch_unavailable")
-        return _WindowsProcess(self, process.hProcess, job, started, initial)
+    def _finish_launched_process(self, process, job, started, initial, token):
+        return _WindowsProcess(
+            self, process.hProcess, job, started, initial, process.hThread, token
+        )
 
     def _has_effective_admin_membership(self, token, sid) -> bool:
         wt = self.wintypes
@@ -1218,10 +1309,12 @@ class _WindowsApi:
         executable: Path,
         environment: dict[str, str],
         cwd: Path,
+        owned: list[_WindowsProcess] | None = None,
     ) -> _WindowsProcess:
         process = self.PROCESS_INFORMATION()
         token = None
         job = None
+        launched = None
         try:
             token = self._restricted_token()
             job = self.kernel.CreateJobObjectW(None, None)
@@ -1265,18 +1358,20 @@ class _WindowsApi:
             )
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
-            self._require_closed_handles(token)
-            token = None
-            return self._finish_launched_process(process, job, started, initial)
+            launched = self._finish_launched_process(
+                process, job, started, initial, token
+            )
+            if owned is not None:
+                owned.append(launched)
+            return launched
         except BaseException as error:
-            if process.hProcess:
-                cleanup_succeeded = self._cleanup_created_process(process, job)
-            else:
-                cleanup_succeeded = self._close_handles(job)
-            if token:
-                cleanup_succeeded = self._close_handles(token) and cleanup_succeeded
+            cleanup_succeeded, cleanup_error = self._cleanup_failed_launch(
+                process, job, token, launched
+            )
             if not isinstance(error, Exception):
                 raise
+            if cleanup_error is not None and not isinstance(cleanup_error, Exception):
+                raise cleanup_error
             primary = (
                 error
                 if isinstance(error, QualificationFailure)
@@ -1395,9 +1490,11 @@ class _WindowsApi:
             int(io.WriteTransferCount),
         )
 
-    def close_process(self, process, job, *, terminate: bool) -> None:
+    def close_process(
+        self, process, job, *, terminate: bool, thread=None, token=None
+    ) -> None:
         drained = not terminate
-        handles_closed = True
+        handles_closed = False
         try:
             if terminate:
                 if not self.kernel.TerminateJobObject(job, 23):
@@ -1418,12 +1515,7 @@ class _WindowsApi:
                         break
                     time.sleep(0.01)
         finally:
-            for handle in (job, process):
-                try:
-                    if not self.kernel.CloseHandle(handle):
-                        handles_closed = False
-                except Exception:
-                    handles_closed = False
+            handles_closed = self._close_owned_handles(thread, job, process, token)
         if not drained or not handles_closed:
             raise QualificationFailure(
                 "scenario_failed",
@@ -1768,18 +1860,16 @@ def _launch_concurrent_pair(
     artifact: Path,
     roots: tuple[Path, Path],
     state_base: Path,
+    owned: list[_WindowsProcess] | None = None,
 ) -> tuple[_WindowsProcess, _WindowsProcess]:
-    processes: list[_WindowsProcess] = []
+    processes: list[_WindowsProcess] = [] if owned is None else owned
     try:
         for root in roots:
-            processes.append(
-                api.launch(
-                    launcher,
-                    _sanitized_environment(
-                        artifact, root, state_base, "concurrent"
-                    ),
-                    root,
-                )
+            api.launch(
+                launcher,
+                _sanitized_environment(artifact, root, state_base, "concurrent"),
+                root,
+                owned=processes,
             )
     except BaseException as primary:
         if processes:
@@ -1803,15 +1893,28 @@ def _launch_concurrent_pair(
 def _close_processes(
     processes: tuple[_WindowsProcess, ...], *, terminate: bool
 ) -> None:
-    first_failure: QualificationFailure | None = None
+    first_failure: BaseException | None = None
     for process in processes:
         try:
             process.close(terminate=terminate)
-        except QualificationFailure as error:
-            if first_failure is None:
-                first_failure = error
+        except BaseException as error:
+            first_failure = _prefer_cleanup_error(first_failure, error)
     if first_failure is not None:
         raise first_failure
+
+
+def _close_owned_processes(
+    processes: list[_WindowsProcess], *, terminate: bool
+) -> None:
+    primary = sys.exc_info()[1]
+    if not processes:
+        return
+    try:
+        _close_processes(tuple(processes), terminate=terminate)
+    except BaseException:
+        if primary is not None and not isinstance(primary, Exception):
+            return
+        raise
 
 
 def _finish_concurrent_processes(
@@ -1878,12 +1981,13 @@ def _run_scenario(
     on_ready: Callable[[_WindowsProcess], None] | None = None,
 ) -> ScenarioResult:
     environment = _sanitized_environment(artifact_dir, work_root, state_base, scenario)
-    process = api.launch(executable, environment, work_root)
+    owned: list[_WindowsProcess] = []
     startup_path = work_root / "startup.json"
     startup_ready_ms: int | None = None
     ready_called = False
     terminate = True
     try:
+        process = api.launch(executable, environment, work_root, owned=owned)
         scenario_deadline = min(deadline, time.monotonic() + MAX_SCENARIO_SECONDS)
         exit_code: int | None = None
         last_receipt: dict[str, object] | None = None
@@ -1941,7 +2045,7 @@ def _run_scenario(
             process.topology(artifact_dir, all_exited=all_exited),
         )
     finally:
-        process.close(terminate=terminate)
+        _close_owned_processes(owned, terminate=terminate)
 
 
 def _reports(store: IncidentStore):
@@ -2883,11 +2987,13 @@ class _QualificationRunner:
     def run_concurrent_instances(self) -> None:
         before = {record.report_id for record in _reports(self.store)}
         roots = (self._root("concurrent-one"), self._root("concurrent-two"))
-        processes = _launch_concurrent_pair(
-            self.api, self.launcher, self.artifact, roots, self.state_base
-        )
+        owned: list[_WindowsProcess] = []
         completed = False
         try:
+            processes = _launch_concurrent_pair(
+                self.api, self.launcher, self.artifact, roots, self.state_base,
+                owned=owned,
+            )
             scenario_deadline = min(
                 self.deadline, time.monotonic() + MAX_SCENARIO_SECONDS
             )
@@ -2902,7 +3008,7 @@ class _QualificationRunner:
             self.results["concurrent_1"], self.results["concurrent_2"] = results
             completed = True
         finally:
-            _close_processes(processes, terminate=not completed)
+            _close_owned_processes(owned, terminate=not completed)
         new_records = [
             record for record in _reports(self.store) if record.report_id not in before
         ]
@@ -2932,9 +3038,10 @@ class _QualificationRunner:
         ):
             environment.pop(key)
         environment["METROLIZA_STARTUP_UI_SMOKE"] = "1"
-        process = self.api.launch(self.launcher, environment, root)
+        owned: list[_WindowsProcess] = []
         terminate = True
         try:
+            process = self.api.launch(self.launcher, environment, root, owned=owned)
             result = _finish_process_without_receipt(
                 process,
                 self.artifact,
@@ -2945,7 +3052,7 @@ class _QualificationRunner:
             self.results["ui_smoke"] = result
             terminate = False
         finally:
-            process.close(terminate=terminate)
+            _close_owned_processes(owned, terminate=terminate)
         if (
             {record.report_id for record in _reports(self.store)} != before
             or _has_qualification_receipt(root)
@@ -3115,9 +3222,12 @@ class _QualificationRunner:
         shutil.copy2(self.launcher, package / self.launcher.name)
         shutil.copy2(self.artifact / MANIFEST_NAME, package / MANIFEST_NAME)
         environment = _sanitized_environment(package, root, self.state_base, "normal")
-        process = self.api.launch(package / self.launcher.name, environment, root)
+        owned: list[_WindowsProcess] = []
         terminate = True
         try:
+            process = self.api.launch(
+                package / self.launcher.name, environment, root, owned=owned
+            )
             exit_code = self._wait_missing_exit(process)
             if exit_code is None:
                 raise QualificationFailure("scenario_timeout")
@@ -3142,7 +3252,7 @@ class _QualificationRunner:
                 process.topology(self.artifact, all_exited=all_exited),
             )
         finally:
-            process.close(terminate=terminate)
+            _close_owned_processes(owned, terminate=terminate)
         incident = _newest_incident(self.store, before)
         if incident.observation.launch is not LaunchState.FAILED:
             raise QualificationFailure("incident_invalid")
@@ -3173,9 +3283,12 @@ class _QualificationRunner:
                 qualification_reason="qualification_filename_control_unavailable",
             ) from None
         try:
-            process = self.api.launch(self.launcher, environment, root)
+            owned: list[_WindowsProcess] = []
             terminate = True
             try:
+                process = self.api.launch(
+                    self.launcher, environment, root, owned=owned
+                )
                 exit_code = self._wait_missing_exit(process)
                 if exit_code is None:
                     raise QualificationFailure("scenario_timeout")
@@ -3200,7 +3313,7 @@ class _QualificationRunner:
                     process.topology(self.artifact, all_exited=all_exited),
                 )
             finally:
-                process.close(terminate=terminate)
+                _close_owned_processes(owned, terminate=terminate)
         finally:
             _attempt_cleanup(lambda: hidden.replace(resource))
         if _sha256(resource) != digest:
