@@ -40,8 +40,9 @@ class _Signal:
             callback(*args)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def qapp():
+    """Keep one QApplication alive through all test-owned Qt teardown."""
     app = QApplication.instance() or QApplication([])
     expected = os.environ.get("METROLIZA_EXPECT_QT_PLATFORM")
     if expected:
