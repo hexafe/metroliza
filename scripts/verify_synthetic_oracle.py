@@ -9,6 +9,8 @@ this comparator; it is not an application, package, or OCR execution.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
+import hashlib
 import json
 import shutil
 import math
@@ -16,6 +18,9 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+_DATABASE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 
 try:
     from openpyxl import Workbook, load_workbook
@@ -85,30 +90,55 @@ def _database_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(zip(columns, row, strict=True)) for row in connection.execute(query)]
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _database_sidecars(database: Path) -> tuple[str, ...]:
+    return tuple(
+        suffix
+        for suffix in _DATABASE_SIDECAR_SUFFIXES
+        if database.with_name(database.name + suffix).exists()
+    )
+
+
 def assert_database(oracle: dict[str, Any], database: Path) -> None:
-    with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(report_measurements)")}
-        if "unit" in columns:
-            _fail("database.unit", "fixture has no unit and schema must not invent a unit field")
-        expected_ids = [row["report_id"] for row in oracle["persisted_reports"]]
-        table_queries = {
-            "source_files": "SELECT id FROM source_files ORDER BY id",
-            "active_locations": "SELECT source_file_id FROM source_file_locations WHERE is_active = 1 ORDER BY source_file_id",
-            "parsed_reports": "SELECT id FROM parsed_reports ORDER BY id",
-            "metadata": "SELECT report_id FROM report_metadata ORDER BY report_id",
-            "measurements": "SELECT report_id FROM report_measurements ORDER BY report_id, id",
-        }
-        for name, query in table_queries.items():
-            actual_ids = [row[0] for row in connection.execute(query)]
-            required = expected_ids if name != "measurements" else expected_ids
-            if actual_ids != required:
-                _fail(f"database.{name}", "unexpected keyset or cardinality")
-        locations = connection.execute(
-            "SELECT source_file_id, is_active FROM source_file_locations ORDER BY source_file_id"
-        ).fetchall()
-        if locations != [(identifier, 1) for identifier in expected_ids]:
-            _fail("database.locations", "unexpected inactive, duplicate or orphan location")
-        actual = _database_rows(connection)
+    if _database_sidecars(database):
+        _fail("database.sidecars", "active journal sidecar present")
+    before = _sha256(database)
+    try:
+        # ``immutable=1`` prevents an SQLite reader from creating WAL/shm files.
+        # Existing journals are rejected above: an immutable reader must never
+        # silently ignore committed pages that remain in a live WAL.
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(report_measurements)")}
+            if "unit" in columns:
+                _fail("database.unit", "fixture has no unit and schema must not invent a unit field")
+            expected_ids = [row["report_id"] for row in oracle["persisted_reports"]]
+            table_queries = {
+                "source_files": "SELECT id FROM source_files ORDER BY id",
+                "active_locations": "SELECT source_file_id FROM source_file_locations WHERE is_active = 1 ORDER BY source_file_id",
+                "parsed_reports": "SELECT id FROM parsed_reports ORDER BY id",
+                "metadata": "SELECT report_id FROM report_metadata ORDER BY report_id",
+                "measurements": "SELECT report_id FROM report_measurements ORDER BY report_id, id",
+            }
+            for name, query in table_queries.items():
+                actual_ids = [row[0] for row in connection.execute(query)]
+                if actual_ids != expected_ids:
+                    _fail(f"database.{name}", "unexpected keyset or cardinality")
+            locations = connection.execute(
+                "SELECT source_file_id, is_active FROM source_file_locations ORDER BY source_file_id"
+            ).fetchall()
+            if locations != [(identifier, 1) for identifier in expected_ids]:
+                _fail("database.locations", "unexpected inactive, duplicate or orphan location")
+            actual = _database_rows(connection)
+    finally:
+        if _sha256(database) != before or _database_sidecars(database):
+            _fail("database.sidecars", "verification altered database files")
 
     expected_reports = oracle["persisted_reports"]
     expected_inputs = oracle["fixture_construction"]["staged_aliases"]

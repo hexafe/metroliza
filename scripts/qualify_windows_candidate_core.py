@@ -214,6 +214,16 @@ def _independent_xlsx_verifier():
     return _adjacent_module("windows_candidate_xlsx.py", "_metroliza_independent_xlsx_oracle")._verify_workbook
 
 
+def _assert_artifact_hashes(paths: dict, payload: dict, reason: str) -> None:
+    if any(_hash(paths[key]) != payload["artifacts"][key]["sha256"] for key in ARTIFACTS):
+        raise CandidateFailure(reason)
+
+
+def _assert_database_sidecars_absent(database: Path, reason: str) -> None:
+    if any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+        raise CandidateFailure(reason)
+
+
 def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path) -> dict:
     child = work / payload["relative_artifact_dir"]
     _directory(child)
@@ -223,9 +233,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
         if _hash(source) != record["sha256"]:
             raise CandidateFailure("scenario_artifact_hash_mismatch")
         actual[key] = source
-    if any(actual["database"].with_name(actual["database"].name + suffix).exists()
-           for suffix in ("-wal", "-shm", "-journal")):
-        raise CandidateFailure("database_sidecars_remain")
+    _assert_database_sidecars_absent(actual["database"], "database_sidecars_remain")
     # This verifier imports no Metroliza and does not derive expected values
     # from application output. Its independent expected inputs were reviewed.
     verify = _independent_verifier()
@@ -238,6 +246,8 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
         verify_xlsx(actual["literal_workbook"])
     except Exception:
         raise CandidateFailure("independent_literal_workbook_oracle_failed") from None
+    _assert_artifact_hashes(actual, payload, "scenario_artifact_changed_after_comparison")
+    _assert_database_sidecars_absent(actual["database"], "scenario_database_sidecars_created_after_comparison")
     copied = {}
     for key, source in actual.items():
         destination = output / payload["artifacts"][key]["path"]
@@ -252,6 +262,11 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
         verify_xlsx(output / copied["literal_workbook"]["path"])
     except Exception:
         raise CandidateFailure("retained_outputs_oracle_failed") from None
+    retained = {key: output / copied[key]["path"] for key in ARTIFACTS}
+    _assert_artifact_hashes(retained, payload, "retained_artifact_changed_after_comparison")
+    _assert_database_sidecars_absent(
+        retained["database"], "retained_database_sidecars_created_after_comparison"
+    )
     return copied
 
 
