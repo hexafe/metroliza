@@ -1,0 +1,4 @@
+# These hash-pinned parser fixtures intentionally contain CRLF and blank/trim
+# lexemes. Preserve their bytes on Windows and permit their authored whitespace.
+tests/fixtures/windows_candidate/finite-source.csv -text whitespace=-blank-at-eol,cr-at-eol
+tests/fixtures/windows_candidate/integer-precision.csv -text whitespace=-blank-at-eol,cr-at-eol
