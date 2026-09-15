@@ -270,11 +270,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
     return copied
 
 
-def qualify(args) -> dict:
-    if os.name != "nt":
-        raise CandidateFailure("native_windows_required")
-    if re.fullmatch(r"[0-9a-f]{40}", args.expected_source_sha) is None:
-        raise CandidateFailure("invalid_expected_source_sha")
+def _prepare_paths(args) -> tuple[Path, Path, Path, Path]:
     checkout = _input_directory(args.source_checkout)
     artifact = _input_directory(args.artifact_dir)
     fixtures = _input_directory(args.fixture_dir)
@@ -287,6 +283,65 @@ def qualify(args) -> dict:
         if output == parent or parent in output.parents:
             raise CandidateFailure("output_must_be_outside_inputs")
     _input_directory(output.parent)
+    return checkout, artifact, fixtures, output
+
+
+def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
+                      output: Path, deadline: float, before: str) -> dict:
+    relocated = diag._relocate_package(artifact, private, deadline)
+    staged_fixtures = _stage_known_fixtures(fixtures, private)
+    work = private / "core scenario"
+    state = private / "ordinary user state"
+    work.mkdir()
+    (state / "Roaming").mkdir(parents=True)
+    environment = diag._sanitized_environment(relocated, work, state, "idle")
+    environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION", None)
+    environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", None)
+    environment.update({
+        "QT_QPA_PLATFORM": "windows",
+        "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION": "1",
+        "METROLIZA_WINDOWS_CANDIDATE_ROOT": str(work),
+        "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR": str(staged_fixtures),
+    })
+    process = diag._WindowsApi().launch(relocated / "metroliza.exe", environment, work)
+    terminate = True
+    try:
+        while time.monotonic() < deadline:
+            process.observe()
+            code = process.poll()
+            if code is not None:
+                break
+            time.sleep(0.02)
+        else:
+            raise CandidateFailure("owned_package_scenario_timeout")
+        if code != 0:
+            raise CandidateFailure("package_scenario_nonzero_exit")
+        result_path = work / SCENARIO_FILE
+        if not result_path.exists():
+            raise CandidateFailure("package_core_hook_or_receipt_missing")
+        payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha)
+        if not diag._wait_for_job_exit(process, deadline):
+            raise CandidateFailure("owned_processes_remain")
+        topology = process.topology(relocated, all_exited=True)
+        # Use the accepted dependency's complete onefile-supervisor /
+        # onedir-child topology contract, including both launcher processes.
+        diag._validate_topology_record(diag._topology_record(topology), supervised=True)
+        after = diag._tree_digest(diag._package_inventory(relocated))
+        if after != before:
+            raise CandidateFailure("package_tree_changed_during_scenario")
+        artifacts = _copy_verified_results(work, payload, output, args.oracle)
+        terminate = False
+        return artifacts
+    finally:
+        process.close(terminate=terminate)
+
+
+def qualify(args) -> dict:
+    if os.name != "nt":
+        raise CandidateFailure("native_windows_required")
+    if re.fullmatch(r"[0-9a-f]{40}", args.expected_source_sha) is None:
+        raise CandidateFailure("invalid_expected_source_sha")
+    checkout, artifact, fixtures, output = _prepare_paths(args)
     diag = _source_driver(checkout, args.expected_source_sha)
     identity = diag._validate_package(artifact)
     # The declared build writes the launcher sidecar; the adjacent child is
@@ -302,61 +357,16 @@ def qualify(args) -> dict:
     output.mkdir(mode=0o700, parents=False, exist_ok=False)
     deadline = time.monotonic() + MAX_SECONDS
 
-    def run_private(private: Path):
-        relocated = diag._relocate_package(artifact, private, deadline)
-        staged_fixtures = _stage_known_fixtures(fixtures, private)
-        work = private / "core scenario"
-        state = private / "ordinary user state"
-        work.mkdir()
-        (state / "Roaming").mkdir(parents=True)
-        environment = diag._sanitized_environment(relocated, work, state, "idle")
-        environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION", None)
-        environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", None)
-        environment.update({
-            "QT_QPA_PLATFORM": "windows",
-            "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION": "1",
-            "METROLIZA_WINDOWS_CANDIDATE_ROOT": str(work),
-            "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR": str(staged_fixtures),
-        })
-        process = diag._WindowsApi().launch(relocated / "metroliza.exe", environment, work)
-        terminate = True
-        try:
-            while time.monotonic() < deadline:
-                process.observe()
-                code = process.poll()
-                if code is not None:
-                    break
-                time.sleep(0.02)
-            else:
-                raise CandidateFailure("owned_package_scenario_timeout")
-            if code != 0:
-                raise CandidateFailure("package_scenario_nonzero_exit")
-            result_path = work / SCENARIO_FILE
-            if not result_path.exists():
-                raise CandidateFailure("package_core_hook_or_receipt_missing")
-            payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha)
-            if not diag._wait_for_job_exit(process, deadline):
-                raise CandidateFailure("owned_processes_remain")
-            topology = process.topology(relocated, all_exited=True)
-            # Use the accepted dependency's complete onefile-supervisor /
-            # onedir-child topology contract, including both launcher processes.
-            diag._validate_topology_record(diag._topology_record(topology), supervised=True)
-            after = diag._tree_digest(diag._package_inventory(relocated))
-            if after != before:
-                raise CandidateFailure("package_tree_changed_during_scenario")
-            artifacts = _copy_verified_results(work, payload, output, args.oracle)
-            terminate = False
-            return artifacts
-        finally:
-            process.close(terminate=terminate)
-
     # Keep our closed failure identifier across the dependency's wrapper, which
     # intentionally replaces unknown exception text. Cleanup still has to pass.
     failures = []
 
     def guarded_run(private):
         try:
-            return run_private(private)
+            return _run_private_core(
+                private, args=args, diag=diag, artifact=artifact, fixtures=fixtures,
+                output=output, deadline=deadline, before=before,
+            )
         except CandidateFailure as error:
             failures.append(error)
             return None

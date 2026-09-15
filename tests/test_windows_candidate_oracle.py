@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,11 @@ def _sidecars(database: Path) -> tuple[Path, ...]:
 def _oracle_database(tmp_path: Path) -> Path:
     database = tmp_path / "reports.sqlite"
     verifier._create_synthetic_database(verifier._load_oracle(ORACLE), database)
+    with closing(sqlite3.connect(database)) as writer:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("PRAGMA user_version = 1")
+        writer.commit()
     assert not _sidecars(database)
     return database
 
@@ -45,8 +51,7 @@ def test_database_comparator_preserves_fresh_database_bytes_and_sidecar_set(tmp_
 
 def test_database_comparator_rejects_and_preserves_active_wal(tmp_path):
     database = _oracle_database(tmp_path)
-    writer = sqlite3.connect(database)
-    try:
+    with closing(sqlite3.connect(database)) as writer:
         assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
         writer.execute("PRAGMA wal_autocheckpoint = 0")
         writer.execute("PRAGMA user_version = 1")
@@ -59,8 +64,6 @@ def test_database_comparator_rejects_and_preserves_active_wal(tmp_path):
             verifier.assert_database(verifier._load_oracle(ORACLE), database)
 
         assert (_digest(database), {path.name: path.read_bytes() for path in sidecars}) == before
-    finally:
-        writer.close()
 
 
 def _payload(child: Path) -> dict:
