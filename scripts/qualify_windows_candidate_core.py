@@ -101,20 +101,14 @@ def _input_directory(path: Path) -> Path:
     return path.resolve(strict=True)
 
 
-def validate_runtime_receipt(payload: object, expected_source: str) -> dict:
-    """Reject source-only, partial, stale, elevated and offscreen observations."""
+def _validate_core_result(payload: object) -> dict:
+    """Validate the closed scenario payload independently of runtime identity."""
     if type(payload) is not dict or type(payload.get("schema_version")) is not int:
         raise CandidateFailure("invalid_runtime_receipt")
     if payload["schema_version"] != 1:
         raise CandidateFailure("invalid_runtime_receipt")
     if payload.get("stage") != "complete" or payload.get("status") != "passed":
         raise CandidateFailure("scenario_incomplete")
-    if payload.get("packaged") is not True:
-        raise CandidateFailure("source_execution_is_not_package_evidence")
-    if payload.get("qpa") != "windows" or payload.get("ordinary_user") is not True:
-        raise CandidateFailure("native_ordinary_user_evidence_missing")
-    if payload.get("source_sha") != expected_source:
-        raise CandidateFailure("runtime_source_mismatch")
     relative = payload.get("relative_artifact_dir")
     if type(relative) is not str or re.fullmatch(r"core-[0-9a-f]{32}", relative) is None:
         raise CandidateFailure("invalid_artifact_directory")
@@ -144,6 +138,18 @@ def validate_runtime_receipt(payload: object, expected_source: str) -> dict:
             raise CandidateFailure("invalid_artifact_record")
         seen.add(name)
     return payload
+
+
+def validate_runtime_receipt(payload: object, expected_source: str) -> dict:
+    """Reject source-only, partial, stale, elevated and offscreen observations."""
+    result = _validate_core_result(payload)
+    if result.get("packaged") is not True:
+        raise CandidateFailure("source_execution_is_not_package_evidence")
+    if result.get("qpa") != "windows" or result.get("ordinary_user") is not True:
+        raise CandidateFailure("native_ordinary_user_evidence_missing")
+    if result.get("source_sha") != expected_source:
+        raise CandidateFailure("runtime_source_mismatch")
+    return result
 
 
 def _source_driver(checkout: Path, source_sha: str):
