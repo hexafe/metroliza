@@ -1332,6 +1332,74 @@ def test_handle_close_prefers_later_interrupt_after_ordinary_failure() -> None:
     assert closed == ["thread", "job", "process"]
 
 
+@pytest.mark.parametrize("phase", ["termination", "drain"])
+@pytest.mark.parametrize("primary_type", [KeyboardInterrupt, SystemExit])
+def test_inflight_interrupt_survives_secondary_handle_close_interrupt(
+    phase, primary_type
+) -> None:
+    primary = primary_type("PRIVATE_PRIMARY")
+    secondary = SystemExit("PRIVATE_SECONDARY") if primary_type is KeyboardInterrupt else KeyboardInterrupt("PRIVATE_SECONDARY")
+    closed = []
+
+    class _Kernel:
+        def TerminateJobObject(self, *_arguments):
+            if phase == "termination":
+                raise primary
+            return True
+
+        def WaitForSingleObject(self, *_arguments):
+            return qualification.WAIT_OBJECT_0
+
+        def CloseHandle(self, handle):
+            closed.append(handle)
+            if handle == "thread":
+                raise secondary
+            return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+
+    def accounting(_job):
+        if phase == "drain":
+            raise primary
+        return 0, 1
+
+    api._job_accounting = accounting
+    with pytest.raises(primary_type) as caught:
+        api.close_process(
+            "process", "job", terminate=True, thread="thread", token="token"
+        )
+
+    assert caught.value is primary
+    assert closed == ["thread", "job", "process", "token"]
+
+
+def test_ordinary_termination_error_keeps_secondary_interrupt_semantics() -> None:
+    ordinary = qualification.QualificationFailure("scenario_failed")
+    secondary = KeyboardInterrupt("PRIVATE_SECONDARY")
+    closed = []
+
+    class _Kernel:
+        def TerminateJobObject(self, *_arguments):
+            raise ordinary
+
+        def CloseHandle(self, handle):
+            closed.append(handle)
+            if handle == "thread":
+                raise secondary
+            return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    with pytest.raises(KeyboardInterrupt) as caught:
+        api.close_process(
+            "process", "job", terminate=True, thread="thread", token="token"
+        )
+
+    assert caught.value is secondary
+    assert closed == ["thread", "job", "process", "token"]
+
+
 def _interrupt_after_call(code, store_name: str | None, primary, action) -> None:
     instructions = list(dis.get_instructions(code))
     transfer = next(
