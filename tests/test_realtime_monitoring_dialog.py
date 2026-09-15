@@ -1322,6 +1322,7 @@ def test_private_dashboard_cleanup_failure_retains_ownership_until_retry(
     retained = SimpleNamespace(name=owned.name, cleanup=cleanup)
     monkeypatch.setattr(dialog, "_dashboard_temp_dir", retained)
     completed = QSignalSpy(dialog.shutdown_complete)
+    failed = QSignalSpy(dialog.shutdown_cleanup_failed)
     if deferred:
         dialog._closing = True
         dialog._shutdown_waiting = True
@@ -1329,6 +1330,7 @@ def test_private_dashboard_cleanup_failure_retains_ownership_until_retry(
     else:
         assert not dialog.close()
     assert len(completed) == 0
+    assert len(failed) == int(deferred)
     assert dialog._dashboard_temp_dir is retained
     assert directory.is_dir()
     assert not dialog.is_close_deferred()
@@ -1396,6 +1398,23 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
                     private_directory.create_private_dashboard_directory()
             assert validated == [True]
             assert list(failed_parent.iterdir()) == []
+
+            # Atomic FILE_CREATED proves ownership even before secondary identity queries.
+            identity_parent = tmp_path / "owned-identity-query-failure"
+            identity_parent.mkdir()
+            identity_checks = []
+
+            def reject_identity_query(*_args):
+                identity_checks.append(True)
+                raise private_directory.PrivateDashboardDirectoryError()
+
+            with monkeypatch.context() as failure:
+                failure.setattr(tempfile, "tempdir", str(identity_parent))
+                failure.setattr(private_directory, "_validate_pinned_identity", reject_identity_query)
+                with pytest.raises(private_directory.PrivateDashboardDirectoryError):
+                    private_directory.create_private_dashboard_directory()
+            assert identity_checks == [True]
+            assert list(identity_parent.iterdir()) == []
 
             # Fault injection is a failure control; positive creation below uses real NtCreateFile.
             for ntstatus in (-1073741790, 0x103):  # ACCESS_DENIED, PENDING

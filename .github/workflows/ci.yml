@@ -994,6 +994,7 @@ jobs:
           python -m pytest -vv -s --tb=short --show-capture=no
           tests/test_realtime_monitoring_dialog.py
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests

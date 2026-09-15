@@ -43,8 +43,10 @@ def test_native_windows_realtime_step_keeps_the_complete_dialog_contract() -> No
     assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
     assert 'python -m pytest -vv -s --tb=short --show-capture=no' in step
     assert 'tests/test_realtime_monitoring_dialog.py' in step
-    assert '::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice' in step
-    assert '::test_dirty_realtime_source_cancel_never_arms_automatic_root_close' in step
+    parent_node = 'tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::'
+    assert parent_node + 'test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice' in step
+    assert parent_node + 'test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries' in step
+    assert parent_node + 'test_dirty_realtime_source_cancel_never_arms_automatic_root_close' in step
     assert ' -k ' not in step
     assert 'continue-on-error' not in step
     assert 'METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9' in step

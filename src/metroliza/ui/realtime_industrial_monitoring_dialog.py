@@ -84,6 +84,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     """Configure and run live polling for one or more industrial source profiles."""
 
     shutdown_complete = pyqtSignal()
+    shutdown_cleanup_failed = pyqtSignal()
     monitor_stopped = pyqtSignal()
     database_work_idle = pyqtSignal()
 
@@ -1439,6 +1440,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if not self._closing or self._workers_own_context():
             return
         if not self._cleanup_dashboard_session():
+            self.shutdown_cleanup_failed.emit()
             return
         if self._shutdown_waiting and not self._shutdown_completion_emitted:
             self._shutdown_completion_emitted = True

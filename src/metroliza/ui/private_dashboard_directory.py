@@ -439,21 +439,19 @@ def _create_windows_private_directory_impl():
     admin_sid = ctypes.cast(sid_buffers[1], ctypes.c_void_p)
     parent = Path(tempfile.gettempdir()).resolve()
     handle = None
-    owned_identity_verified = False
     try:
         allowed_sids = (user_sid, system_sid, admin_sid)
         created_path, handle = _create_unique_private_directory(kernel, ntdll, parent, attributes)
         _validate_pinned_identity(kernel, advapi, handle, allowed_sids)
-        owned_identity_verified = True
         _validate_pinned_directory(kernel, advapi, handle, allowed_sids)
         return _WindowsPrivateDashboardDirectory(str(created_path), handle, kernel)
     except (PrivateDashboardDirectoryError, OSError) as error:
-        if handle:
-            if owned_identity_verified:
-                try:
-                    _mark_empty_directory_for_deletion(kernel, handle)
-                except PrivateDashboardDirectoryError:
-                    pass
+        if _valid_handle(handle):
+            try:
+                # FILE_CREATED proves this exact pin names the newly allocated directory.
+                _mark_empty_directory_for_deletion(kernel, handle)
+            except PrivateDashboardDirectoryError:
+                pass
             kernel.CloseHandle(handle)
         # Cleanup is handle-directed; no unverified name is ever path-deleted.
         if isinstance(error, PrivateDashboardDirectoryError):

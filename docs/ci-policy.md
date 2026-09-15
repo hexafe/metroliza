@@ -63,11 +63,16 @@ The product atomically creates the owned Windows directory and receives its hand
 `NtCreateFile` with a protected allowlist, validates the native handle before output, and retains it through worker
 completion to refuse directory replacement. Native failure controls cover real creation,
 collision preservation, denied/nonfinal creation, untrusted child-delete ACEs,
-post-ownership security validation and handle-directed cleanup; UI tests retain ownership
+secondary identity-query/security failures and handle-directed cleanup of the atomically
+created object; UI tests retain ownership
 and refuse false shutdown completion when cleanup fails. An unavailable private session
 blocks default output with a fixed explanation while an explicitly chosen output file
 keeps its existing operator-directed behavior. Real MainWindow close tests distinguish the
 private-storage retry reason from the preserved unsaved-source cancellation reason.
+The deferred parent-close case uses a real held writer and real SQLite-to-HTML output:
+after cleanup fails, an explicit failure notification clears pending automatic-close
+intent and leaves the parent/storage available for manual retry. Stale-owner signals and
+an earlier queued child-close retry cannot close the parent after that failure.
 
 ## Optional/manual checks (non-blocking)
 

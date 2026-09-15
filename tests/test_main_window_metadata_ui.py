@@ -1209,6 +1209,120 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             finally:
                 window.close()
 
+    def test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries(self):
+        import threading
+        import time
+        from PyQt6 import sip
+        from PyQt6.QtTest import QSignalSpy, QTest
+        from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
+
+        def wait_until(predicate):
+            deadline = time.monotonic() + 3
+            while not predicate() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(5)
+            self.assertTrue(predicate())
+
+        window = self._main_window()
+        window.show()
+        entered = threading.Event()
+        release = threading.Event()
+        worker = None
+        snapshot = RealtimeDashboardService.dashboard_snapshot
+
+        def gated_snapshot(service):
+            entered.set()
+            assert release.wait(3), "test did not release the real dashboard worker"
+            return snapshot(service)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window.set_db_file(str(Path(temp_dir) / "realtime.db"))
+            with patch(
+                "metroliza.ui.realtime_industrial_monitoring_dialog.default_industrial_source_config_path",
+                return_value=Path(temp_dir) / "unused-sources.yaml",
+            ):
+                window.launch_realtime_industrial_monitoring_dialog()
+            realtime = window.realtime_monitoring_dialog
+            owned = realtime._dashboard_temp_dir
+            directory = Path(owned.name)
+            output = realtime._default_dashboard_path()
+            cleanup = owned.cleanup
+            attempts = []
+            completions = QSignalSpy(realtime.shutdown_complete)
+
+            class StaleFailureEmitter(QDialog):
+                shutdown_cleanup_failed = pyqtSignal()
+
+            stale = StaleFailureEmitter(window)
+            stale.shutdown_cleanup_failed.connect(window._on_realtime_shutdown_cleanup_failed)
+            notice_before_close = window.workspace_notice_label.text()
+            realtime.shutdown_cleanup_failed.emit()
+            self.assertEqual(window.workspace_notice_label.text(), notice_before_close)
+
+            def fail_once():
+                attempts.append(True)
+                if len(attempts) == 1:
+                    raise OSError("synthetic cleanup detail")
+                cleanup()
+
+            try:
+                with patch.object(owned, "cleanup", side_effect=fail_once), patch.object(
+                    RealtimeDashboardService, "dashboard_snapshot", gated_snapshot,
+                ):
+                    realtime._schedule_dashboard_write(open_after=False)
+                    wait_until(entered.is_set)
+                    worker = realtime.dashboard_thread
+                    self.assertTrue(worker.isRunning())
+                    event = QCloseEvent()
+                    window.closeEvent(event)
+                    self.assertFalse(event.isAccepted())
+                    self.assertTrue(window._close_deferred_for_realtime)
+                    self.assertTrue(realtime.is_close_deferred())
+                    self.assertEqual(attempts, [])
+                    stale.shutdown_cleanup_failed.emit()
+                    self.assertTrue(window._close_deferred_for_realtime)
+                    # An earlier child close may already have queued its retry.
+                    window._close_deferred_for_children = True
+                    window._deferred_child_close_retry_scheduled = True
+                    release.set()
+                    wait_until(lambda: bool(attempts))
+                    self.assertIsNone(realtime.dashboard_thread)
+                    self.assertIn("Real-time Industrial Monitoring", output.read_text(encoding="utf-8"))
+                    self.assertEqual(len(completions), 0)
+                    self.assertTrue(window.isVisible())
+                    self.assertFalse(window._close_deferred_for_realtime)
+                    self.assertFalse(window._close_deferred_for_children)
+                    self.assertFalse(window._deferred_child_close_retry_scheduled)
+                    self.assertEqual(window._deferred_close_blockers, set())
+                    self.assertFalse(realtime.is_close_deferred())
+                    self.assertIs(realtime._dashboard_temp_dir, owned)
+                    self.assertTrue(directory.is_dir())
+                    self.assertTrue(realtime.dashboard_cleanup_retry_required())
+                    self.assertEqual(
+                        window.workspace_notice_label.text(),
+                        "Private dashboard storage could not be removed. Close again to retry.",
+                    )
+                    self.assertTrue(window.workspace_notice_label.isVisible())
+                    self.assertNotIn("synthetic", window.workspace_notice_label.text())
+                    window._retry_deferred_child_close()
+                    self.app.processEvents()
+                    self.assertTrue(window.isVisible())
+                    self.assertEqual(len(attempts), 1)
+                    self.assertTrue(window.close())
+                self.assertEqual(len(attempts), 2)
+                self.assertFalse(directory.exists())
+            finally:
+                release.set()
+                if worker is not None and not sip.isdeleted(worker):
+                    self.assertTrue(worker.wait(3000))
+                self.app.processEvents()
+                window.close()
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                self.assertTrue(sip.isdeleted(window))
+                if worker is not None:
+                    self.assertTrue(sip.isdeleted(worker))
+
     def test_realtime_shutdown_retry_intent_is_consumed_before_other_blocker(self):
         window = self._main_window()
 
