@@ -936,7 +936,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.11.9'
           cache: 'pip'
           cache-dependency-path: |
             requirements.txt
@@ -967,6 +967,16 @@ jobs:
           "tests/test_csv_pipeline_performance.py::test_benchmark_cli_help_without_resource"
           "tests/test_csv_pipeline_performance.py::test_benchmark_worker_requires_resource_before_setup"
 
+      - name: Run native Windows startup diagnostics tests
+        env:
+          PYTHONPATH: src;.
+        run: >-
+          python -m pytest -v
+          tests/test_bootstrap_startup.py
+          tests/test_diagnostic_events.py
+          tests/test_logging_utils.py
+          tests/test_build_provenance.py
+
       - name: Run native Windows Qt lifecycle tests
         env:
           PYTHONPATH: src;.
@@ -993,6 +1003,29 @@ jobs:
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py
+
+      - name: Run native Windows specialist geometry tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_INDUSTRIAL_SCREEN: 1920x1080
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -vv -s tests/test_industrial_native_geometry.py
+
+      - name: Run native Windows realtime dashboard scheduling tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9
+        run: >-
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_realtime_monitoring_dialog.py
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:

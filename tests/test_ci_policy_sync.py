@@ -7,6 +7,7 @@ import pytest
 
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
+FEATURE_CATALOG_PATH = Path('docs/project/feature_catalog.md')
 NATIVE_BUILD_DISTRIBUTION_PATH = Path('docs/native_build_distribution.md')
 RC_CHECKLIST_PATH = Path('docs/release_checks/release_candidate_checklist.md')
 RELEASE_STATUS_PATH = Path('docs/release_checks/release_status.md')
@@ -47,6 +48,31 @@ def test_native_windows_report_workspace_step_keeps_one_real_owner_and_dpi_gate(
     for test in ('report_workspace_shell', 'report_workspace_geometry', 'main_window_metadata_ui', 'active_dialog_close_guards'):
         assert f'tests/test_{test}.py' in step
     assert name in policy
+
+
+def test_native_windows_realtime_step_keeps_the_complete_dialog_contract() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows realtime dashboard scheduling tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'python -m pytest -vv -s --tb=short --show-capture=no' in step
+    assert 'tests/test_realtime_monitoring_dialog.py' in step
+    parent_node = 'tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::'
+    assert parent_node + 'test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice' in step
+    assert parent_node + 'test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries' in step
+    assert parent_node + 'test_dirty_realtime_source_cancel_never_arms_automatic_root_close' in step
+    assert ' -k ' not in step
+    assert 'continue-on-error' not in step
+    assert 'METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9' in step
+    windows = workflow.split('  windows-core-smoke:', 1)[1].split('  windows-startup-benchmark:', 1)[0]
+    assert "python-version: '3.11.9'" in windows
+    assert 'Windows owner/DACL/effective access' in policy
+    assert 'restricted_current_user' in policy
+    assert name in policy
+    assert 'controlled deferred-dispatch' in policy
+    assert 'real QThread/SQLite/HTML' in policy
 
 
 def test_native_windows_cache_publication_preserves_required_real_lifecycle() -> None:
@@ -289,6 +315,63 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert 'tests/test_db_utils.py' in workflow
     assert 'tests/test_packaging_spec_hiddenimports.py' in workflow
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
+
+
+def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['windows-core-smoke']['steps']
+    specialist = next(
+        step for step in steps
+        if step.get('name') == 'Run native Windows specialist geometry tests'
+    )
+
+    assert specialist['env'] == {
+        'PYTHONPATH': 'src;.',
+        'QT_QPA_PLATFORM': 'windows',
+        'METROLIZA_EXPECT_QT_PLATFORM': 'windows',
+        'METROLIZA_EXPECT_INDUSTRIAL_SCREEN': '1920x1080',
+    }
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in specialist['run']
+    assert 'python -m pytest -vv -s tests/test_industrial_native_geometry.py' in specialist['run']
+
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    assert 'Run native Windows specialist geometry tests' in ci_policy
+    assert 'DPR 1, 1.25, 1.5, and 2' in ci_policy
+    assert 'packaged-EXE and clean-machine acceptance remain separate' in ci_policy
+
+    catalog = FEATURE_CATALOG_PATH.read_text(encoding='utf-8')
+    assert 'Corrective quality trackers' in catalog
+    assert '[#1018]' in catalog
+    assert 'supports the existing #940 and #946 capability rows' in catalog
+    assert '#926–#957 inventory and dependency graph remain unchanged' in catalog
+
+
+def test_windows_core_runs_complete_startup_diagnostics_selection() -> None:
+    import shlex
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-core-smoke']
+    assert job['runs-on'] == 'windows-latest'
+    assert 'if' not in job
+    step_name = 'Run native Windows startup diagnostics tests'
+    steps = [step for step in job['steps'] if step['name'] == step_name]
+    assert len(steps) == 1
+    step = steps[0]
+    assert 'if' not in step
+    assert 'continue-on-error' not in step
+    assert step['env']['PYTHONPATH'] == 'src;.'
+    assert shlex.split(step['run']) == [
+        'python', '-m', 'pytest', '-v',
+        'tests/test_bootstrap_startup.py',
+        'tests/test_diagnostic_events.py',
+        'tests/test_logging_utils.py',
+        'tests/test_build_provenance.py',
+    ]
+    assert step_name in CI_POLICY_PATH.read_text(encoding='utf-8')
 
 
 def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> None:
