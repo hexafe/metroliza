@@ -783,6 +783,190 @@ def test_concurrent_cleanup_attempts_every_owned_process() -> None:
     assert caught.value.qualification_cleanup == "failed"
 
 
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_second_concurrent_launch_interrupt_closes_first_owned_process(
+    tmp_path, monkeypatch, failure_type, cleanup_fails
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    primary = failure_type("PRIVATE_INTERRUPT_DETAIL")
+    launched = []
+    closed = []
+
+    class _Process:
+        def close(self, *, terminate):
+            closed.append(terminate)
+            if cleanup_fails:
+                raise qualification.QualificationFailure(
+                    "scenario_failed",
+                    qualification_reason="qualification_cleanup_failed",
+                    qualification_cleanup="failed",
+                )
+
+    class _Api:
+        def launch(self, _executable, _environment, _cwd):
+            launched.append(_cwd)
+            if len(launched) == 2:
+                raise primary
+            return _Process()
+
+    roots = (tmp_path / "first", tmp_path / "second")
+    with pytest.raises(failure_type) as caught:
+        qualification._launch_concurrent_pair(
+            _Api(), tmp_path / "application.exe", tmp_path, roots, tmp_path
+        )
+
+    assert caught.value is primary
+    assert launched == list(roots)
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_second_concurrent_launch_failure_records_first_process_cleanup(
+    tmp_path, monkeypatch, cleanup_fails
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    primary = qualification.QualificationFailure("restricted_launch_unavailable")
+    closed = []
+
+    class _Process:
+        def close(self, *, terminate):
+            closed.append(terminate)
+            if cleanup_fails:
+                raise qualification.QualificationFailure(
+                    "scenario_failed", qualification_cleanup="failed"
+                )
+
+    class _Api:
+        count = 0
+
+        def launch(self, _executable, _environment, _cwd):
+            self.count += 1
+            if self.count == 2:
+                raise primary
+            return _Process()
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._launch_concurrent_pair(
+            _Api(),
+            tmp_path / "application.exe",
+            tmp_path,
+            (tmp_path / "first", tmp_path / "second"),
+            tmp_path,
+        )
+
+    assert caught.value is primary
+    assert primary.qualification_cleanup == ("failed" if cleanup_fails else "complete")
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("failure_type", [qualification.QualificationFailure, RuntimeError])
+def test_first_concurrent_launch_failure_has_no_owned_process_to_clean(
+    tmp_path, monkeypatch, failure_type
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    primary = failure_type("restricted_launch_unavailable")
+    launches = []
+
+    class _Api:
+        def launch(self, _executable, _environment, cwd):
+            launches.append(cwd)
+            raise primary
+
+    with pytest.raises(failure_type) as caught:
+        qualification._launch_concurrent_pair(
+            _Api(),
+            tmp_path / "application.exe",
+            tmp_path,
+            (tmp_path / "first", tmp_path / "second"),
+            tmp_path,
+        )
+
+    assert caught.value is primary
+    assert launches == [tmp_path / "first"]
+    if isinstance(primary, qualification.QualificationFailure):
+        assert primary.qualification_cleanup == "not_attempted"
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_second_concurrent_launch_ordinary_error_preserves_existing_cleanup_route(
+    tmp_path, monkeypatch, cleanup_fails
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    primary = RuntimeError("PRIVATE_LAUNCH_ERROR")
+    closed = []
+
+    class _Process:
+        def close(self, *, terminate):
+            closed.append(terminate)
+            if cleanup_fails:
+                raise qualification.QualificationFailure(
+                    "scenario_failed", qualification_cleanup="failed"
+                )
+
+    class _Api:
+        count = 0
+
+        def launch(self, _executable, _environment, _cwd):
+            self.count += 1
+            if self.count == 2:
+                raise primary
+            return _Process()
+
+    caught_type = qualification.QualificationFailure if cleanup_fails else RuntimeError
+    with pytest.raises(caught_type) as caught:
+        qualification._launch_concurrent_pair(
+            _Api(),
+            tmp_path / "application.exe",
+            tmp_path,
+            (tmp_path / "first", tmp_path / "second"),
+            tmp_path,
+        )
+
+    if cleanup_fails:
+        assert caught.value.qualification_cleanup == "failed"
+    else:
+        assert caught.value is primary
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("cleanup_type", [KeyboardInterrupt, SystemExit])
+def test_concurrent_cleanup_interrupt_does_not_replace_launch_interrupt(
+    tmp_path, monkeypatch, failure_type, cleanup_type
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    primary = failure_type("PRIVATE_LAUNCH_INTERRUPT")
+    secondary = cleanup_type("PRIVATE_CLEANUP_INTERRUPT")
+    closed = []
+
+    class _Process:
+        def close(self, *, terminate):
+            closed.append(terminate)
+            raise secondary
+
+    class _Api:
+        count = 0
+
+        def launch(self, _executable, _environment, _cwd):
+            self.count += 1
+            if self.count == 2:
+                raise primary
+            return _Process()
+
+    with pytest.raises(failure_type) as caught:
+        qualification._launch_concurrent_pair(
+            _Api(),
+            tmp_path / "application.exe",
+            tmp_path,
+            (tmp_path / "first", tmp_path / "second"),
+            tmp_path,
+        )
+
+    assert caught.value is primary
+    assert closed == [True]
+
+
 def test_driver_phase_preserves_safe_early_process_exit_evidence(
     tmp_path,
     monkeypatch,

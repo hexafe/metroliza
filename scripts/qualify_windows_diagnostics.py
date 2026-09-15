@@ -1781,8 +1781,21 @@ def _launch_concurrent_pair(
                     root,
                 )
             )
-    except Exception:
-        _close_processes(tuple(processes), terminate=True)
+    except BaseException as primary:
+        if processes:
+            try:
+                def cleanup() -> None:
+                    _close_processes(tuple(processes), terminate=True)
+
+                if isinstance(primary, Exception) and not isinstance(
+                    primary, QualificationFailure
+                ):
+                    cleanup()
+                else:
+                    _attempt_cleanup(cleanup)
+            except BaseException:
+                if isinstance(primary, Exception):
+                    raise
         raise
     return processes[0], processes[1]
 
