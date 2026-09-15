@@ -31,11 +31,12 @@ def _interrupt_after_launch_before_store(code, primary, action) -> None:
                 raise primary
         return trace
 
+    previous = sys.gettrace()
     sys.settrace(trace)
     try:
         action()
     finally:
-        sys.settrace(None)
+        sys.settrace(previous)
 
 
 def _legacy_unowned_launch(api) -> None:
