@@ -63,20 +63,80 @@ def test_finish_barrier_accepts_file(tmp_path, monkeypatch, delivery):
         )
 
     diagnostic_qualification._wait_for_finish(
-        tmp_path, seconds=0 if delivery == "existing" else 1
+        tmp_path, seconds=1
     )
 
 
-def test_handled_failure_barrier_timeout_is_a_closed_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize("delivered_at", (109, 110, 111))
+def test_finish_barrier_accepts_only_file_observed_before_deadline(
+    tmp_path, monkeypatch, delivered_at
+):
+    from metroliza.app.bootstrap import get_or_create_qapplication
+
+    app = get_or_create_qapplication()
+    assert app is not None
+    marker = tmp_path / "finish"
+    clock = [100]
+    monkeypatch.setattr(diagnostic_qualification.time, "monotonic", lambda: clock[0])
+
+    def deliver_after_event_pump(_seconds):
+        marker.touch(exist_ok=False)
+        clock[0] = delivered_at
+
+    monkeypatch.setattr(diagnostic_qualification.time, "sleep", deliver_after_event_pump)
+    if delivered_at < 110:
+        diagnostic_qualification._wait_for_finish(tmp_path, seconds=10)
+    else:
+        with pytest.raises(ValueError, match="^qualification_barrier_timeout$"):
+            diagnostic_qualification._wait_for_finish(tmp_path, seconds=10)
+    assert marker.is_file()
+
+
+def test_finish_barrier_rechecks_clock_after_marker_observation(monkeypatch):
+    clock = [100]
+    monkeypatch.setattr(diagnostic_qualification.time, "monotonic", lambda: clock[0])
+
+    class DelayedMarker:
+        def exists(self):
+            return True
+
+        def is_file(self):
+            clock[0] = 111
+            return True
+
+    class Root:
+        def __truediv__(self, name):
+            assert name == "finish"
+            return DelayedMarker()
+
+    with pytest.raises(ValueError, match="^qualification_barrier_timeout$"):
+        diagnostic_qualification._wait_for_finish(Root(), seconds=10)
+
+
+@pytest.mark.parametrize("finish_delivery", ("absent", "after_deadline"))
+def test_handled_failure_barrier_timeout_is_a_closed_failure(
+    tmp_path, monkeypatch, finish_delivery
+):
     monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
     monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", "handled_failure")
     monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", str(tmp_path))
     monkeypatch.setattr(diagnostic_qualification, "_run_work", lambda *_args: None)
     actual_wait = diagnostic_qualification._wait_for_finish
+    wait_seconds = 0
+    if finish_delivery == "after_deadline":
+        clock = [100]
+        monkeypatch.setattr(diagnostic_qualification.time, "monotonic", lambda: clock[0])
+
+        def late_finish(_seconds):
+            (tmp_path / "finish").touch(exist_ok=False)
+            clock[0] = 111
+
+        monkeypatch.setattr(diagnostic_qualification.time, "sleep", late_finish)
+        wait_seconds = 10
     monkeypatch.setattr(
         diagnostic_qualification,
         "_wait_for_finish",
-        lambda root: actual_wait(root, seconds=0),
+        lambda root: actual_wait(root, seconds=wait_seconds),
     )
 
     assert diagnostic_qualification.run_qualification("handled_failure") == 21

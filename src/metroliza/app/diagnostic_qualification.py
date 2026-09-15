@@ -205,11 +205,15 @@ def _wait_for_finish(root: Path, *, seconds: float = 10) -> None:
     from PyQt6.QtWidgets import QApplication
 
     deadline = time.monotonic() + seconds
-    while not (root / "finish").exists() and time.monotonic() < deadline:
+    marker = root / "finish"
+    while time.monotonic() < deadline:
+        if marker.is_file():
+            if time.monotonic() < deadline:
+                return
+            break
         QApplication.instance().processEvents()
         time.sleep(0.02)
-    if not (root / "finish").is_file():
-        raise ValueError("qualification_barrier_timeout")
+    raise ValueError("qualification_barrier_timeout")
 
 
 def _wait_for_concurrent_start(root: Path, *, seconds: float = 10) -> None:
