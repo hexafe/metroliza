@@ -994,21 +994,21 @@ jobs:
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py
 
-<<<<<<< HEAD
       - name: Run native Windows specialist geometry tests
-=======
-      - name: Run native Windows realtime dashboard scheduling tests
->>>>>>> 6aee4ec03a189af0f57fe09c8b296595949d108f
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
           METROLIZA_EXPECT_QT_PLATFORM: windows
-<<<<<<< HEAD
           METROLIZA_EXPECT_INDUSTRIAL_SCREEN: 1920x1080
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv -s tests/test_industrial_native_geometry.py
-=======
+
+      - name: Run native Windows realtime dashboard scheduling tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
           METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9
         run: >-
           python -m pytest -vv -s --tb=short --show-capture=no
@@ -1016,7 +1016,6 @@ jobs:
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
->>>>>>> 6aee4ec03a189af0f57fe09c8b296595949d108f
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
