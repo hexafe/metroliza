@@ -265,7 +265,7 @@ def _create_synthetic_database(oracle: dict[str, Any], path: Path) -> None:
             )]
             measurement_values = [measurement["measurement_id"], report_id, *values[1:]]
             connection.execute(
-                "INSERT INTO report_measurements VALUES (" + ", ".join("?" for _ in measurement_values) + ")",
+                "INSERT INTO report_measurements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 measurement_values,
             )
 

@@ -380,10 +380,7 @@ def run_qualification() -> int:
         capture_tabular_w05(fixtures, tabular_file)
         receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
         receipt["facets"]["finite_precision_filters"] = "passed"
-        if __package__:
-            from .windows_candidate_xlsx import run_export_checks
-        else:
-            from windows_candidate_xlsx import run_export_checks
+        from metroliza.app.windows_candidate_xlsx import run_export_checks
         child = root / receipt["relative_artifact_dir"]
         xlsx_result = run_export_checks(child)
         expected_xlsx_facets = {

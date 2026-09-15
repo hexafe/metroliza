@@ -19,6 +19,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from defusedxml import ElementTree as SafeET
+
 
 # These are copied from the retained xlsx-desktop-check oracle, not from the
 # workbook generated during this call.  The retained artifact was generated at
@@ -162,7 +164,7 @@ def _source_provenance() -> dict[str, str]:
 
 
 def _xml(workbook_zip: zipfile.ZipFile, path: str) -> ET.Element:
-    return ET.fromstring(workbook_zip.read(path))
+    return SafeET.fromstring(workbook_zip.read(path), forbid_dtd=True, forbid_entities=True)
 
 
 def _package_path(base_path: str, target: str) -> str:
@@ -415,7 +417,7 @@ def _verify_local_cell_negative_control(workbook: Path) -> None:
             for item in original.infolist():
                 payload = original.read(item.filename)
                 if item.filename == sheet_path:
-                    worksheet = ET.fromstring(payload)
+                    worksheet = SafeET.fromstring(payload, forbid_dtd=True, forbid_entities=True)
                     cell = worksheet.find(".//x:c[@r='C22']", NS_MAIN)
                     if cell is None:
                         raise XlsxScenarioFailure("measurement_header_cell_missing")
