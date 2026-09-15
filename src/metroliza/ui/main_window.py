@@ -732,10 +732,16 @@ class MainWindow(QMainWindow):
                     callable(deferred_check) and deferred_check()
                 )
                 if not self._close_deferred_for_realtime:
-                    self.workspace_notice_label.setText(
-                        "Metroliza close was cancelled because Realtime Monitor kept "
-                        "unsaved source changes. Resolve them and try again."
-                    )
+                    cleanup_check = getattr(realtime_dialog, "dashboard_cleanup_retry_required", None)
+                    if callable(cleanup_check) and cleanup_check():
+                        self.workspace_notice_label.setText(
+                            "Private dashboard storage could not be removed. Close again to retry."
+                        )
+                    else:
+                        self.workspace_notice_label.setText(
+                            "Metroliza close was cancelled because Realtime Monitor kept "
+                            "unsaved source changes. Resolve them and try again."
+                        )
                     set_status_variant(self.workspace_notice_label, "warning")
                     self.workspace_notice_label.setVisible(True)
                 event.ignore()
@@ -1060,6 +1066,7 @@ class MainWindow(QMainWindow):
                     dialog.shutdown_complete.connect(
                         self._on_realtime_monitoring_shutdown_complete
                     )
+                    self._connect_realtime_shutdown_cleanup_failure(dialog)
                     dialog.database_work_idle.connect(self._retry_pending_realtime_rebind)
                     return dialog
 
@@ -1080,6 +1087,7 @@ class MainWindow(QMainWindow):
                 self.realtime_monitoring_dialog.shutdown_complete.connect(
                     self._on_realtime_monitoring_shutdown_complete
                 )
+                self._connect_realtime_shutdown_cleanup_failure(self.realtime_monitoring_dialog)
                 self.realtime_monitoring_dialog.database_work_idle.connect(
                     self._retry_pending_realtime_rebind
                 )
@@ -1098,6 +1106,27 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Real-time industrial monitoring opened.", 5000)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _connect_realtime_shutdown_cleanup_failure(self, dialog) -> None:
+        cleanup_failed = getattr(dialog, "shutdown_cleanup_failed", None)
+        if cleanup_failed is not None:
+            cleanup_failed.connect(self._on_realtime_shutdown_cleanup_failed)
+
+    def _on_realtime_shutdown_cleanup_failed(self) -> None:
+        if self.sender() is not self.realtime_monitoring_dialog:
+            return
+        retry_root_close = self._close_deferred_for_realtime
+        self._close_deferred_for_realtime = False
+        if not retry_root_close:
+            return
+        self._close_deferred_for_children = False
+        self._deferred_close_blockers.clear()
+        self._deferred_child_close_retry_scheduled = False
+        self.workspace_notice_label.setText(
+            "Private dashboard storage could not be removed. Close again to retry."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.setVisible(True)
 
     def _on_realtime_monitoring_shutdown_complete(self) -> None:
         retry_root_close = self._close_deferred_for_realtime

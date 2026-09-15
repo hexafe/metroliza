@@ -93,6 +93,12 @@ planner into the main Reports page after external #1015 integration.
 | Cache-first Oznak/production-source configuration, bounded fetch, local analysis, and source freshness | [#940](https://github.com/hexafe/metroliza/issues/940) | Release-candidate | 4 | #930, #931, #932, #939, #944, #952 |
 | Operator-ready realtime monitoring, explainable anomaly review, replay, offsets, and recovery | [#941](https://github.com/hexafe/metroliza/issues/941) | Release-candidate / controlled experimental slice | 4 | #919, #940, #930, #937, #944, #952 |
 
+Within #941, [#1054](https://github.com/hexafe/metroliza/issues/1054) owns the bounded
+asynchronous dashboard scheduling regression: observable deferred startup, coalescing and closing.
+Its native continuation owns the protected, pinned temporary dashboard directory and generated
+HTML privacy checks, controlled creation failure and owned cleanup; shared filesystem policy is separate.
+Its source/native test evidence does not establish packaged or operational acceptance.
+
 ## 6. Automation, traceability, diagnostics, and support
 
 | Capability | Issue | Current maturity | Target phase | Strict prerequisites |
