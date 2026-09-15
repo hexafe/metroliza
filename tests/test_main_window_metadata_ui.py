@@ -198,45 +198,67 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 
         window = self._main_window()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            window.launch_realtime_industrial_monitoring_dialog()
-            dialog = window.realtime_monitoring_dialog
-            session_db = Path(dialog.db_file)
-            IndustrialDataRepository(str(session_db)).upsert_source_profile(
-                profile_key="line-a",
-                profile_name="Line A",
-                source_db_alias="line-a",
-                database_type="sqlite",
-                source_object_name="events",
-            )
-            durable_db = str(Path(temp_dir) / "durable.db")
-            saved_copy = Path(temp_dir) / "saved-session.sqlite"
+        errors = []
+        warnings = []
 
-            with (
-                patch(
-                    "metroliza.ui.main_window.QMessageBox.question",
-                    return_value=QMessageBox.StandardButton.Save,
-                ),
-                patch(
-                    "metroliza.ui.main_window.QFileDialog.getSaveFileName",
-                    return_value=(str(saved_copy), "SQLite database"),
-                ),
+        def capture_error(exception, **_kwargs):
+            cause = exception.__cause__
+            errors.append({
+                "exception_class": type(exception).__name__,
+                "cause_class": type(cause).__name__ if cause is not None else None,
+                "errno": getattr(cause or exception, "errno", None),
+                "winerror": getattr(cause or exception, "winerror", None),
+            })
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                window.launch_realtime_industrial_monitoring_dialog()
+                dialog = window.realtime_monitoring_dialog
+                session_db = Path(dialog.db_file)
+                IndustrialDataRepository(str(session_db)).upsert_source_profile(
+                    profile_key="line-a",
+                    profile_name="Line A",
+                    source_db_alias="line-a",
+                    database_type="sqlite",
+                    source_object_name="events",
+                )
+                durable_db = str(Path(temp_dir) / "durable.db")
+                saved_copy = Path(temp_dir) / "saved-session.sqlite"
+
+                with (
+                    patch(
+                        "metroliza.ui.main_window.QMessageBox.question",
+                        return_value=QMessageBox.StandardButton.Save,
+                    ),
+                    patch(
+                        "metroliza.ui.main_window.QFileDialog.getSaveFileName",
+                        return_value=(str(saved_copy), "SQLite database"),
+                    ),
+                    patch("metroliza.ui.main_window.CustomLogger", side_effect=capture_error),
+                    patch("metroliza.ui.main_window.QMessageBox.warning", side_effect=lambda *_: warnings.append(True)),
+                ):
+                    window.set_db_file(durable_db)
+                    self.assertFalse(errors, f"Unexpected archive error (closed fields only): {errors}")
+                    self.assertFalse(warnings, "Unexpected archive warning")
+
+                self.assertFalse(session_db.exists())
+                self.assertTrue(saved_copy.exists())
+                self.assertEqual(dialog.db_file, durable_db)
+                self.assertEqual(
+                    len(
+                        IndustrialDataRepository(str(saved_copy)).list_source_profiles(
+                            include_disabled=True
+                        )
+                    ),
+                    1,
+                )
+                self.assertIn("Durable storage", dialog.storage_lifecycle_label.text())
+        finally:
+            with patch(
+                "metroliza.ui.main_window.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Discard,
             ):
-                window.set_db_file(durable_db)
-
-            self.assertFalse(session_db.exists())
-            self.assertTrue(saved_copy.exists())
-            self.assertEqual(dialog.db_file, durable_db)
-            self.assertEqual(
-                len(
-                    IndustrialDataRepository(str(saved_copy)).list_source_profiles(
-                        include_disabled=True
-                    )
-                ),
-                1,
-            )
-            self.assertIn("Durable storage", dialog.storage_lifecycle_label.text())
-        window.close()
+                window.close()
 
     def test_realtime_temp_session_archive_cannot_replace_active_database(self):
         import sqlite3
@@ -511,20 +533,24 @@ class TestMainWindowMetadataUi(unittest.TestCase):
     def test_workflow_next_step_tracks_source_and_database_context(self):
         window = self._main_window()
         try:
-            self.assertIn("choose reports", window.workflow_next_step_label.text())
+            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertIn("Select a source and database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_directory("/tmp/metroliza-reports")
-            self.assertIn("select or create a database", window.workflow_next_step_label.text())
+            self.assertEqual(window.home_next_action.text(), "Choose database in Reports")
+            self.assertIn("Select or create a database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_db_file("/tmp/metroliza.db")
-            self.assertIn("parse reports", window.workflow_next_step_label.text())
-            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "success")
+            self.assertEqual(window.home_next_action.text(), "Review reports in Reports")
+            self.assertIn("Ready to review", window.workflow_next_step_label.text())
+            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
+            self.assertFalse(window.reports_workspace.parse_button.isEnabled())
 
             window.set_directory("")
-            self.assertIn("export this database", window.workflow_next_step_label.text())
-            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "info")
+            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertTrue(window.export_button.isEnabled())
         finally:
             window.close()
 
@@ -597,17 +623,18 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 return True
 
         try:
-            window.parsing_dialog = OpenWorkflow()
+            host = window.reports_workspace
             window.export_dialog = OpenWorkflow()
 
             window.set_db_file("/tmp/current.db")
 
             self.assertFalse(window.workspace_notice_label.isHidden())
-            self.assertIn("Report import", window.workspace_notice_label.text())
+            self.assertIs(window.parsing_dialog, host)
+            self.assertEqual(host.db_file, window.workspace_context.snapshot.database_file)
+            self.assertNotIn("Report import", window.workspace_notice_label.text())
             self.assertIn("Export", window.workspace_notice_label.text())
             self.assertIn("previously selected database", window.workspace_notice_label.text())
         finally:
-            window.parsing_dialog = None
             window.export_dialog = None
             window.close()
 
@@ -628,6 +655,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     "Industrial Data",
                     "Realtime Monitor",
                     "Parser Profiles",
+                    "Tools",
                 ],
             )
             self.assertEqual(window.workspace_stack.count(), len(navigation))
@@ -736,11 +764,17 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         calls = []
         try:
             window.launch_metadata_enrichment = lambda: calls.append(window.db_file)
+            window.set_db_file("/tmp/metroliza.db")
 
             window.start_metadata_enrichment_from_parsing("/tmp/metroliza.db")
 
             self.assertEqual(window.db_file, "/tmp/metroliza.db")
             self.assertEqual(calls, ["/tmp/metroliza.db"])
+
+            window.start_metadata_enrichment_from_parsing("/tmp/previous.db")
+            self.assertEqual(window.db_file, "/tmp/metroliza.db")
+            self.assertEqual(calls, ["/tmp/metroliza.db"])
+            self.assertIn("different database", window.workspace_notice_label.text())
         finally:
             window.close()
 

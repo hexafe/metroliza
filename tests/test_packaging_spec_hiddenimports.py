@@ -80,6 +80,10 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
 def test_windows_pyinstaller_build_validates_ocr_packaging_inputs():
     script_text = Path("build_windows_exe.ps1").read_text(encoding="utf-8")
 
+    assert "@('-3.11', '-m', 'venv', $venvDir)" in script_text
+    assert "@('-3', '-m', 'venv', $venvDir)" not in script_text
+    assert "sys.version_info[:2] == (3, 11)" in script_text
+    assert "Assert-BuildPythonVersion" in script_text
     assert "[ValidateSet('onefile', 'onedir', 'both')]" in script_text
     assert "[string]$Mode = 'both'" in script_text
     assert "packaging/metroliza_onefile.spec" in script_text

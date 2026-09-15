@@ -4813,6 +4813,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         emit_completed_after_cleanup = False
+        from metroliza.shared.diagnostic_events import WorkflowOperation, WorkflowStage
+        from metroliza.shared.workflow_diagnostics import start_workflow_trace
+
+        diagnostic_cancelled = False
+        diagnostic = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
         try:
             if self._check_canceled():
                 return
@@ -4835,10 +4840,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
                 backend = self.get_export_backend()
                 self._active_backend = backend
+                diagnostic.stage(WorkflowStage.OUTPUT_STAGING)
                 local_outcome = normalize_export_outcome(backend.run(self))
+                diagnostic_cancelled = not bool(local_outcome)
                 self.completion_metadata["local_export_outcome"] = local_outcome.kind.value
                 if not local_outcome:
                     return
+                diagnostic.stage(WorkflowStage.OUTPUT_PUBLISHED)
 
             if self.export_target == "google_sheets_drive_convert":
                 stage_attempts = {
@@ -5011,6 +5019,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     self._log_export_stage("Export completed", stage="completed")
                 self.completed.emit()
                 QCoreApplication.processEvents()
+            diagnostic.finish_export(
+                completed=emit_completed_after_cleanup,
+                cancelled=self.export_canceled or diagnostic_cancelled,
+                fallback=bool(self.completion_metadata.get("fallback_message")),
+                omissions=(self.export_run_result is not None
+                           and self.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS),
+            )
 
     def add_measurements_horizontal_sheet(self, excel_writer):
         """Handle `add_measurements_horizontal_sheet` for `ExportDataThread`.
