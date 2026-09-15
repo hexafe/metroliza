@@ -3,6 +3,8 @@ import runpy
 import struct
 import sys
 import types
+import threading
+import uuid
 from pathlib import Path
 
 import pytest
@@ -58,6 +60,91 @@ def test_control_round_trip():
     assert parse_control(control_bytes("ended", dropped=3), "ended", {"dropped"}) == {
         "control": "ended", "dropped": 3,
     }
+
+
+def test_late_parent_accept_cannot_qualify_timed_out_child_recorder(monkeypatch):
+    child_in, parent_write = os.pipe()
+    parent_read, child_out = os.pipe()
+    recorder = diagnostic_transport.ChildRecorder(child_in, child_out)
+    session_id = uuid.uuid4()
+    hello_seen = threading.Event()
+    release_accept = threading.Event()
+    parent_errors = []
+
+    def parent():
+        try:
+            hello = read_frame(parent_read)
+            assert parse_control(hello, "hello", {"session_id", "token"})[
+                "session_id"
+            ] == session_id.hex
+            hello_seen.set()
+            assert release_accept.wait(2)
+            write_frame(parent_write, control_bytes("accepted"))
+        except Exception as error:
+            parent_errors.append(error)
+
+    worker = threading.Thread(target=parent)
+    diagnostic_transport.write_frame(
+        parent_write,
+        control_bytes("challenge", session_id=session_id.hex, token="a" * 64),
+    )
+    monkeypatch.setattr(diagnostic_transport, "_recorder", recorder)
+    try:
+        worker.start()
+        assert recorder.start() is False
+        assert hello_seen.wait(1)
+        assert diagnostic_transport.supervised_invocation_id() is None
+        release_accept.set()
+        worker.join(1)
+        recorder._worker.join(1)
+        assert not worker.is_alive()
+        assert not recorder._worker.is_alive()
+        assert parent_errors == []
+        assert recorder.invocation_id is None
+        assert diagnostic_transport.supervised_invocation_id() is None
+        assert not recorder.qualified
+        assert not recorder.connected
+        assert read_frame(parent_read) is None
+        with pytest.raises(OSError):
+            os.fstat(child_in)
+        with pytest.raises(OSError):
+            os.fstat(child_out)
+    finally:
+        release_accept.set()
+        recorder.close()
+        os.close(parent_write)
+        os.close(parent_read)
+
+
+def test_on_time_parent_accept_keeps_exact_supervised_session_identity():
+    child_in, parent_write = os.pipe()
+    parent_read, child_out = os.pipe()
+    recorder = diagnostic_transport.ChildRecorder(child_in, child_out)
+    session_id = uuid.uuid4()
+
+    def parent():
+        hello = read_frame(parent_read)
+        assert parse_control(hello, "hello", {"session_id", "token"})[
+            "session_id"
+        ] == session_id.hex
+        write_frame(parent_write, control_bytes("accepted"))
+
+    worker = threading.Thread(target=parent)
+    write_frame(
+        parent_write,
+        control_bytes("challenge", session_id=session_id.hex, token="a" * 64),
+    )
+    try:
+        worker.start()
+        assert recorder.start(timeout=1) is True
+        worker.join(1)
+        assert not worker.is_alive()
+        assert recorder.invocation_id == session_id
+        assert recorder.qualified
+    finally:
+        recorder.close()
+        os.close(parent_write)
+        os.close(parent_read)
 
 
 class SyntheticDiagnosticFailure(Exception):

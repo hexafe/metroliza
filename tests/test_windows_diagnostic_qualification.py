@@ -1420,11 +1420,12 @@ def _interrupt_after_call(code, store_name: str | None, primary, action) -> None
                 raise primary
         return trace
 
+    previous_trace = sys.gettrace()
     sys.settrace(trace)
     try:
         action()
     finally:
-        sys.settrace(None)
+        sys.settrace(previous_trace)
 
 
 def test_concurrent_launch_transfer_interrupt_closes_registered_process(

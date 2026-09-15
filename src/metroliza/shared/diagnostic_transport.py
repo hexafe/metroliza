@@ -181,7 +181,12 @@ class ChildRecorder:
     def start(self, timeout: float = 1.0) -> bool:
         self._worker.start()
         self._ready.wait(timeout)
-        return self.qualified
+        with self._lock:
+            if self.qualified and self.invocation_id is not None:
+                return True
+            self._closing = True
+            self._wake.set()
+            return False
 
     def enqueue(self, event: object) -> bool:
         try:
@@ -266,9 +271,12 @@ class ChildRecorder:
         acknowledgement = read_frame(self._incoming)
         if acknowledgement != control_bytes("accepted"):
             raise ValueError("handshake_unavailable")
-        self.invocation_id = uuid.UUID(hex=value["session_id"])
-        self.connected = self.qualified = True
-        self._ready.set()
+        with self._lock:
+            if self._closing:
+                raise ValueError("handshake_timed_out")
+            self.invocation_id = uuid.UUID(hex=value["session_id"])
+            self.connected = self.qualified = True
+            self._ready.set()
 
     def _run(self) -> None:
         try:
