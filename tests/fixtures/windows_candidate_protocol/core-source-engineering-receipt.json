@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "synthetic-report-oracle.json": "ab27dabf08aa1dfb8a8c877eaa77fd793b1f70764ad93a8bdb209e02ea6fa27c",
+    "verify_synthetic_oracle.py": "81c0063a152e81230c39db09f19f84a0790f366ebc09d06ca654e3dfbf4ef7bb",
+    "windows_candidate_scenario.py": "2ee50f647620fd2b5eb81564d8cf12e6f7e9f0742248ff088d6c8cc17d6b0f44"
+  },
+  "composition": {
+    "archive_consumer_head": "99a3f3373d4ec184d1a0f93e6cca1c57ab075ebd",
+    "overlays_read_only": [
+      "src/metroliza/industrial/industrial_cache_target.py",
+      "src/metroliza/reports/db.py"
+    ]
+  },
+  "execution": {
+    "comparator_exit": 0,
+    "ordinary_user": true,
+    "packaged": false,
+    "qpa": "offscreen",
+    "real_controls": [
+      "MainWindow Reports navigation",
+      "ReportsWorkspace Review reports",
+      "planner exact aliases 1 and 3",
+      "ReportsWorkspace Import selected reports",
+      "ExportDataThread",
+      "public export query/group assignment/group analysis service"
+    ],
+    "scenario_exit": 0
+  },
+  "limitations": "W05 is separately observed at numeric C6; GUI source99a3 and numeric source0f03303 are not a joined EXE.",
+  "observed": {
+    "database_counts": {
+      "active_locations": 2,
+      "measurements": 2,
+      "metadata": 2,
+      "parsed_reports": 2,
+      "source_files": 2
+    },
+    "group_analysis_skip": "insufficient_groups",
+    "pending": "W04 and W05; no EXE claim"
+  },
+  "schema": "metroliza-core-scenario-source-engineering-v1",
+  "status": "PASSED_SOURCE_ENGINEERING_NOT_PACKAGE_ACCEPTANCE"
+}
