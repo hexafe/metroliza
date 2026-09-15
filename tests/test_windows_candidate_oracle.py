@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -42,16 +43,24 @@ def test_database_comparator_preserves_fresh_database_bytes_and_sidecar_set(tmp_
     assert not _sidecars(database)
 
 
-def test_database_comparator_rejects_and_preserves_active_sidecar(tmp_path):
+def test_database_comparator_rejects_and_preserves_active_wal(tmp_path):
     database = _oracle_database(tmp_path)
-    sidecar = database.with_name(database.name + "-wal")
-    sidecar.write_bytes(b"active-wal-fixture")
-    before = (_digest(database), sidecar.read_bytes())
+    writer = sqlite3.connect(database)
+    try:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("PRAGMA user_version = 1")
+        writer.commit()
+        sidecars = _sidecars(database)
+        assert database.with_name(database.name + "-wal") in sidecars
+        before = (_digest(database), {path.name: path.read_bytes() for path in sidecars})
 
-    with pytest.raises(verifier.OracleMismatch, match="database.sidecars: active journal sidecar present"):
-        verifier.assert_database(verifier._load_oracle(ORACLE), database)
+        with pytest.raises(verifier.OracleMismatch, match="database.sidecars: active journal sidecar present"):
+            verifier.assert_database(verifier._load_oracle(ORACLE), database)
 
-    assert (_digest(database), sidecar.read_bytes()) == before
+        assert (_digest(database), {path.name: path.read_bytes() for path in sidecars}) == before
+    finally:
+        writer.close()
 
 
 def _payload(child: Path) -> dict:
