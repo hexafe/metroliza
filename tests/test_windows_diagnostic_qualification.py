@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ctypes
+import dis
 import hashlib
 import json
 import os
+import sys
 import time
 import uuid
 import zipfile
@@ -588,6 +590,248 @@ def test_launch_failure_cleans_created_process_and_preserves_primary(
     assert api.kernel.closed == closed
 
 
+class _LaunchTransferProcessInfo:
+    hThread = None
+    hProcess = None
+    dwProcessId = 12
+
+
+class _LaunchTransferKernel:
+    def __init__(self, closed):
+        self.closed = closed
+
+    def CreateJobObjectW(self, *_arguments):
+        return "job"
+
+    def SetInformationJobObject(self, *_arguments):
+        return True
+
+    def AssignProcessToJobObject(self, *_arguments):
+        return True
+
+    def ResumeThread(self, _thread):
+        return 1
+
+    def TerminateJobObject(self, *_arguments):
+        return True
+
+    def TerminateProcess(self, *_arguments):
+        return True
+
+    def WaitForSingleObject(self, *_arguments):
+        return qualification.WAIT_OBJECT_0
+
+    def CloseHandle(self, handle):
+        self.closed.append(handle)
+        return True
+
+
+class _InterruptingOwner(list):
+    def __init__(self, interrupt_at, primary):
+        super().__init__()
+        self.interrupt_at = interrupt_at
+        self.primary = primary
+
+    def append(self, value):
+        if self.interrupt_at == "before_register":
+            raise self.primary
+        super().append(value)
+        if self.interrupt_at == "after_register":
+            raise self.primary
+
+
+def _fake_launch_api(tmp_path, monkeypatch, kernel):
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = kernel
+    api.PROCESS_INFORMATION = _LaunchTransferProcessInfo
+    api.EXTENDED_LIMITS = lambda: type(
+        "Limits", (), {"BasicLimitInformation": type("Basic", (), {"LimitFlags": 0})()}
+    )()
+    api.STARTUPINFOW = lambda: type("Startup", (), {"cb": 0})()
+    api._restricted_token = lambda: "token"
+
+    def create(*arguments):
+        process = arguments[-1]
+        process.hThread = "thread"
+        process.hProcess = "process"
+        return True
+
+    api._create_suspended_process = create
+    api._process_observation = lambda *_args: qualification._ProcessObservation(
+        12, 1, str(tmp_path / "app.exe")
+    )
+    api._job_accounting = lambda _job: (0, 1)
+    monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
+    monkeypatch.setattr(qualification.ctypes, "sizeof", lambda _value: 1)
+    return api
+
+
+@pytest.mark.parametrize(
+    "interrupt_at", ["before_wrapper_assignment", "before_register", "after_register"]
+)
+def test_native_launch_transfer_closes_wrapper_once_on_interrupt(
+    tmp_path, monkeypatch, interrupt_at
+) -> None:
+    primary = KeyboardInterrupt("PRIVATE_INTERRUPT_DETAIL")
+    closed = []
+    api = _fake_launch_api(tmp_path, monkeypatch, _LaunchTransferKernel(closed))
+    owned = _InterruptingOwner(interrupt_at, primary)
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        if interrupt_at == "before_wrapper_assignment":
+            _interrupt_after_call(
+                qualification._WindowsApi.launch.__code__, "launched", primary,
+                lambda: api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned),
+            )
+        else:
+            api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned)
+    qualification._close_owned_processes(owned, terminate=True)
+
+    assert caught.value is primary
+    assert closed == (
+        ["thread", "process", "job", "token"]
+        if interrupt_at == "before_wrapper_assignment"
+        else ["thread", "job", "process", "token"]
+    )
+    assert len(owned) == (1 if interrupt_at == "after_register" else 0)
+    assert all(process._closed for process in owned)
+
+
+def test_raw_launch_cleanup_attempts_all_handles_after_secondary_interrupt() -> None:
+    primary = KeyboardInterrupt("PRIVATE_PRIMARY")
+    secondary = SystemExit("PRIVATE_SECONDARY")
+    calls = []
+
+    class _Process:
+        hThread = "thread"
+        hProcess = "process"
+
+    class _Kernel:
+        def TerminateJobObject(self, *_arguments):
+            calls.append("terminate_job")
+            raise secondary
+
+        def TerminateProcess(self, *_arguments):
+            calls.append("terminate_process")
+            return True
+
+        def WaitForSingleObject(self, *_arguments):
+            calls.append("wait")
+            return qualification.WAIT_OBJECT_0
+
+        def CloseHandle(self, handle):
+            calls.append(handle)
+            if handle == "thread":
+                raise secondary
+            return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    api._job_accounting = lambda _job: (0, 1)
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        try:
+            raise primary
+        except KeyboardInterrupt:
+            complete, cleanup_error = api._cleanup_failed_launch(
+                _Process(), "job", "token", None
+            )
+            assert not complete
+            assert cleanup_error is secondary
+            raise
+
+    assert caught.value is primary
+    assert calls == [
+        "terminate_job", "terminate_process", "wait",
+        "thread", "process", "job", "token",
+    ]
+
+
+@pytest.mark.parametrize("secondary_type", [KeyboardInterrupt, SystemExit])
+def test_ordinary_launch_failure_propagates_secondary_cleanup_interrupt(
+    tmp_path, monkeypatch, secondary_type
+) -> None:
+    ordinary = RuntimeError("PRIVATE_ORDINARY_DETAIL")
+    secondary = secondary_type("PRIVATE_CLEANUP_DETAIL")
+    closed = []
+
+    class _Kernel(_LaunchTransferKernel):
+        def AssignProcessToJobObject(self, *_arguments):
+            raise ordinary
+
+        def CloseHandle(self, handle):
+            super().CloseHandle(handle)
+            if handle == "thread":
+                raise secondary
+            return True
+
+    api = _fake_launch_api(tmp_path, monkeypatch, _Kernel(closed))
+    with pytest.raises(secondary_type) as caught:
+        api.launch(tmp_path / "app.exe", {}, tmp_path)
+
+    assert caught.value is secondary
+    assert closed == ["thread", "process", "job", "token"]
+
+
+@pytest.mark.parametrize("secondary_type", [KeyboardInterrupt, SystemExit])
+def test_ordinary_launch_failure_preserves_raw_termination_interrupt(
+    tmp_path, monkeypatch, secondary_type
+) -> None:
+    ordinary = RuntimeError("PRIVATE_ORDINARY_DETAIL")
+    secondary = secondary_type("PRIVATE_TERMINATION_DETAIL")
+    closed = []
+    termination_attempts = []
+
+    class _Kernel(_LaunchTransferKernel):
+        def AssignProcessToJobObject(self, *_arguments):
+            raise ordinary
+
+        def TerminateJobObject(self, *_arguments):
+            termination_attempts.append("job")
+            raise secondary
+
+        def TerminateProcess(self, *_arguments):
+            termination_attempts.append("process")
+            return True
+
+    api = _fake_launch_api(tmp_path, monkeypatch, _Kernel(closed))
+    with pytest.raises(secondary_type) as caught:
+        api.launch(tmp_path / "app.exe", {}, tmp_path)
+
+    assert caught.value is secondary
+    assert termination_attempts == ["job", "process"]
+    assert closed == ["thread", "process", "job", "token"]
+
+
+def test_later_raw_cleanup_interrupt_outweighs_earlier_ordinary_error(
+    tmp_path, monkeypatch
+) -> None:
+    ordinary = RuntimeError("PRIVATE_LAUNCH_DETAIL")
+    cleanup_error = RuntimeError("PRIVATE_TERMINATION_DETAIL")
+    secondary = SystemExit("PRIVATE_HANDLE_DETAIL")
+    closed = []
+
+    class _Kernel(_LaunchTransferKernel):
+        def AssignProcessToJobObject(self, *_arguments):
+            raise ordinary
+
+        def TerminateJobObject(self, *_arguments):
+            raise cleanup_error
+
+        def CloseHandle(self, handle):
+            super().CloseHandle(handle)
+            if handle == "thread":
+                raise secondary
+            return True
+
+    api = _fake_launch_api(tmp_path, monkeypatch, _Kernel(closed))
+    with pytest.raises(SystemExit) as caught:
+        api.launch(tmp_path / "app.exe", {}, tmp_path)
+
+    assert caught.value is secondary
+    assert closed == ["thread", "process", "job", "token"]
+
+
 @pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
 @pytest.mark.parametrize("failure_phase", ["open", "restrict", "medium"])
 def test_interrupted_token_creation_closes_acquired_handles(
@@ -804,11 +1048,13 @@ def test_second_concurrent_launch_interrupt_closes_first_owned_process(
                 )
 
     class _Api:
-        def launch(self, _executable, _environment, _cwd):
+        def launch(self, _executable, _environment, _cwd, owned=None):
             launched.append(_cwd)
             if len(launched) == 2:
                 raise primary
-            return _Process()
+            process = _Process()
+            owned.append(process)
+            return process
 
     roots = (tmp_path / "first", tmp_path / "second")
     with pytest.raises(failure_type) as caught:
@@ -840,11 +1086,13 @@ def test_second_concurrent_launch_failure_records_first_process_cleanup(
     class _Api:
         count = 0
 
-        def launch(self, _executable, _environment, _cwd):
+        def launch(self, _executable, _environment, _cwd, owned=None):
             self.count += 1
             if self.count == 2:
                 raise primary
-            return _Process()
+            process = _Process()
+            owned.append(process)
+            return process
 
     with pytest.raises(qualification.QualificationFailure) as caught:
         qualification._launch_concurrent_pair(
@@ -869,7 +1117,7 @@ def test_first_concurrent_launch_failure_has_no_owned_process_to_clean(
     launches = []
 
     class _Api:
-        def launch(self, _executable, _environment, cwd):
+        def launch(self, _executable, _environment, cwd, owned=None):
             launches.append(cwd)
             raise primary
 
@@ -907,11 +1155,13 @@ def test_second_concurrent_launch_ordinary_error_preserves_existing_cleanup_rout
     class _Api:
         count = 0
 
-        def launch(self, _executable, _environment, _cwd):
+        def launch(self, _executable, _environment, _cwd, owned=None):
             self.count += 1
             if self.count == 2:
                 raise primary
-            return _Process()
+            process = _Process()
+            owned.append(process)
+            return process
 
     caught_type = qualification.QualificationFailure if cleanup_fails else RuntimeError
     with pytest.raises(caught_type) as caught:
@@ -948,11 +1198,13 @@ def test_concurrent_cleanup_interrupt_does_not_replace_launch_interrupt(
     class _Api:
         count = 0
 
-        def launch(self, _executable, _environment, _cwd):
+        def launch(self, _executable, _environment, _cwd, owned=None):
             self.count += 1
             if self.count == 2:
                 raise primary
-            return _Process()
+            process = _Process()
+            owned.append(process)
+            return process
 
     with pytest.raises(failure_type) as caught:
         qualification._launch_concurrent_pair(
@@ -967,13 +1219,275 @@ def test_concurrent_cleanup_interrupt_does_not_replace_launch_interrupt(
     assert closed == [True]
 
 
+def test_owned_pair_cleanup_attempts_second_after_secondary_interrupt() -> None:
+    primary = KeyboardInterrupt("PRIVATE_PRIMARY")
+    secondary = SystemExit("PRIVATE_SECONDARY")
+    closed = []
+
+    class _Process:
+        def __init__(self, index):
+            self.index = index
+
+        def close(self, *, terminate):
+            closed.append((self.index, terminate))
+            if self.index == 1:
+                raise secondary
+
+    try:
+        raise primary
+    except KeyboardInterrupt:
+        qualification._close_owned_processes(
+            [_Process(1), _Process(2)], terminate=True
+        )
+
+    assert closed == [(1, True), (2, True)]
+
+
+def test_owned_pair_cleanup_propagates_interrupt_without_prior_primary() -> None:
+    secondary = SystemExit("PRIVATE_CLEANUP")
+    closed = []
+
+    class _Process:
+        def __init__(self, index):
+            self.index = index
+
+        def close(self, *, terminate):
+            closed.append((self.index, terminate))
+            if self.index == 1:
+                raise secondary
+
+    with pytest.raises(SystemExit) as caught:
+        qualification._close_owned_processes(
+            [_Process(1), _Process(2)], terminate=True
+        )
+
+    assert caught.value is secondary
+    assert closed == [(1, True), (2, True)]
+
+
+def test_later_owned_process_interrupt_outweighs_earlier_ordinary_error() -> None:
+    ordinary = qualification.QualificationFailure(
+        "scenario_failed", qualification_cleanup="failed"
+    )
+    secondary = KeyboardInterrupt("PRIVATE_SECOND_CLOSE")
+    closed = []
+
+    class _Process:
+        def __init__(self, index):
+            self.index = index
+
+        def close(self, *, terminate):
+            closed.append((self.index, terminate))
+            raise ordinary if self.index == 1 else secondary
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        qualification._close_owned_processes(
+            [_Process(1), _Process(2)], terminate=True
+        )
+
+    assert caught.value is secondary
+    assert closed == [(1, True), (2, True)]
+
+
+def test_thread_close_interrupt_still_attempts_job_and_process_handles() -> None:
+    secondary = KeyboardInterrupt("PRIVATE_THREAD_CLOSE")
+    closed = []
+
+    class _Kernel:
+        def CloseHandle(self, handle):
+            closed.append(handle)
+            if handle == "thread":
+                raise secondary
+            return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    with pytest.raises(KeyboardInterrupt) as caught:
+        api.close_process("process", "job", terminate=False, thread="thread")
+
+    assert caught.value is secondary
+    assert closed == ["thread", "job", "process"]
+
+
+def test_handle_close_prefers_later_interrupt_after_ordinary_failure() -> None:
+    ordinary = qualification.QualificationFailure("scenario_failed")
+    secondary = SystemExit("PRIVATE_JOB_CLOSE")
+    closed = []
+
+    class _Kernel:
+        def CloseHandle(self, handle):
+            closed.append(handle)
+            if handle == "thread":
+                raise ordinary
+            if handle == "job":
+                raise secondary
+            return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    with pytest.raises(SystemExit) as caught:
+        api.close_process("process", "job", terminate=False, thread="thread")
+
+    assert caught.value is secondary
+    assert closed == ["thread", "job", "process"]
+
+
+def _interrupt_after_call(code, store_name: str | None, primary, action) -> None:
+    instructions = list(dis.get_instructions(code))
+    transfer = next(
+        instruction.offset
+        for index, instruction in enumerate(instructions)
+        if instructions[index - 1].opname == "CALL"
+        and instruction.opname == ("POP_TOP" if store_name is None else "STORE_FAST")
+        and (store_name is None or instruction.argval == store_name)
+    )
+
+    def trace(frame, event, _argument):
+        if frame.f_code is code:
+            if event == "call":
+                frame.f_trace_opcodes = True
+            elif event == "opcode" and frame.f_lasti == transfer:
+                raise primary
+        return trace
+
+    sys.settrace(trace)
+    try:
+        action()
+    finally:
+        sys.settrace(None)
+
+
+def test_concurrent_launch_transfer_interrupt_closes_registered_process(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    primary = KeyboardInterrupt("PRIVATE_TRANSFER")
+    closed = []
+
+    class _Process:
+        def close(self, *, terminate):
+            closed.append(terminate)
+
+    class _Api:
+        def launch(self, _executable, _environment, _cwd, owned=None):
+            process = _Process()
+            owned.append(process)
+            return process
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        _interrupt_after_call(
+            qualification._launch_concurrent_pair.__code__, None, primary,
+            lambda: qualification._launch_concurrent_pair(
+                _Api(), tmp_path / "app.exe", tmp_path,
+                (tmp_path / "one", tmp_path / "two"), tmp_path,
+            ),
+        )
+
+    assert caught.value is primary
+    assert closed == [True]
+
+
+def test_scenario_launch_transfer_interrupt_closes_registered_process(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    primary = SystemExit("PRIVATE_TRANSFER")
+    closed = []
+
+    class _Process:
+        def close(self, *, terminate):
+            closed.append(terminate)
+
+    class _Api:
+        def launch(self, _executable, _environment, _cwd, owned=None):
+            process = _Process()
+            owned.append(process)
+            return process
+
+    with pytest.raises(SystemExit) as caught:
+        _interrupt_after_call(
+            qualification._run_scenario.__code__, "process", primary,
+            lambda: qualification._run_scenario(
+                _Api(), tmp_path / "app.exe", tmp_path, tmp_path, tmp_path,
+                "normal", time.monotonic() + 1,
+                expected_exit=0, expected_stage="complete",
+            ),
+        )
+
+    assert caught.value is primary
+    assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    ("method", "store_name", "expected_closed"),
+    [
+        ("run_concurrent_instances", "processes", 2),
+        ("run_ui_smoke", "process", 1),
+        ("run_missing_components", "process", 1),
+        ("run_missing_qt_resource", "process", 1),
+    ],
+)
+def test_runner_launch_transfer_interrupt_closes_every_registered_process(
+    tmp_path, monkeypatch, method, store_name, expected_closed
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(qualification, "_reports", lambda _store: ())
+    primary = KeyboardInterrupt("PRIVATE_TRANSFER")
+    closed = []
+
+    class _Process:
+        def close(self, *, terminate):
+            closed.append(terminate)
+
+    class _Api:
+        def launch(self, _executable, _environment, _cwd, owned=None):
+            process = _Process()
+            owned.append(process)
+            return process
+
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    (artifact / "metroliza.exe").write_bytes(b"fixed")
+    (artifact / qualification.MANIFEST_NAME).write_bytes(b"fixed")
+    resource = (
+        artifact / "_internal" / "PyQt6" / "Qt6" / "plugins"
+        / "platforms" / "qwindows.dll"
+    )
+    resource.parent.mkdir(parents=True)
+    resource.write_bytes(b"fixed")
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.api = _Api()
+    runner.artifact = artifact
+    runner.launcher = artifact / "metroliza.exe"
+    runner.state_base = tmp_path / "state"
+    runner.private_root = tmp_path / "work"
+    runner.private_root.mkdir()
+    runner.store = object()
+    runner.results = {}
+    runner.deadline = time.monotonic() + 1
+    runner._root = lambda label: qualification._prepare_work_root(
+        runner.private_root, label
+    )
+    action = getattr(runner, method)
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        _interrupt_after_call(
+            getattr(qualification._QualificationRunner, method).__code__,
+            store_name, primary, action,
+        )
+
+    assert caught.value is primary
+    assert closed == [True] * expected_closed
+    assert resource.read_bytes() == b"fixed"
+
+
 def test_driver_phase_preserves_safe_early_process_exit_evidence(
     tmp_path,
     monkeypatch,
 ) -> None:
     class _NoReceiptApi(_FakeApi):
-        def launch(self, executable, environment, cwd):
-            process = super().launch(executable, environment, cwd)
+        def launch(self, executable, environment, cwd, owned=None):
+            process = super().launch(executable, environment, cwd, owned=owned)
             (cwd / "startup.json").unlink()
             (cwd / qualification.QUALIFICATION_RECEIPT_NAMES[self.stage]).unlink()
             return process
@@ -1984,7 +2498,7 @@ class _FakeApi:
         self.process: _FakeProcess | None = None
         self.environment: dict[str, str] | None = None
 
-    def launch(self, executable, environment, cwd):
+    def launch(self, executable, environment, cwd, owned=None):
         self.environment = environment
         common = {
             "schema_version": 1,
@@ -2005,6 +2519,8 @@ class _FakeApi:
             supervised=Path(executable).name == "metroliza.exe",
             active_processes=self.active_processes,
         )
+        if owned is not None:
+            owned.append(self.process)
         return self.process
 
 
