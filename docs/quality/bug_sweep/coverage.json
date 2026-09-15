@@ -989,7 +989,8 @@
       "include": [
         ".gitignore",
         ".pre-commit-config.yaml",
-        ".python-version"
+        ".python-version",
+        ".gitattributes"
       ],
       "exclude": [],
       "class": "workflow/configuration",
@@ -2431,7 +2432,11 @@
         "scripts/validate_qt_runtime.py",
         "scripts/windows_ocr_runtime_diagnostics.py",
         "scripts/build_diagnostic_manifest.py",
-        "scripts/qualify_windows_diagnostics.py"
+        "scripts/qualify_windows_diagnostics.py",
+        "scripts/qualify_windows_candidate_core.py",
+        "scripts/synthetic-report-oracle.json",
+        "scripts/verify_synthetic_oracle.py",
+        "scripts/windows_candidate_xlsx.py"
       ],
       "exclude": [],
       "class": "script/tooling",
