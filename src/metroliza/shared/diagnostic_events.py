@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import types
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -33,6 +34,8 @@ class DiagnosticEventCode(str, Enum):
     LEGACY_LOG_SUPPRESSED = "legacy_log_suppressed"
     INVALID_DIAGNOSTIC_EVENT = "invalid_diagnostic_event"
     EXCEPTION_DIAGNOSTIC = "exception_diagnostic"
+    RUNTIME_PROVENANCE = "runtime_provenance"
+    STARTUP_DIAGNOSTIC = "startup_diagnostic"
 
 
 class DiagnosticOperation(str, Enum):
@@ -78,6 +81,109 @@ _LEGACY_EXCEPTION_TYPES = (
 )
 
 
+class StartupMode(str, Enum):
+    UNKNOWN = "unknown"
+    INTERACTIVE = "interactive"
+    STARTUP_SMOKE = "startup_smoke"
+    PDF_SMOKE = "pdf_smoke"
+    UI_SMOKE = "ui_smoke"
+
+
+class StartupCallsite(str, Enum):
+    BOOTSTRAP = "bootstrap"
+    LOGGING_INITIALIZE = "logging_initialize"
+    LOGGING_READY = "logging_ready"
+    CONFIG_LOAD = "config_load"
+    CONFIG_READY = "config_ready"
+    QAPPLICATION_REQUEST = "qapplication_request"
+    QAPPLICATION_READY = "qapplication_ready"
+    LICENSE_CHECK = "license_check"
+    LICENSE_REJECTED = "license_rejected"
+    MAIN_WINDOW_FACTORY = "main_window_factory"
+    MAIN_WINDOW_CONSTRUCT = "main_window_construct"
+    MAIN_WINDOW_SHOW_REQUEST = "main_window_show_request"
+    MAIN_WINDOW_SHOW_RETURNED = "main_window_show_returned"
+    EVENT_LOOP_EXEC_REQUEST = "event_loop_exec_request"
+    SMOKE_WORK = "smoke_work"
+    SMOKE_RETURN = "smoke_return"
+    APPLICATION_RETURN = "application_return"
+
+
+class StartupOutcome(str, Enum):
+    INVOCATION_STARTED = "invocation_started"
+    MILESTONE = "milestone"
+    STARTUP_COMPLETED = "startup_completed"
+    STARTUP_REJECTED = "startup_rejected"
+    STARTUP_FAILED = "startup_failed"
+    APPLICATION_RETURNED = "application_returned"
+    APPLICATION_FAILED = "application_failed"
+
+
+class RuntimeMode(str, Enum):
+    UNKNOWN = "unknown"
+    SOURCE = "source"
+    FROZEN = "frozen"
+
+
+class BuildPackager(str, Enum):
+    UNKNOWN = "unknown"
+    SOURCE = "source"
+    PYINSTALLER = "pyinstaller"
+    NUITKA = "nuitka"
+
+
+_STARTUPMODE_LITERALS = (
+    (StartupMode.UNKNOWN, "unknown"),
+    (StartupMode.INTERACTIVE, "interactive"),
+    (StartupMode.STARTUP_SMOKE, "startup_smoke"),
+    (StartupMode.PDF_SMOKE, "pdf_smoke"),
+    (StartupMode.UI_SMOKE, "ui_smoke"),
+)
+
+_STARTUPCALLSITE_LITERALS = (
+    (StartupCallsite.BOOTSTRAP, "bootstrap"),
+    (StartupCallsite.LOGGING_INITIALIZE, "logging_initialize"),
+    (StartupCallsite.LOGGING_READY, "logging_ready"),
+    (StartupCallsite.CONFIG_LOAD, "config_load"),
+    (StartupCallsite.CONFIG_READY, "config_ready"),
+    (StartupCallsite.QAPPLICATION_REQUEST, "qapplication_request"),
+    (StartupCallsite.QAPPLICATION_READY, "qapplication_ready"),
+    (StartupCallsite.LICENSE_CHECK, "license_check"),
+    (StartupCallsite.LICENSE_REJECTED, "license_rejected"),
+    (StartupCallsite.MAIN_WINDOW_FACTORY, "main_window_factory"),
+    (StartupCallsite.MAIN_WINDOW_CONSTRUCT, "main_window_construct"),
+    (StartupCallsite.MAIN_WINDOW_SHOW_REQUEST, "main_window_show_request"),
+    (StartupCallsite.MAIN_WINDOW_SHOW_RETURNED, "main_window_show_returned"),
+    (StartupCallsite.EVENT_LOOP_EXEC_REQUEST, "event_loop_exec_request"),
+    (StartupCallsite.SMOKE_WORK, "smoke_work"),
+    (StartupCallsite.SMOKE_RETURN, "smoke_return"),
+    (StartupCallsite.APPLICATION_RETURN, "application_return"),
+)
+
+_STARTUPOUTCOME_LITERALS = (
+    (StartupOutcome.INVOCATION_STARTED, "invocation_started"),
+    (StartupOutcome.MILESTONE, "milestone"),
+    (StartupOutcome.STARTUP_COMPLETED, "startup_completed"),
+    (StartupOutcome.STARTUP_REJECTED, "startup_rejected"),
+    (StartupOutcome.STARTUP_FAILED, "startup_failed"),
+    (StartupOutcome.APPLICATION_RETURNED, "application_returned"),
+    (StartupOutcome.APPLICATION_FAILED, "application_failed"),
+)
+
+_RUNTIMEMODE_LITERALS = (
+    (RuntimeMode.UNKNOWN, "unknown"),
+    (RuntimeMode.SOURCE, "source"),
+    (RuntimeMode.FROZEN, "frozen"),
+)
+
+_BUILDPACKAGER_LITERALS = (
+    (BuildPackager.UNKNOWN, "unknown"),
+    (BuildPackager.SOURCE, "source"),
+    (BuildPackager.PYINSTALLER, "pyinstaller"),
+    (BuildPackager.NUITKA, "nuitka"),
+)
+
+
 class SourceClass(str, Enum):
     """Coarse, non-identifying source classes for suppressed legacy logs."""
 
@@ -90,6 +196,8 @@ _DIAGNOSTIC_EVENT_CODE_LITERALS = (
     (DiagnosticEventCode.LEGACY_LOG_SUPPRESSED, "legacy_log_suppressed"),
     (DiagnosticEventCode.INVALID_DIAGNOSTIC_EVENT, "invalid_diagnostic_event"),
     (DiagnosticEventCode.EXCEPTION_DIAGNOSTIC, "exception_diagnostic"),
+    (DiagnosticEventCode.RUNTIME_PROVENANCE, "runtime_provenance"),
+    (DiagnosticEventCode.STARTUP_DIAGNOSTIC, "startup_diagnostic"),
 )
 _DIAGNOSTIC_OPERATION_LITERALS = (
     (DiagnosticOperation.UNHANDLED_EXCEPTION, "unhandled_exception"),
@@ -228,7 +336,46 @@ class ExceptionDiagnosticEvent:
         return _UNKNOWN_EXCEPTION
 
 
-DiagnosticEvent = LegacyLogSuppressedEvent | InvalidDiagnosticEvent | ExceptionDiagnosticEvent
+@dataclass(frozen=True, slots=True)
+class RuntimeProvenanceEvent:
+    """Closed build facts; release identity comes only from reviewed source."""
+
+    invocation_id: uuid.UUID
+    startup_id: uuid.UUID
+    sequence: int
+    runtime: RuntimeMode
+    packager: BuildPackager
+    git_sha: str = "unknown"
+    dirty: bool | None = None
+    release_year: int = field(kw_only=True)
+    release_month: int = field(kw_only=True)
+    release_candidate: int | None = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        _provenance_payload(self)
+
+
+@dataclass(frozen=True, slots=True)
+class StartupDiagnosticEvent:
+    """One observed bootstrap boundary, never an arbitrary log or traceback."""
+
+    invocation_id: uuid.UUID
+    startup_id: uuid.UUID
+    sequence: int
+    mode: StartupMode
+    callsite: StartupCallsite
+    outcome: StartupOutcome
+    exit_code: int | None = None
+    exception: ExceptionDiagnosticEvent | None = None
+
+    def __post_init__(self) -> None:
+        _startup_payload(self)
+
+
+DiagnosticEvent = (
+    LegacyLogSuppressedEvent | InvalidDiagnosticEvent | ExceptionDiagnosticEvent
+    | RuntimeProvenanceEvent | StartupDiagnosticEvent
+)
 
 
 def _exception_kind(exception: BaseException) -> ExceptionKind:
@@ -504,15 +651,187 @@ def _source_payload(event: DiagnosticEvent) -> dict[str, object]:
     }
 
 
+def _startup_identity(event: RuntimeProvenanceEvent | StartupDiagnosticEvent) -> dict[str, object]:
+    invocation_id = _uuid_hex(event.invocation_id)
+    startup_id = _uuid_hex(event.startup_id)
+    for identifier in (invocation_id, startup_id):
+        if identifier[12] != "4" or identifier[16] not in "89ab":
+            raise DiagnosticEventValidationError("invalid generated identifier")
+    if invocation_id == startup_id:
+        raise DiagnosticEventValidationError("startup identifiers must be distinct")
+    if not _bounded_integer(event.sequence, 16) or event.sequence == 0:
+        raise DiagnosticEventValidationError("invalid startup sequence")
+    return {"invocation_id": invocation_id, "startup_id": startup_id, "sequence": event.sequence}
+
+
+def _validated_build_facts(event: RuntimeProvenanceEvent) -> None:
+    sha = event.git_sha
+    if type(sha) is not str or len(sha) not in (7, 40, 64):
+        raise DiagnosticEventValidationError("invalid build identity")
+    if sha != "unknown" and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) is None:
+        raise DiagnosticEventValidationError("invalid build identity")
+    if event.dirty is not None and type(event.dirty) is not bool:
+        raise DiagnosticEventValidationError("invalid build dirty state")
+    if event.packager is BuildPackager.SOURCE:
+        valid = event.runtime is RuntimeMode.SOURCE and sha == "unknown" and event.dirty is None
+    elif event.packager is BuildPackager.UNKNOWN:
+        valid = sha == "unknown" and event.dirty is None
+    else:
+        valid = event.runtime is RuntimeMode.FROZEN and sha != "unknown" and type(event.dirty) is bool
+    if not valid:
+        raise DiagnosticEventValidationError("inconsistent build identity")
+
+
+def _release_version(event: RuntimeProvenanceEvent) -> str:
+    if not _bounded_integer(event.release_year, 9999) or event.release_year < 2000:
+        raise DiagnosticEventValidationError("invalid release year")
+    if not _bounded_integer(event.release_month, 12) or event.release_month == 0:
+        raise DiagnosticEventValidationError("invalid release month")
+    candidate = event.release_candidate
+    if candidate is not None and (not _bounded_integer(candidate, 999) or candidate == 0):
+        raise DiagnosticEventValidationError("invalid release candidate")
+    version = f"{event.release_year:04d}.{event.release_month:02d}"
+    return version if candidate is None else f"{version}rc{candidate}"
+
+
+def _provenance_payload(event: RuntimeProvenanceEvent) -> dict[str, object]:
+    runtime = _canonical_literal(event.runtime, _RUNTIMEMODE_LITERALS, "invalid runtime")
+    packager = _canonical_literal(event.packager, _BUILDPACKAGER_LITERALS, "invalid packager")
+    _validated_build_facts(event)
+    return {
+        "event_code": _event_code_literal(DiagnosticEventCode.RUNTIME_PROVENANCE),
+        **_startup_identity(event),
+        "release_version": _release_version(event),
+        "git_sha": event.git_sha,
+        "runtime": runtime,
+        "packager": packager,
+        "dirty": event.dirty,
+    }
+
+
+def _startup_exception(event: StartupDiagnosticEvent) -> dict[str, object] | None:
+    failed = event.outcome is StartupOutcome.STARTUP_FAILED or event.outcome is StartupOutcome.APPLICATION_FAILED
+    if event.exception is None:
+        if failed:
+            raise DiagnosticEventValidationError("missing failure shape")
+        return None
+    if not failed or type(event.exception) is not ExceptionDiagnosticEvent:
+        raise DiagnosticEventValidationError("invalid startup exception")
+    payload = _exception_payload(event.exception)
+    for key in ("event_code", "operation", "correlation_id"):
+        payload.pop(key)
+    return payload
+
+
+_STARTUP_MILESTONE_CALLSITES = (
+    StartupCallsite.LOGGING_INITIALIZE, StartupCallsite.LOGGING_READY,
+    StartupCallsite.CONFIG_LOAD, StartupCallsite.CONFIG_READY,
+    StartupCallsite.QAPPLICATION_REQUEST, StartupCallsite.QAPPLICATION_READY,
+    StartupCallsite.LICENSE_CHECK, StartupCallsite.MAIN_WINDOW_FACTORY,
+    StartupCallsite.MAIN_WINDOW_CONSTRUCT, StartupCallsite.MAIN_WINDOW_SHOW_REQUEST,
+    StartupCallsite.MAIN_WINDOW_SHOW_RETURNED, StartupCallsite.SMOKE_WORK,
+)
+
+
+def _validate_startup_terminal(event: StartupDiagnosticEvent) -> None:
+    if event.outcome is StartupOutcome.STARTUP_COMPLETED:
+        valid = (
+            event.callsite is StartupCallsite.EVENT_LOOP_EXEC_REQUEST and event.exit_code is None
+        ) or (event.callsite is StartupCallsite.SMOKE_RETURN and event.exit_code == 0)
+    elif event.outcome is StartupOutcome.STARTUP_REJECTED:
+        valid = event.callsite in (StartupCallsite.LICENSE_REJECTED, StartupCallsite.SMOKE_RETURN)
+        valid = valid and event.exit_code is not None and event.exit_code != 0
+    elif event.outcome is StartupOutcome.APPLICATION_RETURNED:
+        valid = event.callsite is StartupCallsite.APPLICATION_RETURN and event.exit_code is not None
+    elif event.outcome is StartupOutcome.INVOCATION_STARTED:
+        valid = event.callsite is StartupCallsite.BOOTSTRAP and event.exit_code is None
+    elif event.outcome is StartupOutcome.MILESTONE:
+        valid = event.exit_code is None and any(
+            event.callsite is callsite for callsite in _STARTUP_MILESTONE_CALLSITES
+        )
+    else:
+        valid = event.exit_code is None
+    if not valid:
+        raise DiagnosticEventValidationError("inconsistent startup outcome")
+
+
+def _validate_startup_route(event: StartupDiagnosticEvent) -> None:
+    ui_callsites = (
+        StartupCallsite.LICENSE_CHECK, StartupCallsite.LICENSE_REJECTED,
+        StartupCallsite.MAIN_WINDOW_FACTORY, StartupCallsite.MAIN_WINDOW_CONSTRUCT,
+        StartupCallsite.MAIN_WINDOW_SHOW_REQUEST, StartupCallsite.MAIN_WINDOW_SHOW_RETURNED,
+        StartupCallsite.EVENT_LOOP_EXEC_REQUEST,
+    )
+    if event.callsite in ui_callsites and event.mode not in (StartupMode.INTERACTIVE, StartupMode.UI_SMOKE):
+        raise DiagnosticEventValidationError("invalid UI startup route")
+    if event.callsite in (StartupCallsite.SMOKE_WORK, StartupCallsite.SMOKE_RETURN):
+        if event.mode not in (StartupMode.STARTUP_SMOKE, StartupMode.PDF_SMOKE):
+            raise DiagnosticEventValidationError("invalid smoke startup route")
+    if event.outcome is StartupOutcome.APPLICATION_FAILED:
+        if event.callsite is not StartupCallsite.EVENT_LOOP_EXEC_REQUEST:
+            raise DiagnosticEventValidationError("application failure before startup boundary")
+    if event.outcome is StartupOutcome.STARTUP_FAILED:
+        valid = event.callsite is StartupCallsite.BOOTSTRAP or any(
+            event.callsite is callsite for callsite in _STARTUP_MILESTONE_CALLSITES
+        )
+        if not valid:
+            raise DiagnosticEventValidationError("startup failure at terminal boundary")
+
+
+def _validate_startup_mode(event: StartupDiagnosticEvent) -> None:
+    early = (
+        StartupCallsite.BOOTSTRAP, StartupCallsite.LOGGING_INITIALIZE,
+        StartupCallsite.LOGGING_READY, StartupCallsite.CONFIG_LOAD,
+    )
+    if event.callsite in early and event.mode is not StartupMode.UNKNOWN:
+        raise DiagnosticEventValidationError("mode before configuration")
+    if event.callsite is StartupCallsite.CONFIG_READY and event.mode is StartupMode.UNKNOWN:
+        raise DiagnosticEventValidationError("missing configured mode")
+    if event.callsite in (StartupCallsite.QAPPLICATION_REQUEST, StartupCallsite.QAPPLICATION_READY):
+        if event.mode not in (StartupMode.INTERACTIVE, StartupMode.UI_SMOKE, StartupMode.STARTUP_SMOKE):
+            raise DiagnosticEventValidationError("invalid QApplication route")
+
+
+def _startup_payload(event: StartupDiagnosticEvent) -> dict[str, object]:
+    mode = _canonical_literal(event.mode, _STARTUPMODE_LITERALS, "invalid startup mode")
+    callsite = _canonical_literal(event.callsite, _STARTUPCALLSITE_LITERALS, "invalid startup callsite")
+    outcome = _canonical_literal(event.outcome, _STARTUPOUTCOME_LITERALS, "invalid startup outcome")
+    if event.exit_code is not None and (
+        type(event.exit_code) is not int or not -(2**31) <= event.exit_code <= 2**32 - 1
+    ):
+        raise DiagnosticEventValidationError("invalid observed return code")
+    _validate_startup_terminal(event)
+    _validate_startup_route(event)
+    _validate_startup_mode(event)
+    return {
+        "event_code": _event_code_literal(DiagnosticEventCode.STARTUP_DIAGNOSTIC),
+        **_startup_identity(event),
+        "mode": mode,
+        "callsite": callsite,
+        "outcome": outcome,
+        "exit_code": event.exit_code,
+        "exception": _startup_exception(event),
+    }
+
+
 def serialize_diagnostic_event(event: object) -> str:
     """Serialize one exact approved event without fallback string conversion."""
-    if type(event) is ExceptionDiagnosticEvent:
-        payload = _exception_payload(event)
-    elif type(event) in (LegacyLogSuppressedEvent, InvalidDiagnosticEvent):
-        payload = _source_payload(event)
-    else:
-        raise DiagnosticEventValidationError("unsupported diagnostic event")
     try:
-        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError):
+        if type(event) is ExceptionDiagnosticEvent:
+            payload = _exception_payload(event)
+        elif type(event) is LegacyLogSuppressedEvent or type(event) is InvalidDiagnosticEvent:
+            payload = _source_payload(event)
+        elif type(event) is RuntimeProvenanceEvent:
+            payload = _provenance_payload(event)
+        elif type(event) is StartupDiagnosticEvent:
+            payload = _startup_payload(event)
+        else:
+            raise DiagnosticEventValidationError("unsupported diagnostic event")
+        output = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
+        if len(output) > 4096:
+            raise DiagnosticEventValidationError("diagnostic event too large")
+        return output
+    except DiagnosticEventValidationError:
+        raise
+    except (AttributeError, TypeError, ValueError):
         raise DiagnosticEventValidationError("diagnostic serialization failed") from None

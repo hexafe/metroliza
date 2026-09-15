@@ -967,12 +967,32 @@ jobs:
           "tests/test_csv_pipeline_performance.py::test_benchmark_cli_help_without_resource"
           "tests/test_csv_pipeline_performance.py::test_benchmark_worker_requires_resource_before_setup"
 
+      - name: Run native Windows startup diagnostics tests
+        env:
+          PYTHONPATH: src;.
+        run: >-
+          python -m pytest -v
+          tests/test_bootstrap_startup.py
+          tests/test_diagnostic_events.py
+          tests/test_logging_utils.py
+          tests/test_build_provenance.py
+
       - name: Run native Windows Qt lifecycle tests
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: python -m pytest -vv tests/test_industrial_qt_lifecycle.py
+
+      - name: Run native Windows report planner tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_PLANNER_SCREEN: 1920x1080
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py
 
       - name: Run native Windows specialist geometry tests
         env:
@@ -992,6 +1012,23 @@ jobs:
           tests/test_windows_ocr_runtime_diagnostics.py
           tests/test_header_ocr_diagnostics_script.py
           tests/test_windows_ocr_powershell.py
+
+      - name: Run native Windows cache publication tests
+        env:
+          PYTHONPATH: src;.
+        run: python -m pytest -vv -s --tb=no --show-capture=no tests/test_industrial_cache_publication.py
+
+      - name: Run native Windows cache lifecycle tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: >-
+          python -m pytest -vv
+          tests/test_industrial_cache_lifecycle.py
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_temp_session_save_preserves_copy_before_rebind
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_temp_session_rebind_cancel_keeps_operator_data
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_temp_session_archive_cannot_replace_active_database
 
   windows-startup-benchmark:
     name: Windows startup benchmark (manual/opt-in)

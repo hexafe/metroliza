@@ -63,6 +63,96 @@ def _assert_no_staging_artifacts(destination: Path) -> None:
     assert list(destination.parent.glob(f".{destination.name}.*.saving")) == []
 
 
+def test_disposable_counts_close_connection_when_database_is_unreadable(monkeypatch, tmp_path):
+    source = tmp_path / "unreadable.sqlite"
+    original = b"not a sqlite database"
+    source.write_bytes(original)
+    opened, closed = [], []
+    real_connect = sqlite3.connect
+
+    class ObservedConnection(sqlite3.Connection):
+        def close(self):
+            super().close()
+            closed.append(True)
+
+    def connect(*args, **kwargs):
+        opened.append(True)
+        return real_connect(*args, **kwargs, factory=ObservedConnection)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.DatabaseError):
+        disposable_cache_counts(source)
+
+    assert closed == opened == [True]
+    assert source.read_bytes() == original
+    assert all(not Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+    source.unlink()
+    assert not source.exists()
+
+
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_disposable_counts_do_not_modify_database_or_create_sidecars(tmp_path, journal_mode):
+    source = tmp_path / "cache # próba%.sqlite"
+    with closing(sqlite3.connect(source)) as connection, connection:
+        assert connection.execute(f"PRAGMA journal_mode={journal_mode}").fetchone() == (
+            journal_mode.lower(),
+        )
+        connection.execute("CREATE TABLE industrial_records (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO industrial_records VALUES (7)")
+    original = source.read_bytes()
+    assert all(not Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+
+    counts = disposable_cache_counts(source)
+
+    assert counts["industrial_records"] == 1
+    assert sum(counts.values()) == 1
+    assert source.read_bytes() == original
+    assert all(not Path(f"{source}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal"))
+    with closing(sqlite3.connect(source)) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert connection.execute("SELECT id FROM industrial_records").fetchall() == [(7,)]
+
+
+def test_disposable_counts_missing_before_connect_does_not_create_database(monkeypatch, tmp_path):
+    source = tmp_path / "missing.sqlite"
+    assert not any(disposable_cache_counts(source).values())
+    assert not source.exists()
+    _write_marker_database(source)
+    real_connect = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        source.unlink()
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    with pytest.raises(sqlite3.OperationalError):
+        disposable_cache_counts(source)
+    assert not source.exists()
+
+
+def test_disposable_counts_include_committed_rows_in_live_wal(tmp_path):
+    source = tmp_path / "live wal.sqlite"
+    with closing(sqlite3.connect(source)) as connection:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        connection.execute("CREATE TABLE industrial_records (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO industrial_records VALUES (7)")
+        connection.commit()
+        wal_path = Path(f"{source}-wal")
+        assert wal_path.is_file()
+        original = source.read_bytes()
+        original_wal = wal_path.read_bytes()
+
+        counts = disposable_cache_counts(source)
+
+        assert counts["industrial_records"] == 1
+        assert sum(counts.values()) == 1
+        assert source.read_bytes() == original
+        assert wal_path.read_bytes() == original_wal
+        connection.execute("INSERT INTO industrial_records VALUES (8)")
+        connection.commit()
+        assert disposable_cache_counts(source)["industrial_records"] == 2
+
+
 def test_failed_snapshot_does_not_create_destination(tmp_path):
     source = tmp_path / "invalid-source.sqlite"
     source.write_bytes(b"not a sqlite database")
@@ -357,6 +447,7 @@ def test_posix_staging_directory_and_database_are_private_without_umask(
         cleanup_temporary_industrial_cache(target)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX publication primitive control")
 def test_posix_publication_uses_atomic_hard_link(monkeypatch, tmp_path):
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "posix.sqlite"
@@ -411,10 +502,10 @@ def test_windows_publication_uses_atomic_no_replace_rename(monkeypatch, tmp_path
 def test_unsupported_publication_primitive_fails_closed(monkeypatch, tmp_path):
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "unsupported.sqlite"
-    monkeypatch.setattr(cache_target_module, "_PUBLICATION_PLATFORM", "posix")
+    primitive = "rename" if os.name == "nt" else "link"
     monkeypatch.setattr(
         cache_target_module.os,
-        "link",
+        primitive,
         lambda *_args: (_ for _ in ()).throw(OSError("hard links unsupported")),
     )
     try:
@@ -428,6 +519,21 @@ def test_unsupported_publication_primitive_fails_closed(monkeypatch, tmp_path):
         _assert_no_staging_artifacts(destination)
     finally:
         cleanup_temporary_industrial_cache(target)
+
+
+def test_directory_destination_is_rejected_without_symlink_privileges(tmp_path):
+    source = tmp_path / "source.sqlite"
+    original = _write_marker_database(source)
+    destination = tmp_path / "directory.sqlite"
+    destination.mkdir()
+    target = IndustrialCacheTarget("temporary", str(source), is_temporary=True)
+
+    with pytest.raises(ValueError, match="regular file"):
+        persist_temporary_industrial_cache(target, destination)
+
+    assert source.read_bytes() == original
+    assert destination.is_dir()
+    _assert_no_staging_artifacts(destination)
 
 
 def test_successful_commit_has_no_post_publication_rollback(monkeypatch, tmp_path):
@@ -668,6 +774,98 @@ def test_save_cache_as_keeps_temporary_rows(tmp_path, monkeypatch):
         assert "Durable storage" in dialog.storage_lifecycle_label.text()
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize("outcome", ("success", "flush_failure", "cancel"))
+def test_realtime_archive_is_valid_before_rebind_and_session_cleanup(
+    tmp_path, monkeypatch, outcome
+):
+    from PyQt6.QtCore import QSettings
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+    import metroliza.ui.main_window as main_window_module
+    from metroliza.ui.ui_preferences import UiPreferences
+
+    _qapplication()
+    preferences = UiPreferences(QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat))
+    window = main_window_module.MainWindow(
+        version_label="test", days_until_expiration=None, ui_preferences=preferences
+    )
+    events = []
+    warnings = []
+    errors = []
+    archive = tmp_path / "saved session ź.sqlite"
+    incoming = tmp_path / "incoming.db"
+    try:
+        window.launch_realtime_industrial_monitoring_dialog()
+        dialog = window.realtime_monitoring_dialog
+        source = Path(dialog.db_file)
+        _populate_cache(str(source))
+        source_bytes = source.read_bytes()
+        real_rebind = dialog.rebind_database
+        real_cleanup = window._cleanup_realtime_session_db
+
+        def assert_archive_before_mutation(stage):
+            assert source.exists()
+            assert source.read_bytes() == source_bytes
+            assert archive.is_file()
+            with closing(sqlite3.connect(archive)) as connection:
+                assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+                assert connection.execute(
+                    "SELECT source_record_key FROM industrial_records"
+                ).fetchall() == [("row-1",)]
+            events.append(stage)
+
+        def observed_rebind(database):
+            assert_archive_before_mutation("rebind")
+            return real_rebind(database)
+
+        def observed_cleanup():
+            assert_archive_before_mutation("cleanup")
+            return real_cleanup()
+
+        def fail_flush(_descriptor):
+            raise OSError(5, "synthetic flush failure")
+
+        choice = QMessageBox.StandardButton.Cancel if outcome == "cancel" else QMessageBox.StandardButton.Save
+        with monkeypatch.context() as scoped:
+            scoped.setattr(QMessageBox, "question", lambda *_a, **_k: choice)
+            scoped.setattr(QFileDialog, "getSaveFileName", lambda *_a, **_k: (str(archive), "SQLite"))
+            scoped.setattr(QMessageBox, "warning", lambda *_a, **_k: warnings.append(True))
+            scoped.setattr(main_window_module, "CustomLogger", lambda *_a, **_k: errors.append(True))
+            scoped.setattr(dialog, "rebind_database", observed_rebind)
+            scoped.setattr(window, "_cleanup_realtime_session_db", observed_cleanup)
+            if outcome == "flush_failure":
+                scoped.setattr(cache_target_module.os, "fsync", fail_flush)
+            window.set_db_file(str(incoming))
+
+        if outcome == "success":
+            assert events == ["rebind", "cleanup"]
+            assert not source.exists()
+            assert archive.is_file()
+            with closing(sqlite3.connect(archive)) as connection:
+                assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+                assert connection.execute(
+                    "SELECT source_record_key FROM industrial_records"
+                ).fetchall() == [("row-1",)]
+            assert dialog.db_file == str(incoming)
+            assert "Durable storage" in dialog.storage_lifecycle_label.text()
+            assert not warnings and not errors
+        else:
+            assert events == []
+            assert source.read_bytes() == source_bytes
+            assert not archive.exists()
+            assert dialog.db_file == str(source)
+            assert "Durable storage" not in dialog.storage_lifecycle_label.text()
+            assert warnings == ([True] if outcome == "flush_failure" else [])
+            assert errors == ([True] if outcome == "flush_failure" else [])
+        _assert_no_staging_artifacts(archive)
+    finally:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                QMessageBox, "question", lambda *_a, **_k: QMessageBox.StandardButton.Discard
+            )
+            window.close()
 
 
 def test_dialog_save_paths_cannot_replace_active_workspace_database(

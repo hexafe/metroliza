@@ -54,6 +54,11 @@ strict prerequisite, so the #926–#957 inventory and dependency graph remain un
 | Versioned report database and industrial-cache migration, backup, integrity, and repair | [#930](https://github.com/hexafe/metroliza/issues/930) | Release-candidate | 2 | #915, #917, #920, #944 |
 | Report browser, validation review, transactional correction, and curation | [#954](https://github.com/hexafe/metroliza/issues/954) | Release-candidate | 2 | #915, #929, #930, #932 |
 
+Within #927, [#1015](https://github.com/hexafe/metroliza/issues/1015) implements persistent
+report review and exact subset selection in the Parsing host using the merged #1014/#1019/#1020
+contracts. Integration and Windows package acceptance remain pending; #1016 binds the reusable
+planner into the main Reports page after external #1015 integration.
+
 ## 2. Selection, preparation, and reusable configuration
 
 | Capability | Issue | Current maturity | Target phase | Strict prerequisites |
@@ -94,9 +99,18 @@ strict prerequisite, so the #926–#957 inventory and dependency graph remain un
 |---|---:|---|---|---|
 | Supported headless CLI for preflight, import, analysis, export, replay, and validation | [#942](https://github.com/hexafe/metroliza/issues/942) | Planned / partial scripts | 5 | #912, #916, #926, #927, #935, #936, #937 |
 | Watched folders and scheduled local analysis jobs with quarantine and run manifests | [#943](https://github.com/hexafe/metroliza/issues/943) | Planned | 5 | #942, #926, #927, #935, #944, #949 |
-| Sanitized diagnostic bundle for support and Issue reporting | [#944](https://github.com/hexafe/metroliza/issues/944) | Partial diagnostics | 1 and 5 | #917, #920 |
+| Safe diagnostic foundation and supervised local incidents for support | [#944](https://github.com/hexafe/metroliza/issues/944) | Partial foundation; supervised V1 Planned / direction accepted | 1 and 5 | #917, #920 |
 | Analysis run history, provenance, artifact hashes, and reproducibility manifest | [#949](https://github.com/hexafe/metroliza/issues/949) | Partial / planned | 5 | #917, #926, #935, #942, #944 |
 | Contextual onboarding, local manuals, disabled-state explanations, and troubleshooting | [#955](https://github.com/hexafe/metroliza/issues/955) | Partial | 7 | #945, #944, #902, #920 |
+
+The [#944 V1 direction accepted by the PO](https://github.com/hexafe/metroliza/issues/1037#issuecomment-5625839939)
+builds on the integrated #1011 safe-event/managed-log foundation. The first bounded slice,
+[S1a #1039](https://github.com/hexafe/metroliza/issues/1039), adds correlated startup/build facts to
+existing logs; it does not implement crash survival or change logging destinations/retention.
+Delivery proceeds through selected import/export S1b, supervisor/store with source and Windows
+onedir qualification, then preview/export and explicit managed-log migration. Other packagers,
+responsiveness and sensitive native capture require separate gates; complete #944 and Windows V1
+remain unimplemented and are not release-qualified by S1a.
 
 ## 7. Application UX and accessibility
 
