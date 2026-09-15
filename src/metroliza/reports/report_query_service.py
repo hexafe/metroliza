@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
 from metroliza.shared.grouping_filter_core import (
     DateFilterSpec,
     FilterExpressionGroup,
@@ -211,30 +212,9 @@ def _text_expression_clause(spec):
 
 
 def _number_expression_clause(spec):
-    operator = str(spec.operator or "").strip().lower()
-    column = f"CAST({_quote_measurement_filter_column(spec.column)} AS REAL)"
-    value = _sql_literal(spec.value)
-    if operator in {"equals", "eq"}:
-        return f"{column} = CAST({value} AS REAL)"
-    if operator in {"not_equals", "ne"}:
-        return f"({column} <> CAST({value} AS REAL) OR {_quote_measurement_filter_column(spec.column)} IS NULL)"
-    if operator in {"greater_than", "gt"}:
-        return f"{column} > CAST({value} AS REAL)"
-    if operator in {"greater_or_equal", "gte"}:
-        return f"{column} >= CAST({value} AS REAL)"
-    if operator in {"less_than", "lt"}:
-        return f"{column} < CAST({value} AS REAL)"
-    if operator in {"less_or_equal", "lte"}:
-        return f"{column} <= CAST({value} AS REAL)"
-    if operator == "between":
-        first = f"CAST({_sql_literal(spec.value)} AS REAL)"
-        second = f"CAST({_sql_literal(spec.second_value)} AS REAL)"
-        return f"{column} BETWEEN MIN({first}, {second}) AND MAX({first}, {second})"
-    if operator == "is_blank":
-        return f"{_quote_measurement_filter_column(spec.column)} IS NULL"
-    if operator == "is_not_blank":
-        return f"{_quote_measurement_filter_column(spec.column)} IS NOT NULL"
-    raise ValueError(f"Unsupported CMM number filter operator: {spec.operator}")
+    return sqlite_numeric_filter(
+        _quote_measurement_filter_column(spec.column), spec.operator, spec.value, spec.second_value,
+    )
 
 
 def _date_expression_clause(spec):
@@ -273,22 +253,10 @@ def _membership_expression_clause(spec):
     clauses = []
     missing_clause = f"{quoted_column} IS NULL"
     if value_kind == "number":
-        text_column = f"TRIM(CAST({quoted_column} AS TEXT))"
-        json_type = (
-            f"CASE WHEN json_valid({text_column}) "
-            f"THEN json_type({text_column}) ELSE NULL END"
+        return sqlite_numeric_membership(
+            quoted_column, values,
+            negate=bool(spec.negate) or str(spec.operator or "").strip().casefold() == "not_in",
         )
-        numeric_guard = (
-            f"({quoted_column} IS NOT NULL AND {text_column} <> '' AND ("
-            f"COALESCE({json_type} IN ('integer', 'real'), 0) "
-            f"OR {text_column} NOT GLOB '*[^0-9]*' "
-            f"OR (substr({text_column}, 1, 1) IN ('+', '-') "
-            f"AND substr({text_column}, 2) <> '' "
-            f"AND substr({text_column}, 2) NOT GLOB '*[^0-9]*')))"
-        )
-        values_sql = ", ".join(f"CAST({_sql_literal(value)} AS REAL)" for value in values)
-        clauses.append(f"({numeric_guard} AND CAST({quoted_column} AS REAL) IN ({values_sql}))")
-        missing_clause = f"NOT {numeric_guard}"
     elif value_kind == "date":
         values_sql = ", ".join(f"DATE({_sql_literal(value)})" for value in values)
         clauses.append(f"DATE({quoted_column}) IN ({values_sql})")
