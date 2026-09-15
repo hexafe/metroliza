@@ -1515,7 +1515,13 @@ class _WindowsApi:
                         break
                     time.sleep(0.01)
         finally:
-            handles_closed = self._close_owned_handles(thread, job, process, token)
+            primary = sys.exc_info()[1]
+            try:
+                handles_closed = self._close_owned_handles(thread, job, process, token)
+            except BaseException:
+                if primary is not None and not isinstance(primary, Exception):
+                    raise primary from None
+                raise
         if not drained or not handles_closed:
             raise QualificationFailure(
                 "scenario_failed",
