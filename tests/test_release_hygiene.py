@@ -73,3 +73,21 @@ def test_candidate_fixture_path_cannot_admit_linked_content(tmp_path, monkeypatc
     target.unlink()
     target.hardlink_to(source)
     assert len(_collect_violations([name], label="test")) == 1
+    target.unlink()
+    target.symlink_to(tmp_path / "missing.csv")
+    assert len(_collect_violations([name], label="test")) == 1
+    target.unlink()
+    assert len(_collect_violations([name], label="test")) == 1
+
+
+def test_candidate_fixture_path_cannot_admit_symlinked_parent(tmp_path, monkeypatch):
+    repo = Path(__file__).resolve().parents[1]
+    name = next(iter(PINNED_SYNTHETIC_FIXTURES))
+    target = tmp_path / name
+    actual_parent = tmp_path / "public_inputs"
+    actual_parent.mkdir()
+    shutil.copyfile(repo / name, actual_parent / target.name)
+    target.parent.parent.mkdir(parents=True)
+    target.parent.symlink_to(actual_parent, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    assert len(_collect_violations([name], label="test")) == 1

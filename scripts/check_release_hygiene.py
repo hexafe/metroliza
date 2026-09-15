@@ -111,6 +111,8 @@ def _is_blocked(path: str) -> str | None:
 
 def _matches_pinned_fixture(path: Path, expected: str) -> bool:
     try:
+        if any(not stat.S_ISDIR(parent.lstat().st_mode) for parent in path.parents):
+            return False
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             return False
@@ -123,12 +125,12 @@ def _matches_pinned_fixture(path: Path, expected: str) -> bool:
 def _collect_violations(paths: list[str], *, label: str) -> list[str]:
     violations: list[str] = []
     for path in paths:
-        if not Path(path).exists():
-            continue
         expected = PINNED_SYNTHETIC_FIXTURES.get(path.replace("\\", "/"))
         if expected is not None:
             if not _matches_pinned_fixture(Path(path), expected):
                 violations.append(f"{label}: {path} (synthetic fixture bytes differ from reviewed hash)")
+            continue
+        if not Path(path).exists():
             continue
         reason = _is_blocked(path)
         if reason:
