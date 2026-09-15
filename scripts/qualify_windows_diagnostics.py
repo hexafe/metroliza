@@ -167,6 +167,23 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "process_exited_before_startup",
         "process_exited_before_result",
         "process_exit_mismatch",
+        "qualification_launch_failed",
+        "qualification_environment_failed",
+        "qualification_observation_failed",
+        "qualification_startup_receipt_failed",
+        "qualification_result_receipt_failed",
+        "qualification_poll_failed",
+        "qualification_final_receipt_failed",
+        "qualification_job_drain_failed",
+        "qualification_metrics_failed",
+        "qualification_topology_failed",
+        "native_job_ids_unavailable",
+        "native_job_ids_invalid",
+        "native_job_accounting_unavailable",
+        "native_job_accounting_invalid",
+        "native_open_process_unavailable",
+        "native_image_query_unavailable",
+        "native_process_times_unavailable",
         "unexpected",
     }
 )
@@ -250,6 +267,30 @@ def _run_driver_phase(stage: str, action: Callable[[], _T]) -> _T:
             "scenario_failed",
             qualification_stage=stage,
             qualification_reason="unexpected",
+        ) from None
+
+
+def _scenario_step(reason: str, action: Callable[[], _T]) -> _T:
+    if reason not in QUALIFICATION_FAILURE_REASONS or reason == "unexpected":
+        raise QualificationFailure("scenario_failed")
+    try:
+        return action()
+    except QualificationFailure as error:
+        if error.qualification_reason is not None or error.failure_id not in {
+            "scenario_failed", "restricted_launch_unavailable"
+        }:
+            raise
+        raise QualificationFailure(
+            error.failure_id,
+            qualification_stage=error.qualification_stage,
+            qualification_reason=reason,
+            qualification_child_stage=error.qualification_child_stage,
+            qualification_exit_code=error.qualification_exit_code,
+            qualification_cleanup=error.qualification_cleanup,
+        ) from None
+    except Exception:
+        raise QualificationFailure(
+            "scenario_failed", qualification_reason=reason
         ) from None
 
 
@@ -1388,16 +1429,28 @@ class _WindowsApi:
         exited = self.FILETIME()
         kernel = self.FILETIME()
         user = self.FILETIME()
-        if not self.kernel.QueryFullProcessImageNameW(
-            process, 0, image, ctypes.byref(capacity)
-        ) or not self.kernel.GetProcessTimes(
-            process,
-            ctypes.byref(created),
-            ctypes.byref(exited),
-            ctypes.byref(kernel),
-            ctypes.byref(user),
+        if not _scenario_step(
+            "native_image_query_unavailable",
+            lambda: self.kernel.QueryFullProcessImageNameW(
+                process, 0, image, ctypes.byref(capacity)
+            ),
         ):
-            raise QualificationFailure("scenario_failed")
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_image_query_unavailable"
+            )
+        if not _scenario_step(
+            "native_process_times_unavailable",
+            lambda: self.kernel.GetProcessTimes(
+                process,
+                ctypes.byref(created),
+                ctypes.byref(exited),
+                ctypes.byref(kernel),
+                ctypes.byref(user),
+            ),
+        ):
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_process_times_unavailable"
+            )
         creation_time = (int(created.dwHighDateTime) << 32) | int(
             created.dwLowDateTime
         )
@@ -1406,38 +1459,54 @@ class _WindowsApi:
     def _job_process_ids(self, job) -> tuple[int, ...]:
         process_ids = self.PROCESS_IDS()
         returned = self.wintypes.DWORD()
-        if not self.kernel.QueryInformationJobObject(
-            job,
-            3,
-            ctypes.byref(process_ids),
-            ctypes.sizeof(process_ids),
-            ctypes.byref(returned),
+        if not _scenario_step(
+            "native_job_ids_unavailable",
+            lambda: self.kernel.QueryInformationJobObject(
+                job,
+                3,
+                ctypes.byref(process_ids),
+                ctypes.sizeof(process_ids),
+                ctypes.byref(returned),
+            ),
         ):
-            raise QualificationFailure("scenario_failed")
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_job_ids_unavailable"
+            )
         listed = int(process_ids.NumberOfProcessIdsInList)
         assigned = int(process_ids.NumberOfAssignedProcesses)
         if listed > len(process_ids.ProcessIdList) or assigned != listed:
-            raise QualificationFailure("scenario_failed")
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_job_ids_invalid"
+            )
         values = tuple(int(process_ids.ProcessIdList[index]) for index in range(listed))
         if any(value <= 0 for value in values) or len(set(values)) != len(values):
-            raise QualificationFailure("scenario_failed")
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_job_ids_invalid"
+            )
         return values
 
     def _job_accounting(self, job) -> tuple[int, int]:
         accounting = self.BASIC_ACCOUNTING()
         returned = self.wintypes.DWORD()
-        if not self.kernel.QueryInformationJobObject(
-            job,
-            1,
-            ctypes.byref(accounting),
-            ctypes.sizeof(accounting),
-            ctypes.byref(returned),
+        if not _scenario_step(
+            "native_job_accounting_unavailable",
+            lambda: self.kernel.QueryInformationJobObject(
+                job,
+                1,
+                ctypes.byref(accounting),
+                ctypes.sizeof(accounting),
+                ctypes.byref(returned),
+            ),
         ):
-            raise QualificationFailure("scenario_failed")
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_job_accounting_unavailable"
+            )
         active = int(accounting.ActiveProcesses)
         total = int(accounting.TotalProcesses)
         if active > total:
-            raise QualificationFailure("scenario_failed")
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_job_accounting_invalid"
+            )
         return active, total
 
     def job_observations(
@@ -1446,14 +1515,19 @@ class _WindowsApi:
         process_ids = self._job_process_ids(job)
         observations: list[_ProcessObservation] = []
         for process_id in process_ids:
-            process = self.kernel.OpenProcess(0x1000, False, process_id)
+            process = _scenario_step(
+                "native_open_process_unavailable",
+                lambda: self.kernel.OpenProcess(0x1000, False, process_id),
+            )
             if not process:
                 if (
                     ctypes.get_last_error() == WINDOWS_ERROR_INVALID_PARAMETER
                     and process_id not in self._job_process_ids(job)
                 ):
                     continue
-                raise QualificationFailure("scenario_failed")
+                raise QualificationFailure(
+                    "scenario_failed", qualification_reason="native_open_process_unavailable"
+                )
             try:
                 observations.append(self._process_observation(process, process_id))
             finally:
@@ -1986,28 +2060,42 @@ def _run_scenario(
     expected_stage: str,
     on_ready: Callable[[_WindowsProcess], None] | None = None,
 ) -> ScenarioResult:
-    environment = _sanitized_environment(artifact_dir, work_root, state_base, scenario)
     owned: list[_WindowsProcess] = []
     startup_path = work_root / "startup.json"
     startup_ready_ms: int | None = None
     ready_called = False
     terminate = True
     try:
-        process = api.launch(executable, environment, work_root, owned=owned)
+        environment = _scenario_step(
+            "qualification_environment_failed",
+            lambda: _sanitized_environment(
+                artifact_dir, work_root, state_base, scenario
+            ),
+        )
+        process = _scenario_step(
+            "qualification_launch_failed",
+            lambda: api.launch(executable, environment, work_root, owned=owned),
+        )
         scenario_deadline = min(deadline, time.monotonic() + MAX_SCENARIO_SECONDS)
         exit_code: int | None = None
         last_receipt: dict[str, object] | None = None
         while time.monotonic() < scenario_deadline:
-            process.observe()
-            startup_ready_ms = _observe_startup_receipt(
-                startup_path, scenario, process, startup_ready_ms
+            _scenario_step("qualification_observation_failed", process.observe)
+            startup_ready_ms = _scenario_step(
+                "qualification_startup_receipt_failed",
+                lambda: _observe_startup_receipt(
+                    startup_path, scenario, process, startup_ready_ms
+                ),
             )
-            observed_receipt, ready_called = _observe_qualification_receipt(
-                work_root, scenario, process, on_ready, ready_called
+            observed_receipt, ready_called = _scenario_step(
+                "qualification_result_receipt_failed",
+                lambda: _observe_qualification_receipt(
+                    work_root, scenario, process, on_ready, ready_called
+                ),
             )
             if observed_receipt is not None:
                 last_receipt = observed_receipt
-            exit_code = process.poll()
+            exit_code = _scenario_step("qualification_poll_failed", process.poll)
             if exit_code is not None:
                 break
             time.sleep(0.02)
@@ -2031,15 +2119,24 @@ def _run_scenario(
                 qualification_reason="process_exit_mismatch",
                 qualification_exit_code=exit_code,
             )
-        final_receipt = _validate_child_receipt(
-            work_root / QUALIFICATION_RECEIPT_NAMES[expected_stage], scenario
+        final_receipt = _scenario_step(
+            "qualification_final_receipt_failed",
+            lambda: _validate_child_receipt(
+                work_root / QUALIFICATION_RECEIPT_NAMES[expected_stage], scenario
+            ),
         )
         if final_receipt["stage"] != expected_stage:
-            raise QualificationFailure("scenario_failed")
-        all_exited = _wait_for_job_exit(process, scenario_deadline)
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="qualification_final_receipt_failed",
+            )
+        all_exited = _scenario_step(
+            "qualification_job_drain_failed",
+            lambda: _wait_for_job_exit(process, scenario_deadline),
+        )
         if not all_exited:
             raise QualificationFailure("scenario_timeout")
-        metrics = process.metrics()
+        metrics = _scenario_step("qualification_metrics_failed", process.metrics)
         elapsed_ms = round((time.perf_counter() - process.started) * 1000)
         terminate = False
         return ScenarioResult(
@@ -2048,7 +2145,10 @@ def _run_scenario(
             startup_ready_ms,
             str(final_receipt["stage"]),
             metrics,
-            process.topology(artifact_dir, all_exited=all_exited),
+            _scenario_step(
+                "qualification_topology_failed",
+                lambda: process.topology(artifact_dir, all_exited=all_exited),
+            ),
         )
     finally:
         _close_owned_processes(owned, terminate=terminate)

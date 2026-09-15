@@ -1406,7 +1406,9 @@ def _interrupt_after_call(code, store_name: str | None, primary, action) -> None
         instruction.offset
         for index, instruction in enumerate(instructions)
         if instructions[index - 1].opname == "CALL"
-        and instruction.opname == ("POP_TOP" if store_name is None else "STORE_FAST")
+        and instruction.opname in (
+            ("POP_TOP",) if store_name is None else ("STORE_FAST", "STORE_DEREF")
+        )
         and (store_name is None or instruction.argval == store_name)
     )
 
@@ -1680,7 +1682,10 @@ def test_job_observation_omits_only_confirmed_disappeared_pid(monkeypatch) -> No
     assert topology.unexpected_processes_observed == 1
 
 
-def test_job_observation_keeps_other_open_failures_fatal(monkeypatch) -> None:
+@pytest.mark.parametrize("raises_private", [False, True])
+def test_job_observation_keeps_other_open_failures_fatal(
+    monkeypatch, raises_private
+) -> None:
     class _ProcessIds(ctypes.Structure):
         _fields_ = [
             ("NumberOfAssignedProcesses", ctypes.c_uint32),
@@ -1697,6 +1702,8 @@ def test_job_observation_keeps_other_open_failures_fatal(monkeypatch) -> None:
             return 1
 
         def OpenProcess(self, *_arguments):
+            if raises_private:
+                raise OSError("PRIVATE_OPEN_PROCESS_DETAIL")
             return 0
 
     api = object.__new__(qualification._WindowsApi)
@@ -1710,8 +1717,10 @@ def test_job_observation_keeps_other_open_failures_fatal(monkeypatch) -> None:
         raising=False,
     )
 
-    with pytest.raises(qualification.QualificationFailure):
+    with pytest.raises(qualification.QualificationFailure) as caught:
         api.job_observations(object())
+    assert caught.value.qualification_reason == "native_open_process_unavailable"
+    assert "PRIVATE" not in str(caught.value)
 
 
 def test_job_observation_keeps_pid_listed_after_open_failure_fatal(monkeypatch) -> None:
@@ -1744,8 +1753,105 @@ def test_job_observation_keeps_pid_listed_after_open_failure_fatal(monkeypatch) 
         raising=False,
     )
 
-    with pytest.raises(qualification.QualificationFailure):
+    with pytest.raises(qualification.QualificationFailure) as caught:
         api.job_observations(object())
+    assert caught.value.qualification_reason == "native_open_process_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("failing_call", "reason"),
+    [
+        ("image", "native_image_query_unavailable"),
+        ("times", "native_process_times_unavailable"),
+    ],
+)
+@pytest.mark.parametrize("raises_private", [False, True])
+def test_native_process_observation_names_only_failing_api(
+    failing_call, reason, raises_private
+) -> None:
+    class _FileTime(ctypes.Structure):
+        _fields_ = [
+            ("dwLowDateTime", ctypes.c_uint32),
+            ("dwHighDateTime", ctypes.c_uint32),
+        ]
+
+    class _Kernel:
+        def QueryFullProcessImageNameW(self, *_arguments):
+            if failing_call == "image" and raises_private:
+                raise OSError("PRIVATE_IMAGE_QUERY_DETAIL")
+            return failing_call != "image"
+
+        def GetProcessTimes(self, *_arguments):
+            if failing_call == "times" and raises_private:
+                raise OSError("PRIVATE_PROCESS_TIME_DETAIL")
+            return failing_call != "times"
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.FILETIME = _FileTime
+    api.kernel = _Kernel()
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api._process_observation(object(), 123)
+    assert caught.value.failure_id == "scenario_failed"
+    assert caught.value.qualification_reason == reason
+    assert "PRIVATE" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("api_name", "invalid", "reason"),
+    [
+        ("ids", False, "native_job_ids_unavailable"),
+        ("ids", True, "native_job_ids_invalid"),
+        ("accounting", False, "native_job_accounting_unavailable"),
+        ("accounting", True, "native_job_accounting_invalid"),
+    ],
+)
+@pytest.mark.parametrize("raises_private", [False, True])
+def test_native_job_query_names_only_failing_api(
+    api_name, invalid, reason, raises_private
+) -> None:
+    class _ProcessIds(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", ctypes.c_uint32),
+            ("NumberOfProcessIdsInList", ctypes.c_uint32),
+            ("ProcessIdList", ctypes.c_size_t * 16),
+        ]
+
+    class _Accounting(ctypes.Structure):
+        _fields_ = [
+            ("TotalProcesses", ctypes.c_uint32),
+            ("ActiveProcesses", ctypes.c_uint32),
+        ]
+
+    class _Kernel:
+        def QueryInformationJobObject(self, _job, kind, value, _size, _returned):
+            if raises_private and not invalid:
+                raise OSError("PRIVATE_JOB_QUERY_DETAIL")
+            if not invalid:
+                return False
+            if kind == 3:
+                info = ctypes.cast(value, ctypes.POINTER(_ProcessIds)).contents
+                info.NumberOfAssignedProcesses = 1
+                info.NumberOfProcessIdsInList = 0
+            else:
+                info = ctypes.cast(value, ctypes.POINTER(_Accounting)).contents
+                info.TotalProcesses = 0
+                info.ActiveProcesses = 1
+            return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.PROCESS_IDS = _ProcessIds
+    api.BASIC_ACCOUNTING = _Accounting
+    api.kernel = _Kernel()
+    action = api._job_process_ids if api_name == "ids" else api._job_accounting
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        action(object())
+    assert caught.value.failure_id == "scenario_failed"
+    assert caught.value.qualification_reason == reason
+    assert "PRIVATE" not in str(caught.value)
 
 
 def test_job_accounting_exposes_unobserved_short_lived_processes() -> None:
@@ -2280,6 +2386,56 @@ def test_main_preserves_primary_and_independent_failed_cleanup(
         "exit_code": 7,
     }
     assert receipt["qualification_cleanup"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("reason", "exit_code"),
+    [
+        ("qualification_observation_failed", None),
+        ("process_exit_mismatch", 7),
+    ],
+)
+def test_main_serializes_closed_scenario_reason_without_private_detail(
+    tmp_path, monkeypatch, reason, exit_code
+) -> None:
+    artifact = tmp_path / "artifact"
+    output = tmp_path / "output"
+    artifact.mkdir()
+
+    class _Arguments:
+        artifact_dir = artifact
+        output_dir = output
+
+    class _Parser:
+        def parse_args(self, _arguments):
+            return _Arguments()
+
+    monkeypatch.setattr(qualification, "_parser", lambda: _Parser())
+    monkeypatch.setattr(
+        qualification,
+        "qualify_windows_diagnostics",
+        lambda *_arguments: qualification.QualificationResult(
+            "failed",
+            "scenario_failed",
+            None,
+            qualification_stage="direct_normal_1",
+            qualification_reason=reason,
+            qualification_exit_code=exit_code,
+            qualification_cleanup="complete",
+        ),
+    )
+
+    assert qualification.main([]) == 1
+    receipt_bytes = (output / qualification.OUTPUT_NAME).read_bytes()
+    receipt = json.loads(receipt_bytes)
+    qualification._validate_output_payload(receipt)
+    assert receipt["qualification_failure"] == {
+        "stage": "direct_normal_1",
+        "reason": reason,
+        **({"exit_code": exit_code} if exit_code is not None else {}),
+    }
+    assert receipt["qualification_cleanup"] == "complete"
+    assert b"PRIVATE" not in receipt_bytes
 
 
 def test_main_does_not_write_output_failure_into_preexisting_directory(
@@ -2819,6 +2975,132 @@ def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypa
     assert not any(key.startswith("PYTHON") for key in api.environment)
 
 
+@pytest.mark.parametrize(
+    ("fault", "expected_reason"),
+    [
+        ("launch", "qualification_launch_failed"),
+        ("observation", "qualification_observation_failed"),
+    ],
+)
+def test_direct_scenario_failure_identifies_closed_operation_before_cleanup(
+    tmp_path, monkeypatch, fault, expected_reason
+) -> None:
+    monkeypatch.setattr(qualification, "_sanitized_environment", lambda *_args: {})
+
+    class _Process:
+        def observe(self):
+            raise RuntimeError("PRIVATE_OBSERVATION_DETAIL")
+
+        def close(self, *, terminate):
+            qualification._attempt_cleanup(lambda: None)
+
+    class _Api:
+        def launch(self, *_arguments, owned=None):
+            if fault == "launch":
+                raise qualification.QualificationFailure(
+                    "scenario_failed", qualification_cleanup="complete"
+                )
+            process = _Process()
+            owned.append(process)
+            return process
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_driver_phase(
+            "direct_normal_1",
+            lambda: qualification._run_scenario(
+                _Api(), tmp_path / "app.exe", tmp_path, tmp_path, tmp_path,
+                "normal", time.monotonic() + 1,
+                expected_exit=0, expected_stage="complete",
+            ),
+        )
+
+    assert caught.value.failure_id == "scenario_failed"
+    assert caught.value.qualification_stage == "direct_normal_1"
+    assert caught.value.qualification_reason == expected_reason
+    assert caught.value.qualification_cleanup == "complete"
+    assert "PRIVATE" not in str(caught.value)
+
+
+def test_direct_scenario_final_stage_mismatch_names_receipt_operation(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    api = _FakeApi(0, "complete")
+    validate_receipt = qualification._validate_child_receipt
+    final_calls = 0
+
+    def changed_final_receipt(path, scenario):
+        nonlocal final_calls
+        if path.name != "startup.json":
+            final_calls += 1
+            if final_calls == 2:
+                return {"stage": "ready"}
+        return validate_receipt(path, scenario)
+
+    monkeypatch.setattr(
+        qualification,
+        "_validate_child_receipt",
+        changed_final_receipt,
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_driver_phase(
+            "direct_normal_1",
+            lambda: qualification._run_scenario(
+                api, tmp_path / "app.exe", tmp_path, tmp_path, tmp_path,
+                "normal", time.monotonic() + 1,
+                expected_exit=0, expected_stage="complete",
+            ),
+        )
+
+    assert caught.value.failure_id == "scenario_failed"
+    assert caught.value.qualification_reason == "qualification_final_receipt_failed"
+    assert api.process.closed_with is True
+
+
+def test_scenario_step_keeps_specific_failure_and_primary_interrupt() -> None:
+    specific = qualification.QualificationFailure(
+        "scenario_failed",
+        qualification_reason="process_exit_mismatch",
+        qualification_exit_code=9,
+    )
+    primary = KeyboardInterrupt("PRIVATE_PRIMARY")
+
+    def raise_specific():
+        raise specific
+
+    def raise_primary():
+        raise primary
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._scenario_step("qualification_poll_failed", raise_specific)
+    assert caught.value is specific
+    assert caught.value.qualification_exit_code == 9
+
+    with pytest.raises(KeyboardInterrupt) as caught_interrupt:
+        qualification._scenario_step("qualification_poll_failed", raise_primary)
+    assert caught_interrupt.value is primary
+
+
+def test_scenario_step_keeps_authenticated_child_unknown_reason() -> None:
+    child_failure = qualification.QualificationFailure(
+        "scenario_failed",
+        qualification_reason="unexpected",
+        qualification_child_stage="application",
+    )
+
+    def raise_child_failure():
+        raise child_failure
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._scenario_step(
+            "qualification_result_receipt_failed", raise_child_failure
+        )
+    assert caught.value is child_failure
+    assert caught.value.qualification_reason == "unexpected"
+    assert caught.value.qualification_child_stage == "application"
+
+
 def test_scenario_expected_exit_with_active_descendant_is_timeout(
     tmp_path, monkeypatch
 ) -> None:
@@ -3021,11 +3303,16 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
         deadline = time.monotonic() + 10
         exit_code = None
         while time.monotonic() < deadline:
+            process.observe()
             exit_code = process.poll()
             if exit_code is not None:
                 break
             time.sleep(0.02)
         assert exit_code is not None
+        process.observe()
+        while time.monotonic() < deadline and process.active_processes() != 0:
+            time.sleep(0.02)
+        assert process.active_processes() == 0
         assert process.metrics().peak_job_memory_bytes >= 0
     finally:
         process.close(terminate=exit_code is None)
