@@ -1,4 +1,7 @@
-from scripts.check_release_hygiene import _is_blocked
+from pathlib import Path
+import shutil
+
+from scripts.check_release_hygiene import PINNED_SYNTHETIC_FIXTURES, _collect_violations, _is_blocked
 
 
 def test_release_hygiene_blocks_generated_release_artifacts_and_local_data():
@@ -33,3 +36,40 @@ def test_release_hygiene_allows_checked_in_synthetic_fixtures():
     assert _is_blocked("docs/user_manual/group_analysis/user_manual.pdf") is None
     assert _is_blocked("config/google/credentials.example.json") is None
     assert _is_blocked("tests/fixtures/industrial_realtime/customer_export.csv")
+
+
+def test_candidate_fixtures_require_exact_reviewed_bytes_and_no_neighbor_exception(tmp_path, monkeypatch):
+    repo = Path(__file__).resolve().parents[1]
+    paths = list(PINNED_SYNTHETIC_FIXTURES)
+    for name in paths:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo / name, target)
+    monkeypatch.chdir(tmp_path)
+    assert _collect_violations(paths, label="test") == []
+
+    for name in paths:
+        target = Path(name)
+        original = target.read_bytes()
+        target.write_bytes(original + b"unreviewed modification")
+        assert len(_collect_violations([name], label="test")) == 1
+        target.write_bytes(original)
+
+    neighbor = Path(paths[0]).with_name("unreviewed.csv")
+    shutil.copyfile(paths[0], neighbor)
+    assert len(_collect_violations([neighbor.as_posix()], label="test")) == 1
+
+
+def test_candidate_fixture_path_cannot_admit_linked_content(tmp_path, monkeypatch):
+    repo = Path(__file__).resolve().parents[1]
+    name = next(iter(PINNED_SYNTHETIC_FIXTURES))
+    target = tmp_path / name
+    target.parent.mkdir(parents=True)
+    source = tmp_path / "public_source.csv"
+    shutil.copyfile(repo / name, source)
+    target.symlink_to(source)
+    monkeypatch.chdir(tmp_path)
+    assert len(_collect_violations([name], label="test")) == 1
+    target.unlink()
+    target.hardlink_to(source)
+    assert len(_collect_violations([name], label="test")) == 1
