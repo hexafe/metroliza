@@ -19,6 +19,33 @@ def _command(scenario):
     return [sys.executable, str(CHILD), scenario]
 
 
+def _controlled_receiver_rate_window(monkeypatch, *, rollover_every=None):
+    from metroliza.app import diagnostic_supervisor
+
+    receiver_run = diagnostic_supervisor._Receiver._run.__code__
+
+    class ReceiverRateTime:
+        def __init__(self):
+            self.window_time = time.monotonic()
+            self.window_reads = 0
+
+        def monotonic(self):
+            if sys._getframe(1).f_code is receiver_run:
+                self.window_reads += 1
+                if rollover_every and self.window_reads > 1:
+                    if (self.window_reads - 1) % rollover_every == 0:
+                        self.window_time += 1.01
+                return self.window_time
+            return time.monotonic()
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    controlled = ReceiverRateTime()
+    monkeypatch.setattr(diagnostic_supervisor, "time", controlled)
+    return controlled
+
+
 @pytest.mark.parametrize("scenario,code,incident,handshake", [
     ("normal", 0, False, "accepted"),
     ("hard_exit", 9, True, "accepted"),
@@ -94,7 +121,12 @@ def test_partial_channel_allocation_failure_closes_owned_handles(monkeypatch, fa
     ("flood", "accepted", "flooded"),
     ("dropped_terminal", "accepted", "incomplete"),
 ])
-def test_owned_malformed_peer_never_produces_complete_evidence(scenario, handshake, channel):
+def test_owned_malformed_peer_never_produces_complete_evidence(
+    scenario, handshake, channel, monkeypatch
+):
+    controlled = None
+    if scenario == "flood":
+        controlled = _controlled_receiver_rate_window(monkeypatch)
     started = time.monotonic()
     result = launch_supervised([
         sys.executable, str(CHILD.with_name("diagnostic_protocol_child.py")), scenario,
@@ -105,8 +137,26 @@ def test_owned_malformed_peer_never_produces_complete_evidence(scenario, handsha
     assert not result.clean_terminal_received
     assert result.needs_incident
     assert result.history.total_bytes <= 2 * 1024 * 1024
+    if controlled is not None:
+        assert controlled.window_reads >= 2001
+        assert 0 < result.history.loss.sequence_rejected_events < 2000
     if scenario in {"wrong_peer", "cross_instance"}:
         assert result.history.events == ()
+
+
+def test_receiver_rate_window_rollover_does_not_become_a_lifetime_cap(monkeypatch):
+    controlled = _controlled_receiver_rate_window(monkeypatch, rollover_every=1000)
+    result = launch_supervised([
+        sys.executable, str(CHILD.with_name("diagnostic_protocol_child.py")), "flood",
+    ])
+    assert controlled.window_reads > 2001
+    assert result.exit_code == 0
+    assert result.handshake == "accepted"
+    assert result.channel == "incomplete"
+    assert not result.clean_terminal_received
+    assert result.needs_incident
+    assert result.history.loss.sequence_rejected_events > 2000
+    assert result.history.total_bytes <= 2 * 1024 * 1024
 
 
 def test_concurrent_real_instances_keep_their_own_event_history():
