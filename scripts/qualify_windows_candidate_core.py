@@ -303,9 +303,12 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         "METROLIZA_WINDOWS_CANDIDATE_ROOT": str(work),
         "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR": str(staged_fixtures),
     })
-    process = diag._WindowsApi().launch(relocated / "metroliza.exe", environment, work)
+    owned = []
     terminate = True
     try:
+        process = diag._WindowsApi().launch(
+            relocated / "metroliza.exe", environment, work, owned=owned
+        )
         while time.monotonic() < deadline:
             process.observe()
             code = process.poll()
@@ -333,7 +336,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         terminate = False
         return artifacts
     finally:
-        process.close(terminate=terminate)
+        diag._close_owned_processes(owned, terminate=terminate)
 
 
 def qualify(args) -> dict:
