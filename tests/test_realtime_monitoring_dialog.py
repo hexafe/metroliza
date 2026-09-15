@@ -1352,6 +1352,7 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
             from tests.windows_dashboard_privacy import (
                 inspect_dashboard_privacy,
                 null_dacl_directory,
+                untrusted_child_delete_directory,
             )
 
             missing = tmp_path / "missing-private-directory"
@@ -1366,6 +1367,16 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
                 control_html.write_text("synthetic null-DACL control", encoding="utf-8")
                 with pytest.raises(AssertionError, match="privacy_oracle_null_dacl"):
                     inspect_dashboard_privacy(null_control, control_html)
+
+            delete_control = tmp_path / "owned-untrusted-child-delete-control"
+            delete_control.mkdir()
+            with untrusted_child_delete_directory(delete_control):
+                inherited = delete_control / "inherited"
+                inherited.mkdir()
+                control_html = inherited / "control.html"
+                control_html.write_text("synthetic child-delete control", encoding="utf-8")
+                with pytest.raises(AssertionError, match="^privacy_oracle_untrusted_allow_ace$"):
+                    inspect_dashboard_privacy(inherited, control_html)
 
             # A real pinned/owned object must be removed if its security check fails.
             failed_parent = tmp_path / "owned-security-failure"
@@ -1385,6 +1396,42 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
                     private_directory.create_private_dashboard_directory()
             assert validated == [True]
             assert list(failed_parent.iterdir()) == []
+
+            # Fault injection is a failure control; positive creation below uses real NtCreateFile.
+            for ntstatus in (-1073741790, 0x103):  # ACCESS_DENIED, PENDING
+                denied_parent = tmp_path / f"owned-atomic-failure-{ntstatus}"
+                denied_parent.mkdir()
+                denied_calls = []
+
+                def deny_atomic_create(_ntdll, candidate, _attributes):
+                    denied_calls.append(candidate)
+                    return ntstatus, None, 0
+
+                with monkeypatch.context() as failure:
+                    failure.setattr(tempfile, "tempdir", str(denied_parent))
+                    failure.setattr(private_directory, "_nt_create_private_directory", deny_atomic_create)
+                    with pytest.raises(private_directory.PrivateDashboardDirectoryError):
+                        private_directory.create_private_dashboard_directory()
+                assert len(denied_calls) == 1
+                assert list(denied_parent.iterdir()) == []
+
+            collision_parent = tmp_path / "owned-collision-control"
+            collision_parent.mkdir()
+            existing = collision_parent / "metroliza-realtime-dashboard-collision"
+            existing.mkdir()
+            sentinel = existing / "unowned.txt"
+            sentinel.write_text("retained collision control", encoding="utf-8")
+            names = iter(("collision", "new-owned"))
+            with monkeypatch.context() as collision:
+                collision.setattr(tempfile, "tempdir", str(collision_parent))
+                collision.setattr(private_directory.secrets, "token_hex", lambda _size: next(names))
+                created = private_directory.create_private_dashboard_directory()
+            try:
+                assert Path(created.name).name == "metroliza-realtime-dashboard-new-owned"
+                assert sentinel.read_text(encoding="utf-8") == "retained collision control"
+            finally:
+                created.cleanup()
+            assert list(collision_parent.iterdir()) == [existing]
 
         if parent_policy == "permissive":
             parent = tmp_path / "owned-permissive-parent"

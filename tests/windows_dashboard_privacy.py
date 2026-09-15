@@ -38,6 +38,7 @@ _WIN_WORLD_SID = 1
 _WIN_AUTHENTICATED_USER_SID = 17
 _WIN_BUILTIN_ADMINISTRATORS_SID = 26
 _WIN_BUILTIN_USERS_SID = 27
+_WIN_BUILTIN_GUESTS_SID = 28
 _WIN_LOCAL_SYSTEM_SID = 22
 
 _ACL_REVISION = 2
@@ -324,7 +325,7 @@ def _original_dacl_security_information(advapi, descriptor) -> int:
 
 def _ace_grants_content(mask: int) -> bool:
     return bool(
-        mask & (_GENERIC_READ | _GENERIC_WRITE | _GENERIC_ALL | _FILE_GENERIC_READ | _FILE_GENERIC_WRITE | _DELETE | _WRITE_DAC | _WRITE_OWNER)
+        mask & (_GENERIC_READ | _GENERIC_WRITE | _GENERIC_ALL | _FILE_GENERIC_READ | _FILE_GENERIC_WRITE | _FILE_DELETE_CHILD | _DELETE | _WRITE_DAC | _WRITE_OWNER)
     )
 
 
@@ -653,37 +654,37 @@ def inspect_dashboard_privacy(directory: Path, html_path: Path) -> DashboardPriv
 
 
 @contextmanager
-def permissive_directory(path: Path):
-    """Temporarily give Everyone inheritable full access to an owned empty directory.
-
-    The caller creates its control child while this context is active.  The child
-    therefore receives a genuine inherited broad grant for the negative oracle.
-    """
+def _directory_with_control_allowance(path: Path, sid_type: int, access: int):
+    """Install an owned synthetic DACL, preserving creator usability and restoration."""
     kernel, advapi = _api()
     path = Path(path)
     if not path.is_dir() or any(path.iterdir()):
         raise AssertionError("privacy_oracle_fixture_directory_not_empty")
     owner, _group, _dacl, original_descriptor = _security_descriptor(advapi, path)
     original_security_information = None
+    token = None
     try:
         _assert_fixture_owned_by_current_token(kernel, advapi, owner)
         original_security_information = _original_dacl_security_information(advapi, original_descriptor)
-        everyone = _well_known_sid(advapi, _WIN_WORLD_SID)
-        sid_size = advapi.GetLengthSid(everyone)
-        if not sid_size:
-            raise _win_error("fixture_everyone_sid")
-        acl_size = ctypes.sizeof(wintypes.DWORD) * 2 + ctypes.sizeof(_ACE_HEADER) + ctypes.sizeof(wintypes.DWORD) + sid_size
+        token = _current_token(kernel, advapi)
+        user_buffer = _token_information(advapi, token, _TOKEN_USER)
+        user_sid = ctypes.cast(user_buffer, ctypes.POINTER(_TOKEN_USER_STRUCT)).contents.User.Sid
+        control_sid = _well_known_sid(advapi, sid_type)
+        entries = ((user_sid, _FILE_ALL_ACCESS), (control_sid, access))
+        sizes = [advapi.GetLengthSid(sid) for sid, _mask in entries]
+        if not all(sizes):
+            raise _win_error("fixture_control_sid")
+        acl_size = ctypes.sizeof(wintypes.DWORD) * 2 + sum(
+            ctypes.sizeof(_ACE_HEADER) + ctypes.sizeof(wintypes.DWORD) + size for size in sizes
+        )
         acl = ctypes.create_string_buffer(acl_size)
         if not advapi.InitializeAcl(acl, ctypes.sizeof(acl), _ACL_REVISION):
             raise _win_error("initialize_fixture_acl")
-        if not advapi.AddAccessAllowedAceEx(
-            acl,
-            _ACL_REVISION,
-            _OBJECT_INHERIT_ACE | _CONTAINER_INHERIT_ACE,
-            _GENERIC_ALL,
-            everyone,
-        ):
-            raise _win_error("add_fixture_everyone_ace")
+        for sid, mask in entries:
+            if not advapi.AddAccessAllowedAceEx(
+                acl, _ACL_REVISION, _OBJECT_INHERIT_ACE | _CONTAINER_INHERIT_ACE, mask, sid,
+            ):
+                raise _win_error("add_fixture_control_ace")
         result = advapi.SetNamedSecurityInfoW(
             str(path), _SE_FILE_OBJECT, _DACL_SECURITY_INFORMATION, None, None, acl, None
         )
@@ -698,6 +699,17 @@ def permissive_directory(path: Path):
                 raise _win_error("restore_fixture_descriptor")
         finally:
             kernel.LocalFree(original_descriptor)
+            _close(kernel, token)
+
+
+def permissive_directory(path: Path):
+    """Give an owned fixture a real inheritable Everyone full-access control ACE."""
+    return _directory_with_control_allowance(path, _WIN_WORLD_SID, _GENERIC_ALL)
+
+
+def untrusted_child_delete_directory(path: Path):
+    """Give an unrecognized existing principal only inheritable child-delete access."""
+    return _directory_with_control_allowance(path, _WIN_BUILTIN_GUESTS_SID, _FILE_DELETE_CHILD)
 
 
 @contextmanager

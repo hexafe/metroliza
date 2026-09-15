@@ -1147,6 +1147,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertTrue(window.isVisible())
             self.assertFalse(window._close_deferred_for_realtime)
             self.assertTrue(source_editor.isVisible())
+            self.assertIn("unsaved source changes", window.workspace_notice_label.text())
+            self.assertNotIn("Private dashboard storage", window.workspace_notice_label.text())
 
             with patch(
                 "metroliza.ui.industrial_source_profiles_dialog.QMessageBox.question",
@@ -1163,6 +1165,49 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertTrue(window.isVisible())
             self.assertFalse(window._close_deferred_for_realtime)
         window.close()
+
+    def test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice(self):
+        window = self._main_window()
+        window.show()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window.set_db_file(str(Path(temp_dir) / "realtime.db"))
+            with patch(
+                "metroliza.ui.realtime_industrial_monitoring_dialog.default_industrial_source_config_path",
+                return_value=Path(temp_dir) / "unused-sources.yaml",
+            ):
+                window.launch_realtime_industrial_monitoring_dialog()
+            realtime = window.realtime_monitoring_dialog
+            owned = realtime._dashboard_temp_dir
+            directory = Path(owned.name)
+            cleanup = owned.cleanup
+            attempts = []
+
+            def fail_once():
+                attempts.append(True)
+                if len(attempts) == 1:
+                    raise OSError("synthetic cleanup detail")
+                cleanup()
+
+            try:
+                with patch.object(owned, "cleanup", side_effect=fail_once):
+                    event = QCloseEvent()
+                    window.closeEvent(event)
+                    self.assertFalse(event.isAccepted())
+                    self.assertTrue(window.isVisible())
+                    self.assertFalse(window._close_deferred_for_realtime)
+                    self.assertIs(realtime._dashboard_temp_dir, owned)
+                    self.assertTrue(directory.is_dir())
+                    self.assertTrue(realtime.dashboard_cleanup_retry_required())
+                    self.assertEqual(
+                        window.workspace_notice_label.text(),
+                        "Private dashboard storage could not be removed. Close again to retry.",
+                    )
+                    self.assertNotIn("synthetic", window.workspace_notice_label.text())
+                    self.assertTrue(window.close())
+                self.assertEqual(len(attempts), 2)
+                self.assertFalse(directory.exists())
+            finally:
+                window.close()
 
     def test_realtime_shutdown_retry_intent_is_consumed_before_other_blocker(self):
         window = self._main_window()

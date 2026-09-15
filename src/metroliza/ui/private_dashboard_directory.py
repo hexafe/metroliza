@@ -24,15 +24,18 @@ _SE_DACL_PROTECTED = 0x1000
 _FILE_ALL_ACCESS = 0x001F01FF
 _FILE_SHARE_READ = 0x00000001
 _FILE_SHARE_WRITE = 0x00000002
-_OPEN_EXISTING = 3
 _FILE_READ_ATTRIBUTES = 0x00000080
 _READ_CONTROL = 0x00020000
 _DELETE = 0x00010000
-_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
-_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 _FILE_DISPOSITION_INFO = 4
+_FILE_CREATE = 2
+_FILE_CREATED = 2
+_FILE_DIRECTORY_FILE = 0x00000001
+_FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020
+_OBJ_CASE_INSENSITIVE = 0x00000040
+_SYNCHRONIZE = 0x00100000
 _TOKEN_QUERY = 0x0008
 _TOKEN_USER = 1
 _WIN_LOCAL_SYSTEM_SID = 22
@@ -42,7 +45,8 @@ _ACCESS_ALLOWED_ACE_TYPE = 0
 _OBJECT_INHERIT_ACE = 0x01
 _CONTAINER_INHERIT_ACE = 0x02
 _INHERIT_FLAGS = _OBJECT_INHERIT_ACE | _CONTAINER_INHERIT_ACE
-_ERROR_ALREADY_EXISTS = 183
+_STATUS_SUCCESS = 0
+_STATUS_OBJECT_NAME_COLLISION = ctypes.c_int32(0xC0000035).value
 
 
 class PrivateDashboardDirectoryError(RuntimeError):
@@ -106,6 +110,33 @@ class _FILE_DISPOSITION_INFO_STRUCT(ctypes.Structure):
     _fields_ = [("DeleteFile", ctypes.c_ubyte)]
 
 
+class _UNICODE_STRING(ctypes.Structure):
+    _fields_ = [
+        ("Length", wintypes.USHORT),
+        ("MaximumLength", wintypes.USHORT),
+        ("Buffer", wintypes.LPWSTR),
+    ]
+
+
+class _OBJECT_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [
+        ("Length", wintypes.ULONG),
+        ("RootDirectory", wintypes.HANDLE),
+        ("ObjectName", ctypes.POINTER(_UNICODE_STRING)),
+        ("Attributes", wintypes.ULONG),
+        ("SecurityDescriptor", ctypes.c_void_p),
+        ("SecurityQualityOfService", ctypes.c_void_p),
+    ]
+
+
+class _IO_STATUS_BLOCK_STATUS(ctypes.Union):
+    _fields_ = [("Status", ctypes.c_int32), ("Pointer", ctypes.c_void_p)]
+
+
+class _IO_STATUS_BLOCK(ctypes.Structure):
+    _fields_ = [("Status", _IO_STATUS_BLOCK_STATUS), ("Information", ctypes.c_size_t)]
+
+
 class _WindowsPrivateDashboardDirectory:
     """A pinned, verified Windows directory with tempfile-compatible surface."""
 
@@ -140,18 +171,13 @@ class _WindowsPrivateDashboardDirectory:
 def _windows_api():
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
     kernel.GetCurrentProcess.argtypes = []
     kernel.GetCurrentProcess.restype = wintypes.HANDLE
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel.CloseHandle.restype = wintypes.BOOL
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     kernel.LocalFree.restype = ctypes.c_void_p
-    kernel.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(_SECURITY_ATTRIBUTES)]
-    kernel.CreateDirectoryW.restype = wintypes.BOOL
-    kernel.CreateFileW.argtypes = [
-        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
-    ]
-    kernel.CreateFileW.restype = wintypes.HANDLE
     kernel.GetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION)]
     kernel.GetFileInformationByHandle.restype = wintypes.BOOL
     kernel.SetFileInformationByHandle.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
@@ -187,7 +213,19 @@ def _windows_api():
     advapi.GetAce.restype = wintypes.BOOL
     advapi.GetSecurityDescriptorControl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)]
     advapi.GetSecurityDescriptorControl.restype = wintypes.BOOL
-    return kernel, advapi
+    ntdll.RtlDosPathNameToNtPathName_U_WithStatus.argtypes = [
+        wintypes.LPCWSTR, ctypes.POINTER(_UNICODE_STRING), ctypes.POINTER(wintypes.LPWSTR), ctypes.c_void_p,
+    ]
+    ntdll.RtlDosPathNameToNtPathName_U_WithStatus.restype = ctypes.c_int32
+    ntdll.RtlFreeUnicodeString.argtypes = [ctypes.POINTER(_UNICODE_STRING)]
+    ntdll.RtlFreeUnicodeString.restype = None
+    ntdll.NtCreateFile.argtypes = [
+        ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, ctypes.POINTER(_OBJECT_ATTRIBUTES),
+        ctypes.POINTER(_IO_STATUS_BLOCK), ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+    ]
+    ntdll.NtCreateFile.restype = ctypes.c_int32
+    return kernel, advapi, ntdll
 
 
 def _current_user_sid(kernel, advapi):
@@ -339,37 +377,72 @@ def _finalize_pinned_directory(name: str, handle, kernel) -> None:
         kernel.CloseHandle(handle)
 
 
-def _create_unique_private_directory(kernel, parent: Path, attributes) -> Path:
+def _nt_success(status: int) -> bool:
+    return status >= 0
+
+
+def _valid_handle(handle) -> bool:
+    value = handle.value if hasattr(handle, "value") else handle
+    return bool(value) and value != _INVALID_HANDLE_VALUE
+
+
+def _nt_create_private_directory(ntdll, candidate: Path, attributes) -> tuple[int, int | None, int]:
+    """Atomically create a directory and return its pin, without a path reopen."""
+    native_path = _UNICODE_STRING()
+    status = ntdll.RtlDosPathNameToNtPathName_U_WithStatus(
+        str(candidate), ctypes.byref(native_path), None, None,
+    )
+    if not _nt_success(status):
+        return status, None, 0
+    try:
+        handle = wintypes.HANDLE()
+        operation = _OBJECT_ATTRIBUTES(
+            ctypes.sizeof(_OBJECT_ATTRIBUTES), None, ctypes.pointer(native_path), _OBJ_CASE_INSENSITIVE,
+            attributes.lpSecurityDescriptor, None,
+        )
+        result = _IO_STATUS_BLOCK()
+        status = ntdll.NtCreateFile(
+            ctypes.byref(handle), _DELETE | _READ_CONTROL | _FILE_READ_ATTRIBUTES | _SYNCHRONIZE,
+            ctypes.byref(operation), ctypes.byref(result), None, 0,
+            _FILE_SHARE_READ | _FILE_SHARE_WRITE, _FILE_CREATE,
+            _FILE_DIRECTORY_FILE | _FILE_SYNCHRONOUS_IO_NONALERT,
+            None, 0,
+        )
+        return status, handle.value, result.Information
+    finally:
+        ntdll.RtlFreeUnicodeString(ctypes.byref(native_path))
+
+
+def _create_unique_private_directory(kernel, ntdll, parent: Path, attributes) -> tuple[Path, int]:
     for _attempt in range(32):
         candidate = parent / f"{_PREFIX}{secrets.token_hex(16)}"
-        if kernel.CreateDirectoryW(str(candidate), ctypes.byref(attributes)):
-            return candidate
-        if ctypes.get_last_error() != _ERROR_ALREADY_EXISTS:
-            break
+        status, handle, information = _nt_create_private_directory(ntdll, candidate, attributes)
+        if status == _STATUS_OBJECT_NAME_COLLISION:
+            if _valid_handle(handle):
+                kernel.CloseHandle(handle)
+            continue
+        if status == _STATUS_SUCCESS and information == _FILE_CREATED and _valid_handle(handle):
+            return candidate, handle
+        if _valid_handle(handle):
+            kernel.CloseHandle(handle)
+        # A pending/non-final NTSTATUS or any non-FILE_CREATED outcome is never accepted.
+        raise PrivateDashboardDirectoryError()
     raise PrivateDashboardDirectoryError()
 
 
 def _create_windows_private_directory_impl():
-    kernel, advapi = _windows_api()
+    kernel, advapi, ntdll = _windows_api()
     user_buffer, user_sid = _current_user_sid(kernel, advapi)
     attributes, buffers = _security_attributes(advapi, user_sid)
-    _acl, _descriptor, sid_buffers = buffers  # Keep all native buffers alive through CreateDirectoryW.
+    _acl, _descriptor, sid_buffers = buffers  # Keep native DACL/SID buffers alive through NtCreateFile.
     system_sid = ctypes.cast(sid_buffers[0], ctypes.c_void_p)
     admin_sid = ctypes.cast(sid_buffers[1], ctypes.c_void_p)
     parent = Path(tempfile.gettempdir()).resolve()
     handle = None
     owned_identity_verified = False
     try:
-        created_path = _create_unique_private_directory(kernel, parent, attributes)
-        handle = kernel.CreateFileW(
-            str(created_path), _READ_CONTROL | _FILE_READ_ATTRIBUTES | _DELETE,
-            _FILE_SHARE_READ | _FILE_SHARE_WRITE, None, _OPEN_EXISTING,
-            _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT, None,
-        )
-        if not handle or handle == _INVALID_HANDLE_VALUE:
-            handle = None
-            raise PrivateDashboardDirectoryError()
         allowed_sids = (user_sid, system_sid, admin_sid)
+        created_path, handle = _create_unique_private_directory(kernel, ntdll, parent, attributes)
         _validate_pinned_identity(kernel, advapi, handle, allowed_sids)
         owned_identity_verified = True
         _validate_pinned_directory(kernel, advapi, handle, allowed_sids)

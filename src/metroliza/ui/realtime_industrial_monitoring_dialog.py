@@ -118,6 +118,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._shutdown_completion_emitted = False
         self._dashboard_temp_dir = None
         self._dashboard_session_error = ""
+        self._dashboard_cleanup_retry = False
         try:
             self._dashboard_temp_dir = create_private_dashboard_directory()
         except PrivateDashboardDirectoryError:
@@ -1386,6 +1387,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def request_shutdown(self) -> bool:
         """Request worker cancellation and report whether database use has stopped."""
 
+        self._dashboard_cleanup_retry = False
         if not self._close_source_profiles_for_context_change("closing realtime monitoring"):
             return False
         self._closing = True
@@ -1408,6 +1410,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         """Return whether shutdown was accepted and is waiting only on owned workers."""
 
         return bool(self._closing and self._shutdown_waiting)
+
+    def dashboard_cleanup_retry_required(self) -> bool:
+        """Distinguish retained private storage from an unsaved source-editor veto."""
+        return self._dashboard_cleanup_retry
 
     def is_monitoring_active(self) -> bool:
         """Return whether queued or active work prevents a safe database rebind."""
@@ -1440,11 +1446,13 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             QTimer.singleShot(0, self.close)
 
     def _cleanup_dashboard_session(self) -> bool:
+        self._dashboard_cleanup_retry = False
         temp_dir = self._dashboard_temp_dir
         if temp_dir is not None:
             try:
                 temp_dir.cleanup()
             except (OSError, PrivateDashboardDirectoryError):
+                self._dashboard_cleanup_retry = True
                 self._shutdown_waiting = False
                 self._set_dashboard_status(
                     "Could not remove private dashboard storage. Close again to retry.",

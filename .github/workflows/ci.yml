@@ -990,7 +990,11 @@ jobs:
           QT_QPA_PLATFORM: windows
           METROLIZA_EXPECT_QT_PLATFORM: windows
           METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9
-        run: python -m pytest -vv -s --tb=short --show-capture=no tests/test_realtime_monitoring_dialog.py
+        run: >-
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_realtime_monitoring_dialog.py
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:

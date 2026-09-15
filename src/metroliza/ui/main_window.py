@@ -732,10 +732,16 @@ class MainWindow(QMainWindow):
                     callable(deferred_check) and deferred_check()
                 )
                 if not self._close_deferred_for_realtime:
-                    self.workspace_notice_label.setText(
-                        "Metroliza close was cancelled because Realtime Monitor kept "
-                        "unsaved source changes. Resolve them and try again."
-                    )
+                    cleanup_check = getattr(realtime_dialog, "dashboard_cleanup_retry_required", None)
+                    if callable(cleanup_check) and cleanup_check():
+                        self.workspace_notice_label.setText(
+                            "Private dashboard storage could not be removed. Close again to retry."
+                        )
+                    else:
+                        self.workspace_notice_label.setText(
+                            "Metroliza close was cancelled because Realtime Monitor kept "
+                            "unsaved source changes. Resolve them and try again."
+                        )
                     set_status_variant(self.workspace_notice_label, "warning")
                     self.workspace_notice_label.setVisible(True)
                 event.ignore()
