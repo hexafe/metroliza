@@ -49,6 +49,31 @@ Coverage threshold enforcement is blocking for the full test lane:
 
 The coverage threshold is blocking; do not lower it without recording the reason in the PR description or release evidence.
 
+The complete realtime selection also checks Windows owner/DACL/effective access on the
+owned temporary dashboard directory and its generated HTML. The native lane retains the
+observed Python 3.11.9 and asserts that version. POSIX retains its original `0700` oracle.
+A deliberately permissive inherited descriptor must fail the native oracle. The receipt
+labels this as `restricted_current_user`: actual access checks and file operations with
+Administrators disabled and no enabled privilege except traversal. It does not claim an
+actual separate ordinary-user account, a linked token, or protection from a privileged
+administrator. Only safe classifications/counts are printed; short tracebacks suppress fixture identity dumps.
+Real token access checks and impersonated file operations are required; mock access checks,
+DACL-presence-only checks, and an omitted whole-file test are not acceptance.
+The product atomically creates the owned Windows directory and receives its handle using
+`NtCreateFile` with a protected allowlist, validates the native handle before output, and retains it through worker
+completion to refuse directory replacement. Native failure controls cover real creation,
+collision preservation, denied/nonfinal creation, untrusted child-delete ACEs,
+secondary identity-query/security failures and handle-directed cleanup of the atomically
+created object; UI tests retain ownership
+and refuse false shutdown completion when cleanup fails. An unavailable private session
+blocks default output with a fixed explanation while an explicitly chosen output file
+keeps its existing operator-directed behavior. Real MainWindow close tests distinguish the
+private-storage retry reason from the preserved unsaved-source cancellation reason.
+The deferred parent-close case uses a real held writer and real SQLite-to-HTML output:
+after cleanup fails, an explicit failure notification clears pending automatic-close
+intent and leaves the parent/storage available for manual retry. Stale-owner signals and
+an earlier queued child-close retry cannot close the parent after that failure.
+
 ## Optional/manual checks (non-blocking)
 
 These checks are explicitly non-blocking for normal PR CI:
