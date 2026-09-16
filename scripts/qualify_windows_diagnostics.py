@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, TypeVar
 
 from metroliza.app.build_provenance import BuildProvenance
+from metroliza.app.version import VERSION_LABEL
 from metroliza.shared.diagnostic_events import (
     RuntimeProvenanceEvent,
     StartupDiagnosticEvent,
@@ -49,6 +50,9 @@ FIXTURE_SHA256 = "ca500bd52afc2551560e7c0009851906a0d3bec6b35282e20703c1e298da60
 OUTPUT_NAME = "windows-diagnostic-qualification.json"
 PACKAGE_MANIFEST_NAME = "package-manifest.json"
 PACKAGE_ARCHIVE_NAME = "qualified-windows-development-package.zip"
+DIRECT_UI_CHECKPOINT = (
+    '{"check_id":"direct_ui_smoke","schema_version":1,"status":"passed"}'
+)
 QUALIFICATION_RECEIPT_NAMES = {
     "ready": "qualification-ready.json",
     "complete": "qualification-complete.json",
@@ -77,11 +81,21 @@ TOKEN_INTEGRITY_LEVEL = 25
 MEDIUM_INTEGRITY_RID = 0x2000
 MAX_TOKEN_INFORMATION_BYTES = 256
 WINDOWS_ERROR_INVALID_PARAMETER = 87
+GWL_STYLE = -16
+GWL_EXSTYLE = -20
+GW_OWNER = 4
+WM_CLOSE = 0x0010
+WS_CAPTION = 0x00C00000
+WS_SYSMENU = 0x00080000
+WS_CHILD = 0x40000000
+WS_EX_TOOLWINDOW = 0x00000080
+NORMAL_WINDOW_REQUIRED_STYLE = WS_CAPTION | WS_SYSMENU
 NOTICE_FILES = ("THIRD_PARTY_NOTICES.md", "third_party_inventory_260711.json")
 CHECK_IDS = (
     "package_identity",
     "no_console",
     "restricted_token",
+    "direct_ui_smoke",
     "direct_workflow",
     "supervised_workflow",
     "repeat_starts",
@@ -120,6 +134,7 @@ DRIVER_FAILURE_STAGES = frozenset(
         "relocation",
         "runner",
         "startups",
+        "direct_ui_smoke",
         "direct_normal_1",
         "direct_normal_2",
         "supervised_normal_1",
@@ -184,6 +199,12 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "native_open_process_unavailable",
         "native_image_query_unavailable",
         "native_process_times_unavailable",
+        "normal_window_enumeration_failed",
+        "normal_window_ambiguous",
+        "normal_window_unavailable",
+        "normal_window_invalid",
+        "normal_window_close_failed",
+        "process_exited_before_window",
         "unexpected",
     }
 )
@@ -701,12 +722,30 @@ class _WindowsProcess:
     def metrics(self) -> ProcessMetrics:
         return self._api.job_metrics(self._job)
 
-    def observe(self) -> None:
+    def _current_job_state(
+        self,
+    ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
         observations, active, assigned = self._api.job_observations(self._job)
         self._assigned_processes = max(self._assigned_processes, assigned)
         self._max_active_processes = max(self._max_active_processes, active)
         self._observations.update(
             {observation.process_id: observation for observation in observations}
+        )
+        return observations, active, assigned
+
+    def observe(self) -> None:
+        self._current_job_state()
+
+    def normal_window(self, application: Path, expected_title: str):
+        return self._api.normal_window(
+            self._current_job_state()[0], application, expected_title
+        )
+
+    def close_normal_window(
+        self, window, application: Path, expected_title: str
+    ) -> None:
+        self._api.close_normal_window(
+            self._current_job_state()[0], application, expected_title, window
         )
 
     def topology(self, artifact_dir: Path, *, all_exited: bool) -> ProcessTopology:
@@ -720,12 +759,7 @@ class _WindowsProcess:
         )
 
     def active_processes(self) -> int:
-        observations, active, assigned = self._api.job_observations(self._job)
-        self._assigned_processes = max(self._assigned_processes, assigned)
-        self._observations.update(
-            {observation.process_id: observation for observation in observations}
-        )
-        self._max_active_processes = max(self._max_active_processes, active)
+        _, active, _ = self._current_job_state()
         return active
 
     def close(self, *, terminate: bool = False) -> None:
@@ -751,6 +785,7 @@ class _WindowsApi:
         self.wintypes = wintypes
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        self.user = ctypes.WinDLL("user32", use_last_error=True)
         self._declare_structures()
         self._declare_functions()
 
@@ -860,6 +895,7 @@ class _WindowsApi:
         self.FILETIME = FILETIME
         self.PROCESS_IDS = JOBOBJECT_BASIC_PROCESS_ID_LIST
         self.BASIC_ACCOUNTING = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+        self.WNDENUMPROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
     def _declare_functions(self) -> None:
         wt = self.wintypes
@@ -912,6 +948,26 @@ class _WindowsApi:
             ctypes.POINTER(self.FILETIME),
         ]
         self.kernel.GetProcessTimes.restype = wt.BOOL
+
+        self.user.EnumWindows.argtypes = [self.WNDENUMPROC, wt.LPARAM]
+        self.user.EnumWindows.restype = wt.BOOL
+        self.user.IsWindow.argtypes = [wt.HWND]
+        self.user.IsWindow.restype = wt.BOOL
+        self.user.IsWindowVisible.argtypes = [wt.HWND]
+        self.user.IsWindowVisible.restype = wt.BOOL
+        self.user.GetWindow.argtypes = [wt.HWND, wt.UINT]
+        self.user.GetWindow.restype = wt.HWND
+        self.user.GetWindowThreadProcessId.argtypes = [
+            wt.HWND,
+            ctypes.POINTER(wt.DWORD),
+        ]
+        self.user.GetWindowThreadProcessId.restype = wt.DWORD
+        self.user.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+        self.user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        self.user.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+        self.user.GetWindowTextW.restype = ctypes.c_int
+        self.user.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+        self.user.PostMessageW.restype = wt.BOOL
 
         self.advapi.OpenProcessToken.argtypes = [
             wt.HANDLE,
@@ -1456,6 +1512,125 @@ class _WindowsApi:
         )
         return _ProcessObservation(process_id, creation_time, image.value)
 
+    def _window_matches(
+        self, window, process_id: int, expected_title: str
+    ) -> bool:
+        if not self.user.IsWindow(window) or not self.user.IsWindowVisible(window):
+            return False
+        observed_process_id = self.wintypes.DWORD()
+        if not self.user.GetWindowThreadProcessId(
+            window, ctypes.byref(observed_process_id)
+        ) or int(observed_process_id.value) != process_id:
+            return False
+        if self.user.GetWindow(window, GW_OWNER):
+            return False
+        style = int(self.user.GetWindowLongPtrW(window, GWL_STYLE))
+        extended_style = int(self.user.GetWindowLongPtrW(window, GWL_EXSTYLE))
+        if (
+            style & NORMAL_WINDOW_REQUIRED_STYLE != NORMAL_WINDOW_REQUIRED_STYLE
+            or style & WS_CHILD
+            or extended_style & WS_EX_TOOLWINDOW
+        ):
+            return False
+        title = ctypes.create_unicode_buffer(len(expected_title) + 2)
+        copied = self.user.GetWindowTextW(window, title, len(title))
+        return copied == len(expected_title) and title.value == expected_title
+
+    def _enumerate_normal_windows(
+        self, process_id: int, expected_title: str
+    ) -> tuple[int, ...]:
+        matches: list[int] = []
+        callback_failure: list[BaseException] = []
+
+        def visit(window, _parameter):
+            try:
+                if self._window_matches(window, process_id, expected_title):
+                    value = window if type(window) is int else window.value
+                    if type(value) is not int or value <= 0:
+                        raise ValueError("invalid_window")
+                    matches.append(value)
+                return True
+            except BaseException as error:
+                callback_failure.append(error)
+                return False
+
+        callback = self.WNDENUMPROC(visit)
+        try:
+            completed = self.user.EnumWindows(callback, 0)
+        except BaseException as error:
+            if not isinstance(error, Exception):
+                raise
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="normal_window_enumeration_failed",
+            ) from None
+        if callback_failure:
+            error = callback_failure[0]
+            if not isinstance(error, Exception):
+                raise error
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="normal_window_enumeration_failed",
+            ) from None
+        if not completed:
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="normal_window_enumeration_failed",
+            )
+        return tuple(matches)
+
+    def normal_window(
+        self,
+        observations: tuple[_ProcessObservation, ...],
+        application: Path,
+        expected_title: str,
+    ):
+        expected_image = os.path.normcase(os.path.abspath(application))
+        process_ids = {
+            observation.process_id
+            for observation in observations
+            if os.path.normcase(os.path.abspath(observation.image)) == expected_image
+        }
+        if not process_ids:
+            return None
+        if len(process_ids) != 1:
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_ambiguous"
+            )
+        candidates = self._enumerate_normal_windows(
+            next(iter(process_ids)), expected_title
+        )
+        if len(candidates) > 1:
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_ambiguous"
+            )
+        return candidates[0] if candidates else None
+
+    def close_normal_window(
+        self,
+        observations: tuple[_ProcessObservation, ...],
+        application: Path,
+        expected_title: str,
+        window,
+    ) -> None:
+        current = self.normal_window(observations, application, expected_title)
+        if current != window:
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_invalid"
+            )
+        try:
+            posted = self.user.PostMessageW(window, WM_CLOSE, 0, 0)
+        except BaseException as error:
+            if not isinstance(error, Exception):
+                raise
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_close_failed"
+            ) from None
+        if not posted:
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_close_failed"
+            )
+
     def _job_process_ids(self, job) -> tuple[int, ...]:
         process_ids = self.PROCESS_IDS()
         returned = self.wintypes.DWORD()
@@ -1878,8 +2053,8 @@ def _finish_process_without_receipt(
 ) -> ScenarioResult:
     exit_code: int | None = None
     while time.monotonic() < deadline:
-        process.observe()
-        exit_code = process.poll()
+        _scenario_step("qualification_observation_failed", process.observe)
+        exit_code = _scenario_step("qualification_poll_failed", process.poll)
         if exit_code is not None:
             break
         time.sleep(0.02)
@@ -1891,15 +2066,21 @@ def _finish_process_without_receipt(
             qualification_reason="process_exit_mismatch",
             qualification_exit_code=exit_code,
         )
-    if not _wait_for_job_exit(process, deadline):
+    if not _scenario_step(
+        "qualification_job_drain_failed",
+        lambda: _wait_for_job_exit(process, deadline),
+    ):
         raise QualificationFailure("scenario_timeout")
     return ScenarioResult(
         exit_code,
         round((time.perf_counter() - process.started) * 1000),
         0,
         None,
-        process.metrics(),
-        process.topology(artifact_dir, all_exited=True),
+        _scenario_step("qualification_metrics_failed", process.metrics),
+        _scenario_step(
+            "qualification_topology_failed",
+            lambda: process.topology(artifact_dir, all_exited=True),
+        ),
     )
 
 
@@ -3090,6 +3271,87 @@ class _QualificationRunner:
         if {record.report_id for record in _reports(self.store)} != before:
             raise QualificationFailure("incident_invalid")
 
+    def run_direct_ui_smoke(self) -> None:
+        before = {record.report_id for record in _reports(self.store)}
+        root = self._root("direct-ui-smoke")
+        environment = _scenario_step(
+            "qualification_environment_failed",
+            lambda: _sanitized_environment(
+                self.artifact, root, self.state_base, "normal"
+            ),
+        )
+        for key in (
+            "METROLIZA_STARTUP_SMOKE",
+            "METROLIZA_STARTUP_UI_SMOKE",
+            "METROLIZA_DIAGNOSTIC_QUALIFICATION",
+            "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT",
+            "QT_QPA_PLATFORM",
+        ):
+            environment.pop(key, None)
+        owned: list[_WindowsProcess] = []
+        terminate = True
+        try:
+            process = _scenario_step(
+                "qualification_launch_failed",
+                lambda: self.api.launch(
+                    self.application, environment, root, owned=owned
+                ),
+            )
+            scenario_deadline = min(
+                self.deadline, time.monotonic() + MAX_SCENARIO_SECONDS
+            )
+            expected_title = f"Metroliza [{VERSION_LABEL}]"
+            window = None
+            while time.monotonic() < scenario_deadline:
+                window = _scenario_step(
+                    "qualification_observation_failed",
+                    lambda: process.normal_window(
+                        self.application, expected_title
+                    ),
+                )
+                if window is not None:
+                    break
+                exit_code = _scenario_step(
+                    "qualification_poll_failed", process.poll
+                )
+                if exit_code is not None:
+                    raise QualificationFailure(
+                        "scenario_failed",
+                        qualification_reason="process_exited_before_window",
+                        qualification_exit_code=exit_code,
+                    )
+                time.sleep(0.02)
+            if window is None:
+                raise QualificationFailure(
+                    "scenario_failed",
+                    qualification_reason="normal_window_unavailable",
+                )
+            _scenario_step(
+                "normal_window_close_failed",
+                lambda: process.close_normal_window(
+                    window, self.application, expected_title
+                ),
+            )
+            result = _finish_process_without_receipt(
+                process, self.artifact, scenario_deadline, 0
+            )
+            _scenario_step(
+                "qualification_topology_failed",
+                lambda: _validate_topology_record(
+                    _topology_record(result.topology), supervised=False
+                ),
+            )
+            self.results["direct_ui_smoke"] = result
+            terminate = False
+        finally:
+            _close_owned_processes(owned, terminate=terminate)
+        if (
+            {record.report_id for record in _reports(self.store)} != before
+            or _has_qualification_receipt(root)
+            or (root / "startup.json").exists()
+        ):
+            raise QualificationFailure("incident_invalid")
+
     def run_concurrent_instances(self) -> None:
         before = {record.report_id for record in _reports(self.store)}
         roots = (self._root("concurrent-one"), self._root("concurrent-two"))
@@ -3458,6 +3720,7 @@ class _QualificationRunner:
         output_metadata = output_dir.lstat()
         output_identity = (output_metadata.st_dev, output_metadata.st_ino)
         phases = (
+            ("direct_ui_smoke", self.run_direct_ui_smoke),
             ("startups", self.run_startups),
             ("concurrent", self.run_concurrent_instances),
             ("ui_smoke", self.run_ui_smoke),
@@ -3472,6 +3735,8 @@ class _QualificationRunner:
         )
         for stage, action in phases:
             _run_driver_phase(stage, action)
+            if stage == "direct_ui_smoke":
+                print(DIRECT_UI_CHECKPOINT, flush=True)
         artifacts_created = False
         try:
             artifacts = _run_driver_phase(

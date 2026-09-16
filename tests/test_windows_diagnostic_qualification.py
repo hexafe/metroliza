@@ -33,6 +33,69 @@ class _TokenWinTypes:
     DWORD = ctypes.c_uint32
 
 
+class _WindowUser:
+    def __init__(self, windows):
+        self.windows = windows
+        self.posted = []
+        self.failure = None
+        self.post_succeeds = True
+
+    def EnumWindows(self, callback, parameter):
+        for window in tuple(self.windows):
+            if not callback(window, parameter):
+                return False
+        return True
+
+    def IsWindow(self, window):
+        if self.failure is not None:
+            raise self.failure
+        return window in self.windows
+
+    def IsWindowVisible(self, window):
+        return self.windows[window]["visible"]
+
+    def GetWindowThreadProcessId(self, window, process_id):
+        ctypes.cast(process_id, ctypes.POINTER(ctypes.c_uint32)).contents.value = (
+            self.windows[window]["process_id"]
+        )
+        return 1
+
+    def GetWindow(self, window, _kind):
+        return self.windows[window]["owner"]
+
+    def GetWindowLongPtrW(self, window, index):
+        field = "style" if index == qualification.GWL_STYLE else "extended_style"
+        return self.windows[window][field]
+
+    def GetWindowTextW(self, window, title, capacity):
+        value = self.windows[window]["title"][: capacity - 1]
+        title.value = value
+        return len(value)
+
+    def PostMessageW(self, window, message, word, long_value):
+        self.posted.append((window, message, word, long_value))
+        return self.post_succeeds
+
+
+def _window_api(windows):
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.WNDENUMPROC = lambda callback: callback
+    api.user = _WindowUser(windows)
+    return api
+
+
+def _normal_window(process_id, title):
+    return {
+        "process_id": process_id,
+        "title": title,
+        "visible": True,
+        "owner": 0,
+        "style": qualification.NORMAL_WINDOW_REQUIRED_STYLE,
+        "extended_style": 0,
+    }
+
+
 class _SidAndAttributes(ctypes.Structure):
     _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", ctypes.c_uint32)]
 
@@ -1855,6 +1918,112 @@ def test_native_job_query_names_only_failing_api(
     assert "PRIVATE" not in str(caught.value)
 
 
+def test_normal_window_requires_exact_owned_application_and_revalidates_close(
+    tmp_path,
+) -> None:
+    application = tmp_path / "metroliza_application.exe"
+    title = "Metroliza [fixed]"
+    api = _window_api(
+        {
+            100: _normal_window(41, title),
+            200: _normal_window(99, title),
+        }
+    )
+    observations = (
+        qualification._ProcessObservation(41, 1, str(application)),
+        qualification._ProcessObservation(99, 2, str(tmp_path / "foreign.exe")),
+    )
+
+    window = api.normal_window(observations, application, title)
+    assert window == 100
+    api.close_normal_window(observations, application, title, window)
+    assert api.user.posted == [(100, qualification.WM_CLOSE, 0, 0)]
+
+
+@pytest.mark.parametrize(
+    ("change", "value"),
+    [
+        ("visible", False),
+        ("owner", 500),
+        ("style", qualification.WS_SYSMENU),
+        ("style", qualification.NORMAL_WINDOW_REQUIRED_STYLE | qualification.WS_CHILD),
+        ("extended_style", qualification.WS_EX_TOOLWINDOW),
+        ("title", "PRIVATE_DIALOG_TITLE"),
+        ("title", "Metroliza [fixed] suffix"),
+        ("process_id", 99),
+    ],
+)
+def test_normal_window_rejects_non_main_or_foreign_window(
+    tmp_path, change, value
+) -> None:
+    application = tmp_path / "metroliza_application.exe"
+    title = "Metroliza [fixed]"
+    window = _normal_window(41, title)
+    window[change] = value
+    api = _window_api({100: window})
+    observations = (
+        qualification._ProcessObservation(41, 1, str(application)),
+    )
+
+    assert api.normal_window(observations, application, title) is None
+    assert api.user.posted == []
+
+
+def test_normal_window_rejects_ambiguity_reuse_and_post_failure(tmp_path) -> None:
+    application = tmp_path / "metroliza_application.exe"
+    title = "Metroliza [fixed]"
+    observations = (
+        qualification._ProcessObservation(41, 1, str(application)),
+    )
+    api = _window_api(
+        {100: _normal_window(41, title), 101: _normal_window(41, title)}
+    )
+    with pytest.raises(qualification.QualificationFailure) as ambiguous:
+        api.normal_window(observations, application, title)
+    assert ambiguous.value.qualification_reason == "normal_window_ambiguous"
+
+    api.user.windows.pop(101)
+    matched = api.normal_window(observations, application, title)
+    api.user.windows[100]["process_id"] = 99
+    with pytest.raises(qualification.QualificationFailure) as reused:
+        api.close_normal_window(observations, application, title, matched)
+    assert reused.value.qualification_reason == "normal_window_invalid"
+    assert api.user.posted == []
+
+    api.user.windows[100]["process_id"] = 41
+    api.user.post_succeeds = False
+    with pytest.raises(qualification.QualificationFailure) as post_failed:
+        api.close_normal_window(observations, application, title, matched)
+    assert post_failed.value.qualification_reason == "normal_window_close_failed"
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt])
+def test_window_callback_contains_exception_and_preserves_interrupt(
+    tmp_path, failure_type
+) -> None:
+    application = tmp_path / "metroliza_application.exe"
+    title = "Metroliza [fixed]"
+    api = _window_api({100: _normal_window(41, title)})
+    failure = failure_type("PRIVATE_WINDOW_CALLBACK")
+    api.user.failure = failure
+    observations = (
+        qualification._ProcessObservation(41, 1, str(application)),
+    )
+
+    expected = (
+        qualification.QualificationFailure
+        if failure_type is RuntimeError
+        else KeyboardInterrupt
+    )
+    with pytest.raises(expected) as caught:
+        api.normal_window(observations, application, title)
+    if failure_type is RuntimeError:
+        assert caught.value.qualification_reason == "normal_window_enumeration_failed"
+        assert "PRIVATE" not in str(caught.value)
+    else:
+        assert caught.value is failure
+
+
 def test_job_accounting_exposes_unobserved_short_lived_processes() -> None:
     class _ProcessIds(ctypes.Structure):
         _fields_ = [
@@ -2210,6 +2379,12 @@ def test_output_receipt_is_closed_bounded_and_atomic(tmp_path) -> None:
         *qualification.CHECK_IDS,
         qualification.OPERATIONAL_CHECK_ID,
     ]
+    assert qualification.CHECK_IDS[:4] == (
+        "package_identity",
+        "no_console",
+        "restricted_token",
+        "direct_ui_smoke",
+    )
     assert set(payload["metrics"]) == {
         "direct_startup_ready_ms",
         "supervised_startup_ready_ms",
@@ -2248,7 +2423,7 @@ def test_output_receipt_is_closed_bounded_and_atomic(tmp_path) -> None:
 
 
 def test_late_payload_failure_removes_only_created_artifacts_for_failure_receipt(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ) -> None:
     source = tmp_path / "source"
     tested = tmp_path / "tested"
@@ -2267,7 +2442,9 @@ def test_late_payload_failure_removes_only_created_artifacts_for_failure_receipt
     runner.hard_assembly_to_verification_ms = 0
     runner.handled_assembly_to_verification_ms = 0
     runner.flood_loss = {}
+    phase_calls = []
     for name in (
+        "run_direct_ui_smoke",
         "run_startups",
         "run_concurrent_instances",
         "run_ui_smoke",
@@ -2280,7 +2457,7 @@ def test_late_payload_failure_removes_only_created_artifacts_for_failure_receipt
         "run_missing_components",
         "run_missing_qt_resource",
     ):
-        setattr(runner, name, lambda: None)
+        setattr(runner, name, lambda name=name: phase_calls.append(name))
 
     def fail_payload(*_arguments, **_keywords):
         raise qualification.QualificationFailure("scenario_failed")
@@ -2290,6 +2467,8 @@ def test_late_payload_failure_removes_only_created_artifacts_for_failure_receipt
         runner.run({}, source, output)
 
     assert caught.value.qualification_stage == "receipt"
+    assert phase_calls[:2] == ["run_direct_ui_smoke", "run_startups"]
+    assert capsys.readouterr().out == qualification.DIRECT_UI_CHECKPOINT + "\n"
     assert not tuple(output.iterdir())
     failure_payload = {
         "schema_version": 1,
@@ -2310,6 +2489,46 @@ def test_late_payload_failure_removes_only_created_artifacts_for_failure_receipt
     destination = qualification._write_receipt(output, failure_payload)
     assert {path.name for path in output.iterdir()} == {qualification.OUTPUT_NAME}
     assert json.loads(destination.read_text(encoding="ascii"))["status"] == "failed"
+
+
+def test_direct_ui_failure_emits_no_success_checkpoint(
+    tmp_path, capsys
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    artifact = tmp_path / "artifact"
+    for path in (source, output, artifact):
+        path.mkdir()
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = artifact
+
+    def fail_direct_ui():
+        raise qualification.QualificationFailure(
+            "scenario_failed", qualification_reason="normal_window_unavailable"
+        )
+
+    runner.run_direct_ui_smoke = fail_direct_ui
+    for name in (
+        "run_startups",
+        "run_concurrent_instances",
+        "run_ui_smoke",
+        "run_hard_exit",
+        "run_handled_failure",
+        "run_preview",
+        "run_idle",
+        "run_flood",
+        "run_unavailable_store",
+        "run_missing_components",
+        "run_missing_qt_resource",
+    ):
+        setattr(runner, name, lambda: None)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        runner.run({}, source, output)
+
+    assert caught.value.qualification_stage == "direct_ui_smoke"
+    assert caught.value.qualification_reason == "normal_window_unavailable"
+    assert capsys.readouterr().out == ""
 
 
 def test_main_replaces_late_created_artifacts_with_closed_failure_receipt(
@@ -2394,6 +2613,7 @@ def test_main_preserves_primary_and_independent_failed_cleanup(
     [
         ("qualification_observation_failed", None),
         ("process_exit_mismatch", 7),
+        ("normal_window_unavailable", None),
     ],
 )
 def test_main_serializes_closed_scenario_reason_without_private_detail(
@@ -2749,6 +2969,64 @@ class _FakeApi:
         return self.process
 
 
+class _DirectWindowProcess:
+    def __init__(self, application, *, window=700, early_exit=None):
+        self.application = application
+        self.window = window
+        self.early_exit = early_exit
+        self.started = time.perf_counter()
+        self.window_closed = False
+        self.closed_with = None
+        self.requested_title = None
+
+    def normal_window(self, application, expected_title):
+        assert application == self.application
+        self.requested_title = expected_title
+        return self.window
+
+    def close_normal_window(self, window, application, expected_title):
+        assert window == self.window
+        assert application == self.application
+        assert expected_title == self.requested_title
+        self.window_closed = True
+
+    def observe(self):
+        return None
+
+    def poll(self):
+        if self.early_exit is not None:
+            return self.early_exit
+        return 0 if self.window_closed else None
+
+    def active_processes(self):
+        return 0 if self.window_closed else 1
+
+    def metrics(self):
+        return _metrics()
+
+    def topology(self, _artifact, *, all_exited):
+        assert all_exited
+        return _scenario().topology
+
+    def close(self, *, terminate=False):
+        self.closed_with = terminate
+
+
+class _DirectWindowApi:
+    def __init__(self, application, *, window=700, early_exit=None):
+        self.process = _DirectWindowProcess(
+            application, window=window, early_exit=early_exit
+        )
+        self.executable = None
+        self.environment = None
+
+    def launch(self, executable, environment, _root, owned=None):
+        self.executable = executable
+        self.environment = dict(environment)
+        owned.append(self.process)
+        return self.process
+
+
 def test_missing_qt_restore_failure_preserves_classified_primary(
     tmp_path, monkeypatch
 ) -> None:
@@ -2974,6 +3252,88 @@ def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypa
     assert called == [api.process]
     assert api.process.closed_with is False
     assert not any(key.startswith("PYTHON") for key in api.environment)
+
+
+def test_direct_ui_smoke_uses_normal_application_window_and_clean_close(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(qualification, "_reports", lambda _store: ())
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = tmp_path / "artifact"
+    runner.state_base = tmp_path / "state"
+    runner.application = runner.artifact / "metroliza_application.exe"
+    runner.launcher = runner.artifact / "metroliza.exe"
+    runner.deadline = time.monotonic() + 1
+    runner.store = object()
+    runner.results = {}
+    for path in (runner.artifact, runner.state_base):
+        path.mkdir()
+    root = tmp_path / "direct-ui"
+    root.mkdir()
+    runner._root = lambda _label: root
+    runner.api = _DirectWindowApi(runner.application)
+
+    runner.run_direct_ui_smoke()
+
+    assert runner.api.executable == runner.application
+    assert runner.api.process.requested_title == (
+        f"Metroliza [{qualification.VERSION_LABEL}]"
+    )
+    assert runner.api.process.window_closed
+    assert runner.api.process.closed_with is False
+    assert runner.results["direct_ui_smoke"].exit_code == 0
+    assert runner.api.environment["METROLIZA_LICENSE_VERIFICATION"] == "0"
+    assert runner.api.environment["LOCALAPPDATA"] == str(runner.state_base)
+    assert runner.api.environment["APPDATA"] == str(runner.state_base / "Roaming")
+    assert not {
+        "METROLIZA_STARTUP_SMOKE",
+        "METROLIZA_STARTUP_UI_SMOKE",
+        "METROLIZA_DIAGNOSTIC_QUALIFICATION",
+        "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT",
+        "QT_QPA_PLATFORM",
+    } & set(runner.api.environment)
+    assert not qualification._has_qualification_receipt(root)
+    assert not (root / "startup.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("window", "early_exit", "deadline_offset", "reason", "exit_code"),
+    [
+        (None, 7, 1, "process_exited_before_window", 7),
+        (None, None, 0, "normal_window_unavailable", None),
+    ],
+)
+def test_direct_ui_smoke_fails_closed_before_visible_window(
+    tmp_path, monkeypatch, window, early_exit, deadline_offset, reason, exit_code
+) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(qualification, "_reports", lambda _store: ())
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = tmp_path / "artifact"
+    runner.state_base = tmp_path / "state"
+    runner.application = runner.artifact / "metroliza_application.exe"
+    runner.deadline = time.monotonic() + deadline_offset
+    runner.store = object()
+    runner.results = {}
+    for path in (runner.artifact, runner.state_base):
+        path.mkdir()
+    root = tmp_path / "direct-ui"
+    root.mkdir()
+    runner._root = lambda _label: root
+    runner.api = _DirectWindowApi(
+        runner.application, window=window, early_exit=early_exit
+    )
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_driver_phase(
+            "direct_ui_smoke", runner.run_direct_ui_smoke
+        )
+
+    assert caught.value.qualification_stage == "direct_ui_smoke"
+    assert caught.value.qualification_reason == reason
+    assert caught.value.qualification_exit_code == exit_code
+    assert runner.api.process.closed_with is True
 
 
 @pytest.mark.parametrize(
@@ -3317,3 +3677,33 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
         assert process.metrics().peak_job_memory_bytes >= 0
     finally:
         process.close(terminate=exit_code is None)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native User32 window proof requires Windows")
+def test_native_windows_matches_and_closes_test_owned_qt_main_window() -> None:
+    from PyQt6.QtWidgets import QApplication, QMainWindow
+
+    application = QApplication.instance() or QApplication([])
+    window = QMainWindow()
+    title = f"Metroliza [native-test-{uuid.uuid4().hex}]"
+    window.setWindowTitle(title)
+    window.show()
+    application.processEvents()
+    api = qualification._WindowsApi()
+    observations = (
+        qualification._ProcessObservation(os.getpid(), 1, sys.executable),
+    )
+    try:
+        handle = api.normal_window(observations, Path(sys.executable), title)
+        assert handle is not None
+        api.close_normal_window(
+            observations, Path(sys.executable), title, handle
+        )
+        deadline = time.monotonic() + 2
+        while window.isVisible() and time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(0.01)
+        assert not window.isVisible()
+    finally:
+        window.close()
+        application.processEvents()
