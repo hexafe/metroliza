@@ -1,5 +1,6 @@
 import os
 import runpy
+import secrets
 import struct
 import sys
 import types
@@ -67,6 +68,7 @@ def test_late_parent_accept_cannot_qualify_timed_out_child_recorder(monkeypatch)
     parent_read, child_out = os.pipe()
     recorder = diagnostic_transport.ChildRecorder(child_in, child_out)
     session_id = uuid.uuid4()
+    token = secrets.token_hex(32)
     hello_seen = threading.Event()
     release_accept = threading.Event()
     parent_errors = []
@@ -74,9 +76,12 @@ def test_late_parent_accept_cannot_qualify_timed_out_child_recorder(monkeypatch)
     def parent():
         try:
             hello = read_frame(parent_read)
-            assert parse_control(hello, "hello", {"session_id", "token"})[
-                "session_id"
-            ] == session_id.hex
+            hello_fields = parse_control(hello, "hello", {"session_id", "token"})
+            assert hello_fields == {
+                "control": "hello",
+                "session_id": session_id.hex,
+                "token": token,
+            }
             hello_seen.set()
             assert release_accept.wait(2)
             write_frame(parent_write, control_bytes("accepted"))
@@ -86,7 +91,7 @@ def test_late_parent_accept_cannot_qualify_timed_out_child_recorder(monkeypatch)
     worker = threading.Thread(target=parent)
     diagnostic_transport.write_frame(
         parent_write,
-        control_bytes("challenge", session_id=session_id.hex, token="a" * 64),
+        control_bytes("challenge", session_id=session_id.hex, token=token),
     )
     monkeypatch.setattr(diagnostic_transport, "_recorder", recorder)
     try:
@@ -121,18 +126,21 @@ def test_on_time_parent_accept_keeps_exact_supervised_session_identity():
     parent_read, child_out = os.pipe()
     recorder = diagnostic_transport.ChildRecorder(child_in, child_out)
     session_id = uuid.uuid4()
+    token = secrets.token_hex(32)
 
     def parent():
         hello = read_frame(parent_read)
-        assert parse_control(hello, "hello", {"session_id", "token"})[
-            "session_id"
-        ] == session_id.hex
+        assert parse_control(hello, "hello", {"session_id", "token"}) == {
+            "control": "hello",
+            "session_id": session_id.hex,
+            "token": token,
+        }
         write_frame(parent_write, control_bytes("accepted"))
 
     worker = threading.Thread(target=parent)
     write_frame(
         parent_write,
-        control_bytes("challenge", session_id=session_id.hex, token="a" * 64),
+        control_bytes("challenge", session_id=session_id.hex, token=token),
     )
     try:
         worker.start()
