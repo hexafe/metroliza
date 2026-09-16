@@ -124,7 +124,11 @@ def _validate_core_result(payload: object) -> dict:
         or any(checks.get(key) != "passed" for key in REQUIRED_CHECKS)
     ):
         raise CandidateFailure("required_core_check_incomplete")
-    artifacts = payload.get("artifacts")
+    _validate_core_artifacts(payload.get("artifacts"))
+    return payload
+
+
+def _validate_core_artifacts(artifacts: object) -> None:
     if type(artifacts) is not dict or set(artifacts) != set(ARTIFACTS):
         raise CandidateFailure("missing_scenario_artifact")
     seen = set()
@@ -141,7 +145,6 @@ def _validate_core_result(payload: object) -> dict:
         ):
             raise CandidateFailure("invalid_artifact_record")
         seen.add(name)
-    return payload
 
 
 def validate_runtime_receipt(payload: object, expected_source: str) -> dict:
