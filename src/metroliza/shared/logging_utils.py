@@ -19,6 +19,8 @@ from metroliza.shared.diagnostic_events import (
     InvalidDiagnosticEvent,
     LegacyLogSuppressedEvent,
     SourceClass,
+    RuntimeProvenanceEvent,
+    StartupDiagnosticEvent,
     serialize_diagnostic_event,
 )
 from metroliza.shared.env_utils import parse_bool
@@ -45,6 +47,8 @@ _STRUCTURED_EVENT_TYPES = (
     LegacyLogSuppressedEvent,
     InvalidDiagnosticEvent,
     ExceptionDiagnosticEvent,
+    RuntimeProvenanceEvent,
+    StartupDiagnosticEvent,
 )
 
 
@@ -103,7 +107,7 @@ def _has_empty_arguments(record: logging.LogRecord) -> bool:
 def _safe_event(record: logging.LogRecord) -> object:
     source_class = _source_class(record)
     message = _record_attribute(record, "msg", None)
-    if type(message) not in _STRUCTURED_EVENT_TYPES:
+    if not any(type(message) is approved for approved in _STRUCTURED_EVENT_TYPES):
         return LegacyLogSuppressedEvent(source_class)
     if not _has_empty_arguments(record):
         return InvalidDiagnosticEvent(source_class)
