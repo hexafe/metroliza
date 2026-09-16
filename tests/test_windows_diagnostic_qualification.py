@@ -1750,6 +1750,140 @@ def test_job_observation_omits_only_confirmed_disappeared_pid(monkeypatch) -> No
     assert topology.unexpected_processes_observed == 1
 
 
+@pytest.mark.parametrize(
+    "reason",
+    ["native_image_query_unavailable", "native_process_times_unavailable"],
+)
+def test_job_observation_omits_confirmed_disappearance_after_open_query_failure(
+    reason,
+) -> None:
+    class _Kernel:
+        closed = []
+
+        def OpenProcess(self, _access, _inherit, process_id):
+            assert process_id == 407
+            return 77
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    snapshots = iter(((407,), ()))
+    api._job_process_ids = lambda _job: next(snapshots)
+    primary = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason=reason
+    )
+
+    def fail_observation(_process, _process_id):
+        raise primary
+
+    api._process_observation = fail_observation
+    api._job_accounting = lambda _job: (0, 1)
+
+    observations, active, assigned = api.job_observations(object())
+
+    assert observations == ()
+    assert (active, assigned) == (0, 1)
+    assert api.kernel.closed == [77]
+    topology = qualification._classify_topology(
+        observations,
+        assigned,
+        active,
+        True,
+        Path("launcher"),
+        Path("application"),
+    )
+    assert topology.unexpected_processes_observed == 1
+
+
+@pytest.mark.parametrize("mode", ["still_listed", "requery_failed", "unrelated"])
+def test_job_observation_keeps_post_open_failures_fatal(mode) -> None:
+    class _Kernel:
+        closed = []
+
+        def OpenProcess(self, _access, _inherit, process_id):
+            assert process_id == 408
+            return 78
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    calls = []
+
+    def process_ids(_job):
+        calls.append(None)
+        if len(calls) == 1:
+            return (408,)
+        if mode == "requery_failed":
+            raise qualification.QualificationFailure(
+                "scenario_failed", qualification_reason="native_job_ids_unavailable"
+            )
+        return (408,) if mode == "still_listed" else ()
+
+    api._job_process_ids = process_ids
+    primary = qualification.QualificationFailure(
+        "artifact_invalid"
+        if mode == "unrelated"
+        else "scenario_failed",
+        qualification_reason=(
+            None if mode == "unrelated" else "native_image_query_unavailable"
+        ),
+    )
+
+    def fail_observation(_process, _process_id):
+        raise primary
+
+    api._process_observation = fail_observation
+    api._job_accounting = lambda _job: (1, 1)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.job_observations(object())
+
+    if mode == "requery_failed":
+        assert caught.value.qualification_reason == "native_job_ids_unavailable"
+    else:
+        assert caught.value is primary
+    assert len(calls) == (1 if mode == "unrelated" else 2)
+    assert api.kernel.closed == [78]
+
+
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, SystemExit])
+def test_job_observation_preserves_post_open_interrupt(failure_type) -> None:
+    class _Kernel:
+        closed = []
+
+        def OpenProcess(self, *_arguments):
+            return 79
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    ids_calls = []
+    api._job_process_ids = lambda _job: ids_calls.append(None) or (409,)
+    primary = failure_type("PRIVATE_INTERRUPT")
+
+    def fail_observation(_process, _process_id):
+        raise primary
+
+    api._process_observation = fail_observation
+    api._job_accounting = lambda _job: (1, 1)
+
+    with pytest.raises(failure_type) as caught:
+        api.job_observations(object())
+
+    assert caught.value is primary
+    assert ids_calls == [None]
+    assert api.kernel.closed == [79]
+
+
 @pytest.mark.parametrize("raises_private", [False, True])
 def test_job_observation_keeps_other_open_failures_fatal(
     monkeypatch, raises_private
@@ -3687,6 +3821,87 @@ def test_qualification_build_pins_observed_onnxruntime_version() -> None:
     ] == ["onnxruntime==1.30.0"]
 
 
+def _duplicate_native_process_handle(api, process, duplicate) -> None:
+    current_process = api.kernel.GetCurrentProcess
+    current_process.argtypes = []
+    current_process.restype = api.wintypes.HANDLE
+    duplicate_handle = api.kernel.DuplicateHandle
+    duplicate_handle.argtypes = [
+        api.wintypes.HANDLE,
+        api.wintypes.HANDLE,
+        api.wintypes.HANDLE,
+        ctypes.POINTER(api.wintypes.HANDLE),
+        api.wintypes.DWORD,
+        api.wintypes.BOOL,
+        api.wintypes.DWORD,
+    ]
+    duplicate_handle.restype = api.wintypes.BOOL
+    owner = current_process()
+    assert duplicate_handle(
+        owner,
+        process._process,
+        owner,
+        ctypes.byref(duplicate),
+        0,
+        False,
+        0x00000002,
+    )
+
+
+def _wait_for_native_process_and_job_exit(api, process) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and process.poll() is None:
+        time.sleep(0.01)
+    assert process.poll() is not None
+    while time.monotonic() < deadline and api._job_accounting(process._job)[0]:
+        time.sleep(0.01)
+    assert api._job_accounting(process._job)[0] == 0
+
+
+def _native_observation_result(api, process_handle, process_id) -> str:
+    try:
+        api._process_observation(process_handle, process_id)
+    except qualification.QualificationFailure as error:
+        assert error.qualification_reason in {
+            "native_image_query_unavailable",
+            "native_process_times_unavailable",
+        }
+        return "unavailable"
+    return "available"
+
+
+class _ControlledNativeQueryFailureKernel:
+    def __init__(self, real_kernel, process_id, duplicate) -> None:
+        self.real_kernel = real_kernel
+        self.process_id = process_id
+        self.duplicate = duplicate
+        self.duplicate_value = duplicate.value
+        self.duplicate_open = True
+        self.duplicate_closes = 0
+        self.image_queries = 0
+
+    def __getattr__(self, name):
+        return getattr(self.real_kernel, name)
+
+    def OpenProcess(self, _access, _inherit, observed_process_id):
+        assert observed_process_id == self.process_id
+        return self.duplicate
+
+    def QueryFullProcessImageNameW(self, *_arguments):
+        self.image_queries += 1
+        return 0
+
+    def CloseHandle(self, handle):
+        value = handle.value if hasattr(handle, "value") else handle
+        result = self.real_kernel.CloseHandle(handle)
+        if value == self.duplicate_value:
+            assert self.duplicate_open
+            if result:
+                self.duplicate_open = False
+                self.duplicate_closes += 1
+        return result
+
+
 @pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")
 def test_native_windows_restricted_token_job_launches_without_console(tmp_path) -> None:
     api = qualification._WindowsApi()
@@ -3718,6 +3933,73 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
         assert process.metrics().peak_job_memory_bytes >= 0
     finally:
         process.close(terminate=exit_code is None)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Job race proof requires Windows")
+def test_native_windows_hybrid_stale_job_snapshot_closes_disappeared_query_handle(
+    tmp_path,
+) -> None:
+    api = qualification._WindowsApi()
+    system_root = Path(os.environ["SYSTEMROOT"])
+    executable = system_root / "System32" / "whoami.exe"
+    environment = qualification._sanitized_environment(
+        tmp_path, tmp_path, tmp_path, "normal"
+    )
+    owned = []
+    real_kernel = None
+    duplicate = None
+    controlled_kernel = None
+    drained = False
+    try:
+        process = api.launch(executable, environment, tmp_path, owned=owned)
+        real_kernel = api.kernel
+        duplicate = api.wintypes.HANDLE()
+        _duplicate_native_process_handle(api, process, duplicate)
+        process_id = next(iter(process._observations))
+        _wait_for_native_process_and_job_exit(api, process)
+        drained = True
+        assert process_id not in api._job_process_ids(process._job)
+        actual_query_result = _native_observation_result(
+            api, duplicate, process_id
+        )
+        controlled_kernel = _ControlledNativeQueryFailureKernel(
+            real_kernel, process_id, duplicate
+        )
+        original_process_ids = api._job_process_ids
+        snapshots = []
+
+        def stale_then_current(job):
+            snapshots.append(None)
+            if len(snapshots) == 1:
+                return (process_id,)
+            return original_process_ids(job)
+
+        api.kernel = controlled_kernel
+        api._job_process_ids = stale_then_current
+
+        observations, active, assigned = api.job_observations(process._job)
+
+        assert actual_query_result in {"available", "unavailable"}
+        assert observations == ()
+        assert active == 0
+        assert assigned >= 1
+        assert snapshots == [None, None]
+        assert controlled_kernel.image_queries == 1
+        assert controlled_kernel.duplicate_closes == 1
+        assert not controlled_kernel.duplicate_open
+    finally:
+        try:
+            if (
+                real_kernel is not None
+                and duplicate is not None
+                and duplicate.value
+                and (controlled_kernel is None or controlled_kernel.duplicate_open)
+            ):
+                assert real_kernel.CloseHandle(duplicate)
+        finally:
+            qualification._close_owned_processes(
+                owned, terminate=not drained
+            )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native User32 window proof requires Windows")

@@ -1691,6 +1691,19 @@ class _WindowsApi:
             )
         return active, total
 
+    def _process_disappeared_after_observation_failure(
+        self,
+        job,
+        process_id: int,
+        error: QualificationFailure,
+    ) -> bool:
+        if error.qualification_reason not in {
+            "native_image_query_unavailable",
+            "native_process_times_unavailable",
+        }:
+            return False
+        return process_id not in self._job_process_ids(job)
+
     def job_observations(
         self, job
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
@@ -1711,7 +1724,15 @@ class _WindowsApi:
                     "scenario_failed", qualification_reason="native_open_process_unavailable"
                 )
             try:
-                observations.append(self._process_observation(process, process_id))
+                try:
+                    observation = self._process_observation(process, process_id)
+                except QualificationFailure as error:
+                    if not self._process_disappeared_after_observation_failure(
+                        job, process_id, error
+                    ):
+                        raise
+                else:
+                    observations.append(observation)
             finally:
                 _attempt_cleanup(
                     lambda process=process: self._require_closed_handles(process)
