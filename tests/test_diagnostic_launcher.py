@@ -758,6 +758,9 @@ def test_final_control_survives_three_failed_terminal_backlog(tmp_path, monkeypa
 
     monkeypatch.setattr(store, "publish", fail_first)
     publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    # This barrier measures backlog delivery, after real marker preparation.
+    assert publisher._ensure_begin() is StoreStatus.MARKER_STARTED
+    assert publisher._ensure_authenticated() is StoreStatus.MARKER_AUTHENTICATED
     assert publisher.start()
     assert publisher.submit(observed)
     assert entered.wait(1)
