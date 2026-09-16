@@ -276,19 +276,12 @@ def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[
     }
 
 
-def _failure_result(private: Path | None, code: str) -> dict[str, Any]:
+def _failure_result(code: str) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "stage": "failed",
         "status": "failed",
-        "relative_artifact_dir": private.name if private is not None else None,
-        "facets": {
-            "planner_review": "failed",
-            "selected_import": "failed",
-            "persisted_measurements": "failed",
-            "filename_resolved_group_assignments": "failed",
-            "group_analysis_light": "failed",
-        },
+        "facets": {"successful_group_inference": "failed"},
         "failure": code,
     }
 
@@ -296,9 +289,10 @@ def _failure_result(private: Path | None, code: str) -> dict[str, Any]:
 def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
     """Run the real synthetic W06 producer and return retained-artifact metadata.
 
-    ``scratch`` is caller-owned and must already be an absolute directory.  The
-    producer creates one unique child so retained artifact paths are relative to
-    that child and cannot expose the caller's filesystem layout.
+    ``scratch`` is the caller's existing isolated child and must already be an
+    absolute directory.  The two retained artifact names are relative to that
+    same directory.  A unique nested directory contains only temporary staged
+    report inputs.
     """
     private: Path | None = None
     window = None
@@ -308,8 +302,10 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
         private = root / f"inference-w06-{uuid.uuid4().hex}"
         private.mkdir()
         reports, source_hashes = _stage_reports(fixtures, private)
-        database = private / "inference.sqlite"
-        grouping_file = private / "group-inference.json"
+        database = root / "inference.sqlite"
+        grouping_file = root / "group-inference.json"
+        if database.exists() or grouping_file.exists():
+            raise InferenceFailure("inference_artifact_name_collision")
 
         from PyQt6.QtCore import QSettings
         from metroliza.app.bootstrap import get_or_create_qapplication
@@ -367,6 +363,13 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
             "source_hashes": source_hashes,
             "assignments": _ASSIGNMENTS,
             "database_counts": _database_counts(database),
+            "checks": {
+                "planner_review": "passed",
+                "selected_import": "passed",
+                "persisted_measurements": "passed",
+                "filename_resolved_group_assignments": "passed",
+                "group_analysis_light": "passed",
+            },
             "analysis": analysis,
         }
         _atomic_json(grouping_file, payload)
@@ -376,14 +379,7 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
             "schema_version": SCHEMA_VERSION,
             "stage": "complete",
             "status": "passed",
-            "relative_artifact_dir": private.name,
-            "facets": {
-                "planner_review": "passed",
-                "selected_import": "passed",
-                "persisted_measurements": "passed",
-                "filename_resolved_group_assignments": "passed",
-                "group_analysis_light": "passed",
-            },
+            "facets": {"successful_group_inference": "passed"},
             "source_hashes": source_hashes,
             "assignments": _ASSIGNMENTS,
             "artifacts": {
@@ -393,7 +389,7 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
         }
     except Exception as error:
         code = str(error) if isinstance(error, InferenceFailure) else type(error).__name__
-        return _failure_result(private, code)
+        return _failure_result(code)
     finally:
         if window is not None:
             window.close()
