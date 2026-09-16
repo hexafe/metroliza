@@ -205,6 +205,7 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "normal_window_invalid",
         "normal_window_close_failed",
         "process_exited_before_window",
+        "process_exit_timeout",
         "unexpected",
     }
 )
@@ -955,6 +956,8 @@ class _WindowsApi:
         self.user.IsWindow.restype = wt.BOOL
         self.user.IsWindowVisible.argtypes = [wt.HWND]
         self.user.IsWindowVisible.restype = wt.BOOL
+        self.user.IsWindowEnabled.argtypes = [wt.HWND]
+        self.user.IsWindowEnabled.restype = wt.BOOL
         self.user.GetWindow.argtypes = [wt.HWND, wt.UINT]
         self.user.GetWindow.restype = wt.HWND
         self.user.GetWindowThreadProcessId.argtypes = [
@@ -1515,7 +1518,11 @@ class _WindowsApi:
     def _window_matches(
         self, window, process_id: int, expected_title: str
     ) -> bool:
-        if not self.user.IsWindow(window) or not self.user.IsWindowVisible(window):
+        if (
+            not self.user.IsWindow(window)
+            or not self.user.IsWindowVisible(window)
+            or not self.user.IsWindowEnabled(window)
+        ):
             return False
         observed_process_id = self.wintypes.DWORD()
         if not self.user.GetWindowThreadProcessId(
@@ -2059,7 +2066,9 @@ def _finish_process_without_receipt(
             break
         time.sleep(0.02)
     if exit_code is None:
-        raise QualificationFailure("scenario_timeout")
+        raise QualificationFailure(
+            "scenario_timeout", qualification_reason="process_exit_timeout"
+        )
     if exit_code != expected_exit:
         raise QualificationFailure(
             "scenario_failed",
@@ -2070,7 +2079,10 @@ def _finish_process_without_receipt(
         "qualification_job_drain_failed",
         lambda: _wait_for_job_exit(process, deadline),
     ):
-        raise QualificationFailure("scenario_timeout")
+        raise QualificationFailure(
+            "scenario_timeout",
+            qualification_reason="qualification_job_drain_failed",
+        )
     return ScenarioResult(
         exit_code,
         round((time.perf_counter() - process.started) * 1000),

@@ -54,6 +54,9 @@ class _WindowUser:
     def IsWindowVisible(self, window):
         return self.windows[window]["visible"]
 
+    def IsWindowEnabled(self, window):
+        return self.windows[window]["enabled"]
+
     def GetWindowThreadProcessId(self, window, process_id):
         ctypes.cast(process_id, ctypes.POINTER(ctypes.c_uint32)).contents.value = (
             self.windows[window]["process_id"]
@@ -90,6 +93,7 @@ def _normal_window(process_id, title):
         "process_id": process_id,
         "title": title,
         "visible": True,
+        "enabled": True,
         "owner": 0,
         "style": qualification.NORMAL_WINDOW_REQUIRED_STYLE,
         "extended_style": 0,
@@ -1944,6 +1948,7 @@ def test_normal_window_requires_exact_owned_application_and_revalidates_close(
     ("change", "value"),
     [
         ("visible", False),
+        ("enabled", False),
         ("owner", 500),
         ("style", qualification.WS_SYSMENU),
         ("style", qualification.NORMAL_WINDOW_REQUIRED_STYLE | qualification.WS_CHILD),
@@ -1991,6 +1996,13 @@ def test_normal_window_rejects_ambiguity_reuse_and_post_failure(tmp_path) -> Non
     assert api.user.posted == []
 
     api.user.windows[100]["process_id"] = 41
+    api.user.windows[100]["enabled"] = False
+    with pytest.raises(qualification.QualificationFailure) as disabled:
+        api.close_normal_window(observations, application, title, matched)
+    assert disabled.value.qualification_reason == "normal_window_invalid"
+    assert api.user.posted == []
+
+    api.user.windows[100]["enabled"] = True
     api.user.post_succeeds = False
     with pytest.raises(qualification.QualificationFailure) as post_failed:
         api.close_normal_window(observations, application, title, matched)
@@ -2614,6 +2626,8 @@ def test_main_preserves_primary_and_independent_failed_cleanup(
         ("qualification_observation_failed", None),
         ("process_exit_mismatch", 7),
         ("normal_window_unavailable", None),
+        ("process_exit_timeout", None),
+        ("qualification_job_drain_failed", None),
     ],
 )
 def test_main_serializes_closed_scenario_reason_without_private_detail(
@@ -3492,6 +3506,33 @@ def test_scenario_expected_exit_with_active_descendant_is_timeout(
     assert api.process is not None and api.process.closed_with is True
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "active_processes", "expected_reason"),
+    [
+        (None, 0, "process_exit_timeout"),
+        (0, 1, "qualification_job_drain_failed"),
+    ],
+)
+def test_direct_process_timeout_identifies_exit_or_job_drain(
+    tmp_path, monkeypatch, exit_code, active_processes, expected_reason
+) -> None:
+    process = _FakeProcess(
+        exit_code, supervised=False, active_processes=active_processes
+    )
+    clock = iter((0.0, 1.0))
+    monkeypatch.setattr(qualification.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(qualification.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._finish_process_without_receipt(
+            process, tmp_path, 1.0, 0
+        )
+
+    assert caught.value.failure_id == "scenario_timeout"
+    assert caught.value.qualification_reason == expected_reason
+    assert caught.value.qualification_exit_code is None
+
+
 def _concurrent_roots(tmp_path) -> tuple[Path, Path]:
     roots = (tmp_path / "one", tmp_path / "two")
     payload = {
@@ -3681,7 +3722,8 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
 
 @pytest.mark.skipif(os.name != "nt", reason="native User32 window proof requires Windows")
 def test_native_windows_matches_and_closes_test_owned_qt_main_window() -> None:
-    from PyQt6.QtWidgets import QApplication, QMainWindow
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication, QDialog, QMainWindow
 
     application = QApplication.instance() or QApplication([])
     assert application.platformName() == "windows"
@@ -3689,12 +3731,20 @@ def test_native_windows_matches_and_closes_test_owned_qt_main_window() -> None:
     title = f"Metroliza [native-test-{uuid.uuid4().hex}]"
     window.setWindowTitle(title)
     window.show()
+    modal = QDialog(None)
+    modal.setWindowModality(Qt.WindowModality.ApplicationModal)
+    modal.show()
     application.processEvents()
     api = qualification._WindowsApi()
     observations = (
         qualification._ProcessObservation(os.getpid(), 1, sys.executable),
     )
     try:
+        assert not api.user.IsWindowEnabled(int(window.winId()))
+        assert api.normal_window(observations, Path(sys.executable), title) is None
+        modal.close()
+        application.processEvents()
+        assert api.user.IsWindowEnabled(int(window.winId()))
         handle = api.normal_window(observations, Path(sys.executable), title)
         assert handle is not None
         api.close_normal_window(
@@ -3706,5 +3756,6 @@ def test_native_windows_matches_and_closes_test_owned_qt_main_window() -> None:
             time.sleep(0.01)
         assert not window.isVisible()
     finally:
+        modal.close()
         window.close()
         application.processEvents()
