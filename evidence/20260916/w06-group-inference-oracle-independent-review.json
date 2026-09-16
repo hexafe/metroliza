@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "scope": "source-engineering synthetic W06 producer only; not package or Windows acceptance",
+  "producer": {
+    "commit": "b4110d7",
+    "path": "src/metroliza/app/windows_candidate_inference.py",
+    "sha256": "1d2e5c273041b7824dff69a26e96eff1ce40659fc9cd6b1fd4f7404941312ba0"
+  },
+  "staged_files": {
+    "REF001_2024-01-01_1.pdf": {"group": "A", "measurement": 9.9, "origin": "private_authored_cmm"},
+    "REF001_2024-01-01_2.pdf": {"group": "A", "measurement": 9.92, "origin": "private_authored_cmm"},
+    "REF001_2024-01-01_3.pdf": {"group": "A", "measurement": 9.94, "origin": "private_authored_cmm"},
+    "REF001_2024-01-01_4.pdf": {"group": "A", "measurement": 9.96, "origin": "private_authored_cmm"},
+    "REF001_2024-01-01_5.pdf": {"group": "A", "measurement": 10.02, "origin": "report-1.pdf"},
+    "REF001_2024-01-01_6.pdf": {"group": "B", "measurement": 10.02, "origin": "report-3.pdf"},
+    "REF001_2024-01-01_7.pdf": {"group": "B", "measurement": 10.04, "origin": "private_authored_cmm"},
+    "REF001_2024-01-01_8.pdf": {"group": "B", "measurement": 10.06, "origin": "private_authored_cmm"},
+    "REF001_2024-01-01_9.pdf": {"group": "B", "measurement": 10.08, "origin": "private_authored_cmm"},
+    "REF001_2024-01-01_10.pdf": {"group": "B", "measurement": 10.1, "origin": "private_authored_cmm"}
+  },
+  "actual_source_run": {
+    "status": "passed",
+    "facets": {
+      "planner_review": "passed",
+      "selected_import": "passed",
+      "persisted_measurements": "passed",
+      "filename_resolved_group_assignments": "passed",
+      "group_analysis_light": "passed"
+    },
+    "artifacts": ["inference.sqlite", "group-inference.json"],
+    "analysis": {
+      "status": "ready",
+      "effective_scope": "single_reference",
+      "metric": "SMOKE FEATURE - X",
+      "groups": ["A", "B"],
+      "pairwise_test_used": "Student t-test",
+      "pairwise_effect_type": "cohen_d",
+      "pairwise_p_value": 0.002046046456837804
+    }
+  },
+  "independent_oracle": {
+    "status": "pending_contract_spelling_correction",
+    "observed_failure": "pairwise_identity",
+    "only_observed_difference": {
+      "actual_public_effect_type": "cohen_d",
+      "oracle_effect_type": "cohens_d"
+    },
+    "action_owner": "root-owned scripts/synthetic-inference-oracle.json"
+  },
+  "static_validation": ["ruff check", "ruff format --check", "git diff --check"]
+}
