@@ -16,6 +16,7 @@ def _payload():
         "ordinary_user": True,
         "source_sha": None,
         "relative_artifact_dir": "core-" + "a" * 32,
+        "checks": {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "not_executed"},
         "facets": {
             **{key: "passed" for key in driver.REQUIRED_CHECKS},
             "group_analysis_status": "insufficient_groups",
@@ -24,7 +25,7 @@ def _payload():
             key: {"path": key + suffix, "sha256": "2" * 64}
             for key, suffix in zip(
                 driver.ARTIFACTS,
-                (".sqlite", ".xlsx", ".json", ".json", ".xlsx"),
+                (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json"),
                 strict=True,
             )
         },
