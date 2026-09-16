@@ -29,8 +29,9 @@ REQUIRED_CHECKS = (
     "literal_chart_titles_series_caches_references", "value_limit_order",
     "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
     "oversized_label_rejection_preserves_workbook",
+    "successful_group_inference",
 )
-ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook")
+ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 MAX_SECONDS = 900
@@ -214,6 +215,10 @@ def _independent_xlsx_verifier():
     return _adjacent_module("windows_candidate_xlsx.py", "_metroliza_independent_xlsx_oracle")._verify_workbook
 
 
+def _independent_inference_verifier():
+    return _adjacent_module("verify_group_inference.py", "_metroliza_independent_inference_oracle").verify
+
+
 def _assert_artifact_hashes(paths: dict, payload: dict, reason: str) -> None:
     if any(_hash(paths[key]) != payload["artifacts"][key]["sha256"] for key in ARTIFACTS):
         raise CandidateFailure(reason)
@@ -222,6 +227,18 @@ def _assert_artifact_hashes(paths: dict, payload: dict, reason: str) -> None:
 def _assert_database_sidecars_absent(database: Path, reason: str) -> None:
     if any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
         raise CandidateFailure(reason)
+
+
+def _assert_both_databases_closed(paths: dict, reason: str) -> None:
+    for key in ("database", "inference_database"):
+        _assert_database_sidecars_absent(paths[key], reason)
+
+
+def _check_inference_outputs(paths: dict) -> None:
+    try:
+        _independent_inference_verifier()(paths["inference_database"], paths["group_inference"])
+    except Exception:
+        raise CandidateFailure("independent_inference_oracle_failed") from None
 
 
 def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path) -> dict:
@@ -233,7 +250,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
         if _hash(source) != record["sha256"]:
             raise CandidateFailure("scenario_artifact_hash_mismatch")
         actual[key] = source
-    _assert_database_sidecars_absent(actual["database"], "database_sidecars_remain")
+    _assert_both_databases_closed(actual, "database_sidecars_remain")
     # This verifier imports no Metroliza and does not derive expected values
     # from application output. Its independent expected inputs were reviewed.
     verify = _independent_verifier()
@@ -246,8 +263,9 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
         verify_xlsx(actual["literal_workbook"])
     except Exception:
         raise CandidateFailure("independent_literal_workbook_oracle_failed") from None
+    _check_inference_outputs(actual)
     _assert_artifact_hashes(actual, payload, "scenario_artifact_changed_after_comparison")
-    _assert_database_sidecars_absent(actual["database"], "scenario_database_sidecars_created_after_comparison")
+    _assert_both_databases_closed(actual, "scenario_database_sidecars_created_after_comparison")
     copied = {}
     for key, source in actual.items():
         destination = output / payload["artifacts"][key]["path"]
@@ -263,10 +281,9 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
     except Exception:
         raise CandidateFailure("retained_outputs_oracle_failed") from None
     retained = {key: output / copied[key]["path"] for key in ARTIFACTS}
+    _check_inference_outputs(retained)
     _assert_artifact_hashes(retained, payload, "retained_artifact_changed_after_comparison")
-    _assert_database_sidecars_absent(
-        retained["database"], "retained_database_sidecars_created_after_comparison"
-    )
+    _assert_both_databases_closed(retained, "retained_database_sidecars_created_after_comparison")
     return copied
 
 
@@ -401,9 +418,12 @@ def qualify(args) -> dict:
             "verifier_sha256": _hash(Path(__file__).with_name("verify_synthetic_oracle.py")),
             "driver_sha256": _hash(Path(__file__)),
             "literal_xlsx_verifier_sha256": _hash(Path(__file__).with_name("windows_candidate_xlsx.py")),
+            "inference_oracle_sha256": _hash(Path(__file__).with_name("synthetic-inference-oracle.json")),
+            "inference_verifier_sha256": _hash(Path(__file__).with_name("verify_group_inference.py")),
             "limits": [
                 "Observed core facets only; no complete W01-W16 gate is implied.",
-                "Pre-cancel and oversized-label rejection observed; active cancellation and inferential analysis remain unqualified.",
+                "Pre-cancel and oversized-label rejection observed; active cancellation remains unqualified.",
+                "Inference covers only the fixed public two-group PDF case; no general analysis or real-data qualification.",
                 "Build-host automation is not clean-machine evidence.",
                 "No representative operator data or release acceptance.",
             ],

@@ -25,7 +25,7 @@ def payload():
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
             key: {"path": key + extension, "sha256": "2" * 64}
-            for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx"), strict=True)
+            for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json"), strict=True)
         },
     }
 
@@ -230,6 +230,7 @@ def test_unknown_facet_cannot_extend_acceptance_claim():
 
 def _complete_synthetic_artifacts(tmp_path):
     from scripts.verify_synthetic_oracle import _create_synthetic_database, _create_synthetic_workbook
+    from tests.windows_candidate_inference_cases import create_inference_case
     oracle_path = ORACLE
     oracle = json.loads(oracle_path.read_text())
     sample = payload()
@@ -242,6 +243,7 @@ def _complete_synthetic_artifacts(tmp_path):
     import shutil
     retained = PROTOCOL_FIXTURES / "literal-measurement-labels.xlsx"
     shutil.copyfile(retained, child / "literal_workbook.xlsx")
+    create_inference_case(child / "inference_database.sqlite", child / "group_inference.json")
     for record in sample["artifacts"].values():
         record["sha256"] = driver._hash(child / record["path"])
     output = tmp_path / "output"
@@ -253,13 +255,14 @@ def test_verified_preserved_copy_remains_readable_and_matches_oracle(tmp_path):
     sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
     copied = driver._copy_verified_results(tmp_path, sample, output, oracle)
     assert copied == sample["artifacts"]
-    assert len(list(output.iterdir())) == 5
+    assert len(list(output.iterdir())) == 7
 
 
 @pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
-def test_uncheckpointed_database_sidecars_cannot_be_lost_from_receipt(tmp_path, suffix):
+@pytest.mark.parametrize("name", ["database.sqlite", "inference_database.sqlite"])
+def test_uncheckpointed_database_sidecars_cannot_be_lost_from_receipt(tmp_path, suffix, name):
     sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
-    (child / ("database.sqlite" + suffix)).write_bytes(b"uncheckpointed state")
+    (child / (name + suffix)).write_bytes(b"uncheckpointed state")
     with pytest.raises(driver.CandidateFailure, match="database_sidecars_remain"):
         driver._copy_verified_results(tmp_path, sample, output, oracle)
     assert not list(output.iterdir())

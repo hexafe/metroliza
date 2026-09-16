@@ -73,6 +73,8 @@ def _payload(child: Path) -> dict:
         "grouping": child / "grouping.json",
         "tabular": child / "tabular.json",
         "literal_workbook": child / "literal.xlsx",
+        "inference_database": child / "inference.sqlite",
+        "group_inference": child / "inference.json",
     }
     for key, path in paths.items():
         path.write_bytes(key.encode("ascii"))
@@ -104,6 +106,7 @@ def test_copy_rejects_sidecars_created_by_comparison(tmp_path, monkeypatch, phas
 
     monkeypatch.setattr(driver, "_independent_verifier", lambda: core_verifier)
     monkeypatch.setattr(driver, "_independent_xlsx_verifier", lambda: lambda _workbook: None)
+    monkeypatch.setattr(driver, "_independent_inference_verifier", lambda: lambda *_args: None)
 
     with pytest.raises(driver.CandidateFailure, match=expected):
         driver._copy_verified_results(tmp_path, payload, output, ORACLE)
@@ -131,6 +134,7 @@ def test_copy_rejects_artifact_hash_drift_after_comparison(tmp_path, monkeypatch
 
     monkeypatch.setattr(driver, "_independent_verifier", lambda: core_verifier)
     monkeypatch.setattr(driver, "_independent_xlsx_verifier", lambda: lambda _workbook: None)
+    monkeypatch.setattr(driver, "_independent_inference_verifier", lambda: lambda *_args: None)
 
     with pytest.raises(driver.CandidateFailure, match=expected):
         driver._copy_verified_results(tmp_path, payload, output, ORACLE)

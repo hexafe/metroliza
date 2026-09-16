@@ -2436,6 +2436,8 @@
         "scripts/qualify_windows_candidate_core.py",
         "scripts/synthetic-report-oracle.json",
         "scripts/verify_synthetic_oracle.py",
+        "scripts/synthetic-inference-oracle.json",
+        "scripts/verify_group_inference.py",
         "scripts/windows_candidate_xlsx.py"
       ],
       "exclude": [],

@@ -68,16 +68,28 @@ labels, series caches, local references, values and limit order. A corrupted loc
 cell with unchanged chart cache must fail comparison. Pre-cancel and oversized
 label rejection must preserve the prior completed workbook.
 
-After all application processes exit, the driver verifies five artifact hashes
+The additional W06 case imports ten real synthetic PDFs into a separate SQLite
+database through the same Reports workspace. It reuses two original 10.02 PDFs
+and generates eight reports in private scratch space. Filename-resolved groups
+A (9.90, 9.92, 9.94, 9.96, 10.02) and B (10.02, 10.04, 10.06, 10.08, 10.10)
+each contain five observations. The public analysis must be runnable, with one
+matching metric, Student t-test, adjusted p-value 0.0020 and Cohen's d -2.836.
+An independent standard-library comparator checks the actual persisted rows,
+group membership and public result against separately specified expected values.
+It checks both the original and retained inference database and JSON artifact.
+This fixed case supplements the preserved one-group negative boundary.
+
+After all application processes exit, the driver verifies seven artifact hashes
 and rejects SQLite sidecars. It compares the actual database, workbook, grouping
 and tabular results against the reviewed oracle and checks literal OOXML. It
 repeats comparison on retained copies. The receipt binds source/tree, package,
-notices, driver, oracle and comparator hashes.
+notices, driver, both oracles and comparator hashes. Both databases must remain
+closed and byte-identical through comparison, with no journal sidecars created.
 
 ## Remaining acceptance boundaries
 
 This core receipt does not establish active-work cancellation/close, every
-reopening or drift path, inferential statistics, offline dashboard rendering,
+reopening or drift path, inference beyond the fixed W06 case, offline dashboard rendering,
 packaged OCR inference, optional-native fallback parity, incident-menu behavior,
 privacy negative paths, supported desktop geometry, clean-machine launch or
 desktop Excel rendering. A one-group `insufficient_groups` result proves the

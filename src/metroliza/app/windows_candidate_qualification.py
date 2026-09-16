@@ -400,6 +400,12 @@ def run_qualification() -> int:
             raise ScenarioFailure("literal_workbook_copy_mismatch")
         receipt["artifacts"]["literal_workbook"] = {"path": literal_workbook.name, "sha256": literal_hash}
         receipt["facets"].update(xlsx_facets)
+        from metroliza.app.windows_candidate_inference import run_inference_checks
+        inference = run_inference_checks(child, fixtures)
+        if inference.get("status") != "passed" or inference.get("facets") != {"successful_group_inference": "passed"}:
+            raise ScenarioFailure("group_inference_checks_failed")
+        receipt["artifacts"].update(inference["artifacts"])
+        receipt["facets"].update(inference["facets"])
         receipt["stage"] = "complete"
         receipt["status"] = "passed"
         receipt["checks"].update({"W03": "passed", "W05": "passed"})
