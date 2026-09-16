@@ -188,8 +188,7 @@ def _database_counts(database: Path) -> dict[str, int]:
         return {key: int(connection.execute(query).fetchone()[0]) for key, query in queries.items()}
 
 
-def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[str, Any]:
-    from metroliza.analytics.group_analysis_service import build_group_analysis_payload
+def _load_grouped_measurements(database: Path, report_ids: Mapping[str, int]):
     from metroliza.exporting.export_grouping_utils import (
         apply_group_assignments,
         prepare_grouping_dataframe,
@@ -214,7 +213,10 @@ def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[
     )
     if not applied or keys != ["GROUP_KEY"] or duplicates:
         raise InferenceFailure("group_assignment_not_applied")
+    return grouped
 
+
+def _members_by_filename(grouped, report_ids: Mapping[str, int]) -> dict[str, dict[str, Any]]:
     names_by_id = {value: key for key, value in report_ids.items()}
     records = [
         dict(row)
@@ -223,6 +225,7 @@ def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[
     ]
     if len(records) != len(_EXPECTED_FILES):
         raise InferenceFailure("grouped_metric_row_count_mismatch")
+
     observed_by_name: dict[str, dict[str, Any]] = {}
     for row in records:
         report_id = int(row["REPORT_ID"])
@@ -252,6 +255,14 @@ def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[
         }
     if set(observed_by_name) != set(_EXPECTED_FILES):
         raise InferenceFailure("grouped_filename_keyset_mismatch")
+    return observed_by_name
+
+
+def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[str, Any]:
+    from metroliza.analytics.group_analysis_service import build_group_analysis_payload
+
+    grouped = _load_grouped_measurements(database, report_ids)
+    observed_by_name = _members_by_filename(grouped, report_ids)
 
     analysis = build_group_analysis_payload(
         grouped,
@@ -276,46 +287,26 @@ def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[
     }
 
 
-def _failure_result(code: str) -> dict[str, Any]:
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "stage": "failed",
-        "status": "failed",
-        "facets": {"successful_group_inference": "failed"},
-        "failure": code,
-    }
+def _assert_import_result(result: Any) -> None:
+    if (
+        result is None
+        or result.imported_files != len(_EXPECTED_FILES)
+        or result.intentionally_excluded_files
+    ):
+        raise InferenceFailure("import_count_mismatch")
 
 
-def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
-    """Run the real synthetic W06 producer and return retained-artifact metadata.
+def _run_gui_import(private: Path, reports: Path, database: Path) -> None:
+    from PyQt6.QtCore import QSettings
+    from metroliza.app.bootstrap import get_or_create_qapplication
+    from metroliza.app.windows_candidate_qualification import DEADLINES_S, _wait
+    from metroliza.ui.main_window import MainWindow
+    from metroliza.ui.ui_preferences import UiPreferences
 
-    ``scratch`` is the caller's existing isolated child and must already be an
-    absolute directory.  The two retained artifact names are relative to that
-    same directory.  A unique nested directory contains only temporary staged
-    report inputs.
-    """
-    private: Path | None = None
-    window = None
-    app = None
+    app = get_or_create_qapplication()
+    settings = QSettings(str(private / "isolated-settings.ini"), QSettings.Format.IniFormat)
+    window = MainWindow("candidate-w06-inference", None, ui_preferences=UiPreferences(settings))
     try:
-        root = _require_private_root(scratch)
-        private = root / f"inference-w06-{uuid.uuid4().hex}"
-        private.mkdir()
-        reports, source_hashes = _stage_reports(fixtures, private)
-        database = root / "inference.sqlite"
-        grouping_file = root / "group-inference.json"
-        if database.exists() or grouping_file.exists():
-            raise InferenceFailure("inference_artifact_name_collision")
-
-        from PyQt6.QtCore import QSettings
-        from metroliza.app.bootstrap import get_or_create_qapplication
-        from metroliza.app.windows_candidate_qualification import DEADLINES_S, _wait
-        from metroliza.ui.main_window import MainWindow
-        from metroliza.ui.ui_preferences import UiPreferences
-
-        app = get_or_create_qapplication()
-        settings = QSettings(str(private / "isolated-settings.ini"), QSettings.Format.IniFormat)
-        window = MainWindow("candidate-w06-inference", None, ui_preferences=UiPreferences(settings))
         window.show()
         app.processEvents()
         reports_index = window.navigation_combo.findData("reports")
@@ -347,13 +338,42 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
             deadline_s=DEADLINES_S["import"],
             stage="import",
         )
-        result = worker.last_parse_result
-        if (
-            result is None
-            or result.imported_files != len(_EXPECTED_FILES)
-            or result.intentionally_excluded_files
-        ):
-            raise InferenceFailure("import_count_mismatch")
+        _assert_import_result(worker.last_parse_result)
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def _failure_result(code: str) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "stage": "failed",
+        "status": "failed",
+        "facets": {"successful_group_inference": "failed"},
+        "failure": code,
+    }
+
+
+def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
+    """Run the real synthetic W06 producer and return retained-artifact metadata.
+
+    ``scratch`` is the caller's existing isolated child and must already be an
+    absolute directory.  The two retained artifact names are relative to that
+    same directory.  A unique nested directory contains only temporary staged
+    report inputs.
+    """
+    private: Path | None = None
+    try:
+        root = _require_private_root(scratch)
+        private = root / f"inference-w06-{uuid.uuid4().hex}"
+        private.mkdir()
+        reports, source_hashes = _stage_reports(fixtures, private)
+        database = root / "inference.sqlite"
+        grouping_file = root / "group-inference.json"
+        if database.exists() or grouping_file.exists():
+            raise InferenceFailure("inference_artifact_name_collision")
+
+        _run_gui_import(private, reports, database)
         if any(_sha256(reports / name) != digest for name, digest in source_hashes.items()):
             raise InferenceFailure("source_preservation_failed")
         report_ids = _report_ids_by_filename(database)
@@ -390,8 +410,3 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
     except Exception as error:
         code = str(error) if isinstance(error, InferenceFailure) else type(error).__name__
         return _failure_result(code)
-    finally:
-        if window is not None:
-            window.close()
-        if app is not None:
-            app.processEvents()
