@@ -28,6 +28,10 @@ from metroliza.reports.db import (
 )
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.shared.datetime_parsing import parse_datetime_literal
+from metroliza.shared.finite_numeric import (
+    finite_numeric_source, parse_numeric_literal,
+    sqlite_numeric_filter, sqlite_numeric_membership, sqlite_prefer_integer_source,
+)
 from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
 from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
@@ -79,6 +83,7 @@ TABULAR_SQLITE_CHUNK_ROWS = 50_000
 TABULAR_SQLITE_PREVIEW_ROWS = 5_000
 _TABULAR_SQLITE_TABLE = "tabular_rows"
 _TABULAR_NUMERIC_OPERATORS = frozenset({"=", "!=", ">", ">=", "<", "<="})
+_TABULAR_NUMERIC_ALIASES = {"=": "eq", "!=": "ne", ">": "gt", ">=": "gte", "<": "lt", "<=": "lte"}
 _TABULAR_DATE_OPERATORS = _TABULAR_NUMERIC_OPERATORS
 _SQLITE_TEXT_FILTER_OPERATORS = frozenset(
     {
@@ -1101,15 +1106,17 @@ class TabularSqliteStore:
         if column_filter.has_numeric_filter:
             numeric_value = _parse_tabular_filter_number(column_filter.numeric_value)
             if numeric_value is not None and column_filter.numeric_operator in _TABULAR_NUMERIC_OPERATORS:
-                numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
+                source = _sqlite_numeric_filter_source(
                     column_filter.column,
                     self.numeric_filter_columns,
                 )
-                filter_clauses.append(
-                    f"(({numeric_guard}) AND {numeric_expr} "
-                    f"{column_filter.numeric_operator} ?)"
+                # Column filters exclude invalid sources even for !=; grouping
+                # expressions deliberately use the shared predicate's total NE.
+                comparison = sqlite_numeric_filter(
+                    source, _TABULAR_NUMERIC_ALIASES[column_filter.numeric_operator],
+                    numeric_value, params=params, exclude_invalid=True,
                 )
-                params.append(float(numeric_value))
+                filter_clauses.append(comparison)
         if not filter_clauses:
             return "", []
         return f"({' AND '.join(filter_clauses)})", params
@@ -3855,6 +3862,14 @@ def _compile_sqlite_text_membership_filter_spec(
     return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
+def _sqlite_numeric_filter_source(column: str, mapping: Mapping[str, str] | None) -> str:
+    source = _quote_identifier(column)
+    sidecar = (mapping or {}).get(column, column)
+    if sidecar == column:
+        return source
+    return sqlite_prefer_integer_source(source, _quote_identifier(sidecar))
+
+
 def _compile_sqlite_numeric_membership_filter_spec(
     spec: Any,
     column: str,
@@ -3863,23 +3878,11 @@ def _compile_sqlite_numeric_membership_filter_spec(
     numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
     del spec
-    numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
-        column,
-        numeric_filter_columns,
+    params: list[Any] = []
+    clause = sqlite_numeric_membership(
+        _sqlite_numeric_filter_source(column, numeric_filter_columns),
+        values, negate=negate, params=params,
     )
-    parsed_values = tuple(
-        _sqlite_filter_number_value(value, field_name="IN value")
-        for value in values
-    )
-    predicate, params = _sqlite_membership_in_predicate(
-        numeric_expr,
-        parsed_values,
-        negate=negate,
-    )
-    if negate:
-        clause = f"((NOT ({numeric_guard})) OR {predicate})"
-    else:
-        clause = f"(({numeric_guard}) AND {predicate})"
     return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
@@ -3915,37 +3918,12 @@ def _compile_sqlite_number_filter_spec(
     operator: str,
     numeric_filter_columns: Mapping[str, str] | None,
 ) -> TabularSqliteFilterExpression:
-    numeric_expr, numeric_guard = _sqlite_filter_numeric_expr_and_guard(
-        column,
-        numeric_filter_columns,
+    params: list[Any] = []
+    clause = sqlite_numeric_filter(
+        _sqlite_numeric_filter_source(column, numeric_filter_columns), operator,
+        getattr(spec, "value", None), getattr(spec, "second_value", None), params=params,
     )
-    if operator == "is_blank":
-        return TabularSqliteFilterExpression(clause=f"(NOT ({numeric_guard}))", columns=(column,))
-    if operator == "is_not_blank":
-        return TabularSqliteFilterExpression(clause=f"({numeric_guard})", columns=(column,))
-
-    if operator == "between":
-        value = _sqlite_filter_number_value(getattr(spec, "value", None), field_name="value")
-        second_value = _sqlite_filter_number_value(
-            getattr(spec, "second_value", None),
-            field_name="second_value",
-        )
-        lower, upper = sorted((value, second_value))
-        return TabularSqliteFilterExpression(
-            clause=f"(({numeric_guard}) AND {numeric_expr} BETWEEN ? AND ?)",
-            params=(lower, upper),
-            columns=(column,),
-        )
-
-    sql_operator = _SQLITE_NUMBER_OPERATOR_SQL.get(operator)
-    if sql_operator is None:
-        raise ValueError(f"Unsupported number filter operator: {operator}")
-    value = _sqlite_filter_number_value(getattr(spec, "value", None), field_name="value")
-    if sql_operator == "!=":
-        clause = f"((NOT ({numeric_guard})) OR {numeric_expr} != ?)"
-    else:
-        clause = f"(({numeric_guard}) AND {numeric_expr} {sql_operator} ?)"
-    return TabularSqliteFilterExpression(clause=clause, params=(value,), columns=(column,))
+    return TabularSqliteFilterExpression(clause=clause, params=tuple(params), columns=(column,))
 
 
 def _compile_sqlite_date_filter_spec(
@@ -4172,34 +4150,6 @@ def _resolve_sqlite_filter_column(
     raise KeyError(f"SQLite grouping filter column not allowed: {requested}")
 
 
-def _sqlite_numeric_text_and_guard(column: str) -> tuple[str, str]:
-    identifier = _quote_identifier(column)
-    text_expr = f"TRIM(CAST({identifier} AS TEXT))"
-    json_type_expr = f"CASE WHEN json_valid({text_expr}) THEN json_type({text_expr}) ELSE NULL END"
-    numeric_guard = (
-        f"{text_expr} != '' AND ("
-        f"COALESCE({json_type_expr} IN ('integer', 'real'), 0) "
-        f"OR ({text_expr} NOT GLOB '*[^0-9]*') "
-        f"OR (substr({text_expr}, 1, 1) IN ('+', '-') "
-        f"AND substr({text_expr}, 2) != '' "
-        f"AND substr({text_expr}, 2) NOT GLOB '*[^0-9]*')"
-        ")"
-    )
-    return text_expr, numeric_guard
-
-
-def _sqlite_filter_numeric_expr_and_guard(
-    column: str,
-    numeric_filter_columns: Mapping[str, str] | None = None,
-) -> tuple[str, str]:
-    storage_column = (numeric_filter_columns or {}).get(column)
-    if storage_column is not None:
-        identifier = _quote_identifier(storage_column)
-        return identifier, f"{identifier} IS NOT NULL"
-    text_expr, numeric_guard = _sqlite_numeric_text_and_guard(column)
-    return f"CAST({text_expr} AS REAL)", numeric_guard
-
-
 def _sqlite_stored_numeric_expr_and_guard(
     column: str,
     numeric_filter_columns: Mapping[str, str] | None = None,
@@ -4297,9 +4247,14 @@ def _parse_tabular_filter_date(value: str | None):
     return parsed.date() if parsed is not None else None
 
 
-def _parse_tabular_filter_number(value: float | int | str | None) -> float | None:
+def _parse_tabular_filter_number(value: float | int | str | None) -> int | float | None:
     if value is None:
         return None
+    # Normalize exactly the comma grouping already accepted by the fallback.
+    exact = parse_numeric_literal(_display_cell_text(value).replace(",", ""))
+    if isinstance(exact, int):
+        return exact
+    # Retain the existing comma/grouping and float-compatible literal language.
     return _parse_tabular_number(value)
 
 
@@ -4338,7 +4293,9 @@ def _tabular_numeric_filter_mask(series: pd.Series, column_filter: TabularColumn
     value = _parse_tabular_filter_number(column_filter.numeric_value)
     if operator not in _TABULAR_NUMERIC_OPERATORS or value is None:
         return pd.Series(True, index=series.index)
-    numeric_series = pd.to_numeric(series, errors="coerce")
+    numeric_series = pd.Series(
+        [finite_numeric_source(item) for item in series], index=series.index, dtype=object,
+    )
     valid_numeric = numeric_series.notna()
     if operator == "=":
         mask = valid_numeric & (numeric_series == value)
