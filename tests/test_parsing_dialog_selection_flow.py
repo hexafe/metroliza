@@ -1216,8 +1216,19 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
     finally:
         release_extraction.set()
         for worker in workers:
-            worker.wait(15000)
+            assert worker.wait(15000)
+        from PyQt6 import sip
+        from PyQt6.QtCore import QCoreApplication, QEvent
+
+        app.processEvents()
+        assert dialog.parse_thread is None
         dialog.close()
+        dialog.deleteLater()
+        for worker in workers:
+            worker.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(dialog)
+        assert all(sip.isdeleted(worker) for worker in workers)
 
 
 @pytest.mark.parametrize("result", (None, SimpleNamespace(parsed_files=1, total_files=1),
