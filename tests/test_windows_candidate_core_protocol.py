@@ -22,6 +22,7 @@ def payload():
         "schema_version": 1, "stage": "complete", "status": "passed",
         "packaged": True, "qpa": "windows", "ordinary_user": True,
         "source_sha": SHA, "relative_artifact_dir": "core-" + "a" * 32,
+        "checks": {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "not_executed"},
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
             key: {"path": key + extension, "sha256": "2" * 64}
@@ -33,6 +34,19 @@ def payload():
 def test_protocol_accepts_only_declared_native_complete_identity():
     sample = payload()
     assert driver.validate_runtime_receipt(sample, SHA) is sample
+
+
+@pytest.mark.parametrize("checks", [
+    {},
+    {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "not_executed", "W07": "not_executed"},
+    {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "not_executed"},
+    {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "passed"},
+])
+def test_core_observations_cannot_contradict_completed_facets_or_claim_unexecuted_scope(checks):
+    sample = payload()
+    sample["checks"] = checks
+    with pytest.raises(driver.CandidateFailure, match="^core_observation_state_mismatch$"):
+        driver.validate_runtime_receipt(sample, SHA)
 
 
 @pytest.mark.parametrize(("key", "value", "reason"), [

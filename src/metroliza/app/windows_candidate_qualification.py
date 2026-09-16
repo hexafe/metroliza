@@ -408,7 +408,7 @@ def run_qualification() -> int:
         receipt["facets"].update(inference["facets"])
         receipt["stage"] = "complete"
         receipt["status"] = "passed"
-        receipt["checks"].update({"W03": "passed", "W05": "passed"})
+        receipt["checks"].update({"W03": "passed", "W05": "passed", "W06": "passed"})
         _atomic_json(root / "windows-candidate-result.json", receipt)
         return 0
     except Exception as error:

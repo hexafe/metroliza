@@ -78,6 +78,10 @@ An independent standard-library comparator checks the actual persisted rows,
 group membership and public result against separately specified expected values.
 It checks both the original and retained inference database and JSON artifact.
 This fixed case supplements the preserved one-group negative boundary.
+The core reports W03, W05 and W06 as executed; W04 and W07 remain incomplete
+because their broader reopening/cancellation contracts are not all exercised.
+The host rejects inconsistent check statuses, and separately requires a native
+ordinary-user packaged runtime before accepting any Windows observation.
 
 After all application processes exit, the driver verifies seven artifact hashes
 and rejects SQLite sidecars. It compares the actual database, workbook, grouping
