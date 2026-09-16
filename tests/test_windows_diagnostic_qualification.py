@@ -3684,6 +3684,7 @@ def test_native_windows_matches_and_closes_test_owned_qt_main_window() -> None:
     from PyQt6.QtWidgets import QApplication, QMainWindow
 
     application = QApplication.instance() or QApplication([])
+    assert application.platformName() == "windows"
     window = QMainWindow()
     title = f"Metroliza [native-test-{uuid.uuid4().hex}]"
     window.setWindowTitle(title)

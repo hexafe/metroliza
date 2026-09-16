@@ -651,6 +651,7 @@ def test_windows_incident_qualification_is_bounded_and_native_selection_is_block
     assert len(selected) == 1
     assert 'if' not in selected[0] and 'continue-on-error' not in selected[0]
     assert selected[0]['env']['QT_QPA_PLATFORM'] == 'windows'
+    assert selected[0]['env']['METROLIZA_EXPECT_QT_PLATFORM'] == 'windows'
     assert selected[0]['run'].split() == [
         'python', '-m', 'pytest', '-v',
         'tests/test_diagnostic_wire.py', 'tests/test_diagnostic_ring.py',

@@ -1035,6 +1035,7 @@ jobs:
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
         run: >-
           python -m pytest -v
           tests/test_diagnostic_wire.py tests/test_diagnostic_ring.py
