@@ -34,6 +34,25 @@ def test_native_windows_report_planner_step_preserves_real_platform_and_scope() 
     assert 'do not qualify a packaged EXE' in policy
 
 
+def test_native_windows_grouping_preview_step_keeps_complete_file_and_order() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows grouping-preview lifecycle tests'
+    ocr_name = 'Run safe OCR diagnostics and native PowerShell contract tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'python -m pytest -vv -s --tb=short --show-capture=no' in step
+    assert 'tests/test_tabular_analytics_grouping_dialog.py' in step
+    assert ' -k ' not in step
+    assert 'continue-on-error' not in step
+    assert 'if:' not in step
+    assert workflow.index(f'- name: {name}') < workflow.index(f'- name: {ocr_name}')
+    assert name in policy
+    assert 'complete `tests/test_tabular_analytics_grouping_dialog.py` file' in policy
+    assert 'independent OCR/PowerShell contract step' in policy
+
+
 def test_native_windows_cache_publication_preserves_required_real_lifecycle() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
     policy = CI_POLICY_PATH.read_text(encoding='utf-8')
