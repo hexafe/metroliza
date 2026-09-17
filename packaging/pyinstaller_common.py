@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import importlib.util
+import inspect
+import json
 import os
 from pathlib import Path
 import sys
+from typing import Any, Iterator
 
 try:
     from PyInstaller.utils.hooks import (
@@ -28,6 +32,23 @@ except ModuleNotFoundError as exc:
     copy_metadata = _missing_pyinstaller_hook
 else:
     _PYINSTALLER_IMPORT_ERROR = None
+
+
+ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES = (
+    "onnxruntime.backend",
+    "onnxruntime.datasets",
+    "onnxruntime.quantization",
+    "onnxruntime.tools",
+    "onnxruntime.transformers",
+)
+_ONEDIR_SCANNER_PROBE_PYINSTALLER_VERSION = "6.22.3"
+_ONEDIR_SCANNER_PROBE_ENV = "METROLIZA_PYINSTALLER_SCANNER_PROBE"
+_TARGET6_OBSERVED_CHILD_EXIT_CODE = 3221225477
+_ONEDIR_SCANNER_PARAMETERS = (
+    "binaries",
+    "import_packages",
+    "symlink_suppression_patterns",
+)
 
 
 def read_version_label(root_dir: Path) -> str:
@@ -136,6 +157,391 @@ def collect_optional_runtime_assets(
     if not _package_is_installed(package_name):
         return [], [], []
     return _collect_runtime_assets(package_name)
+
+
+def filter_onedir_hiddenimports(hiddenimports: list[str]) -> list[str]:
+    """Keep ONNX Runtime inference modules and all unrelated hidden imports."""
+    inference_prefix = "onnxruntime.capi"
+    return [
+        module_name
+        for module_name in hiddenimports
+        if not module_name.startswith("onnxruntime.")
+        or module_name == inference_prefix
+        or module_name.startswith(f"{inference_prefix}.")
+    ]
+
+
+def _load_pyinstaller_binary_scanner() -> tuple[str, str, Any, Any]:
+    from importlib.metadata import version as distribution_version
+
+    import PyInstaller
+    from PyInstaller.building import build_main
+    from PyInstaller import isolated
+
+    return (
+        PyInstaller.__version__,
+        distribution_version("onnxruntime"),
+        build_main,
+        isolated,
+    )
+
+
+def _scanner_signature_is_supported(scanner: object) -> bool:
+    try:
+        parameters = tuple(inspect.signature(scanner).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    return tuple(parameter.name for parameter in parameters) == _ONEDIR_SCANNER_PARAMETERS and all(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        and parameter.default is inspect.Parameter.empty
+        for parameter in parameters
+    )
+
+
+def _emit_scanner_probe(
+    scenario: str,
+    status: str,
+    child_exit_code: int | None = None,
+) -> None:
+    payload = {
+        "kind": "pyinstaller_scanner_probe",
+        "scenario": scenario,
+        "schema_version": 1,
+        "status": status,
+    }
+    if child_exit_code is not None:
+        payload["child_exit_code"] = child_exit_code
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")), flush=True)
+
+
+def _run_scanner_probe(
+    scanner: Any,
+    subprocess_died_error: type[Exception],
+    scenario: str,
+    packages: list[str],
+) -> tuple[str, int | None]:
+    child_exit_code = None
+    _emit_scanner_probe(scenario, "started")
+    try:
+        scanner([], packages, set())
+    except subprocess_died_error as exc:
+        status, candidate_code = _scanner_child_death_metadata(exc)
+        if (
+            isinstance(candidate_code, int)
+            and not isinstance(candidate_code, bool)
+            and -(2**31) <= candidate_code <= 2**32 - 1
+        ):
+            child_exit_code = candidate_code
+    except Exception:
+        status = "python_failed"
+    else:
+        status = "passed"
+    _emit_scanner_probe(scenario, status, child_exit_code)
+    return status, child_exit_code
+
+
+def _scanner_child_death_metadata(exc: BaseException) -> tuple[str, object]:
+    current: BaseException | None = exc
+    for _depth in range(4):
+        status = getattr(current, "_metroliza_scanner_status", None)
+        child_exit_code = getattr(current, "_metroliza_child_exit_code", None)
+        observed_phase = (
+            status == "scanner_child_died_during_onnxruntime_after_pyqt6"
+        )
+        if observed_phase or child_exit_code is not None:
+            return (
+                status if observed_phase else "scanner_child_died",
+                child_exit_code,
+            )
+        cause = current.__cause__
+        current = cause if isinstance(cause, BaseException) else None
+        if current is None:
+            break
+    return "scanner_child_died", None
+
+
+class _VerifiedOnnxRuntimePython:
+    """Proxy one pinned scanner child and verify package imports in that child."""
+
+    def __init__(
+        self,
+        python_type: Any,
+        expected_onnxruntime_version: str,
+        subprocess_died_error: type[Exception],
+        preload: bool,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        self._context = python_type(*args, **kwargs)
+        self._expected_onnxruntime_version = expected_onnxruntime_version
+        self._subprocess_died_error = subprocess_died_error
+        self._preload = preload
+        self._child: Any = None
+        self._setup_complete = False
+        self._preloaded = False
+        self._pyqt6_loaded = False
+
+    def __enter__(self) -> _VerifiedOnnxRuntimePython:
+        self._child = self._context.__enter__()
+        return self
+
+    def __exit__(self, *args: object) -> object:
+        return self._context.__exit__(*args)
+
+    def call(self, function: Any, *args: object, **kwargs: object) -> object:
+        function_name = getattr(function, "__name__", None)
+        if not self._setup_complete:
+            if function_name != "setup":
+                raise RuntimeError("Windows onedir scanner setup changed")
+            result = self._child.call(function, *args, **kwargs)
+            self._setup_complete = True
+            return result
+        if self._preload and not self._preloaded:
+            if function_name != "import_library":
+                raise RuntimeError("Windows onedir scanner import sequence changed")
+            self._child.call(function, "onnxruntime")
+            self._require_loaded_module("onnxruntime", self._expected_onnxruntime_version)
+            self._preloaded = True
+        try:
+            result = self._child.call(function, *args, **kwargs)
+        except self._subprocess_died_error as exc:
+            self._annotate_scanner_child_death(exc, function_name, args)
+            raise
+        self._verify_observed_import(function_name, args)
+        return result
+
+    def _verify_observed_import(
+        self,
+        function_name: str | None,
+        args: tuple[object, ...],
+    ) -> None:
+        if function_name != "import_library":
+            return
+        if args == ("PyQt6",):
+            self._require_loaded_module("PyQt6", None)
+            self._pyqt6_loaded = True
+        elif not self._preload and args == ("onnxruntime",):
+            self._require_loaded_module("onnxruntime", self._expected_onnxruntime_version)
+
+    def _require_loaded_module(
+        self,
+        module_name: str,
+        expected_version: str | None,
+    ) -> None:
+        loaded = self._child.call(
+            _verify_loaded_module,
+            module_name,
+            expected_version,
+        )
+        if loaded is not True:
+            raise RuntimeError("Windows onedir scanner module import failed")
+
+    def _annotate_scanner_child_death(
+        self,
+        exc: Exception,
+        function_name: str | None,
+        args: tuple[object, ...],
+    ) -> None:
+        process = getattr(self._child, "_child", None)
+        child_exit_code = getattr(process, "returncode", None)
+        if isinstance(child_exit_code, int) and not isinstance(child_exit_code, bool):
+            exc._metroliza_child_exit_code = child_exit_code
+        if (
+            self._pyqt6_loaded
+            and function_name == "import_library"
+            and args == ("onnxruntime",)
+        ):
+            exc._metroliza_scanner_status = (
+                "scanner_child_died_during_onnxruntime_after_pyqt6"
+            )
+
+
+def _verify_loaded_module(module_name: str, expected_version: str | None) -> bool:
+    import sys
+    from types import ModuleType
+
+    module = sys.modules.get(module_name)
+    return isinstance(module, ModuleType) and (
+        expected_version is None
+        or getattr(module, "__version__", None) == expected_version
+    )
+
+
+def _import_and_verify_onnxruntime(expected_version: str) -> bool:
+    import sys
+    from types import ModuleType
+
+    __import__("onnxruntime")
+    module = sys.modules.get("onnxruntime")
+    return isinstance(module, ModuleType) and getattr(module, "__version__", None) == expected_version
+
+
+@contextmanager
+def _verify_onnxruntime_in_scanner(
+    isolated: Any,
+    expected_onnxruntime_version: str,
+    *,
+    preload: bool,
+) -> Iterator[None]:
+    original_python = isolated.Python
+
+    def _verified_python(*args: object, **kwargs: object) -> _VerifiedOnnxRuntimePython:
+        return _VerifiedOnnxRuntimePython(
+            original_python,
+            expected_onnxruntime_version,
+            isolated.SubprocessDiedError,
+            preload,
+            *args,
+            **kwargs,
+        )
+
+    isolated.Python = _verified_python
+    try:
+        yield
+    finally:
+        isolated.Python = original_python
+
+
+def _run_preloaded_scanner_probe(
+    scanner: Any,
+    isolated: Any,
+    expected_onnxruntime_version: str,
+    packages: list[str],
+) -> tuple[str, int | None]:
+    with _verify_onnxruntime_in_scanner(
+        isolated,
+        expected_onnxruntime_version,
+        preload=True,
+    ):
+        return _run_scanner_probe(
+            scanner,
+            isolated.SubprocessDiedError,
+            "onnxruntime_before_pyqt6",
+            packages,
+        )
+
+
+def _run_observed_scanner_probe(
+    scanner: Any,
+    isolated: Any,
+    expected_onnxruntime_version: str,
+    scenario: str,
+    packages: list[str],
+) -> tuple[str, int | None]:
+    with _verify_onnxruntime_in_scanner(
+        isolated,
+        expected_onnxruntime_version,
+        preload=False,
+    ):
+        return _run_scanner_probe(
+            scanner,
+            isolated.SubprocessDiedError,
+            scenario,
+            packages,
+        )
+
+
+def _run_direct_onnxruntime_probe(
+    isolated: Any,
+    expected_onnxruntime_version: str,
+) -> tuple[str, int | None]:
+    _emit_scanner_probe("onnxruntime_direct", "started")
+    try:
+        loaded = isolated.call(
+            _import_and_verify_onnxruntime,
+            expected_onnxruntime_version,
+        )
+    except isolated.SubprocessDiedError:
+        status = "scanner_child_died"
+    except Exception:
+        status = "python_failed"
+    else:
+        status = "passed" if loaded is True else "module_invalid"
+    _emit_scanner_probe("onnxruntime_direct", status)
+    return status, None
+
+
+@contextmanager
+def onedir_binary_scanner_probe() -> Iterator[None]:
+    """Preload ORT in the pinned Windows scanner and optionally run controls."""
+    if sys.platform != "win32":
+        yield
+        return
+
+    (
+        version,
+        expected_onnxruntime_version,
+        build_main,
+        isolated,
+    ) = _load_pyinstaller_binary_scanner()
+    original = getattr(build_main, "find_binary_dependencies", None)
+    if (
+        version != _ONEDIR_SCANNER_PROBE_PYINSTALLER_VERSION
+        or not _scanner_signature_is_supported(original)
+    ):
+        raise RuntimeError(
+            "Windows onedir scanner probe requires PyInstaller 6.22.3 "
+            "with its expected binary dependency scanner API"
+        )
+
+    def _probed_find_binary_dependencies(
+        binaries: object,
+        import_packages: list[str],
+        symlink_suppression_patterns: object,
+    ) -> object:
+        if os.getenv(_ONEDIR_SCANNER_PROBE_ENV) == "1":
+            probe_results = (
+                _run_direct_onnxruntime_probe(
+                    isolated,
+                    expected_onnxruntime_version,
+                ),
+                _run_observed_scanner_probe(
+                    original,
+                    isolated,
+                    expected_onnxruntime_version,
+                    "onnxruntime_scanner",
+                    ["onnxruntime"],
+                ),
+                _run_observed_scanner_probe(
+                    original,
+                    isolated,
+                    expected_onnxruntime_version,
+                    "pyqt6_then_onnxruntime",
+                    ["PyQt6", "onnxruntime"],
+                ),
+                _run_preloaded_scanner_probe(
+                    original,
+                    isolated,
+                    expected_onnxruntime_version,
+                    ["PyQt6", "onnxruntime"],
+                ),
+            )
+            if probe_results != (
+                ("passed", None),
+                ("passed", None),
+                (
+                    "scanner_child_died_during_onnxruntime_after_pyqt6",
+                    _TARGET6_OBSERVED_CHILD_EXIT_CODE,
+                ),
+                ("passed", None),
+            ):
+                raise RuntimeError("Windows onedir scanner probe failed")
+        with _verify_onnxruntime_in_scanner(
+            isolated,
+            expected_onnxruntime_version,
+            preload=True,
+        ):
+            return original(
+                binaries,
+                import_packages,
+                symlink_suppression_patterns,
+            )
+
+    build_main.find_binary_dependencies = _probed_find_binary_dependencies
+    try:
+        yield
+    finally:
+        build_main.find_binary_dependencies = original
 
 
 def collect_optional_distribution_metadata(distribution_name: str) -> list[tuple[str, str]]:

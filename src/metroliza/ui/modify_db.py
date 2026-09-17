@@ -119,15 +119,16 @@ class ModifyDB(QDialog):
     LEGACY_REPORT_FIELD_COLUMNS = EDIT_SERVICE_LEGACY_REPORT_FIELDS
     LEGACY_MEASUREMENT_FIELD_COLUMNS = EDIT_SERVICE_LEGACY_MEASUREMENT_FIELDS
 
-    def __init__(self, parent=None, db_file=""):
+    def __init__(self, parent=None, db_file="", *, modal=True):
         super().__init__(parent)
         self.setWindowTitle("Modify database")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         configure_window_size(self, minimum=(860, 540), initial=(1100, 650))
-        self.setModal(True)
+        self.setModal(modal)
 
         self.db_file = db_file
+        self.database_change_allowed = None
         self.undo_data = {}
         self._last_clicked_row_by_table = {}
         self._record_specs_by_table = {}
@@ -429,6 +430,8 @@ class ModifyDB(QDialog):
     def select_db_file(self):
         """Select a database file and load editable values into each table."""
         try:
+            if self.database_change_allowed is not None and not self.database_change_allowed():
+                return
             if self.has_pending_changes() and not self._confirm_discard_changes(
                 "Choose another database"
             ):
@@ -438,6 +441,8 @@ class ModifyDB(QDialog):
                 self, "Select a database file", "", "SQLite database (*.db);;All files (*)"
             )
             if filename:
+                if self.database_change_allowed is not None and not self.database_change_allowed():
+                    return
                 if not filename.endswith(".db"):
                     filename += ".db"
                 logger.info("Selected DB file: %s", filename)

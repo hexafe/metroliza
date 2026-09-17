@@ -49,8 +49,12 @@ release evidence are complete.
 
 Within #927, [#1015](https://github.com/hexafe/metroliza/issues/1015) implements persistent
 report review and exact subset selection in the Parsing host using the merged #1014/#1019/#1020
-contracts. Integration and Windows package acceptance remain pending; #1016 binds the reusable
-planner into the main Reports page after external #1015 integration.
+contracts. [#1016](https://github.com/hexafe/metroliza/issues/1016) embeds the same report
+operations in the main Reports page; Home reflects its context/task/result and Tools provides
+utilities and domain shortcuts. Navigation preserves selection and active work; no portable
+workspace persistence is introduced. External integration and Windows package acceptance
+remain separate gates. The optional diagnostic-menu binding consumes the separately owned
+viewer without qualifying its packaged preview/export.
 
 ## 2. Selection, preparation, and reusable configuration
 
@@ -92,7 +96,7 @@ planner into the main Reports page after external #1015 integration.
 |---|---:|---|---|---|
 | Supported headless CLI for preflight, import, analysis, export, replay, and validation | [#942](https://github.com/hexafe/metroliza/issues/942) | Planned / partial scripts | 5 | #912, #916, #926, #927, #935, #936, #937 |
 | Watched folders and scheduled local analysis jobs with quarantine and run manifests | [#943](https://github.com/hexafe/metroliza/issues/943) | Planned | 5 | #942, #926, #927, #935, #944, #949 |
-| Safe diagnostic foundation and supervised local incidents for support | [#944](https://github.com/hexafe/metroliza/issues/944) | Partial foundation; supervised V1 Planned / direction accepted | 1 and 5 | #917, #920 |
+| Safe diagnostic foundation and supervised local incidents for support | [#944](https://github.com/hexafe/metroliza/issues/944) | Partial foundation; supervised V1 implemented in #1046, qualification pending | 1 and 5 | #917, #920 |
 | Analysis run history, provenance, artifact hashes, and reproducibility manifest | [#949](https://github.com/hexafe/metroliza/issues/949) | Partial / planned | 5 | #917, #926, #935, #942, #944 |
 | Contextual onboarding, local manuals, disabled-state explanations, and troubleshooting | [#955](https://github.com/hexafe/metroliza/issues/955) | Partial | 7 | #945, #944, #902, #920 |
 
@@ -100,10 +104,13 @@ The [#944 V1 direction accepted by the PO](https://github.com/hexafe/metroliza/i
 builds on the integrated #1011 safe-event/managed-log foundation. The first bounded slice,
 [S1a #1039](https://github.com/hexafe/metroliza/issues/1039), adds correlated startup/build facts to
 existing logs; it does not implement crash survival or change logging destinations/retention.
-Delivery proceeds through selected import/export S1b, supervisor/store with source and Windows
-onedir qualification, then preview/export and explicit managed-log migration. Other packagers,
-responsiveness and sensitive native capture require separate gates; complete #944 and Windows V1
-remain unimplemented and are not release-qualified by S1a.
+[V1 #1046](https://github.com/hexafe/metroliza/issues/1046) composes actual selected-import/local-export
+adapters, inherited-pipe supervision, bounded RAM and private incident storage, local preview and
+selected export. Its Windows PyInstaller onedir launcher uses an independent minimal runtime and
+suppresses ordinary duplicate managed files. Source tests cover surviving history and caught failures;
+native package qualification and current integration gates remain required. See the
+[operator guide](../user_manual/diagnostic_incidents.md). Other packagers, responsiveness and
+sensitive native capture require separate gates; neither S1a nor V1 grants complete #944 or release acceptance.
 
 ## 7. Application UX and accessibility
 

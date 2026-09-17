@@ -58,7 +58,7 @@ function New-BuildVenv {
 
     $pythonLauncher = Get-Command py -ErrorAction SilentlyContinue
     if ($pythonLauncher) {
-        Invoke-Checked -Executable 'py' -Arguments @('-3', '-m', 'venv', $venvDir)
+        Invoke-Checked -Executable 'py' -Arguments @('-3.11', '-m', 'venv', $venvDir)
         return
     }
 
@@ -68,6 +68,13 @@ function New-BuildVenv {
     }
 
     Invoke-Checked -Executable 'python' -Arguments @('-m', 'venv', $venvDir)
+}
+
+function Assert-BuildPythonVersion {
+    Invoke-Checked -Executable $venvPython -Arguments @(
+        '-c',
+        'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)'
+    )
 }
 
 function Get-PyInstallerBuildSpecs {
@@ -129,6 +136,7 @@ try {
         if (-not (Test-Path -LiteralPath $venvPython)) {
             throw "Build venv Python was not created: $venvPython"
         }
+        Assert-BuildPythonVersion
     }
 
     $env:Path = "$venvScripts;$env:Path"

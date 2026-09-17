@@ -17,6 +17,7 @@ Start here for current product scope, architecture, planning, and development pr
 - [`engineering/codex-model-routing.md`](engineering/codex-model-routing.md) — universal coordinator/worker routing, exact-head evidence, review feedback, merge authority, and Metroliza adaptation.
 - [`engineering/codex-task-packet-template.md`](engineering/codex-task-packet-template.md) — reusable pre-dispatch and post-execution packet with MUST/SHOULD/DEFERRED scope.
 - [`engineering/pr-routing-report-template.md`](engineering/pr-routing-report-template.md) — PR-ready routing, MUST-to-evidence, validation, review, and remote-operation report.
+- [`engineering/supervised-diagnostics-v1.md`](engineering/supervised-diagnostics-v1.md) — supervised process/store contracts, bounds, rollback and source/package qualification boundaries.
 - `project/branch_audit.md` — durable branch archaeology and cleanup-closeout record with historical recovery evidence, executed Gates 1–4, the observed pre-Gate-5 state, and the final branch target.
 - `project/branch_cleanup_execution.md` — branch-cleanup closeout and final-state contract with the Gate 5 handoff; #960 remains the authoritative exact-ref execution ledger.
 
@@ -38,6 +39,7 @@ Start here for current product scope, architecture, planning, and development pr
 - `user_manual/parser_profiles.md` — end-user guide to Parser Profiles and LLM handoff folders.
 - `user_manual/characteristic_name_matching.md` — end-user guide to Characteristic Name Matching.
 - `user_manual/help_startup_and_license.md` — short support/reference page for startup, license, About, and Release notes.
+- [`user_manual/diagnostic_incidents.md`](user_manual/diagnostic_incidents.md) — local incident preview, selected export and incomplete-history interpretation.
 - `user_manual/group_analysis/README.md` — index for the exported Group Analysis worksheet manual.
 - `user_manual/group_analysis/user_manual.md` — plain-English end-user guide for interpreting the exported Group Analysis worksheet.
 - `user_manual/group_analysis/user_manual.pdf` — optional printable companion version.
