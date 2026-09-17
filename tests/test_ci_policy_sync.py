@@ -639,12 +639,30 @@ def test_windows_incident_qualification_is_bounded_and_native_selection_is_block
     assert 'scripts/qualify_windows_diagnostics.py' in runs
     uploads = [step for step in job['steps']
                if step.get('uses', '').startswith('actions/upload-artifact@')]
-    assert {step['with']['path'] for step in uploads} == {
+    assert {path for step in uploads for path in step['with']['path'].splitlines()} == {
         'diagnostic-qualification-receipts/*.json',
+        'native-identity-receipts/*.json',
         'diagnostic-qualification-receipts/qualified-windows-development-package.zip',
     }
+    control_index = next(index for index, step in enumerate(job['steps'])
+                         if '--identity-control-executable' in step.get('run', ''))
+    application_index = next(index for index, step in enumerate(job['steps'])
+                             if step['name'] == 'Qualify actual packaged incident flow with public synthetic inputs')
+    assert control_index < application_index
+    controls = job['steps'][control_index]
+    mode = workflow['on']['workflow_dispatch']['inputs']['diagnostic_mode']
+    assert mode['default'] == 'full'
+    assert mode['options'] == ['full', 'identity']
+    assert controls['if'] == "inputs.diagnostic_mode == 'identity'"
+    assert '--onedir --windowed' in controls['run']
+    assert 'scripts/windows_native_identity_control.py' in controls['run']
+    assert 'if ($LASTEXITCODE -ne 0)' in controls['run']
+    assert job['steps'][application_index]['if'] == "inputs.diagnostic_mode == 'full'"
+    receipt_upload = next(step for step in uploads if 'native-identity-receipts' in step['with']['path'])
+    assert receipt_upload['if'] == 'always()'
     package_upload = next(step for step in uploads if step['with']['path'].endswith('.zip'))
-    assert 'if' not in package_upload  # A failed qualification cannot publish a package.
+    # Neither failure nor an identity-only result can publish a qualified package.
+    assert package_upload['if'] == "success() && inputs.diagnostic_mode == 'full'"
     assert package_upload['with']['if-no-files-found'] == 'error'
     selected = [step for step in workflow['jobs']['windows-core-smoke']['steps']
                 if step['name'] == 'Run native Windows supervised incident tests']

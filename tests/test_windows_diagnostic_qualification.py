@@ -2001,6 +2001,217 @@ def test_native_process_observation_names_only_failing_api(
 
 
 @pytest.mark.parametrize(
+    ("wait_result", "state"), [(0, "exited"), (258, "alive"), (0xFFFFFFFF, "unknown")]
+)
+@pytest.mark.parametrize("api_name", ["image", "times"])
+def test_native_identity_captures_primary_error_before_state_query(
+    monkeypatch, wait_result, state, api_name
+) -> None:
+    last_error = [999]
+    calls = []
+
+    class _Kernel:
+        def WaitForSingleObject(self, process, timeout):
+            assert process is process_handle and timeout == 0
+            calls.append("state")
+            last_error[0] = 1234  # Secondary observation must not replace the error.
+            return wait_result
+
+    def query():
+        assert last_error[0] == 0
+        calls.append("query")
+        last_error[0] = 5
+        return 0
+
+    def read_error():
+        calls.append("error")
+        return last_error[0]
+
+    monkeypatch.setattr(ctypes, "set_last_error", lambda code: last_error.__setitem__(0, code), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", read_error, raising=False)
+    process_handle = object()
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api._identity_call(process_handle, api_name, query)
+    detail = caught.value.native_observation
+    assert detail.winerror == 5
+    assert detail.api == api_name and detail.outcome == "false"
+    assert detail.process_state == state
+    assert calls == ["query", "error", "state"]
+
+
+def test_native_identity_keeps_original_failure_if_state_probe_raises(monkeypatch) -> None:
+    class _Kernel:
+        def WaitForSingleObject(self, *_args):
+            raise OSError("PRIVATE_STATE_DETAIL")
+
+    monkeypatch.setattr(ctypes, "set_last_error", lambda _code: None, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 6, raising=False)
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api._identity_call(object(), "image", lambda: 0)
+    assert caught.value.qualification_reason == "native_image_query_unavailable"
+    assert caught.value.native_observation.winerror == 6
+    assert caught.value.native_observation.process_state == "unknown"
+    assert "PRIVATE" not in str(caught.value)
+
+
+def test_native_identity_launch_phase_precedes_resume_and_survives_cleanup(
+    tmp_path, monkeypatch
+) -> None:
+    closed = []
+    api = _fake_launch_api(tmp_path, monkeypatch, _LaunchTransferKernel(closed))
+    primary = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason="native_image_query_unavailable",
+        native_observation=qualification._NativeIdentityObservation(
+            None, "image", "false", 31, "alive"
+        ),
+    )
+
+    def fail(*_args):
+        raise primary
+
+    api._process_observation = fail
+    api.kernel.ResumeThread = lambda _thread: pytest.fail("Failed identity must not resume")
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.launch(tmp_path / "app.exe", {}, tmp_path)
+    assert caught.value is primary
+    assert primary.native_observation.phase == "pre_resume"
+    assert primary.native_observation.winerror == 31
+    assert primary.qualification_cleanup == "complete"
+    assert closed == ["thread", "process", "job", "token"]
+
+
+def test_native_identity_job_phase_stays_fatal_when_process_remains_listed() -> None:
+    closed = []
+
+    class _Kernel:
+        def OpenProcess(self, *_args):
+            return 77
+
+        def CloseHandle(self, handle):
+            closed.append(handle)
+            return 1
+
+    primary = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason="native_image_query_unavailable",
+        native_observation=qualification._NativeIdentityObservation(
+            None, "image", "false", 5, "unknown"
+        ),
+    )
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    api._job_process_ids = lambda _job: (407,)
+
+    def fail(*_args):
+        raise primary
+
+    api._process_observation = fail
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.job_observations(object())
+    assert caught.value is primary
+    assert primary.native_observation.phase == "job_observation"
+    assert primary.native_observation.process_state == "unknown"
+    assert closed == [77]
+
+
+def test_native_identity_exception_does_not_report_stale_last_error(monkeypatch) -> None:
+    class _Kernel:
+        def WaitForSingleObject(self, *_args):
+            return 258
+
+    def query():
+        raise OSError("PRIVATE_IMAGE_DETAIL")
+
+    def stale_error():
+        pytest.fail("A Python exception has no reliable failed-BOOL last error")
+
+    monkeypatch.setattr(ctypes, "set_last_error", lambda _code: None, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", stale_error, raising=False)
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api._identity_call(object(), "image", query)
+    assert caught.value.native_observation.winerror is None
+    assert caught.value.native_observation.outcome == "exception"
+    assert caught.value.native_observation.process_state == "alive"
+    assert "PRIVATE" not in str(caught.value)
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_native_identity_survives_phase_cleanup_and_public_receipt(
+    tmp_path, monkeypatch, cleanup_fails
+) -> None:
+    observation = qualification._NativeIdentityObservation(
+        "pre_resume", "image", "false", 31, "alive"
+    )
+    primary = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason="native_image_query_unavailable",
+        native_observation=observation,
+    )
+
+    def cleanup():
+        if cleanup_fails:
+            raise OSError("PRIVATE_CLEANUP_DETAIL")
+
+    def fail():
+        try:
+            raise primary
+        finally:
+            qualification._attempt_cleanup(cleanup)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._run_driver_phase("direct_ui_smoke", fail)
+    failure = caught.value
+    assert failure.native_observation == observation
+    assert failure.qualification_reason == primary.qualification_reason
+    result = qualification.QualificationResult(
+        "failed", failure.failure_id, None,
+        qualification_stage=failure.qualification_stage,
+        qualification_reason=failure.qualification_reason,
+        qualification_cleanup=failure.qualification_cleanup,
+        native_observation=failure.native_observation,
+    )
+    monkeypatch.setattr(qualification, "qualify_windows_diagnostics", lambda *_args: result)
+    output = tmp_path / "out"
+    assert qualification.main([
+        "--artifact-dir", str(tmp_path / "package"), "--output-dir", str(output)
+    ]) == 1
+    raw = (output / qualification.OUTPUT_NAME).read_bytes()
+    receipt = json.loads(raw)
+    qualification._validate_output_payload(receipt)
+    assert receipt["qualification_failure"]["native_observation"] == {
+        "phase": "pre_resume", "api": "image", "outcome": "false",
+        "winerror": 31, "process_state": "alive",
+    }
+    assert receipt["qualification_cleanup"] == ("failed" if cleanup_fails else "complete")
+    assert b"PRIVATE" not in raw and b"package" not in json.dumps(
+        receipt["qualification_failure"]
+    ).encode()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [("phase", "PRIVATE_PATH"), ("api", "PRIVATE_API"), ("outcome", "success"),
+     ("process_state", "PRIVATE_STATE"), ("winerror", True), ("winerror", -1),
+     ("winerror", 2**32), ("winerror", "5"), ("pid", 123), ("path", "PRIVATE_PATH")],
+)
+def test_native_identity_receipt_rejects_unbounded_or_misleading_fields(field, invalid):
+    detail = {
+        "stage": "direct_ui_smoke", "reason": "native_image_query_unavailable",
+        "native_observation": {
+            "phase": "job_observation", "api": "image", "outcome": "false",
+            "winerror": 5, "process_state": "unknown",
+        },
+    }
+    assert qualification._valid_failure_detail(detail)
+    detail["native_observation"][field] = invalid
+    assert not qualification._valid_failure_detail(detail)
+
+
+@pytest.mark.parametrize(
     ("api_name", "invalid", "reason"),
     [
         ("ids", False, "native_job_ids_unavailable"),
@@ -3900,6 +4111,62 @@ class _ControlledNativeQueryFailureKernel:
                 self.duplicate_open = False
                 self.duplicate_closes += 1
         return result
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")
+def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
+    tmp_path, monkeypatch
+) -> None:
+    api = qualification._WindowsApi()
+    executable = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "whoami.exe"
+    original_observe = api._process_observation
+    observed = []
+
+    def observe_before_resume(handle, process_id):
+        initial = original_observe(handle, process_id)
+        assert api._native_process_state(handle) == "alive"
+        assert initial.creation_time > 0
+        assert os.path.normcase(initial.image) == os.path.normcase(str(executable))
+        with pytest.raises(qualification.QualificationFailure) as invalid:
+            original_observe(api.wintypes.HANDLE(), 0)
+        assert invalid.value.native_observation.api == "image"
+        assert invalid.value.native_observation.outcome == "false"
+        assert invalid.value.native_observation.winerror == 6
+        assert invalid.value.native_observation.process_state == "unknown"
+        duplicate = api.duplicate_synchronize_only(handle)
+        try:
+            with pytest.raises(qualification.QualificationFailure) as denied:
+                original_observe(duplicate, process_id)
+            assert denied.value.native_observation.api == "image"
+            assert denied.value.native_observation.outcome == "false"
+            assert denied.value.native_observation.winerror == 5
+            assert denied.value.native_observation.process_state == "alive"
+        finally:
+            api._require_closed_handles(duplicate)
+        observed.append(initial)
+        return initial
+
+    monkeypatch.setattr(api, "_process_observation", observe_before_resume)
+    owned = []
+    try:
+        environment = qualification._sanitized_environment(
+            tmp_path, tmp_path, tmp_path / "state", "normal"
+        )
+        process = api.launch(executable, environment, tmp_path, owned=owned)
+        monkeypatch.setattr(api, "_process_observation", original_observe)
+        _wait_for_native_process_and_job_exit(api, process)
+        assert api._native_process_state(process._process) == "exited"
+        assert len(observed) == 1
+        try:
+            retired = original_observe(process._process, observed[0].process_id)
+        except qualification.QualificationFailure as failure:
+            assert failure.native_observation.process_state == "exited"
+            assert failure.native_observation.outcome == "false"
+            assert type(failure.native_observation.winerror) is int
+        else:
+            assert retired == observed[0]
+    finally:
+        qualification._close_owned_processes(owned, terminate=True)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")
