@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 from defusedxml.common import DefusedXmlException
+from PyQt6.QtCore import QCoreApplication
+
+from metroliza.exporting.execution import ExportOutcomeKind
 
 from metroliza.app import windows_candidate_xlsx as application_xlsx
 from scripts import windows_candidate_xlsx as standalone_xlsx
@@ -43,3 +46,18 @@ def test_core_qualification_uses_only_the_canonical_xlsx_module() -> None:
     source = inspect.getsource(qualification)
     assert "from metroliza.app.windows_candidate_xlsx import run_export_checks" in source
     assert "from windows_candidate_xlsx import run_export_checks" not in source
+
+
+@pytest.mark.parametrize("module", (application_xlsx, standalone_xlsx))
+def test_active_export_cancellation_preserves_completed_workbook(tmp_path: Path, module) -> None:
+    """Cancel the actual QThread after its measurement stage has begun."""
+    application = QCoreApplication.instance() or QCoreApplication([])
+    workbook = tmp_path / "last-complete.xlsx"
+    completed = module._make_thread(tmp_path / "complete.sqlite", workbook, ("Complete",))
+    assert completed.get_export_backend().run(completed).kind is ExportOutcomeKind.COMPLETED
+    completed_bytes = workbook.read_bytes()
+
+    facets = module._verify_active_cancellation(tmp_path, workbook, application)
+
+    assert facets == {"active_export_cancellation_preserves_workbook": "passed"}
+    assert workbook.read_bytes() == completed_bytes

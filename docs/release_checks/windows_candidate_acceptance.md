@@ -66,7 +66,11 @@ measurements, grouping membership, exported cells and finite/precision filter ID
 The literal-label export additionally checks formula-looking text, non-ASCII
 labels, series caches, local references, values and limit order. A corrupted local
 cell with unchanged chart cache must fail comparison. Pre-cancel and oversized
-label rejection must preserve the prior completed workbook.
+label rejection must preserve the prior completed workbook. The W07 source
+operation also starts the actual `ExportDataThread`, waits for its measurement
+stage progress while it is still running, then calls its cooperative cancel
+seam. That canceled run must retain the previous complete workbook bytes and
+leave no temporary workbook publication file.
 
 The additional W06 case imports ten real synthetic PDFs into a separate SQLite
 database through the same Reports workspace. It reuses two original 10.02 PDFs
@@ -80,6 +84,8 @@ It checks both the original and retained inference database and JSON artifact.
 This fixed case supplements the preserved one-group negative boundary.
 The core reports W03, W05 and W06 as executed; W04 and W07 remain incomplete
 because their broader reopening/cancellation contracts are not all exercised.
+The active W07 source facet is narrower: it covers one real in-flight exporter
+cancel and publication preservation, not every close or cancellation path.
 The host rejects inconsistent check statuses, and separately requires a native
 ordinary-user packaged runtime before accepting any Windows observation.
 
@@ -92,7 +98,7 @@ closed and byte-identical through comparison, with no journal sidecars created.
 
 ## Remaining acceptance boundaries
 
-This core receipt does not establish active-work cancellation/close, every
+This core receipt does not establish every active-work cancellation/close,
 reopening or drift path, inference beyond the fixed W06 case, offline dashboard rendering,
 packaged OCR inference, optional-native fallback parity, incident-menu behavior,
 privacy negative paths, supported desktop geometry, clean-machine launch or

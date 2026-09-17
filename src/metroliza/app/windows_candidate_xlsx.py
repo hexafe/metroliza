@@ -52,6 +52,13 @@ _SAFE_FAILURE_CODES = {
     "cancel_outcome",
     "cancel_preservation",
     "cancel_staging_cleanup",
+    "active_cancel_operation_not_started",
+    "active_cancel_outcome",
+    "active_cancel_preservation",
+    "active_cancel_request_not_observed",
+    "active_cancel_staging_cleanup",
+    "active_cancel_thread_deadline",
+    "active_cancel_thread_still_running",
     "chart_count",
     "chart_cache_changed_in_control",
     "chart_value_ranges",
@@ -470,6 +477,55 @@ def _verify_preservation(scratch: Path, workbook: Path) -> dict[str, str]:
     }
 
 
+def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any) -> dict[str, str]:
+    """Cancel a running real exporter after its measurement stage begins."""
+    from metroliza.exporting.export_outcomes import ExportRunStatus
+
+    completed = workbook.read_bytes()
+    active = _make_thread(
+        scratch / "active-cancel.sqlite",
+        workbook,
+        tuple(f"Active cancellation {index:03d}" for index in range(96)),
+    )
+    progress_values: list[int] = []
+    cancellation_observation: dict[str, int | bool] = {}
+
+    def request_cancellation(value: int) -> None:
+        progress = int(value)
+        progress_values.append(progress)
+        if progress >= 30 and not cancellation_observation:
+            cancellation_observation["progress"] = progress
+            cancellation_observation["running_before_stop"] = active.isRunning()
+            active.stop_exporting()
+
+    active.update_progress.connect(request_cancellation)
+    before_cancel = _directory_snapshot(scratch)
+    active.start()
+    deadline = time.monotonic() + DEADLINE_S
+    while active.isRunning() and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.002)
+    application.processEvents()
+    if active.isRunning():
+        active.stop_exporting()
+        active.wait(1000)
+        if active.isRunning():
+            raise XlsxScenarioFailure("active_cancel_thread_still_running")
+        raise XlsxScenarioFailure("active_cancel_thread_deadline")
+    if not progress_values or progress_values[0] != 0:
+        raise XlsxScenarioFailure("active_cancel_operation_not_started")
+    if not cancellation_observation.get("running_before_stop"):
+        raise XlsxScenarioFailure("active_cancel_request_not_observed")
+    if (
+        active.export_run_result is None
+        or active.export_run_result.status is not ExportRunStatus.CANCELLED
+    ):
+        raise XlsxScenarioFailure("active_cancel_outcome")
+    _require_equal(workbook.read_bytes(), completed, "active_cancel_preservation")
+    _require_equal(_directory_snapshot(scratch), before_cancel, "active_cancel_staging_cleanup")
+    return {"active_export_cancellation_preserves_workbook": "passed"}
+
+
 def run_export_checks(scratch_root: str | Path) -> dict[str, Any]:
     """Run W07 export facets without a Git or packaged-runtime assumption.
 
@@ -510,6 +566,7 @@ def run_export_checks(scratch_root: str | Path) -> dict[str, Any]:
             "value_limit_order": "failed",
             "local_chart_cells_and_negative_control": "failed",
             "pre_cancelled_export_preserves_workbook": "failed",
+            "active_export_cancellation_preserves_workbook": "failed",
             "oversized_label_rejection_preserves_workbook": "failed",
         },
         "status": "failed",
@@ -532,6 +589,7 @@ def run_export_checks(scratch_root: str | Path) -> dict[str, Any]:
         _verify_local_cell_negative_control(workbook)
         result["facets"]["local_chart_cells_and_negative_control"] = "passed"
         result["facets"].update(_verify_preservation(scratch, workbook))
+        result["facets"].update(_verify_active_cancellation(scratch, workbook, application))
         if time.monotonic() - started > DEADLINE_S:
             raise XlsxScenarioFailure("operation_deadline")
         result["artifacts"] = {"workbook": workbook_details}
