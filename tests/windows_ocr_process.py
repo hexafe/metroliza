@@ -10,7 +10,7 @@ fixed-schema synthetic state files in a disposable fixture.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 import math
@@ -110,24 +110,24 @@ class _ProcessInformation(ctypes.Structure):
 
 
 @contextmanager
-def _standard_handles(kernel, stdout_target, stderr_target):
+def _standard_handles(child, stdout_target, stderr_target):
     """Duplicate only the three selected streams; never inherit incidental handles."""
     import msvcrt
 
+    kernel = child.kernel
     kernel.GetCurrentProcess.restype = wintypes.HANDLE
     kernel.DuplicateHandle.argtypes = [
         wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
         ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
     ]
     handles = []
-    with ExitStack() as files:
+    # Match Popen's one O_RDWR DEVNULL source, including stdin access rights.
+    with open(os.devnull, "r+b") as null:
         try:
             inputs = (
-                files.enter_context(open(os.devnull, "rb")),
-                stdout_target if stdout_target is not None else
-                files.enter_context(open(os.devnull, "wb")),
-                stderr_target if stderr_target is not None else
-                files.enter_context(open(os.devnull, "wb")),
+                null,
+                stdout_target if stdout_target is not None else null,
+                stderr_target if stderr_target is not None else null,
             )
             owner = kernel.GetCurrentProcess()
             for stream in inputs:
@@ -141,12 +141,11 @@ def _standard_handles(kernel, stdout_target, stderr_target):
                     raise OSError("startup_failed")
             yield [handle.value for handle in handles]
         finally:
-            failed = False
             for handle in handles:
                 if handle.value and not kernel.CloseHandle(handle.value):
-                    failed = True
-            if failed:
-                raise OSError("handle_close_failed")
+                    # Retain this separately from process/job accounting and
+                    # preserve an active startup/cancellation exception.
+                    child.launch_cleanup_complete = False
 
 
 @contextmanager
@@ -202,6 +201,7 @@ class _SuspendedChild:
         self.kernel = kernel
         self.info = _ProcessInformation()
         self.returncode = None
+        self.launch_cleanup_complete = True
 
     @property
     def _handle(self):
@@ -228,7 +228,7 @@ class _SuspendedChild:
         ]
         command_line = ctypes.create_unicode_buffer(subprocess.list2cmdline(command))
         environment = _environment_block(env)
-        with _standard_handles(kernel, stdout_target, stderr_target) as handles:
+        with _standard_handles(self, stdout_target, stderr_target) as handles:
             with _startup_info(kernel, handles) as startup:
                 # run_owned owns self.info before this call. Even interruption
                 # immediately after native creation cannot lose its handles.
@@ -239,6 +239,8 @@ class _SuspendedChild:
                     ctypes.byref(startup), ctypes.byref(self.info),
                 ):
                     raise OSError("startup_failed")
+        if not self.launch_cleanup_complete:
+            raise OSError("handle_close_failed")
 
     def poll(self):
         if self.returncode is None:
@@ -475,6 +477,7 @@ def run_owned(
                 unexpected = error
         finally:
             if process is not None:
+                cleanup_complete = cleanup_complete and process.launch_cleanup_complete
                 try:
                     process.close()
                 except OSError:

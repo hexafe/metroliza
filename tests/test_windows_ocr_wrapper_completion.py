@@ -57,6 +57,7 @@ class _Child:
         self.returncode = None
         self.killed = False
         self.closed = 0
+        self.launch_cleanup_complete = True
 
     def start(self, *_args, **_kwargs):
         self._handle = 41
@@ -195,6 +196,23 @@ def test_failed_handle_close_cannot_publish_completed(monkeypatch):
     assert result.reason == "not_completed" and not result.cleanup_complete
 
 
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_failed_launch_handle_close_survives_process_cleanup(monkeypatch, interrupted):
+    job = _Job()
+    child = _mock_owned(monkeypatch, job)
+
+    def incomplete_start(*_args, **_kwargs):
+        child._handle = 41
+        child.launch_cleanup_complete = False
+        raise KeyboardInterrupt if interrupted else OSError("handle_close_failed")
+
+    monkeypatch.setattr(child, "start", incomplete_start)
+    result = run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
+    assert result.reason == ("cancelled" if interrupted else "startup_failed")
+    assert result.tree_empty and not result.cleanup_complete
+    assert job.closed == child.closed == 1 and child.killed
+
+
 class _NativeFunction:
     def __init__(self, function):
         self.function = function
@@ -288,6 +306,7 @@ def test_native_child_closes_both_retained_handles_even_if_one_close_fails(faile
 
 @pytest.mark.parametrize("failure", [
     None, "interrupt", "duplicate_first", "duplicate_second", "initialize", "update", "create",
+    "close_duplicate", "interrupt_and_close_duplicate",
 ])
 @pytest.mark.parametrize("capture", [False, True])
 def test_creation_owns_output_slots_and_inherits_only_selected_streams(
@@ -332,13 +351,13 @@ def test_creation_owns_output_slots_and_inherits_only_selected_streams(
             return False
         info._obj.process, info._obj.thread = 61, 41
         info._obj.pid, info._obj.tid = 123, 41
-        if failure == "interrupt":
+        if failure in {"interrupt", "interrupt_and_close_duplicate"}:
             raise KeyboardInterrupt
         return True
 
     def close(handle):
         observed["closed"].append(handle)
-        return True
+        return not (handle == 102 and failure in {"close_duplicate", "interrupt_and_close_duplicate"})
 
     functions = {
         "GetCurrentProcess": lambda: 71, "DuplicateHandle": duplicate,
@@ -355,14 +374,19 @@ def test_creation_owns_output_slots_and_inherits_only_selected_streams(
                   "stdout_target": stdout if capture else None,
                   "stderr_target": stderr if capture else None}
         if failure:
-            with pytest.raises(KeyboardInterrupt if failure == "interrupt" else OSError):
+            with pytest.raises(
+                KeyboardInterrupt if failure in {"interrupt", "interrupt_and_close_duplicate"}
+                else OSError
+            ):
                 child.start(["synthetic"], **kwargs)
         else:
             child.start(["synthetic"], **kwargs)
         assert not stdout.closed and not stderr.closed
         if capture and len(observed["duplicates"]) == 3:
             assert observed["duplicates"][1:] == [stdout.fileno(), stderr.fileno()]
-    created = failure in {None, "interrupt"}
+        elif not capture:
+            assert len(set(observed["duplicates"])) == 1
+    created = failure in {None, "interrupt", "close_duplicate", "interrupt_and_close_duplicate"}
     assert child._handle == (61 if created else None)
     assert child.primary_thread == (41 if created else None)
     assert child.pid == (123 if created else 0) and child.primary_thread_id == (41 if created else 0)
@@ -370,6 +394,9 @@ def test_creation_owns_output_slots_and_inherits_only_selected_streams(
     assert observed["closed"] == duplicated
     assert observed["attributes_deleted"] == (
         0 if failure in {"duplicate_first", "duplicate_second", "initialize"} else 1
+    )
+    assert child.launch_cleanup_complete is (
+        failure not in {"close_duplicate", "interrupt_and_close_duplicate"}
     )
     child.close()
     assert observed["closed"] == duplicated + ([41, 61] if created else [])
@@ -487,7 +514,7 @@ def _read_phase(path: Path) -> str:
         return "unobserved"
     except (OSError, UnicodeError, json.JSONDecodeError):
         return "fixture_mismatch"
-    stages = ("shell_initialized", "native_factory_ready", "child_created")
+    stages = ("shell_entered", "shell_initialized", "native_factory_ready", "child_created")
     expected = [{"schema_version": 1, "stage": stage} for stage in stages]
     if not rows:
         return "unobserved"
@@ -498,7 +525,7 @@ def _read_phase(path: Path) -> str:
 
 @pytest.mark.parametrize('rows,expected', [
     ([], "unobserved"),
-    ([{"schema_version": 1, "stage": "shell_initialized"}], "shell_initialized"),
+    ([{"schema_version": 1, "stage": "shell_entered"}], "shell_entered"),
     ([{"schema_version": 1, "stage": "native_factory_ready"}], "fixture_mismatch"),
     ([{"schema_version": 1, "stage": "SYNTHETIC_PRIVATE_CANARY"}], "fixture_mismatch"),
     ([{"schema_version": 1, "stage": "shell_initialized", "extra": True}], "fixture_mismatch"),
@@ -512,8 +539,8 @@ def test_phase_reader_requires_closed_ordered_records(tmp_path, rows, expected):
 def test_phase_reader_retains_complete_prefix_only(tmp_path):
     path = tmp_path / "phase.jsonl"
     records = [{"schema_version": 1, "stage": stage} for stage in
-               ("shell_initialized", "native_factory_ready", "child_created")]
-    for length in (2, 3):
+               ("shell_entered", "shell_initialized", "native_factory_ready", "child_created")]
+    for length in (1, 2, 3, 4):
         text = "".join(json.dumps(row) + "\n" for row in records[:length])
         path.write_text(text + '{"stage":', encoding="utf-8")
         assert _read_phase(path) == records[length - 1]["stage"]
@@ -572,7 +599,7 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=(), phase="un
         expected_stage = "shell_ready" if scenario == "live_shell" else "child_ready"
         fixture_ready = fixture_stage == expected_stage
     fixture_phase = phase if phase in {
-        "unobserved", "shell_initialized", "native_factory_ready", "child_created",
+        "unobserved", "shell_entered", "shell_initialized", "native_factory_ready", "child_created",
     } else "fixture_mismatch"
     expected_phase = "shell_initialized" if scenario == "live_shell" else "child_created"
     completed = (
