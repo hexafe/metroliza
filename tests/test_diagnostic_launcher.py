@@ -862,11 +862,12 @@ def test_stalled_store_io_is_bounded_and_preserves_actual_child_exit(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(store, method, stalled)
+    trace = _trace_publisher_calls(monkeypatch, store)
     child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
     started = time.monotonic()
     try:
         delivery = run_with_store([sys.executable, str(child), scenario], store=store)
-        assert entered.is_set()
+        assert entered.is_set(), json.dumps(trace(), sort_keys=True)
         assert delivery.observation.exit_code == expected_exit
         assert delivery.storage_status is StoreStatus.PUBLISH_INCOMPLETE
         assert time.monotonic() - started < 2.5
