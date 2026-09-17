@@ -222,6 +222,7 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "native_open_process_unavailable",
         "native_image_query_unavailable",
         "native_process_times_unavailable",
+        "native_primary_identity_mismatch",
         "normal_window_enumeration_failed",
         "normal_window_ambiguous",
         "normal_window_unavailable",
@@ -236,7 +237,7 @@ QUALIFICATION_CLEANUP_STATUSES = frozenset(
     {"not_attempted", "complete", "failed"}
 )
 NATIVE_IDENTITY_PHASES = frozenset(
-    {"pre_resume", "job_observation", "control_live", "control_retired", "control_invalid", "control_denied"}
+    {"pre_resume", "job_observation", "owned_job_observation", "control_live", "control_retired", "control_invalid", "control_denied"}
 )
 NATIVE_IDENTITY_APIS = frozenset({"image", "times"})
 NATIVE_IDENTITY_OUTCOMES = frozenset({"false", "exception"})
@@ -781,6 +782,7 @@ class _WindowsProcess:
         self._token = token_handle
         self.started = started
         self._closed = False
+        self._initial = initial
         self._observations = {initial.process_id: initial}
         self._assigned_processes = 1
         self._max_active_processes = 1
@@ -795,7 +797,9 @@ class _WindowsProcess:
     def _current_job_state(
         self,
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
-        observations, active, assigned = self._api.job_observations(self._job)
+        observations, active, assigned = self._api.job_observations(
+            self._job, primary_process=self._process, primary_initial=self._initial
+        )
         self._assigned_processes = max(self._assigned_processes, assigned)
         self._max_active_processes = max(self._max_active_processes, active)
         self._observations.update(
@@ -1864,40 +1868,66 @@ class _WindowsApi:
         except Exception:
             return False
 
+    def _open_job_process(self, job, process_id: int):
+        process = _scenario_step(
+            "native_open_process_unavailable",
+            lambda: self.kernel.OpenProcess(0x1000, False, process_id),
+        )
+        if process:
+            return process
+        if (
+            ctypes.get_last_error() == WINDOWS_ERROR_INVALID_PARAMETER
+            and process_id not in self._job_process_ids(job)
+        ):
+            return None
+        raise QualificationFailure(
+            "scenario_failed", qualification_reason="native_open_process_unavailable"
+        )
+
     def job_observations(
-        self, job
+        self, job, *, primary_process=None,
+        primary_initial: _ProcessObservation | None = None,
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
+        if (primary_process is None) != (primary_initial is None):
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_primary_identity_mismatch"
+            )
         process_ids = self._job_process_ids(job)
         observations: list[_ProcessObservation] = []
         for process_id in process_ids:
-            process = _scenario_step(
-                "native_open_process_unavailable",
-                lambda: self.kernel.OpenProcess(0x1000, False, process_id),
+            owned_primary = (
+                primary_initial is not None
+                and process_id == primary_initial.process_id
             )
-            if not process:
-                if (
-                    ctypes.get_last_error() == WINDOWS_ERROR_INVALID_PARAMETER
-                    and process_id not in self._job_process_ids(job)
-                ):
+            if owned_primary:
+                process = primary_process
+            else:
+                process = self._open_job_process(job, process_id)
+                if process is None:
                     continue
-                raise QualificationFailure(
-                    "scenario_failed", qualification_reason="native_open_process_unavailable"
-                )
             try:
                 try:
                     observation = self._process_observation(process, process_id)
                 except QualificationFailure as error:
-                    error.set_native_phase("job_observation")
+                    error.set_native_phase(
+                        "owned_job_observation" if owned_primary else "job_observation"
+                    )
                     if not self._process_disappeared_after_observation_failure(
                         job, process_id, error
                     ):
                         raise
                 else:
+                    if owned_primary and observation != primary_initial:
+                        raise QualificationFailure(
+                            "scenario_failed",
+                            qualification_reason="native_primary_identity_mismatch",
+                        )
                     observations.append(observation)
             finally:
-                _attempt_cleanup(
-                    lambda process=process: self._require_closed_handles(process)
-                )
+                if not owned_primary:
+                    _attempt_cleanup(
+                        lambda process=process: self._require_closed_handles(process)
+                    )
         active, total = self._job_accounting(job)
         return tuple(observations), active, total
 

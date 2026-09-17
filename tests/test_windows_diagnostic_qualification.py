@@ -1798,6 +1798,209 @@ def test_job_observation_omits_confirmed_disappearance_after_open_query_failure(
     assert topology.unexpected_processes_observed == 1
 
 
+@pytest.mark.parametrize("drift", (None, "image", "creation"))
+def test_job_observation_uses_retained_primary_and_rechecks_identity(drift) -> None:
+    initial = qualification._ProcessObservation(407, 1234, r"C:\fixed\application.exe")
+    retained = object()
+
+    class _Kernel:
+        opened = []
+        closed = []
+
+        def OpenProcess(self, _access, _inherit, process_id):
+            self.opened.append(process_id)
+            return 88
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    api._job_process_ids = lambda _job: (initial.process_id,)
+    api._job_accounting = lambda _job: (1, 1)
+
+    def observe(handle, process_id):
+        assert handle is retained
+        assert process_id == initial.process_id
+        return qualification._ProcessObservation(
+            process_id,
+            initial.creation_time + (drift == "creation"),
+            initial.image + (".other" if drift == "image" else ""),
+        )
+
+    api._process_observation = observe
+    if drift is None:
+        observations, active, assigned = api.job_observations(
+            object(), primary_process=retained, primary_initial=initial
+        )
+        assert (observations, active, assigned) == ((initial,), 1, 1)
+    else:
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            api.job_observations(
+                object(), primary_process=retained, primary_initial=initial
+            )
+        assert caught.value.qualification_reason == "native_primary_identity_mismatch"
+        assert caught.value.native_observation is None
+    assert api.kernel.opened == []
+    assert api.kernel.closed == []
+
+
+def test_owned_process_observe_survives_primary_reopen_image_denial() -> None:
+    initial = qualification._ProcessObservation(411, 1234, r"C:\fixed\application.exe")
+    retained = object()
+
+    class _Kernel:
+        opened = []
+        closed = []
+
+        def OpenProcess(self, _access, _inherit, process_id):
+            self.opened.append(process_id)
+            return 88
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    api._job_process_ids = lambda _job: (initial.process_id,)
+    api._job_accounting = lambda _job: (1, 1)
+
+    def observe(handle, process_id):
+        assert process_id == initial.process_id
+        if handle is retained:
+            return initial
+        raise qualification.QualificationFailure(
+            "scenario_failed", qualification_reason="native_image_query_unavailable",
+            native_observation=qualification._NativeIdentityObservation(
+                None, "image", "false", 5, "unknown"
+            ),
+        )
+
+    api._process_observation = observe
+    process = qualification._WindowsProcess(api, retained, object(), 0.0, initial)
+    process.observe()
+    assert process._observations == {initial.process_id: initial}
+    assert api.kernel.opened == []
+    assert api.kernel.closed == []
+
+
+def test_retired_primary_absent_from_fresh_job_ids_keeps_verified_initial() -> None:
+    initial = qualification._ProcessObservation(412, 4321, r"C:\fixed\application.exe")
+    retained = object()
+    api = object.__new__(qualification._WindowsApi)
+    api._job_process_ids = lambda _job: ()
+    api._job_accounting = lambda _job: (0, 1)
+
+    def unexpected_observation(*_arguments):
+        raise AssertionError("absent process must not be reattributed")
+
+    api._process_observation = unexpected_observation
+    process = qualification._WindowsProcess(api, retained, object(), 0.0, initial)
+
+    process.observe()
+
+    assert process._observations == {initial.process_id: initial}
+    assert process._assigned_processes == 1
+    assert process.active_processes() == 0
+
+
+@pytest.mark.parametrize("membership", ("absent", "still_listed", "requery_failed"))
+def test_retained_primary_query_failure_requires_proven_job_disappearance(
+    membership,
+) -> None:
+    initial = qualification._ProcessObservation(408, 5678, r"C:\fixed\application.exe")
+    retained = object()
+    api = object.__new__(qualification._WindowsApi)
+    queries = []
+
+    def ids(_job):
+        queries.append(None)
+        if len(queries) == 1:
+            return (initial.process_id,)
+        if membership == "requery_failed":
+            raise qualification.QualificationFailure(
+                "scenario_failed", qualification_reason="native_job_ids_unavailable"
+            )
+        return () if membership == "absent" else (initial.process_id,)
+
+    api._job_process_ids = ids
+    api._job_accounting = lambda _job: (0, 1)
+    api.kernel = object()
+    primary = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason="native_image_query_unavailable",
+        native_observation=qualification._NativeIdentityObservation(
+            None, "image", "false", 5, "exited"
+        ),
+    )
+
+    def fail_observation(handle, process_id):
+        assert handle is retained
+        assert process_id == initial.process_id
+        raise primary
+
+    api._process_observation = fail_observation
+    if membership == "absent":
+        assert api.job_observations(
+            object(), primary_process=retained, primary_initial=initial
+        ) == ((), 0, 1)
+    else:
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            api.job_observations(
+                object(), primary_process=retained, primary_initial=initial
+            )
+        assert caught.value is primary
+        assert primary.native_observation.receipt() == {
+            "phase": "owned_job_observation", "api": "image", "outcome": "false",
+            "winerror": 5, "process_state": "exited",
+        }
+    assert len(queries) == 2
+
+
+def test_retained_primary_does_not_hide_other_job_member_query_failure() -> None:
+    initial = qualification._ProcessObservation(409, 1234, r"C:\fixed\application.exe")
+    retained = object()
+
+    class _Kernel:
+        opened = []
+        closed = []
+
+        def OpenProcess(self, _access, _inherit, process_id):
+            self.opened.append(process_id)
+            return 99
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    api = object.__new__(qualification._WindowsApi)
+    api.kernel = _Kernel()
+    api._job_process_ids = lambda _job: (409, 410)
+    api._job_accounting = lambda _job: (2, 2)
+    primary = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason="native_image_query_unavailable",
+        native_observation=qualification._NativeIdentityObservation(
+            None, "image", "false", 5, "unknown"
+        ),
+    )
+
+    def observe(handle, process_id):
+        if process_id == initial.process_id:
+            assert handle is retained
+            return initial
+        assert handle == 99
+        raise primary
+
+    api._process_observation = observe
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.job_observations(object(), primary_process=retained, primary_initial=initial)
+    assert caught.value is primary
+    assert primary.native_observation.phase == "job_observation"
+    assert api.kernel.opened == [410]
+    assert api.kernel.closed == [99]
+
+
 @pytest.mark.parametrize("mode", ["still_listed", "requery_failed", "unrelated"])
 def test_job_observation_keeps_post_open_failures_fatal(mode) -> None:
     class _Kernel:
@@ -2214,6 +2417,23 @@ def test_native_identity_receipt_rejects_unbounded_or_misleading_fields(field, i
     }
     assert qualification._valid_failure_detail(detail)
     detail["native_observation"][field] = invalid
+    assert not qualification._valid_failure_detail(detail)
+
+
+def test_owned_job_identity_failure_receipt_accepts_only_closed_phase_and_reason():
+    detail = {
+        "stage": "direct_ui_smoke", "reason": "native_image_query_unavailable",
+        "native_observation": {
+            "phase": "owned_job_observation", "api": "image", "outcome": "false",
+            "winerror": 5, "process_state": "unknown",
+        },
+    }
+    assert qualification._valid_failure_detail(detail)
+    detail["reason"] = "native_primary_identity_mismatch"
+    assert not qualification._valid_failure_detail(detail)
+    detail.pop("native_observation")
+    assert qualification._valid_failure_detail(detail)
+    detail["private_image"] = "PRIVATE_PATH"
     assert not qualification._valid_failure_detail(detail)
 
 
@@ -4273,6 +4493,21 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
     executable = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "whoami.exe"
     original_observe = api._process_observation
     observed = []
+    paired_outcomes = []
+    assigned_jobs = []
+    real_kernel = api.kernel
+
+    class _CaptureAssignedJob:
+        def __getattr__(self, name):
+            return getattr(real_kernel, name)
+
+        def AssignProcessToJobObject(self, job, handle):
+            result = real_kernel.AssignProcessToJobObject(job, handle)
+            if result:
+                assigned_jobs.append(job)
+            return result
+
+    api.kernel = _CaptureAssignedJob()
 
     def observe_before_resume(handle, process_id):
         initial = original_observe(handle, process_id)
@@ -4281,6 +4516,38 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
         image_matches = os.path.normcase(initial.image) == os.path.normcase(str(executable))
         assert creation_present
         assert image_matches
+        assert len(assigned_jobs) == 1
+        assert process_id in api._job_process_ids(assigned_jobs[0])
+        monkeypatch.setattr(api, "_process_observation", original_observe)
+        try:
+            job_observations, active, total = api.job_observations(
+                assigned_jobs[0], primary_process=handle, primary_initial=initial
+            )
+        finally:
+            monkeypatch.setattr(api, "_process_observation", observe_before_resume)
+        assert initial in job_observations
+        assert active >= 1
+        assert total >= 1
+        assert api._native_process_state(handle) == "alive"
+        reopened = api.kernel.OpenProcess(0x1000, False, process_id)
+        if not reopened:
+            paired_outcomes.append("reopen_unavailable")
+        else:
+            try:
+                try:
+                    reopened_observation = original_observe(reopened, process_id)
+                except qualification.QualificationFailure as failure:
+                    assert failure.qualification_reason in {
+                        "native_image_query_unavailable", "native_process_times_unavailable"
+                    }
+                    assert failure.native_observation is not None
+                    assert failure.native_observation.api in {"image", "times"}
+                    paired_outcomes.append("reopened_query_unavailable")
+                else:
+                    assert reopened_observation == initial
+                    paired_outcomes.append("reopened_matched")
+            finally:
+                api._require_closed_handles(reopened)
         with pytest.raises(qualification.QualificationFailure) as invalid:
             original_observe(api.wintypes.HANDLE(), 0)
         assert invalid.value.native_observation.api == "image"
@@ -4311,6 +4578,9 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
         _wait_for_native_process_and_job_exit(api, process)
         assert api._native_process_state(process._process) == "exited"
         assert len(observed) == 1
+        assert paired_outcomes[0] in {
+            "reopen_unavailable", "reopened_query_unavailable", "reopened_matched"
+        }
         try:
             retired = original_observe(process._process, observed[0].process_id)
         except qualification.QualificationFailure as failure:
