@@ -92,8 +92,11 @@ def _seed_completed_import(application, root: Path) -> tuple[Path, Path, dict[st
     return database, reports, hashes
 
 
-def test_reopen_preserves_completed_import_after_real_window_close(application, tmp_path: Path) -> None:
-    database, reports, hashes = _seed_completed_import(application, tmp_path)
+@pytest.mark.parametrize("directory", ("plain", "owned # próba"))
+def test_reopen_preserves_completed_import_after_real_window_close(application, tmp_path: Path, directory) -> None:
+    root = tmp_path / directory
+    root.mkdir()
+    database, reports, hashes = _seed_completed_import(application, root)
 
     result = run_reopen_checks(database, reports, hashes)
 
@@ -109,3 +112,36 @@ def test_reopen_preserves_completed_import_after_real_window_close(application, 
     assert result["database"]["sha256"] == _sha256(database)
     assert result["source_hashes"] == hashes
     assert not [database.with_name(database.name + suffix) for suffix in ("-wal", "-shm", "-journal") if database.with_name(database.name + suffix).exists()]
+
+
+def test_count_observation_closes_its_connection_without_leaving_sidecars(application, tmp_path):
+    from metroliza.app.windows_candidate_qualification import _database_observation
+
+    database, _, _ = _seed_completed_import(application, tmp_path)
+    before = _sha256(database)
+    assert _database_observation(database) == {
+        "source_files": 2, "active_locations": 2, "parsed_reports": 2,
+        "metadata": 2, "measurements": 2,
+    }
+    assert _sha256(database) == before
+    assert not any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+
+
+def test_reopen_rejects_a_sidecar_left_by_the_last_observation(application, tmp_path, monkeypatch):
+    from metroliza.app import windows_candidate_reopen as operation
+
+    database, reports, hashes = _seed_completed_import(application, tmp_path)
+    original = operation._public_measurements
+    calls = []
+
+    def leave_sidecar_after_last_read(path):
+        result = original(path)
+        calls.append(path)
+        if len(calls) == 2:
+            path.with_name(path.name + "-journal").write_bytes(b"controlled adverse sidecar")
+        return result
+
+    monkeypatch.setattr(operation, "_public_measurements", leave_sidecar_after_last_read)
+    result = operation.run_reopen_checks(database, reports, hashes)
+    assert result["status"] == "failed"
+    assert result["failure_code"] == "database_sidecars_created"

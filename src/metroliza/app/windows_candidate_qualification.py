@@ -7,6 +7,8 @@ independent oracle; it never treats a source-engineering run as package evidence
 """
 from __future__ import annotations
 
+from contextlib import closing
+
 import hashlib
 import json
 import os
@@ -200,7 +202,9 @@ def _grouping_snapshot(database: Path) -> dict[str, Any]:
 
 def _database_observation(database: Path) -> dict[str, Any]:
     import sqlite3
-    with sqlite3.connect(database) as connection:
+    if any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+        raise ScenarioFailure("database_observation_sidecars_present")
+    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
         tables = {
             "source_files": "SELECT COUNT(*) FROM source_files",
             "active_locations": "SELECT COUNT(*) FROM source_file_locations WHERE is_active = 1",

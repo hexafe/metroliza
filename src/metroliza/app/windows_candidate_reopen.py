@@ -1,10 +1,12 @@
-"""Source-only W04 subset: reopen an already completed synthetic import.
+"""Bounded W04 subset: reopen an already completed synthetic import.
 
 The caller owns the completed SQLite database and staged report directory.  This
 operation creates a new ordinary MainWindow only to reopen that context.  It
 does not import, alter selection, or construct a replacement database.
 """
 from __future__ import annotations
+
+from contextlib import closing
 
 import hashlib
 import sqlite3
@@ -65,8 +67,8 @@ def _database_counts(database: Path) -> dict[str, int]:
         "metadata": "SELECT COUNT(*) FROM report_metadata",
         "measurements": "SELECT COUNT(*) FROM report_measurements",
     }
-    uri = f"file:{database}?mode=ro&immutable=1"
-    with sqlite3.connect(uri, uri=True) as connection:
+    uri = database.resolve().as_uri() + "?mode=ro&immutable=1"
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
         return {name: int(connection.execute(query).fetchone()[0]) for name, query in queries.items()}
 
 
@@ -145,6 +147,10 @@ def run_reopen_checks(
         _require(_validate_inputs(database, reports, source_before) == source_before, "source_hashes_changed")
         _require(_database_counts(database) == _EXPECTED_COUNTS, "database_counts_after_reopen")
         _require(_public_measurements(database) == _EXPECTED_MEASUREMENTS, "public_measurements_after_reopen")
+        # The observation itself must finish without altering retained evidence.
+        _require(_sha256(database) == database_before, "database_bytes_changed")
+        _require(not _sidecars(database), "database_sidecars_created")
+        _require(_validate_inputs(database, reports, source_before) == source_before, "source_hashes_changed")
     except ReopenScenarioFailure as error:
         result["failure_code"] = str(error)
     else:
