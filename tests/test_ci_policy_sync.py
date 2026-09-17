@@ -437,6 +437,43 @@ def test_windows_wrapper_lane_never_prints_private_failure_context(
     assert 'private_cleanup_failed' in output.out if failure == 'cleanup' else 'outer_timeout' in output.out
 
 
+@pytest.mark.parametrize('outcome', ['absent', 'passed', 'failure', 'error', 'skipped', 'duplicate'])
+def test_windows_primary_thread_receipt_publishes_only_known_node_status(outcome):
+    import ast
+    import xml.etree.ElementTree as ET
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+    function = next(node for node in ast.parse(code).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'safe_native_controls')
+    namespace = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<native-controls>', 'exec'), namespace)
+    report = ET.Element('testsuite')
+    ET.SubElement(report, 'testcase', {'classname': 'SYNTHETIC_PRIVATE_CANARY',
+                                     'name': 'test_native_resumed_thread_matches_child_initial_thread'})
+    if outcome != 'absent':
+        case = ET.SubElement(report, 'testcase', {
+            'classname': 'tests.test_windows_ocr_wrapper_completion',
+            'name': 'test_native_resumed_thread_matches_child_initial_thread',
+            'file': 'SYNTHETIC_PRIVATE_CANARY',
+        })
+        if outcome in {'failure', 'error', 'skipped'}:
+            ET.SubElement(case, outcome).text = 'SYNTHETIC_PRIVATE_CANARY'
+        if outcome == 'duplicate':
+            report.append(case)
+            with pytest.raises(ValueError, match='duplicate_native_control'):
+                namespace['safe_native_controls'](report)
+            return
+    expected = {'absent': 'unobserved', 'passed': 'passed', 'failure': 'failed',
+                'error': 'failed', 'skipped': 'skipped'}[outcome]
+    assert namespace['safe_native_controls'](report) == {
+        'primary_thread_identity': expected, 'interrupted_creation': 'unobserved',
+    }
+    assert "if result == 0 and set(controls.values()) != {'passed'}:" in code
+
+
 @pytest.mark.parametrize('stage,code,expected', [
     ('invoke_returned', 1, 'bounded_failure'),
     ('invoke_failed', None, 'bounded_failure'),
