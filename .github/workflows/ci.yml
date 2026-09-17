@@ -147,6 +147,23 @@ jobs:
                                             **counts}, sort_keys=True))
                           for receipt in safe_receipts(root):
                               print(json.dumps(receipt, sort_keys=True))
+                          sys.path.insert(0, str(Path.cwd()))
+                          from tests.windows_ocr_stages import validate_observation
+                          observed_pairs = set()
+                          for prop in ET.parse(report).getroot().iter('property'):
+                              if prop.get('name') == 'wrapper_completion_stages':
+                                  receipt = validate_observation(prop.get('value', ''))
+                                  pair = (receipt['shell'], receipt['mode'])
+                                  if pair in observed_pairs:
+                                      raise ValueError('duplicate_stage_receipt')
+                                  observed_pairs.add(pair)
+                                  print(json.dumps({'stage': 'wrapper_completion_stages',
+                                                    **receipt}, sort_keys=True))
+                          if result == 0 and observed_pairs != {
+                              ('powershell', 'pass'), ('powershell', 'fail'),
+                              ('pwsh', 'pass'), ('pwsh', 'fail'),
+                          }:
+                              raise ValueError('missing_stage_receipt')
                       else:
                           print('{"stage":"pytest_incomplete","reason":"report_unavailable"}')
                           result = 1
