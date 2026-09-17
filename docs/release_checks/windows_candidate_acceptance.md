@@ -84,9 +84,13 @@ It checks both the original and retained inference database and JSON artifact.
 This fixed case supplements the preserved one-group negative boundary.
 The core reports W03, W05, W06 and the bounded W07 export contract as executed.
 A second real MainWindow reopens the completed import's Reports source and DB
-context. The public query and independent comparator check the same measurements;
-source hashes, database bytes and absent sidecars must remain unchanged. This is
-context reopen/rebind only, without a second review scan. W04 remains incomplete:
+context. Exact schema and complete logical SQLite dump, public measurements,
+counts and source hashes must remain unchanged, with no sidecars. Normal startup
+recovery can rewrite the physical database without changing that content; both
+physical hashes are retained and the final artifact digest is bound only after
+semantic comparison succeeds. Each read-only observation itself must preserve
+bytes and leave no sidecars. This is context reopen/rebind only, without a second
+review scan. W04 remains incomplete:
 hidden selection, drift, duplicates and active import/close contracts are not all
 exercised by this core. W07 covers exact literal output plus failed,
 pre-cancelled and in-flight cancelled publication preservation; it does not

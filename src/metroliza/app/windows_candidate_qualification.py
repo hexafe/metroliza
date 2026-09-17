@@ -388,6 +388,13 @@ def run_qualification() -> int:
         if reopened.get("status") != "passed" or reopened.get("facets") != {"reopen_preserves_completed_import": "passed"}:
             receipt["reopen_failure"] = reopened.get("failure_code", "invalid_reopen_result")
             raise ScenarioFailure("completed_import_reopen_failed")
+        if reopened["database"]["before_sha256"] != receipt["artifacts"]["database"]["sha256"]:
+            raise ScenarioFailure("reopen_input_identity_mismatch")
+        reopened_hash = _sha256(completed_import / "reports.sqlite")
+        if reopened["database"]["sha256"] != reopened_hash:
+            raise ScenarioFailure("reopen_output_identity_mismatch")
+        receipt["artifacts"]["database"]["sha256"] = reopened_hash
+        receipt["reopen_database"] = reopened["database"]
         receipt["facets"].update(reopened["facets"])
         tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
         capture_tabular_w05(fixtures, tabular_file)

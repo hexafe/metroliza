@@ -5,6 +5,7 @@ import hashlib
 import shutil
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -174,8 +175,14 @@ def test_reopen_rejects_actual_semantic_mutation_after_real_window_rebind(
 
     def mutate_after_actual_reopen(path, sources):
         actual_reopen(path, sources)
-        with sqlite3.connect(path) as connection:
-            connection.execute(mutation)
+        with closing(sqlite3.connect(path)) as connection:
+            changed = connection.execute(mutation)
+            if expected_failure == "logical_dump_changed_after_reopen":
+                assert changed.rowcount == 1
+            else:
+                assert connection.execute(
+                    "SELECT name FROM sqlite_master WHERE name = 'w04_reopen_schema_control'"
+                ).fetchone() == ("w04_reopen_schema_control",)
             connection.commit()
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             connection.execute("PRAGMA journal_mode=DELETE")
