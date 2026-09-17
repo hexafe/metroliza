@@ -18,6 +18,46 @@ GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
 GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 
 
+def test_native_windows_report_planner_step_preserves_real_platform_and_scope() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows report planner tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
+    assert 'METROLIZA_EXPECT_PLANNER_SCREEN: 1920x1080' in step
+    for test in ('model', 'integration', 'geometry'):
+        assert f'tests/test_report_planner_{test}.py' in step
+    assert name in policy
+    assert 'scale factors 1, 1.25, 1.5 and 2' in policy
+    assert 'do not qualify a packaged EXE' in policy
+
+
+def test_native_windows_cache_publication_preserves_required_real_lifecycle() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    publication = workflow.split(
+        '- name: Run native Windows cache publication tests', 1
+    )[1].split('- name:', 1)[0]
+    lifecycle = workflow.split(
+        '- name: Run native Windows cache lifecycle tests', 1
+    )[1].split('  windows-startup-benchmark:', 1)[0]
+    assert 'tests/test_industrial_cache_publication.py' in publication
+    assert 'tests/test_industrial_cache_lifecycle.py' in lifecycle
+    assert 'QT_QPA_PLATFORM: windows' in lifecycle
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in lifecycle
+    for test in ('save_preserves_copy_before_rebind', 'rebind_cancel_keeps_operator_data',
+                 'archive_cannot_replace_active_database'):
+        assert f'::test_realtime_temp_session_{test}' in lifecycle
+    for step in (publication, lifecycle):
+        assert 'continue-on-error' not in step
+        assert 'if:' not in step
+        assert ' -k ' not in step
+    assert 'Run native Windows cache publication tests' in policy
+    assert 'Run native Windows cache lifecycle tests' in policy
+
+
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
@@ -234,6 +274,32 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert 'tests/test_db_utils.py' in workflow
     assert 'tests/test_packaging_spec_hiddenimports.py' in workflow
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
+
+
+def test_windows_core_runs_complete_startup_diagnostics_selection() -> None:
+    import shlex
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-core-smoke']
+    assert job['runs-on'] == 'windows-latest'
+    assert 'if' not in job
+    step_name = 'Run native Windows startup diagnostics tests'
+    steps = [step for step in job['steps'] if step['name'] == step_name]
+    assert len(steps) == 1
+    step = steps[0]
+    assert 'if' not in step
+    assert 'continue-on-error' not in step
+    assert step['env']['PYTHONPATH'] == 'src;.'
+    assert shlex.split(step['run']) == [
+        'python', '-m', 'pytest', '-v',
+        'tests/test_bootstrap_startup.py',
+        'tests/test_diagnostic_events.py',
+        'tests/test_logging_utils.py',
+        'tests/test_build_provenance.py',
+    ]
+    assert step_name in CI_POLICY_PATH.read_text(encoding='utf-8')
 
 
 def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> None:
