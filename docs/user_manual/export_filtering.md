@@ -73,6 +73,14 @@ Common expression fields:
 The expression supports `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`, `AND`, `OR`, parentheses, and `*` wildcards.
 Field names and operators are not case-sensitive, so `Meas`, `meas`, `AND`, `and`, `IN`, and `in` are interpreted the same way. Text values are also matched without case sensitivity by default.
 
+Numeric comparisons and numeric `IN` accept complete finite numbers, including
+`+1.2`, `.5`, `1.`, `+1e2`, signed zero and surrounding spaces, tabs or line breaks.
+Blank, missing, malformed (for example `1x`), infinite and overflowing values do
+not match positive numeric comparisons. Numeric `!=` and `NOT IN` include those
+invalid values; numeric blank filters include them as well. Text and date filters
+retain their own rules. Integer sources retain their 64-bit precision; decimal
+and exponent forms use floating-point precision.
+
 When you repeat a comparison after `AND`, Metroliza reuses the previous field name. For example, `Meas > 200 and < 150.2` is accepted as `Meas > 200 AND Meas < 150.2`. Because those two limits conflict, the filter is valid but matches zero rows.
 
 Examples:
