@@ -994,6 +994,15 @@ jobs:
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py
 
+      - name: Run native Windows grouping-preview lifecycle tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: >-
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_tabular_analytics_grouping_dialog.py
+
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
           PYTHONPATH: src;.
