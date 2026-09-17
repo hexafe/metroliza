@@ -1781,12 +1781,12 @@ class _WindowsApi:
         value = handle.value if hasattr(handle, "value") else handle
         return value not in (None, 0, -1, ctypes.c_void_p(-1).value)
 
-    def _expected_file_name(self, handle):
+    def _expected_file_name(self, handle, *, opened: bool = False):
         image = ctypes.create_unicode_buffer(32_768)
         self._reset_native_error()
         try:
             copied = self.kernel.GetFinalPathNameByHandleW(
-                handle, image, len(image), 0x2
+                handle, image, len(image), 0x2 | (0x8 if opened else 0)
             )
         except Exception:
             return None, self._alternate("expected_file_name", "exception")
@@ -1821,7 +1821,8 @@ class _WindowsApi:
         return alternate
 
     def _expected_file_native_image(
-        self, expected: Path, primary: QualificationFailure
+        self, expected: Path, process_native_image: str,
+        primary: QualificationFailure,
     ):
         handle = None
         valid_handle: bool | None = None
@@ -1842,7 +1843,21 @@ class _WindowsApi:
                         "expected_file_open", "false", self._native_error_code()
                     )
                 else:
-                    result, alternate = self._expected_file_name(handle)
+                    expected_native, alternate = self._expected_file_name(handle)
+                    if alternate is None:
+                        result = (
+                            ntpath.normcase(process_native_image)
+                            == ntpath.normcase(expected_native)
+                        )
+                        if not result:
+                            opened_native, alternate = self._expected_file_name(
+                                handle, opened=True
+                            )
+                            if alternate is None:
+                                result = (
+                                    ntpath.normcase(process_native_image)
+                                    == ntpath.normcase(opened_native)
+                                )
         finally:
             if handle is not None and valid_handle is not False:
                 raw_value = (
@@ -1874,12 +1889,12 @@ class _WindowsApi:
             if alternate is None:
                 matched = None
                 for expected in expected_images:
-                    expected_native, alternate = self._expected_file_native_image(
-                        expected, primary
+                    image_matches, alternate = self._expected_file_native_image(
+                        expected, native_image, primary
                     )
                     if alternate is not None:
                         break
-                    if ntpath.normcase(native_image) == ntpath.normcase(expected_native):
+                    if image_matches:
                         matched = expected
                         break
                 if alternate is None and matched is None:

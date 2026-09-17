@@ -2244,8 +2244,9 @@ def _fallback_identity_api(monkeypatch, *, process_image=None, file_image=None):
             return 91
 
         def GetFinalPathNameByHandleW(self, handle, buffer, capacity, flags):
-            assert (handle, capacity, flags) == (91, len(buffer), 2)
-            calls.append("file_name")
+            assert (handle, capacity) == (91, len(buffer))
+            assert flags in (2, 10)
+            calls.append("file_name_opened" if flags == 10 else "file_name")
             buffer.value = file_image
             return len(file_image)
 
@@ -2287,6 +2288,67 @@ def test_native_fallback_binds_fresh_process_and_opened_expected_file(monkeypatc
     assert calls == ["k32", "open", "file_name", "close", "times"]
 
 
+@pytest.mark.parametrize("opened_matches", (True, False))
+def test_native_fallback_checks_opened_name_on_normalized_mismatch(
+    monkeypatch, opened_matches
+):
+    api, expected, primary, calls = _fallback_identity_api(monkeypatch)
+    native = r"\Device\HarddiskVolume7\package\metroliza_application.exe"
+    normalized = r"\Device\HarddiskVolume7\resolved\metroliza_application.exe"
+    wrong_opened = r"\Device\HarddiskVolume7\other\metroliza_application.exe"
+
+    def file_name(handle, buffer, capacity, flags):
+        assert (handle, capacity) == (91, len(buffer))
+        assert flags in (2, 10)
+        calls.append("file_name_opened" if flags == 10 else "file_name")
+        value = normalized if flags == 2 else native if opened_matches else wrong_opened
+        buffer.value = value
+        return len(value)
+
+    api.kernel.GetFinalPathNameByHandleW = file_name
+    if opened_matches:
+        observed = api._observe_job_member(77, 407, (expected,))
+        assert observed == qualification._ProcessObservation(407, 1234, str(expected))
+        assert calls == [
+            "k32", "open", "file_name", "file_name_opened", "close", "times",
+        ]
+    else:
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            api._observe_job_member(77, 407, (expected,))
+        assert caught.value is primary
+        assert primary.native_observation.alternative.receipt() == {
+            "api": "image_match", "outcome": "mismatch", "winerror": None,
+        }
+        assert calls == ["k32", "open", "file_name", "file_name_opened", "close"]
+
+
+@pytest.mark.parametrize(("copied", "outcome"), ((0, "false"), (32768, "invalid_result")))
+def test_native_fallback_opened_name_query_failure_keeps_primary_and_closes_file(
+    monkeypatch, copied, outcome
+):
+    api, expected, primary, calls = _fallback_identity_api(monkeypatch)
+    native = r"\Device\HarddiskVolume7\resolved\metroliza_application.exe"
+
+    def file_name(handle, buffer, capacity, flags):
+        assert (handle, capacity) == (91, len(buffer))
+        calls.append("file_name_opened" if flags == 10 else "file_name")
+        if flags == 10:
+            return copied
+        assert flags == 2
+        buffer.value = native
+        return len(native)
+
+    api.kernel.GetFinalPathNameByHandleW = file_name
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api._observe_job_member(77, 407, (expected,))
+    assert caught.value is primary
+    assert primary.native_observation.alternative.receipt() == {
+        "api": "expected_file_name", "outcome": outcome,
+        "winerror": 5 if copied == 0 else None,
+    }
+    assert calls == ["k32", "open", "file_name", "file_name_opened", "close"]
+
+
 def test_native_fallback_wrong_image_preserves_original_failure(monkeypatch):
     api, expected, primary, calls = _fallback_identity_api(
         monkeypatch, process_image=r"\Device\HarddiskVolume7\other.exe"
@@ -2297,7 +2359,7 @@ def test_native_fallback_wrong_image_preserves_original_failure(monkeypatch):
     assert primary.native_observation.alternative.receipt() == {
         "api": "image_match", "outcome": "mismatch", "winerror": None,
     }
-    assert calls == ["k32", "open", "file_name", "close"]
+    assert calls == ["k32", "open", "file_name", "file_name_opened", "close"]
 
 
 def test_native_fallback_applies_to_other_owned_job_member(monkeypatch):
@@ -4978,6 +5040,56 @@ def _assert_native_restricted_fallback(
         assert wrong.value.native_observation.alternative.api == "image_match"
 
 
+def _assert_native_restricted_opened_name_fallback(
+    api, job, handle, initial, executable, monkeypatch
+) -> None:
+    # The normalized mismatch is controlled; K32 and the opened-name query are native.
+    forced_win32 = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason="native_image_query_unavailable",
+        native_observation=qualification._NativeIdentityObservation(
+            None, "image", "false", 5, "alive"
+        ),
+    )
+
+    def controlled_win32_denial(_handle, _process_id):
+        raise forced_win32
+
+    real_file_name = api._expected_file_name
+    name_modes = []
+
+    def force_only_normalized_mismatch(file_handle, *, opened=False):
+        name_modes.append("opened" if opened else "normalized")
+        if not opened:
+            return r"\Device\HarddiskVolume0\controlled-mismatch.exe", None
+        return real_file_name(file_handle, opened=True)
+
+    with monkeypatch.context() as opened_context:
+        opened_context.setattr(api, "_process_observation", controlled_win32_denial)
+        opened_context.setattr(api, "_expected_file_name", force_only_normalized_mismatch)
+        opened_observations, _active, _total = api.job_observations(
+            job, primary_process=handle,
+            primary_initial=initial, expected_images=(executable,),
+        )
+    assert opened_observations == (initial,)
+    assert name_modes == ["normalized", "opened"]
+
+
+def test_restricted_opened_name_control_routes_through_denied_image_query(
+    monkeypatch,
+):
+    api, expected, _primary, calls = _fallback_identity_api(monkeypatch)
+    initial = qualification._ProcessObservation(407, 1234, str(expected))
+    api._process_observation = lambda *_args: initial
+    api._job_process_ids = lambda _job: (407,)
+    api._job_accounting = lambda _job: (1, 1)
+
+    _assert_native_restricted_opened_name_fallback(
+        api, object(), 77, initial, expected, monkeypatch
+    )
+    assert api._process_observation(77, 407) is initial
+    assert calls == ["k32", "open", "file_name_opened", "close", "times"]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")
 def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
     tmp_path, monkeypatch
@@ -5023,6 +5135,9 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
         assert total >= 1
         assert api._native_process_state(handle) == "alive"
         _assert_native_restricted_fallback(
+            api, assigned_jobs[0], handle, initial, executable, monkeypatch
+        )
+        _assert_native_restricted_opened_name_fallback(
             api, assigned_jobs[0], handle, initial, executable, monkeypatch
         )
         reopened = api.kernel.OpenProcess(0x1000, False, process_id)
