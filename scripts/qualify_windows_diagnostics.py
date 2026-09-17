@@ -18,7 +18,7 @@ import tempfile
 import time
 import uuid
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, TypeVar
 
@@ -48,6 +48,28 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
 FIXTURE_SHA256 = "ca500bd52afc2551560e7c0009851906a0d3bec6b35282e20703c1e298da608b"
 OUTPUT_NAME = "windows-diagnostic-qualification.json"
+NATIVE_IDENTITY_CONTROL_NAME = "native-identity-control.json"
+NATIVE_IDENTITY_CONTROL_BASENAME = "metroliza-native-identity-control.exe"
+NATIVE_IDENTITY_CONTROL_IDS = (
+    "pre_resume",
+    "retired",
+    "sleeper_pre_resume",
+    "resumed_live",
+    "invalid_handle",
+    "denied_handle",
+    "wrong_image",
+)
+NATIVE_CONTROL_IMAGE_RESULTS = frozenset(
+    {"matched", "rejected", "unavailable"}
+)
+NATIVE_CONTROL_EXPECTED = {
+    "pre_resume": ("alive", "matched", None),
+    "sleeper_pre_resume": ("alive", "matched", None),
+    "resumed_live": ("alive", "matched", None),
+    "invalid_handle": ("unknown", "unavailable", 6),
+    "denied_handle": ("alive", "unavailable", 5),
+    "wrong_image": ("alive", "rejected", None),
+}
 PACKAGE_MANIFEST_NAME = "package-manifest.json"
 PACKAGE_ARCHIVE_NAME = "qualified-windows-development-package.zip"
 DIRECT_UI_CHECKPOINT = (
@@ -133,6 +155,7 @@ DRIVER_FAILURE_STAGES = frozenset(
         "package",
         "relocation",
         "runner",
+        "identity_control",
         "startups",
         "direct_ui_smoke",
         "direct_normal_1",
@@ -212,6 +235,37 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
 QUALIFICATION_CLEANUP_STATUSES = frozenset(
     {"not_attempted", "complete", "failed"}
 )
+NATIVE_IDENTITY_PHASES = frozenset(
+    {"pre_resume", "job_observation", "control_live", "control_retired", "control_invalid", "control_denied"}
+)
+NATIVE_IDENTITY_APIS = frozenset({"image", "times"})
+NATIVE_IDENTITY_OUTCOMES = frozenset({"false", "exception"})
+NATIVE_PROCESS_STATES = frozenset({"alive", "exited", "unknown"})
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeIdentityObservation:
+    phase: str | None
+    api: str
+    outcome: str
+    winerror: int | None
+    process_state: str
+
+    def with_phase(self, phase: str) -> _NativeIdentityObservation:
+        if phase not in NATIVE_IDENTITY_PHASES:
+            raise QualificationFailure("scenario_failed")
+        return replace(self, phase=phase)
+
+    def receipt(self) -> dict[str, object]:
+        if self.phase not in NATIVE_IDENTITY_PHASES:
+            raise QualificationFailure("output_failed")
+        return {
+            "phase": self.phase,
+            "api": self.api,
+            "outcome": self.outcome,
+            "winerror": self.winerror,
+            "process_state": self.process_state,
+        }
 
 
 class QualificationFailure(RuntimeError):
@@ -226,6 +280,7 @@ class QualificationFailure(RuntimeError):
         qualification_child_stage: str | None = None,
         qualification_exit_code: int | None = None,
         qualification_cleanup: str = "not_attempted",
+        native_observation: _NativeIdentityObservation | None = None,
     ) -> None:
         if failure_id not in FAILURE_IDS:
             failure_id = "scenario_failed"
@@ -249,7 +304,16 @@ class QualificationFailure(RuntimeError):
             and qualification_cleanup in QUALIFICATION_CLEANUP_STATUSES
             else "not_attempted"
         )
+        self.native_observation = (
+            native_observation
+            if isinstance(native_observation, _NativeIdentityObservation)
+            else None
+        )
         super().__init__(failure_id)
+
+    def set_native_phase(self, phase: str) -> None:
+        if self.native_observation is not None:
+            self.native_observation = self.native_observation.with_phase(phase)
 
     def record_cleanup(self, *, succeeded: bool) -> None:
         if not succeeded:
@@ -283,6 +347,7 @@ def _run_driver_phase(stage: str, action: Callable[[], _T]) -> _T:
             qualification_child_stage=error.qualification_child_stage,
             qualification_exit_code=error.qualification_exit_code,
             qualification_cleanup=error.qualification_cleanup,
+            native_observation=error.native_observation,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -309,6 +374,7 @@ def _scenario_step(reason: str, action: Callable[[], _T]) -> _T:
             qualification_child_stage=error.qualification_child_stage,
             qualification_exit_code=error.qualification_exit_code,
             qualification_cleanup=error.qualification_cleanup,
+            native_observation=error.native_observation,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -371,6 +437,7 @@ class QualificationResult:
     qualification_exit_code: int | None = None
     qualification_cleanup: str = "not_attempted"
     output_identity: tuple[int, int] | None = None
+    native_observation: _NativeIdentityObservation | None = None
 
 
 def _attempt_cleanup(action: Callable[[], None]) -> None:
@@ -705,6 +772,7 @@ class _WindowsProcess:
         initial: _ProcessObservation,
         thread_handle=None,
         token_handle=None,
+        initial_process_state: str = "unknown",
     ) -> None:
         self._api = api
         self._process = process_handle
@@ -716,6 +784,7 @@ class _WindowsProcess:
         self._observations = {initial.process_id: initial}
         self._assigned_processes = 1
         self._max_active_processes = 1
+        self.initial_process_state = initial_process_state
 
     def poll(self) -> int | None:
         return self._api.poll(self._process)
@@ -900,7 +969,13 @@ class _WindowsApi:
 
     def _declare_functions(self) -> None:
         wt = self.wintypes
+        self.kernel.GetCurrentProcess.argtypes = []
         self.kernel.GetCurrentProcess.restype = wt.HANDLE
+        self.kernel.DuplicateHandle.argtypes = [
+            wt.HANDLE, wt.HANDLE, wt.HANDLE, ctypes.POINTER(wt.HANDLE),
+            wt.DWORD, wt.BOOL, wt.DWORD,
+        ]
+        self.kernel.DuplicateHandle.restype = wt.BOOL
         self.kernel.CloseHandle.argtypes = [wt.HANDLE]
         self.kernel.CloseHandle.restype = wt.BOOL
         self.kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wt.LPCWSTR]
@@ -1245,10 +1320,27 @@ class _WindowsApi:
             )
         )
 
-    def _finish_launched_process(self, process, job, started, initial, token):
+    def _finish_launched_process(
+        self, process, job, started, initial, token, initial_process_state
+    ):
         return _WindowsProcess(
-            self, process.hProcess, job, started, initial, process.hThread, token
+            self, process.hProcess, job, started, initial, process.hThread, token,
+            initial_process_state,
         )
+
+    def duplicate_synchronize_only(self, process):
+        wt = self.wintypes
+        current = self.kernel.GetCurrentProcess()
+        duplicate = wt.HANDLE()
+        if not self.kernel.DuplicateHandle(
+            current, process, current, ctypes.byref(duplicate),
+            0x00100000, False, 0,
+        ) or not duplicate:
+            raise QualificationFailure(
+                "scenario_failed",
+                qualification_reason="native_open_process_unavailable",
+            )
+        return duplicate
 
     def _has_effective_admin_membership(self, token, sid) -> bool:
         wt = self.wintypes
@@ -1453,13 +1545,12 @@ class _WindowsApi:
                 raise QualificationFailure("restricted_launch_unavailable")
             if not self.kernel.AssignProcessToJobObject(job, process.hProcess):
                 raise QualificationFailure("restricted_launch_unavailable")
-            initial = self._process_observation(
-                process.hProcess, int(process.dwProcessId)
-            )
+            initial = self._observe_before_resume(process)
+            initial_process_state = self._native_process_state(process.hProcess)
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
             launched = self._finish_launched_process(
-                process, job, started, initial, token
+                process, job, started, initial, token, initial_process_state
             )
             if owned is not None:
                 owned.append(launched)
@@ -1480,6 +1571,76 @@ class _WindowsApi:
             primary.record_cleanup(succeeded=cleanup_succeeded)
             raise primary from None
 
+    def _observe_before_resume(self, process) -> _ProcessObservation:
+        try:
+            return self._process_observation(
+                process.hProcess, int(process.dwProcessId)
+            )
+        except QualificationFailure as error:
+            error.set_native_phase("pre_resume")
+            raise
+
+    def _native_process_state(self, process) -> str:
+        try:
+            result = self.kernel.WaitForSingleObject(process, 0)
+        except BaseException:
+            return "unknown"
+        if result == WAIT_OBJECT_0:
+            return "exited"
+        if result == WAIT_TIMEOUT:
+            return "alive"
+        return "unknown"
+
+    def _native_identity_failure(
+        self, process, api: str, outcome: str, winerror: int | None
+    ) -> QualificationFailure:
+        code = (
+            winerror
+            if type(winerror) is int and 0 <= winerror <= 2**32 - 1
+            else None
+        )
+        return QualificationFailure(
+            "scenario_failed",
+            qualification_reason=(
+                "native_image_query_unavailable"
+                if api == "image"
+                else "native_process_times_unavailable"
+            ),
+            native_observation=_NativeIdentityObservation(
+                None, api, outcome, code, self._native_process_state(process)
+            ),
+        )
+
+    @staticmethod
+    def _reset_native_error() -> None:
+        reset = getattr(ctypes, "set_last_error", None)
+        if reset is not None:
+            reset(0)
+
+    @staticmethod
+    def _native_error_code() -> int | None:
+        read = getattr(ctypes, "get_last_error", None)
+        if read is None:
+            return None
+        try:
+            return int(read())
+        except BaseException:
+            return None
+
+    def _identity_call(self, process, api: str, action: Callable[[], object]) -> None:
+        self._reset_native_error()
+        try:
+            result = action()
+        except Exception:
+            raise self._native_identity_failure(
+                process, api, "exception", None
+            ) from None
+        if not result:
+            winerror = self._native_error_code()
+            raise self._native_identity_failure(
+                process, api, "false", winerror
+            )
+
     def _process_observation(self, process, process_id: int) -> _ProcessObservation:
         wt = self.wintypes
         capacity = wt.DWORD(32_768)
@@ -1488,17 +1649,16 @@ class _WindowsApi:
         exited = self.FILETIME()
         kernel = self.FILETIME()
         user = self.FILETIME()
-        if not _scenario_step(
-            "native_image_query_unavailable",
+        self._identity_call(
+            process,
+            "image",
             lambda: self.kernel.QueryFullProcessImageNameW(
                 process, 0, image, ctypes.byref(capacity)
             ),
-        ):
-            raise QualificationFailure(
-                "scenario_failed", qualification_reason="native_image_query_unavailable"
-            )
-        if not _scenario_step(
-            "native_process_times_unavailable",
+        )
+        self._identity_call(
+            process,
+            "times",
             lambda: self.kernel.GetProcessTimes(
                 process,
                 ctypes.byref(created),
@@ -1506,10 +1666,7 @@ class _WindowsApi:
                 ctypes.byref(kernel),
                 ctypes.byref(user),
             ),
-        ):
-            raise QualificationFailure(
-                "scenario_failed", qualification_reason="native_process_times_unavailable"
-            )
+        )
         creation_time = (int(created.dwHighDateTime) << 32) | int(
             created.dwLowDateTime
         )
@@ -1702,7 +1859,10 @@ class _WindowsApi:
             "native_process_times_unavailable",
         }:
             return False
-        return process_id not in self._job_process_ids(job)
+        try:
+            return process_id not in self._job_process_ids(job)
+        except Exception:
+            return False
 
     def job_observations(
         self, job
@@ -1727,6 +1887,7 @@ class _WindowsApi:
                 try:
                     observation = self._process_observation(process, process_id)
                 except QualificationFailure as error:
+                    error.set_native_phase("job_observation")
                     if not self._process_disappeared_after_observation_failure(
                         job, process_id, error
                     ):
@@ -3075,7 +3236,9 @@ def _valid_failure_detail(detail: object) -> bool:
     return bool(
         type(detail) is dict
         and {"stage", "reason"} <= detail_keys
-        and detail_keys <= {"stage", "reason", "child_stage", "exit_code"}
+        and detail_keys <= {
+            "stage", "reason", "child_stage", "exit_code", "native_observation"
+        }
         and type(detail["stage"]) is str
         and type(detail["reason"]) is str
         and detail["stage"] in QUALIFICATION_FAILURE_STAGES
@@ -3090,6 +3253,40 @@ def _valid_failure_detail(detail: object) -> bool:
             or type(detail["exit_code"]) is int
             and -(2**31) <= detail["exit_code"] <= 2**32 - 1
         )
+        and (
+            "native_observation" not in detail
+            or (
+                _valid_native_observation(detail["native_observation"])
+                and detail["reason"] == (
+                    "native_image_query_unavailable"
+                    if detail["native_observation"]["api"] == "image"
+                    else "native_process_times_unavailable"
+                )
+            )
+        )
+    )
+
+
+def _valid_native_observation(detail: object) -> bool:
+    return bool(
+        type(detail) is dict
+        and set(detail) == {
+            "phase", "api", "outcome", "winerror", "process_state"
+        }
+        and type(detail["phase"]) is str
+        and detail["phase"] in NATIVE_IDENTITY_PHASES
+        and type(detail["api"]) is str
+        and detail["api"] in NATIVE_IDENTITY_APIS
+        and type(detail["outcome"]) is str
+        and detail["outcome"] in NATIVE_IDENTITY_OUTCOMES
+        and (detail["outcome"] != "exception" or detail["winerror"] is None)
+        and (
+            detail["winerror"] is None
+            or type(detail["winerror"]) is int
+            and 0 <= detail["winerror"] <= 2**32 - 1
+        )
+        and type(detail["process_state"]) is str
+        and detail["process_state"] in NATIVE_PROCESS_STATES
     )
 
 
@@ -3855,6 +4052,459 @@ def _qualification_payload(
     return _run_in_private_directory(qualify_private)
 
 
+def _control_check(
+    check_id: str, process_state: str, image_result: str,
+    winerror: int | None = None,
+) -> dict[str, object]:
+    if (
+        check_id not in NATIVE_IDENTITY_CONTROL_IDS
+        or process_state not in NATIVE_PROCESS_STATES
+        or image_result not in NATIVE_CONTROL_IMAGE_RESULTS
+        or (winerror is not None and (type(winerror) is not int or not 0 <= winerror <= 2**32 - 1))
+    ):
+        raise QualificationFailure("scenario_failed")
+    return {
+        "id": check_id,
+        "status": "passed",
+        "process_state": process_state,
+        "image_result": image_result,
+        "winerror": winerror,
+    }
+
+
+def _same_observed_image(observation: _ProcessObservation, expected: Path) -> bool:
+    return (
+        observation.creation_time > 0
+        and os.path.normcase(os.path.abspath(observation.image))
+        == os.path.normcase(os.path.abspath(expected))
+    )
+
+
+def _control_mismatch() -> QualificationFailure:
+    return QualificationFailure(
+        "scenario_failed", qualification_reason="qualification_result_mismatch"
+    )
+
+
+def _observe_control_identity(
+    api: _WindowsApi, handle, process_id: int, phase: str
+) -> _ProcessObservation:
+    try:
+        return api._process_observation(handle, process_id)
+    except QualificationFailure as error:
+        error.set_native_phase(phase)
+        raise
+
+
+def _expected_control_identity_failure(
+    api: _WindowsApi, handle, process_id: int, phase: str,
+    expected_state: str, expected_winerror: int,
+) -> _NativeIdentityObservation:
+    try:
+        _observe_control_identity(api, handle, process_id, phase)
+    except QualificationFailure as error:
+        detail = error.native_observation
+        if (
+            error.qualification_reason != "native_image_query_unavailable"
+            or detail is None
+            or detail.api != "image"
+            or detail.outcome != "false"
+            or detail.process_state != expected_state
+            or detail.winerror != expected_winerror
+        ):
+            raise
+        return detail
+    raise _control_mismatch()
+
+
+def _control_sleeper_checks(
+    api: _WindowsApi, sleeper: _WindowsProcess, executable: Path,
+    whoami: Path, checks: list[dict[str, object]],
+) -> None:
+    initial = next(iter(sleeper._observations.values()))
+    if sleeper.initial_process_state != "alive" or not _same_observed_image(
+        initial, executable
+    ):
+        raise _control_mismatch()
+    checks.append(_control_check("sleeper_pre_resume", "alive", "matched"))
+    if api._native_process_state(sleeper._process) != "alive":
+        raise _control_mismatch()
+    live = _observe_control_identity(
+        api, sleeper._process, initial.process_id, "control_live"
+    )
+    if (
+        live.creation_time != initial.creation_time
+        or not _same_observed_image(live, executable)
+    ):
+        raise _control_mismatch()
+    checks.append(_control_check("resumed_live", "alive", "matched"))
+    invalid = _expected_control_identity_failure(
+        api, api.wintypes.HANDLE(0), initial.process_id,
+        "control_invalid", "unknown", 6,
+    )
+    checks.append(_control_check(
+        "invalid_handle", invalid.process_state, "unavailable", invalid.winerror
+    ))
+    denied_handle = api.duplicate_synchronize_only(sleeper._process)
+    try:
+        denied = _expected_control_identity_failure(
+            api, denied_handle, initial.process_id, "control_denied", "alive", 5
+        )
+        checks.append(_control_check(
+            "denied_handle", denied.process_state, "unavailable", denied.winerror
+        ))
+    finally:
+        _attempt_cleanup(lambda: api._require_closed_handles(denied_handle))
+    if _same_observed_image(live, whoami):
+        raise _control_mismatch()
+    checks.append(_control_check("wrong_image", "alive", "rejected"))
+
+
+def _wait_control_exit(
+    api: _WindowsApi, process: _WindowsProcess, deadline: float
+) -> None:
+    while time.monotonic() < deadline and process.poll() is None:
+        time.sleep(0.01)
+    if process.poll() is None:
+        raise QualificationFailure("scenario_timeout")
+    while time.monotonic() < deadline and api._job_accounting(process._job)[0]:
+        time.sleep(0.01)
+    if api._job_accounting(process._job)[0]:
+        raise QualificationFailure("scenario_timeout")
+
+
+def _control_retired_check(
+    api: _WindowsApi, whoami_process: _WindowsProcess, whoami: Path,
+    deadline: float, checks: list[dict[str, object]],
+) -> None:
+    _wait_control_exit(api, whoami_process, deadline)
+    initial = next(iter(whoami_process._observations.values()))
+    if api._native_process_state(whoami_process._process) != "exited":
+        raise _control_mismatch()
+    try:
+        retired = _observe_control_identity(
+            api, whoami_process._process, initial.process_id, "control_retired"
+        )
+    except QualificationFailure as error:
+        detail = error.native_observation
+        if (
+            detail is None
+            or detail.process_state != "exited"
+            or detail.api != "image"
+            or detail.outcome != "false"
+            or detail.winerror is None
+            or error.qualification_reason != "native_image_query_unavailable"
+        ):
+            raise
+        checks.append(_control_check(
+            "retired", "exited", "unavailable", detail.winerror
+        ))
+    else:
+        if (
+            retired.creation_time != initial.creation_time
+            or not _same_observed_image(retired, whoami)
+        ):
+            raise _control_mismatch()
+        checks.append(_control_check("retired", "exited", "matched"))
+
+
+def _native_control_sequence(
+    api: _WindowsApi, artifact: Path, executable: Path,
+    private_root: Path, deadline: float, checks: list[dict[str, object]],
+) -> None:
+    work_root = _prepare_work_root(private_root, "identity-control")
+    state_base = private_root / "control-state"
+    (state_base / "Roaming").mkdir(parents=True)
+    environment = _sanitized_environment(
+        artifact, work_root, state_base, "normal"
+    )
+    system_root = environment.get("SYSTEMROOT") or environment.get("WINDIR")
+    if system_root is None:
+        raise QualificationFailure("restricted_launch_unavailable")
+    whoami = Path(system_root) / "System32" / "whoami.exe"
+    owned: list[_WindowsProcess] = []
+    api_process = None
+    try:
+        whoami_process = api.launch(whoami, environment, work_root, owned=owned)
+        whoami_initial = next(iter(whoami_process._observations.values()))
+        if (
+            whoami_process.initial_process_state != "alive"
+            or not _same_observed_image(whoami_initial, whoami)
+        ):
+            raise _control_mismatch()
+        checks.append(_control_check("pre_resume", "alive", "matched"))
+        _control_retired_check(api, whoami_process, whoami, deadline, checks)
+        whoami_process.close(terminate=False)
+        if time.monotonic() >= deadline:
+            raise QualificationFailure("scenario_timeout")
+        api_process = api.launch(executable, environment, work_root, owned=owned)
+        _control_sleeper_checks(api, api_process, executable, whoami, checks)
+    finally:
+        _attempt_cleanup(lambda: _close_owned_processes(owned, terminate=True))
+
+
+def _run_native_identity_controls(
+    artifact: Path, executable: Path, deadline: float,
+    checks: list[dict[str, object]],
+) -> None:
+    api = _WindowsApi()
+    _run_driver_phase(
+        "identity_control",
+        lambda: _run_in_private_directory(
+            lambda private_root: _native_control_sequence(
+                api, artifact, executable, private_root, deadline, checks
+            )
+        ),
+    )
+
+
+def _validate_identity_control_executable(executable: Path) -> Path:
+    if (
+        not executable.is_absolute()
+        or executable.name != NATIVE_IDENTITY_CONTROL_BASENAME
+        or executable.is_symlink()
+    ):
+        raise QualificationFailure(
+            "artifact_invalid", qualification_reason="qualification_result_mismatch"
+        )
+    try:
+        metadata = executable.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or _pe_subsystem(executable) != 2:
+            raise QualificationFailure("artifact_invalid")
+    except (OSError, QualificationFailure):
+        raise QualificationFailure(
+            "artifact_invalid", qualification_reason="qualification_result_mismatch"
+        ) from None
+    return executable
+
+
+def _run_identity_application(artifact: Path, deadline: float) -> None:
+    package = _run_driver_phase("package", lambda: _validate_package(artifact))
+
+    def run_private(private_root: Path) -> None:
+        relocated = _run_driver_phase(
+            "relocation", lambda: _relocate_package(artifact, private_root, deadline)
+        )
+        observed = _run_driver_phase(
+            "relocation", lambda: _validate_package(relocated)
+        )
+        if observed != package:
+            raise QualificationFailure(
+                "artifact_invalid", qualification_stage="relocation",
+                qualification_reason="qualification_result_mismatch",
+            )
+        runner = _run_driver_phase(
+            "runner", lambda: _QualificationRunner(relocated, private_root, deadline)
+        )
+        _run_driver_phase("direct_ui_smoke", runner.run_direct_ui_smoke)
+
+    _run_in_private_directory(run_private)
+
+
+def _valid_identity_control_check(check: object) -> bool:
+    return bool(
+        type(check) is dict
+        and set(check) == {
+            "id", "status", "process_state", "image_result", "winerror"
+        }
+        and type(check["id"]) is str
+        and check["id"] in NATIVE_IDENTITY_CONTROL_IDS
+        and check["status"] == "passed"
+        and type(check["status"]) is str
+        and type(check["process_state"]) is str
+        and check["process_state"] in NATIVE_PROCESS_STATES
+        and type(check["image_result"]) is str
+        and check["image_result"] in NATIVE_CONTROL_IMAGE_RESULTS
+        and (
+            check["winerror"] is None
+            or type(check["winerror"]) is int
+            and 0 <= check["winerror"] <= 2**32 - 1
+        )
+        and (
+            (
+                check["process_state"], check["image_result"], check["winerror"]
+            ) == NATIVE_CONTROL_EXPECTED[check["id"]]
+            if check["id"] in NATIVE_CONTROL_EXPECTED
+            else check["id"] == "retired"
+            and check["process_state"] == "exited"
+            and (
+                (check["image_result"] == "matched" and check["winerror"] is None)
+                or (
+                    check["image_result"] == "unavailable"
+                    and type(check["winerror"]) is int
+                    and 0 <= check["winerror"] <= 2**32 - 1
+                )
+            )
+        )
+    )
+
+
+def _validate_identity_control_payload(payload: object) -> None:
+    if type(payload) is not dict or set(payload) != {
+        "schema_version", "status", "checks", "failure", "application", "cleanup"
+    }:
+        raise QualificationFailure("output_failed")
+    checks = payload["checks"]
+    application = payload["application"]
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != 1
+        or type(payload["status"]) is not str
+        or payload["status"] not in {"passed", "failed"}
+        or type(checks) is not list
+        or len(checks) > len(NATIVE_IDENTITY_CONTROL_IDS)
+        or not all(_valid_identity_control_check(check) for check in checks)
+        or [check["id"] for check in checks]
+        != list(NATIVE_IDENTITY_CONTROL_IDS[:len(checks)])
+        or type(application) is not dict
+        or set(application) != {"status", "qualification_failure"}
+        or type(application["status"]) is not str
+        or application["status"] not in {"passed", "failed", "not_run"}
+        or type(payload["cleanup"]) is not str
+        or payload["cleanup"] not in QUALIFICATION_CLEANUP_STATUSES
+    ):
+        raise QualificationFailure("output_failed")
+    failure = payload["failure"]
+    application_failure = application["qualification_failure"]
+    if (
+        (failure is not None and not _valid_failure_detail(failure))
+        or (application_failure is not None and not _valid_failure_detail(application_failure))
+        or (failure is None and len(checks) != len(NATIVE_IDENTITY_CONTROL_IDS))
+        or (application["status"] == "failed") != (application_failure is not None)
+        or (application["status"] == "not_run" and payload["cleanup"] != "failed")
+        or (application["status"] != "failed" and application_failure is not None)
+        or (payload["status"] == "passed") != (
+            failure is None and application["status"] == "passed"
+            and payload["cleanup"] == "complete"
+        )
+    ):
+        raise QualificationFailure("output_failed")
+
+
+def _write_identity_control_receipt(
+    output_dir: Path, output_identity: tuple[int, int], payload: dict[str, object]
+) -> Path:
+    _validate_identity_control_payload(payload)
+    try:
+        metadata = output_dir.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != output_identity
+            or set(output_dir.iterdir())
+        ):
+            raise QualificationFailure("output_failed")
+        destination = output_dir / NATIVE_IDENTITY_CONTROL_NAME
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii") + b"\n"
+        if len(encoded) > 4096:
+            raise QualificationFailure("output_failed")
+        with destination.open("xb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return destination
+    except (OSError, ValueError, TypeError, QualificationFailure):
+        raise QualificationFailure("output_failed") from None
+
+
+def _identity_control_payload(
+    artifact: Path, executable: Path, deadline: float
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    control_error: QualificationFailure | None = None
+    app_error: QualificationFailure | None = None
+    app_status = "not_run"
+    try:
+        _run_driver_phase(
+            "identity_control",
+            lambda: _run_native_identity_controls(
+                artifact,
+                _validate_identity_control_executable(executable),
+                deadline,
+                checks,
+            ),
+        )
+    except QualificationFailure as error:
+        control_error = error
+    if control_error is None or control_error.qualification_cleanup != "failed":
+        try:
+            _run_driver_phase(
+                "runner", lambda: _run_identity_application(artifact, deadline)
+            )
+        except QualificationFailure as error:
+            app_error = error
+            app_status = "failed"
+        else:
+            app_status = "passed"
+    cleanup = "not_attempted"
+    if (
+        control_error is None
+        or app_status == "passed"
+        or any(
+            error is not None and error.qualification_cleanup == "complete"
+            for error in (control_error, app_error)
+        )
+    ):
+        cleanup = "complete"
+    if any(
+        error is not None and error.qualification_cleanup == "failed"
+        for error in (control_error, app_error)
+    ):
+        cleanup = "failed"
+    payload = {
+        "schema_version": 1,
+        "status": (
+            "passed" if control_error is None and app_error is None else "failed"
+        ),
+        "checks": checks,
+        "failure": (
+            _failure_detail(
+                control_error.qualification_stage,
+                control_error.qualification_reason,
+                control_error.qualification_child_stage,
+                control_error.qualification_exit_code,
+                control_error.native_observation,
+            ) if control_error is not None else None
+        ),
+        "application": {
+            "status": app_status,
+            "qualification_failure": (
+                _failure_detail(
+                    app_error.qualification_stage,
+                    app_error.qualification_reason,
+                    app_error.qualification_child_stage,
+                    app_error.qualification_exit_code,
+                    app_error.native_observation,
+                ) if app_error is not None else None
+            ),
+        },
+        "cleanup": cleanup,
+    }
+    _validate_identity_control_payload(payload)
+    return payload
+
+
+def run_identity_control(
+    artifact_dir: Path, output_dir: Path, executable: Path
+) -> int:
+    if os.name != "nt":
+        return 1
+    try:
+        artifact, output_identity = _prepare_qualification_paths(
+            artifact_dir, output_dir, MAX_TOTAL_SECONDS
+        )
+    except QualificationFailure:
+        return 1
+    deadline = time.monotonic() + MAX_TOTAL_SECONDS
+    try:
+        payload = _identity_control_payload(artifact, executable, deadline)
+        _write_identity_control_receipt(output_dir, output_identity, payload)
+    except Exception:
+        return 1
+    return 0 if payload["status"] == "passed" else 1
+
+
 def _run_in_private_directory(action: Callable[[Path], _T]) -> _T:
     try:
         temporary = tempfile.TemporaryDirectory(
@@ -4006,6 +4656,7 @@ def qualify_windows_diagnostics(
             qualification_exit_code=error.qualification_exit_code,
             qualification_cleanup=error.qualification_cleanup,
             output_identity=output_identity,
+            native_observation=error.native_observation,
         )
     except Exception:
         cleanup_status = "not_attempted"
@@ -4038,6 +4689,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--identity-control-executable", type=Path)
     return parser
 
 
@@ -4058,11 +4710,40 @@ def _failure_output_identity(
     return metadata.st_dev, metadata.st_ino
 
 
+def _failure_detail(
+    stage: str | None,
+    reason: str | None,
+    child_stage: str | None,
+    exit_code: int | None,
+    native_observation: _NativeIdentityObservation | None,
+) -> dict[str, object]:
+    return {
+        "stage": stage,
+        "reason": reason,
+        **({"child_stage": child_stage} if child_stage is not None else {}),
+        **({"exit_code": exit_code} if exit_code is not None else {}),
+        **(
+            {"native_observation": native_observation.receipt()}
+            if native_observation is not None
+            else {}
+        ),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         arguments = _parser().parse_args(argv)
     except SystemExit as error:
         return int(error.code)
+    identity_control_executable = getattr(
+        arguments, "identity_control_executable", None
+    )
+    if identity_control_executable is not None:
+        return run_identity_control(
+            arguments.artifact_dir,
+            arguments.output_dir,
+            identity_control_executable,
+        )
     result = qualify_windows_diagnostics(arguments.artifact_dir, arguments.output_dir)
     if result.status == "passed":
         return 0
@@ -4077,20 +4758,13 @@ def main(argv: list[str] | None = None) -> int:
                         "schema_version": 1,
                         "status": "failed",
                         "failure_id": result.failure_id,
-                        "qualification_failure": {
-                            "stage": result.qualification_stage,
-                            "reason": result.qualification_reason,
-                            **(
-                                {"child_stage": result.qualification_child_stage}
-                                if result.qualification_child_stage is not None
-                                else {}
-                            ),
-                            **(
-                                {"exit_code": result.qualification_exit_code}
-                                if result.qualification_exit_code is not None
-                                else {}
-                            ),
-                        },
+                        "qualification_failure": _failure_detail(
+                            result.qualification_stage,
+                            result.qualification_reason,
+                            result.qualification_child_stage,
+                            result.qualification_exit_code,
+                            result.native_observation,
+                        ),
                         "qualification_cleanup": result.qualification_cleanup,
                         "package": None,
                         "environment": None,
