@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import closing
 
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Mapping
@@ -44,6 +45,10 @@ def _sidecars(database: Path) -> tuple[str, ...]:
     return tuple(suffix for suffix in _SIDECAR_SUFFIXES if database.with_name(database.name + suffix).exists())
 
 
+def _readonly_uri(database: Path) -> str:
+    return database.resolve().as_uri() + "?mode=ro&immutable=1"
+
+
 def _require(condition: bool, code: str) -> None:
     if not condition:
         raise ReopenScenarioFailure(code)
@@ -67,9 +72,34 @@ def _database_counts(database: Path) -> dict[str, int]:
         "metadata": "SELECT COUNT(*) FROM report_metadata",
         "measurements": "SELECT COUNT(*) FROM report_measurements",
     }
-    uri = database.resolve().as_uri() + "?mode=ro&immutable=1"
-    with closing(sqlite3.connect(uri, uri=True)) as connection:
+    with closing(sqlite3.connect(_readonly_uri(database), uri=True)) as connection:
         return {name: int(connection.execute(query).fetchone()[0]) for name, query in queries.items()}
+
+
+def _schema_digest(database: Path) -> str:
+    with closing(sqlite3.connect(_readonly_uri(database), uri=True)) as connection:
+        schema = list(
+            connection.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name"
+            )
+        )
+    encoded = json.dumps(schema, ensure_ascii=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _logical_dump_digest(database: Path) -> str:
+    with closing(sqlite3.connect(_readonly_uri(database), uri=True)) as connection:
+        dump = "\n".join(connection.iterdump()).encode("utf-8")
+    return hashlib.sha256(dump).hexdigest()
+
+
+def _readonly_select_with_columns(database: str, query: str) -> tuple[list[tuple[Any, ...]], list[str]]:
+    with closing(sqlite3.connect(_readonly_uri(Path(database)), uri=True)) as connection:
+        with closing(connection.cursor()) as cursor:
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            columns = [description[0] for description in cursor.description or ()]
+    return rows, columns
 
 
 def _public_measurements(database: Path) -> dict[tuple[str, str], tuple[float, float, float, float]]:
@@ -80,7 +110,11 @@ def _public_measurements(database: Path) -> dict[tuple[str, str], tuple[float, f
     )
     from metroliza.reports.report_query_service import build_measurement_export_query
 
-    rows, columns = execute_export_query(str(database), build_measurement_export_query())
+    rows, columns = execute_export_query(
+        str(database),
+        build_measurement_export_query(),
+        select_reader=_readonly_select_with_columns,
+    )
     table = build_measurement_export_dataframe(build_export_dataframe(rows, columns))
     observed: dict[tuple[str, str], tuple[float, float, float, float]] = {}
     for row in table.iter_rows(as_dict=True):
@@ -93,6 +127,20 @@ def _public_measurements(database: Path) -> dict[tuple[str, str], tuple[float, f
             float(row["MEAS"]),
         )
     return observed
+
+
+def _readonly_observation(
+    database: Path,
+    reports: Path,
+    source_hashes: Mapping[str, str],
+    operation,
+) -> Any:
+    database_before = _sha256(database)
+    result = operation(database)
+    _require(_sha256(database) == database_before, "readonly_database_bytes_changed")
+    _require(not _sidecars(database), "database_sidecars_created")
+    _require(_validate_inputs(database, reports, source_hashes) == source_hashes, "source_hashes_changed")
+    return result
 
 
 def _reopen_window(database: Path, reports: Path) -> None:
@@ -139,18 +187,38 @@ def run_reopen_checks(
     try:
         source_before = _validate_inputs(database, reports, expected_source_hashes)
         database_before = _sha256(database)
-        _require(_database_counts(database) == _EXPECTED_COUNTS, "database_counts_before_reopen")
-        _require(_public_measurements(database) == _EXPECTED_MEASUREMENTS, "public_measurements_before_reopen")
+        schema_before = _readonly_observation(
+            database, reports, source_before, _schema_digest
+        )
+        logical_before = _readonly_observation(
+            database, reports, source_before, _logical_dump_digest
+        )
+        counts_before = _readonly_observation(
+            database, reports, source_before, _database_counts
+        )
+        _require(counts_before == _EXPECTED_COUNTS, "database_counts_before_reopen")
+        measurements_before = _readonly_observation(
+            database, reports, source_before, _public_measurements
+        )
+        _require(measurements_before == _EXPECTED_MEASUREMENTS, "public_measurements_before_reopen")
         _reopen_window(database, reports)
-        _require(_sha256(database) == database_before, "database_bytes_changed")
+        schema_after = _readonly_observation(
+            database, reports, source_before, _schema_digest
+        )
+        logical_after = _readonly_observation(
+            database, reports, source_before, _logical_dump_digest
+        )
+        _require(schema_after == schema_before, "schema_changed_after_reopen")
+        _require(logical_after == logical_before, "logical_dump_changed_after_reopen")
+        database_after = _sha256(database)
         _require(not _sidecars(database), "database_sidecars_created")
         _require(_validate_inputs(database, reports, source_before) == source_before, "source_hashes_changed")
-        _require(_database_counts(database) == _EXPECTED_COUNTS, "database_counts_after_reopen")
-        _require(_public_measurements(database) == _EXPECTED_MEASUREMENTS, "public_measurements_after_reopen")
-        # The observation itself must finish without altering retained evidence.
-        _require(_sha256(database) == database_before, "database_bytes_changed")
-        _require(not _sidecars(database), "database_sidecars_created")
-        _require(_validate_inputs(database, reports, source_before) == source_before, "source_hashes_changed")
+        counts_after = _readonly_observation(database, reports, source_before, _database_counts)
+        _require(counts_after == _EXPECTED_COUNTS, "database_counts_after_reopen")
+        measurements_after = _readonly_observation(
+            database, reports, source_before, _public_measurements
+        )
+        _require(measurements_after == _EXPECTED_MEASUREMENTS, "public_measurements_after_reopen")
     except ReopenScenarioFailure as error:
         result["failure_code"] = str(error)
     else:
@@ -158,7 +226,13 @@ def run_reopen_checks(
             {
                 "status": "passed",
                 "facets": {"reopen_preserves_completed_import": "passed"},
-                "database": {"sha256": database_before, "counts": _EXPECTED_COUNTS},
+                "database": {
+                    "sha256": database_after,
+                    "before_sha256": database_before,
+                    "schema_sha256": schema_after,
+                    "logical_dump_sha256": logical_after,
+                    "counts": _EXPECTED_COUNTS,
+                },
                 "source_hashes": source_before,
             }
         )

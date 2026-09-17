@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 
@@ -110,6 +111,9 @@ def test_reopen_preserves_completed_import_after_real_window_close(application, 
         "measurements": 2,
     }
     assert result["database"]["sha256"] == _sha256(database)
+    assert len(result["database"]["before_sha256"]) == 64
+    assert result["database"]["schema_sha256"]
+    assert result["database"]["logical_dump_sha256"]
     assert result["source_hashes"] == hashes
     assert not [database.with_name(database.name + suffix) for suffix in ("-wal", "-shm", "-journal") if database.with_name(database.name + suffix).exists()]
 
@@ -145,3 +149,39 @@ def test_reopen_rejects_a_sidecar_left_by_the_last_observation(application, tmp_
     result = operation.run_reopen_checks(database, reports, hashes)
     assert result["status"] == "failed"
     assert result["failure_code"] == "database_sidecars_created"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_failure"),
+    (
+        (
+            "UPDATE report_measurements SET meas = meas + 1 WHERE id = 1",
+            "logical_dump_changed_after_reopen",
+        ),
+        (
+            "CREATE TABLE w04_reopen_schema_control (value INTEGER)",
+            "schema_changed_after_reopen",
+        ),
+    ),
+)
+def test_reopen_rejects_actual_semantic_mutation_after_real_window_rebind(
+    application, tmp_path, monkeypatch, mutation, expected_failure
+):
+    from metroliza.app import windows_candidate_reopen as operation
+
+    database, reports, hashes = _seed_completed_import(application, tmp_path)
+    actual_reopen = operation._reopen_window
+
+    def mutate_after_actual_reopen(path, sources):
+        actual_reopen(path, sources)
+        with sqlite3.connect(path) as connection:
+            connection.execute(mutation)
+            connection.commit()
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            connection.execute("PRAGMA journal_mode=DELETE")
+
+    monkeypatch.setattr(operation, "_reopen_window", mutate_after_actual_reopen)
+    result = operation.run_reopen_checks(database, reports, hashes)
+
+    assert result["status"] == "failed"
+    assert result["failure_code"] == expected_failure
