@@ -2380,9 +2380,12 @@ def test_native_fallback_closes_file_if_buffer_allocation_interrupts(monkeypatch
     assert primary.qualification_cleanup == "not_attempted"
 
 
-def test_native_fallback_closes_file_if_handle_check_interrupts(monkeypatch):
+@pytest.mark.parametrize("interrupt_type", (KeyboardInterrupt, SystemExit))
+def test_native_fallback_closes_file_if_handle_check_interrupts(
+    monkeypatch, interrupt_type
+):
     api, expected, _primary, calls = _fallback_identity_api(monkeypatch)
-    interrupt = KeyboardInterrupt("PRIVATE_HANDLE_CHECK")
+    interrupt = interrupt_type("PRIVATE_HANDLE_CHECK")
     valid = api._valid_file_handle
     attempts = []
 
@@ -2393,10 +2396,66 @@ def test_native_fallback_closes_file_if_handle_check_interrupts(monkeypatch):
         return valid(handle)
 
     api._valid_file_handle = interrupted_check
-    with pytest.raises(KeyboardInterrupt) as caught:
+    with pytest.raises(interrupt_type) as caught:
         api._observe_job_member(77, 407, (expected,))
     assert caught.value is interrupt
     assert calls == ["k32", "open", "close"]
+
+
+@pytest.mark.parametrize("interrupt_type", (KeyboardInterrupt, SystemExit))
+def test_native_fallback_interrupted_invalid_handle_is_not_closed(
+    monkeypatch, interrupt_type
+):
+    api, expected, _primary, calls = _fallback_identity_api(monkeypatch)
+    interrupt = interrupt_type("PRIVATE_HANDLE_CHECK")
+    api.kernel.CreateFileW = lambda *_args: -1
+    api._valid_file_handle = lambda _handle: (_ for _ in ()).throw(interrupt)
+
+    def unexpected_close(_handle):
+        pytest.fail("invalid handle must not be closed")
+
+    api.kernel.CloseHandle = unexpected_close
+    with pytest.raises(interrupt_type) as caught:
+        api._observe_job_member(77, 407, (expected,))
+    assert caught.value is interrupt
+    assert calls == ["k32"]
+
+
+@pytest.mark.parametrize("interrupt_type", (KeyboardInterrupt, SystemExit))
+def test_native_fallback_never_revalidates_acquired_handle_in_finally(
+    monkeypatch, interrupt_type
+):
+    api, expected, _primary, calls = _fallback_identity_api(monkeypatch)
+    original_check = api._valid_file_handle
+    checks = []
+
+    def check_once(handle):
+        checks.append(None)
+        if len(checks) > 1:
+            raise interrupt_type("PRIVATE_FINAL_CHECK")
+        return original_check(handle)
+
+    api._valid_file_handle = check_once
+    observed = api._observe_job_member(77, 407, (expected,))
+    assert observed == qualification._ProcessObservation(407, 1234, str(expected))
+    assert len(checks) == 1
+    assert calls == ["k32", "open", "file_name", "close", "times"]
+
+
+def test_native_fallback_never_closes_definitively_invalid_file_handle(monkeypatch):
+    api, expected, primary, calls = _fallback_identity_api(monkeypatch)
+    api.kernel.CreateFileW = lambda *_args: -1
+
+    def unexpected_close(_handle):
+        pytest.fail("invalid handle must not be closed")
+
+    api.kernel.CloseHandle = unexpected_close
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api._observe_job_member(77, 407, (expected,))
+    assert caught.value is primary
+    assert primary.native_observation.alternative.api == "expected_file_open"
+    assert primary.native_observation.alternative.outcome == "false"
+    assert calls == ["k32"]
 
 
 def test_native_fallback_close_interrupt_keeps_primary_interrupt(monkeypatch):

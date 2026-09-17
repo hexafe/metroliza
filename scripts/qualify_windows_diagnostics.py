@@ -1824,6 +1824,7 @@ class _WindowsApi:
         self, expected: Path, primary: QualificationFailure
     ):
         handle = None
+        valid_handle: bool | None = None
         result = None
         alternate = None
         try:
@@ -1835,17 +1836,22 @@ class _WindowsApi:
             except Exception:
                 alternate = self._alternate("expected_file_open", "exception")
             else:
-                if not self._valid_file_handle(handle):
+                valid_handle = self._valid_file_handle(handle)
+                if not valid_handle:
                     alternate = self._alternate(
                         "expected_file_open", "false", self._native_error_code()
                     )
                 else:
                     result, alternate = self._expected_file_name(handle)
         finally:
-            if handle is not None and self._valid_file_handle(handle):
-                close_error = self._close_expected_file(handle, primary)
-                if alternate is None:
-                    alternate = close_error
+            if handle is not None and valid_handle is not False:
+                raw_value = (
+                    handle.value if isinstance(handle, ctypes.c_void_p) else handle
+                )
+                if raw_value not in (None, 0, -1, ctypes.c_void_p(-1).value):
+                    close_error = self._close_expected_file(handle, primary)
+                    if alternate is None:
+                        alternate = close_error
         return result, alternate
 
     def _observe_job_member(
