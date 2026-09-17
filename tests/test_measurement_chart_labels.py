@@ -10,6 +10,7 @@ from xlsxwriter.utility import quote_sheetname, xl_col_to_name
 
 from metroliza.charts.export_chart_writer import insert_measurement_chart
 from metroliza.exporting.execution import ExportOutcomeKind
+from metroliza.exporting.export_outcomes import ExportRunStatus
 from modules.contracts import AppPaths, ExportOptions, ExportRequest
 from modules.report_repository import ReportRepository
 from modules.report_schema import ensure_report_schema
@@ -285,6 +286,39 @@ class TestMeasurementChartLabels(unittest.TestCase):
                             ['9.5', '9.5'],
                         )
                     self.assertEqual(observed_labels, [f'{label} - X' for label in sorted(labels)])
+
+    def test_html_dashboard_retains_long_measurement_label_without_xlsx_chart_binding(self):
+        imported_header = '=!' * 16384
+        expected_label = f'{imported_header} - X'
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            db_path = temp_path / 'metroliza.sqlite'
+            html_path = temp_path / 'dashboard.html'
+            ensure_report_schema(str(db_path))
+            repository = ReportRepository(str(db_path))
+            source_dir = temp_path / 'reports'
+            source_dir.mkdir()
+            _persist_measurement(
+                repository, source_dir, report_id=1, sample_number=1,
+                header=imported_header, ax='X', measurement=10.1,
+            )
+            _persist_measurement(
+                repository, source_dir, report_id=2, sample_number=2,
+                header=imported_header, ax='X', measurement=10.2,
+            )
+
+            request = ExportRequest(
+                paths=AppPaths(db_file=str(db_path), html_dashboard_file=str(html_path)),
+                options=ExportOptions(export_target='html_dashboard', generate_summary_sheet=False),
+            )
+            thread = self.ExportDataThread(request)
+            thread.run()
+
+            self.assertIsNotNone(thread.export_run_result)
+            self.assertEqual(thread.export_run_result.status, ExportRunStatus.COMPLETE)
+            self.assertTrue(html_path.is_file())
+            self.assertIn(expected_label, html_path.read_text(encoding='utf-8'))
 
     def test_backend_retains_last_complete_workbook_when_actual_pipeline_cancels_or_rejects_label(self):
         with tempfile.TemporaryDirectory() as temp_dir:
