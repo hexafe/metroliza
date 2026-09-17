@@ -382,6 +382,7 @@ def run_qualification() -> int:
             completed_import / "reports.sqlite", completed_import / "reports", receipt["source_hashes"]
         )
         if reopened.get("status") != "passed" or reopened.get("facets") != {"reopen_preserves_completed_import": "passed"}:
+            receipt["reopen_failure"] = reopened.get("failure_code", "invalid_reopen_result")
             raise ScenarioFailure("completed_import_reopen_failed")
         receipt["facets"].update(reopened["facets"])
         tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
