@@ -286,9 +286,8 @@ def _require_complete_workbook(result) -> str:
     return result.status.value
 
 
-def _run_core(root: Path, fixtures: Path, receipt: dict[str, Any]) -> None:
+def _run_core(root: Path, fixtures: Path, receipt: dict[str, Any], app) -> None:
     from PyQt6.QtCore import QSettings
-    from metroliza.app.bootstrap import get_or_create_qapplication
     from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
     from metroliza.exporting.export_data_thread import ExportDataThread
     from metroliza.ui.main_window import MainWindow
@@ -299,7 +298,6 @@ def _run_core(root: Path, fixtures: Path, receipt: dict[str, Any]) -> None:
     receipt["relative_artifact_dir"] = scratch.name
     reports, staged_hashes = _stage_reports(fixtures, scratch)
     database, workbook, grouping_file = scratch / "reports.sqlite", scratch / "export.xlsx", scratch / "grouping.json"
-    app = get_or_create_qapplication()
     receipt["qpa"] = app.platformName()
     settings = QSettings(str(scratch / "isolated-settings.ini"), QSettings.Format.IniFormat)
     window = MainWindow("candidate-qualification", None, ui_preferences=UiPreferences(settings))
@@ -376,7 +374,6 @@ def run_qualification() -> int:
         "checks": {key: "not_executed" for key in ("W03", "W04", "W05", "W06", "W07")},
     }
     root: Path | None = None
-    application = None
     try:
         root = _root()
         fixtures = _fixture_dir()
@@ -384,7 +381,7 @@ def run_qualification() -> int:
         # Each stage closes its own windows. Keep their shared application alive
         # until all subsequent widget and worker stages have finished.
         application = get_or_create_qapplication()
-        _run_core(root, fixtures, receipt)
+        _run_core(root, fixtures, receipt, application)
         from metroliza.app.windows_candidate_reopen import run_reopen_checks
         completed_import = root / receipt["relative_artifact_dir"]
         reopened = run_reopen_checks(
@@ -441,9 +438,6 @@ def run_qualification() -> int:
         if root is not None:
             _atomic_json(root / "windows-candidate-result.json", receipt)
         return 21
-    finally:
-        if application is not None:
-            application.processEvents()
 
 
 if __name__ == "__main__":
