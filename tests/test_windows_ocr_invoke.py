@@ -71,18 +71,22 @@ def test_stage_receipt_accepts_interleaved_eof_exit_and_early_cleanup():
     assert stages.validate_observation(json.dumps(value)) == value
 
 
-def test_disposable_stage_probe_preserves_source_and_rejects_anchor_drift(tmp_path):
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_disposable_stage_probe_preserves_source_and_rejects_anchor_drift(tmp_path, newline):
     script = tmp_path / "diagnose_windows_ocr.ps1"
     production = harness.ROOT / script.name
     original = production.read_bytes()
-    script.write_bytes(original)
+    script.write_bytes(original.replace(b"\r\n", b"\n").replace(b"\n", newline))
     (tmp_path / "scripts").mkdir()
     harness.write_child(tmp_path, "pass")
     stages.instrument_wrapper(tmp_path)
     assert production.read_bytes() == original
     observed = script.read_text(encoding="utf-8-sig")
     assert not script.read_bytes().startswith(b"\xef\xbb\xbf")
-    assert b"\r\n" not in script.read_bytes()
+    if newline == b"\r\n":
+        assert script.read_bytes().count(b"\r\n") == script.read_bytes().count(b"\n")
+    else:
+        assert b"\r\n" not in script.read_bytes()
     assert "Write-TestStage 'type_entered'" in observed
     child = tmp_path / "scripts/windows_ocr_runtime_diagnostics.py"
     compile(child.read_text(), str(child), "exec")

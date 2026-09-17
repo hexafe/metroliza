@@ -46,6 +46,11 @@ def _ordered(values: list[str], domain: tuple[str, ...]) -> bool:
 
 
 def _replace_once(source: str, anchor: str, replacement: str) -> str:
+    # Git's Windows checkout can use CRLF. Preserve its existing bytes instead
+    # of normalizing the whole disposable file as a side effect of observation.
+    if "\r\n" in source:
+        anchor = anchor.replace("\n", "\r\n")
+        replacement = replacement.replace("\n", "\r\n")
     if source.count(anchor) != 1:
         raise ValueError("fixture_anchor_mismatch")
     return source.replace(anchor, replacement)
