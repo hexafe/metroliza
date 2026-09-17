@@ -936,7 +936,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.11.9'
           cache: 'pip'
           cache-dependency-path: |
             requirements.txt
@@ -993,6 +993,19 @@ jobs:
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py
+
+      - name: Run native Windows realtime dashboard scheduling tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9
+        run: >-
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_realtime_monitoring_dialog.py
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
