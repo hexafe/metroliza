@@ -7,6 +7,7 @@ import ctypes
 import hashlib
 import importlib.metadata
 import json
+import ntpath
 import os
 import platform
 import re
@@ -242,6 +243,22 @@ NATIVE_IDENTITY_PHASES = frozenset(
 NATIVE_IDENTITY_APIS = frozenset({"image", "times"})
 NATIVE_IDENTITY_OUTCOMES = frozenset({"false", "exception"})
 NATIVE_PROCESS_STATES = frozenset({"alive", "exited", "unknown"})
+NATIVE_ALTERNATIVE_APIS = frozenset(
+    {"k32_image", "expected_file_open", "expected_file_name", "expected_file_close", "image_match"}
+)
+NATIVE_ALTERNATIVE_OUTCOMES = frozenset(
+    {"false", "exception", "invalid_result", "mismatch"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeAlternativeObservation:
+    api: str
+    outcome: str
+    winerror: int | None
+
+    def receipt(self) -> dict[str, object]:
+        return {"api": self.api, "outcome": self.outcome, "winerror": self.winerror}
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +268,7 @@ class _NativeIdentityObservation:
     outcome: str
     winerror: int | None
     process_state: str
+    alternative: _NativeAlternativeObservation | None = None
 
     def with_phase(self, phase: str) -> _NativeIdentityObservation:
         if phase not in NATIVE_IDENTITY_PHASES:
@@ -260,13 +278,16 @@ class _NativeIdentityObservation:
     def receipt(self) -> dict[str, object]:
         if self.phase not in NATIVE_IDENTITY_PHASES:
             raise QualificationFailure("output_failed")
-        return {
+        result = {
             "phase": self.phase,
             "api": self.api,
             "outcome": self.outcome,
             "winerror": self.winerror,
             "process_state": self.process_state,
         }
+        if self.alternative is not None:
+            result["alternative"] = self.alternative.receipt()
+        return result
 
 
 class QualificationFailure(RuntimeError):
@@ -771,6 +792,7 @@ class _WindowsProcess:
         job_handle,
         started: float,
         initial: _ProcessObservation,
+        expected_images: tuple[Path, ...],
         thread_handle=None,
         token_handle=None,
         initial_process_state: str = "unknown",
@@ -783,6 +805,7 @@ class _WindowsProcess:
         self.started = started
         self._closed = False
         self._initial = initial
+        self._expected_images = expected_images
         self._observations = {initial.process_id: initial}
         self._assigned_processes = 1
         self._max_active_processes = 1
@@ -798,7 +821,8 @@ class _WindowsProcess:
         self,
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
         observations, active, assigned = self._api.job_observations(
-            self._job, primary_process=self._process, primary_initial=self._initial
+            self._job, primary_process=self._process, primary_initial=self._initial,
+            expected_images=self._expected_images,
         )
         self._assigned_processes = max(self._assigned_processes, assigned)
         self._max_active_processes = max(self._max_active_processes, active)
@@ -1020,6 +1044,19 @@ class _WindowsApi:
             ctypes.POINTER(wt.DWORD),
         ]
         self.kernel.QueryFullProcessImageNameW.restype = wt.BOOL
+        self.kernel.K32GetProcessImageFileNameW.argtypes = [
+            wt.HANDLE, wt.LPWSTR, wt.DWORD,
+        ]
+        self.kernel.K32GetProcessImageFileNameW.restype = wt.DWORD
+        self.kernel.CreateFileW.argtypes = [
+            wt.LPCWSTR, wt.DWORD, wt.DWORD, ctypes.c_void_p, wt.DWORD,
+            wt.DWORD, wt.HANDLE,
+        ]
+        self.kernel.CreateFileW.restype = wt.HANDLE
+        self.kernel.GetFinalPathNameByHandleW.argtypes = [
+            wt.HANDLE, wt.LPWSTR, wt.DWORD, wt.DWORD,
+        ]
+        self.kernel.GetFinalPathNameByHandleW.restype = wt.DWORD
         self.kernel.GetProcessTimes.argtypes = [
             wt.HANDLE,
             ctypes.POINTER(self.FILETIME),
@@ -1325,11 +1362,12 @@ class _WindowsApi:
         )
 
     def _finish_launched_process(
-        self, process, job, started, initial, token, initial_process_state
+        self, process, job, started, initial, token, initial_process_state,
+        expected_images,
     ):
         return _WindowsProcess(
-            self, process.hProcess, job, started, initial, process.hThread, token,
-            initial_process_state,
+            self, process.hProcess, job, started, initial, expected_images,
+            process.hThread, token, initial_process_state,
         )
 
     def duplicate_synchronize_only(self, process):
@@ -1506,6 +1544,7 @@ class _WindowsApi:
         environment: dict[str, str],
         cwd: Path,
         owned: list[_WindowsProcess] | None = None,
+        expected_images: tuple[Path, ...] | None = None,
     ) -> _WindowsProcess:
         process = self.PROCESS_INFORMATION()
         token = None
@@ -1550,11 +1589,13 @@ class _WindowsApi:
             if not self.kernel.AssignProcessToJobObject(job, process.hProcess):
                 raise QualificationFailure("restricted_launch_unavailable")
             initial = self._observe_before_resume(process)
+            self._verify_requested_initial(initial, executable)
             initial_process_state = self._native_process_state(process.hProcess)
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
             launched = self._finish_launched_process(
-                process, job, started, initial, token, initial_process_state
+                process, job, started, initial, token, initial_process_state,
+                (executable,) if expected_images is None else expected_images,
             )
             if owned is not None:
                 owned.append(launched)
@@ -1583,6 +1624,36 @@ class _WindowsApi:
         except QualificationFailure as error:
             error.set_native_phase("pre_resume")
             raise
+
+    @staticmethod
+    def _canonical_drive_image(image: str) -> str | None:
+        if image.startswith("\\\\?\\"):
+            if len(image) <= 6 or not image[4].isalpha() or image[5:7] != ":\\":
+                return None
+            image = image[4:]
+        elif image.startswith("\\\\"):
+            return None
+        if (
+            len(image) < 3
+            or not image[0].isascii()
+            or not image[0].isalpha()
+            or image[1:3] != ":\\"
+        ):
+            return None
+        return ntpath.normcase(image)
+
+    @classmethod
+    def _same_requested_image(cls, observed: str, requested: Path) -> bool:
+        expected = cls._canonical_drive_image(str(requested))
+        return expected is not None and cls._canonical_drive_image(observed) == expected
+
+    def _verify_requested_initial(
+        self, initial: _ProcessObservation, executable: Path
+    ) -> None:
+        if not self._same_requested_image(initial.image, executable):
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_primary_identity_mismatch"
+            )
 
     def _native_process_state(self, process) -> str:
         try:
@@ -1649,10 +1720,6 @@ class _WindowsApi:
         wt = self.wintypes
         capacity = wt.DWORD(32_768)
         image = ctypes.create_unicode_buffer(capacity.value)
-        created = self.FILETIME()
-        exited = self.FILETIME()
-        kernel = self.FILETIME()
-        user = self.FILETIME()
         self._identity_call(
             process,
             "image",
@@ -1660,6 +1727,15 @@ class _WindowsApi:
                 process, 0, image, ctypes.byref(capacity)
             ),
         )
+        return _ProcessObservation(
+            process_id, self._process_creation_time(process), image.value
+        )
+
+    def _process_creation_time(self, process) -> int:
+        created = self.FILETIME()
+        exited = self.FILETIME()
+        kernel = self.FILETIME()
+        user = self.FILETIME()
         self._identity_call(
             process,
             "times",
@@ -1671,10 +1747,143 @@ class _WindowsApi:
                 ctypes.byref(user),
             ),
         )
-        creation_time = (int(created.dwHighDateTime) << 32) | int(
+        return (int(created.dwHighDateTime) << 32) | int(
             created.dwLowDateTime
         )
-        return _ProcessObservation(process_id, creation_time, image.value)
+
+    @staticmethod
+    def _alternate(api: str, outcome: str, code: int | None = None
+                   ) -> _NativeAlternativeObservation:
+        return _NativeAlternativeObservation(
+            api, outcome,
+            code if type(code) is int and 0 <= code <= 2**32 - 1 else None,
+        )
+
+    def _native_process_image(self, process):
+        image = ctypes.create_unicode_buffer(32_768)
+        self._reset_native_error()
+        try:
+            copied = self.kernel.K32GetProcessImageFileNameW(
+                process, image, len(image)
+            )
+        except Exception:
+            return None, self._alternate("k32_image", "exception")
+        if copied == 0:
+            return None, self._alternate(
+                "k32_image", "false", self._native_error_code()
+            )
+        if type(copied) is not int or copied >= len(image) or len(image.value) != copied:
+            return None, self._alternate("k32_image", "invalid_result")
+        return image.value, None
+
+    @staticmethod
+    def _valid_file_handle(handle) -> bool:
+        value = handle.value if hasattr(handle, "value") else handle
+        return value not in (None, 0, -1, ctypes.c_void_p(-1).value)
+
+    def _expected_file_name(self, handle):
+        image = ctypes.create_unicode_buffer(32_768)
+        self._reset_native_error()
+        try:
+            copied = self.kernel.GetFinalPathNameByHandleW(
+                handle, image, len(image), 0x2
+            )
+        except Exception:
+            return None, self._alternate("expected_file_name", "exception")
+        if copied == 0:
+            return None, self._alternate(
+                "expected_file_name", "false", self._native_error_code()
+            )
+        if type(copied) is not int or copied >= len(image) or len(image.value) != copied:
+            return None, self._alternate("expected_file_name", "invalid_result")
+        return image.value, None
+
+    def _close_expected_file(self, handle, primary: QualificationFailure):
+        in_flight = sys.exc_info()[1]
+        self._reset_native_error()
+        try:
+            closed = self.kernel.CloseHandle(handle)
+        except BaseException as error:
+            if not isinstance(error, Exception):
+                if in_flight is not None and not isinstance(in_flight, Exception):
+                    raise in_flight from None
+                raise
+            closed = False
+            alternate = self._alternate("expected_file_close", "exception")
+        else:
+            alternate = (
+                self._alternate(
+                    "expected_file_close", "false", self._native_error_code()
+                ) if not closed else None
+            )
+        if not closed:
+            primary.record_cleanup(succeeded=False)
+        return alternate
+
+    def _expected_file_native_image(
+        self, expected: Path, primary: QualificationFailure
+    ):
+        handle = None
+        result = None
+        alternate = None
+        try:
+            self._reset_native_error()
+            try:
+                handle = self.kernel.CreateFileW(
+                    str(expected), 0, 0x1 | 0x2 | 0x4, None, 3, 0x80, None
+                )
+            except Exception:
+                alternate = self._alternate("expected_file_open", "exception")
+            else:
+                if not self._valid_file_handle(handle):
+                    alternate = self._alternate(
+                        "expected_file_open", "false", self._native_error_code()
+                    )
+                else:
+                    result, alternate = self._expected_file_name(handle)
+        finally:
+            if handle is not None and self._valid_file_handle(handle):
+                close_error = self._close_expected_file(handle, primary)
+                if alternate is None:
+                    alternate = close_error
+        return result, alternate
+
+    def _observe_job_member(
+        self, process, process_id: int, expected_images: tuple[Path, ...]
+    ) -> _ProcessObservation:
+        try:
+            return self._process_observation(process, process_id)
+        except QualificationFailure as primary:
+            detail = primary.native_observation
+            if not (
+                expected_images
+                and primary.qualification_reason == "native_image_query_unavailable"
+                and detail is not None
+                and detail.api == "image"
+                and detail.outcome == "false"
+                and detail.winerror == 5
+            ):
+                raise
+            native_image, alternate = self._native_process_image(process)
+            if alternate is None:
+                matched = None
+                for expected in expected_images:
+                    expected_native, alternate = self._expected_file_native_image(
+                        expected, primary
+                    )
+                    if alternate is not None:
+                        break
+                    if ntpath.normcase(native_image) == ntpath.normcase(expected_native):
+                        matched = expected
+                        break
+                if alternate is None and matched is None:
+                    alternate = self._alternate("image_match", "mismatch")
+            if alternate is not None:
+                primary.native_observation = replace(detail, alternative=alternate)
+                raise
+            return _ProcessObservation(
+                process_id, self._process_creation_time(process), str(matched)
+            )
 
     def _window_matches(
         self, window, process_id: int, expected_title: str
@@ -1863,6 +2072,16 @@ class _WindowsApi:
             "native_process_times_unavailable",
         }:
             return False
+        if error.qualification_cleanup == "failed":
+            return False
+        alternative = (
+            error.native_observation.alternative
+            if error.native_observation is not None else None
+        )
+        if alternative is not None and (
+            alternative.api != "k32_image" or alternative.outcome != "false"
+        ):
+            return False
         try:
             return process_id not in self._job_process_ids(job)
         except Exception:
@@ -1887,6 +2106,7 @@ class _WindowsApi:
     def job_observations(
         self, job, *, primary_process=None,
         primary_initial: _ProcessObservation | None = None,
+        expected_images: tuple[Path, ...] = (),
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
         if (primary_process is None) != (primary_initial is None):
             raise QualificationFailure(
@@ -1907,7 +2127,11 @@ class _WindowsApi:
                     continue
             try:
                 try:
-                    observation = self._process_observation(process, process_id)
+                    observation = self._observe_job_member(
+                        process, process_id, expected_images
+                    ) if expected_images else self._process_observation(
+                        process, process_id
+                    )
                 except QualificationFailure as error:
                     error.set_native_phase(
                         "owned_job_observation" if owned_primary else "job_observation"
@@ -1917,7 +2141,13 @@ class _WindowsApi:
                     ):
                         raise
                 else:
-                    if owned_primary and observation != primary_initial:
+                    if owned_primary and (
+                        observation.process_id != primary_initial.process_id
+                        or observation.creation_time != primary_initial.creation_time
+                        or not self._same_requested_image(
+                            observation.image, Path(primary_initial.image)
+                        )
+                    ):
                         raise QualificationFailure(
                             "scenario_failed",
                             qualification_reason="native_primary_identity_mismatch",
@@ -2355,6 +2585,10 @@ def _launch_concurrent_pair(
                 _sanitized_environment(artifact, root, state_base, "concurrent"),
                 root,
                 owned=processes,
+                expected_images=(
+                    artifact / "metroliza.exe",
+                    artifact / "metroliza_application.exe",
+                ),
             )
     except BaseException as primary:
         if processes:
@@ -2479,7 +2713,13 @@ def _run_scenario(
         )
         process = _scenario_step(
             "qualification_launch_failed",
-            lambda: api.launch(executable, environment, work_root, owned=owned),
+            lambda: api.launch(
+                executable, environment, work_root, owned=owned,
+                expected_images=(
+                    artifact_dir / "metroliza.exe",
+                    artifact_dir / "metroliza_application.exe",
+                ),
+            ),
         )
         scenario_deadline = min(deadline, time.monotonic() + MAX_SCENARIO_SECONDS)
         exit_code: int | None = None
@@ -3300,8 +3540,10 @@ def _valid_failure_detail(detail: object) -> bool:
 def _valid_native_observation(detail: object) -> bool:
     return bool(
         type(detail) is dict
-        and set(detail) == {
-            "phase", "api", "outcome", "winerror", "process_state"
+        and {"phase", "api", "outcome", "winerror", "process_state"}
+        <= set(detail)
+        and set(detail) <= {
+            "phase", "api", "outcome", "winerror", "process_state", "alternative"
         }
         and type(detail["phase"]) is str
         and detail["phase"] in NATIVE_IDENTITY_PHASES
@@ -3317,6 +3559,37 @@ def _valid_native_observation(detail: object) -> bool:
         )
         and type(detail["process_state"]) is str
         and detail["process_state"] in NATIVE_PROCESS_STATES
+        and (
+            "alternative" not in detail
+            or (
+                detail["phase"] in {"job_observation", "owned_job_observation"}
+                and detail["api"] == "image"
+                and detail["outcome"] == "false"
+                and detail["winerror"] == 5
+                and _valid_native_alternative(detail["alternative"])
+            )
+        )
+    )
+
+
+def _valid_native_alternative(detail: object) -> bool:
+    return bool(
+        type(detail) is dict
+        and set(detail) == {"api", "outcome", "winerror"}
+        and type(detail["api"]) is str
+        and detail["api"] in NATIVE_ALTERNATIVE_APIS
+        and type(detail["outcome"]) is str
+        and detail["outcome"] in NATIVE_ALTERNATIVE_OUTCOMES
+        and (detail["api"] == "image_match") == (detail["outcome"] == "mismatch")
+        and (
+            detail["outcome"] == "false"
+            and (
+                detail["winerror"] is None
+                or type(detail["winerror"]) is int
+                and 0 <= detail["winerror"] <= 2**32 - 1
+            )
+            or detail["outcome"] != "false" and detail["winerror"] is None
+        )
     )
 
 
@@ -3554,7 +3827,11 @@ class _QualificationRunner:
             process = _scenario_step(
                 "qualification_launch_failed",
                 lambda: self.api.launch(
-                    self.application, environment, root, owned=owned
+                    self.application, environment, root, owned=owned,
+                    expected_images=(
+                        self.artifact / "metroliza.exe",
+                        self.artifact / "metroliza_application.exe",
+                    ),
                 ),
             )
             scenario_deadline = min(
@@ -3669,7 +3946,13 @@ class _QualificationRunner:
         owned: list[_WindowsProcess] = []
         terminate = True
         try:
-            process = self.api.launch(self.launcher, environment, root, owned=owned)
+            process = self.api.launch(
+                self.launcher, environment, root, owned=owned,
+                expected_images=(
+                    self.artifact / "metroliza.exe",
+                    self.artifact / "metroliza_application.exe",
+                ),
+            )
             result = _finish_process_without_receipt(
                 process,
                 self.artifact,
@@ -3854,7 +4137,8 @@ class _QualificationRunner:
         terminate = True
         try:
             process = self.api.launch(
-                package / self.launcher.name, environment, root, owned=owned
+                package / self.launcher.name, environment, root, owned=owned,
+                expected_images=(package / self.launcher.name,),
             )
             exit_code = self._wait_missing_exit(process)
             if exit_code is None:
@@ -3915,7 +4199,11 @@ class _QualificationRunner:
             terminate = True
             try:
                 process = self.api.launch(
-                    self.launcher, environment, root, owned=owned
+                    self.launcher, environment, root, owned=owned,
+                    expected_images=(
+                        self.artifact / "metroliza.exe",
+                        self.artifact / "metroliza_application.exe",
+                    ),
                 )
                 exit_code = self._wait_missing_exit(process)
                 if exit_code is None:
