@@ -5115,16 +5115,17 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     chart_insert_start = time.perf_counter()
-                    insert_measurement_chart(
-                        workbook,
-                        worksheet,
-                        chart_type=self.selected_export_type,
-                        header=header,
-                        sheet_name=safe_ref_sheet_name,
-                        measurement_plan=measurement_plan,
-                        chart_anchor_col=col - 5,
-                        cache=optimization_cache,
-                    )
+                    if self.export_target != 'html_dashboard':
+                        insert_measurement_chart(
+                            workbook,
+                            worksheet,
+                            chart_type=self.selected_export_type,
+                            header=header,
+                            sheet_name=safe_ref_sheet_name,
+                            measurement_plan=measurement_plan,
+                            chart_anchor_col=col - 5,
+                            cache=optimization_cache,
+                        )
 
                     chart_insert_time = time.perf_counter() - chart_insert_start
                     if timing_enabled:
