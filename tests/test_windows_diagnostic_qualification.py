@@ -25,6 +25,8 @@ from metroliza.shared.diagnostic_incident import (
 from metroliza.shared.diagnostic_ring import LOSS_ACCOUNTING_BYTES, RingLoss, RingSnapshot
 from scripts import qualify_windows_diagnostics as qualification
 
+TEST_NATIVE_ANCHOR = r"\Device\HarddiskVolume7\fixed\application.exe"
+
 
 class _TokenWinTypes:
     HANDLE = ctypes.c_void_p
@@ -728,10 +730,62 @@ def _fake_launch_api(tmp_path, monkeypatch, kernel):
         12, 1, str(tmp_path / "app.exe")
     )
     api._verify_requested_initial = lambda _initial, _executable: None
+    api._native_process_image = lambda _handle: (
+        r"\Device\HarddiskVolume7\app.exe", None
+    )
     api._job_accounting = lambda _job: (0, 1)
     monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
     monkeypatch.setattr(qualification.ctypes, "sizeof", lambda _value: 1)
     return api
+
+
+@pytest.mark.parametrize("mode", ("unavailable", "empty", "invalid", "interrupt"))
+def test_suspended_native_anchor_capture_failure_closes_all_launch_handles(
+    tmp_path, monkeypatch, mode
+):
+    closed = []
+    api = _fake_launch_api(tmp_path, monkeypatch, _LaunchTransferKernel(closed))
+    interrupt = KeyboardInterrupt("PRIVATE_ANCHOR_INTERRUPT")
+    if mode == "interrupt":
+        api._native_process_image = lambda _handle: (_ for _ in ()).throw(interrupt)
+    elif mode == "unavailable":
+        api._native_process_image = lambda _handle: (
+            None, qualification._NativeAlternativeObservation("k32_image", "false", 5)
+        )
+    else:
+        api._native_process_image = lambda _handle: (
+            "" if mode == "empty" else r"C:\invalid\image.exe", None
+        )
+    owned = []
+
+    with pytest.raises(
+        KeyboardInterrupt if mode == "interrupt" else qualification.QualificationFailure
+    ) as caught:
+        api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned)
+    if mode == "interrupt":
+        assert caught.value is interrupt
+    else:
+        assert caught.value.qualification_reason == "native_image_query_unavailable"
+        assert caught.value.native_observation is None
+        assert caught.value.qualification_cleanup == "complete"
+    assert owned == []
+    assert closed == ["thread", "process", "job", "token"]
+
+
+def test_launch_transfers_private_native_anchor_into_owned_wrapper(
+    tmp_path, monkeypatch
+):
+    closed = []
+    api = _fake_launch_api(tmp_path, monkeypatch, _LaunchTransferKernel(closed))
+    owned = []
+    process = api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned)
+    try:
+        assert owned == [process]
+        assert process._initial_native_image == r"\Device\HarddiskVolume7\app.exe"
+    finally:
+        qualification._close_owned_processes(owned, terminate=True)
+    assert process._closed
+    assert closed == ["thread", "job", "process", "token"]
 
 
 @pytest.mark.parametrize(
@@ -1833,13 +1887,15 @@ def test_job_observation_uses_retained_primary_and_rechecks_identity(drift) -> N
     api._process_observation = observe
     if drift is None:
         observations, active, assigned = api.job_observations(
-            object(), primary_process=retained, primary_initial=initial
+            object(), primary_process=retained, primary_initial=initial,
+            primary_native_image=TEST_NATIVE_ANCHOR,
         )
         assert (observations, active, assigned) == ((initial,), 1, 1)
     else:
         with pytest.raises(qualification.QualificationFailure) as caught:
             api.job_observations(
-                object(), primary_process=retained, primary_initial=initial
+                object(), primary_process=retained, primary_initial=initial,
+                primary_native_image=TEST_NATIVE_ANCHOR,
             )
         assert caught.value.qualification_reason == "native_primary_identity_mismatch"
         assert caught.value.native_observation is None
@@ -1883,6 +1939,7 @@ def test_owned_process_observe_survives_primary_reopen_image_denial() -> None:
     process = qualification._WindowsProcess(
         api, retained, object(), 0.0, initial,
         (Path(r"C:\fixed\application.exe"),),
+        initial_native_image=TEST_NATIVE_ANCHOR,
     )
     process.observe()
     assert process._observations == {initial.process_id: initial}
@@ -1904,6 +1961,7 @@ def test_retired_primary_absent_from_fresh_job_ids_keeps_verified_initial() -> N
     process = qualification._WindowsProcess(
         api, retained, object(), 0.0, initial,
         (Path(r"C:\fixed\application.exe"),),
+        initial_native_image=TEST_NATIVE_ANCHOR,
     )
 
     process.observe()
@@ -1935,6 +1993,9 @@ def test_retained_primary_query_failure_requires_proven_job_disappearance(
     api._job_process_ids = ids
     api._job_accounting = lambda _job: (0, 1)
     api.kernel = object()
+    api._native_process_image = lambda _handle: (
+        None, qualification._NativeAlternativeObservation("k32_image", "false", 5)
+    )
     primary = qualification.QualificationFailure(
         "scenario_failed", qualification_reason="native_image_query_unavailable",
         native_observation=qualification._NativeIdentityObservation(
@@ -1950,17 +2011,22 @@ def test_retained_primary_query_failure_requires_proven_job_disappearance(
     api._process_observation = fail_observation
     if membership == "absent":
         assert api.job_observations(
-            object(), primary_process=retained, primary_initial=initial
+            object(), primary_process=retained, primary_initial=initial,
+            primary_native_image=TEST_NATIVE_ANCHOR,
         ) == ((), 0, 1)
     else:
         with pytest.raises(qualification.QualificationFailure) as caught:
             api.job_observations(
-                object(), primary_process=retained, primary_initial=initial
+                object(), primary_process=retained, primary_initial=initial,
+                primary_native_image=TEST_NATIVE_ANCHOR,
             )
         assert caught.value is primary
         assert primary.native_observation.receipt() == {
             "phase": "owned_job_observation", "api": "image", "outcome": "false",
             "winerror": 5, "process_state": "exited",
+            "alternative": {
+                "api": "k32_image", "outcome": "false", "winerror": 5,
+            },
         }
     assert len(queries) == 2
 
@@ -2001,7 +2067,10 @@ def test_retained_primary_does_not_hide_other_job_member_query_failure() -> None
 
     api._process_observation = observe
     with pytest.raises(qualification.QualificationFailure) as caught:
-        api.job_observations(object(), primary_process=retained, primary_initial=initial)
+        api.job_observations(
+            object(), primary_process=retained, primary_initial=initial,
+            primary_native_image=TEST_NATIVE_ANCHOR,
+        )
     assert caught.value is primary
     assert primary.native_observation.phase == "job_observation"
     assert api.kernel.opened == [410]
@@ -2388,12 +2457,83 @@ def test_native_fallback_applies_to_other_owned_job_member(monkeypatch):
     assert calls == ["k32", "open", "file_name", "close", "times", "close_process"]
 
 
+@pytest.mark.parametrize("drift", (None, "native_image", "creation"))
+def test_owned_primary_uses_immutable_suspended_native_anchor_not_reopened_file(
+    monkeypatch, drift
+):
+    wrong_file = r"\Device\HarddiskVolume7\other\metroliza_application.exe"
+    api, expected, _primary, calls = _fallback_identity_api(
+        monkeypatch, file_image=wrong_file
+    )
+    native = r"\Device\HarddiskVolume7\package\metroliza_application.exe"
+    initial = qualification._ProcessObservation(
+        407, 1234 + (drift == "creation"), str(expected)
+    )
+    api._job_process_ids = lambda _job: (407,)
+    api._job_accounting = lambda _job: (1, 1)
+    anchor = native if drift != "native_image" else wrong_file
+
+    if drift is None:
+        assert api.job_observations(
+            object(), primary_process=77, primary_initial=initial,
+            primary_native_image=anchor, expected_images=(expected,),
+        ) == ((initial,), 1, 1)
+        assert calls == ["k32", "times"]
+    else:
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            api.job_observations(
+                object(), primary_process=77, primary_initial=initial,
+                primary_native_image=anchor, expected_images=(expected,),
+            )
+        assert caught.value.qualification_reason == "native_primary_identity_mismatch"
+        assert caught.value.native_observation is None
+        assert calls == (["k32"] if drift == "native_image" else ["k32", "times"])
+
+
+@pytest.mark.parametrize("anchor", (None, "", r"C:\invalid\image.exe"))
+def test_owned_primary_rejects_missing_or_invalid_native_anchor(anchor):
+    api = object.__new__(qualification._WindowsApi)
+    api._job_process_ids = lambda _job: pytest.fail("invalid anchor reached Job query")
+    initial = qualification._ProcessObservation(
+        407, 1234, r"C:\package\metroliza_application.exe"
+    )
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.job_observations(
+            object(), primary_process=77, primary_initial=initial,
+            primary_native_image=anchor, expected_images=(Path(initial.image),),
+        )
+    assert caught.value.qualification_reason == "native_image_query_unavailable"
+    assert caught.value.native_observation is None
+
+
+def test_owned_primary_fresh_native_failure_preserves_image5_and_no_file_open(
+    monkeypatch,
+):
+    api, expected, primary, calls = _fallback_identity_api(monkeypatch)
+    initial = qualification._ProcessObservation(407, 1234, str(expected))
+    api._job_process_ids = lambda _job: (407,)
+    api._job_accounting = lambda _job: (1, 1)
+    api.kernel.K32GetProcessImageFileNameW = lambda *_args: calls.append("k32") or 0
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.job_observations(
+            object(), primary_process=77, primary_initial=initial,
+            primary_native_image=TEST_NATIVE_ANCHOR,
+            expected_images=(expected,),
+        )
+    assert caught.value is primary
+    assert primary.native_observation.phase == "owned_job_observation"
+    assert primary.native_observation.alternative.receipt() == {
+        "api": "k32_image", "outcome": "false", "winerror": 5,
+    }
+    assert calls == ["k32"]
+
+
 @pytest.mark.parametrize("still_listed", (False, True))
-def test_native_fallback_fresh_times_failure_keeps_job_disappearance_rule(
+def test_other_member_native_fallback_times_failure_keeps_job_disappearance_rule(
     monkeypatch, still_listed
 ):
     api, expected, _primary, calls = _fallback_identity_api(monkeypatch)
-    initial = qualification._ProcessObservation(407, 1234, str(expected))
     snapshots = []
 
     def ids(_job):
@@ -2402,24 +2542,34 @@ def test_native_fallback_fresh_times_failure_keeps_job_disappearance_rule(
 
     api._job_process_ids = ids
     api._job_accounting = lambda _job: (0, 1)
+    api.kernel.OpenProcess = lambda _access, _inherit, _pid: 77
+    original_close = api.kernel.CloseHandle
+
+    def close(handle):
+        if handle == 77:
+            calls.append("close_process")
+            return 1
+        return original_close(handle)
+
+    api.kernel.CloseHandle = close
     api.kernel.GetProcessTimes = lambda *_args: calls.append("times") or 0
     if still_listed:
         with pytest.raises(qualification.QualificationFailure) as caught:
             api.job_observations(
-                object(), primary_process=77, primary_initial=initial,
-                expected_images=(expected,),
+                object(), expected_images=(expected,),
             )
         assert caught.value.qualification_reason == "native_process_times_unavailable"
         assert caught.value.native_observation.api == "times"
         assert caught.value.native_observation.winerror == 5
-        assert caught.value.native_observation.phase == "owned_job_observation"
+        assert caught.value.native_observation.phase == "job_observation"
     else:
         assert api.job_observations(
-            object(), primary_process=77, primary_initial=initial,
-            expected_images=(expected,),
+            object(), expected_images=(expected,),
         ) == ((), 0, 1)
     assert len(snapshots) == 2
-    assert calls == ["k32", "open", "file_name", "close", "times"]
+    assert calls == [
+        "k32", "open", "file_name", "close", "times", "close_process",
+    ]
 
 
 def test_native_fallback_closes_file_if_buffer_allocation_interrupts(monkeypatch):
@@ -2618,15 +2768,27 @@ def test_native_fallback_mismatch_is_never_forgiven_by_job_disappearance(kind):
     def fail(*_args):
         raise original
 
+    class _Kernel:
+        closed = []
+
+        def OpenProcess(self, _access, _inherit, observed_pid):
+            assert observed_pid == pid
+            return 77
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+            return 1
+
+    api.kernel = _Kernel()
     api._observe_job_member = fail
     with pytest.raises(qualification.QualificationFailure) as caught:
         api.job_observations(
-            object(), primary_process=77, primary_initial=initial,
-            expected_images=(Path(initial.image),),
+            object(), expected_images=(Path(initial.image),),
         )
     assert caught.value is original
     assert len(snapshots) == 1
-    assert original.native_observation.phase == "owned_job_observation"
+    assert original.native_observation.phase == "job_observation"
+    assert api.kernel.closed == [77]
 
 
 @pytest.mark.parametrize("still_listed", (False, True))
@@ -2654,17 +2816,19 @@ def test_native_k32_false_requires_fresh_proven_job_disappearance(still_listed):
     def fail(*_args):
         raise original
 
-    api._observe_job_member = fail
+    api._observe_owned_primary = fail
     if still_listed:
         with pytest.raises(qualification.QualificationFailure) as caught:
             api.job_observations(
                 object(), primary_process=77, primary_initial=initial,
+                primary_native_image=TEST_NATIVE_ANCHOR,
                 expected_images=(Path(initial.image),),
             )
         assert caught.value is original
     else:
         assert api.job_observations(
             object(), primary_process=77, primary_initial=initial,
+            primary_native_image=TEST_NATIVE_ANCHOR,
             expected_images=(Path(initial.image),),
         ) == ((), 0, 1)
     assert len(snapshots) == 2
@@ -2684,7 +2848,8 @@ def test_owned_identity_accepts_only_canonical_dos_spelling(observed):
         407, 1234, observed
     )
     observations, active, total = api.job_observations(
-        object(), primary_process=77, primary_initial=initial
+        object(), primary_process=77, primary_initial=initial,
+        primary_native_image=TEST_NATIVE_ANCHOR,
     )
     assert (active, total) == (1, 1)
     assert observations[0].image == observed
@@ -5021,20 +5186,18 @@ def _assert_native_restricted_fallback(
     def controlled_win32_denial(_handle, _pid):
         raise forced_win32
 
+    assert initial.process_id in api._job_process_ids(job)
     with monkeypatch.context() as context:
         context.setattr(api, "_process_observation", controlled_win32_denial)
-        observations, _active, _total = api.job_observations(
-            job, primary_process=handle, primary_initial=initial,
-            expected_images=(executable,),
+        observation = api._observe_job_member(
+            handle, initial.process_id, (executable,)
         )
-        assert len(observations) == 1
-        assert observations[0].creation_time == initial.creation_time
-        assert api._same_requested_image(observations[0].image, executable)
+        assert observation.creation_time == initial.creation_time
+        assert api._same_requested_image(observation.image, executable)
         wrong_expected = executable.with_name("cmd.exe")
         with pytest.raises(qualification.QualificationFailure) as wrong:
-            api.job_observations(
-                job, primary_process=handle, primary_initial=initial,
-                expected_images=(wrong_expected,),
+            api._observe_job_member(
+                handle, initial.process_id, (wrong_expected,)
             )
         assert wrong.value is forced_win32
         assert wrong.value.native_observation.alternative.api == "image_match"
@@ -5063,14 +5226,14 @@ def _assert_native_restricted_opened_name_fallback(
             return r"\Device\HarddiskVolume0\controlled-mismatch.exe", None
         return real_file_name(file_handle, opened=True)
 
+    assert initial.process_id in api._job_process_ids(job)
     with monkeypatch.context() as opened_context:
         opened_context.setattr(api, "_process_observation", controlled_win32_denial)
         opened_context.setattr(api, "_expected_file_name", force_only_normalized_mismatch)
-        opened_observations, _active, _total = api.job_observations(
-            job, primary_process=handle,
-            primary_initial=initial, expected_images=(executable,),
+        opened_observation = api._observe_job_member(
+            handle, initial.process_id, (executable,)
         )
-    assert opened_observations == (initial,)
+    assert opened_observation == initial
     assert name_modes == ["normalized", "opened"]
 
 
@@ -5098,6 +5261,7 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
     executable = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "whoami.exe"
     original_observe = api._process_observation
     observed = []
+    native_anchors = []
     paired_outcomes = []
     assigned_jobs = []
     real_kernel = api.kernel
@@ -5123,10 +5287,22 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
         assert image_matches
         assert len(assigned_jobs) == 1
         assert process_id in api._job_process_ids(assigned_jobs[0])
+        initial_native, native_error = api._native_process_image(handle)
+        assert native_error is None
+        assert api._valid_native_image_anchor(initial_native)
+        native_anchors.append(initial_native)
+        fresh_native, fresh_error = api._native_process_image(handle)
+        assert fresh_error is None
+        same_native_name = (
+            qualification.ntpath.normcase(initial_native)
+            == qualification.ntpath.normcase(fresh_native)
+        )
+        assert same_native_name
         monkeypatch.setattr(api, "_process_observation", original_observe)
         try:
             job_observations, active, total = api.job_observations(
-                assigned_jobs[0], primary_process=handle, primary_initial=initial
+                assigned_jobs[0], primary_process=handle, primary_initial=initial,
+                primary_native_image=initial_native,
             )
         finally:
             monkeypatch.setattr(api, "_process_observation", observe_before_resume)
@@ -5185,6 +5361,10 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
             tmp_path, tmp_path, tmp_path / "state", "normal"
         )
         process = api.launch(executable, environment, tmp_path, owned=owned)
+        assert len(native_anchors) == 1
+        assert qualification.ntpath.normcase(process._initial_native_image) == (
+            qualification.ntpath.normcase(native_anchors[0])
+        )
         monkeypatch.setattr(api, "_process_observation", original_observe)
         _wait_for_native_process_and_job_exit(api, process)
         assert api._native_process_state(process._process) == "exited"

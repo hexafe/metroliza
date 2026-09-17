@@ -796,6 +796,7 @@ class _WindowsProcess:
         thread_handle=None,
         token_handle=None,
         initial_process_state: str = "unknown",
+        initial_native_image: str | None = None,
     ) -> None:
         self._api = api
         self._process = process_handle
@@ -805,6 +806,7 @@ class _WindowsProcess:
         self.started = started
         self._closed = False
         self._initial = initial
+        self._initial_native_image = initial_native_image
         self._expected_images = expected_images
         self._observations = {initial.process_id: initial}
         self._assigned_processes = 1
@@ -822,6 +824,7 @@ class _WindowsProcess:
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
         observations, active, assigned = self._api.job_observations(
             self._job, primary_process=self._process, primary_initial=self._initial,
+            primary_native_image=self._initial_native_image,
             expected_images=self._expected_images,
         )
         self._assigned_processes = max(self._assigned_processes, assigned)
@@ -1363,12 +1366,23 @@ class _WindowsApi:
 
     def _finish_launched_process(
         self, process, job, started, initial, token, initial_process_state,
-        expected_images,
+        expected_images, initial_native_image,
     ):
         return _WindowsProcess(
             self, process.hProcess, job, started, initial, expected_images,
             process.hThread, token, initial_process_state,
+            initial_native_image,
         )
+
+    def _capture_initial_native_image(self, process) -> str:
+        native_image, native_error = self._native_process_image(process)
+        if native_error is not None or not self._valid_native_image_anchor(
+            native_image
+        ):
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_image_query_unavailable"
+            )
+        return native_image
 
     def duplicate_synchronize_only(self, process):
         wt = self.wintypes
@@ -1590,12 +1604,16 @@ class _WindowsApi:
                 raise QualificationFailure("restricted_launch_unavailable")
             initial = self._observe_before_resume(process)
             self._verify_requested_initial(initial, executable)
+            initial_native_image = self._capture_initial_native_image(
+                process.hProcess
+            )
             initial_process_state = self._native_process_state(process.hProcess)
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
             launched = self._finish_launched_process(
                 process, job, started, initial, token, initial_process_state,
                 (executable,) if expected_images is None else expected_images,
+                initial_native_image,
             )
             if owned is not None:
                 owned.append(launched)
@@ -1775,6 +1793,45 @@ class _WindowsApi:
         if type(copied) is not int or copied >= len(image) or len(image.value) != copied:
             return None, self._alternate("k32_image", "invalid_result")
         return image.value, None
+
+    @staticmethod
+    def _valid_native_image_anchor(image: object) -> bool:
+        return bool(
+            type(image) is str
+            and image.startswith("\\Device\\")
+            and len(image) > len("\\Device\\")
+            and "\x00" not in image
+        )
+
+    def _observe_owned_primary(
+        self, process, initial: _ProcessObservation, native_anchor: str
+    ) -> _ProcessObservation:
+        try:
+            return self._process_observation(process, initial.process_id)
+        except QualificationFailure as primary:
+            detail = primary.native_observation
+            if not (
+                primary.qualification_reason == "native_image_query_unavailable"
+                and detail is not None
+                and detail.api == "image"
+                and detail.outcome == "false"
+                and detail.winerror == 5
+            ):
+                raise
+            native_image, alternate = self._native_process_image(process)
+            if alternate is not None:
+                primary.native_observation = replace(detail, alternative=alternate)
+                raise
+            if ntpath.normcase(native_image) != ntpath.normcase(native_anchor):
+                raise QualificationFailure(
+                    "scenario_failed",
+                    qualification_reason="native_primary_identity_mismatch",
+                ) from None
+            return _ProcessObservation(
+                initial.process_id,
+                self._process_creation_time(process),
+                initial.image,
+            )
 
     @staticmethod
     def _valid_file_handle(handle) -> bool:
@@ -2124,15 +2181,47 @@ class _WindowsApi:
             "scenario_failed", qualification_reason="native_open_process_unavailable"
         )
 
-    def job_observations(
-        self, job, *, primary_process=None,
-        primary_initial: _ProcessObservation | None = None,
-        expected_images: tuple[Path, ...] = (),
-    ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
+    def _require_primary_identity_inputs(
+        self, primary_process, primary_initial, primary_native_image
+    ) -> None:
         if (primary_process is None) != (primary_initial is None):
             raise QualificationFailure(
                 "scenario_failed", qualification_reason="native_primary_identity_mismatch"
             )
+        if primary_initial is not None and not self._valid_native_image_anchor(
+            primary_native_image
+        ):
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="native_image_query_unavailable"
+            )
+
+    def _observe_job_process(
+        self, process, process_id: int, *, owned_primary: bool,
+        primary_initial: _ProcessObservation | None,
+        primary_native_image: str | None,
+        expected_images: tuple[Path, ...],
+    ) -> _ProcessObservation:
+        if owned_primary:
+            if primary_initial is None or primary_native_image is None:
+                raise QualificationFailure(
+                    "scenario_failed", qualification_reason="native_image_query_unavailable"
+                )
+            return self._observe_owned_primary(
+                process, primary_initial, primary_native_image
+            )
+        if expected_images:
+            return self._observe_job_member(process, process_id, expected_images)
+        return self._process_observation(process, process_id)
+
+    def job_observations(
+        self, job, *, primary_process=None,
+        primary_initial: _ProcessObservation | None = None,
+        primary_native_image: str | None = None,
+        expected_images: tuple[Path, ...] = (),
+    ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
+        self._require_primary_identity_inputs(
+            primary_process, primary_initial, primary_native_image
+        )
         process_ids = self._job_process_ids(job)
         observations: list[_ProcessObservation] = []
         for process_id in process_ids:
@@ -2148,10 +2237,11 @@ class _WindowsApi:
                     continue
             try:
                 try:
-                    observation = self._observe_job_member(
-                        process, process_id, expected_images
-                    ) if expected_images else self._process_observation(
-                        process, process_id
+                    observation = self._observe_job_process(
+                        process, process_id, owned_primary=owned_primary,
+                        primary_initial=primary_initial,
+                        primary_native_image=primary_native_image,
+                        expected_images=expected_images,
                     )
                 except QualificationFailure as error:
                     error.set_native_phase(
