@@ -205,6 +205,8 @@ def test_unavailable_default_store_still_runs_and_preserves_actual_child_exit(tm
 def test_preview_requires_the_real_normal_help_action(
     tmp_path, monkeypatch, cleanup_status, menu_fault
 ):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
     from metroliza.app.bootstrap import get_or_create_qapplication
     from metroliza.ui.main_window import MainWindow
 
@@ -254,7 +256,11 @@ def test_preview_requires_the_real_normal_help_action(
             diagnostic_qualification._preview_export(work)
         assert failure.value.cleanup == cleanup_status
         assert len(windows) == 1
-        assert windows[0].isVisible() is (cleanup_status == "failed")
+        if cleanup_status == "complete":
+            assert sip.isdeleted(windows[0])
+        else:
+            assert not sip.isdeleted(windows[0])
+            assert windows[0].isVisible()
         diagnostic_qualification._write_failure(work, "preview", failure.value)
         assert json.loads((work / "failure.json").read_bytes()) == {
             "schema_version": 1,
@@ -263,8 +269,11 @@ def test_preview_requires_the_real_normal_help_action(
             "cleanup": cleanup_status,
         }
     finally:
-        for close in close_methods:
-            close()
+        for window, close in zip(windows, close_methods, strict=True):
+            if not sip.isdeleted(window):
+                close()
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(window, QEvent.Type.DeferredDelete)
     assert not (work / "selected.zip").exists()
 
 
@@ -280,10 +289,55 @@ def test_preview_failure_receipt_revalidates_cleanup_without_private_text(tmp_pa
     }
 
 
+def test_preview_cleanup_destroys_owned_qt_widgets_before_app_release():
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtWidgets import QDialog, QMainWindow
+    from metroliza.app.bootstrap import get_or_create_qapplication
+
+    app = get_or_create_qapplication()
+    window = QMainWindow()
+    dialog = QDialog(window)
+    window.show()
+    dialog.show()
+    app.processEvents()
+    try:
+        assert diagnostic_qualification._close_preview_windows(window) == "complete"
+        assert sip.isdeleted(window)
+        assert sip.isdeleted(dialog)
+    finally:
+        if not sip.isdeleted(window):
+            window.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_preview_cleanup_reports_failed_if_owned_qt_widget_remains(monkeypatch):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtWidgets import QMainWindow
+    from metroliza.app.bootstrap import get_or_create_qapplication
+
+    app = get_or_create_qapplication()
+    window = QMainWindow()
+    window.show()
+    app.processEvents()
+    delete_later = window.deleteLater
+    monkeypatch.setattr(window, "deleteLater", lambda: None)
+    try:
+        assert diagnostic_qualification._close_preview_windows(window) == "failed"
+        assert not sip.isdeleted(window)
+        assert not window.isVisible()
+    finally:
+        delete_later()
+        QCoreApplication.sendPostedEvents(window, QEvent.Type.DeferredDelete)
+    assert sip.isdeleted(window)
+
+
 @pytest.mark.parametrize("has_window", [False, True])
 def test_preview_cleanup_survives_widget_import_failure(monkeypatch, has_window):
     import builtins
 
+    from PyQt6 import sip
     from metroliza.app.bootstrap import get_or_create_qapplication
     from PyQt6.QtWidgets import QMainWindow
 
@@ -306,9 +360,9 @@ def test_preview_cleanup_survives_widget_import_failure(monkeypatch, has_window)
             "failed" if has_window else "not_attempted"
         )
         if window is not None:
-            assert not window.isVisible()
+            assert sip.isdeleted(window)
     finally:
-        if window is not None:
+        if window is not None and not sip.isdeleted(window):
             window.close()
 
 
@@ -327,7 +381,9 @@ def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
     env = dict(os.environ, METROLIZA_STARTUP_SMOKE="1", METROLIZA_LICENSE_VERIFICATION="0",
                METROLIZA_DIAGNOSTIC_QUALIFICATION="preview",
                METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT=str(work),
-               XDG_STATE_HOME=str(state), LOCALAPPDATA=str(state))
+               XDG_STATE_HOME=str(state), XDG_CONFIG_HOME=str(work / "config"),
+               XDG_DATA_HOME=str(work / "data"), APPDATA=str(state),
+               LOCALAPPDATA=str(state))
     if headless_environment:
         for key in ("DISPLAY", "WAYLAND_DISPLAY", "QT_QPA_PLATFORMTHEME", "QT_STYLE_OVERRIDE"):
             env.pop(key, None)

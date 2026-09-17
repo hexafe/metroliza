@@ -347,6 +347,7 @@ def _close_preview_windows(window) -> str:
     if window is None:
         return "not_attempted"
     status = "complete"
+    all_closed = True
     try:
         from PyQt6.QtWidgets import QDialog
 
@@ -357,6 +358,20 @@ def _close_preview_windows(window) -> str:
     for widget in widgets:
         try:
             if not widget.close():
+                status = "failed"
+                all_closed = False
+        except Exception:
+            status = "failed"
+            all_closed = False
+    if all_closed:
+        try:
+            from PyQt6 import sip
+            from PyQt6.QtCore import QCoreApplication, QEvent
+
+            if not sip.isdeleted(window):
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(window, QEvent.Type.DeferredDelete)
+            if not sip.isdeleted(window):
                 status = "failed"
         except Exception:
             status = "failed"
