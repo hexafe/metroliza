@@ -376,9 +376,14 @@ def run_qualification() -> int:
         "checks": {key: "not_executed" for key in ("W03", "W04", "W05", "W06", "W07")},
     }
     root: Path | None = None
+    application = None
     try:
         root = _root()
         fixtures = _fixture_dir()
+        from metroliza.app.bootstrap import get_or_create_qapplication
+        # Each stage closes its own windows. Keep their shared application alive
+        # until all subsequent widget and worker stages have finished.
+        application = get_or_create_qapplication()
         _run_core(root, fixtures, receipt)
         from metroliza.app.windows_candidate_reopen import run_reopen_checks
         completed_import = root / receipt["relative_artifact_dir"]
@@ -436,6 +441,9 @@ def run_qualification() -> int:
         if root is not None:
             _atomic_json(root / "windows-candidate-result.json", receipt)
         return 21
+    finally:
+        if application is not None:
+            application.processEvents()
 
 
 if __name__ == "__main__":
