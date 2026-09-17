@@ -2298,6 +2298,71 @@ def test_native_identity_control_cannot_validate_false_positive(check_id, state,
     })
 
 
+@pytest.mark.parametrize("application_fails", [False, True])
+def test_identity_probe_complete_controls_then_exact_application_receipt(
+    tmp_path, monkeypatch, application_fails
+) -> None:
+    expected_checks = [
+        {"id": check_id, "status": "passed", "process_state": state,
+         "image_result": image_result, "winerror": code}
+        for check_id, state, image_result, code in [
+            ("pre_resume", "alive", "matched", None),
+            ("retired", "exited", "matched", None),
+            ("sleeper_pre_resume", "alive", "matched", None),
+            ("resumed_live", "alive", "matched", None),
+            ("invalid_handle", "unknown", "unavailable", 6),
+            ("denied_handle", "alive", "unavailable", 5),
+            ("wrong_image", "alive", "rejected", None),
+        ]
+    ]
+    calls = []
+
+    def control(_artifact, _executable, _deadline, checks):
+        calls.append("control")
+        checks.extend(expected_checks)
+
+    def application(*_args):
+        calls.append("app")
+        if application_fails:
+            raise qualification.QualificationFailure(
+                "scenario_failed", qualification_stage="direct_ui_smoke",
+                qualification_reason="native_image_query_unavailable",
+                qualification_cleanup="complete",
+                native_observation=qualification._NativeIdentityObservation(
+                    "pre_resume", "image", "false", 31, "alive"
+                ),
+            )
+
+    monkeypatch.setattr(qualification, "_validate_identity_control_executable", lambda path: path)
+    monkeypatch.setattr(qualification, "_run_native_identity_controls", control)
+    monkeypatch.setattr(qualification, "_run_identity_application", application)
+    payload = qualification._identity_control_payload(tmp_path, tmp_path / "control.exe", 123)
+    assert calls == ["control", "app"]
+    assert payload["checks"] == expected_checks
+    assert payload["failure"] is None
+    assert payload["status"] == ("failed" if application_fails else "passed")
+    assert payload["application"]["status"] == payload["status"]
+    output = tmp_path / "bounded"
+    output.mkdir()
+    metadata = output.stat()
+    result = qualification._write_identity_control_receipt(
+        output, (metadata.st_dev, metadata.st_ino), payload
+    )
+    assert json.loads(result.read_bytes()) == payload
+    assert sorted(path.name for path in output.iterdir()) == ["native-identity-control.json"]
+    # An identity probe never creates or validates a full-qualification success receipt.
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_output_payload(payload)
+    if application_fails:
+        assert payload["application"]["qualification_failure"] == {
+            "stage": "direct_ui_smoke", "reason": "native_image_query_unavailable",
+            "native_observation": {
+                "phase": "pre_resume", "api": "image", "outcome": "false",
+                "winerror": 31, "process_state": "alive",
+            },
+        }
+
+
 @pytest.mark.parametrize(
     ("api_name", "invalid", "reason"),
     [
