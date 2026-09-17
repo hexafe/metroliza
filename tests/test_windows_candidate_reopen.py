@@ -1,0 +1,111 @@
+"""Real MainWindow reopen coverage for the bounded W04 acceptance subset."""
+from __future__ import annotations
+
+import hashlib
+import shutil
+import time
+from pathlib import Path
+
+import pytest
+from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, Qt
+
+from metroliza.app.bootstrap import get_or_create_qapplication
+from metroliza.app.windows_candidate_reopen import run_reopen_checks
+from metroliza.ui.main_window import MainWindow
+from metroliza.ui.ui_preferences import UiPreferences
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _wait(application, predicate, *, timeout_s: float) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not predicate() and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+    assert predicate()
+
+
+@pytest.fixture(scope="module")
+def application():
+    return get_or_create_qapplication()
+
+
+def _stage_reports(root: Path) -> tuple[Path, dict[str, str]]:
+    original = Path(__file__).parent / "fixtures" / "windows_candidate" / "reports"
+    reports = root / "reports"
+    reports.mkdir()
+    for index in range(5):
+        shutil.copyfile(original / f"report-{index}.pdf", reports / f"REF001_2024-01-01_{index}.pdf")
+    return reports, {path.name: _sha256(path) for path in reports.iterdir()}
+
+
+def _close_window(application, window) -> None:
+    window.close()
+    window.deleteLater()
+    application.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    application.processEvents()
+
+
+def _seed_completed_import(application, root: Path) -> tuple[Path, Path, dict[str, str]]:
+    reports, hashes = _stage_reports(root)
+    database = root / "reports.sqlite"
+    settings = QSettings(str(root / "seed.ini"), QSettings.Format.IniFormat)
+    window = MainWindow("candidate-reopen-seed", None, ui_preferences=UiPreferences(settings))
+    try:
+        window.show()
+        application.processEvents()
+        reports_index = window.navigation_combo.findData("reports")
+        assert reports_index >= 0
+        window.navigation_list.setCurrentRow(reports_index)
+        workspace = window.reports_workspace
+        assert window.set_directory(str(reports))
+        assert window.set_db_file(str(database))
+        workspace.scan_button.click()
+        _wait(application, lambda: workspace.preflight_thread is None, timeout_s=30.0)
+        assert not database.exists()
+        assert workspace.report_planner.model.counts["total"] == 5
+        workspace.report_planner.clear.click()
+        assert not workspace.parse_button.isEnabled()
+        for row in range(workspace.report_planner.model.rowCount()):
+            item = workspace.report_planner.model.item_at(row)
+            if item is not None and item.display_name in {
+                "REF001_2024-01-01_1.pdf",
+                "REF001_2024-01-01_3.pdf",
+            }:
+                assert workspace.report_planner.model.setData(
+                    workspace.report_planner.model.index(row, 0),
+                    Qt.CheckState.Checked,
+                    Qt.ItemDataRole.CheckStateRole,
+                )
+        workspace.parse_button.click()
+        worker = workspace.parse_thread
+        assert worker is not None
+        _wait(application, lambda: workspace.parse_thread is None, timeout_s=45.0)
+        assert worker.last_parse_result is not None
+        assert worker.last_parse_result.imported_files == 2
+        assert worker.last_parse_result.intentionally_excluded_files == 3
+    finally:
+        _close_window(application, window)
+    return database, reports, hashes
+
+
+def test_reopen_preserves_completed_import_after_real_window_close(application, tmp_path: Path) -> None:
+    database, reports, hashes = _seed_completed_import(application, tmp_path)
+
+    result = run_reopen_checks(database, reports, hashes)
+
+    assert result["status"] == "passed", result
+    assert result["facets"] == {"reopen_preserves_completed_import": "passed"}
+    assert result["database"]["counts"] == {
+        "source_files": 2,
+        "active_locations": 2,
+        "parsed_reports": 2,
+        "metadata": 2,
+        "measurements": 2,
+    }
+    assert result["database"]["sha256"] == _sha256(database)
+    assert result["source_hashes"] == hashes
+    assert not [database.with_name(database.name + suffix) for suffix in ("-wal", "-shm", "-journal") if database.with_name(database.name + suffix).exists()]
