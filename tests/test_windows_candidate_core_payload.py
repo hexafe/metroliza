@@ -16,7 +16,7 @@ def _payload():
         "ordinary_user": True,
         "source_sha": None,
         "relative_artifact_dir": "core-" + "a" * 32,
-        "checks": {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "not_executed"},
+        "checks": {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "passed"},
         "facets": {
             **{key: "passed" for key in driver.REQUIRED_CHECKS},
             "group_analysis_status": "insufficient_groups",

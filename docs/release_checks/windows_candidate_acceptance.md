@@ -68,7 +68,7 @@ labels, series caches, local references, values and limit order. A corrupted loc
 cell with unchanged chart cache must fail comparison. Pre-cancel and oversized
 label rejection must preserve the prior completed workbook. The W07 source
 operation also starts the actual `ExportDataThread`, waits for its measurement
-stage progress while it is still running, then calls its cooperative cancel
+stage progress above its entry value, after a completed header unit, while it is still running, then calls its cooperative cancel
 seam. That canceled run must retain the previous complete workbook bytes and
 leave no temporary workbook publication file.
 
@@ -82,10 +82,17 @@ An independent standard-library comparator checks the actual persisted rows,
 group membership and public result against separately specified expected values.
 It checks both the original and retained inference database and JSON artifact.
 This fixed case supplements the preserved one-group negative boundary.
-The core reports W03, W05 and W06 as executed; W04 and W07 remain incomplete
-because their broader reopening/cancellation contracts are not all exercised.
-The active W07 source facet is narrower: it covers one real in-flight exporter
-cancel and publication preservation, not every close or cancellation path.
+The core reports W03, W05, W06 and the bounded W07 export contract as executed.
+A second real MainWindow reopens the completed import's Reports source and DB
+context. The public query and independent comparator check the same measurements;
+source hashes, database bytes and absent sidecars must remain unchanged. This is
+context reopen/rebind only, without a second review scan. W04 remains incomplete:
+hidden selection, drift, duplicates and active import/close contracts are not all
+exercised by this core. W07 covers exact literal output plus failed,
+pre-cancelled and in-flight cancelled publication preservation; it does not
+establish arbitrary close paths or desktop Excel rendering. Cleanup always joins
+the export thread before returning, including after an operation failure; the
+existing external Job/watchdog bounds a worker that cannot stop cooperatively.
 The host rejects inconsistent check statuses, and separately requires a native
 ordinary-user packaged runtime before accepting any Windows observation.
 

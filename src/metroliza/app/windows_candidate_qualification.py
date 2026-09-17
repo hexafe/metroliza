@@ -376,6 +376,14 @@ def run_qualification() -> int:
         root = _root()
         fixtures = _fixture_dir()
         _run_core(root, fixtures, receipt)
+        from metroliza.app.windows_candidate_reopen import run_reopen_checks
+        completed_import = root / receipt["relative_artifact_dir"]
+        reopened = run_reopen_checks(
+            completed_import / "reports.sqlite", completed_import / "reports", receipt["source_hashes"]
+        )
+        if reopened.get("status") != "passed" or reopened.get("facets") != {"reopen_preserves_completed_import": "passed"}:
+            raise ScenarioFailure("completed_import_reopen_failed")
+        receipt["facets"].update(reopened["facets"])
         tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
         capture_tabular_w05(fixtures, tabular_file)
         receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
@@ -408,7 +416,7 @@ def run_qualification() -> int:
         receipt["facets"].update(inference["facets"])
         receipt["stage"] = "complete"
         receipt["status"] = "passed"
-        receipt["checks"].update({"W03": "passed", "W05": "passed", "W06": "passed"})
+        receipt["checks"].update({"W03": "passed", "W05": "passed", "W06": "passed", "W07": "passed"})
         _atomic_json(root / "windows-candidate-result.json", receipt)
         return 0
     except Exception as error:

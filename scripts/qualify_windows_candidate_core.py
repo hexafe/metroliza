@@ -29,10 +29,10 @@ REQUIRED_CHECKS = (
     "literal_chart_titles_series_caches_references", "value_limit_order",
     "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
     "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
-    "successful_group_inference",
+    "successful_group_inference", "reopen_preserves_completed_import",
 )
 ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")
-CORE_OBSERVATIONS = {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "not_executed"}
+CORE_OBSERVATIONS = {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "passed"}
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 MAX_SECONDS = 900

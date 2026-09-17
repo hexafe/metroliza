@@ -58,7 +58,7 @@ _SAFE_FAILURE_CODES = {
     "active_cancel_request_not_observed",
     "active_cancel_staging_cleanup",
     "active_cancel_thread_deadline",
-    "active_cancel_thread_still_running",
+    "active_cancel_callback_thread",
     "chart_count",
     "chart_cache_changed_in_control",
     "chart_value_ranges",
@@ -479,6 +479,7 @@ def _verify_preservation(scratch: Path, workbook: Path) -> dict[str, str]:
 
 def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any) -> dict[str, str]:
     """Cancel a running real exporter after its measurement stage begins."""
+    from PyQt6.QtCore import QThread
     from metroliza.exporting.export_outcomes import ExportRunStatus
 
     completed = workbook.read_bytes()
@@ -493,29 +494,38 @@ def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any)
     def request_cancellation(value: int) -> None:
         progress = int(value)
         progress_values.append(progress)
-        if progress >= 30 and not cancellation_observation:
+        # Stage entry is exactly 30; a value above it follows a completed
+        # measurement header unit in the real exporter.
+        if progress > 30 and not cancellation_observation:
             cancellation_observation["progress"] = progress
             cancellation_observation["running_before_stop"] = active.isRunning()
+            cancellation_observation["application_thread"] = QThread.currentThread() == application.thread()
             active.stop_exporting()
 
     active.update_progress.connect(request_cancellation)
     before_cancel = _directory_snapshot(scratch)
-    active.start()
-    deadline = time.monotonic() + DEADLINE_S
-    while active.isRunning() and time.monotonic() < deadline:
+    try:
+        active.start()
+        deadline = time.monotonic() + DEADLINE_S
+        while active.isRunning() and time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(0.002)
         application.processEvents()
-        time.sleep(0.002)
-    application.processEvents()
-    if active.isRunning():
-        active.stop_exporting()
-        active.wait(1000)
         if active.isRunning():
-            raise XlsxScenarioFailure("active_cancel_thread_still_running")
-        raise XlsxScenarioFailure("active_cancel_thread_deadline")
+            raise XlsxScenarioFailure("active_cancel_thread_deadline")
+    finally:
+        if active.isRunning():
+            active.stop_exporting()
+        # Never unwind or destroy a running QThread. The existing external Job
+        # watchdog bounds cleanup if cooperative cancellation cannot complete.
+        active.wait()
+        active.update_progress.disconnect(request_cancellation)
     if not progress_values or progress_values[0] != 0:
         raise XlsxScenarioFailure("active_cancel_operation_not_started")
     if not cancellation_observation.get("running_before_stop"):
         raise XlsxScenarioFailure("active_cancel_request_not_observed")
+    if not cancellation_observation.get("application_thread"):
+        raise XlsxScenarioFailure("active_cancel_callback_thread")
     if (
         active.export_run_result is None
         or active.export_run_result.status is not ExportRunStatus.CANCELLED
