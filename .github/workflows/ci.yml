@@ -1027,6 +1027,15 @@ jobs:
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
+      - name: Run native Windows grouping-preview lifecycle tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: >-
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_tabular_analytics_grouping_dialog.py
+
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
           PYTHONPATH: src;.
@@ -1035,6 +1044,17 @@ jobs:
           tests/test_windows_ocr_runtime_diagnostics.py
           tests/test_header_ocr_diagnostics_script.py
           tests/test_windows_ocr_powershell.py
+
+      - name: Run measurement chart-label and workbook publication tests on Windows
+        env:
+          PYTHONPATH: src;.
+        run: >-
+          python -m pytest -v
+          tests/test_measurement_chart_labels.py
+          tests/test_phase4_integration_happy_path.py::TestPhase4ParseToExportHappyPath::test_export_workbook_chart_ranges_match_expected_parity
+          tests/test_export_chart_writer.py
+          tests/test_export_backends.py
+          tests/test_export_workbook_output.py
 
       - name: Run finite numeric filter and query-consumer parity on Windows
         env:

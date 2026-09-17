@@ -1,4 +1,4 @@
-from xlsxwriter.utility import xl_range
+from xlsxwriter.utility import quote_sheetname, xl_range
 
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.charts.xlsx_chart_utils import create_workbook_chart, insert_chart
@@ -25,7 +25,7 @@ def _build_chart_size_policy():
 
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
     """Build an absolute worksheet range string for xlsxwriter series definitions."""
-    return f"={sheet_name}!${xl_range(first_row, column_index, last_row, column_index)}"
+    return f"={quote_sheetname(sheet_name)}!${xl_range(first_row, column_index, last_row, column_index)}"
 
 
 def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column, usl_column=None, lsl_column=None, cache=None):
@@ -171,6 +171,19 @@ def build_horizontal_limit_line_specs(usl, lsl, *, color=None, linestyle='--', l
         {'y': lsl, 'color': line_color, 'linestyle': linestyle, 'linewidth': linewidth},
     ]
 
+def _measurement_chart_label_cell(worksheet, header, sheet_name, measurement_plan):
+    """Bind names to the literal header already written by write_measurement_block."""
+    if not isinstance(header, str) or not header or len(header) > 32767:
+        raise ValueError('Measurement chart label must contain 1 to 32767 characters')
+    try:
+        header.encode('utf-8')
+    except UnicodeEncodeError:
+        raise ValueError('Measurement chart label contains unsupported Unicode') from None
+    if worksheet.name != sheet_name:
+        raise ValueError('Measurement chart worksheet does not match its data sheet')
+    return [worksheet.name, measurement_plan['data_header_row'], measurement_plan['y_column']]
+
+
 def insert_measurement_chart(
     workbook,
     worksheet,
@@ -182,6 +195,7 @@ def insert_measurement_chart(
     chart_anchor_col,
     cache=None,
 ):
+    label_cell = _measurement_chart_label_cell(worksheet, header, sheet_name, measurement_plan)
     chart = create_workbook_chart(workbook, chart_type)
     series_specs = build_measurement_chart_series_specs_from_plan(
         header=header,
@@ -189,6 +203,9 @@ def insert_measurement_chart(
         measurement_plan=measurement_plan,
         cache=cache,
     )
+    # A plain imported name can be interpreted as a formula by XlsxWriter.
+    # The local string cell and explicit cache preserve its exact text instead.
+    series_specs[0].update(name=label_cell, name_data=[header])
     for series_spec in series_specs:
         chart.add_series(series_spec)
 
@@ -197,6 +214,7 @@ def insert_measurement_chart(
         chart_anchor_row=measurement_plan.get('chart_insert_row'),
         legend_series_count=1,
     )
+    chart_policy['title'].update(name=label_cell, data=[header])
     chart.set_title(chart_policy['title'])
     chart.set_y_axis(chart_policy['y_axis'])
     chart.set_legend(chart_policy['legend'])
