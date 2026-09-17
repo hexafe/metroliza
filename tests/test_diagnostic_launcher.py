@@ -46,12 +46,109 @@ def _fixture_setup_failure(scratch, thread, deliveries):
     return f"fixture_setup_not_ready:{stage}:{child_state}"
 
 
-def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path):
+def _trace_publisher_calls(monkeypatch, store):
+    """Capture only fixed operation/status/timing facts for a failing native test."""
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    calls = []
+    guard = threading.Lock()
+    dropped_calls = 0
+    frozen_snapshot = None
+    operations = (
+        "begin_session", "authenticate_session", "publish", "end_session",
+        "resolve_session",
+    )
+    for name in operations:
+        original = getattr(store, name)
+
+        def recorded(*args, _name=name, _original=original, **kwargs):
+            nonlocal dropped_calls
+            started = time.monotonic()
+            item = {"operation": _name, "started": started, "status": "in_flight"}
+            with guard:
+                if len(calls) < 16:
+                    calls.append(item)
+                else:
+                    dropped_calls = min(1_000, dropped_calls + 1)
+            status = "raised"
+            try:
+                result = _original(*args, **kwargs)
+                result_status = getattr(result, "status", None)
+                status = (
+                    result_status.value
+                    if type(result_status) is StoreStatus else "invalid_status"
+                )
+                return result
+            finally:
+                with guard:
+                    item["status"] = status
+                    item["finished"] = time.monotonic()
+                    item["elapsed_ms"] = min(
+                        10_000, int((item["finished"] - started) * 1000)
+                    )
+
+        monkeypatch.setattr(store, name, recorded)
+
+    original_close = _OperationPublisher.close
+
+    def recorded_close(publisher, observed):
+        nonlocal frozen_snapshot
+        started = time.monotonic()
+        result = original_close(publisher, observed)
+        close_returned = time.monotonic()
+        with guard:
+            frozen_snapshot = {
+                "calls": [
+                    {
+                        "operation": item["operation"],
+                        "status": item["status"],
+                        "completion": (
+                            "started_after_close_return"
+                            if item["started"] > close_returned else
+                            "in_flight_at_close_return"
+                            if "finished" not in item or item["finished"] > close_returned else
+                            "completed_before_close_return"
+                        ),
+                        "elapsed_ms": item.get(
+                            "elapsed_ms", max(
+                                0, min(
+                                    10_000, int((close_returned - item["started"]) * 1000)
+                                )
+                            )
+                        ),
+                    }
+                    for item in calls
+                ],
+                "dropped_calls": dropped_calls,
+                "observation_phase": "post_close_return",
+                "close": {
+                    "status": result.value,
+                    "elapsed_ms": min(10_000, int((close_returned - started) * 1000)),
+                    "post_close_worker_alive": publisher.worker.is_alive(),
+                    "post_close_done": publisher.done.is_set(),
+                    "post_close_final_saved": publisher.final_saved.is_set(),
+                },
+            }
+        return result
+
+    monkeypatch.setattr(_OperationPublisher, "close", recorded_close)
+
+    def snapshot():
+        with guard:
+            return frozen_snapshot
+
+    return snapshot
+
+
+def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path, monkeypatch):
     store = IncidentStore(tmp_path / "state")
+    trace = _trace_publisher_calls(monkeypatch, store)
     child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
     delivery = run_with_store([sys.executable, str(child), "hard_exit"], store=store)
-    assert delivery.observation.exit_code == 9
-    assert delivery.storage_status is StoreStatus.SAVED
+    exit_code = delivery.observation.exit_code
+    assert exit_code == 9
+    actual_status = delivery.storage_status
+    assert actual_status is StoreStatus.SAVED, json.dumps(trace(), sort_keys=True)
     listing = store.list_reports()
     assert listing.status is StoreStatus.AVAILABLE
     assert len(listing.reports) == 1
@@ -68,14 +165,54 @@ def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path)
         assert b"SYNTHETIC_RAW_SECRET" not in archive.read("incident.json")
 
 
-def test_normal_observed_exit_has_only_clean_marker_and_no_crash_report(tmp_path):
+def test_normal_observed_exit_has_only_clean_marker_and_no_crash_report(tmp_path, monkeypatch):
     store = IncidentStore(tmp_path / "state")
+    trace = _trace_publisher_calls(monkeypatch, store)
     child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
     delivery = run_with_store([sys.executable, str(child), "normal"], store=store)
-    assert delivery.storage_status is StoreStatus.MARKER_CLEAN_ENDED
+    actual_status = delivery.storage_status
+    assert actual_status is StoreStatus.MARKER_CLEAN_ENDED, json.dumps(trace(), sort_keys=True)
     assert not delivery.observation.needs_incident
     assert store.list_reports().reports == ()
     assert store.list_unclean_sessions().sessions == ()
+
+
+def test_publisher_trace_identifies_unfinished_store_call_without_changing_close(
+    tmp_path, monkeypatch
+):
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    store = IncidentStore(tmp_path / "state")
+    entered, release = threading.Event(), threading.Event()
+    original_begin = store.begin_session
+
+    def held_begin(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return original_begin(*args, **kwargs)
+
+    monkeypatch.setattr(store, "begin_session", held_begin)
+    trace = _trace_publisher_calls(monkeypatch, store)
+    observed = _live_observation()
+    publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher.start()
+    assert publisher.begin()
+    try:
+        assert entered.wait(1)
+        actual_status = publisher.close(observed)
+        at_return = trace()
+        assert actual_status is StoreStatus.PUBLISH_INCOMPLETE
+        assert at_return["close"]["status"] == StoreStatus.PUBLISH_INCOMPLETE.value
+        assert at_return["close"]["post_close_worker_alive"] is True
+        assert at_return["close"]["post_close_done"] is False
+        assert at_return["close"]["post_close_final_saved"] is False
+        assert at_return["calls"][0]["operation"] == "begin_session"
+        assert at_return["calls"][0]["status"] == "in_flight"
+        assert at_return["calls"][0]["completion"] == "in_flight_at_close_return"
+    finally:
+        release.set()
+        publisher.worker.join(2)
+    assert not publisher.worker.is_alive()
 
 
 def test_unavailable_store_does_not_change_child_result_or_use_cwd(tmp_path, monkeypatch):
