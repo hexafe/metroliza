@@ -28,7 +28,7 @@ REQUIRED_CHECKS = (
     "group_membership", "workbook_cells",
     "literal_chart_titles_series_caches_references", "value_limit_order",
     "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
-    "oversized_label_rejection_preserves_workbook",
+    "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
     "successful_group_inference",
 )
 ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")

@@ -386,7 +386,7 @@ def run_qualification() -> int:
         expected_xlsx_facets = {
             "literal_chart_titles_series_caches_references", "value_limit_order",
             "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
-            "oversized_label_rejection_preserves_workbook",
+            "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
         }
         xlsx_facets = xlsx_result.get("facets", {})
         if (xlsx_result.get("status") != "passed" or set(xlsx_facets) != expected_xlsx_facets
