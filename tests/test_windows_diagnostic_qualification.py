@@ -1833,6 +1833,11 @@ def test_job_observation_keeps_post_open_failures_fatal(mode) -> None:
         qualification_reason=(
             None if mode == "unrelated" else "native_image_query_unavailable"
         ),
+        native_observation=(
+            None if mode == "unrelated" else qualification._NativeIdentityObservation(
+                None, "image", "false", 31, "unknown"
+            )
+        ),
     )
 
     def fail_observation(_process, _process_id):
@@ -1844,10 +1849,11 @@ def test_job_observation_keeps_post_open_failures_fatal(mode) -> None:
     with pytest.raises(qualification.QualificationFailure) as caught:
         api.job_observations(object())
 
-    if mode == "requery_failed":
-        assert caught.value.qualification_reason == "native_job_ids_unavailable"
-    else:
-        assert caught.value is primary
+    assert caught.value is primary
+    if mode != "unrelated":
+        assert caught.value.qualification_reason == "native_image_query_unavailable"
+        assert caught.value.native_observation.phase == "job_observation"
+        assert caught.value.native_observation.winerror == 31
     assert len(calls) == (1 if mode == "unrelated" else 2)
     assert api.kernel.closed == [78]
 
@@ -2209,6 +2215,87 @@ def test_native_identity_receipt_rejects_unbounded_or_misleading_fields(field, i
     assert qualification._valid_failure_detail(detail)
     detail["native_observation"][field] = invalid
     assert not qualification._valid_failure_detail(detail)
+
+
+@pytest.mark.parametrize("cleanup", ["complete", "failed"])
+def test_identity_probe_preserves_control_failure_and_bounds_application_attempt(
+    tmp_path, monkeypatch, cleanup
+) -> None:
+    calls = []
+    primary = qualification.QualificationFailure(
+        "scenario_failed", qualification_reason="native_image_query_unavailable",
+        qualification_cleanup=cleanup,
+        native_observation=qualification._NativeIdentityObservation(
+            "pre_resume", "image", "false", 31, "alive"
+        ),
+    )
+
+    def control(*_args):
+        calls.append("control")
+        raise primary
+
+    monkeypatch.setattr(qualification, "_validate_identity_control_executable", lambda path: path)
+    monkeypatch.setattr(qualification, "_run_native_identity_controls", control)
+    monkeypatch.setattr(qualification, "_run_identity_application", lambda *_args: calls.append("app"))
+    payload = qualification._identity_control_payload(tmp_path, tmp_path / "fixed.exe", 123)
+    qualification._validate_identity_control_payload(payload)
+    assert payload["status"] == "failed"
+    assert payload["failure"]["native_observation"]["winerror"] == 31
+    assert payload["failure"]["native_observation"]["phase"] == "pre_resume"
+    assert payload["cleanup"] == cleanup
+    assert calls == (["control", "app"] if cleanup == "complete" else ["control"])
+    assert payload["application"]["status"] == ("passed" if cleanup == "complete" else "not_run")
+
+
+def test_identity_cli_never_runs_full_qualification(tmp_path, monkeypatch) -> None:
+    calls = []
+
+    def control(artifact, output, executable):
+        calls.append((artifact, output, executable))
+        return 1
+
+    monkeypatch.setattr(qualification, "run_identity_control", control)
+    monkeypatch.setattr(qualification, "qualify_windows_diagnostics", lambda *_args: pytest.fail("Full qualification forbidden in identity mode"))
+    artifact, output, executable = [tmp_path / name for name in ("package", "output", "control.exe")]
+    assert qualification.main([
+        "--artifact-dir", str(artifact), "--output-dir", str(output),
+        "--identity-control-executable", str(executable),
+    ]) == 1
+    assert calls == [(artifact, output, executable)]
+
+
+@pytest.mark.parametrize(
+    ("reason", "api", "outcome", "code"),
+    [("process_exit_timeout", "image", "false", 5),
+     ("native_process_times_unavailable", "image", "false", 5),
+     ("native_image_query_unavailable", "times", "false", 5),
+     ("native_image_query_unavailable", "image", "exception", 5)],
+)
+def test_native_identity_failure_detail_rejects_inconsistent_attribution(reason, api, outcome, code):
+    assert not qualification._valid_failure_detail({
+        "stage": "direct_ui_smoke", "reason": reason,
+        "native_observation": {
+            "phase": "pre_resume", "api": api, "outcome": outcome,
+            "winerror": code, "process_state": "alive",
+        },
+    })
+
+
+@pytest.mark.parametrize(
+    ("check_id", "state", "image_result", "code"),
+    [("invalid_handle", "alive", "unavailable", 6),
+     ("invalid_handle", "unknown", "unavailable", 5),
+     ("denied_handle", "alive", "matched", 5),
+     ("denied_handle", "alive", "unavailable", 6),
+     ("pre_resume", "unknown", "matched", None),
+     ("retired", "alive", "matched", None),
+     ("wrong_image", "alive", "matched", None)],
+)
+def test_native_identity_control_cannot_validate_false_positive(check_id, state, image_result, code):
+    assert not qualification._valid_identity_control_check({
+        "id": check_id, "status": "passed", "process_state": state,
+        "image_result": image_result, "winerror": code,
+    })
 
 
 @pytest.mark.parametrize(
@@ -4125,8 +4212,10 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
     def observe_before_resume(handle, process_id):
         initial = original_observe(handle, process_id)
         assert api._native_process_state(handle) == "alive"
-        assert initial.creation_time > 0
-        assert os.path.normcase(initial.image) == os.path.normcase(str(executable))
+        creation_present = initial.creation_time > 0
+        image_matches = os.path.normcase(initial.image) == os.path.normcase(str(executable))
+        assert creation_present
+        assert image_matches
         with pytest.raises(qualification.QualificationFailure) as invalid:
             original_observe(api.wintypes.HANDLE(), 0)
         assert invalid.value.native_observation.api == "image"
@@ -4164,7 +4253,8 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
             assert failure.native_observation.outcome == "false"
             assert type(failure.native_observation.winerror) is int
         else:
-            assert retired == observed[0]
+            same_identity = retired == observed[0]
+            assert same_identity
     finally:
         qualification._close_owned_processes(owned, terminate=True)
 
