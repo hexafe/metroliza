@@ -482,6 +482,28 @@ def _run_ocr_slice(child: Path, fixture: Path, receipt: dict[str, Any]) -> None:
     receipt["facets"].update(observation["facets"])
 
 
+def _run_closeout_slices(child, fixtures, receipt):
+    from metroliza.app.windows_candidate_privacy_checks import run_privacy_checks
+    from metroliza.app.windows_candidate_shell_checks import run_shell_checks
+    from metroliza.app.windows_candidate_lifecycle_checks import run_lifecycle_checks
+
+    scale = os.environ.get("METROLIZA_WINDOWS_CANDIDATE_DPR", "1.0")
+    if scale not in {"1.0", "1.25", "1.5"}:
+        raise ScenarioFailure("invalid_ui_scale")
+    observations = {}
+    receipt["closeout_observation"] = observations
+    for name, operation in (
+        ("privacy", lambda: run_privacy_checks(child)),
+        ("shell", lambda: run_shell_checks(child, fixtures, expected_dpr=float(scale))),
+        ("lifecycle", lambda: run_lifecycle_checks(child, fixtures)),
+    ):
+        record = operation()
+        observations[name] = record
+        expected = "passed" if os.name == "nt" or name == "lifecycle" else "partial"
+        if record.get("status") != expected or record.get("error_codes") != []:
+            raise ScenarioFailure("closeout_" + name + "_failed")
+
+
 def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     from metroliza.app.bootstrap import get_or_create_qapplication
     # Each stage closes its own windows. Keep their shared application alive
@@ -510,7 +532,8 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     capture_tabular_w05(fixtures, tabular_file)
     receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
     receipt["facets"]["finite_precision_filters"] = "passed"
-    from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes, run_export_checks
+    from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes
+    from metroliza.app.windows_candidate_xlsx import run_export_checks
     xlsx_result = run_export_checks(child)
     expected_xlsx_facets = {
         "literal_chart_titles_series_caches_references", "value_limit_order",
@@ -539,6 +562,7 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     receipt["facets"].update(inference["facets"])
     _run_import_guards_slice(child, fixtures, receipt)
     _run_ui_slice(child, receipt)
+    _run_closeout_slices(child, fixtures, receipt)
 
 
 def run_qualification() -> int:
@@ -557,6 +581,11 @@ def run_qualification() -> int:
         root = _root()
         fixtures = _fixture_dir()
         ocr_fixture = _ocr_fixture()
+        from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
+        _atomic_json(root / "core-startup.json", {
+            "schema_version": 1, "scenario": "core", "stage": "startup_ready",
+        })
+        wait_for_host_ready()
         from metroliza.app.windows_candidate_native_check import run_with_native_mode
         receipt["native_observation"] = run_with_native_mode(
             lambda: _execute_core_checks(root, fixtures, ocr_fixture, receipt)

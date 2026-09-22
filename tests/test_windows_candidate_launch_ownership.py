@@ -124,3 +124,96 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     assert current.value is primary
     assert closed == [True]
     assert len(evidence) == 1 and not evidence[0].root.exists()
+
+
+def test_candidate_services_wait_for_host_startup_ack(tmp_path, monkeypatch):
+    import json
+    import threading
+    from metroliza.shared import diagnostic_runtime_audit as audit
+    from metroliza.app import windows_candidate_native_check as native
+
+    root = tmp_path / "core"
+    root.mkdir()
+    journal = tmp_path / "audit"
+    journal.mkdir()
+    nonce = "a" * 32
+    audit._write(journal, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+    for gate in application.GATES:
+        monkeypatch.setenv(gate, "1")
+    monkeypatch.setenv(application.ROOT_ENV, str(root))
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(journal))
+    monkeypatch.setenv(audit.NONCE, nonce)
+    monkeypatch.setattr(application, "_fixture_dir", lambda: tmp_path)
+    monkeypatch.setattr(application, "_ocr_fixture", lambda: tmp_path / "public.pdf")
+    evidence = object.__new__(owned_probe.RuntimeEvidence)
+    evidence.root = journal
+    evidence.root_identity = evidence._identity()
+    evidence.probe = SimpleNamespace(phase="startup")
+    evidence.failure_factory = lambda: ValueError("synthetic")
+    started = []
+    observed = []
+
+    def services(_callback):
+        started.append(evidence.probe.phase)
+        assert evidence.probe.phase == "running"
+        return {}
+
+    def host():
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            marker = root / "core-startup.json"
+            if marker.exists():
+                assert json.loads(marker.read_bytes()) == {"schema_version": 1, "scenario": "core", "stage": "startup_ready"}
+                time.sleep(0.05)
+                observed.append(list(started))
+                evidence.ready()
+                return
+            time.sleep(0.005)
+
+    monkeypatch.setattr(native, "run_with_native_mode", services)
+    observer = threading.Thread(target=host)
+    observer.start()
+    try:
+        result = application.run_qualification()
+    finally:
+        observer.join(timeout=2)
+    assert not observer.is_alive()
+    assert observed == [[]]
+    assert started == ["running"]
+    assert result == 0
+
+
+@pytest.mark.parametrize("fault", ["missing", "nonempty_schema", "boolean", "directory", "valid", "host_failure"])
+def test_candidate_host_ack_requires_valid_startup_and_successful_phase_change(tmp_path, fault):
+    import json
+
+    calls = []
+    marker = tmp_path / "core-startup.json"
+    payload = {"schema_version": 1, "scenario": "core", "stage": "startup_ready"}
+    if fault == "nonempty_schema":
+        payload["unrecognized"] = True
+    if fault == "boolean":
+        payload["schema_version"] = True
+    if fault == "directory":
+        marker.mkdir()
+    elif fault != "missing":
+        marker.write_text(json.dumps(payload))
+
+    def ready():
+        calls.append("ready")
+        if fault == "host_failure":
+            raise diagnostics.QualificationFailure("output_failed")
+
+    process = SimpleNamespace(mark_runtime_ready=ready)
+    if fault == "missing":
+        assert not driver._observe_core_startup(tmp_path, process, False)
+        assert calls == []
+    elif fault == "valid":
+        assert driver._observe_core_startup(tmp_path, process, False)
+        assert driver._observe_core_startup(tmp_path, process, True)
+        assert calls == ["ready"]
+    else:
+        with pytest.raises((driver.CandidateFailure, diagnostics.QualificationFailure)):
+            driver._observe_core_startup(tmp_path, process, False)
+        assert calls == (["ready"] if fault == "host_failure" else [])

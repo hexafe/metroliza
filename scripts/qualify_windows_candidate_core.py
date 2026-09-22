@@ -24,6 +24,8 @@ import sys
 import time
 from pathlib import Path
 
+from scripts.verify_windows_candidate_closeout import ALL_FACETS as CLOSEOUT_CHECKS
+
 SCENARIO_FILE = "windows-candidate-result.json"
 REQUIRED_CHECKS = (
     "selected_import", "zero_selection_no_write", "finite_precision_filters", "persisted_measurements",
@@ -47,6 +49,13 @@ NATIVE_BINDINGS = (
     "group.coerce_sequence_to_float64",
     "chart.render_histogram_png", "chart.render_distribution_png", "chart.render_iqr_png", "chart.render_trend_png",
 )
+RESULT_LIMITS = [
+    "Observed core facets only; no complete W01-W16 gate is implied.",
+    "Import cancellation is observed at real batch entry; export cancellation occurs after real export progress. Arbitrary later commit boundaries are not implied.",
+    "Inference covers only the fixed public two-group PDF case; no general analysis or real-data qualification.",
+    "Build-host automation is not clean-machine evidence.",
+    "No representative operator data or release acceptance.",
+]
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 MAX_SECONDS = 900
@@ -144,7 +153,16 @@ def _validate_core_result(payload: object) -> dict:
     _validate_ui_observation(payload.get("ui_observation"))
     _validate_ocr_observation(payload.get("ocr_observation"))
     _validate_native_observation(payload.get("native_observation"))
+    _validate_closeout_observation(payload.get("closeout_observation"))
     return payload
+
+
+def _validate_closeout_observation(value, *, packaged=False, expected_dpr=None):
+    from scripts.verify_windows_candidate_closeout import validate
+    try:
+        return validate(value, packaged=packaged, expected_dpr=expected_dpr)
+    except (ValueError, TypeError, KeyError):
+        raise CandidateFailure("invalid_closeout_observation") from None
 
 
 def _validate_native_observation(value, *, packaged=False, expected_mode=None):
@@ -565,6 +583,20 @@ def _verify_dashboard_rendering(diag, output: Path, artifacts: dict, browser: Pa
     artifacts["browser_evidence"] = {"path": path.name, "sha256": _hash(path)}
 
 
+def _observe_core_startup(work: Path, process, observed: bool) -> bool:
+    if observed:
+        return True
+    marker = work / "core-startup.json"
+    if not marker.exists():
+        return False
+    payload = _json(marker, 1024)
+    if (payload != {"schema_version": 1, "scenario": "core", "stage": "startup_ready"}
+            or type(payload.get("schema_version")) is not int):
+        raise CandidateFailure("invalid_core_startup_receipt")
+    process.mark_runtime_ready()
+    return True
+
+
 def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
                       output: Path, deadline: float, before: str) -> dict:
     relocated = diag._relocate_package(artifact, private, deadline)
@@ -601,8 +633,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             relocated / "metroliza.exe", environment, launch_cwd, owned=owned,
             expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
         )
+        startup_observed = False
         while time.monotonic() < deadline:
             process.observe()
+            startup_observed = _observe_core_startup(work, process, startup_observed)
             code = process.poll()
             if code is not None:
                 break
@@ -611,11 +645,14 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             raise CandidateFailure("owned_package_scenario_timeout")
         if code != 0:
             raise CandidateFailure("package_scenario_nonzero_exit")
+        if not startup_observed:
+            raise CandidateFailure("core_startup_receipt_missing")
         result_path = work / SCENARIO_FILE
         if not result_path.exists():
             raise CandidateFailure("package_core_hook_or_receipt_missing")
         payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha, native_mode=args.native_mode)
         _validate_ui_observation(payload.get("ui_observation"), expected_dpr=float(args.dpi_scale))
+        _validate_closeout_observation(payload.get("closeout_observation"), packaged=True, expected_dpr=float(args.dpi_scale))
         if not diag._wait_for_job_exit(process, deadline):
             raise CandidateFailure("owned_processes_remain")
         topology = process.topology(relocated, all_exited=True)
@@ -627,6 +664,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         if after != before:
             raise CandidateFailure("package_tree_changed_during_scenario")
         artifacts = _copy_verified_results(work, payload, output, args.oracle)
+        process_result = output / "process-topology.json"
+        with process_result.open("x", encoding="ascii") as stream:
+            json.dump(diag._topology_record(topology), stream)
+        artifacts["process_evidence"] = {"path": process_result.name, "sha256": _hash(process_result)}
         ocr_result = output / "ocr-observation.json"
         with ocr_result.open("x", encoding="ascii") as stream:
             json.dump(_validate_ocr_observation(payload["ocr_observation"], packaged=True), stream)
@@ -635,6 +676,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         with native_result.open("x", encoding="ascii") as stream:
             json.dump(payload["native_observation"], stream)
         artifacts["native_evidence"] = {"path": native_result.name, "sha256": _hash(native_result)}
+        closeout_result = output / "closeout-observation.json"
+        with closeout_result.open("x", encoding="ascii") as stream:
+            json.dump(payload["closeout_observation"], stream)
+        artifacts["closeout_evidence"] = {"path": closeout_result.name, "sha256": _hash(closeout_result)}
         terminate = False
         return artifacts
     finally:
@@ -688,7 +733,7 @@ def qualify(args) -> dict:
         result = {
             "schema_version": 1,
             "status": "passed",
-            "scope": [*REQUIRED_CHECKS, "offline_browser_dom_and_layout"],
+            "scope": [*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"],
             "source_sha": args.expected_source_sha,
             "ui_scale": args.dpi_scale,
             "native_mode": args.native_mode,
@@ -701,7 +746,7 @@ def qualify(args) -> dict:
             "launcher_sha256": identity["launcher_sha256"],
             "application_sha256": identity["application_sha256"],
             "artifacts": artifacts,
-            "facets": dict.fromkeys((*REQUIRED_CHECKS, "offline_browser_dom_and_layout"), "passed"),
+            "facets": dict.fromkeys((*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"), "passed"),
             "independent_oracle": "passed",
             "launch": "restricted_ordinary_user_native_windows_outside_checkout",
             "provenance_validated": bool(identity),
@@ -712,18 +757,13 @@ def qualify(args) -> dict:
             "verifier_sha256": _hash(Path(__file__).with_name("verify_synthetic_oracle.py")),
             "driver_sha256": _hash(Path(__file__)),
             "ocr_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_ocr.py")),
+            "closeout_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_closeout.py")),
             "browser_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_dashboard.py")),
             "ocr_fixture_sha256": _ocr_oracle().FIXTURE_SHA256,
             "literal_xlsx_verifier_sha256": _hash(Path(__file__).with_name("windows_candidate_xlsx.py")),
             "inference_oracle_sha256": _hash(Path(__file__).with_name("synthetic-inference-oracle.json")),
             "inference_verifier_sha256": _hash(Path(__file__).with_name("verify_group_inference.py")),
-            "limits": [
-                "Observed core facets only; no complete W01-W16 gate is implied.",
-                "Import cancellation is observed at real batch entry; export cancellation occurs after real export progress. Arbitrary later commit boundaries are not implied.",
-                "Inference covers only the fixed public two-group PDF case; no general analysis or real-data qualification.",
-                "Build-host automation is not clean-machine evidence.",
-                "No representative operator data or release acceptance.",
-            ],
+            "limits": list(RESULT_LIMITS),
         }
         with (output / "core-driver-receipt.json").open("x", encoding="ascii") as stream:
             json.dump(result, stream, indent=2)
@@ -745,7 +785,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         qualify(args)
-        print(json.dumps({"status": "passed", "scope": [*REQUIRED_CHECKS, "offline_browser_dom_and_layout"]}))
+        print(json.dumps({"status": "passed", "scope": [*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"]}))
         return 0
     except CandidateFailure as error:
         print(json.dumps({"status": "failed", "reason": str(error)}))

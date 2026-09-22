@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts import qualify_windows_candidate_core as driver
+from tests.test_windows_candidate_closeout import closeout_observation
 
 REPO = Path(__file__).resolve().parents[1]
 ORACLE = REPO / "scripts/synthetic-report-oracle.json"
@@ -68,6 +69,7 @@ def payload():
         "source_sha": SHA, "relative_artifact_dir": "core-" + "a" * 32,
         "checks": {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"},
         "import_guard_evidence": import_guard_evidence(),
+        "closeout_observation": closeout_observation("packaged"),
         "ui_observation": ui_observation(),
         "ocr_observation": ocr_observation(),
         "native_observation": native_observation(),

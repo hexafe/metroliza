@@ -19,6 +19,66 @@ GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
 GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 
 
+def test_combined_candidate_workflow_preserves_authority_and_same_package_gate():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"]["windows-candidate-acceptance"]
+    assert job["if"] == (
+        "github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' "
+        "&& github.actor == github.repository_owner && github.event.repository.private == false"
+    )
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["run_windows_candidate_acceptance"]["default"] == "0"
+    assert job["timeout-minutes"] == "60"
+    assert job["concurrency"] == {"group": "windows-candidate-acceptance-${{ github.repository }}",
+                                   "cancel-in-progress": "false"}
+    for field in ("group", "cancel-in-progress"):
+        assert "inputs.run_windows_candidate_acceptance == '1'" in workflow["concurrency"][field]
+    steps = job["steps"]
+    checkout = next(step for step in steps if "actions/checkout@" in step.get("uses", ""))
+    assert checkout["with"]["persist-credentials"] == "false"
+    builds = [step for step in steps if "build_windows_exe.ps1" in step.get("run", "")]
+    assert len(builds) == 1 and "-Clean -WithNative -Mode onedir" in builds[0]["run"]
+    host = next(step for step in steps if "pip install" in step.get("run", ""))
+    assert steps.index(host) > steps.index(builds[0])
+    assert "requirements-windows-candidate-host.txt" in host["run"]
+    core = [step for step in steps if "scripts/qualify_windows_candidate_core.py" in step.get("run", "")]
+    assert len(core) == 2
+    assert "foreach ($scale in @('1.0', '1.25', '1.5'))" in core[0]["run"]
+    assert "--native-mode default" in core[0]["run"]
+    assert "--dpi-scale 1.0 --native-mode unavailable" in core[1]["run"]
+    diagnostics = next(step for step in steps if "scripts/qualify_windows_diagnostics.py" in step.get("run", ""))
+    for step in [diagnostics, *core]:
+        assert "--artifact-dir $env:CANDIDATE_PACKAGE" in step["run"]
+        assert "if ($LASTEXITCODE -ne 0) { throw" in step["run"]
+    for step in core:
+        assert "--expected-source-sha $env:GITHUB_SHA" in step["run"]
+    final = next(step for step in steps if "scripts/finalize_windows_candidate_receipts.py" in step.get("run", ""))
+    assert "--expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree" in final["run"]
+    assert "if ($LASTEXITCODE -ne 0) { throw" in final["run"]
+    uploads = [step for step in steps if "actions/upload-artifact@" in step.get("uses", "")]
+    receipts = next(step for step in uploads if step["with"]["path"].endswith("/**/*.json"))
+    package = next(step for step in uploads if step["with"]["path"].endswith(".zip"))
+    assert receipts["if"] == "always()" and package["if"] == "success()"
+    assert package["with"]["if-no-files-found"] == "error"
+    assert steps.index(core[-1]) < steps.index(final) < steps.index(package)
+    assert "continue-on-error" not in job and all("continue-on-error" not in step for step in steps)
+
+
+def test_candidate_required_native_contracts_include_actual_closeout_owners():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    step = next(step for step in workflow["jobs"]["windows-core-smoke"]["steps"]
+                if step.get("name") == "Run Windows candidate receipt and ownership contracts")
+    assert step["env"]["QT_QPA_PLATFORM"] == "windows"
+    assert step["env"]["METROLIZA_EXPECT_QT_PLATFORM"] == "windows"
+    assert "Set-DisplayResolution -Width 1920 -Height 1080 -Force" in step["run"]
+    for name in ("shell_checks", "lifecycle_checks", "privacy_checks", "closeout", "final_receipts", "launch_ownership"):
+        assert f"tests/test_windows_candidate_{name}.py" in step["run"]
+    assert "if" not in step and "continue-on-error" not in step and " -k " not in step["run"]
+
+
 def test_native_windows_report_planner_step_preserves_real_platform_and_scope() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
     policy = CI_POLICY_PATH.read_text(encoding='utf-8')
@@ -312,7 +372,7 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
     assert 'concurrency:' in workflow
     assert (
         "cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && "
-        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1')) }}"
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1')) }}"
     ) in workflow
     assert workflow.count('uses: actions/checkout@') == workflow.count(
         'persist-credentials: false'
@@ -417,10 +477,12 @@ def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> No
         "inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}"
         "${{ github.event_name == 'workflow_dispatch' && "
         "inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}"
     )  # Opted-in experiments get separate groups; ordinary CI keeps its key.
     assert workflow['concurrency']['cancel-in-progress'] == (
         "${{ !(github.event_name == 'workflow_dispatch' && "
-        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1')) }}"
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1')) }}"
     )
     for step in job['steps']:
         assert 'actions/upload-artifact@' not in step.get('uses', '')

@@ -213,3 +213,42 @@ owners' executable scenarios. Run them against the same final package identity.
 PO acceptance on controlled copies follows delivery of the full candidate.
 Release, live-data and legal/service approvals are separate. Historical SIGSEGV
 cause remains UNKNOWN.
+
+## Combined workflow and immutable receipt gate
+
+The owner-only `run_windows_candidate_acceptance=1` input in the existing CI
+workflow builds one clean `-WithNative` onedir, then executes the diagnostic
+qualifier and core at DPR1.0/1.25/1.5 plus forced-unavailable at DPR1.0. Its
+60-minute job budget is the separate whole-program ledger. The installed Windows
+browser and host automation are prepared only after freezing.
+
+The core child publishes a closed startup receipt and, only with the runtime
+audit gate enabled, waits for the same bounded host acknowledgement as the V1
+qualifier before importing workflow/native services. The host advances its
+process-observation phase before allowing work to proceed. This explicit probe
+effect prevents lazy work from being classified as startup because of host
+polling order; normal program execution has no such wait.
+
+Each core run retains its complete bounded owned-process topology. The final
+`finalize_windows_candidate_receipts.py` gate rechecks the diagnostic archive,
+all four core receipt identities, retained artifact hashes, native/OCR/browser
+observations and owned-job completion. Different source/tree/package hashes,
+missing modes or scales, incomplete facets and unresolved operational cost fail.
+The resulting `combined-candidate-receipt.json` covers precisely the diagnostic
+and four core runs. Remaining W01–W16 facets still require their separate
+execution evidence; the gate is not a release or clean-machine claim. Only a
+successful job retains the engineering package for the external orchestrator.
+
+The combined core child additionally executes W04 active preflight/export close,
+dirty source editor refusal and deferred dashboard context rebind; W12 actual
+private-directory creation refusal and Windows sharing-denial cleanup/retry; and
+W13 shell/planner layout with Qt keyboard events. These use real workers, services
+and SQLite. Scheduling barriers enter the real operation and every owner is joined
+before restoring unavailable-native bindings. A failed join exits the owned child
+without a PASS or restoration under a live worker.
+
+The independent closeout receipt validator requires packaged context, Windows QPA,
+complete native facets and the requested DPR. Source offscreen evidence stays
+partial. `windows_qt_planner_keyboard` means QTest-delivered Qt events, not native
+Win32 input injection. Shell import is checked against pinned readonly SQLite rows,
+not only the worker summary. Synthetic denial handles never target user data.

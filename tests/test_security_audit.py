@@ -33,6 +33,20 @@ def test_security_tool_dependencies_are_declared():
     assert security_audit.normalize_package_name("bandit") in packages
 
 
+def test_candidate_host_dependency_remains_declared_and_vulnerability_audited(tmp_path):
+    for name in security_audit.REQUIREMENT_FILES:
+        (tmp_path / name).write_text("")
+    folder = tmp_path / "scripts"
+    folder.mkdir()
+    (folder / "host.py").write_text("from playwright.sync_api import sync_playwright\n")
+    missing = security_audit.audit_import_coverage(tmp_path)
+    assert any("not declared" in error for error in missing.errors)
+    (tmp_path / "requirements-windows-candidate-host.txt").write_text("playwright==1.63.0\n")
+    assert security_audit.audit_import_coverage(tmp_path).errors == []
+    lines, _ = security_audit.build_public_audit_requirements(tmp_path, sibling_root=None)
+    assert "playwright==1.63.0" in lines
+
+
 def test_public_audit_requirements_exclude_internal_git_pins():
     lines, warnings = security_audit.build_public_audit_requirements(
         security_audit.REPO_ROOT, sibling_root=None
