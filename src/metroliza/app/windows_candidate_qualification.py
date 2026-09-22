@@ -22,6 +22,7 @@ from typing import Any
 SCENARIO = "core"
 ROOT_ENV = "METROLIZA_WINDOWS_CANDIDATE_ROOT"
 FIXTURES_ENV = "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR"
+OCR_FIXTURE_ENV = "METROLIZA_WINDOWS_CANDIDATE_OCR_FIXTURE"
 GATES = ("METROLIZA_STARTUP_SMOKE", "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION")
 DEADLINES_S = {"review": 30.0, "import": 45.0}
 FIXTURES = {
@@ -78,6 +79,16 @@ def _fixture_dir() -> Path:
         if _sha256(directory / name) != expected_hash:
             raise ScenarioFailure("fixture_hash_mismatch")
     return directory
+
+
+def _ocr_fixture() -> Path:
+    raw = os.getenv(OCR_FIXTURE_ENV)
+    if not raw:
+        raise ScenarioFailure("ocr_fixture_missing")
+    fixture = Path(raw)
+    if not fixture.is_absolute() or fixture.is_symlink() or not fixture.is_file():
+        raise ScenarioFailure("ocr_fixture_invalid")
+    return fixture
 
 
 def _ordinary_user() -> bool:
@@ -394,6 +405,83 @@ def _run_import_guards_slice(child: Path, fixtures: Path, receipt: dict[str, Any
     receipt["import_guard_evidence"] = guards["evidence"]
 
 
+def _run_ocr_slice(child: Path, fixture: Path, receipt: dict[str, Any]) -> None:
+    from metroliza.app.windows_candidate_ocr_check import (
+        EMBEDDED_TEXT_SHA256,
+        EXPECTED_FIELD_SOURCES,
+        EXPECTED_METADATA,
+        EXPECTED_OCR_TOKENS,
+        FACETS,
+        FIXTURE_NAME,
+        FIXTURE_SHA256,
+        run_ocr_check,
+    )
+    from metroliza.parsing.header_ocr_backend import RAPIDOCR_MODEL_ASSET_MANIFEST
+
+    observation = run_ocr_check(child, fixture)
+    receipt["ocr_observation"] = observation
+    expected_top_level = {
+        "schema_version", "status", "facets", "error_codes", "evidence",
+    }
+    if not isinstance(observation, dict) or set(observation) != expected_top_level:
+        raise ScenarioFailure("ocr_observation_schema_mismatch")
+    if (observation.get("schema_version") != 1
+            or observation.get("status") != "passed"
+            or observation.get("facets") != dict.fromkeys(FACETS, "passed")
+            or observation.get("error_codes") != []):
+        raise ScenarioFailure("ocr_checks_failed")
+
+    evidence = observation.get("evidence")
+    expected_evidence_keys = {
+        "runtime_context", "fixture_name", "fixture_sha256",
+        "embedded_text_sha256", "embedded_header_word_count",
+        "header_image_count", "parser_plugin_id", "measurement_count",
+        "header_extraction_mode", "header_structured_word_count",
+        "header_ocr_engine", "header_ocr_runtime_engine",
+        "header_ocr_runtime_accelerator", "recognized_header_sha256",
+        "matched_ocr_tokens", "selected_metadata", "field_sources",
+        "model_asset_sha256",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != expected_evidence_keys:
+        raise ScenarioFailure("ocr_evidence_schema_mismatch")
+    expected_runtime = "packaged" if receipt.get("packaged") is True else "source"
+    expected_models = {
+        name: values["sha256"]
+        for name, values in sorted(RAPIDOCR_MODEL_ASSET_MANIFEST.items())
+    }
+    digest = evidence.get("recognized_header_sha256")
+    expected_evidence = {
+        "runtime_context": expected_runtime,
+        "fixture_name": FIXTURE_NAME,
+        "fixture_sha256": FIXTURE_SHA256,
+        "embedded_text_sha256": EMBEDDED_TEXT_SHA256,
+        "embedded_header_word_count": 0,
+        "header_image_count": 1,
+        "parser_plugin_id": "cmm",
+        "measurement_count": 1,
+        "header_extraction_mode": "ocr",
+        "header_structured_word_count": 0,
+        "header_ocr_engine": "rapidocr_latin",
+        "header_ocr_runtime_engine": "onnxruntime",
+        "header_ocr_runtime_accelerator": "cpu",
+        "matched_ocr_tokens": list(EXPECTED_OCR_TOKENS),
+        "selected_metadata": EXPECTED_METADATA,
+        "field_sources": EXPECTED_FIELD_SOURCES,
+        "model_asset_sha256": expected_models,
+    }
+    evidence_mismatch = any(
+        evidence.get(name) != expected for name, expected in expected_evidence.items()
+    )
+    invalid_digest = (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    )
+    if evidence_mismatch or invalid_digest:
+        raise ScenarioFailure("ocr_evidence_mismatch")
+    receipt["facets"].update(observation["facets"])
+
+
 def run_qualification() -> int:
     if requested_scenario() != SCENARIO:
         return 20
@@ -403,16 +491,20 @@ def run_qualification() -> int:
         "packaged": bool(getattr(sys, "frozen", False)), "qpa": None,
         "ordinary_user": _ordinary_user(), "source_sha": _runtime_provenance()["source_sha"],
         "checks": {key: "not_executed" for key in ("W03", "W04", "W05", "W06", "W07")},
+        "ocr_observation": None,
     }
     root: Path | None = None
     try:
         root = _root()
         fixtures = _fixture_dir()
+        ocr_fixture = _ocr_fixture()
         from metroliza.app.bootstrap import get_or_create_qapplication
         # Each stage closes its own windows. Keep their shared application alive
         # until all subsequent widget and worker stages have finished.
         application = get_or_create_qapplication()
         _run_core(root, fixtures, receipt, application)
+        child = root / receipt["relative_artifact_dir"]
+        _run_ocr_slice(child, ocr_fixture, receipt)
         from metroliza.app.windows_candidate_reopen import run_reopen_checks
         completed_import = root / receipt["relative_artifact_dir"]
         reopened = run_reopen_checks(
@@ -434,7 +526,6 @@ def run_qualification() -> int:
         receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
         receipt["facets"]["finite_precision_filters"] = "passed"
         from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes, run_export_checks
-        child = root / receipt["relative_artifact_dir"]
         xlsx_result = run_export_checks(child)
         expected_xlsx_facets = {
             "literal_chart_titles_series_caches_references", "value_limit_order",

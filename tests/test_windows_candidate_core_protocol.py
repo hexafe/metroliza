@@ -51,6 +51,16 @@ def ui_observation():
     }
 
 
+def ocr_observation(runtime_context="packaged"):
+    from scripts.verify_windows_candidate_ocr import EXPECTED, FACETS
+    return {
+        "schema_version": 1, "status": "passed", "error_codes": [],
+        "facets": {key: "passed" for key in FACETS},
+        "evidence": {**copy.deepcopy(EXPECTED), "runtime_context": runtime_context,
+                     "recognized_header_sha256": "a" * 64},
+    }
+
+
 def payload():
     return {
         "schema_version": 1, "stage": "complete", "status": "passed",
@@ -59,6 +69,7 @@ def payload():
         "checks": {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"},
         "import_guard_evidence": import_guard_evidence(),
         "ui_observation": ui_observation(),
+        "ocr_observation": ocr_observation(),
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
             key: {"path": key + extension, "sha256": "2" * 64}

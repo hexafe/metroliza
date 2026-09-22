@@ -34,6 +34,8 @@ REQUIRED_CHECKS = (
     "successful_group_inference", "reopen_preserves_completed_import",
     "hidden_selection_import", "stale_source_rereview", "duplicate_review", "active_import_cancel_close",
     "private_dashboard_generation", "offline_html_source",
+    "declared_ocr_model_assets", "image_only_header_provenance",
+    "rapidocr_header_inference", "parser_metadata_selection",
 )
 ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")
 CORE_OBSERVATIONS = {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"}
@@ -132,7 +134,19 @@ def _validate_core_result(payload: object) -> dict:
     _validate_core_artifacts(payload.get("artifacts"))
     _validate_import_guard_evidence(payload.get("import_guard_evidence"))
     _validate_ui_observation(payload.get("ui_observation"))
+    _validate_ocr_observation(payload.get("ocr_observation"))
     return payload
+
+
+def _ocr_oracle():
+    return _adjacent_module("verify_windows_candidate_ocr.py", "_metroliza_candidate_ocr_oracle")
+
+
+def _validate_ocr_observation(value: object, *, packaged: bool = False) -> dict:
+    try:
+        return _ocr_oracle().validate(value, packaged=packaged)
+    except ValueError as error:
+        raise CandidateFailure(str(error)) from None
 
 
 def _validate_ui_observation(value: object, *, expected_dpr: float | None = None) -> dict:
@@ -307,6 +321,7 @@ def validate_runtime_receipt(payload: object, expected_source: str) -> dict:
         raise CandidateFailure("native_ordinary_user_evidence_missing")
     if result.get("source_sha") != expected_source:
         raise CandidateFailure("runtime_source_mismatch")
+    _validate_ocr_observation(result.get("ocr_observation"), packaged=True)
     return result
 
 
@@ -347,6 +362,20 @@ def _stage_known_fixtures(fixtures: Path, private: Path) -> Path:
         if _hash(target) != digest:
             raise CandidateFailure("prepared_fixture_copy_mismatch")
     return output
+
+
+def _stage_ocr_fixture(checkout: Path, private: Path) -> Path:
+    oracle = _ocr_oracle()
+    folder = _input_directory(checkout / "tests" / "fixtures" / "windows_candidate_ocr")
+    source = folder / oracle.FIXTURE_NAME
+    if _hash(source) != oracle.FIXTURE_SHA256:
+        raise CandidateFailure("prepared_ocr_fixture_hash_mismatch")
+    target = private / oracle.FIXTURE_NAME
+    with source.open("rb") as original, target.open("xb") as copied:
+        shutil.copyfileobj(original, copied)
+    if _hash(target) != oracle.FIXTURE_SHA256:
+        raise CandidateFailure("prepared_ocr_fixture_copy_mismatch")
+    return target
 
 
 def _adjacent_module(filename: str, name: str):
@@ -491,6 +520,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
                       output: Path, deadline: float, before: str) -> dict:
     relocated = diag._relocate_package(artifact, private, deadline)
     staged_fixtures = _stage_known_fixtures(fixtures, private)
+    staged_ocr = _stage_ocr_fixture(args.source_checkout, private)
     work = private / "core scenario"
     state = private / "ordinary user state"
     work.mkdir()
@@ -505,6 +535,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION": "1",
         "METROLIZA_WINDOWS_CANDIDATE_ROOT": str(work),
         "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR": str(staged_fixtures),
+        "METROLIZA_WINDOWS_CANDIDATE_OCR_FIXTURE": str(staged_ocr),
     })
     owned = []
     terminate = True
@@ -539,6 +570,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         if after != before:
             raise CandidateFailure("package_tree_changed_during_scenario")
         artifacts = _copy_verified_results(work, payload, output, args.oracle)
+        ocr_result = output / "ocr-observation.json"
+        with ocr_result.open("x", encoding="ascii") as stream:
+            json.dump(_validate_ocr_observation(payload["ocr_observation"], packaged=True), stream)
+        artifacts["ocr_evidence"] = {"path": ocr_result.name, "sha256": _hash(ocr_result)}
         terminate = False
         return artifacts
     finally:
@@ -609,6 +644,8 @@ def qualify(args) -> dict:
             "oracle_sha256": _hash(args.oracle),
             "verifier_sha256": _hash(Path(__file__).with_name("verify_synthetic_oracle.py")),
             "driver_sha256": _hash(Path(__file__)),
+            "ocr_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_ocr.py")),
+            "ocr_fixture_sha256": _ocr_oracle().FIXTURE_SHA256,
             "literal_xlsx_verifier_sha256": _hash(Path(__file__).with_name("windows_candidate_xlsx.py")),
             "inference_oracle_sha256": _hash(Path(__file__).with_name("synthetic-inference-oracle.json")),
             "inference_verifier_sha256": _hash(Path(__file__).with_name("verify_group_inference.py")),

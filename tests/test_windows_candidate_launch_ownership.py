@@ -77,13 +77,14 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     assert closed == []
 
     monkeypatch.setattr(driver, "_stage_known_fixtures", lambda _fixtures, private: private)
+    monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda _checkout, private: private / "ocr.pdf")
     diag = SimpleNamespace(
         _relocate_package=lambda _artifact, private, _deadline: private / "relocated",
         _sanitized_environment=lambda *_args: {},
         _WindowsApi=lambda: api,
         _close_owned_processes=diagnostics._close_owned_processes,
     )
-    args = SimpleNamespace(expected_source_sha="1" * 40, oracle=tmp_path / "oracle.json", dpi_scale="1.0")
+    args = SimpleNamespace(source_checkout=tmp_path, expected_source_sha="1" * 40, oracle=tmp_path / "oracle.json", dpi_scale="1.0")
     private = tmp_path / "private"
     private.mkdir()
 
