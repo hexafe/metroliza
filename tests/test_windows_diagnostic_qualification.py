@@ -5674,9 +5674,15 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
 
     api = qualification._WindowsApi()
     original_advapi = api.advapi
-    executable = Path(sys.executable).resolve()
+    # The packaged application is a GUI-subsystem PE. Native44 observed an
+    # extra conhost with console python.exe and no audited child launch. Remove
+    # that subsystem confound by requiring this installation's real GUI PE.
+    executable = Path(sys.executable).resolve().with_name("pythonw.exe")
+    assert executable.is_file() and not executable.is_symlink()
+    assert qualification._pe_subsystem(executable) == 2
     fixture = Path(__file__).parent / "fixtures" / "windows_ui_process_control.py"
     command_text = subprocess.list2cmdline([str(executable), str(fixture.resolve())])
+    launch_api = []
 
     class FixedSourceCommand:
         """Keep both real launch APIs/flags; supply one fixed test script only."""
@@ -5686,12 +5692,18 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
         def CreateProcessAsUserW(self, *arguments):
             values = list(arguments)
             values[2] = ctypes.create_unicode_buffer(command_text)
-            return original_advapi.CreateProcessAsUserW(*values)
+            result = original_advapi.CreateProcessAsUserW(*values)
+            if result:
+                launch_api.append("as_user")
+            return result
 
         def CreateProcessWithTokenW(self, *arguments):
             values = list(arguments)
             values[3] = ctypes.create_unicode_buffer(command_text)
-            return original_advapi.CreateProcessWithTokenW(*values)
+            result = original_advapi.CreateProcessWithTokenW(*values)
+            if result:
+                launch_api.append("with_token")
+            return result
 
     monkeypatch.setattr(api, "advapi", FixedSourceCommand())
     system = Path(os.environ["SYSTEMROOT"]) / "System32"
@@ -5716,6 +5728,8 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
     try:
         process = api.launch(executable, environment, tmp_path, owned=owned,
                              expected_images=tuple(candidates.values()))
+        assert len(launch_api) == 1
+        diagnostic["launch_api"] = launch_api[0]
         diagnostic["stage"] = "observe"
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
