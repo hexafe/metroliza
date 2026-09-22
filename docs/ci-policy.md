@@ -175,4 +175,13 @@ When a PR touches parser plugin contracts/registry/plugins, also complete the go
 
 ### Windows incident feature qualification
 
+The explicit `diagnostic_mode=startup` discriminator runs the existing feature
+journey with fixed empty startup-phase markers enabled only for synthetic normal
+starts. Failed pre-readiness receipts may include a closed `startup_phases` list;
+an empty list is unknown, not proof of a bootloader or import failure. Exclusive
+marker creation adds filesystem work and can affect timing. This mode cannot
+upload a qualified development package. Default `full` mode leaves the probe
+disabled and remains the package qualification path; containment, cleanup,
+identity, privacy and all positive/negative controls remain mandatory.
+
 The owner-only public Windows lane `windows-diagnostic-qualification` is selected explicitly by `run_windows_diagnostic_qualification=1` (default 0), capped at 45 minutes, and isolated from ordinary CI cancellation. It builds the actual onedir with `build_windows_exe.ps1 -Mode onedir`, then runs a bounded driver with hash-pinned public synthetic input and a restricted ordinary-user child token. The driver checks useful startup/import/export history after child loss, local preview/export, no-development-Python/no-console operation, repeat and concurrent starts, normal main-window startup, observed process roles, missing components and matched performance measurements. The complete tested tree, canonical manifest and exact `qualified-windows-development-package.zip` are bound by SHA-256; that ZIP is the uploaded development package. Only validated fixed-schema receipts and the successful development ZIP are uploaded; scratch databases and business outputs are excluded. This feature-specific proof does not grant release or real-data acceptance.

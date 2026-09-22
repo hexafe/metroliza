@@ -652,12 +652,17 @@ def test_windows_incident_qualification_is_bounded_and_native_selection_is_block
     controls = job['steps'][control_index]
     mode = workflow['on']['workflow_dispatch']['inputs']['diagnostic_mode']
     assert mode['default'] == 'full'
-    assert mode['options'] == ['full', 'identity']
+    assert mode['options'] == ['full', 'identity', 'startup']
     assert controls['if'] == "inputs.diagnostic_mode == 'identity'"
     assert '--onedir --windowed' in controls['run']
     assert 'scripts/windows_native_identity_control.py' in controls['run']
     assert 'if ($LASTEXITCODE -ne 0)' in controls['run']
-    assert job['steps'][application_index]['if'] == "inputs.diagnostic_mode == 'full'"
+    assert job['steps'][application_index]['if'] == (
+        "inputs.diagnostic_mode == 'full' || inputs.diagnostic_mode == 'startup'"
+    )
+    assert job['steps'][application_index]['env']['METROLIZA_DIAGNOSTIC_STARTUP_PROBE'] == (
+        "${{ inputs.diagnostic_mode == 'startup' && '1' || '0' }}"
+    )
     receipt_upload = next(step for step in uploads if 'native-identity-receipts' in step['with']['path'])
     assert receipt_upload['if'] == 'always()'
     package_upload = next(step for step in uploads if step['with']['path'].endswith('.zip'))
@@ -678,4 +683,5 @@ def test_windows_incident_qualification_is_bounded_and_native_selection_is_block
         'tests/test_diagnostic_launcher.py', 'tests/test_diagnostic_package.py',
         'tests/test_workflow_diagnostics.py', 'tests/test_incident_dialog.py',
         'tests/test_diagnostic_qualification.py', 'tests/test_windows_diagnostic_qualification.py',
+        'tests/test_diagnostic_startup_probe.py',
     ]

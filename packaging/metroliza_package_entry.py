@@ -17,12 +17,17 @@ if not getattr(sys, "frozen", False):
         sys.path.remove(src_text)
     sys.path.insert(0, src_text)
 
+from metroliza.shared.diagnostic_startup_probe import mark  # noqa: E402
+
+mark("child_entry")
+
 from metroliza.shared.diagnostic_transport import (  # noqa: E402
     attach_child_recorder,
     supervised_mode_requested,
 )
 
 recorder = attach_child_recorder()
+mark("child_attach_returned")
 if supervised_mode_requested():
     try:
         from metroliza.shared.logging_utils import ensure_application_logging
@@ -32,6 +37,8 @@ if supervised_mode_requested():
         pass
 
 from metroliza.app.bootstrap import run_application  # noqa: E402
+
+mark("child_bootstrap_imported")
 
 if __name__ == "__main__":
     try:

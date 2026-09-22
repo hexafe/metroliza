@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from metroliza.shared.diagnostic_ring import DiagnosticRing, RingSnapshot
+from metroliza.shared.diagnostic_startup_probe import mark, mark_error
 from metroliza.shared.diagnostic_transport import (
     CHANNEL_ENV,
     MAX_COUNTER,
@@ -277,7 +278,9 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         descriptors.update((child_read, parent_write))
         token = secrets.token_hex(32)
         receiver = _Receiver(parent_read, parent_write, session, token, on_operation_failure)
+        mark("spawn_entered")
         child = _spawn_child(argv, env, cwd, child_read, child_write, descriptors)
+        mark("spawn_returned")
         if on_started is not None:
             try:
                 on_started()
@@ -291,7 +294,9 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         receiver.thread.join(DRAIN_SECONDS)
         receiver.stop.set()
         termination = "posix_signal" if os.name != "nt" and exit_code < 0 else "observed_exit"
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError) as error:
+        mark("supervision_failed")
+        mark_error(error)
         _close_descriptors(descriptors)
         if child is not None:
             # Pipe failure cannot orphan/restart/kill the real product operation.

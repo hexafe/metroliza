@@ -25,6 +25,7 @@ from metroliza.shared.diagnostic_incident import (
 from metroliza.shared.diagnostic_package import inspect_package
 from metroliza.shared.diagnostic_ring import DiagnosticRing
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
+from metroliza.shared.diagnostic_startup_probe import mark
 from metroliza.shared.diagnostic_wire import decode_event
 
 
@@ -321,10 +322,13 @@ def _fixed_notice(message: str) -> None:
 
 def main() -> int:
     store = IncidentStore()
+    mark("store_constructed")
     if getattr(sys, "frozen", False):
         root = Path(sys.executable).absolute().parent
+        mark("package_inspection")
         identity = inspect_package(root)
         if not identity.valid:
+            mark("package_rejected")
             observed = SupervisedResult(
                 uuid.uuid4().hex, "failed", "missing", "incomplete", None, "not_started",
                 False, 0, False, DiagnosticRing().snapshot(now=time.monotonic()), 0,
@@ -332,6 +336,7 @@ def main() -> int:
             _persist_unstarted_bounded(store, observed, identity.git_sha)
             _fixed_notice("Nie można uruchomić aplikacji: brak lub niezgodność składników pakietu.")
             return 1
+        mark("package_verified")
         argv = [str(root / "metroliza_application.exe"), *sys.argv[1:]]
         git_sha = identity.git_sha
     else:
@@ -342,7 +347,9 @@ def main() -> int:
             *sys.argv[1:],
         ]
         git_sha = "unknown"
+    mark("supervision_entered")
     delivery = run_with_store(argv, store=store, git_sha=git_sha)
+    mark("supervision_returned")
     if delivery.storage_status not in {StoreStatus.SAVED, StoreStatus.MARKER_CLEAN_ENDED}:
         _fixed_notice("Historia diagnostyczna jest niedostępna lub raport nie został zapisany.")
     code = delivery.observation.exit_code

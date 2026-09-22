@@ -1683,9 +1683,14 @@ def test_driver_phase_preserves_safe_early_process_exit_evidence(
             process = super().launch(executable, environment, cwd, owned=owned)
             (cwd / "startup.json").unlink()
             (cwd / qualification.QUALIFICATION_RECEIPT_NAMES[self.stage]).unlink()
+            markers = cwd / qualification.PROBE_DIRECTORY
+            markers.mkdir()
+            (markers / "launcher_entry").touch()
+            (markers / "package_rejected").touch()
             return process
 
     monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE", "1")
     api = _NoReceiptApi(3221225477, "failed")
     artifact = tmp_path / "artifact"
     work = tmp_path / "work"
@@ -1712,6 +1717,13 @@ def test_driver_phase_preserves_safe_early_process_exit_evidence(
     assert error.value.qualification_stage == "startups"
     assert error.value.qualification_reason == "process_exited_before_startup"
     assert error.value.qualification_exit_code == 3221225477
+    assert error.value.startup_phases == ("launcher_entry", "package_rejected")
+    detail = qualification._failure_detail(
+        error.value.qualification_stage, error.value.qualification_reason,
+        None, error.value.qualification_exit_code, None, error.value.startup_phases,
+    )
+    assert qualification._valid_failure_detail(detail)
+    assert detail["startup_phases"] == ["launcher_entry", "package_rejected"]
 
 
 def test_startup_failure_retains_exact_host_and_child_stage(monkeypatch) -> None:

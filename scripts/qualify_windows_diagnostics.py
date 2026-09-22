@@ -41,6 +41,7 @@ from metroliza.shared.diagnostic_incident import (
     decode_incident,
 )
 from metroliza.shared.diagnostic_package import MANIFEST_NAME, inspect_package
+from metroliza.shared.diagnostic_startup_probe import PHASES, PROBE_DIRECTORY
 from metroliza.shared.diagnostic_ring import RingLoss
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_wire import decode_event
@@ -303,6 +304,7 @@ class QualificationFailure(RuntimeError):
         qualification_exit_code: int | None = None,
         qualification_cleanup: str = "not_attempted",
         native_observation: _NativeIdentityObservation | None = None,
+        startup_phases: tuple[str, ...] | None = None,
     ) -> None:
         if failure_id not in FAILURE_IDS:
             failure_id = "scenario_failed"
@@ -331,6 +333,7 @@ class QualificationFailure(RuntimeError):
             if isinstance(native_observation, _NativeIdentityObservation)
             else None
         )
+        self.startup_phases = startup_phases
         super().__init__(failure_id)
 
     def set_native_phase(self, phase: str) -> None:
@@ -370,6 +373,7 @@ def _run_driver_phase(stage: str, action: Callable[[], _T]) -> _T:
             qualification_exit_code=error.qualification_exit_code,
             qualification_cleanup=error.qualification_cleanup,
             native_observation=error.native_observation,
+            startup_phases=error.startup_phases,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -397,6 +401,7 @@ def _scenario_step(reason: str, action: Callable[[], _T]) -> _T:
             qualification_exit_code=error.qualification_exit_code,
             qualification_cleanup=error.qualification_cleanup,
             native_observation=error.native_observation,
+            startup_phases=error.startup_phases,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -460,6 +465,7 @@ class QualificationResult:
     qualification_cleanup: str = "not_attempted"
     output_identity: tuple[int, int] | None = None
     native_observation: _NativeIdentityObservation | None = None
+    startup_phases: tuple[str, ...] | None = None
 
 
 def _attempt_cleanup(action: Callable[[], None]) -> None:
@@ -738,6 +744,8 @@ def _sanitized_environment(
             "QT_QPA_PLATFORM": "offscreen",
         }
     )
+    if os.getenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") == "1":
+        environment["METROLIZA_DIAGNOSTIC_STARTUP_PROBE"] = "1"
     return environment
 
 
@@ -2412,6 +2420,8 @@ def _prepare_work_root(parent: Path, label: str) -> Path:
     root = parent / f"{label}-{uuid.uuid4().hex}" / "próba ze spacjami"
     try:
         root.mkdir(parents=True)
+        if os.getenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") == "1":
+            (root / PROBE_DIRECTORY).mkdir()
     except OSError:
         raise QualificationFailure(
             "scenario_failed",
@@ -2797,6 +2807,25 @@ def _finish_concurrent_processes(
     return results[0], results[1]
 
 
+def _startup_phases(root: Path) -> tuple[str, ...]:
+    try:
+        info = (root / PROBE_DIRECTORY).lstat()
+    except OSError:
+        return ()
+    if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        return ()
+    observed = []
+    for phase in PHASES:
+        try:
+            info = (root / PROBE_DIRECTORY / phase).lstat()
+        except OSError:
+            continue
+        if (stat.S_ISREG(info.st_mode) and info.st_size == 0 and info.st_nlink == 1
+                and not getattr(info, "st_file_attributes", 0) & 0x400):
+            observed.append(phase)
+    return tuple(observed)
+
+
 def _run_scenario(
     api: _WindowsApi,
     executable: Path,
@@ -2862,6 +2891,10 @@ def _run_scenario(
                 "scenario_failed",
                 qualification_reason="process_exited_before_startup",
                 qualification_exit_code=exit_code,
+                startup_phases=(
+                    _startup_phases(work_root)
+                    if environment.get("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") == "1" else None
+                ),
             )
         if last_receipt is None:
             raise QualificationFailure(
@@ -3618,7 +3651,7 @@ def _valid_failure_detail(detail: object) -> bool:
         type(detail) is dict
         and {"stage", "reason"} <= detail_keys
         and detail_keys <= {
-            "stage", "reason", "child_stage", "exit_code", "native_observation"
+            "stage", "reason", "child_stage", "exit_code", "native_observation", "startup_phases"
         }
         and type(detail["stage"]) is str
         and type(detail["reason"]) is str
@@ -3633,6 +3666,17 @@ def _valid_failure_detail(detail: object) -> bool:
             "exit_code" not in detail
             or type(detail["exit_code"]) is int
             and -(2**31) <= detail["exit_code"] <= 2**32 - 1
+        )
+        and (
+            "startup_phases" not in detail
+            or (
+                detail["reason"] == "process_exited_before_startup"
+                and type(detail["startup_phases"]) is list
+                and len(detail["startup_phases"]) <= len(PHASES)
+                and all(type(phase) is str and phase in PHASES
+                        for phase in detail["startup_phases"])
+                and len(set(detail["startup_phases"])) == len(detail["startup_phases"])
+            )
         )
         and (
             "native_observation" not in detail
@@ -5086,6 +5130,7 @@ def qualify_windows_diagnostics(
             qualification_cleanup=error.qualification_cleanup,
             output_identity=output_identity,
             native_observation=error.native_observation,
+            startup_phases=error.startup_phases,
         )
     except Exception:
         cleanup_status = "not_attempted"
@@ -5145,12 +5190,14 @@ def _failure_detail(
     child_stage: str | None,
     exit_code: int | None,
     native_observation: _NativeIdentityObservation | None,
+    startup_phases: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     return {
         "stage": stage,
         "reason": reason,
         **({"child_stage": child_stage} if child_stage is not None else {}),
         **({"exit_code": exit_code} if exit_code is not None else {}),
+        **({"startup_phases": list(startup_phases)} if startup_phases is not None else {}),
         **(
             {"native_observation": native_observation.receipt()}
             if native_observation is not None
@@ -5193,6 +5240,7 @@ def main(argv: list[str] | None = None) -> int:
                             result.qualification_child_stage,
                             result.qualification_exit_code,
                             result.native_observation,
+                            result.startup_phases,
                         ),
                         "qualification_cleanup": result.qualification_cleanup,
                         "package": None,

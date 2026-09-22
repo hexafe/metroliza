@@ -25,7 +25,7 @@ on:
       diagnostic_mode:
         description: "Native identity discriminator or full incident qualification"
         type: choice
-        options: [full, identity]
+        options: [full, identity, startup]
         required: false
         default: "full"
 
@@ -51,7 +51,7 @@ jobs:
         env:
           DIAGNOSTIC_MODE: ${{ inputs.diagnostic_mode }}
         run: |
-          if ($env:DIAGNOSTIC_MODE -notin @('full', 'identity')) { throw 'Invalid diagnostic mode' }
+          if ($env:DIAGNOSTIC_MODE -notin @('full', 'identity', 'startup')) { throw 'Invalid diagnostic mode' }
 
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -84,10 +84,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native process identity controls failed' }
 
       - name: Qualify actual packaged incident flow with public synthetic inputs
-        if: inputs.diagnostic_mode == 'full'
+        if: inputs.diagnostic_mode == 'full' || inputs.diagnostic_mode == 'startup'
         shell: pwsh
         env:
           PYTHONPATH: src;.
+          METROLIZA_DIAGNOSTIC_STARTUP_PROBE: ${{ inputs.diagnostic_mode == 'startup' && '1' || '0' }}
         run: |
           $package = @(Get-ChildItem -LiteralPath dist -Directory -Filter '*_onedir')
           if ($package.Count -ne 1) { throw 'Expected one diagnostic package' }
@@ -1075,6 +1076,7 @@ jobs:
           tests/test_diagnostic_launcher.py tests/test_diagnostic_package.py
           tests/test_workflow_diagnostics.py tests/test_incident_dialog.py
           tests/test_diagnostic_qualification.py tests/test_windows_diagnostic_qualification.py
+          tests/test_diagnostic_startup_probe.py
 
       - name: Run native Windows Qt lifecycle tests
         env:
