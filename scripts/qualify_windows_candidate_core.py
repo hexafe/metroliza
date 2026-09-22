@@ -33,6 +33,7 @@ REQUIRED_CHECKS = (
     "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
     "successful_group_inference", "reopen_preserves_completed_import",
     "hidden_selection_import", "stale_source_rereview", "duplicate_review", "active_import_cancel_close",
+    "private_dashboard_generation", "offline_html_source",
 )
 ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")
 CORE_OBSERVATIONS = {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"}
@@ -130,7 +131,77 @@ def _validate_core_result(payload: object) -> dict:
         raise CandidateFailure("required_core_check_incomplete")
     _validate_core_artifacts(payload.get("artifacts"))
     _validate_import_guard_evidence(payload.get("import_guard_evidence"))
+    _validate_ui_observation(payload.get("ui_observation"))
     return payload
+
+
+def _validate_ui_observation(value: object, *, expected_dpr: float | None = None) -> dict:
+    if (type(value) is not dict or set(value) != {"schema_version", "status", "facets", "error_codes", "evidence"}
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or value["error_codes"] != [] or value["status"] not in {"passed", "partial"}):
+        raise CandidateFailure("invalid_ui_observation")
+    facets = value["facets"]
+    if (type(facets) is not dict or set(facets) != {
+            "private_dashboard_generation", "offline_html_source", "industrial_geometry", "browser_rendering"}
+            or facets["private_dashboard_generation"] != "passed"
+            or facets["offline_html_source"] != "passed" or facets["browser_rendering"] != "not_assessed"
+            or facets["industrial_geometry"] not in {"passed", "not_assessed"}
+            or (value["status"] == "passed") != (facets["industrial_geometry"] == "passed")):
+        raise CandidateFailure("invalid_ui_observation")
+    evidence = value["evidence"]
+    if (type(evidence) is not dict or set(evidence) != {
+            "relative_artifact_dir", "screen", "sample_count", "dashboard_sha256", "retained_html",
+            "owned_handle_observed", "private_directory_removed_after_close", "dialog_geometry", "browser_rendered"}
+            or type(evidence["relative_artifact_dir"]) is not str
+            or re.fullmatch(r"ui-checks-[0-9a-f]{32}", evidence["relative_artifact_dir"]) is None
+            or type(evidence["sample_count"]) is not int or evidence["sample_count"] != 2
+            or evidence["retained_html"] != "dashboard.html"
+            or evidence["private_directory_removed_after_close"] is not True
+            or evidence["browser_rendered"] is not False
+            or type(evidence["dashboard_sha256"]) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", evidence["dashboard_sha256"]) is None):
+        raise CandidateFailure("invalid_ui_observation")
+    if expected_dpr is not None:
+        screen = evidence["screen"]
+        geometry = evidence["dialog_geometry"]
+        if (value["status"] != "passed" or evidence["owned_handle_observed"] is not True
+                or type(screen) is not dict or set(screen) != {"qpa", "dpr", "physical_screen", "logical_screen"}
+                or screen["qpa"] != "windows" or type(screen["dpr"]) not in {int, float}
+                or not 0.95 <= screen["dpr"] <= 1.55
+                or abs(screen["dpr"] - expected_dpr) > 0.05
+                or screen["physical_screen"] != [1920, 1080]
+                or type(screen["logical_screen"]) is not list or len(screen["logical_screen"]) != 2
+                or any(type(size) is not int or not 1 <= size <= 1920 for size in screen["logical_screen"])
+                or type(geometry) is not dict or set(geometry) != {"industrial_data", "source_profiles", "industrial_sync"}):
+            raise CandidateFailure("native_ui_observation_incomplete")
+        for dimensions in geometry.values():
+            if (type(dimensions) is not dict or set(dimensions) != {"client", "frame"}
+                    or any(type(dimensions[key]) is not list or len(dimensions[key]) != 2
+                           or any(type(size) is not int or not 1 <= size <= 1920 for size in dimensions[key])
+                           for key in ("client", "frame"))):
+                raise CandidateFailure("invalid_ui_geometry")
+    return evidence
+
+
+def _retain_ui_dashboard(child: Path, payload: dict, output: Path) -> dict:
+    evidence = _validate_ui_observation(payload.get("ui_observation"))
+    directory = child / evidence["relative_artifact_dir"]
+    _directory(directory)
+    source = directory / "dashboard.html"
+    before = _hash(source)
+    if before != evidence["dashboard_sha256"]:
+        raise CandidateFailure("dashboard_hash_mismatch")
+    raw = source.read_bytes()
+    if (len(raw) > 1024 * 1024 or not raw.startswith(b"<!doctype html>")
+            or b'data-section="signal-charts"' not in raw or b"cycle_time_s" not in raw or b"10.25" not in raw
+            or any(marker in raw.lower() for marker in (b"http://", b"https://", b"<script", b"<link", b"fetch(", b"xmlhttprequest"))):
+        raise CandidateFailure("dashboard_source_invalid")
+    target = output / "dashboard.html"
+    with target.open("xb") as stream:
+        stream.write(raw)
+    if _hash(source) != before or _hash(target) != before:
+        raise CandidateFailure("dashboard_changed_during_copy")
+    return {"path": target.name, "sha256": before}
 
 
 def _validate_import_guard_evidence(record: object) -> dict:
@@ -396,6 +467,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
     _assert_artifact_hashes(retained, payload, "retained_artifact_changed_after_comparison")
     _assert_both_databases_closed(retained, "retained_database_sidecars_created_after_comparison")
     copied["import_guards_database"] = _verify_import_guard_outputs(child, payload, output, oracle)
+    copied["private_dashboard"] = _retain_ui_dashboard(child, payload, output)
     return copied
 
 
@@ -428,6 +500,8 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", None)
     environment.update({
         "QT_QPA_PLATFORM": "windows",
+        "QT_SCALE_FACTOR": args.dpi_scale,
+        "METROLIZA_WINDOWS_CANDIDATE_DPR": args.dpi_scale,
         "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION": "1",
         "METROLIZA_WINDOWS_CANDIDATE_ROOT": str(work),
         "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR": str(staged_fixtures),
@@ -452,6 +526,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         if not result_path.exists():
             raise CandidateFailure("package_core_hook_or_receipt_missing")
         payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha)
+        _validate_ui_observation(payload.get("ui_observation"), expected_dpr=float(args.dpi_scale))
         if not diag._wait_for_job_exit(process, deadline):
             raise CandidateFailure("owned_processes_remain")
         topology = process.topology(relocated, all_exited=True)
@@ -512,6 +587,9 @@ def qualify(args) -> dict:
             "status": "passed",
             "scope": list(REQUIRED_CHECKS),
             "source_sha": args.expected_source_sha,
+            "ui_scale": args.dpi_scale,
+            "native_geometry": "passed",
+            "offline_browser_rendering": "not_assessed",
             "source_tree": subprocess.check_output(
                 ["git", "rev-parse", "HEAD^{tree}"], cwd=checkout, text=True
             ).strip(),
@@ -555,6 +633,7 @@ def main() -> int:
     for name in ("source-checkout", "artifact-dir", "fixture-dir", "output-dir", "oracle"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--expected-source-sha", required=True)
+    parser.add_argument("--dpi-scale", choices=("1.0", "1.25", "1.5"), default="1.0")
     args = parser.parse_args()
     try:
         qualify(args)

@@ -33,6 +33,24 @@ def import_guard_evidence():
     }
 
 
+def ui_observation():
+    return {
+        "schema_version": 1, "status": "passed", "error_codes": [],
+        "facets": {"private_dashboard_generation": "passed", "offline_html_source": "passed",
+                   "industrial_geometry": "passed", "browser_rendering": "not_assessed"},
+        "evidence": {
+            "relative_artifact_dir": "ui-checks-" + "c" * 32,
+            "screen": {"qpa": "windows", "dpr": 1.0, "physical_screen": [1920, 1080],
+                       "logical_screen": [1920, 1080]},
+            "sample_count": 2, "dashboard_sha256": "2" * 64, "retained_html": "dashboard.html",
+            "owned_handle_observed": True, "private_directory_removed_after_close": True,
+            "dialog_geometry": {key: {"client": [760, 480], "frame": [770, 520]} for key in (
+                "industrial_data", "source_profiles", "industrial_sync")},
+            "browser_rendered": False,
+        },
+    }
+
+
 def payload():
     return {
         "schema_version": 1, "stage": "complete", "status": "passed",
@@ -40,6 +58,7 @@ def payload():
         "source_sha": SHA, "relative_artifact_dir": "core-" + "a" * 32,
         "checks": {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"},
         "import_guard_evidence": import_guard_evidence(),
+        "ui_observation": ui_observation(),
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
             key: {"path": key + extension, "sha256": "2" * 64}
@@ -288,6 +307,11 @@ def _complete_synthetic_artifacts(tmp_path):
     with closing(sqlite3.connect(guard / "reports.sqlite")) as db:
         logical = hashlib.sha256("\n".join(db.iterdump()).encode()).hexdigest()
     sample["import_guard_evidence"]["committed_logical_sha256"] = logical
+    ui = child / sample["ui_observation"]["evidence"]["relative_artifact_dir"]
+    ui.mkdir()
+    html = ui / "dashboard.html"
+    html.write_text('<!doctype html><div data-section="signal-charts">cycle_time_s 10.25</div>')
+    sample["ui_observation"]["evidence"]["dashboard_sha256"] = driver._hash(html)
     output = tmp_path / "output"
     output.mkdir()
     return sample, child, output, oracle_path
@@ -302,8 +326,11 @@ def test_verified_preserved_copy_remains_readable_and_matches_oracle(tmp_path):
             "path": "import-guards.sqlite",
             "sha256": driver._hash(child / sample["import_guard_evidence"]["relative_artifact_dir"] / "reports.sqlite"),
         },
+        "private_dashboard": {
+            "path": "dashboard.html", "sha256": sample["ui_observation"]["evidence"]["dashboard_sha256"],
+        },
     }
-    assert len(list(output.iterdir())) == 8
+    assert len(list(output.iterdir())) == 9
 
 
 @pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
@@ -475,3 +502,47 @@ def test_import_guard_detects_database_mutation_during_observation(tmp_path, mon
     monkeypatch.setattr(driver, "_adjacent_module", mutate_on_oracle_load)
     with pytest.raises(driver.CandidateFailure, match="^import_guard_observation_changed_database$"):
         driver._verify_import_guard_outputs(child, sample, output, oracle)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owned_handle_observed", False),
+    ("private_directory_removed_after_close", False),
+    ("relative_artifact_dir", "../escape"),
+    ("retained_html", "../escape.html"),
+    ("browser_rendered", True),
+    ("sample_count", True),
+    ("screen", {"qpa": "offscreen", "dpr": 1.0, "physical_screen": [1920, 1080], "logical_screen": [1920, 1080]}),
+])
+def test_ui_receipt_rejects_missing_ownership_geometry_or_unperformed_claim(field, value):
+    record = ui_observation()
+    record["evidence"][field] = value
+    with pytest.raises(driver.CandidateFailure):
+        driver._validate_ui_observation(record, expected_dpr=1.0)
+
+
+def test_partial_source_ui_observation_is_never_native_geometry():
+    record = ui_observation()
+    record["status"] = "partial"
+    record["facets"]["industrial_geometry"] = "not_assessed"
+    driver._validate_ui_observation(record)
+    with pytest.raises(driver.CandidateFailure, match="native_ui_observation_incomplete"):
+        driver._validate_ui_observation(record, expected_dpr=1.0)
+
+
+@pytest.mark.parametrize("content", [b"https://private.invalid", b"<script>alert(1)</script>"])
+def test_dashboard_retention_rejects_external_resources_even_with_matching_hash(tmp_path, content):
+    sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
+    evidence = sample["ui_observation"]["evidence"]
+    html = child / evidence["relative_artifact_dir"] / "dashboard.html"
+    html.write_bytes(html.read_bytes() + content)
+    evidence["dashboard_sha256"] = driver._hash(html)
+    with pytest.raises(driver.CandidateFailure, match="dashboard_source_invalid"):
+        driver._retain_ui_dashboard(child, sample, output)
+
+
+@pytest.mark.parametrize("dimensions", [[True, 1080], [1920, "private"], [1920, 0], [1920]])
+def test_native_ui_receipt_rejects_invalid_logical_screen_dimensions(dimensions):
+    record = ui_observation()
+    record["evidence"]["screen"]["logical_screen"] = dimensions
+    with pytest.raises(driver.CandidateFailure, match="native_ui_observation_incomplete"):
+        driver._validate_ui_observation(record, expected_dpr=1.0)

@@ -119,18 +119,36 @@ The host rejects inconsistent check statuses, and separately requires a native
 ordinary-user packaged runtime before accepting any Windows observation.
 
 After all application processes exit, the driver verifies the seven original artifact hashes and the additional W04 database
-and rejects SQLite sidecars. It compares the actual database, workbook, grouping
+and rejects SQLite sidecars except the strictly inert W04 pair above. It compares the actual database, workbook, grouping
 and tabular results against the reviewed oracle and checks literal OOXML. It
 repeats comparison on retained copies. The receipt binds source/tree, package,
 notices, driver, both oracles and comparator hashes. Both databases must remain
 closed and byte-identical through comparison, with no journal sidecars created.
+
+## Dashboard and native geometry slice
+
+The same application scenario seeds two public synthetic industrial samples,
+opens realtime monitoring from the actual MainWindow, and uses its real debounced
+worker and private output owner to generate offline dashboard HTML. It checks
+source content, retains a byte-identical copy, and requires owned private output
+cleanup on close. The host independently checks the retained HTML and its hash;
+this establishes HTML generation, not browser rendering or DOM layout.
+
+On Windows the slice also requires Windows QPA, a 1920x1080 physical display,
+and the requested DPR. It checks the main frame and actual industrial data,
+source profile, and synchronization dialogs for containment, resizing, scrolling,
+focus access and overlapping bulk controls. Use `--dpi-scale 1.0`, `1.25`, and
+`1.5` in separate owned runs of the same immutable package. The driver rejects
+partial/source geometry observations as Windows evidence. A close refusal or a
+still-visible owner fails cleanup and retains the object instead of deleting it.
+Linux execution records geometry and browser rendering as `not_assessed`.
 
 ## Remaining acceptance boundaries
 
 This core receipt does not establish every active-work cancellation/close,
 reopening or drift path, inference beyond the fixed W06 case, offline dashboard rendering,
 packaged OCR inference, optional-native fallback parity, incident-menu behavior,
-privacy negative paths, supported desktop geometry, clean-machine launch or
+privacy negative paths beyond the observed owned-dashboard path, supported desktop geometry beyond the three named industrial dialogs, clean-machine launch or
 desktop Excel rendering. A one-group `insufficient_groups` result proves the
 specified grouping outcome; it does not prove inferential analysis.
 
