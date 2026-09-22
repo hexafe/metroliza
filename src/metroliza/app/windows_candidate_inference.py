@@ -160,6 +160,14 @@ def _select_all_reports(workspace) -> tuple[str, ...]:
     return selected
 
 
+def _require_closed_database_snapshot(database: Path) -> None:
+    # These observations run only after the real GUI importer has joined and
+    # closed. Immutable reads must never hide a live writer's WAL contents.
+    if any(database.with_name(database.name + suffix).exists()
+           for suffix in ("-wal", "-shm", "-journal")):
+        raise InferenceFailure("database_snapshot_not_closed")
+
+
 def _report_ids_by_filename(database: Path) -> dict[str, int]:
     query = """
         SELECT location.file_name, report.id
@@ -168,7 +176,8 @@ def _report_ids_by_filename(database: Path) -> dict[str, int]:
           ON location.source_file_id = report.source_file_id
         WHERE location.is_active = 1
     """
-    with sqlite_readonly_connection_scope(str(database)) as connection:
+    _require_closed_database_snapshot(database)
+    with sqlite_readonly_connection_scope(str(database), immutable=True) as connection:
         rows = connection.execute(query).fetchall()
     mapped = {str(name): int(report_id) for name, report_id in rows}
     if set(mapped) != set(_EXPECTED_FILES) or len(mapped) != len(rows):
@@ -184,7 +193,8 @@ def _database_counts(database: Path) -> dict[str, int]:
         "metadata": "SELECT COUNT(*) FROM report_metadata",
         "measurements": "SELECT COUNT(*) FROM report_measurements",
     }
-    with sqlite_readonly_connection_scope(str(database)) as connection:
+    _require_closed_database_snapshot(database)
+    with sqlite_readonly_connection_scope(str(database), immutable=True) as connection:
         return {key: int(connection.execute(query).fetchone()[0]) for key, query in queries.items()}
 
 

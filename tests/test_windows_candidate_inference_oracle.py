@@ -74,3 +74,27 @@ def test_inference_comparison_cannot_create_hidden_sidecar(tmp_path, monkeypatch
         driver.CandidateFailure, match=f"^{phase}_database_sidecars_created_after_comparison$"
     ):
         driver._copy_verified_results(tmp_path, payload, output, oracle)
+
+
+@pytest.mark.parametrize("reader", ["_report_ids_by_filename", "_database_counts"])
+def test_application_inference_snapshot_read_creates_no_sidecars_and_rejects_live_writer(tmp_path, reader):
+    from metroliza.app import windows_candidate_inference as application
+
+    database = tmp_path / "inference.sqlite"
+    create_inference_case(database, tmp_path / "inference.json")
+    with closing(sqlite3.connect(database)) as writer:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+    before = database.read_bytes()
+    assert not any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+    assert getattr(application, reader)(database)
+    assert database.read_bytes() == before
+    assert not any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+    with closing(sqlite3.connect(database)) as writer:
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("PRAGMA user_version=7")
+        writer.commit()
+        wal = database.with_name(database.name + "-wal")
+        before = (database.read_bytes(), wal.read_bytes())
+        with pytest.raises(application.InferenceFailure, match="^database_snapshot_not_closed$"):
+            getattr(application, reader)(database)
+        assert (database.read_bytes(), wal.read_bytes()) == before
