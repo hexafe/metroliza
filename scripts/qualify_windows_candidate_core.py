@@ -524,6 +524,8 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     work = private / "core scenario"
     state = private / "ordinary user state"
     work.mkdir()
+    scratch_temp = work / "temporary files"
+    scratch_temp.mkdir()
     (state / "Roaming").mkdir(parents=True)
     environment = diag._sanitized_environment(relocated, work, state, "idle")
     environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION", None)
@@ -536,6 +538,9 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         "METROLIZA_WINDOWS_CANDIDATE_ROOT": str(work),
         "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR": str(staged_fixtures),
         "METROLIZA_WINDOWS_CANDIDATE_OCR_FIXTURE": str(staged_ocr),
+        "TEMP": str(scratch_temp),
+        "TMP": str(scratch_temp),
+        "TMPDIR": str(scratch_temp),
     })
     owned = []
     terminate = True

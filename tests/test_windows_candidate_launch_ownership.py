@@ -64,6 +64,9 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     class Api:
         def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
             if owned is not None:
+                scratch = _cwd / "temporary files"
+                assert scratch.is_dir()
+                assert all(_environment[key] == str(scratch) for key in ("TEMP", "TMP", "TMPDIR"))
                 assert expected_images == (_executable, _executable.with_name("metroliza_application.exe"))
                 owned.append(process)
             return process
