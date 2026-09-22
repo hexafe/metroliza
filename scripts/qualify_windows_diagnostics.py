@@ -436,6 +436,7 @@ class ProcessTopology:
     max_active_processes: int
     creation_order: tuple[str, ...]
     all_processes_exited: bool
+    runtime_evidence: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -743,6 +744,7 @@ def _sanitized_environment(
             "METROLIZA_DIAGNOSTIC_QUALIFICATION": scenario,
             "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT": str(work_root),
             "METROLIZA_LICENSE_VERIFICATION": "0",
+            "METROLIZA_WINDOWS_RUNTIME_AUDIT": "1",
             "QT_QPA_PLATFORM": "offscreen",
         }
     )
@@ -822,6 +824,7 @@ class _WindowsProcess:
         self._assigned_processes = 1
         self._max_active_processes = 1
         self.initial_process_state = initial_process_state
+        self.runtime_evidence = None
 
     def poll(self) -> int | None:
         return self._api.poll(self._process)
@@ -832,10 +835,13 @@ class _WindowsProcess:
     def _current_job_state(
         self,
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
+        evidence = getattr(self, "runtime_evidence", None)
+        extra = {} if evidence is None else {"probe": evidence.probe}
         observations, active, assigned = self._api.job_observations(
             self._job, primary_process=self._process, primary_initial=self._initial,
             primary_native_image=self._initial_native_image,
             expected_images=self._expected_images,
+            **extra,
         )
         self._assigned_processes = max(self._assigned_processes, assigned)
         self._max_active_processes = max(self._max_active_processes, active)
@@ -848,9 +854,17 @@ class _WindowsProcess:
         self._current_job_state()
 
     def normal_window(self, application: Path, expected_title: str):
-        return self._api.normal_window(
+        window = self._api.normal_window(
             self._current_job_state()[0], application, expected_title
         )
+        if window is not None:
+            self.mark_runtime_ready()
+        return window
+
+    def mark_runtime_ready(self):
+        evidence = getattr(self, "runtime_evidence", None)
+        if evidence is not None:
+            evidence.ready()
 
     def close_normal_window(
         self, window, application: Path, expected_title: str
@@ -860,7 +874,7 @@ class _WindowsProcess:
         )
 
     def topology(self, artifact_dir: Path, *, all_exited: bool) -> ProcessTopology:
-        return _classify_topology(
+        topology = _classify_topology(
             tuple(self._observations.values()),
             self._assigned_processes,
             self._max_active_processes,
@@ -868,6 +882,26 @@ class _WindowsProcess:
             artifact_dir / "metroliza.exe",
             artifact_dir / "metroliza_application.exe",
         )
+        evidence = getattr(self, "runtime_evidence", None)
+        if evidence is None:
+            return topology
+        from scripts.windows_owned_process_probe import verified_runtime_order
+
+        proof = evidence.proof()
+        try:
+            order = verified_runtime_order(proof, supervised=topology.launcher_processes_observed == 2)
+        except (ValueError, TypeError, KeyError):
+            raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
+        # The semantic suffix accounts for real physical members, not a count
+        # projection. The independent native image and journal proof must agree.
+        helpers = 2 if proof["events"] else 0
+        if (topology.unexpected_processes_observed != helpers
+                or topology.assigned_processes != len(order)
+                or topology.application_processes_observed != 1
+                or not all_exited):
+            raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed")
+        return replace(topology, unexpected_processes_observed=0,
+                       creation_order=order, runtime_evidence=proof)
 
     def active_processes(self) -> int:
         _, active, _ = self._current_job_state()
@@ -877,12 +911,18 @@ class _WindowsProcess:
         if self._closed:
             return
         self._closed = True
-        _attempt_cleanup(
-            lambda: self._api.close_process(
-                self._process, self._job, terminate=terminate,
-                thread=self._thread, token=self._token,
+        try:
+            _attempt_cleanup(
+                lambda: self._api.close_process(
+                    self._process, self._job, terminate=terminate,
+                    thread=self._thread, token=self._token,
+                )
             )
-        )
+        finally:
+            evidence = getattr(self, "runtime_evidence", None)
+            if evidence is not None:
+                self.runtime_evidence = None
+                _attempt_cleanup(evidence.close)
 
 
 class _WindowsApi:
@@ -907,8 +947,9 @@ class _WindowsApi:
             self, artifact, lambda: QualificationFailure("scenario_failed")
         )
 
-    def _probe_call(self, method: str, *arguments) -> None:
-        probe = getattr(self, "_owned_probe", None)
+    def _probe_call(self, method: str, *arguments, probe=None) -> None:
+        if probe is None:
+            probe = getattr(self, "_owned_probe", None)
         if probe is None:
             return
         try:
@@ -1657,12 +1698,18 @@ class _WindowsApi:
         cwd: Path,
         owned: list[_WindowsProcess] | None = None,
         expected_images: tuple[Path, ...] | None = None,
+        runtime_evidence=None,
     ) -> _WindowsProcess:
         process = self.PROCESS_INFORMATION()
         token = None
         job = None
         launched = None
         try:
+            environment = dict(environment)
+            runtime_evidence = self._prepare_runtime_evidence(
+                executable, expected_images, cwd, environment, runtime_evidence
+            )
+            probe = None if runtime_evidence is None else runtime_evidence.probe
             token = self._restricted_token()
             job = self.kernel.CreateJobObjectW(None, None)
             if not job:
@@ -1706,7 +1753,7 @@ class _WindowsApi:
                 process.hProcess
             )
             initial_process_state = self._native_process_state(process.hProcess)
-            self._probe_call("observe", job, process.hProcess, initial, (initial.process_id,))
+            self._probe_call("observe", job, process.hProcess, initial, (initial.process_id,), probe=probe)
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
             launched = self._finish_launched_process(
@@ -1714,12 +1761,16 @@ class _WindowsApi:
                 (executable,) if expected_images is None else expected_images,
                 initial_native_image,
             )
+            launched.runtime_evidence = runtime_evidence
             if owned is not None:
                 owned.append(launched)
             return launched
         except BaseException as error:
             cleanup_succeeded, cleanup_error = self._cleanup_failed_launch(
                 process, job, token, launched
+            )
+            cleanup_succeeded, cleanup_error = self._close_failed_runtime_evidence(
+                runtime_evidence, launched, cleanup_succeeded, cleanup_error
             )
             if not isinstance(error, Exception):
                 raise
@@ -1732,6 +1783,27 @@ class _WindowsApi:
             )
             primary.record_cleanup(succeeded=cleanup_succeeded)
             raise primary from None
+
+    def _prepare_runtime_evidence(self, executable, images, cwd, environment, existing):
+        if (existing is None and environment.get("METROLIZA_WINDOWS_RUNTIME_AUDIT") == "1"
+                and images == (executable.parent / "metroliza.exe",
+                               executable.parent / "metroliza_application.exe")):
+            from scripts.windows_owned_process_probe import RuntimeEvidence
+
+            return RuntimeEvidence(
+                self, executable.parent, cwd, environment,
+                lambda: QualificationFailure("output_failed", qualification_reason="qualification_topology_failed"),
+            )
+        return existing
+
+    @staticmethod
+    def _close_failed_runtime_evidence(evidence, launched, succeeded, error):
+        if evidence is not None and launched is None:
+            try:
+                evidence.close()
+            except BaseException as evidence_error:
+                return False, evidence_error
+        return succeeded, error
 
     def _observe_before_resume(self, process) -> _ProcessObservation:
         try:
@@ -2317,6 +2389,7 @@ class _WindowsApi:
         primary_initial: _ProcessObservation | None = None,
         primary_native_image: str | None = None,
         expected_images: tuple[Path, ...] = (),
+        probe=None,
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
         self._require_primary_identity_inputs(
             primary_process, primary_initial, primary_native_image
@@ -2343,7 +2416,7 @@ class _WindowsApi:
                         expected_images=expected_images,
                     )
                 except QualificationFailure as error:
-                    self._probe_call("rejected", job, process, process_id, process_ids)
+                    self._probe_call("rejected", job, process, process_id, process_ids, probe=probe)
                     error.set_native_phase(
                         "owned_job_observation" if owned_primary else "job_observation"
                     )
@@ -2364,14 +2437,14 @@ class _WindowsApi:
                             qualification_reason="native_primary_identity_mismatch",
                         )
                     observations.append(observation)
-                    self._probe_call("observe", job, process, observation, process_ids)
+                    self._probe_call("observe", job, process, observation, process_ids, probe=probe)
             finally:
                 if not owned_primary:
                     _attempt_cleanup(
                         lambda process=process: self._require_closed_handles(process)
                     )
         active, total = self._job_accounting(job)
-        self._probe_call("account", active, total, process_ids)
+        self._probe_call("account", active, total, process_ids, probe=probe)
         return tuple(observations), active, total
 
     def poll(self, process) -> int | None:
@@ -2663,6 +2736,9 @@ def _observe_startup_receipt(
     receipt = _validate_child_receipt(path, scenario)
     if receipt["stage"] != "startup_ready":
         raise QualificationFailure("scenario_failed")
+    mark_ready = getattr(process, "mark_runtime_ready", None)
+    if mark_ready is not None:
+        mark_ready()
     return round((time.perf_counter() - process.started) * 1000)
 
 
@@ -2721,7 +2797,7 @@ def _finish_process_without_receipt(
         exit_code = _scenario_step("qualification_poll_failed", process.poll)
         if exit_code is not None:
             break
-        time.sleep(0.02)
+        time.sleep(0.005)
     if exit_code is None:
         raise QualificationFailure(
             "scenario_timeout", qualification_reason="process_exit_timeout"
@@ -2780,7 +2856,7 @@ def _wait_concurrent_barrier(
             (root / "waiting").is_file() for root in roots
         ):
             return startup_ms[0], startup_ms[1]
-        time.sleep(0.02)
+        time.sleep(0.005)
     raise QualificationFailure("scenario_timeout")
 
 
@@ -2866,7 +2942,7 @@ def _finish_concurrent_processes(
             process.observe()
             if exit_codes[index] is None:
                 exit_codes[index] = process.poll()
-        time.sleep(0.02)
+        time.sleep(0.005)
     results: list[ScenarioResult] = []
     for index, process in enumerate(processes):
         def finish_one() -> ScenarioResult:
@@ -2977,7 +3053,7 @@ def _run_scenario(
             exit_code = _scenario_step("qualification_poll_failed", process.poll)
             if exit_code is not None:
                 break
-            time.sleep(0.02)
+            time.sleep(0.005)
         if exit_code is None:
             raise QualificationFailure("scenario_timeout")
         if startup_ready_ms is None:
@@ -3674,7 +3750,7 @@ def _validate_operational_cost(cost: object) -> None:
 
 
 def _topology_record(topology: ProcessTopology) -> dict[str, object]:
-    return {
+    result = {
         "launcher_processes_observed": topology.launcher_processes_observed,
         "application_processes_observed": topology.application_processes_observed,
         "unexpected_processes_observed": topology.unexpected_processes_observed,
@@ -3683,6 +3759,9 @@ def _topology_record(topology: ProcessTopology) -> dict[str, object]:
         "creation_order": list(topology.creation_order),
         "all_processes_exited": topology.all_processes_exited,
     }
+    if topology.runtime_evidence is not None:
+        result["runtime_evidence"] = topology.runtime_evidence
+    return result
 
 
 def _topology_failure_observation(value: object) -> dict[str, object]:
@@ -3697,7 +3776,8 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
         count = value.get(key)
         result[key] = count if type(count) is int and 0 <= count <= 16 else "invalid"
     order = value.get("creation_order")
-    roles = {"launcher_bootloader", "launcher_supervisor", "application", "unexpected"}
+    roles = {"launcher_bootloader", "launcher_supervisor", "application", "unexpected",
+             "windows_version_command", "windows_version_console"}
     result["creation_order"] = (
         order if type(order) is list and len(order) <= 16
         and all(type(role) is str and role in roles for role in order) else "invalid"
@@ -3707,7 +3787,7 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
     return result
 
 
-def _validate_topology_record(value: object, *, supervised: bool) -> None:
+def _validate_topology_record(value: object, *, supervised: bool, require_runtime_evidence: bool = False) -> None:
     expected = {
         "launcher_processes_observed",
         "application_processes_observed",
@@ -3717,28 +3797,38 @@ def _validate_topology_record(value: object, *, supervised: bool) -> None:
         "creation_order",
         "all_processes_exited",
     }
-    if type(value) is not dict or set(value) != expected:
+    if type(value) is not dict or set(value) not in (expected, expected | {"runtime_evidence"}):
         print("qualification_topology_observation=" + json.dumps(
             _topology_failure_observation(value), sort_keys=True
         ), file=sys.stderr, flush=True)
         raise QualificationFailure(
             "output_failed", qualification_reason="qualification_topology_failed"
         )
+    if require_runtime_evidence and "runtime_evidence" not in value:
+        raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed")
     expected_order = (
         ["launcher_bootloader", "launcher_supervisor", "application"]
         if supervised
         else ["application"]
     )
     expected_launchers = 2 if supervised else 0
+    if "runtime_evidence" in value:
+        from scripts.windows_owned_process_probe import verified_runtime_order
+
+        try:
+            expected_order = list(verified_runtime_order(value["runtime_evidence"], supervised=supervised))
+        except (ValueError, TypeError, KeyError):
+            raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
     if (
         value["launcher_processes_observed"] != expected_launchers
         or value["application_processes_observed"] != 1
         or value["unexpected_processes_observed"] != 0
-        or value["assigned_processes"] != (3 if supervised else 1)
+        or type(value["assigned_processes"]) is not int
+        or value["assigned_processes"] != len(expected_order)
         or value["creation_order"] != expected_order
         or value["all_processes_exited"] is not True
         or type(value["max_active_processes"]) is not int
-        or not 1 <= value["max_active_processes"] <= 3
+        or not 1 <= value["max_active_processes"] <= len(expected_order)
     ):
         print("qualification_topology_observation=" + json.dumps(
             _topology_failure_observation(value), sort_keys=True
@@ -3766,9 +3856,9 @@ def _validate_topology(topology: object, package: dict[str, object]) -> None:
     ):
         raise QualificationFailure("output_failed")
     for record in topology["direct"]:
-        _validate_topology_record(record, supervised=False)
+        _validate_topology_record(record, supervised=False, require_runtime_evidence=True)
     for record in topology["supervised"]:
-        _validate_topology_record(record, supervised=True)
+        _validate_topology_record(record, supervised=True, require_runtime_evidence=True)
 
 
 def _valid_failure_detail(detail: object) -> bool:
@@ -4109,10 +4199,6 @@ class _QualificationRunner:
             environment.pop(key, None)
         owned: list[_WindowsProcess] = []
         terminate = True
-        enable_probe = getattr(self.api, "enable_owned_probe", None)
-        if enable_probe is not None:
-            enable_probe(self.artifact)
-        probe = getattr(self.api, "_owned_probe", None)
         try:
             process = _scenario_step(
                 "qualification_launch_failed",
@@ -4129,7 +4215,6 @@ class _QualificationRunner:
             )
             expected_title = f"Metroliza [{VERSION_LABEL}]"
             window = None
-            _owned_probe_phase(probe, "window_wait")
             while time.monotonic() < scenario_deadline:
                 window = _scenario_step(
                     "qualification_observation_failed",
@@ -4148,20 +4233,18 @@ class _QualificationRunner:
                         qualification_reason="process_exited_before_window",
                         qualification_exit_code=exit_code,
                     )
-                time.sleep(0.005 if probe is not None else 0.02)
+                time.sleep(0.005)
             if window is None:
                 raise QualificationFailure(
                     "scenario_failed",
                     qualification_reason="normal_window_unavailable",
                 )
-            _owned_probe_phase(probe, "window_close")
             _scenario_step(
                 "normal_window_close_failed",
                 lambda: process.close_normal_window(
                     window, self.application, expected_title
                 ),
             )
-            _owned_probe_phase(probe, "drain")
             result = _finish_process_without_receipt(
                 process, self.artifact, scenario_deadline, 0
             )
@@ -4174,14 +4257,7 @@ class _QualificationRunner:
             self.results["direct_ui_smoke"] = result
             terminate = False
         finally:
-            try:
-                _close_owned_processes(owned, terminate=terminate)
-            finally:
-                if probe is not None:
-                    # This bounded side-band record never supplies acceptance.
-                    # The strict original topology and cleanup gates stand.
-                    self.api._owned_probe = None
-                    probe.emit()
+            _close_owned_processes(owned, terminate=terminate)
         if (
             {record.report_id for record in _reports(self.store)} != before
             or _has_qualification_receipt(root)

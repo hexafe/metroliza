@@ -220,3 +220,20 @@ permissions that its restricted child cannot use. Native controls compare an
 unmodified token's default pipe permissions with an explicit private descriptor,
 then verify the corrected token; only closed synthetic outcomes are printed.
 This host qualification correction does not grant product users extra rights.
+
+The required native incident cohort includes `tests/test_windows_runtime_audit.py`.
+Each synthetic packaged application start also installs an earliest app-only
+audit hook with a unique private journal. Before each Popen it records only a
+fixed command-purpose enum and bounded callsite category; raw arguments, paths
+and frames are never persisted. Journal failures terminate that synthetic run
+with exit97, never silently becoming a zero-event result. The launcher does not
+install the hook, and ordinary product starts do not enable it.
+
+The qualifier retains physical Job counts and accepts the specific Windows
+version-query suffix only when the same run proves one exact system cmd/ver
+call through both required CPython platform frames and the exact contained
+app-to-system-cmd-to-system-conhost relationship. Unknown members, commands,
+parents, late calls, missing samples, mismatched counts and incomplete cleanup
+still fail. Every concurrent Job owns its own probe and journal; no receipt is
+transferred between runs. Synchronous journal writes, native handle/snapshot
+queries and5ms sampling perturb timing and remain part of the measured journey.
