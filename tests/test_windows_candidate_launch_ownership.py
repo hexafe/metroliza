@@ -62,8 +62,9 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     process = Process()
 
     class Api:
-        def launch(self, _executable, _environment, _cwd, owned=None):
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
             if owned is not None:
+                assert expected_images == (_executable, _executable.with_name("metroliza_application.exe"))
                 owned.append(process)
             return process
 
@@ -82,7 +83,7 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
         _WindowsApi=lambda: api,
         _close_owned_processes=diagnostics._close_owned_processes,
     )
-    args = SimpleNamespace(expected_source_sha="1" * 40, oracle=tmp_path / "oracle.json")
+    args = SimpleNamespace(expected_source_sha="1" * 40, oracle=tmp_path / "oracle.json", dpi_scale="1.0")
     private = tmp_path / "private"
     private.mkdir()
 

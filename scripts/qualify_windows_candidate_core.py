@@ -510,14 +510,15 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     terminate = True
     try:
         process = diag._WindowsApi().launch(
-            relocated / "metroliza.exe", environment, work, owned=owned
+            relocated / "metroliza.exe", environment, work, owned=owned,
+            expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
         )
         while time.monotonic() < deadline:
             process.observe()
             code = process.poll()
             if code is not None:
                 break
-            time.sleep(0.02)
+            time.sleep(0.005)
         else:
             raise CandidateFailure("owned_package_scenario_timeout")
         if code != 0:
@@ -532,7 +533,8 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         topology = process.topology(relocated, all_exited=True)
         # Use the accepted dependency's complete onefile-supervisor /
         # onedir-child topology contract, including both launcher processes.
-        diag._validate_topology_record(diag._topology_record(topology), supervised=True)
+        diag._validate_topology_record(diag._topology_record(topology), supervised=True,
+                                       require_runtime_evidence=True)
         after = diag._tree_digest(diag._package_inventory(relocated))
         if after != before:
             raise CandidateFailure("package_tree_changed_during_scenario")

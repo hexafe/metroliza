@@ -4,10 +4,16 @@ from __future__ import annotations
 import pytest
 
 from scripts import qualify_windows_candidate_core as driver
-from tests.test_windows_candidate_core_protocol import import_guard_evidence
+from tests.test_windows_candidate_core_protocol import import_guard_evidence, ui_observation
 
 
 def _payload():
+    ui = ui_observation()
+    ui["status"] = "partial"
+    ui["facets"]["industrial_geometry"] = "not_assessed"
+    ui["evidence"]["screen"]["qpa"] = "offscreen"
+    ui["evidence"]["dialog_geometry"] = None
+    ui["evidence"]["owned_handle_observed"] = None
     return {
         "schema_version": 1,
         "stage": "complete",
@@ -19,6 +25,7 @@ def _payload():
         "relative_artifact_dir": "core-" + "a" * 32,
         "checks": {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"},
         "import_guard_evidence": import_guard_evidence(),
+        "ui_observation": ui,
         "facets": {
             **{key: "passed" for key in driver.REQUIRED_CHECKS},
             "group_analysis_status": "insufficient_groups",
