@@ -5427,6 +5427,14 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
             time.sleep(0.02)
         assert process.active_processes() == 0
         assert process.metrics().peak_job_memory_bytes >= 0
+    except qualification.QualificationFailure as error:
+        # Retain only the existing fixed-schema observer detail. This remains
+        # a failing gate; raw image paths, PID and exception text stay private.
+        detail = error.native_observation
+        pytest.fail("native_token_job_observation=" + json.dumps({
+            "reason": error.qualification_reason,
+            "native_observation": detail.receipt() if detail is not None else None,
+        }, sort_keys=True), pytrace=False)
     finally:
         process.close(terminate=exit_code is None)
 
