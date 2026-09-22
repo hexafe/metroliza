@@ -101,6 +101,8 @@ MAX_FLOOD_ELAPSED_MILLISECONDS = 90_000
 MAX_TERMINATION_DRAIN_MILLISECONDS = 5_000
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 0x00000102
+TOKEN_USER = 1
+TOKEN_DEFAULT_DACL = 6
 TOKEN_INTEGRITY_LEVEL = 25
 MEDIUM_INTEGRITY_RID = 0x2000
 MAX_TOKEN_INFORMATION_BYTES = 256
@@ -1157,6 +1159,14 @@ class _WindowsApi:
             ctypes.POINTER(wt.DWORD),
         ]
         self.advapi.GetTokenInformation.restype = wt.BOOL
+        self.advapi.InitializeAcl.argtypes = [ctypes.c_void_p, wt.DWORD, wt.DWORD]
+        self.advapi.InitializeAcl.restype = wt.BOOL
+        self.advapi.AddAccessAllowedAce.argtypes = [
+            ctypes.c_void_p, wt.DWORD, wt.DWORD, ctypes.c_void_p,
+        ]
+        self.advapi.AddAccessAllowedAce.restype = wt.BOOL
+        self.advapi.IsValidAcl.argtypes = [ctypes.c_void_p]
+        self.advapi.IsValidAcl.restype = wt.BOOL
         self.advapi.IsValidSid.argtypes = [ctypes.c_void_p]
         self.advapi.IsValidSid.restype = wt.BOOL
         self.advapi.GetSidIdentifierAuthority.argtypes = [ctypes.c_void_p]
@@ -1457,6 +1467,65 @@ class _WindowsApi:
         finally:
             _attempt_cleanup(lambda: self._free_sid(medium_sid))
 
+    def _token_information(self, token, information_class):
+        required = self.wintypes.DWORD()
+        self.advapi.GetTokenInformation(
+            token, information_class, None, 0, ctypes.byref(required)
+        )
+        if not 0 < required.value <= MAX_TOKEN_INFORMATION_BYTES:
+            raise QualificationFailure("restricted_launch_unavailable")
+        buffer = ctypes.create_string_buffer(required.value)
+        if not self.advapi.GetTokenInformation(
+            token, information_class, buffer, len(buffer), ctypes.byref(required)
+        ) or required.value > len(buffer):
+            raise QualificationFailure("restricted_launch_unavailable")
+        return buffer
+
+    def _private_default_acl(self, token):
+        # An elevated runner's inherited DACL can grant only Administrators,
+        # which is deny-only on this token. New pipes must be usable by their
+        # actual user without granting access to another ordinary user.
+        user = self._token_information(token, TOKEN_USER)
+        if len(user) < ctypes.sizeof(self.SID_AND_ATTRIBUTES):
+            raise QualificationFailure("restricted_launch_unavailable")
+        user_sid = ctypes.cast(user, ctypes.POINTER(self.SID_AND_ATTRIBUTES)).contents.Sid
+        if not user_sid or not self.advapi.IsValidSid(user_sid):
+            raise QualificationFailure("restricted_launch_unavailable")
+        system_sid = ctypes.create_string_buffer(68)
+        system_size = self.wintypes.DWORD(len(system_sid))
+        if not self.advapi.CreateWellKnownSid(
+            22, None, system_sid, ctypes.byref(system_size)
+        ):
+            raise QualificationFailure("restricted_launch_unavailable")
+        user_size = int(self.advapi.GetLengthSid(user_sid))
+        if not 0 < user_size <= 68 or not 0 < system_size.value <= 68:
+            raise QualificationFailure("restricted_launch_unavailable")
+        # ACL header: 8 bytes; each allow ACE: 8 bytes followed by its SID.
+        acl = ctypes.create_string_buffer(8 + 8 + user_size + 8 + system_size.value)
+        if (not self.advapi.InitializeAcl(acl, len(acl), 2)
+                or not self.advapi.AddAccessAllowedAce(acl, 2, 0x10000000, user_sid)
+                or not self.advapi.AddAccessAllowedAce(acl, 2, 0x10000000, system_sid)
+                or not self.advapi.IsValidAcl(acl)):
+            raise QualificationFailure("restricted_launch_unavailable")
+        return acl
+
+    def _set_private_default_dacl(self, token) -> None:
+        acl = self._private_default_acl(token)
+        # TOKEN_DEFAULT_DACL contains one non-NULL PACL; the OS copies the ACL.
+        default = ctypes.c_void_p(ctypes.addressof(acl))
+        if not self.advapi.SetTokenInformation(
+            token, TOKEN_DEFAULT_DACL, ctypes.byref(default), ctypes.sizeof(default)
+        ):
+            raise QualificationFailure("restricted_launch_unavailable")
+        observed = self._token_information(token, TOKEN_DEFAULT_DACL)
+        if len(observed) < ctypes.sizeof(ctypes.c_void_p):
+            raise QualificationFailure("restricted_launch_unavailable")
+        pointer = ctypes.cast(observed, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        start = ctypes.addressof(observed)
+        if (pointer is None or not start <= pointer <= start + len(observed) - len(acl)
+                or ctypes.string_at(pointer, len(acl)) != acl.raw):
+            raise QualificationFailure("restricted_launch_unavailable")
+
     def _integrity_rid(self, token) -> int:
         wt = self.wintypes
         required = wt.DWORD()
@@ -1543,6 +1612,7 @@ class _WindowsApi:
                 raise QualificationFailure("restricted_launch_unavailable")
             if self._has_effective_admin_membership(restricted, sid):
                 raise QualificationFailure("restricted_launch_unavailable")
+            self._set_private_default_dacl(restricted)
             return restricted
         except BaseException:
             if restricted:

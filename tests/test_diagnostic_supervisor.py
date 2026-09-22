@@ -76,6 +76,82 @@ def test_missing_child_is_not_a_fabricated_process_exit(tmp_path):
     assert result.needs_incident
 
 
+@pytest.mark.skipif(os.name != "nt", reason="native Windows token and pipe contract")
+def test_qualified_nonadmin_token_can_create_its_anonymous_pipe():
+    # A separate child confines impersonation, including an adverse RevertToSelf
+    # result. No application input, raw native error text, SID or ACL is emitted.
+    program = r'''
+import ctypes
+import json
+import os
+from scripts.qualify_windows_diagnostics import _WindowsApi
+
+result = {"baseline": False, "restricted": False, "error_class": None, "stage": "baseline", "cleanup": True}
+api = _WindowsApi()
+api.advapi.ImpersonateLoggedOnUser.argtypes = [api.wintypes.HANDLE]
+api.advapi.ImpersonateLoggedOnUser.restype = api.wintypes.BOOL
+api.advapi.RevertToSelf.argtypes = []
+api.advapi.RevertToSelf.restype = api.wintypes.BOOL
+token = None
+impersonating = False
+def pipe_roundtrip(prefix):
+    pipes = []
+    try:
+        result["stage"] = prefix + "_first_pipe"
+        pipes.append(os.pipe())
+        result["stage"] = prefix + "_second_pipe"
+        pipes.append(os.pipe())
+        for read, write in pipes:
+            os.write(write, b"closed-control")
+            if os.read(read, 14) != b"closed-control":
+                return False
+        return True
+    finally:
+        for read, write in pipes:
+            os.close(write)
+            os.close(read)
+try:
+    result["baseline"] = pipe_roundtrip("baseline")
+    result["stage"] = "token"
+    token = api._restricted_token()
+    result["stage"] = "impersonate"
+    if not api.advapi.ImpersonateLoggedOnUser(token):
+        raise RuntimeError()
+    impersonating = True
+    try:
+        result["restricted"] = pipe_roundtrip("restricted")
+        result["stage"] = "complete"
+    except OSError as error:
+        native = getattr(error, "winerror", None)
+        result["error_class"] = (
+            "access_denied" if native == 5
+            else "access_denied_mapped" if native is None and error.errno == 13
+            else "resource_failure" if native in (8, 14) or error.errno in (12, 24)
+            else "other"
+        )
+except Exception:
+    result["cleanup"] = False
+finally:
+    if impersonating and not api.advapi.RevertToSelf():
+        os._exit(3)
+    if token and not api.kernel.CloseHandle(token):
+        result["cleanup"] = False
+print(json.dumps(result, sort_keys=True))
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", program], cwd=ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+        check=False,
+    )
+    assert result.returncode == 0
+    observation = json.loads(result.stdout)
+    assert observation == {
+        "baseline": True, "restricted": True, "error_class": None,
+        "stage": "complete", "cleanup": True,
+    }
+
+
 @pytest.mark.parametrize("scenario", ["duplicate", "dropped"])
 def test_clean_process_return_cannot_erase_missing_event_evidence(scenario):
     result = launch_supervised(_command(scenario))
@@ -310,3 +386,25 @@ def test_native_windows_spawn_callback_observes_clean_dll_directory_and_restores
 
     assert diagnostic_supervisor._call_with_clean_windows_dll_directory(observe_clean) == "observed"
     assert current_directory() == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native token default DACL control")
+def test_restricted_token_default_dacl_matches_private_explicit_pipe(capfd):
+    result = subprocess.run(
+        [sys.executable, str(CHILD.with_name("windows_restricted_pipe_control.py"))],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+        check=False,
+    )
+    assert result.returncode == 0
+    observation = json.loads(result.stdout)
+    assert observation["default_before"] in {"passed", "access_denied"}
+    expected = {
+        "default_before": observation["default_before"], "explicit_private": True,
+        "default_after": True, "medium_integrity": True, "nonadmin": True,
+        "cleanup": True,
+    }
+    assert observation == expected
+    # The successful evidence contains only this closed synthetic schema.
+    with capfd.disabled():
+        print("restricted_pipe_control=" + json.dumps(expected, sort_keys=True), flush=True)
