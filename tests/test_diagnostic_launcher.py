@@ -271,9 +271,13 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
     )
     thread.start()
     try:
-        readiness_deadline = time.monotonic() + 10
+        # This is cold fixture initialization, not the measured incident path.
+        # A native integration run exceeded 10 s before bootstrap was ready;
+        # preserve the separate 7 s operation and 10 s shutdown bounds below.
+        readiness_deadline = time.monotonic() + 30
         while (
             not (scratch / "operation_ready").exists()
+            and thread.is_alive()
             and time.monotonic() < readiness_deadline
         ):
             time.sleep(0.02)
@@ -303,7 +307,8 @@ def test_real_caught_import_failure_is_viewable_while_app_still_runs(tmp_path):
     finally:
         (scratch / "finish").touch()
         thread.join(10)
-    assert not thread.is_alive()
+        # A setup/operation assertion must not bypass the cleanup assertion.
+        assert not thread.is_alive(), _fixture_setup_failure(scratch, thread, deliveries)
     assert deliveries[0].observation.exit_code == 0
     assert deliveries[0].storage_status is StoreStatus.SAVED
     reports = store.list_reports().reports
