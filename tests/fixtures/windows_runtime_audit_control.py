@@ -1,5 +1,7 @@
 """Synthetic native roles; no command/path/exception output."""
 import os
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import runpy
 import subprocess
@@ -18,7 +20,13 @@ def _wait_for_marker(name):
 
 def _exercise_subprocess(mode):
     if mode == "late_numpy":
-        import numpy  # noqa: F401 - actual delayed dependency import, no synthetic frame.
+        import numpy
+
+        # A source import alone need not query Windows. This public operation
+        # calls platform.uname -> win32_ver using real NumPy frames. Its system
+        # details stay in memory and never enter CI output or audit receipts.
+        with redirect_stdout(StringIO()):
+            numpy.show_runtime()
     if mode in {"ver", "deep_ver", "late_ver", "hard", "write_failure"}:
         import platform
 
