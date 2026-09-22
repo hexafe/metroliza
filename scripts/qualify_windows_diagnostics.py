@@ -217,6 +217,7 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "process_exited_before_startup",
         "process_exited_before_result",
         "process_exit_mismatch",
+        "launcher_storage_not_saved",
         "qualification_launch_failed",
         "qualification_environment_failed",
         "qualification_observation_failed",
@@ -315,6 +316,7 @@ class QualificationFailure(RuntimeError):
         qualification_cleanup: str = "not_attempted",
         native_observation: _NativeIdentityObservation | None = None,
         startup_phases: tuple[str, ...] | None = None,
+        concurrent_phases: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
     ) -> None:
         if failure_id not in FAILURE_IDS:
             failure_id = "scenario_failed"
@@ -344,6 +346,7 @@ class QualificationFailure(RuntimeError):
             else None
         )
         self.startup_phases = startup_phases
+        self.concurrent_phases = concurrent_phases
         super().__init__(failure_id)
 
     def set_native_phase(self, phase: str) -> None:
@@ -384,6 +387,7 @@ def _run_driver_phase(stage: str, action: Callable[[], _T]) -> _T:
             qualification_cleanup=error.qualification_cleanup,
             native_observation=error.native_observation,
             startup_phases=error.startup_phases,
+            concurrent_phases=error.concurrent_phases,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -412,6 +416,7 @@ def _scenario_step(reason: str, action: Callable[[], _T]) -> _T:
             qualification_cleanup=error.qualification_cleanup,
             native_observation=error.native_observation,
             startup_phases=error.startup_phases,
+            concurrent_phases=error.concurrent_phases,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -477,6 +482,7 @@ class QualificationResult:
     output_identity: tuple[int, int] | None = None
     native_observation: _NativeIdentityObservation | None = None
     startup_phases: tuple[str, ...] | None = None
+    concurrent_phases: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
 
 def _attempt_cleanup(action: Callable[[], None]) -> None:
@@ -1198,6 +1204,10 @@ class _WindowsApi:
             ctypes.POINTER(wt.HANDLE),
         ]
         self.advapi.OpenProcessToken.restype = wt.BOOL
+        self.advapi.ImpersonateLoggedOnUser.argtypes = [wt.HANDLE]
+        self.advapi.ImpersonateLoggedOnUser.restype = wt.BOOL
+        self.advapi.RevertToSelf.argtypes = []
+        self.advapi.RevertToSelf.restype = wt.BOOL
         self.advapi.CreateWellKnownSid.argtypes = [
             ctypes.c_int,
             ctypes.c_void_p,
@@ -1668,6 +1678,32 @@ class _WindowsApi:
     def _require_closed_owned_token(self, token) -> None:
         self._require_closed_handles(token)
         token.value = None
+
+    def initialize_incident_store(self, store: IncidentStore) -> None:
+        # The elevated host must not become the owner of the application's
+        # private root. Materialize it under the same restricted identity used
+        # for every application launch, before any host-side listing creates it.
+        if store.root is None or store.root.exists() or store.root.is_symlink():
+            raise QualificationFailure("restricted_launch_unavailable")
+        token = self._restricted_token()
+        try:
+            try:
+                if not self.advapi.ImpersonateLoggedOnUser(token):
+                    raise QualificationFailure("restricted_launch_unavailable")
+                listing = store.list_reports()
+                if listing.status != StoreStatus.AVAILABLE or listing.reports:
+                    raise QualificationFailure("restricted_launch_unavailable")
+            finally:
+                # Continuing with an unexpectedly impersonated host is unsafe.
+                # No child has been launched at this initialization boundary.
+                try:
+                    reverted = self.advapi.RevertToSelf()
+                except BaseException:
+                    os._exit(22)
+                if not reverted:
+                    os._exit(22)
+        finally:
+            _attempt_cleanup(lambda: self._require_closed_owned_token(token))
 
     def _restricted_token(self):
         wt = self.wintypes
@@ -3015,10 +3051,37 @@ def _finish_concurrent_processes(
                 process.topology(artifact_dir, all_exited=True),
             )
 
-        results.append(
-            _run_driver_phase(f"concurrent_{index + 1}", finish_one)
-        )
+        results.append(_finish_concurrent_with_probe(finish_one, index, roots))
     return results[0], results[1]
+
+
+def _finish_concurrent_with_probe(
+    action: Callable[[], ScenarioResult], index: int, roots: tuple[Path, Path]
+) -> ScenarioResult:
+    stage = f"concurrent_{index + 1}"
+    try:
+        result = _run_driver_phase(stage, action)
+    except QualificationFailure as error:
+        if os.getenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") == "1":
+            error.concurrent_phases = (_startup_phases(roots[0]), _startup_phases(roots[1]))
+        raise
+    if os.getenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") == "1":
+        phases = (_startup_phases(roots[0]), _startup_phases(roots[1]))
+        status = _launcher_storage_status(phases[index])
+        # A confirmed unsuccessful delivery explains a failure, but incomplete
+        # publication does not prove that an incident is absent. Missing or
+        # ambiguous markers remain unknown. The two-report oracle is unchanged.
+        if status is not None and status != "saved":
+            raise QualificationFailure(
+                "incident_invalid", qualification_stage=stage,
+                qualification_reason="launcher_storage_not_saved", concurrent_phases=phases,
+            )
+    return result
+
+
+def _launcher_storage_status(phases: tuple[str, ...]) -> str | None:
+    statuses = [phase.removeprefix("storage_") for phase in phases if phase.startswith("storage_")]
+    return statuses[0] if len(statuses) == 1 and statuses[0] in {item.value for item in StoreStatus} else None
 
 
 def _startup_phases(root: Path) -> tuple[str, ...]:
@@ -3911,7 +3974,7 @@ def _valid_failure_detail(detail: object) -> bool:
         type(detail) is dict
         and {"stage", "reason"} <= detail_keys
         and detail_keys <= {
-            "stage", "reason", "child_stage", "exit_code", "native_observation", "startup_phases"
+            "stage", "reason", "child_stage", "exit_code", "native_observation", "startup_phases", "concurrent_phases"
         }
         and type(detail["stage"]) is str
         and type(detail["reason"]) is str
@@ -3936,6 +3999,20 @@ def _valid_failure_detail(detail: object) -> bool:
                 and all(type(phase) is str and phase in PHASES
                         for phase in detail["startup_phases"])
                 and len(set(detail["startup_phases"])) == len(detail["startup_phases"])
+            )
+        )
+        and (
+            "concurrent_phases" not in detail
+            or (
+                detail["stage"] in {"concurrent_1", "concurrent_2"}
+                and type(detail["concurrent_phases"]) is list
+                and len(detail["concurrent_phases"]) == 2
+                and all(
+                    type(phases) is list and len(phases) <= len(PHASES)
+                    and all(type(phase) is str and phase in PHASES for phase in phases)
+                    and len(set(phases)) == len(phases)
+                    for phases in detail["concurrent_phases"]
+                )
             )
         )
         and (
@@ -4163,6 +4240,7 @@ class _QualificationRunner:
                 qualification_reason="invalid_qualification_root",
             ) from None
         self.store = IncidentStore(self.state_base / "Metroliza" / "diagnostics")
+        self.api.initialize_incident_store(self.store)
         self.launcher = artifact / "metroliza.exe"
         self.application = artifact / "metroliza_application.exe"
         self.results: dict[str, ScenarioResult] = {}
@@ -5396,6 +5474,7 @@ def qualify_windows_diagnostics(
             output_identity=output_identity,
             native_observation=error.native_observation,
             startup_phases=error.startup_phases,
+            concurrent_phases=error.concurrent_phases,
         )
     except Exception:
         cleanup_status = "not_attempted"
@@ -5456,6 +5535,7 @@ def _failure_detail(
     exit_code: int | None,
     native_observation: _NativeIdentityObservation | None,
     startup_phases: tuple[str, ...] | None = None,
+    concurrent_phases: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
 ) -> dict[str, object]:
     return {
         "stage": stage,
@@ -5463,6 +5543,8 @@ def _failure_detail(
         **({"child_stage": child_stage} if child_stage is not None else {}),
         **({"exit_code": exit_code} if exit_code is not None else {}),
         **({"startup_phases": list(startup_phases)} if startup_phases is not None else {}),
+        **({"concurrent_phases": [list(phases) for phases in concurrent_phases]}
+           if concurrent_phases is not None else {}),
         **(
             {"native_observation": native_observation.receipt()}
             if native_observation is not None
@@ -5506,6 +5588,7 @@ def main(argv: list[str] | None = None) -> int:
                             result.qualification_exit_code,
                             result.native_observation,
                             result.startup_phases,
+                            result.concurrent_phases,
                         ),
                         "qualification_cleanup": result.qualification_cleanup,
                         "package": None,

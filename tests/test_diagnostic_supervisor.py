@@ -408,3 +408,41 @@ def test_restricted_token_default_dacl_matches_private_explicit_pipe(capfd):
     # The successful evidence contains only this closed synthetic schema.
     with capfd.disabled():
         print("restricted_pipe_control=" + json.dumps(expected, sort_keys=True), flush=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native private-store owner boundary control")
+def test_restricted_store_creation_owner_boundary(tmp_path, capfd):
+    result = subprocess.run(
+        [sys.executable, str(CHILD.with_name("windows_store_owner_control.py")), str(tmp_path)],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+        check=False,
+    )
+    assert len(result.stdout) <= 4096
+    observation = json.loads(result.stdout)
+    assert result.returncode == 0, observation
+    assert set(observation) == {
+        "schema_version", "cleanup", "control_complete", "medium_integrity", "nonadmin",
+        "parent_create", "parent_owner_is_user", "parent_restricted_publish",
+        "restricted_create_publish", "restricted_owner_is_user", "restricted_host_read",
+        "user_owner_create_publish", "user_owner_is_user", "user_owner_host_read",
+        "ancestor_accessible", "restricted_full_readback", "user_owner_full_readback",
+        "initialized_owner_is_user", "initialized_restricted_publish", "initialized_full_readback",
+    }
+    for key in ("cleanup", "control_complete", "medium_integrity", "nonadmin", "user_owner_is_user",
+                "ancestor_accessible", "user_owner_full_readback", "initialized_owner_is_user",
+                "initialized_full_readback"):
+        assert observation[key] is True, observation
+    for key in ("parent_owner_is_user", "restricted_owner_is_user"):
+        assert type(observation[key]) is bool
+    assert observation["schema_version"] == 1 and type(observation["schema_version"]) is int
+    assert observation["parent_create"] == "available"
+    assert observation["initialized_restricted_publish"] == "saved"
+    assert observation["parent_restricted_publish"] in {"saved", "root_unavailable"}
+    assert observation["restricted_create_publish"] in {"saved", "root_unavailable"}
+    assert observation["restricted_host_read"] == "available"
+    assert observation["restricted_full_readback"] is (observation["restricted_create_publish"] == "saved")
+    assert observation["user_owner_create_publish"] == "saved", observation
+    assert observation["user_owner_host_read"] == "available", observation
+    with capfd.disabled():
+        print("restricted_store_owner_control=" + json.dumps(observation, sort_keys=True), flush=True)

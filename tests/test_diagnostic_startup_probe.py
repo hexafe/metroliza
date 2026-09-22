@@ -135,3 +135,70 @@ def test_public_failure_preserves_empty_unknown_observation():
     )
     assert detail["startup_phases"] == []
     assert qualifier._valid_failure_detail(detail)
+
+
+@pytest.mark.parametrize("status,notice", [
+    ("saved", "notice_not_required"),
+    ("publish_incomplete", "notice_suppressed"),
+    ("io_failed", "notice_suppressed"),
+])
+def test_concurrent_launcher_records_final_delivery_and_preserves_child_exit(
+    probe_root, monkeypatch, status, notice
+):
+    from types import SimpleNamespace
+    from metroliza.app import diagnostic_launcher as launcher
+    from metroliza.shared.diagnostic_store import StoreStatus
+
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", "concurrent")
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setattr(launcher, "IncidentStore", lambda: None)
+    delivery = launcher.LaunchDelivery(SimpleNamespace(exit_code=9), StoreStatus(status))
+    monkeypatch.setattr(launcher, "run_with_store", lambda *args, **kwargs: delivery)
+    assert launcher.main() == 9
+    phases = qualifier._startup_phases(probe_root)
+    assert [p for p in phases if p.startswith("storage_")] == ["storage_" + status]
+    assert [p for p in phases if p.startswith("notice_")] == [notice]
+
+
+def test_concurrent_probe_marker_failure_does_not_change_launcher_exit(probe_root, monkeypatch):
+    from types import SimpleNamespace
+    from metroliza.app import diagnostic_launcher as launcher
+    from metroliza.shared.diagnostic_store import StoreStatus
+
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", "concurrent")
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setattr(launcher, "IncidentStore", lambda: None)
+    monkeypatch.setattr(launcher, "run_with_store", lambda *args, **kwargs: launcher.LaunchDelivery(
+        SimpleNamespace(exit_code=9), StoreStatus.PUBLISH_INCOMPLETE
+    ))
+    def denied(*args, **kwargs):
+        raise PermissionError("PRIVATE_SENTINEL")
+    monkeypatch.setattr(Path, "open", denied)
+    assert launcher.main() == 9
+    assert qualifier._startup_phases(probe_root) == ()
+
+
+@pytest.mark.parametrize("phases", [(), ("storage_private",), ("storage_saved", "storage_io_failed")])
+def test_absent_unknown_or_multiple_storage_markers_are_not_a_status(phases):
+    assert qualifier._launcher_storage_status(phases) is None
+
+
+@pytest.mark.parametrize("phases", [
+    [["private sentinel"], []], [["storage_saved", "storage_saved"], []],
+    [[True], []], [[], [], []], "private sentinel",
+])
+def test_public_failure_rejects_unclosed_concurrent_phase_evidence(phases):
+    assert not qualifier._valid_failure_detail({
+        "stage": "concurrent_1", "reason": "launcher_storage_not_saved", "concurrent_phases": phases,
+    })
+
+
+def test_public_concurrent_failure_preserves_separate_empty_and_observed_roots():
+    detail = qualifier._failure_detail(
+        "concurrent_2", "launcher_storage_not_saved", None, None, None,
+        concurrent_phases=((), ("storage_publish_incomplete", "notice_suppressed")),
+    )
+    assert detail["concurrent_phases"] == [[], ["storage_publish_incomplete", "notice_suppressed"]]
+    assert qualifier._valid_failure_detail(detail)
+    detail["stage"] = "normal"
+    assert not qualifier._valid_failure_detail(detail)
