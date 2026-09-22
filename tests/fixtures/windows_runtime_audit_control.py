@@ -10,7 +10,9 @@ import time
 def main():
     mode = sys.argv[1]
     if mode in {"outer", "supervisor"}:
-        executable = Path(sys.executable).with_name("python.exe" if mode == "outer" else "pythonw.exe")
+        executable = Path(sys.executable).with_name(
+            "control-launcher.exe" if mode == "outer" else "control-application.exe"
+        )
         next_mode = "supervisor" if mode == "outer" else "ver"
         return subprocess.call([str(executable), __file__, next_mode], creationflags=0x08000000)
     root = Path(__file__).resolve().parents[2]
