@@ -5399,7 +5399,7 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")
-def test_native_windows_restricted_token_job_launches_without_console(tmp_path) -> None:
+def test_native_windows_restricted_token_job_launches_without_console(tmp_path, monkeypatch) -> None:
     api = qualification._WindowsApi()
     token = api._restricted_token()
     try:
@@ -5411,6 +5411,29 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
     environment = qualification._sanitized_environment(
         tmp_path, tmp_path, tmp_path, "normal"
     )
+    # Inspect only this owned Job's rejected member while its handle remains
+    # owned. Exact fixed-system-file comparisons never authorize that member.
+    rejected_images = []
+    original_observe_member = api._observe_job_member
+
+    def observe_member(handle, process_id, expected_images):
+        try:
+            return original_observe_member(handle, process_id, expected_images)
+        except qualification.QualificationFailure as error:
+            native, unavailable = api._native_process_image(handle)
+            classification = "unavailable" if unavailable is not None else "unknown"
+            if unavailable is None:
+                for name in ("whoami.exe", "conhost.exe", "WerFault.exe", "wermgr.exe", "OpenConsole.exe"):
+                    matches, failed = api._expected_file_native_image(
+                        system_root / "System32" / name, native, error
+                    )
+                    if failed is None and matches:
+                        classification = name
+                        break
+            rejected_images.append(classification)
+            raise
+
+    monkeypatch.setattr(api, "_observe_job_member", observe_member)
     process = api.launch(executable, environment, tmp_path)
     try:
         deadline = time.monotonic() + 10
@@ -5421,7 +5444,7 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
             if exit_code is not None:
                 break
             time.sleep(0.02)
-        assert exit_code is not None
+        assert exit_code == 0, {"native_whoami_exit_code": exit_code}
         process.observe()
         while time.monotonic() < deadline and process.active_processes() != 0:
             time.sleep(0.02)
@@ -5431,7 +5454,14 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path) 
         # Retain only the existing fixed-schema observer detail. This remains
         # a failing gate; raw image paths, PID and exception text stay private.
         detail = error.native_observation
+        # Query only the already-owned primary handle, without an extra wait.
+        try:
+            primary_exit = process.poll()
+        except qualification.QualificationFailure:
+            primary_exit = "unavailable"
         pytest.fail("native_token_job_observation=" + json.dumps({
+            "rejected_images": rejected_images[:16],
+            "primary_exit_code": primary_exit,
             "reason": error.qualification_reason,
             "native_observation": detail.receipt() if detail is not None else None,
         }, sort_keys=True), pytrace=False)
@@ -5613,3 +5643,103 @@ def test_token_information_rejects_unbounded_allocation(reported):
     api.advapi = SimpleNamespace(GetTokenInformation=query)
     with pytest.raises(qualification.QualificationFailure, match="restricted_launch_unavailable"):
         api._token_information(17, qualification.TOKEN_USER)
+
+
+def test_failed_topology_emits_only_closed_counts_and_roles(capsys):
+    record = {
+        "launcher_processes_observed": 0, "application_processes_observed": 1,
+        "unexpected_processes_observed": 1, "assigned_processes": 2,
+        "max_active_processes": 2, "creation_order": ["application", "unexpected"],
+        "all_processes_exited": True,
+    }
+    with pytest.raises(qualification.QualificationFailure) as failure:
+        qualification._validate_topology_record(record, supervised=False)
+    assert failure.value.qualification_reason == "qualification_topology_failed"
+    observed = capsys.readouterr().err.strip().split("=", 1)[1]
+    assert json.loads(observed) == record
+    record.update(creation_order=["PRIVATE_PATH"], assigned_processes=True,
+                  application_processes_observed=100000, private="PRIVATE_PATH")
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_topology_record(record, supervised=False)
+    output = capsys.readouterr().err
+    assert "PRIVATE_PATH" not in output
+    safe = json.loads(output.strip().split("=", 1)[1])
+    assert safe["creation_order"] == safe["assigned_processes"] == "invalid"
+    assert safe["application_processes_observed"] == "invalid"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real source-window process control requires Windows")
+def test_native_source_window_process_dependencies_are_observed(tmp_path, monkeypatch):
+    import subprocess
+
+    api = qualification._WindowsApi()
+    original_advapi = api.advapi
+    executable = Path(sys.executable).resolve()
+    fixture = Path(__file__).parent / "fixtures" / "windows_ui_process_control.py"
+    command_text = subprocess.list2cmdline([str(executable), str(fixture.resolve())])
+
+    class FixedSourceCommand:
+        """Keep both real launch APIs/flags; supply one fixed test script only."""
+        def __getattr__(self, name):
+            return getattr(original_advapi, name)
+
+        def CreateProcessAsUserW(self, *arguments):
+            values = list(arguments)
+            values[2] = ctypes.create_unicode_buffer(command_text)
+            return original_advapi.CreateProcessAsUserW(*values)
+
+        def CreateProcessWithTokenW(self, *arguments):
+            values = list(arguments)
+            values[3] = ctypes.create_unicode_buffer(command_text)
+            return original_advapi.CreateProcessWithTokenW(*values)
+
+    monkeypatch.setattr(api, "advapi", FixedSourceCommand())
+    system = Path(os.environ["SYSTEMROOT"]) / "System32"
+    # Diagnostic candidates only: an extra member still fails the one-process
+    # contract below. Native file comparison, token, Job and cleanup stay real.
+    candidates = {"application": executable, "system_cmd": system / "cmd.exe",
+                  "system_conhost": system / "conhost.exe", "system_werfault": system / "WerFault.exe"}
+    state = tmp_path / "state"
+    (state / "Roaming").mkdir(parents=True)
+    temporary = tmp_path / "temp"
+    temporary.mkdir()
+    environment = qualification._sanitized_environment(tmp_path, tmp_path, state, "normal")
+    environment.update(TEMP=str(temporary), TMP=str(temporary),
+                       PYTHONDONTWRITEBYTECODE="1", APPDATA=str(state / "Roaming"))
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    environment["QT_QPA_PLATFORM"] = "windows"
+    environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION", None)
+    owned = []
+    completed = False
+    try:
+        process = api.launch(executable, environment, tmp_path, owned=owned,
+                             expected_images=tuple(candidates.values()))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            process.observe()
+            if process.poll() is not None and process.active_processes() == 0:
+                break
+            time.sleep(0.002)
+        assert process.poll() == 0 and process.active_processes() == 0
+        observed = []
+        for observation in process._observations.values():
+            observed.append(next((key for key, path in candidates.items()
+                                  if api._same_requested_image(observation.image, path)), "unknown"))
+        receipt = qualification._bounded_json(tmp_path / "ui-process-control.json", 4096)
+        assert set(receipt) == {"status", "audit", "window_seen", "closed"}
+        assert receipt["status"] == "passed" and receipt["window_seen"] is True and receipt["closed"] is True
+        assert set(receipt["audit"]) == {"bootstrap_import", "window_import", "window_construct", "show_close"}
+        assert all(set(values) == {"cmd_ver", "other"}
+                   and all(type(count) is int and 0 <= count <= 16 for count in values.values())
+                   for values in receipt["audit"].values())
+        diagnostic = {"audit": receipt["audit"], "observed_roles": sorted(observed),
+                      "assigned_processes": process._assigned_processes,
+                      "max_active_processes": process._max_active_processes}
+        # This is a discriminator for the rejected direct-window topology,
+        # never a waiver for extra processes or a packaged acceptance claim.
+        assert process._assigned_processes == 1 and observed == ["application"], (
+            "source_window_process_dependencies=" + json.dumps(diagnostic, sort_keys=True)
+        )
+        completed = True
+    finally:
+        qualification._close_owned_processes(owned, terminate=not completed)

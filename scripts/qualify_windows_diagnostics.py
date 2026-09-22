@@ -3661,6 +3661,28 @@ def _topology_record(topology: ProcessTopology) -> dict[str, object]:
     }
 
 
+def _topology_failure_observation(value: object) -> dict[str, object]:
+    """Bound the diagnostic even when rejecting malformed topology input."""
+    if type(value) is not dict:
+        return {"shape": "invalid"}
+    result: dict[str, object] = {}
+    for key in (
+        "launcher_processes_observed", "application_processes_observed",
+        "unexpected_processes_observed", "assigned_processes", "max_active_processes",
+    ):
+        count = value.get(key)
+        result[key] = count if type(count) is int and 0 <= count <= 16 else "invalid"
+    order = value.get("creation_order")
+    roles = {"launcher_bootloader", "launcher_supervisor", "application", "unexpected"}
+    result["creation_order"] = (
+        order if type(order) is list and len(order) <= 16
+        and all(type(role) is str and role in roles for role in order) else "invalid"
+    )
+    exited = value.get("all_processes_exited")
+    result["all_processes_exited"] = exited if type(exited) is bool else "invalid"
+    return result
+
+
 def _validate_topology_record(value: object, *, supervised: bool) -> None:
     expected = {
         "launcher_processes_observed",
@@ -3672,7 +3694,12 @@ def _validate_topology_record(value: object, *, supervised: bool) -> None:
         "all_processes_exited",
     }
     if type(value) is not dict or set(value) != expected:
-        raise QualificationFailure("output_failed")
+        print("qualification_topology_observation=" + json.dumps(
+            _topology_failure_observation(value), sort_keys=True
+        ), file=sys.stderr, flush=True)
+        raise QualificationFailure(
+            "output_failed", qualification_reason="qualification_topology_failed"
+        )
     expected_order = (
         ["launcher_bootloader", "launcher_supervisor", "application"]
         if supervised
@@ -3689,7 +3716,12 @@ def _validate_topology_record(value: object, *, supervised: bool) -> None:
         or type(value["max_active_processes"]) is not int
         or not 1 <= value["max_active_processes"] <= 3
     ):
-        raise QualificationFailure("output_failed")
+        print("qualification_topology_observation=" + json.dumps(
+            _topology_failure_observation(value), sort_keys=True
+        ), file=sys.stderr, flush=True)
+        raise QualificationFailure(
+            "output_failed", qualification_reason="qualification_topology_failed"
+        )
 
 
 def _validate_topology(topology: object, package: dict[str, object]) -> None:
