@@ -127,11 +127,19 @@ def verified_runtime_order(proof, *, supervised: bool) -> tuple[str, ...]:
     events = proof["events"]
     if type(events) is not list or len(events) > 1:
         reject()
+    helper_phase = "startup"
     if events:
         event = events[0]
         if (type(event) is not dict or set(event) != {"kind", "caller", "phase"}
-                or event["kind"] != "platform_ver" or event["phase"] != "startup"
+                or event["kind"] != "platform_ver"
                 or type(event["caller"]) is not str or event["caller"] not in audit.CALLERS):
+            reject()
+        # startup_ready precedes lazy workflow imports. EXE24 proved NumPy's
+        # same exact version query can occur after this real readiness boundary.
+        # Pair that one evidenced case with running-only native observations.
+        if event["phase"] == "after_ready" and event["caller"] == "numpy":
+            helper_phase = "running"
+        elif event["phase"] != "startup":
             reject()
     owned = proof["owned"]
     expected_roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
@@ -149,11 +157,11 @@ def verified_runtime_order(proof, *, supervised: bool) -> tuple[str, ...]:
             or owned["probe_effect"] != "extra_handle_queries_and_bounded_snapshot"
             or type(owned["members"]) is not list or len(owned["members"]) != len(expected_roles)):
         reject()
-    _verify_members(owned["members"], expected_roles)
+    _verify_members(owned["members"], expected_roles, helper_phase)
     return tuple(expected_order)
 
 
-def _verify_members(members, expected_roles):
+def _verify_members(members, expected_roles, helper_phase):
     def reject():
         raise ValueError("runtime_evidence_invalid")
 
@@ -167,7 +175,7 @@ def _verify_members(members, expected_roles):
         if parent != "unknown" and not (type(parent) is int and 0 <= parent < index):
             reject()
         if role in {"system_cmd", "system_conhost"} and (
-            member["first_phase"] != "startup" or member["last_phase"] != "startup"
+            member["first_phase"] != helper_phase or member["last_phase"] != helper_phase
             or type(member["parent_ordinal_advisory"]) is not int
             or member["parent_ordinal_advisory"] != index - 1
         ):
