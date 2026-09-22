@@ -1781,7 +1781,7 @@ class _WindowsApi:
                 process, job, token, launched
             )
             cleanup_succeeded, cleanup_error = self._close_failed_runtime_evidence(
-                runtime_evidence, launched, cleanup_succeeded, cleanup_error
+                runtime_evidence, cleanup_succeeded, cleanup_error
             )
             if not isinstance(error, Exception):
                 raise
@@ -1808,12 +1808,15 @@ class _WindowsApi:
         return existing
 
     @staticmethod
-    def _close_failed_runtime_evidence(evidence, launched, succeeded, error):
-        if evidence is not None and launched is None:
+    def _close_failed_runtime_evidence(evidence, succeeded, error):
+        # Until launch returns, its failure path owns the journal even after
+        # wrapper construction/registration. Wrapper failure cleanup closes the
+        # native handles only and marks that wrapper closed to prevent repeats.
+        if evidence is not None:
             try:
                 evidence.close()
             except BaseException as evidence_error:
-                return False, evidence_error
+                return False, _prefer_cleanup_error(error, evidence_error)
         return succeeded, error
 
     def _observe_before_resume(self, process) -> _ProcessObservation:

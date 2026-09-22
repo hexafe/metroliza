@@ -10,6 +10,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -867,22 +868,29 @@ def test_concurrent_pair_is_registered_before_any_resume(tmp_path, monkeypatch, 
 @pytest.mark.parametrize(
     "interrupt_at", ["before_wrapper_assignment", "before_register", "after_register"]
 )
+@pytest.mark.parametrize("defer_resume", [False, True])
 def test_native_launch_transfer_closes_wrapper_once_on_interrupt(
-    tmp_path, monkeypatch, interrupt_at
+    tmp_path, monkeypatch, interrupt_at, defer_resume
 ) -> None:
     primary = KeyboardInterrupt("PRIVATE_INTERRUPT_DETAIL")
     closed = []
     api = _fake_launch_api(tmp_path, monkeypatch, _LaunchTransferKernel(closed))
     owned = _InterruptingOwner(interrupt_at, primary)
+    evidence_closed = []
+    evidence = SimpleNamespace(probe=None, close=lambda: evidence_closed.append(True))
+
+    def launch():
+        return api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned,
+                          runtime_evidence=evidence, defer_resume=defer_resume)
 
     with pytest.raises(KeyboardInterrupt) as caught:
         if interrupt_at == "before_wrapper_assignment":
             _interrupt_after_call(
                 qualification._WindowsApi.launch.__code__, "launched", primary,
-                lambda: api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned),
+                launch,
             )
         else:
-            api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned)
+            launch()
     qualification._close_owned_processes(owned, terminate=True)
 
     assert caught.value is primary
@@ -893,6 +901,30 @@ def test_native_launch_transfer_closes_wrapper_once_on_interrupt(
     )
     assert len(owned) == (1 if interrupt_at == "after_register" else 0)
     assert all(process._closed for process in owned)
+    assert evidence_closed == [True]
+
+
+@pytest.mark.parametrize("evidence_fails", [False, True])
+def test_registered_launch_failure_accounts_for_journal_cleanup(tmp_path, monkeypatch, evidence_fails):
+    primary = qualification.QualificationFailure("restricted_launch_unavailable")
+    closed, evidence_closed = [], []
+    api = _fake_launch_api(tmp_path, monkeypatch, _LaunchTransferKernel(closed))
+    owned = _InterruptingOwner("after_register", primary)
+
+    def close_evidence():
+        evidence_closed.append(True)
+        if evidence_fails:
+            raise OSError("synthetic cleanup failure")
+
+    evidence = SimpleNamespace(probe=None, close=close_evidence)
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned,
+                   runtime_evidence=evidence, defer_resume=True)
+    qualification._close_owned_processes(owned, terminate=True)
+    assert caught.value is primary
+    assert primary.qualification_cleanup == ("failed" if evidence_fails else "complete")
+    assert evidence_closed == [True]
+    assert closed == ["thread", "job", "process", "token"]
 
 
 def test_raw_launch_cleanup_attempts_all_handles_after_secondary_interrupt() -> None:
