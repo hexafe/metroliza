@@ -228,6 +228,66 @@ def test_runtime_proof_keeps_physical_counts_and_exact_launcher_order(supervised
     assert topology.assigned_processes == size
 
 
+@pytest.mark.parametrize("supervised", [False, True])
+def test_lazy_numpy_version_query_after_ready_keeps_exact_owned_chain(supervised):
+    proof = _proof(supervised)
+    proof["events"][0].update(caller="numpy", phase="after_ready")
+    for member in proof["owned"]["members"][-2:]:
+        member.update(first_phase="running", last_phase="running")
+    order = verified_runtime_order(proof, supervised=supervised)
+    assert len(order) == (5 if supervised else 3)
+    assert order[-2:] == ("windows_version_command", "windows_version_console")
+    topology = qualification.ProcessTopology(
+        2 if supervised else 0, 1, 0, len(order), len(order), order, True, proof
+    )
+    qualification._validate_topology_record(
+        qualification._topology_record(topology), supervised=supervised,
+        require_runtime_evidence=True,
+    )
+
+
+@pytest.mark.parametrize("defect", [
+    "other_caller", "setuptools_caller", "other_command", "other_frames", "unknown_phase", "event_startup",
+    "cmd_first_startup", "cmd_last_startup", "console_first_startup", "console_last_startup",
+    "helper_drain", "wrong_parent", "unknown_parent", "unknown_image", "extra_event", "live", "gap", "unavailable",
+])
+def test_after_ready_numpy_query_still_requires_matching_phase_and_complete_proof(defect):
+    proof = _proof()
+    proof["events"][0].update(caller="numpy", phase="after_ready")
+    members = proof["owned"]["members"]
+    for member in members[-2:]:
+        member.update(first_phase="running", last_phase="running")
+    if defect in {"other_caller", "setuptools_caller"}:
+        proof["events"][0]["caller"] = defect.removesuffix("_caller")
+    elif defect in {"other_command", "other_frames"}:
+        proof["events"][0]["kind"] = defect
+    elif defect == "unknown_phase":
+        proof["events"][0]["phase"] = "unknown"
+    elif defect == "event_startup":
+        proof["events"][0]["phase"] = "startup"
+    elif defect.startswith(("cmd_", "console_")):
+        helper, boundary, _ = defect.split("_")
+        members[-2 if helper == "cmd" else -1][boundary + "_phase"] = "startup"
+    elif defect == "wrong_parent":
+        members[-1]["parent_ordinal_advisory"] = 0
+    elif defect == "unknown_parent":
+        members[-1]["parent_ordinal_advisory"] = "unknown"
+    elif defect == "helper_drain":
+        members[-1]["last_phase"] = "drain"
+    elif defect == "unknown_image":
+        members[-1]["identity"] = "unknown"
+    elif defect == "extra_event":
+        proof["events"] *= 2
+    elif defect == "live":
+        proof["owned"]["job_empty"] = False
+    elif defect == "gap":
+        proof["owned"]["unobserved"] = 1
+    elif defect == "unavailable":
+        proof["owned"]["observation_unavailable"] = True
+    with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+        verified_runtime_order(proof, supervised=False)
+
+
 @pytest.mark.parametrize(
     "defect",
     [
@@ -480,7 +540,7 @@ def test_runtime_cleanup_refuses_replaced_root_or_unknown_content(tmp_path, defe
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows owned process and audit control")
 @pytest.mark.parametrize(
-    "mode", ["none", "ver", "deep_ver", "hard", "other", "write_failure", "blocked_install", "outer", "concurrent"]
+    "mode", ["none", "ver", "deep_ver", "late_numpy", "late_ver", "late_other", "hard", "other", "write_failure", "blocked_install", "outer", "concurrent"]
 )
 def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, monkeypatch, mode):
     api = qualification._WindowsApi()
@@ -568,6 +628,9 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             for index, process in enumerate(owned):
                 process.observe()
                 if (tmp_path / str(index) / "control-ready").exists():
+                    if mode.startswith("late_") and not (tmp_path / str(index) / "control-start").exists():
+                        process.mark_runtime_ready()
+                        (tmp_path / str(index) / "control-start").touch()
                     (tmp_path / str(index) / "control-finish").touch()
             if all(
                 process.poll() is not None and process.active_processes() == 0 for process in owned
@@ -584,12 +647,15 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             else:
                 proof = evidence.proof()
                 proofs.append(proof)
-                if mode == "other":
+                if mode in {"other", "late_ver", "late_other"}:
                     with pytest.raises(ValueError):
                         verified_runtime_order(proof, supervised=False)
                 else:
                     order = verified_runtime_order(proof, supervised=mode == "outer")
                     assert process._assigned_processes == len(order)
+                    if mode == "late_numpy":
+                        assert proof["events"] == [{"kind": "platform_ver", "caller": "numpy", "phase": "after_ready"}]
+                        assert len(order) == 3
         if mode == "concurrent":
             assert (
                 evidences[0].nonce != evidences[1].nonce and evidences[0].root != evidences[1].root
