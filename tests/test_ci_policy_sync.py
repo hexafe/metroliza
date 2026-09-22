@@ -685,4 +685,5 @@ def test_windows_incident_qualification_is_bounded_and_native_selection_is_block
         'tests/test_diagnostic_qualification.py', 'tests/test_windows_diagnostic_qualification.py',
         'tests/test_diagnostic_startup_probe.py',
         'tests/test_packaging_setuptools_hook.py',
+        'tests/test_windows_runtime_audit.py',
     ]

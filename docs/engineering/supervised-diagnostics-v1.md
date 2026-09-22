@@ -133,3 +133,39 @@ Its receipts are necessary package evidence. Source mocks or native source pytes
 establish that result. Current full CI, Qt19, independent exact-head audit, configured review and
 the Ready-triggered review remain separate gates. Final operational composition and release/real-data
 acceptance belong to their respective delivery tracks; this feature does not authorize self-merge.
+
+### Same-run Windows version-query evidence
+
+EXE20 and EXE21 observed the exact contained app/cmd/conhost chain, all exited;
+no leak was demonstrated. Replacing the eager setuptools hook had a positive
+native counterfactual but did not remove the chain in the frozen package.
+Dependency ownership in that package remains unproved until its own earliest
+audit hook records a fixed callsite category. The qualifier therefore pairs
+command-purpose proof with owned native file and ancestry proof in every run.
+
+Permitted physical creation sequences are app alone or app/version-command/
+version-console; supervised runs prepend the same two launcher processes. The
+helper suffix requires exactly one `platform_ver` event, exact system cmd.exe
+with the fixed ver command and both `_syscmd_ver`/`win32_ver` frames, a verified
+parent chain and no observations missing. Zero events require zero helpers.
+The outer dependency category `other` does not authorize an unknown command,
+image or parent and does not establish a dependency-removal cause. Helpers
+remain visible in assigned/max-active counts and must exit with their Job.
+
+The explicit app hook precedes all implied runtime hooks; Analysis verifies
+its exact source and order. The hook is inert outside synthetic qualification.
+It closes an exclusive bounded receipt before each attempted Popen, avoiding
+any atexit dependency for the deliberate hard-exit test. Failed writes,
+installation, overflow and reentrancy exit the synthetic app with97; no
+optional dependency catch can turn missing evidence into success. After Job
+drain the host validates nonce, schema, regular single-link files, all records
+and observation agreement, emits only fixed enums and removes the private
+journal. The host binds its created directory identity and removes only the
+capped regular single-link journal files followed by rmdir; replaced roots,
+reparse points, nested content and unknown entries are rejected. Incidents and exported ZIPs never include these private journals.
+Concurrent starts retain separate per-process owners and journals.
+
+Native controls cover no call, the real version call, other commands, durable
+prelaunch evidence after hard exit, failed exclusive write, two launcher-like
+parents and two simultaneous Jobs. Their source proof cannot establish that
+a packaged candidate passed; the exact packaged head still needs qualification.

@@ -1078,6 +1078,7 @@ jobs:
           tests/test_diagnostic_qualification.py tests/test_windows_diagnostic_qualification.py
           tests/test_diagnostic_startup_probe.py
           tests/test_packaging_setuptools_hook.py
+          tests/test_windows_runtime_audit.py
 
       - name: Run native Windows Qt lifecycle tests
         env:

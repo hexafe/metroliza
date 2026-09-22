@@ -51,6 +51,15 @@ _ONEDIR_SCANNER_PARAMETERS = (
 )
 
 
+def validate_runtime_audit_hook(scripts: list, hook_root: Path) -> None:
+    """Only bootloader bootstrap may execute before the explicit audit hook."""
+    expected = (hook_root / "rthooks/metroliza_rth_runtime_audit.py").resolve()
+    selected = [Path(source).resolve() for name, source, _ in scripts
+                if name != "pyiboot01_bootstrap"]
+    if not selected or selected[0] != expected or selected.count(expected) != 1:
+        raise RuntimeError("Windows runtime audit hook order is invalid")
+
+
 def validate_setuptools_runtime_hook(scripts: list, hook_root: Path) -> None:
     """Fail the build if Analysis did not replace the eager setuptools hook."""
     expected = (hook_root / "rthooks" / "metroliza_rth_setuptools.py").resolve()
