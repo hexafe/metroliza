@@ -846,10 +846,19 @@ class _WindowsProcess:
     ) -> tuple[tuple[_ProcessObservation, ...], int, int]:
         evidence = getattr(self, "runtime_evidence", None)
         extra = {} if evidence is None else {"probe": evidence.probe}
+        identity_candidates = self._expected_images
+        if evidence is not None:
+            # Collect exact helper identity even when Win32 image query is
+            # denied. This changes no topology allowance: the helpers remain
+            # unexpected until the same Job's complete runtime proof passes.
+            images = dict(evidence.probe.images)
+            identity_candidates += tuple(
+                images[role] for role in ("system_cmd", "system_conhost") if role in images
+            )
         observations, active, assigned = self._api.job_observations(
             self._job, primary_process=self._process, primary_initial=self._initial,
             primary_native_image=self._initial_native_image,
-            expected_images=self._expected_images,
+            expected_images=identity_candidates,
             **extra,
         )
         self._assigned_processes = max(self._assigned_processes, assigned)
@@ -917,21 +926,25 @@ class _WindowsProcess:
         return active
 
     def close(self, *, terminate: bool = False) -> None:
-        if self._closed:
-            return
-        self._closed = True
         try:
-            _attempt_cleanup(
-                lambda: self._api.close_process(
-                    self._process, self._job, terminate=terminate,
-                    thread=self._thread, token=self._token,
+            if not self._closed:
+                self._closed = True
+                _attempt_cleanup(
+                    lambda: self._api.close_process(
+                        self._process, self._job, terminate=terminate,
+                        thread=self._thread, token=self._token,
+                    )
                 )
-            )
         finally:
-            evidence = getattr(self, "runtime_evidence", None)
-            if evidence is not None:
+            self._close_runtime_evidence()
+
+    def _close_runtime_evidence(self) -> None:
+        evidence = getattr(self, "runtime_evidence", None)
+        if evidence is not None:
+            def cleanup() -> None:
+                evidence.close()
                 self.runtime_evidence = None
-                _attempt_cleanup(evidence.close)
+            _attempt_cleanup(cleanup)
 
 
 class _WindowsApi:
@@ -1781,7 +1794,7 @@ class _WindowsApi:
                 process, job, token, launched
             )
             cleanup_succeeded, cleanup_error = self._close_failed_runtime_evidence(
-                runtime_evidence, cleanup_succeeded, cleanup_error
+                runtime_evidence, cleanup_succeeded, cleanup_error, launched=launched
             )
             if not isinstance(error, Exception):
                 raise
@@ -1808,13 +1821,15 @@ class _WindowsApi:
         return existing
 
     @staticmethod
-    def _close_failed_runtime_evidence(evidence, succeeded, error):
+    def _close_failed_runtime_evidence(evidence, succeeded, error, *, launched=None):
         # Until launch returns, its failure path owns the journal even after
         # wrapper construction/registration. Wrapper failure cleanup closes the
         # native handles only and marks that wrapper closed to prevent repeats.
         if evidence is not None:
             try:
                 evidence.close()
+                if launched is not None:
+                    launched.runtime_evidence = None
             except BaseException as evidence_error:
                 return False, _prefer_cleanup_error(error, evidence_error)
         return succeeded, error
