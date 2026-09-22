@@ -63,7 +63,10 @@ def classify_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
             caller = module.split(".", 1)[0]
         frame = frame.f_back
     else:
-        return "other_depth", "other"
+        # The bound limits observation, not the caller's total stack depth.
+        # Retain a complete signature already proved inside that window.
+        if required != {"_syscmd_ver", "win32_ver"}:
+            return ("other_depth" if frame is not None else "other_frames"), "other"
     return ("platform_ver" if required == {"_syscmd_ver", "win32_ver"} else "other_frames"), caller
 
 

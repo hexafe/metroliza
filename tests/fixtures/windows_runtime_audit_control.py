@@ -25,10 +25,15 @@ def main():
                 raise RuntimeError("synthetic")
         sys.addaudithook(block_registration)
     runpy.run_path(str(root / "packaging/hooks/windows/rthooks/metroliza_rth_runtime_audit.py"))
-    if mode in {"ver", "hard", "write_failure"}:
+    if mode in {"ver", "deep_ver", "hard", "write_failure"}:
         import platform
 
-        platform.win32_ver()
+        def version_at_depth(remaining):
+            if remaining:
+                return version_at_depth(remaining - 1)
+            return platform.win32_ver()
+
+        version_at_depth(80 if mode == "deep_ver" else 0)
     elif mode == "other":
         subprocess.check_output("echo synthetic", shell=True)
     if mode == "hard":
