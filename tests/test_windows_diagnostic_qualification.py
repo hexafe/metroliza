@@ -5680,6 +5680,10 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
     executable = Path(sys.executable).resolve().with_name("pythonw.exe")
     assert executable.is_file() and not executable.is_symlink()
     assert qualification._pe_subsystem(executable) == 2
+    api.enable_owned_probe(tmp_path)
+    # This control's fixed expected image is the owned source interpreter.
+    # Production probe candidates and process acceptance are unchanged.
+    api._owned_probe.images = (("package_application", executable),)
     fixture = Path(__file__).parent / "fixtures" / "windows_ui_process_control.py"
     command_text = subprocess.list2cmdline([str(executable), str(fixture.resolve())])
     launch_api = []
@@ -5761,6 +5765,11 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
         diagnostic["stage"] = "topology"
         # This is a discriminator for rejected topology, never a waiver.
         assert process._assigned_processes == 1 and observed == ["application"]
+        diagnostic["owned_probe"] = api._owned_probe.receipt()
+        assert diagnostic["owned_probe"]["observation_unavailable"] is False
+        assert diagnostic["owned_probe"]["job_empty"] is True
+        assert diagnostic["owned_probe"]["members"][0]["identity"] == "fixed_file_verified"
+        assert diagnostic["owned_probe"]["members"][0]["role"] == "package_application"
         completed = True
     except BaseException as error:
         failure = error

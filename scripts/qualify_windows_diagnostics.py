@@ -900,6 +900,26 @@ class _WindowsApi:
         self._declare_structures()
         self._declare_functions()
 
+    def enable_owned_probe(self, artifact: Path) -> None:
+        from scripts.windows_owned_process_probe import OwnedProcessProbe
+
+        self._owned_probe = OwnedProcessProbe(
+            self, artifact, lambda: QualificationFailure("scenario_failed")
+        )
+
+    def _probe_call(self, method: str, *arguments) -> None:
+        probe = getattr(self, "_owned_probe", None)
+        if probe is None:
+            return
+        try:
+            getattr(probe, method)(*arguments)
+        except QualificationFailure as error:
+            if error.qualification_cleanup == "failed":
+                raise
+            probe.unavailable = True
+        except Exception:
+            probe.unavailable = True
+
     def _declare_structures(self) -> None:
         wt = self.wintypes
 
@@ -1686,6 +1706,7 @@ class _WindowsApi:
                 process.hProcess
             )
             initial_process_state = self._native_process_state(process.hProcess)
+            self._probe_call("observe", job, process.hProcess, initial, (initial.process_id,))
             if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
             launched = self._finish_launched_process(
@@ -2322,6 +2343,7 @@ class _WindowsApi:
                         expected_images=expected_images,
                     )
                 except QualificationFailure as error:
+                    self._probe_call("rejected", job, process, process_id, process_ids)
                     error.set_native_phase(
                         "owned_job_observation" if owned_primary else "job_observation"
                     )
@@ -2342,12 +2364,14 @@ class _WindowsApi:
                             qualification_reason="native_primary_identity_mismatch",
                         )
                     observations.append(observation)
+                    self._probe_call("observe", job, process, observation, process_ids)
             finally:
                 if not owned_primary:
                     _attempt_cleanup(
                         lambda process=process: self._require_closed_handles(process)
                     )
         active, total = self._job_accounting(job)
+        self._probe_call("account", active, total, process_ids)
         return tuple(observations), active, total
 
     def poll(self, process) -> int | None:
@@ -3985,6 +4009,11 @@ def _success_payload(
     }
 
 
+def _owned_probe_phase(probe, phase: str) -> None:
+    if probe is not None:
+        probe.phase = phase
+
+
 class _QualificationRunner:
     def __init__(self, artifact: Path, private_root: Path, deadline: float) -> None:
         self.artifact = artifact
@@ -4080,6 +4109,10 @@ class _QualificationRunner:
             environment.pop(key, None)
         owned: list[_WindowsProcess] = []
         terminate = True
+        enable_probe = getattr(self.api, "enable_owned_probe", None)
+        if enable_probe is not None:
+            enable_probe(self.artifact)
+        probe = getattr(self.api, "_owned_probe", None)
         try:
             process = _scenario_step(
                 "qualification_launch_failed",
@@ -4096,6 +4129,7 @@ class _QualificationRunner:
             )
             expected_title = f"Metroliza [{VERSION_LABEL}]"
             window = None
+            _owned_probe_phase(probe, "window_wait")
             while time.monotonic() < scenario_deadline:
                 window = _scenario_step(
                     "qualification_observation_failed",
@@ -4114,18 +4148,20 @@ class _QualificationRunner:
                         qualification_reason="process_exited_before_window",
                         qualification_exit_code=exit_code,
                     )
-                time.sleep(0.02)
+                time.sleep(0.005 if probe is not None else 0.02)
             if window is None:
                 raise QualificationFailure(
                     "scenario_failed",
                     qualification_reason="normal_window_unavailable",
                 )
+            _owned_probe_phase(probe, "window_close")
             _scenario_step(
                 "normal_window_close_failed",
                 lambda: process.close_normal_window(
                     window, self.application, expected_title
                 ),
             )
+            _owned_probe_phase(probe, "drain")
             result = _finish_process_without_receipt(
                 process, self.artifact, scenario_deadline, 0
             )
@@ -4138,7 +4174,14 @@ class _QualificationRunner:
             self.results["direct_ui_smoke"] = result
             terminate = False
         finally:
-            _close_owned_processes(owned, terminate=terminate)
+            try:
+                _close_owned_processes(owned, terminate=terminate)
+            finally:
+                if probe is not None:
+                    # This bounded side-band record never supplies acceptance.
+                    # The strict original topology and cleanup gates stand.
+                    self.api._owned_probe = None
+                    probe.emit()
         if (
             {record.report_id for record in _reports(self.store)} != before
             or _has_qualification_receipt(root)
