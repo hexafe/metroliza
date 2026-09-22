@@ -139,9 +139,9 @@ acceptance belong to their respective delivery tracks; this feature does not aut
 EXE20 and EXE21 observed the exact contained app/cmd/conhost chain, all exited;
 no leak was demonstrated. Replacing the eager setuptools hook had a positive
 native counterfactual but did not remove the chain in the frozen package.
-Dependency ownership in that package remains unproved until its own earliest
-audit hook records a fixed callsite category. The qualifier therefore pairs
-command-purpose proof with owned native file and ancestry proof in every run.
+EXE24 later bound that exact query to NumPy through the package's earliest audit
+hook. The qualifier pairs command-purpose proof with owned native file and
+ancestry proof in every run; this does not identify the historical Qt crash cause.
 
 Permitted physical creation sequences are app alone or app/version-command/
 version-console; supervised runs prepend the same two launcher processes. The
@@ -151,6 +151,17 @@ parent chain and no observations missing. Zero events require zero helpers.
 The outer dependency category `other` does not authorize an unknown command,
 image or parent and does not establish a dependency-removal cause. Helpers
 remain visible in assigned/max-active counts and must exit with their Job.
+
+EXE24 identified the fixed version query as NumPy's call. Its direct UI smoke
+completed; the normal workflow then made the same query after `startup_ready`,
+which is intentionally written before lazy import of the real workflow services.
+The qualifier accepts two complete phase pairs: a startup event with both helper
+observations entirely in startup, or the evidenced `numpy`/`after_ready` event
+with both helpers observed entirely in running. Mixed phases, another late
+caller, another command or missing native evidence still fail. The readiness
+marker and physical count/ancestry/lifecycle checks are unchanged. This corrects
+the qualifier's startup-only assumption; it does not establish a general NumPy
+subprocess allowance or successful supervised/package acceptance.
 
 The explicit app hook precedes all implied runtime hooks; Analysis verifies
 its exact source and order. The hook is inert outside synthetic qualification.
