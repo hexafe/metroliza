@@ -331,6 +331,7 @@ def test_valid_digest_does_not_substitute_for_correct_persisted_measurement(tmp_
     ("relative_artifact_dir", "../escape"), ("initial_imported", True),
     ("cancelled_files", 0), ("cancel_barrier_stage", "after_commit"),
     ("source_hashes", {}), ("sidecars_after_window_close", ["-wal", "-wal"]),
+    ("sidecars_after_window_close", ["-journal"]),
 ])
 def test_import_guard_receipt_rejects_false_or_unbounded_evidence(field, value):
     sample = payload()
@@ -363,3 +364,114 @@ def test_import_guard_postprocess_verification_rejects_changes(tmp_path, mutatio
     with pytest.raises(driver.CandidateFailure, match=reason):
         driver._verify_import_guard_outputs(child, sample, output, oracle)
     assert not (output / "import-guards.sqlite").exists()
+
+
+def test_import_guard_accepts_only_inert_closed_wal_pair(tmp_path):
+    sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
+    database = child / sample["import_guard_evidence"]["relative_artifact_dir"] / "reports.sqlite"
+    database.with_name(database.name + "-wal").write_bytes(b"")
+    database.with_name(database.name + "-shm").write_bytes(bytes(32768))
+
+    copied = driver._verify_import_guard_outputs(child, sample, output, oracle)
+
+    assert copied == {"path": "import-guards.sqlite", "sha256": driver._hash(database)}
+    assert (output / copied["path"]).is_file()
+    assert database.with_name(database.name + "-wal").stat().st_size == 0
+    assert database.with_name(database.name + "-shm").stat().st_size == 32768
+
+
+@pytest.mark.parametrize("kind", ("nonempty_wal", "journal", "wrong_shm", "hardlink", "symlink"))
+def test_import_guard_rejects_unsafe_final_sidecars(tmp_path, kind):
+    import os
+
+    sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
+    database = child / sample["import_guard_evidence"]["relative_artifact_dir"] / "reports.sqlite"
+    wal = database.with_name(database.name + "-wal")
+    shm = database.with_name(database.name + "-shm")
+    wal.write_bytes(b"")
+    shm.write_bytes(bytes(32768))
+    if kind == "nonempty_wal":
+        wal.write_bytes(b"uncheckpointed page")
+    elif kind == "journal":
+        database.with_name(database.name + "-journal").write_bytes(b"")
+    elif kind == "wrong_shm":
+        shm.write_bytes(bytes(32767))
+    elif kind == "hardlink":
+        wal.unlink()
+        os.link(shm, wal)
+    else:
+        wal.unlink()
+        wal.symlink_to(shm)
+
+    with pytest.raises(driver.CandidateFailure, match="^import_guard_database_sidecars_remain$"):
+        driver._verify_import_guard_outputs(child, sample, output, oracle)
+    assert not (output / "import-guards.sqlite").exists()
+
+
+def test_import_guard_detects_sidecar_mutation_during_observation(tmp_path, monkeypatch):
+    sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
+    database = child / sample["import_guard_evidence"]["relative_artifact_dir"] / "reports.sqlite"
+    database.with_name(database.name + "-wal").write_bytes(b"")
+    shm = database.with_name(database.name + "-shm")
+    shm.write_bytes(bytes(32768))
+    original = driver._adjacent_module
+
+    def mutate_on_oracle_load(*args, **kwargs):
+        module = original(*args, **kwargs)
+        shm.write_bytes(b"x" + bytes(32767))
+        return module
+
+    monkeypatch.setattr(driver, "_adjacent_module", mutate_on_oracle_load)
+    with pytest.raises(driver.CandidateFailure, match="^import_guard_observation_changed_database$"):
+        driver._verify_import_guard_outputs(child, sample, output, oracle)
+
+
+def test_import_guard_rejects_live_uncheckpointed_wal(tmp_path):
+    import sqlite3
+
+    sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
+    database = child / sample["import_guard_evidence"]["relative_artifact_dir"] / "reports.sqlite"
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE live_uncheckpointed_marker (id INTEGER)")
+        connection.commit()
+        assert database.with_name(database.name + "-wal").stat().st_size > 0
+        with pytest.raises(driver.CandidateFailure, match="^import_guard_database_sidecars_remain$"):
+            driver._verify_import_guard_outputs(child, sample, output, oracle)
+    finally:
+        connection.close()
+
+
+def test_import_guard_rejects_reparse_attribute(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    target = tmp_path / "reports.sqlite-wal"
+    target.write_bytes(b"")
+    actual_lstat = Path.lstat
+
+    def lstat_with_reparse(path):
+        info = actual_lstat(path)
+        if path == target:
+            return SimpleNamespace(st_mode=info.st_mode, st_nlink=info.st_nlink,
+                                   st_file_attributes=0x400)
+        return info
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_reparse)
+    assert not driver._regular(target)
+
+
+def test_import_guard_detects_database_mutation_during_observation(tmp_path, monkeypatch):
+    sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
+    database = child / sample["import_guard_evidence"]["relative_artifact_dir"] / "reports.sqlite"
+    original = driver._adjacent_module
+
+    def mutate_on_oracle_load(*args, **kwargs):
+        module = original(*args, **kwargs)
+        with database.open("ab") as stream:
+            stream.write(b"changed after immutable observation")
+        return module
+
+    monkeypatch.setattr(driver, "_adjacent_module", mutate_on_oracle_load)
+    with pytest.raises(driver.CandidateFailure, match="^import_guard_observation_changed_database$"):
+        driver._verify_import_guard_outputs(child, sample, output, oracle)

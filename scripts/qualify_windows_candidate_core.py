@@ -153,8 +153,8 @@ def _validate_import_guard_evidence(record: object) -> dict:
         if type(record[key]) is not str or re.fullmatch(r"[0-9a-f]{64}", record[key]) is None:
             raise CandidateFailure("invalid_import_guard_evidence")
     sidecars = record["sidecars_after_window_close"]
-    if (type(sidecars) is not list or len(sidecars) > 3
-            or any(type(item) is not str or item not in {"-wal", "-shm", "-journal"} for item in sidecars)
+    if (type(sidecars) is not list or len(sidecars) > 2
+            or any(type(item) is not str or item not in {"-wal", "-shm"} for item in sidecars)
             or len(set(sidecars)) != len(sidecars)):
         raise CandidateFailure("invalid_import_guard_evidence")
     sources = record["source_hashes"]
@@ -175,30 +175,36 @@ def _verify_import_guard_outputs(child: Path, payload: dict, output: Path, oracl
     if any(_hash(reports / name) != digest for name, digest in record["source_hashes"].items()):
         raise CandidateFailure("import_guard_sources_changed")
     database = guard / "reports.sqlite"
-    _assert_database_sidecars_absent(database, "import_guard_database_sidecars_remain")
+    sidecars_before = _inert_import_guard_sidecars(database, "import_guard_database_sidecars_remain")
     before = _hash(database)
     with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
         logical = hashlib.sha256("\n".join(connection.iterdump()).encode("utf-8")).hexdigest()
     if logical != record["committed_logical_sha256"]:
         raise CandidateFailure("import_guard_committed_database_changed")
+    _assert_import_guard_unchanged(database, before, sidecars_before,
+                                   "import_guard_observation_changed_database")
     verifier = _adjacent_module("verify_synthetic_oracle.py", "_metroliza_import_guard_oracle")
     expected = verifier._load_oracle(oracle)
-    try:
-        verifier.assert_database(expected, database)
-    except Exception:
-        raise CandidateFailure("independent_import_guard_oracle_failed") from None
-    if _hash(database) != before:
-        raise CandidateFailure("import_guard_observation_changed_database")
     retained = output / "import-guards.sqlite"
     with database.open("rb") as source, retained.open("xb") as destination:
         shutil.copyfileobj(source, destination)
+    _assert_import_guard_unchanged(database, before, sidecars_before,
+                                   "import_guard_observation_changed_database")
+    if _hash(retained) != before:
+        raise CandidateFailure("import_guard_retained_database_changed")
+    # The independent oracle requires a sidecar-free file. A zero-byte WAL
+    # contains no uncheckpointed pages, so this exact-byte copy is equivalent
+    # to the immutable snapshot checked above.
     try:
         verifier.assert_database(expected, retained)
     except Exception:
         raise CandidateFailure("retained_import_guard_oracle_failed") from None
-    if _hash(retained) != before or _hash(database) != before:
+    if _hash(retained) != before:
         raise CandidateFailure("import_guard_retained_database_changed")
-    _assert_database_sidecars_absent(database, "import_guard_database_sidecars_created")
+    _assert_import_guard_unchanged(database, before, sidecars_before,
+                                   "import_guard_database_sidecars_created")
+    if any(_hash(reports / name) != digest for name, digest in record["source_hashes"].items()):
+        raise CandidateFailure("import_guard_sources_changed")
     return {"path": retained.name, "sha256": before}
 
 
@@ -306,6 +312,31 @@ def _assert_artifact_hashes(paths: dict, payload: dict, reason: str) -> None:
 
 def _assert_database_sidecars_absent(database: Path, reason: str) -> None:
     if any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+        raise CandidateFailure(reason)
+
+
+def _inert_import_guard_sidecars(database: Path, reason: str) -> dict[str, str]:
+    """Accept only no sidecars or SQLite's inert, closed WAL/SHM pair."""
+    paths = {suffix: database.with_name(database.name + suffix)
+             for suffix in ("-wal", "-shm", "-journal")}
+    if paths["-journal"].exists() or paths["-journal"].is_symlink():
+        raise CandidateFailure(reason)
+    present = {suffix for suffix in ("-wal", "-shm")
+               if paths[suffix].exists() or paths[suffix].is_symlink()}
+    if present not in (set(), {"-wal", "-shm"}):
+        raise CandidateFailure(reason)
+    if not present:
+        return {}
+    wal, shm = paths["-wal"], paths["-shm"]
+    if not _regular(wal) or not _regular(shm) or wal.stat().st_size != 0 or shm.stat().st_size != 32768:
+        raise CandidateFailure(reason)
+    return {suffix: _hash(paths[suffix]) for suffix in ("-wal", "-shm")}
+
+
+def _assert_import_guard_unchanged(database: Path, expected_hash: str,
+                                   expected_sidecars: dict[str, str], reason: str) -> None:
+    if (_hash(database) != expected_hash
+            or _inert_import_guard_sidecars(database, reason) != expected_sidecars):
         raise CandidateFailure(reason)
 
 

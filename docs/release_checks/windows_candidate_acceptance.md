@@ -99,12 +99,16 @@ The window must defer close, the real worker must cancel, and the prior logical
 SQLite contents and all source hashes must remain unchanged. This proves that
 named cancellation boundary, not every later transaction boundary.
 
-The W04 driver waits for the complete owned Job to exit, then rejects remaining
-SQLite sidecars, checks the entire logical dump against the pre-cancel digest,
-and independently verifies the persisted measurements using the existing public
-oracle. It rechecks all five source hashes and retains an independently verified
-copy of that database. Sidecars observed while the GUI process was alive are
-recorded separately and never treated as proof of final cleanup. The child
+The W04 driver waits for the complete owned Job to exit, then accepts either no
+SQLite sidecars or only a regular, single-link, non-reparse, zero-byte WAL plus
+exactly 32 KiB SHM. It rejects journals, nonempty WALs and other SHM sizes,
+checks the entire logical dump with an immutable read against the pre-cancel
+digest, and verifies that database and sidecar hashes stay unchanged through
+observation. It independently verifies the persisted measurements on an exact
+sidecar-free copy using the existing public oracle, rechecks all five source
+hashes, and retains that verified copy. A real duplicate review may leave an
+inert WAL/SHM pair while the GUI runs; that child observation is recorded
+separately and never treated as proof of final cleanup. The child
 physical database hashes describe in-process observations; the host calculates
 and verifies the retained artifact hash after the complete Job exits. W07 covers exact literal output plus failed,
 pre-cancelled and in-flight cancelled publication preservation; it does not

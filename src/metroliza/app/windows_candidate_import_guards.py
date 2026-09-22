@@ -53,16 +53,12 @@ def _wait(app, predicate, *, seconds: float, code: str) -> None:
     _require(bool(predicate()), code)
 
 
-def _database_state(database: Path, *, require_no_sidecars: bool = False) -> dict[str, Any]:
+def _database_state(database: Path) -> dict[str, Any]:
     _require(database.is_file(), "committed_database_missing")
-    if require_no_sidecars:
-        _require(
-            not any(database.with_name(database.name + suffix).exists()
-                    for suffix in ("-wal", "-shm", "-journal")),
-            "database_sidecar_present",
-        )
-    # The live Reports window may legitimately hold WAL/SHM files. Read the
-    # whole transaction view, including WAL, without creating a writer.
+    # A legitimate duplicate review opens the WAL database read-only and may
+    # leave an empty WAL and SHM. Read the full SQLite view, including any WAL,
+    # while owned workers are joined; the host checks strict sidecar shape and
+    # immutable contents only after the complete Job has exited.
     with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         names = tuple(sorted(row[0] for row in db.execute(
             "SELECT file_name FROM source_file_locations WHERE is_active = 1"

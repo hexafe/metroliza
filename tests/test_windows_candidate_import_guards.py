@@ -38,7 +38,7 @@ def test_real_import_guard_slice_preserves_committed_database_and_sources(tmp_pa
     assert len(evidence["committed_logical_sha256"]) == 64
     assert evidence["cancel_barrier_stage"] == "real_parse_batch_entry"
     assert len(evidence["database_sha256_after_close"]) == 64
-    assert set(evidence["sidecars_after_window_close"]) <= {"-wal", "-shm", "-journal"}
+    assert set(evidence["sidecars_after_window_close"]) <= {"-wal", "-shm"}
     assert len(evidence["source_hashes"]) == 5
     assert (scratch / evidence["relative_artifact_dir"] / "reports.sqlite").is_file()
 
