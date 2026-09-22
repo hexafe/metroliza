@@ -402,7 +402,7 @@ def run_qualification() -> int:
         capture_tabular_w05(fixtures, tabular_file)
         receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
         receipt["facets"]["finite_precision_filters"] = "passed"
-        from metroliza.app.windows_candidate_xlsx import run_export_checks
+        from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes, run_export_checks
         child = root / receipt["relative_artifact_dir"]
         xlsx_result = run_export_checks(child)
         expected_xlsx_facets = {
@@ -413,6 +413,8 @@ def run_qualification() -> int:
         xlsx_facets = xlsx_result.get("facets", {})
         if (xlsx_result.get("status") != "passed" or set(xlsx_facets) != expected_xlsx_facets
                 or any(value != "passed" for value in xlsx_facets.values())):
+            failure = xlsx_result.get("failure_code")
+            receipt["xlsx_failure"] = failure if type(failure) is str and failure in xlsx_failure_codes else "operation_failed"
             raise ScenarioFailure("literal_workbook_checks_failed")
         original_workbook = child / xlsx_result["relative_artifact_dir"] / xlsx_result["artifacts"]["workbook"]["workbook"]
         literal_workbook = child / "literal-workbook.xlsx"
