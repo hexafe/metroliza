@@ -6085,7 +6085,7 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
 
 @pytest.mark.parametrize("field,value,reason", [
     ("packaged", False, "qualification_packaged_flag_mismatch"),
-    ("console_none", False, "qualification_console_streams_present"),
+    ("console_none", False, "qualification_console_not_absent"),
     ("ordinary_user", False, "qualification_user_not_ordinary"),
     ("integrity_level", "unavailable", "qualification_integrity_not_medium"),
     ("scenario", "SYNTHETIC_PRIVATE_SCENARIO", "qualification_scenario_mismatch"),
@@ -6155,10 +6155,13 @@ def test_native_gui_stdio_facts_distinguish_redirected_handles_from_console(tmp_
     assert facts["schema_version"] == 1
     if mode == "attached":
         assert facts["console_state"] == "attached" and facts["console_window"] is True
+        assert facts["qualification_console_absent"] is False
     elif mode == "direct":
         assert facts == {"schema_version": 1, "console_state": "absent", "console_window": False,
+                         "qualification_console_absent": True,
                          "stdout_none": True, "stderr_none": True, "stdout_handle": "none", "stderr_handle": "none"}
     else:
         assert facts == {"schema_version": 1, "console_state": "absent", "console_window": False,
+                         "qualification_console_absent": True,
                          "stdout_none": False, "stderr_none": False,
                          "stdout_handle": "character_nonconsole", "stderr_handle": "character_nonconsole"}

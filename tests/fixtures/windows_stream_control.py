@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from metroliza.shared.diagnostic_transport import attach_child_recorder  # noqa: E402
+from metroliza.app.diagnostic_qualification import _console_absent  # noqa: E402
 
 
 def _stdio_kind(kernel, identifier):
@@ -60,6 +61,7 @@ def main():
         state = "attached" if attached else "absent" if error == 6 else "unavailable"
         facts = {"schema_version": 1, "console_state": state,
                  "console_window": bool(kernel.GetConsoleWindow()),
+                 "qualification_console_absent": _console_absent(),
                  "stdout_none": sys.stdout is None, "stderr_none": sys.stderr is None}
         for name, identifier in (("stdout_handle", -11), ("stderr_handle", -12)):
             facts[name] = _stdio_kind(kernel, identifier)

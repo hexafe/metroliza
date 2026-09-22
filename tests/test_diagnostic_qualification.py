@@ -11,6 +11,51 @@ from metroliza.app.diagnostic_qualification import requested_scenario
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 
 
+@pytest.mark.parametrize("count,error,window,expected", [
+    (0, 6, 0, True), (0, 0, 0, False), (0, 87, 0, False),
+    (1, 0, 0, False), (2, 0, 41, False), (0, 6, 41, False),
+])
+@pytest.mark.parametrize("streams_none", [False, True])
+def test_console_receipt_requires_native_absence_not_python_streams(
+    monkeypatch, count, error, window, expected, streams_none
+):
+    import ctypes
+    from types import SimpleNamespace
+
+    calls = []
+
+    def process_list(buffer, size):
+        assert buffer is not None and size == 1
+        calls.append("process_list")
+        return count
+
+    def console_window():
+        return window
+
+    kernel = SimpleNamespace(GetConsoleProcessList=process_list, GetConsoleWindow=console_window)
+    monkeypatch.setattr(diagnostic_qualification, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(diagnostic_qualification, "sys", SimpleNamespace(
+        stdout=None if streams_none else object(), stderr=None if streams_none else object()))
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: kernel, raising=False)
+    monkeypatch.setattr(ctypes, "set_last_error", lambda value: calls.append(("clear", value)), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: error, raising=False)
+    assert diagnostic_qualification._console_absent() is expected
+    assert calls == [("clear", 0), "process_list"]
+
+
+def test_console_probe_unavailable_is_not_absence(monkeypatch):
+    import ctypes
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(diagnostic_qualification, "os", SimpleNamespace(name="nt"))
+
+    def unavailable(*args, **kwargs):
+        raise OSError("synthetic unavailable API")
+
+    monkeypatch.setattr(ctypes, "WinDLL", unavailable, raising=False)
+    assert diagnostic_qualification._console_absent() is False
+
+
 def test_qualification_receipt_includes_closed_integrity_level(tmp_path, monkeypatch):
     monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", str(tmp_path))
     monkeypatch.setattr(diagnostic_qualification, "_ordinary_user", lambda: True)
