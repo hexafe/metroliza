@@ -214,9 +214,29 @@ def test_preview_requires_the_real_normal_help_action(
     monkeypatch.setenv("XDG_STATE_HOME", str(state))
     monkeypatch.setenv("LOCALAPPDATA", str(state))
     store = IncidentStore()
-    child = Path(__file__).parent / "fixtures/diagnostic_child.py"
-    crashed = run_with_store([sys.executable, str(child), "hard_exit"], store=store)
-    assert crashed.storage_status is StoreStatus.SAVED
+    # Menu faults need a stored incident, not an asynchronous publisher race.
+    import time
+    import uuid
+    from metroliza.shared.diagnostic_incident import (
+        ChannelState, HandshakeState, IncidentObservation, LaunchState,
+        TerminationState, build_incident,
+    )
+    from metroliza.shared.diagnostic_ring import LOSS_ACCOUNTING_BYTES, RingLoss, RingSnapshot
+
+    incident = build_incident(
+        session_id=uuid.uuid4(), created_at_ms=time.time_ns() // 1_000_000,
+        build_git_sha="a" * 40,
+        observation=IncidentObservation(
+            launch=LaunchState.STARTED, handshake=HandshakeState.ACCEPTED,
+            channel=ChannelState.COMPLETE, exit_code=9,
+            termination=TerminationState.OBSERVED_EXIT,
+            clean_terminal_received=True, source_dropped=0,
+            source_loss_known=True, elapsed_ms=20,
+        ),
+        history=RingSnapshot((), RingLoss(), LOSS_ACCOUNTING_BYTES),
+    )
+    assert store.publish(incident).status is StoreStatus.SAVED
+    assert len(store.list_reports().reports) == 1
     work = tmp_path / "preview"
     work.mkdir()
     monkeypatch.chdir(work)
