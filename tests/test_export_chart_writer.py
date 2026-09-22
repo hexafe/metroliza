@@ -113,6 +113,7 @@ class TestExportChartWriter(unittest.TestCase):
         workbook = DummyWorkbook()
         worksheet = DummyWorksheet()
         plan = {
+            'data_header_row': 20,
             'data_start_row': 21,
             'last_data_row': 25,
             'summary_column': 1,
@@ -251,6 +252,7 @@ class TestExportChartWriter(unittest.TestCase):
         workbook = DummyWorkbook()
         worksheet = DummyWorksheet()
         plan = {
+            'data_header_row': 9,
             'data_start_row': 10,
             'last_data_row': 14,
             'summary_column': 1,
@@ -272,12 +274,15 @@ class TestExportChartWriter(unittest.TestCase):
 
         self.assertEqual(worksheet.insert_calls[0][0:2], (7, 5))
         self.assertEqual(workbook.chart.legend, {'position': 'none'})
-        self.assertEqual(workbook.chart.title, {'name': 'Stable Export', 'name_font': {'size': 10}})
+        self.assertEqual(workbook.chart.title, {
+            'name': ['Ref', 9, 2], 'data': ['Stable Export'], 'name_font': {'size': 10},
+        })
 
     def test_existing_measurement_chart_export_ranges_remain_unchanged_without_custom_anchor(self):
         workbook = DummyWorkbook()
         worksheet = DummyWorksheet()
         plan = {
+            'data_header_row': 20,
             'data_start_row': 21,
             'last_data_row': 25,
             'summary_column': 1,
