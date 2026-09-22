@@ -427,14 +427,17 @@ def test_restricted_store_creation_owner_boundary(tmp_path, capfd):
         "restricted_create_publish", "restricted_owner_is_user", "restricted_host_read",
         "user_owner_create_publish", "user_owner_is_user", "user_owner_host_read",
         "ancestor_accessible", "restricted_full_readback", "user_owner_full_readback",
+        "initialized_owner_is_user", "initialized_restricted_publish", "initialized_full_readback",
     }
     for key in ("cleanup", "control_complete", "medium_integrity", "nonadmin", "user_owner_is_user",
-                "ancestor_accessible", "user_owner_full_readback"):
+                "ancestor_accessible", "user_owner_full_readback", "initialized_owner_is_user",
+                "initialized_full_readback"):
         assert observation[key] is True, observation
     for key in ("parent_owner_is_user", "restricted_owner_is_user"):
         assert type(observation[key]) is bool
     assert observation["schema_version"] == 1 and type(observation["schema_version"]) is int
     assert observation["parent_create"] == "available"
+    assert observation["initialized_restricted_publish"] == "saved"
     assert observation["parent_restricted_publish"] in {"saved", "root_unavailable"}
     assert observation["restricted_create_publish"] in {"saved", "root_unavailable"}
     assert observation["restricted_host_read"] == "available"

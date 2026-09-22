@@ -6244,3 +6244,77 @@ def test_concurrent_probe_child_receipt_mismatch_retains_valid_public_failure(tm
     )
     assert detail["concurrent_phases"] == [[], []]
     assert qualification._valid_failure_detail(detail)
+
+
+@pytest.mark.parametrize("failure", [None, "impersonate", "interrupted_impersonate", "listing", "unavailable", "nonempty", "revert", "revert_error", "close"])
+def test_private_store_initialization_restores_identity_and_closes_token(tmp_path, monkeypatch, failure):
+    from types import SimpleNamespace
+
+    api = object.__new__(qualification._WindowsApi)
+    calls = []
+    token = object()
+    primary = KeyboardInterrupt("controlled interruption")
+    api._restricted_token = lambda: token
+
+    def impersonate(value):
+        assert value is token
+        calls.append("impersonate")
+        if failure == "interrupted_impersonate":
+            raise primary
+        return failure != "impersonate"
+
+    def listing():
+        calls.append("listing")
+        if failure == "listing":
+            raise primary
+        return SimpleNamespace(status=(qualification.StoreStatus.ROOT_UNAVAILABLE
+            if failure == "unavailable" else qualification.StoreStatus.AVAILABLE),
+            reports=(object(),) if failure == "nonempty" else ())
+
+    def revert():
+        calls.append("revert")
+        if failure == "revert_error":
+            raise OSError("controlled revert failure")
+        return failure != "revert"
+
+    def terminate(code):
+        calls.append("fatal_exit")
+        assert code == 22
+        raise SystemExit(code)
+
+    def close(value):
+        assert value is token
+        calls.append("close")
+        if failure == "close":
+            raise OSError("controlled cleanup failure")
+
+    api.advapi = SimpleNamespace(ImpersonateLoggedOnUser=impersonate, RevertToSelf=revert)
+    api._require_closed_owned_token = close
+    monkeypatch.setattr(qualification.os, "_exit", terminate)
+    store = SimpleNamespace(root=tmp_path / "new", list_reports=listing)
+    expected = (KeyboardInterrupt if failure in {"listing", "interrupted_impersonate"}
+                else SystemExit if failure in {"revert", "revert_error"} else qualification.QualificationFailure)
+    if failure is None:
+        api.initialize_incident_store(store)
+    else:
+        with pytest.raises(expected) as caught:
+            api.initialize_incident_store(store)
+        if expected is KeyboardInterrupt:
+            assert caught.value is primary
+    assert calls[0] == "impersonate" and calls[-1] == "close"
+    assert "revert" in calls
+    if failure in {"impersonate", "interrupted_impersonate"}:
+        assert "listing" not in calls
+    if failure in {"revert", "revert_error"}:
+        assert calls[-2] == "fatal_exit"
+
+
+@pytest.mark.parametrize("root_kind", ["missing", "existing"])
+def test_private_store_initialization_refuses_unowned_or_existing_root(tmp_path, root_kind):
+    from types import SimpleNamespace
+
+    api = object.__new__(qualification._WindowsApi)
+    api._restricted_token = lambda: pytest.fail("must reject before acquiring token")
+    store = SimpleNamespace(root=None if root_kind == "missing" else tmp_path)
+    with pytest.raises(qualification.QualificationFailure):
+        api.initialize_incident_store(store)

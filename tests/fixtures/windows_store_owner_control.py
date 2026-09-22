@@ -113,6 +113,20 @@ def main():
         result["restricted_owner_is_user"] = _owner_is_user(api, roots[1], token)
         result["restricted_host_read"] = stores[1].list_reports().status.value
         result["restricted_full_readback"] = stores[1].load(incident.report_id).incident == incident
+        # Reproduce _QualificationRunner exactly: the elevated host creates
+        # state/Roaming first; only the sibling private store is initialized
+        # under the restricted identity.
+        initialized_roaming = root / "initialized" / "Roaming"
+        initialized_roaming.mkdir(parents=True)
+        initialized = IncidentStore(root / "initialized" / "Metroliza" / "diagnostics")
+        if not initialized_roaming.is_dir() or initialized.root.exists():
+            raise RuntimeError()
+        api.initialize_incident_store(initialized)
+        if not initialized_roaming.is_dir():
+            raise RuntimeError()
+        result["initialized_owner_is_user"] = _owner_is_user(api, initialized.root, token)
+        result["initialized_restricted_publish"] = restricted(lambda: initialized.publish(incident).status.value)
+        result["initialized_full_readback"] = initialized.load(incident.report_id).incident == incident
         # Only this disposable token's default owner changes. Production ACL and
         # store code are untouched; this third control is not qualification PASS.
         _set_token_owner_user(api, token)
