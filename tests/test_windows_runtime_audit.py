@@ -89,20 +89,37 @@ def test_command_and_required_frames_are_exact_not_basename_allowance():
         expected + ' /c "ver & echo private"',
         expected + ' /c "echo synthetic"',
     ):
-        assert audit.classify_call((expected, command), frame, expected)[0] == "other"
+        assert audit.classify_call((expected, command), frame, expected)[0] == "other_command"
     assert (
         audit.classify_call((r"C:\private\cmd.exe", expected + ' /c "ver"'), frame, expected)[0]
-        == "other"
+        == "other_executable"
     )
     assert (
         audit.classify_call(
             (expected, expected + ' /c "ver"'), _frame("platform", "_syscmd_ver"), expected
         )[0]
-        == "other"
+        == "other_frames"
     )
     for _ in range(65):
         frame = _frame("private_module_name", "private_function", frame)
-    assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected)[0] == "other"
+    assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected)[0] == "other_depth"
+
+
+@pytest.mark.parametrize("kind", sorted(audit.KINDS - {"platform_ver"}))
+def test_closed_rejection_discriminator_never_admits_unknown_command(tmp_path, kind):
+    nonce = "1" * 32
+    event = {"kind": kind, "caller": "other", "phase": "startup"}
+    _journal(tmp_path, nonce, [event])
+    assert audit.read_evidence(tmp_path, nonce) == [event]
+    proof = _proof(False)
+    proof["events"] = [event]
+    with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+        verified_runtime_order(proof, supervised=False)
+
+
+@pytest.mark.parametrize("arguments", [(), ("private",), (None, "private"), ("private", ["private"])])
+def test_runtime_audit_exposes_only_closed_argument_failure(arguments):
+    assert audit.classify_call(arguments, None, "expected") == ("other_arguments", "other")
 
 
 def test_gate_off_installs_nothing(monkeypatch):
@@ -301,6 +318,42 @@ def test_runtime_cleanup_removes_only_its_bounded_regular_journal(tmp_path):
     assert not evidence.root.exists()
 
 
+@pytest.mark.parametrize("interrupt_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("point", ["partial_unlink", "after_rmdir"])
+def test_interrupted_journal_cleanup_retains_owner_until_actual_removal(
+    tmp_path, monkeypatch, interrupt_type, point,
+):
+    evidence = _local_evidence(tmp_path / "owned")
+    _journal(evidence.root, evidence.nonce, [{"kind": "platform_ver", "caller": "other", "phase": "startup"}])
+    primary = interrupt_type("synthetic cleanup interruption")
+    closed = []
+    api = SimpleNamespace(close_process=lambda *_args, **_kwargs: closed.append(True))
+    initial = qualification._ProcessObservation(1, 1, "application")
+    process = qualification._WindowsProcess(api, 11, 12, 0.0, initial, ())
+    process.runtime_evidence = evidence
+    original = Path.unlink if point == "partial_unlink" else Path.rmdir
+    interrupted = False
+
+    def interrupt_path(path, *args, **kwargs):
+        nonlocal interrupted
+        result = original(path, *args, **kwargs)
+        if not interrupted and (path.parent == evidence.root if point == "partial_unlink" else path == evidence.root):
+            interrupted = True
+            raise primary
+        return result
+
+    monkeypatch.setattr(Path, "unlink" if point == "partial_unlink" else "rmdir", interrupt_path)
+    with pytest.raises(interrupt_type) as caught:
+        process.close(terminate=True)
+    assert caught.value is primary
+    assert process.runtime_evidence is evidence
+    process.close(terminate=True)
+    assert not evidence.root.exists()
+    assert process.runtime_evidence is None
+    process.close(terminate=True)
+    assert closed == [True]
+
+
 @pytest.mark.parametrize("hardlink", [False, True])
 def test_runtime_cleanup_uses_full_metadata_when_directory_cache_has_no_link_count(
     tmp_path, monkeypatch, hardlink
@@ -463,7 +516,7 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                 root,
                 owned=owned,
                 runtime_evidence=evidence,
-                expected_images=tuple(image for _, image in evidence.probe.images),
+                expected_images=(launcher, pythonw),
                 defer_resume=True,
             )
         assert all(

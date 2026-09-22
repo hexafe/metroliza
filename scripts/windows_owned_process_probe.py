@@ -89,7 +89,13 @@ class RuntimeEvidence:
         self._remove_journal()
 
     def _remove_journal(self):
-        self._require_same_root()
+        try:
+            self._require_same_root()
+        except FileNotFoundError:
+            # An interruption can arrive after rmdir completed but before
+            # ownership is released. Absence is complete cleanup; an existing
+            # replacement still has to pass the original identity checks.
+            return
         allowed = {"installed.json", "ready"} | {f"event-{index:02}.json" for index in range(1, audit.MAX_EVENTS + 1)}
         entries = []
         with os.scandir(self.root) as iterator:

@@ -19,6 +19,10 @@ NONCE = "METROLIZA_WINDOWS_RUNTIME_AUDIT_NONCE"
 MAX_EVENTS = 16
 FAILURE_EXIT = 97
 CALLERS = frozenset({"setuptools", "numpy", "matplotlib", "platformdirs", "other"})
+KINDS = frozenset({
+    "platform_ver", "other", "other_arguments", "other_executable",
+    "other_command", "other_frames", "other_depth",
+})
 
 
 def _plain_directory(path: Path) -> bool:
@@ -38,15 +42,14 @@ def classify_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
     import ntpath
 
     if len(arguments) < 2:
-        return "other", "other"
+        return "other_arguments", "other"
     executable, command = arguments[:2]
-    if (
-        type(executable) is not str
-        or type(command) is not str
-        or ntpath.normcase(executable) != ntpath.normcase(expected_cmd)
-        or command.casefold() != (expected_cmd + ' /c "ver"').casefold()
-    ):
-        return "other", "other"
+    if type(executable) is not str or type(command) is not str:
+        return "other_arguments", "other"
+    if ntpath.normcase(executable) != ntpath.normcase(expected_cmd):
+        return "other_executable", "other"
+    if command.casefold() != (expected_cmd + ' /c "ver"').casefold():
+        return "other_command", "other"
     required = set()
     caller = "other"
     for _ in range(64):
@@ -60,8 +63,8 @@ def classify_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
             caller = module.split(".", 1)[0]
         frame = frame.f_back
     else:
-        return "other", "other"
-    return ("platform_ver" if required == {"_syscmd_ver", "win32_ver"} else "other"), caller
+        return "other_depth", "other"
+    return ("platform_ver" if required == {"_syscmd_ver", "win32_ver"} else "other_frames"), caller
 
 
 def install() -> None:
@@ -173,7 +176,7 @@ def read_evidence(root: Path, nonce: str) -> list[dict]:
             or event["nonce"] != nonce
             or type(event["ordinal"]) is not int
             or event["ordinal"] != ordinal
-            or event["kind"] not in {"platform_ver", "other"}
+            or event["kind"] not in KINDS
             or event["caller"] not in CALLERS
             or event["phase"] not in {"startup", "after_ready"}
         ):

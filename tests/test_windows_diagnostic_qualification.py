@@ -920,10 +920,18 @@ def test_registered_launch_failure_accounts_for_journal_cleanup(tmp_path, monkey
     with pytest.raises(qualification.QualificationFailure) as caught:
         api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned,
                    runtime_evidence=evidence, defer_resume=True)
-    qualification._close_owned_processes(owned, terminate=True)
+    if evidence_fails:
+        assert owned[0].runtime_evidence is evidence
+        with pytest.raises(qualification.QualificationFailure) as cleanup:
+            qualification._close_owned_processes(owned, terminate=True)
+        assert cleanup.value.qualification_cleanup == "failed"
+        assert owned[0].runtime_evidence is evidence
+    else:
+        qualification._close_owned_processes(owned, terminate=True)
+        assert owned[0].runtime_evidence is None
     assert caught.value is primary
     assert primary.qualification_cleanup == ("failed" if evidence_fails else "complete")
-    assert evidence_closed == [True]
+    assert evidence_closed == ([True, True] if evidence_fails else [True])
     assert closed == ["thread", "job", "process", "token"]
 
 
@@ -2559,6 +2567,123 @@ def test_native_fallback_wrong_image_preserves_original_failure(monkeypatch):
         "api": "image_match", "outcome": "mismatch", "winerror": None,
     }
     assert calls == ["k32", "open", "file_name", "file_name_opened", "close"]
+
+
+@pytest.mark.parametrize("member,with_evidence,accepted", [
+    ("cmd", True, True), ("conhost", True, True),
+    ("cmd", False, False), ("conhost", False, False),
+    ("foreign_cmd", True, False), ("powershell", True, False),
+    ("werfault", True, False), ("openconsole", True, False),
+])
+def test_runtime_member_fallback_observes_only_exact_system_helpers(
+    monkeypatch, member, with_evidence, accepted,
+):
+    api, application, primary, calls = _fallback_identity_api(monkeypatch)
+    images = {
+        "cmd": Path(r"C:\Windows\System32\cmd.exe"),
+        "conhost": Path(r"C:\Windows\System32\conhost.exe"),
+        "powershell": Path(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+        "foreign_cmd": Path(r"C:\other\cmd.exe"),
+        "werfault": Path(r"C:\Windows\System32\WerFault.exe"),
+        "openconsole": Path(r"C:\Windows\System32\OpenConsole.exe"),
+    }
+    observed_image = str(images[member])
+    api._native_process_image = lambda handle: (observed_image, None)
+    checked = []
+
+    def exact_file(expected, native_image, failure):
+        checked.append(expected)
+        assert failure is primary
+        return str(expected) == native_image, None
+
+    api._expected_file_native_image = exact_file
+    api.job_observations = lambda _job, **kwargs: (
+        (api._observe_job_member(77, 407, kwargs["expected_images"]),), 1, 2,
+    )
+    initial = qualification._ProcessObservation(406, 1000, str(application))
+    process = qualification._WindowsProcess(
+        api, 66, 88, 0.0, initial, (application,), initial_native_image=TEST_NATIVE_ANCHOR,
+    )
+    if with_evidence:
+        process.runtime_evidence = SimpleNamespace(probe=SimpleNamespace(images=(
+            ("package_application", application),
+            ("system_cmd", images["cmd"]), ("system_conhost", images["conhost"]),
+            ("system_powershell", images["powershell"]),
+            ("system_werfault", images["werfault"]), ("system_openconsole", images["openconsole"]),
+        )))
+    if accepted:
+        observations, active, assigned = process._current_job_state()
+        assert observations == (qualification._ProcessObservation(407, 1234, observed_image),)
+        assert (active, assigned) == (1, 2)
+        assert calls == ["times"]
+    else:
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            process._current_job_state()
+        assert caught.value is primary
+        assert primary.native_observation.alternative.api == "image_match"
+        assert calls == []
+    assert images["powershell"] not in checked
+    assert images["foreign_cmd"] not in checked
+    assert images["werfault"] not in checked
+    assert images["openconsole"] not in checked
+    assert process._expected_images == (application,)
+
+
+def test_runtime_helper_candidates_remain_per_job_and_ignore_global_probe():
+    application = Path("application.exe")
+    probe_a = SimpleNamespace(images=(("system_cmd", Path("system-a/cmd.exe")),
+                                     ("system_conhost", Path("system-a/conhost.exe"))))
+    probe_b = SimpleNamespace(images=(("system_cmd", Path("system-b/cmd.exe")),
+                                     ("system_conhost", Path("system-b/conhost.exe"))))
+    seen = []
+    initial = qualification._ProcessObservation(406, 1000, str(application))
+
+    def observe(job, **kwargs):
+        seen.append((job, kwargs["expected_images"], kwargs.get("probe")))
+        return (), 0, 1
+
+    api = SimpleNamespace(job_observations=observe, _owned_probe=probe_b)
+    for job, probe in ((81, probe_a), (82, probe_b), (83, None), (81, probe_a)):
+        process = qualification._WindowsProcess(
+            api, 66, job, 0.0, initial, (application,), initial_native_image=TEST_NATIVE_ANCHOR,
+        )
+        if probe is not None:
+            process.runtime_evidence = SimpleNamespace(probe=probe)
+        process.observe()
+    assert seen == [
+        (81, (application, Path("system-a/cmd.exe"), Path("system-a/conhost.exe")), probe_a),
+        (82, (application, Path("system-b/cmd.exe"), Path("system-b/conhost.exe")), probe_b),
+        (83, (application,), None),
+        (81, (application, Path("system-a/cmd.exe"), Path("system-a/conhost.exe")), probe_a),
+    ]
+
+
+def test_multi_candidate_native_fallback_closes_mismatch_and_matched_file(monkeypatch):
+    api, application, _primary, calls = _fallback_identity_api(monkeypatch)
+    helper = Path(r"C:\Windows\System32\cmd.exe")
+    native_application = r"\Device\HarddiskVolume7\package\metroliza_application.exe"
+    native_helper = r"\Device\HarddiskVolume7\Windows\System32\cmd.exe"
+    api._native_process_image = lambda _process: (native_helper, None)
+    opened = []
+
+    def open_file(path, access, share, security, disposition, flags, template):
+        assert (access, share, security, disposition, flags, template) == (0, 7, None, 3, 0x80, None)
+        opened.append(path)
+        calls.append("open")
+        return 91
+
+    def file_name(handle, buffer, capacity, flags):
+        assert handle == 91 and flags in (2, 10)
+        buffer.value = native_helper if opened[-1] == str(helper) else native_application
+        calls.append("file_name")
+        return len(buffer.value)
+
+    api.kernel.CreateFileW = open_file
+    api.kernel.GetFinalPathNameByHandleW = file_name
+    result = api._observe_job_member(77, 407, (application, helper))
+    assert result == qualification._ProcessObservation(407, 1234, str(helper))
+    assert opened == [str(application), str(helper)]
+    assert calls == ["open", "file_name", "file_name", "close", "open", "file_name", "close", "times"]
 
 
 def test_native_fallback_applies_to_other_owned_job_member(monkeypatch):
