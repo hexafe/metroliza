@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -140,11 +141,32 @@ def _trace_publisher_calls(monkeypatch, store):
     return snapshot
 
 
+@contextmanager
+def _authenticated_marker_child(tmp_path, monkeypatch, store, scenario):
+    """Separate final persistence from the separately tested cold-I/O backlog."""
+    barrier = tmp_path / "authenticated-marker-ready"
+    authenticate = store.authenticate_session
+
+    def authenticated(*args, **kwargs):
+        result = authenticate(*args, **kwargs)
+        if result.status is StoreStatus.MARKER_AUTHENTICATED:
+            with barrier.open("x", encoding="ascii") as stream:
+                stream.write("ready")
+        return result
+
+    monkeypatch.setattr(store, "authenticate_session", authenticated)
+    child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
+    try:
+        yield [sys.executable, str(child), scenario, str(barrier)]
+    finally:
+        barrier.unlink(missing_ok=True)
+
+
 def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path, monkeypatch):
     store = IncidentStore(tmp_path / "state")
-    trace = _trace_publisher_calls(monkeypatch, store)
-    child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
-    delivery = run_with_store([sys.executable, str(child), "hard_exit"], store=store)
+    with _authenticated_marker_child(tmp_path, monkeypatch, store, "hard_exit_after_marker") as command:
+        trace = _trace_publisher_calls(monkeypatch, store)
+        delivery = run_with_store(command, store=store)
     exit_code = delivery.observation.exit_code
     assert exit_code == 9
     actual_status = delivery.storage_status
@@ -167,9 +189,9 @@ def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path,
 
 def test_normal_observed_exit_has_only_clean_marker_and_no_crash_report(tmp_path, monkeypatch):
     store = IncidentStore(tmp_path / "state")
-    trace = _trace_publisher_calls(monkeypatch, store)
-    child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
-    delivery = run_with_store([sys.executable, str(child), "normal"], store=store)
+    with _authenticated_marker_child(tmp_path, monkeypatch, store, "normal_after_marker") as command:
+        trace = _trace_publisher_calls(monkeypatch, store)
+        delivery = run_with_store(command, store=store)
     actual_status = delivery.storage_status
     assert actual_status is StoreStatus.MARKER_CLEAN_ENDED, json.dumps(trace(), sort_keys=True)
     assert not delivery.observation.needs_incident

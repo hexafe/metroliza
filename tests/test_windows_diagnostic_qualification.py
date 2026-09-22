@@ -5674,9 +5674,19 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
 
     api = qualification._WindowsApi()
     original_advapi = api.advapi
-    executable = Path(sys.executable).resolve()
+    # The packaged application is a GUI-subsystem PE. Native44 observed an
+    # extra conhost with console python.exe and no audited child launch. Remove
+    # that subsystem confound by requiring this installation's real GUI PE.
+    executable = Path(sys.executable).resolve().with_name("pythonw.exe")
+    assert executable.is_file() and not executable.is_symlink()
+    assert qualification._pe_subsystem(executable) == 2
+    api.enable_owned_probe(tmp_path)
+    # This control's fixed expected image is the owned source interpreter.
+    # Production probe candidates and process acceptance are unchanged.
+    api._owned_probe.images = (("package_application", executable),)
     fixture = Path(__file__).parent / "fixtures" / "windows_ui_process_control.py"
     command_text = subprocess.list2cmdline([str(executable), str(fixture.resolve())])
+    launch_api = []
 
     class FixedSourceCommand:
         """Keep both real launch APIs/flags; supply one fixed test script only."""
@@ -5686,12 +5696,18 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
         def CreateProcessAsUserW(self, *arguments):
             values = list(arguments)
             values[2] = ctypes.create_unicode_buffer(command_text)
-            return original_advapi.CreateProcessAsUserW(*values)
+            result = original_advapi.CreateProcessAsUserW(*values)
+            if result:
+                launch_api.append("as_user")
+            return result
 
         def CreateProcessWithTokenW(self, *arguments):
             values = list(arguments)
             values[3] = ctypes.create_unicode_buffer(command_text)
-            return original_advapi.CreateProcessWithTokenW(*values)
+            result = original_advapi.CreateProcessWithTokenW(*values)
+            if result:
+                launch_api.append("with_token")
+            return result
 
     monkeypatch.setattr(api, "advapi", FixedSourceCommand())
     system = Path(os.environ["SYSTEMROOT"]) / "System32"
@@ -5711,35 +5727,72 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
     environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION", None)
     owned = []
     completed = False
+    diagnostic = {"stage": "launch", "cleanup": "not_attempted"}
+    failure = None
     try:
         process = api.launch(executable, environment, tmp_path, owned=owned,
                              expected_images=tuple(candidates.values()))
+        assert len(launch_api) == 1
+        diagnostic["launch_api"] = launch_api[0]
+        diagnostic["stage"] = "observe"
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             process.observe()
             if process.poll() is not None and process.active_processes() == 0:
                 break
             time.sleep(0.002)
-        assert process.poll() == 0 and process.active_processes() == 0
+        diagnostic["stage"] = "exit"
+        diagnostic["exit_code"] = process.poll()
+        assert diagnostic["exit_code"] == 0 and process.active_processes() == 0
         observed = []
         for observation in process._observations.values():
             observed.append(next((key for key, path in candidates.items()
                                   if api._same_requested_image(observation.image, path)), "unknown"))
+        diagnostic.update(observed_roles=sorted(observed)[:16],
+                          assigned_processes=min(16, process._assigned_processes),
+                          max_active_processes=min(16, process._max_active_processes))
+        diagnostic["stage"] = "receipt"
         receipt = qualification._bounded_json(tmp_path / "ui-process-control.json", 4096)
         assert set(receipt) == {"status", "audit", "window_seen", "closed"}
-        assert receipt["status"] == "passed" and receipt["window_seen"] is True and receipt["closed"] is True
         assert set(receipt["audit"]) == {"bootstrap_import", "window_import", "window_construct", "show_close"}
         assert all(set(values) == {"cmd_ver", "other"}
                    and all(type(count) is int and 0 <= count <= 16 for count in values.values())
                    for values in receipt["audit"].values())
-        diagnostic = {"audit": receipt["audit"], "observed_roles": sorted(observed),
-                      "assigned_processes": process._assigned_processes,
-                      "max_active_processes": process._max_active_processes}
-        # This is a discriminator for the rejected direct-window topology,
-        # never a waiver for extra processes or a packaged acceptance claim.
-        assert process._assigned_processes == 1 and observed == ["application"], (
-            "source_window_process_dependencies=" + json.dumps(diagnostic, sort_keys=True)
-        )
+        diagnostic["audit"] = receipt["audit"]
+        diagnostic["window_seen"] = receipt["window_seen"] is True
+        diagnostic["window_closed"] = receipt["closed"] is True
+        assert receipt["status"] == "passed" and receipt["window_seen"] is True and receipt["closed"] is True
+        diagnostic["stage"] = "topology"
+        # This is a discriminator for rejected topology, never a waiver.
+        assert process._assigned_processes == 1 and observed == ["application"]
+        diagnostic["owned_probe"] = api._owned_probe.receipt()
+        assert diagnostic["owned_probe"]["observation_unavailable"] is False
+        assert diagnostic["owned_probe"]["job_empty"] is True
+        assert diagnostic["owned_probe"]["members"][0]["identity"] == "fixed_file_verified"
+        assert diagnostic["owned_probe"]["members"][0]["role"] == "package_application"
         completed = True
-    finally:
+    except BaseException as error:
+        failure = error
+    # The production cleanup boundary intentionally projects arbitrary active
+    # exceptions to a closed failure. Call it outside the exception context so
+    # the test retains its own *already closed* observation, not raw errors.
+    try:
         qualification._close_owned_processes(owned, terminate=not completed)
+        diagnostic["cleanup"] = "complete"
+    except Exception:
+        diagnostic["cleanup"] = "failed"
+    if failure is not None and not isinstance(failure, Exception):
+        raise failure
+    if isinstance(failure, qualification.QualificationFailure):
+        diagnostic["qualification_reason"] = (
+            failure.qualification_reason
+            if failure.qualification_reason in qualification.QUALIFICATION_FAILURE_REASONS else "unexpected"
+        )
+        if failure.native_observation is not None:
+            try:
+                diagnostic["native_observation"] = failure.native_observation.receipt()
+            except qualification.QualificationFailure:
+                diagnostic["native_observation"] = "unavailable"
+    assert completed and diagnostic["cleanup"] == "complete", (
+        "source_window_process_dependencies=" + json.dumps(diagnostic, sort_keys=True)
+    )

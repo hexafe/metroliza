@@ -397,27 +397,60 @@ def test_failed_post_publish_readback_rolls_back_only_new_inode(tmp_path, monkey
     assert not final.exists()
 
 
-def test_two_concurrent_publications_are_serialized(tmp_path) -> None:
+def test_two_concurrent_publications_preserve_history_after_bounded_contention(tmp_path) -> None:
     store = IncidentStore(tmp_path / "diagnostics")
-    identifiers = (
-        REPORT_ID,
-        uuid.UUID("44444444-4444-4444-8444-444444444444"),
+    incidents = (
+        _incident(),
+        _incident(
+            report_id=uuid.UUID("44444444-4444-4444-8444-444444444444"),
+            session_id=uuid.UUID("55555555-5555-4555-8555-555555555555"),
+        ),
     )
     barrier = threading.Barrier(2)
-    statuses: list[StoreStatus] = []
+    statuses: dict[uuid.UUID, StoreStatus] = {}
 
-    def publish(identifier: uuid.UUID) -> None:
+    def publish(incident) -> None:
         barrier.wait()
-        statuses.append(store.publish(_incident(report_id=identifier)).status)
+        statuses[incident.report_id] = store.publish(incident).status
 
-    threads = [threading.Thread(target=publish, args=(identifier,)) for identifier in identifiers]
+    threads = [threading.Thread(target=publish, args=(incident,)) for incident in incidents]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
 
-    assert statuses == [StoreStatus.SAVED, StoreStatus.SAVED]
-    assert {record.report_id for record in store.list_reports().reports} == set(identifiers)
+    assert set(statuses) == {incident.report_id for incident in incidents}
+    assert set(statuses.values()) <= {StoreStatus.SAVED, StoreStatus.LOCK_UNAVAILABLE}
+    assert StoreStatus.SAVED in statuses.values()
+    listing = store.list_reports()
+    assert listing.status is StoreStatus.AVAILABLE
+    assert {record.report_id for record in listing.reports} == {
+        identifier for identifier, status in statuses.items() if status is StoreStatus.SAVED
+    }
+    # Contention is a documented finite result, not a lost/partial publication.
+    # Once both calls have ended, make exactly one uncontended attempt for the
+    # rejected report. Never retry another status or an already saved report.
+    for incident in incidents:
+        if statuses[incident.report_id] is StoreStatus.LOCK_UNAVAILABLE:
+            assert store.load(incident.report_id).status is StoreStatus.NOT_FOUND
+            assert store.publish(incident).status is StoreStatus.SAVED
+        assert store.load(incident.report_id).incident == incident
+    assert {record.report_id for record in store.list_reports().reports} == set(statuses)
+
+
+def test_real_held_store_lock_rejects_publication_without_partial_report(tmp_path) -> None:
+    store = IncidentStore(tmp_path / "diagnostics")
+    assert store.list_reports().status is StoreStatus.AVAILABLE
+    lock = diagnostic_store._StoreLock(store.root)
+    assert lock.acquire()
+    incident = _incident()
+    try:
+        assert store.publish(incident).status is StoreStatus.LOCK_UNAVAILABLE
+        assert {path.name for path in store.root.iterdir()} == {diagnostic_store._LOCK_NAME}
+    finally:
+        lock.release()
+    assert store.publish(incident).status is StoreStatus.SAVED
+    assert store.load(REPORT_ID).incident == incident
 
 
 def test_two_cross_process_publications_keep_distinct_session_history(tmp_path) -> None:

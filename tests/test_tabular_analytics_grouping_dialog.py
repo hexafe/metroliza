@@ -857,6 +857,11 @@ def test_sqlite_grouping_preview_with_actual_async_threshold_rows(tmp_path) -> N
     dialog = TabularAnalyticsGroupingDialog(dataframe=loaded.dataframe, column_mapping=loaded.column_mapping, sqlite_store=loaded.sqlite_store)
     try:
         assert loaded.sqlite_store.row_count == row_count
+        # Keep this as an actual threshold-size async read and native lifecycle
+        # check, without treating cold expression-index DDL as a 1500 ms UI
+        # performance contract. The held-worker cases above exercise ownership
+        # while preview_group_rows performs its ordinary cold setup.
+        loaded.sqlite_store._ensure_grouping_column_indexes(("line", "station"))
         dialog.selector_columns = ["line", "station"]
         dialog._refresh_selectors()
         assert dialog._selector_preview_threads
