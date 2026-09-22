@@ -825,6 +825,15 @@ class _WindowsProcess:
         self._max_active_processes = 1
         self.initial_process_state = initial_process_state
         self.runtime_evidence = None
+        self._resume_pending = False
+
+    def resume(self) -> None:
+        """Start an already owned suspended member after the whole pair exists."""
+        if self._closed or not self._resume_pending:
+            raise QualificationFailure("restricted_launch_unavailable")
+        if self._api.kernel.ResumeThread(self._thread) != 1:
+            raise QualificationFailure("restricted_launch_unavailable")
+        self._resume_pending = False
 
     def poll(self) -> int | None:
         return self._api.poll(self._process)
@@ -1699,6 +1708,7 @@ class _WindowsApi:
         owned: list[_WindowsProcess] | None = None,
         expected_images: tuple[Path, ...] | None = None,
         runtime_evidence=None,
+        defer_resume: bool = False,
     ) -> _WindowsProcess:
         process = self.PROCESS_INFORMATION()
         token = None
@@ -1754,7 +1764,7 @@ class _WindowsApi:
             )
             initial_process_state = self._native_process_state(process.hProcess)
             self._probe_call("observe", job, process.hProcess, initial, (initial.process_id,), probe=probe)
-            if self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
+            if not defer_resume and self.kernel.ResumeThread(process.hThread) == 0xFFFFFFFF:
                 raise QualificationFailure("restricted_launch_unavailable")
             launched = self._finish_launched_process(
                 process, job, started, initial, token, initial_process_state,
@@ -1762,6 +1772,7 @@ class _WindowsApi:
                 initial_native_image,
             )
             launched.runtime_evidence = runtime_evidence
+            launched._resume_pending = defer_resume
             if owned is not None:
                 owned.append(launched)
             return launched
@@ -2880,7 +2891,12 @@ def _launch_concurrent_pair(
                     artifact / "metroliza.exe",
                     artifact / "metroliza_application.exe",
                 ),
+                defer_resume=True,
             )
+        # Token creation and suspended-launch inspection of the second member
+        # must not leave the first member's startup running without observation.
+        for process in processes:
+            process.resume()
     except BaseException as primary:
         if processes:
             try:

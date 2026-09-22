@@ -788,6 +788,82 @@ def test_launch_transfers_private_native_anchor_into_owned_wrapper(
     assert closed == ["thread", "job", "process", "token"]
 
 
+@pytest.mark.parametrize("outcome", [1, 0, 2, 0xFFFFFFFF, KeyboardInterrupt])
+def test_deferred_launch_owns_all_handles_before_single_resume(tmp_path, monkeypatch, outcome):
+    closed, resumed = [], []
+    kernel = _LaunchTransferKernel(closed)
+    api = _fake_launch_api(tmp_path, monkeypatch, kernel)
+
+    def resume(thread):
+        resumed.append(thread)
+        if outcome is KeyboardInterrupt:
+            raise KeyboardInterrupt()
+        return outcome
+
+    kernel.ResumeThread = resume
+    owned = []
+    process = api.launch(tmp_path / "app.exe", {}, tmp_path, owned=owned, defer_resume=True)
+    assert owned == [process] and resumed == [] and closed == []
+    try:
+        if outcome == 1:
+            process.resume()
+            with pytest.raises(qualification.QualificationFailure):
+                process.resume()
+        else:
+            with pytest.raises(KeyboardInterrupt if outcome is KeyboardInterrupt else qualification.QualificationFailure):
+                process.resume()
+        assert resumed == ["thread"]
+    finally:
+        qualification._close_owned_processes(owned, terminate=True)
+    assert closed == ["thread", "job", "process", "token"]
+    with pytest.raises(qualification.QualificationFailure):
+        process.resume()
+    assert resumed == ["thread"]
+
+
+@pytest.mark.parametrize("failed_resume", [None, 0, 1])
+def test_concurrent_pair_is_registered_before_any_resume(tmp_path, monkeypatch, failed_resume):
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    events = []
+    owned = []
+
+    class Process:
+        def __init__(self, index):
+            self.index = index
+
+        def resume(self):
+            assert len(owned) == 2
+            events.append(("resume", self.index))
+            if self.index == failed_resume:
+                raise qualification.QualificationFailure("restricted_launch_unavailable")
+
+        def close(self, *, terminate):
+            events.append(("close", self.index, terminate))
+
+    class Api:
+        def launch(self, _exe, _env, _cwd, *, owned, expected_images, defer_resume):
+            assert defer_resume is True
+            index = len(owned)
+            events.append(("launch", index))
+            owned.append(Process(index))
+            return owned[-1]
+
+    def launch():
+        return qualification._launch_concurrent_pair(
+            Api(), tmp_path / "metroliza.exe", tmp_path,
+            (tmp_path / "one", tmp_path / "two"), tmp_path, owned=owned,
+        )
+
+    if failed_resume is None:
+        assert launch() == tuple(owned)
+        assert events == [("launch", 0), ("launch", 1), ("resume", 0), ("resume", 1)]
+    else:
+        with pytest.raises(qualification.QualificationFailure):
+            launch()
+        assert events[:2] == [("launch", 0), ("launch", 1)]
+        assert events[-2:] == [("close", 0, True), ("close", 1, True)]
+
+
 @pytest.mark.parametrize(
     "interrupt_at", ["before_wrapper_assignment", "before_register", "after_register"]
 )
@@ -1171,7 +1247,8 @@ def test_second_concurrent_launch_interrupt_closes_first_owned_process(
                 )
 
     class _Api:
-        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None, defer_resume=False):
+            assert defer_resume is True
             launched.append(_cwd)
             if len(launched) == 2:
                 raise primary
@@ -1209,7 +1286,8 @@ def test_second_concurrent_launch_failure_records_first_process_cleanup(
     class _Api:
         count = 0
 
-        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None, defer_resume=False):
+            assert defer_resume is True
             self.count += 1
             if self.count == 2:
                 raise primary
@@ -1240,7 +1318,8 @@ def test_first_concurrent_launch_failure_has_no_owned_process_to_clean(
     launches = []
 
     class _Api:
-        def launch(self, _executable, _environment, cwd, owned=None, expected_images=None):
+        def launch(self, _executable, _environment, cwd, owned=None, expected_images=None, defer_resume=False):
+            assert defer_resume is True
             launches.append(cwd)
             raise primary
 
@@ -1278,7 +1357,8 @@ def test_second_concurrent_launch_ordinary_error_preserves_existing_cleanup_rout
     class _Api:
         count = 0
 
-        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None, defer_resume=False):
+            assert defer_resume is True
             self.count += 1
             if self.count == 2:
                 raise primary
@@ -1321,7 +1401,8 @@ def test_concurrent_cleanup_interrupt_does_not_replace_launch_interrupt(
     class _Api:
         count = 0
 
-        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None, defer_resume=False):
+            assert defer_resume is True
             self.count += 1
             if self.count == 2:
                 raise primary
@@ -1563,7 +1644,8 @@ def test_concurrent_launch_transfer_interrupt_closes_registered_process(
             closed.append(terminate)
 
     class _Api:
-        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None, defer_resume=False):
+            assert defer_resume is True
             process = _Process()
             owned.append(process)
             return process
@@ -1630,11 +1712,14 @@ def test_runner_launch_transfer_interrupt_closes_every_registered_process(
     closed = []
 
     class _Process:
+        def resume(self):
+            pass
+
         def close(self, *, terminate):
             closed.append(terminate)
 
     class _Api:
-        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None, defer_resume=False):
             process = _Process()
             owned.append(process)
             return process
@@ -5418,6 +5503,8 @@ def test_native_windows_identity_errors_on_owned_suspended_and_retired_process(
 
 @pytest.mark.skipif(os.name != "nt", reason="native restricted-token proof requires Windows")
 def test_native_windows_restricted_token_job_launches_without_console(tmp_path, monkeypatch) -> None:
+    import subprocess
+
     api = qualification._WindowsApi()
     token = api._restricted_token()
     try:
@@ -5425,7 +5512,29 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path, 
     finally:
         api.kernel.CloseHandle(token)
     system_root = Path(os.environ["SYSTEMROOT"])
-    executable = system_root / "System32" / "whoami.exe"
+    executable = Path(sys.executable).resolve().with_name("pythonw.exe")
+    assert executable.is_file() and not executable.is_symlink()
+    assert qualification._pe_subsystem(executable) == 2
+    # whoami is a console PE and native50 observed its conhost. The primitive
+    # GUI launch control must use the same subsystem as the packaged program.
+    advapi = api.advapi
+    command = subprocess.list2cmdline([str(executable), "-c", "pass"])
+
+    class FixedGuiCommand:
+        def __getattr__(self, name):
+            return getattr(advapi, name)
+
+        def CreateProcessAsUserW(self, *arguments):
+            values = list(arguments)
+            values[2] = ctypes.create_unicode_buffer(command)
+            return advapi.CreateProcessAsUserW(*values)
+
+        def CreateProcessWithTokenW(self, *arguments):
+            values = list(arguments)
+            values[3] = ctypes.create_unicode_buffer(command)
+            return advapi.CreateProcessWithTokenW(*values)
+
+    monkeypatch.setattr(api, "advapi", FixedGuiCommand())
     environment = qualification._sanitized_environment(
         tmp_path, tmp_path, tmp_path, "normal"
     )
@@ -5462,11 +5571,12 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path, 
             if exit_code is not None:
                 break
             time.sleep(0.02)
-        assert exit_code == 0, {"native_whoami_exit_code": exit_code}
+        assert exit_code == 0, {"native_gui_exit_code": exit_code}
         process.observe()
         while time.monotonic() < deadline and process.active_processes() != 0:
             time.sleep(0.02)
         assert process.active_processes() == 0
+        assert process._assigned_processes == 1 and len(process._observations) == 1
         assert process.metrics().peak_job_memory_bytes >= 0
     except qualification.QualificationFailure as error:
         # Retain only the existing fixed-schema observer detail. This remains

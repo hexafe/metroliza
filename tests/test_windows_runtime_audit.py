@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+from contextlib import contextmanager
 import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -299,6 +301,43 @@ def test_runtime_cleanup_removes_only_its_bounded_regular_journal(tmp_path):
     assert not evidence.root.exists()
 
 
+@pytest.mark.parametrize("hardlink", [False, True])
+def test_runtime_cleanup_uses_full_metadata_when_directory_cache_has_no_link_count(
+    tmp_path, monkeypatch, hardlink
+):
+    evidence = _local_evidence(tmp_path / "owned")
+    _journal(evidence.root, evidence.nonce, [])
+    protected = tmp_path / "protected"
+    if hardlink:
+        os.link(evidence.root / "installed.json", protected)
+    original_scandir = os.scandir
+
+    @contextmanager
+    def windows_directory_cache(path):
+        with original_scandir(path) as entries:
+            cached = []
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                incomplete = SimpleNamespace(
+                    st_mode=info.st_mode, st_size=info.st_size, st_nlink=0,
+                    st_ino=0, st_dev=0, st_file_attributes=0,
+                )
+                cached.append(SimpleNamespace(
+                    name=entry.name, stat=lambda *, follow_symlinks, value=incomplete: value
+                ))
+            yield iter(cached)
+
+    monkeypatch.setattr(os, "scandir", windows_directory_cache)
+    if hardlink:
+        before = protected.read_bytes()
+        with pytest.raises(qualification.QualificationFailure):
+            evidence._remove_journal()
+        assert protected.read_bytes() == before and evidence.root.is_dir()
+    else:
+        evidence._remove_journal()
+        assert not evidence.root.exists()
+
+
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 def test_runtime_constructor_owns_empty_root_even_when_identity_query_fails(tmp_path, monkeypatch, cleanup_fails):
     from scripts import windows_owned_process_probe as probe_module
@@ -355,10 +394,27 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
     api = qualification._WindowsApi()
     advapi = api.advapi
     pythonw = Path(sys.executable).resolve().with_name("pythonw.exe")
-    python = pythonw.with_name("python.exe")
+    assert qualification._pe_subsystem(pythonw) == 2
+    launcher = pythonw.with_name("python.exe")
+    if mode == "outer":
+        # Two distinct fixed GUI images model the package's two GUI PEs. A
+        # console interpreter creates unrelated conhosts in this native control.
+        runtime = tmp_path / "control-runtime"
+        runtime.mkdir()
+        launcher = runtime / "control-launcher.exe"
+        application = runtime / "control-application.exe"
+        for target in (launcher, application):
+            shutil.copyfile(pythonw, target)
+            assert qualification._pe_subsystem(target) == 2
+        for name in (f"python{sys.version_info.major}{sys.version_info.minor}.dll",
+                     "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+            dependency = Path(sys.base_prefix) / name
+            if dependency.is_file():
+                shutil.copyfile(dependency, runtime / name)
+        pythonw = application
     fixture = ROOT / "tests/fixtures/windows_runtime_audit_control.py"
     script_mode = "ver" if mode == "concurrent" else mode
-    executable = python if mode == "outer" else pythonw
+    executable = launcher if mode == "outer" else pythonw
     command = subprocess.list2cmdline([str(executable), str(fixture), script_mode])
 
     class FixedControl:
@@ -379,6 +435,7 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
     owned = []
     evidences = []
     complete = False
+    failure = None
     proofs = []
     expected_exit = 97 if mode in {"write_failure", "blocked_install"} else 9 if mode == "hard" else 0
     try:
@@ -386,6 +443,8 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             root = tmp_path / str(index)
             root.mkdir()
             environment = qualification._sanitized_environment(root, root, root / "state", "normal")
+            if mode == "outer":
+                environment["PYTHONHOME"] = sys.base_prefix
             evidence = RuntimeEvidence(
                 api,
                 root,
@@ -394,7 +453,7 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                 lambda: qualification.QualificationFailure("output_failed"),
             )
             evidence.probe.images = (
-                ("package_launcher", python),
+                ("package_launcher", launcher),
                 ("package_application", pythonw),
             ) + evidence.probe.images[2:]
             evidences.append(evidence)
@@ -405,10 +464,13 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                 owned=owned,
                 runtime_evidence=evidence,
                 expected_images=tuple(image for _, image in evidence.probe.images),
+                defer_resume=True,
             )
         assert all(
             process.runtime_evidence is evidence for process, evidence in zip(owned, evidences)
         )
+        for process in owned:
+            process.resume()
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             for index, process in enumerate(owned):
@@ -449,6 +511,12 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             for evidence in evidences
         )
         complete = True
+    except Exception as error:
+        # Cleanup must run outside this handled assertion/proof exception, so
+        # its failure projection cannot hide the native control's first cause.
+        failure = error
     finally:
         qualification._close_owned_processes(owned, terminate=not complete)
+    if failure is not None:
+        raise failure
     assert all(not evidence.root.exists() for evidence in evidences)

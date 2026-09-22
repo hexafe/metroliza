@@ -97,7 +97,9 @@ class RuntimeEvidence:
                 entries.append(entry.name)
                 if len(entries) > audit.MAX_EVENTS + 2 or entry.name not in allowed:
                     raise self.failure_factory()
-                info = entry.stat(follow_symlinks=False)
+                # Windows DirEntry.stat caches st_nlink=0. Query full metadata
+                # without following links; a single-link file is still required.
+                info = (self.root / entry.name).lstat()
                 if (not audit._plain_file(info) or info.st_size > 1024
                         or entry.name == "ready" and info.st_size != 0):
                     raise self.failure_factory()
