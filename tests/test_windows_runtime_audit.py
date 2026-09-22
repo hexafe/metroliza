@@ -105,6 +105,45 @@ def test_command_and_required_frames_are_exact_not_basename_allowance():
     assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected)[0] == "other_depth"
 
 
+@pytest.mark.parametrize("signature_last_index", [1, 63, 64])
+def test_platform_signature_must_be_proved_inside_unchanged_64_frame_window(signature_last_index):
+    class OutsideObservationWindow:
+        @property
+        def f_globals(self):
+            pytest.fail("classifier read beyond its 64-frame window")
+
+    expected = r"C:\Windows\System32\cmd.exe"
+    frame = OutsideObservationWindow()
+    for index in reversed(range(64)):
+        module, name = ("platform", "win32_ver") if index == signature_last_index else ("outer", "call")
+        if index == 0:
+            module, name = "platform", "_syscmd_ver"
+        frame = _frame(module, name, frame)
+    kind, _caller = audit.classify_call((expected, expected + ' /c "ver"'), frame, expected)
+    assert kind == ("platform_ver" if signature_last_index < 64 else "other_depth")
+
+
+def test_deep_outer_stack_does_not_discard_already_proved_exact_signature():
+    outer = None
+    for _ in range(80):
+        outer = _frame("outer", "call", outer)
+    frame = _frame("platform", "_syscmd_ver", _frame("platform", "win32_ver", outer))
+    expected = r"C:\Windows\System32\cmd.exe"
+    assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected)[0] == "platform_ver"
+    assert audit.classify_call((expected, expected + ' /c "ver & echo synthetic"'), frame, expected)[0] == "other_command"
+    assert audit.classify_call((r"C:\private\cmd.exe", expected + ' /c "ver"'), frame, expected)[0] == "other_executable"
+
+
+def test_exactly_exhausted_64_frame_stack_reports_missing_signature_not_truncation():
+    frame = None
+    for _ in range(64):
+        frame = _frame("outer", "call", frame)
+    expected = r"C:\Windows\System32\cmd.exe"
+    assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected) == (
+        "other_frames", "other"
+    )
+
+
 @pytest.mark.parametrize("kind", sorted(audit.KINDS - {"platform_ver"}))
 def test_closed_rejection_discriminator_never_admits_unknown_command(tmp_path, kind):
     nonce = "1" * 32
@@ -441,7 +480,7 @@ def test_runtime_cleanup_refuses_replaced_root_or_unknown_content(tmp_path, defe
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows owned process and audit control")
 @pytest.mark.parametrize(
-    "mode", ["none", "ver", "hard", "other", "write_failure", "blocked_install", "outer", "concurrent"]
+    "mode", ["none", "ver", "deep_ver", "hard", "other", "write_failure", "blocked_install", "outer", "concurrent"]
 )
 def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, monkeypatch, mode):
     api = qualification._WindowsApi()
