@@ -200,7 +200,7 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "qualification_output_unavailable",
         "qualification_result_mismatch",
         "qualification_packaged_flag_mismatch",
-        "qualification_console_streams_present",
+        "qualification_console_not_absent",
         "qualification_user_not_ordinary",
         "qualification_integrity_not_medium",
         "qualification_scenario_mismatch",
@@ -2570,7 +2570,7 @@ def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
             (payload["scenario"] == scenario, "qualification_scenario_mismatch"),
             (payload["stage"] in {"startup_ready", "ready", "complete", "failed"}, "qualification_stage_mismatch"),
             (payload["packaged"] is True, "qualification_packaged_flag_mismatch"),
-            (payload["console_none"] is True, "qualification_console_streams_present"),
+            (payload["console_none"] is True, "qualification_console_not_absent"),
             (payload["ordinary_user"] is True, "qualification_user_not_ordinary"),
             (payload["integrity_level"] == "medium", "qualification_integrity_not_medium"),
         )
