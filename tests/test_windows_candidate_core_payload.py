@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from scripts import qualify_windows_candidate_core as driver
-from tests.test_windows_candidate_core_protocol import import_guard_evidence, ocr_observation, ui_observation
+from tests.test_windows_candidate_core_protocol import import_guard_evidence, native_observation, ocr_observation, ui_observation
 
 
 def _payload():
@@ -27,6 +27,7 @@ def _payload():
         "import_guard_evidence": import_guard_evidence(),
         "ui_observation": ui,
         "ocr_observation": ocr_observation("source"),
+        "native_observation": native_observation("source"),
         "facets": {
             **{key: "passed" for key in driver.REQUIRED_CHECKS},
             "group_analysis_status": "insufficient_groups",

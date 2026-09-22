@@ -177,11 +177,33 @@ independent host oracle. The host retains `ocr-observation.json` and its hash.
 Existing source observations do not establish packaged Windows inference; run
 this check with the same final package used for the other core facets.
 
+## Optional native fallback slice
+
+Run the same complete driver once with `--native-mode default` and once with
+`--native-mode unavailable`, using separate new output directories and the same
+immutable `-WithNative` package, source SHA and independent oracles. The latter
+is a qualification-only control: it verifies all sixteen native callables are
+present, temporarily makes those exact bridge bindings unavailable, and runs the
+real import/SQLite/filter/analysis/export journey. The normal frozen-backend
+policy remains unchanged. No package files, Python modules or product services
+are removed or replaced. Owners cancel and join their workers before bindings
+are restored, including on an ordinary operation failure. If a bounded join
+itself fails, the synthetic child exits unsuccessfully into its owned Job teardown
+with native bindings still unavailable; no successful native observation is
+written and no live fallback worker is switched back to a native implementation.
+Both runs must independently match the same expected data and outputs; success
+of one mode cannot substitute for the other. The host binds the requested mode,
+exact binding list, initial availability, disabled count and restoration in
+`native-observation.json` and its artifact hash. This proves behavior with native
+callables forced unavailable; it does not claim a physically missing-module
+installation or native-versus-Python numerical equivalence for other inputs.
+The final Windows package execution of both modes remains required.
+
 ## Remaining acceptance boundaries
 
 This core receipt does not establish every active-work cancellation/close,
 reopening or drift path, inference beyond the fixed W06 case,
-optional-native fallback parity, incident-menu behavior,
+incident-menu behavior,
 privacy negative paths beyond the observed owned-dashboard path, supported desktop geometry beyond the three named industrial dialogs, clean-machine launch or
 desktop Excel rendering. A one-group `insufficient_groups` result proves the
 specified grouping outcome; it does not prove inferential analysis.

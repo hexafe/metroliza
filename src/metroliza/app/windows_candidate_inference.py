@@ -340,8 +340,8 @@ def _run_gui_import(private: Path, reports: Path, database: Path) -> None:
         )
         _assert_import_result(worker.last_parse_result)
     finally:
-        window.close()
-        app.processEvents()
+        from metroliza.app.windows_candidate_native_check import close_report_owner
+        close_report_owner(window, app)
 
 
 def _failure_result(code: str) -> dict[str, Any]:

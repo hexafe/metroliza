@@ -370,8 +370,8 @@ def _run_core(root: Path, fixtures: Path, receipt: dict[str, Any], app) -> None:
         })
     finally:
         if window is not None:
-            window.close()
-        app.processEvents()
+            from metroliza.app.windows_candidate_native_check import close_report_owner
+            close_report_owner(window, app)
 
 
 def _run_ui_slice(child: Path, receipt: dict[str, Any]) -> None:
@@ -482,6 +482,65 @@ def _run_ocr_slice(child: Path, fixture: Path, receipt: dict[str, Any]) -> None:
     receipt["facets"].update(observation["facets"])
 
 
+def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
+    from metroliza.app.bootstrap import get_or_create_qapplication
+    # Each stage closes its own windows. Keep their shared application alive
+    # until all subsequent widget and worker stages have finished.
+    application = get_or_create_qapplication()
+    _run_core(root, fixtures, receipt, application)
+    child = root / receipt["relative_artifact_dir"]
+    _run_ocr_slice(child, ocr_fixture, receipt)
+    from metroliza.app.windows_candidate_reopen import run_reopen_checks
+    completed_import = root / receipt["relative_artifact_dir"]
+    reopened = run_reopen_checks(
+        completed_import / "reports.sqlite", completed_import / "reports", receipt["source_hashes"]
+    )
+    if reopened.get("status") != "passed" or reopened.get("facets") != {"reopen_preserves_completed_import": "passed"}:
+        receipt["reopen_failure"] = reopened.get("failure_code", "invalid_reopen_result")
+        raise ScenarioFailure("completed_import_reopen_failed")
+    if reopened["database"]["before_sha256"] != receipt["artifacts"]["database"]["sha256"]:
+        raise ScenarioFailure("reopen_input_identity_mismatch")
+    reopened_hash = _sha256(completed_import / "reports.sqlite")
+    if reopened["database"]["sha256"] != reopened_hash:
+        raise ScenarioFailure("reopen_output_identity_mismatch")
+    receipt["artifacts"]["database"]["sha256"] = reopened_hash
+    receipt["reopen_database"] = reopened["database"]
+    receipt["facets"].update(reopened["facets"])
+    tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
+    capture_tabular_w05(fixtures, tabular_file)
+    receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
+    receipt["facets"]["finite_precision_filters"] = "passed"
+    from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes, run_export_checks
+    xlsx_result = run_export_checks(child)
+    expected_xlsx_facets = {
+        "literal_chart_titles_series_caches_references", "value_limit_order",
+        "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
+        "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
+    }
+    xlsx_facets = xlsx_result.get("facets", {})
+    if (xlsx_result.get("status") != "passed" or set(xlsx_facets) != expected_xlsx_facets
+            or any(value != "passed" for value in xlsx_facets.values())):
+        failure = xlsx_result.get("failure_code")
+        receipt["xlsx_failure"] = failure if type(failure) is str and failure in xlsx_failure_codes else "operation_failed"
+        raise ScenarioFailure("literal_workbook_checks_failed")
+    original_workbook = child / xlsx_result["relative_artifact_dir"] / xlsx_result["artifacts"]["workbook"]["workbook"]
+    literal_workbook = child / "literal-workbook.xlsx"
+    shutil.copyfile(original_workbook, literal_workbook)
+    literal_hash = _sha256(literal_workbook)
+    if literal_hash != xlsx_result["artifacts"]["workbook"]["sha256"]:
+        raise ScenarioFailure("literal_workbook_copy_mismatch")
+    receipt["artifacts"]["literal_workbook"] = {"path": literal_workbook.name, "sha256": literal_hash}
+    receipt["facets"].update(xlsx_facets)
+    from metroliza.app.windows_candidate_inference import run_inference_checks
+    inference = run_inference_checks(child, fixtures)
+    if inference.get("status") != "passed" or inference.get("facets") != {"successful_group_inference": "passed"}:
+        raise ScenarioFailure("group_inference_checks_failed")
+    receipt["artifacts"].update(inference["artifacts"])
+    receipt["facets"].update(inference["facets"])
+    _run_import_guards_slice(child, fixtures, receipt)
+    _run_ui_slice(child, receipt)
+
+
 def run_qualification() -> int:
     if requested_scenario() != SCENARIO:
         return 20
@@ -498,62 +557,10 @@ def run_qualification() -> int:
         root = _root()
         fixtures = _fixture_dir()
         ocr_fixture = _ocr_fixture()
-        from metroliza.app.bootstrap import get_or_create_qapplication
-        # Each stage closes its own windows. Keep their shared application alive
-        # until all subsequent widget and worker stages have finished.
-        application = get_or_create_qapplication()
-        _run_core(root, fixtures, receipt, application)
-        child = root / receipt["relative_artifact_dir"]
-        _run_ocr_slice(child, ocr_fixture, receipt)
-        from metroliza.app.windows_candidate_reopen import run_reopen_checks
-        completed_import = root / receipt["relative_artifact_dir"]
-        reopened = run_reopen_checks(
-            completed_import / "reports.sqlite", completed_import / "reports", receipt["source_hashes"]
+        from metroliza.app.windows_candidate_native_check import run_with_native_mode
+        receipt["native_observation"] = run_with_native_mode(
+            lambda: _execute_core_checks(root, fixtures, ocr_fixture, receipt)
         )
-        if reopened.get("status") != "passed" or reopened.get("facets") != {"reopen_preserves_completed_import": "passed"}:
-            receipt["reopen_failure"] = reopened.get("failure_code", "invalid_reopen_result")
-            raise ScenarioFailure("completed_import_reopen_failed")
-        if reopened["database"]["before_sha256"] != receipt["artifacts"]["database"]["sha256"]:
-            raise ScenarioFailure("reopen_input_identity_mismatch")
-        reopened_hash = _sha256(completed_import / "reports.sqlite")
-        if reopened["database"]["sha256"] != reopened_hash:
-            raise ScenarioFailure("reopen_output_identity_mismatch")
-        receipt["artifacts"]["database"]["sha256"] = reopened_hash
-        receipt["reopen_database"] = reopened["database"]
-        receipt["facets"].update(reopened["facets"])
-        tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
-        capture_tabular_w05(fixtures, tabular_file)
-        receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
-        receipt["facets"]["finite_precision_filters"] = "passed"
-        from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes, run_export_checks
-        xlsx_result = run_export_checks(child)
-        expected_xlsx_facets = {
-            "literal_chart_titles_series_caches_references", "value_limit_order",
-            "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
-            "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
-        }
-        xlsx_facets = xlsx_result.get("facets", {})
-        if (xlsx_result.get("status") != "passed" or set(xlsx_facets) != expected_xlsx_facets
-                or any(value != "passed" for value in xlsx_facets.values())):
-            failure = xlsx_result.get("failure_code")
-            receipt["xlsx_failure"] = failure if type(failure) is str and failure in xlsx_failure_codes else "operation_failed"
-            raise ScenarioFailure("literal_workbook_checks_failed")
-        original_workbook = child / xlsx_result["relative_artifact_dir"] / xlsx_result["artifacts"]["workbook"]["workbook"]
-        literal_workbook = child / "literal-workbook.xlsx"
-        shutil.copyfile(original_workbook, literal_workbook)
-        literal_hash = _sha256(literal_workbook)
-        if literal_hash != xlsx_result["artifacts"]["workbook"]["sha256"]:
-            raise ScenarioFailure("literal_workbook_copy_mismatch")
-        receipt["artifacts"]["literal_workbook"] = {"path": literal_workbook.name, "sha256": literal_hash}
-        receipt["facets"].update(xlsx_facets)
-        from metroliza.app.windows_candidate_inference import run_inference_checks
-        inference = run_inference_checks(child, fixtures)
-        if inference.get("status") != "passed" or inference.get("facets") != {"successful_group_inference": "passed"}:
-            raise ScenarioFailure("group_inference_checks_failed")
-        receipt["artifacts"].update(inference["artifacts"])
-        receipt["facets"].update(inference["facets"])
-        _run_import_guards_slice(child, fixtures, receipt)
-        _run_ui_slice(child, receipt)
         receipt["stage"] = "complete"
         receipt["status"] = "passed"
         receipt["checks"].update({"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"})

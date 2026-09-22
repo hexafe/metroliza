@@ -70,11 +70,19 @@ def payload():
         "import_guard_evidence": import_guard_evidence(),
         "ui_observation": ui_observation(),
         "ocr_observation": ocr_observation(),
+        "native_observation": native_observation(),
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
             key: {"path": key + extension, "sha256": "2" * 64}
             for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json"), strict=True)
         },
+    }
+
+
+def native_observation(runtime_context="packaged", mode="default"):
+    return {
+        "mode": mode, "runtime_context": runtime_context, "bindings": list(driver.NATIVE_BINDINGS),
+        "available_before": 16, "forced_unavailable": 16 if mode == "unavailable" else 0, "restored": True,
     }
 
 

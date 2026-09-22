@@ -280,6 +280,8 @@ def _close_window_safely(app, window) -> str | None:
         worker = getattr(dialog, "dashboard_thread", None)
         if worker is not None and not worker.wait(20000):
             _RETAINED_WINDOWS.append(window)
+            from metroliza.app.windows_candidate_native_check import abort_unavailable_after_join_failure
+            abort_unavailable_after_join_failure(window)
             return "dashboard_worker_join_deadline"
         app.processEvents()
     closed = window.close()

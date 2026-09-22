@@ -107,7 +107,7 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
         _WindowsApi=lambda: api,
         _close_owned_processes=diagnostics._close_owned_processes,
     )
-    args = SimpleNamespace(source_checkout=tmp_path, expected_source_sha="1" * 40, oracle=tmp_path / "oracle.json", dpi_scale="1.0")
+    args = SimpleNamespace(source_checkout=tmp_path, expected_source_sha="1" * 40, oracle=tmp_path / "oracle.json", dpi_scale="1.0", native_mode="default")
     private = tmp_path / "private"
     private.mkdir()
 

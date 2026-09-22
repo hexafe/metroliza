@@ -279,6 +279,8 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
             workspace._request_active_worker_cancellation()
         if any(not worker.wait(20000) for worker in live):
             _RETAINED_WINDOWS.append(window)
+            from metroliza.app.windows_candidate_native_check import abort_unavailable_after_join_failure
+            abort_unavailable_after_join_failure(window)
             raise ImportGuardsFailure("worker_join_deadline")
         app.processEvents()
         closed = window.close()

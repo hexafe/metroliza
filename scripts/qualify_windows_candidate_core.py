@@ -39,6 +39,14 @@ REQUIRED_CHECKS = (
 )
 ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")
 CORE_OBSERVATIONS = {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"}
+NATIVE_BINDINGS = (
+    "cmm.parse_blocks", "cmm.normalize_measurement_rows", "cmm.persist_measurement_rows",
+    "comparison.bootstrap_percentile_ci", "comparison.bootstrap_percentile_ci_batch", "comparison.pairwise_stats",
+    "distribution.compute_ad_ks_statistics", "distribution.estimate_ad_pvalue_monte_carlo",
+    "candidate.compute_candidate_metrics", "candidate.compute_candidate_metrics_batch", "candidate.compute_candidate_fit_params_batch",
+    "group.coerce_sequence_to_float64",
+    "chart.render_histogram_png", "chart.render_distribution_png", "chart.render_iqr_png", "chart.render_trend_png",
+)
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 MAX_SECONDS = 900
@@ -135,7 +143,26 @@ def _validate_core_result(payload: object) -> dict:
     _validate_import_guard_evidence(payload.get("import_guard_evidence"))
     _validate_ui_observation(payload.get("ui_observation"))
     _validate_ocr_observation(payload.get("ocr_observation"))
+    _validate_native_observation(payload.get("native_observation"))
     return payload
+
+
+def _validate_native_observation(value, *, packaged=False, expected_mode=None):
+    if (type(value) is not dict or set(value) != {
+        "mode", "runtime_context", "bindings", "available_before", "forced_unavailable", "restored"
+    } or value["mode"] not in ("default", "unavailable")
+            or value["runtime_context"] not in ("source", "packaged")
+            or value["bindings"] != list(NATIVE_BINDINGS)
+            or type(value["available_before"]) is not int or not 0 <= value["available_before"] <= 16
+            or type(value["forced_unavailable"]) is not int
+            or value["forced_unavailable"] != (16 if value["mode"] == "unavailable" else 0)
+            or value["restored"] is not True):
+        raise CandidateFailure("invalid_native_observation")
+    if expected_mode is not None and value["mode"] != expected_mode:
+        raise CandidateFailure("native_mode_mismatch")
+    if packaged and (value["runtime_context"] != "packaged" or value["available_before"] != 16):
+        raise CandidateFailure("packaged_native_bindings_missing")
+    return value
 
 
 def _ocr_oracle():
@@ -312,7 +339,7 @@ def _validate_core_artifacts(artifacts: object) -> None:
         seen.add(name)
 
 
-def validate_runtime_receipt(payload: object, expected_source: str) -> dict:
+def validate_runtime_receipt(payload: object, expected_source: str, *, native_mode="default") -> dict:
     """Reject source-only, partial, stale, elevated and offscreen observations."""
     result = _validate_core_result(payload)
     if result.get("packaged") is not True:
@@ -322,6 +349,7 @@ def validate_runtime_receipt(payload: object, expected_source: str) -> dict:
     if result.get("source_sha") != expected_source:
         raise CandidateFailure("runtime_source_mismatch")
     _validate_ocr_observation(result.get("ocr_observation"), packaged=True)
+    _validate_native_observation(result.get("native_observation"), packaged=True, expected_mode=native_mode)
     return result
 
 
@@ -561,6 +589,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         "METROLIZA_WINDOWS_CANDIDATE_ROOT": str(work),
         "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR": str(staged_fixtures),
         "METROLIZA_WINDOWS_CANDIDATE_OCR_FIXTURE": str(staged_ocr),
+        "METROLIZA_WINDOWS_CANDIDATE_NATIVE_MODE": args.native_mode,
         "TEMP": str(scratch_temp),
         "TMP": str(scratch_temp),
         "TMPDIR": str(scratch_temp),
@@ -585,7 +614,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         result_path = work / SCENARIO_FILE
         if not result_path.exists():
             raise CandidateFailure("package_core_hook_or_receipt_missing")
-        payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha)
+        payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha, native_mode=args.native_mode)
         _validate_ui_observation(payload.get("ui_observation"), expected_dpr=float(args.dpi_scale))
         if not diag._wait_for_job_exit(process, deadline):
             raise CandidateFailure("owned_processes_remain")
@@ -602,6 +631,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         with ocr_result.open("x", encoding="ascii") as stream:
             json.dump(_validate_ocr_observation(payload["ocr_observation"], packaged=True), stream)
         artifacts["ocr_evidence"] = {"path": ocr_result.name, "sha256": _hash(ocr_result)}
+        native_result = output / "native-observation.json"
+        with native_result.open("x", encoding="ascii") as stream:
+            json.dump(payload["native_observation"], stream)
+        artifacts["native_evidence"] = {"path": native_result.name, "sha256": _hash(native_result)}
         terminate = False
         return artifacts
     finally:
@@ -658,6 +691,7 @@ def qualify(args) -> dict:
             "scope": [*REQUIRED_CHECKS, "offline_browser_dom_and_layout"],
             "source_sha": args.expected_source_sha,
             "ui_scale": args.dpi_scale,
+            "native_mode": args.native_mode,
             "native_geometry": "passed",
             "offline_browser_rendering": "passed",
             "source_tree": subprocess.check_output(
@@ -707,6 +741,7 @@ def main() -> int:
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--expected-source-sha", required=True)
     parser.add_argument("--dpi-scale", choices=("1.0", "1.25", "1.5"), default="1.0")
+    parser.add_argument("--native-mode", choices=("default", "unavailable"), default="default")
     args = parser.parse_args()
     try:
         qualify(args)
