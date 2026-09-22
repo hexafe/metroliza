@@ -1,0 +1,2 @@
+# Preserve the upstream byte-identity control on Windows checkouts.
+tests/fixtures/packaging/pyi_rth_setuptools_6_22_3.py text eol=lf
