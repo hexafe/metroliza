@@ -798,4 +798,3 @@ def test_windows_primary_thread_receipt_publishes_only_known_node_status(outcome
         'primary_thread_identity': expected, 'interrupted_creation': 'unobserved',
     }
     assert "if result == 0 and set(controls.values()) != {'passed'}:" in code
-
