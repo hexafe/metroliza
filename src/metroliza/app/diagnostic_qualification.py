@@ -27,6 +27,8 @@ FAILURE_REASONS = frozenset(
     {
         "invalid_qualification_root",
         "qualification_barrier_timeout",
+        "runtime_ready_timeout",
+        "runtime_audit_invalid",
         "qualification_fixture_mismatch",
         "qualification_output_exists",
         "qualification_result_mismatch",
@@ -461,6 +463,8 @@ def run_qualification(scenario: str) -> int:
         root = _root()
         failure_stage = "receipt"
         write_receipt(scenario, "startup_ready")
+        from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
+        wait_for_host_ready()
         failure_stage = {
             "preview": "preview",
             "flood": "flood",

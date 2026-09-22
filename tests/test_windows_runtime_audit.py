@@ -628,9 +628,8 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             for index, process in enumerate(owned):
                 process.observe()
                 if (tmp_path / str(index) / "control-ready").exists():
-                    if mode.startswith("late_") and not (tmp_path / str(index) / "control-start").exists():
+                    if mode.startswith("late_"):
                         process.mark_runtime_ready()
-                        (tmp_path / str(index) / "control-start").touch()
                     (tmp_path / str(index) / "control-finish").touch()
             if all(
                 process.poll() is not None and process.active_processes() == 0 for process in owned
@@ -678,3 +677,123 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
     if failure is not None:
         raise failure
     assert all(not evidence.root.exists() for evidence in evidences)
+
+
+def test_runtime_ready_wait_is_inert_outside_opt_in(monkeypatch):
+    monkeypatch.delenv(audit.GATE, raising=False)
+    monkeypatch.setattr(audit, "_wait_for_host_ready", lambda *_: pytest.fail("ordinary startup waited"))
+    audit.wait_for_host_ready()
+
+
+@pytest.mark.parametrize("delivery_time", [0.5, 1.0, 1.1])
+def test_runtime_ready_wait_accepts_only_ack_before_deadline(tmp_path, monkeypatch, delivery_time):
+    nonce = "a" * 32
+    _journal(tmp_path, nonce, [])
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(tmp_path))
+    monkeypatch.setenv(audit.NONCE, nonce)
+    clock = [0.0]
+    monkeypatch.setattr(audit.time, "monotonic", lambda: clock[0])
+
+    def deliver(_seconds):
+        (tmp_path / "ready").touch(exist_ok=False)
+        clock[0] = delivery_time
+
+    monkeypatch.setattr(audit.time, "sleep", deliver)
+    if delivery_time < 1:
+        audit.wait_for_host_ready(seconds=1)
+    else:
+        with pytest.raises(ValueError, match="^runtime_ready_timeout$"):
+            audit.wait_for_host_ready(seconds=1)
+
+
+@pytest.mark.parametrize("defect", ["directory", "nonempty", "hardlink", "symlink", "nonce", "missing_install"])
+def test_runtime_ready_wait_rejects_unsafe_or_stale_ack(tmp_path, monkeypatch, defect):
+    nonce = "a" * 32
+    _journal(tmp_path, nonce, [])
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(tmp_path))
+    monkeypatch.setenv(audit.NONCE, nonce)
+    marker = tmp_path / "ready"
+    if defect == "directory":
+        marker.mkdir()
+    elif defect in {"hardlink", "symlink"}:
+        other = tmp_path / "unrelated"
+        other.touch()
+        if defect == "hardlink":
+            os.link(other, marker)
+        else:
+            try:
+                marker.symlink_to(other)
+            except OSError:
+                pytest.skip("symlink unavailable for native ordinary user")
+    else:
+        marker.write_bytes(b"invalid" if defect == "nonempty" else b"")
+        if defect == "nonce":
+            monkeypatch.setenv(audit.NONCE, "b" * 32)
+        if defect == "missing_install":
+            (tmp_path / "installed.json").unlink()
+    with pytest.raises(ValueError, match="^runtime_audit_invalid$"):
+        audit.wait_for_host_ready(seconds=1)
+
+
+def test_runtime_ready_wait_rejects_replaced_root(tmp_path, monkeypatch):
+    root = tmp_path / "owned"
+    root.mkdir()
+    nonce = "a" * 32
+    _journal(root, nonce, [])
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(root))
+    monkeypatch.setenv(audit.NONCE, nonce)
+
+    def replace(_seconds):
+        root.rename(tmp_path / "old")
+        root.mkdir()
+        (root / "ready").touch()
+
+    monkeypatch.setattr(audit.time, "sleep", replace)
+    with pytest.raises(ValueError, match="^runtime_audit_invalid$"):
+        audit.wait_for_host_ready(seconds=1)
+
+
+def test_runtime_ready_wait_rechecks_deadline_after_marker_observation(tmp_path, monkeypatch):
+    nonce = "a" * 32
+    _journal(tmp_path, nonce, [])
+    marker = tmp_path / "ready"
+    marker.touch()
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(tmp_path))
+    monkeypatch.setenv(audit.NONCE, nonce)
+    clock = [0.0]
+    original = Path.lstat
+    monkeypatch.setattr(audit.time, "monotonic", lambda: clock[0])
+
+    def delayed_stat(path, *args, **kwargs):
+        result = original(path, *args, **kwargs)
+        if path == marker:
+            clock[0] = 2.0
+        return result
+
+    monkeypatch.setattr(Path, "lstat", delayed_stat)
+    with pytest.raises(ValueError, match="^runtime_ready_timeout$"):
+        audit.wait_for_host_ready(seconds=1)
+
+
+def test_runtime_ready_accepts_host_ack_delivered_before_wait(tmp_path, monkeypatch):
+    nonce = "a" * 32
+    _journal(tmp_path, nonce, [])
+    (tmp_path / "ready").touch()
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(tmp_path))
+    monkeypatch.setenv(audit.NONCE, nonce)
+    audit.wait_for_host_ready(seconds=1)
+
+
+@pytest.mark.parametrize("missing", [audit.ROOT, audit.NONCE])
+def test_runtime_ready_missing_environment_is_closed(tmp_path, monkeypatch, missing):
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(tmp_path))
+    monkeypatch.setenv(audit.NONCE, "a" * 32)
+    monkeypatch.delenv(missing, raising=False)
+    with pytest.raises(ValueError, match="^runtime_audit_invalid$"):
+        audit.wait_for_host_ready()

@@ -161,7 +161,14 @@ with both helpers observed entirely in running. Mixed phases, another late
 caller, another command or missing native evidence still fail. The readiness
 marker and physical count/ancestry/lifecycle checks are unchanged. This corrects
 the qualifier's startup-only assumption; it does not establish a general NumPy
-subprocess allowance or successful supervised/package acceptance.
+subprocess allowance or successful supervised/package acceptance. In synthetic
+diagnostic qualification the child waits after publishing `startup_ready` for
+the host's existing private audit-ready acknowledgement, before any workflow
+imports. This bounds the observer effect explicitly: the host's polling delay
+cannot label a post-readiness operation as startup. The wait is at most five
+seconds, fails closed, and is inert when the synthetic runtime-audit gate is off.
+The native late-call controls use this same handshake. Ordinary application
+startup and product-operation deadlines are unchanged.
 
 The explicit app hook precedes all implied runtime hooks; Analysis verifies
 its exact source and order. The hook is inert outside synthetic qualification.
