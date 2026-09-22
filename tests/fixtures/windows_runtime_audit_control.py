@@ -60,8 +60,8 @@ def main():
     runpy.run_path(str(root / "packaging/hooks/windows/rthooks/metroliza_rth_runtime_audit.py"))
     if mode.startswith("late_"):
         (Path.cwd() / "control-ready").touch()
-        if not _wait_for_marker("control-start"):
-            return 98
+        from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
+        wait_for_host_ready()
     _exercise_subprocess(mode)
     if mode == "hard":
         os._exit(9)

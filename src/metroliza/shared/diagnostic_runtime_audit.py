@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import time
 
 GATE = "METROLIZA_WINDOWS_RUNTIME_AUDIT"
 ROOT = "METROLIZA_WINDOWS_RUNTIME_AUDIT_ROOT"
@@ -144,6 +145,47 @@ def _install() -> None:
     if not installed_seen:
         raise ValueError("runtime_audit_invalid")
     _write(root, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+
+
+def wait_for_host_ready(*, seconds: float = 5.0) -> None:
+    """Keep synthetic work behind the host's existing private phase acknowledgement."""
+    if os.environ.get(GATE) != "1":
+        return
+    try:
+        _wait_for_host_ready(seconds)
+    except (OSError, KeyError) as error:
+        raise ValueError("runtime_audit_invalid") from error
+
+
+def _wait_for_host_ready(seconds: float) -> None:
+    root = Path(os.environ[ROOT])
+    nonce = os.environ[NONCE]
+    if (not root.is_absolute() or not _plain_directory(root)
+            or len(nonce) != 32 or any(char not in "0123456789abcdef" for char in nonce)):
+        raise ValueError("runtime_audit_invalid")
+    identity = root.lstat()
+    installed = _read(root / "installed.json")
+    if (installed != {"schema_version": 1, "nonce": nonce, "installed": True}
+            or type(installed.get("schema_version")) is not int
+            or installed.get("installed") is not True):
+        raise ValueError("runtime_audit_invalid")
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        current = root.lstat()
+        if not _plain_directory(root) or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+            raise ValueError("runtime_audit_invalid")
+        try:
+            ready = (root / "ready").lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if not _plain_file(ready) or ready.st_size != 0:
+                raise ValueError("runtime_audit_invalid")
+            if time.monotonic() < deadline:
+                return
+            break
+        time.sleep(0.005)
+    raise ValueError("runtime_ready_timeout")
 
 
 def read_evidence(root: Path, nonce: str) -> list[dict]:
