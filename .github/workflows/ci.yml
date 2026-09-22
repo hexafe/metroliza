@@ -146,6 +146,27 @@ jobs:
           import tempfile
           import xml.etree.ElementTree as ET
 
+          def safe_native_controls(report):
+              names = {
+                  'test_native_resumed_thread_matches_child_initial_thread': 'primary_thread_identity',
+                  'test_native_interrupted_creation_cleans_unresumed_primary_thread': 'interrupted_creation',
+              }
+              statuses = {label: 'unobserved' for label in names.values()}
+              for case in report.iter('testcase'):
+                  if (case.get('classname') != 'tests.test_windows_ocr_wrapper_completion'
+                          or case.get('name') not in names):
+                      continue
+                  label = names[case.get('name')]
+                  if statuses[label] != 'unobserved':
+                      raise ValueError('duplicate_native_control')
+                  if case.find('failure') is not None or case.find('error') is not None:
+                      statuses[label] = 'failed'
+                  elif case.find('skipped') is not None:
+                      statuses[label] = 'skipped'
+                  else:
+                      statuses[label] = 'passed'
+              return statuses
+
           def safe_receipts(root):
               path = root / 'windows-ocr-wrapper-receipts.jsonl'
               if not path.is_file() or not 0 < path.stat().st_size <= 32768:
@@ -163,7 +184,7 @@ jobs:
                              'not_completed', 'output_limit'},
                   'shell_state': {'exited', 'live', 'wait_failed', 'unobserved'},
                   'fixture_stage': {'child_ready', 'shell_ready', 'fixture_mismatch', 'unobserved'},
-                  'fixture_phase': {'unobserved', 'shell_initialized', 'native_factory_ready',
+                  'fixture_phase': {'unobserved', 'shell_entered', 'shell_initialized', 'native_factory_ready',
                                     'child_created', 'fixture_mismatch'},
                   'invoke_state': {'returned', 'timeout_returned', 'failed', 'unobserved'},
                   'invoke_reason': {'completed', 'timeout', 'cancelled', 'containment_unavailable',
@@ -231,8 +252,30 @@ jobs:
                               result = 1
                           print(json.dumps({'stage': 'pytest_complete', 'exit_code': result,
                                             **counts}, sort_keys=True))
+                          controls = safe_native_controls(ET.parse(report).getroot())
+                          print(json.dumps({'stage': 'native_primary_thread_controls',
+                                            **controls}, sort_keys=True))
+                          if result == 0 and set(controls.values()) != {'passed'}:
+                              raise ValueError('missing_native_control')
                           for receipt in safe_receipts(root):
                               print(json.dumps(receipt, sort_keys=True))
+                          sys.path.insert(0, str(Path.cwd()))
+                          from tests.windows_ocr_stages import validate_observation
+                          observed_pairs = set()
+                          for prop in ET.parse(report).getroot().iter('property'):
+                              if prop.get('name') == 'wrapper_completion_stages':
+                                  receipt = validate_observation(prop.get('value', ''))
+                                  pair = (receipt['shell'], receipt['mode'])
+                                  if pair in observed_pairs:
+                                      raise ValueError('duplicate_stage_receipt')
+                                  observed_pairs.add(pair)
+                                  print(json.dumps({'stage': 'wrapper_completion_stages',
+                                                    **receipt}, sort_keys=True))
+                          if result == 0 and observed_pairs != {
+                              ('powershell', 'pass'), ('powershell', 'fail'),
+                              ('pwsh', 'pass'), ('pwsh', 'fail'),
+                          }:
+                              raise ValueError('missing_stage_receipt')
                       else:
                           print('{"stage":"pytest_incomplete","reason":"report_unavailable"}')
                           result = 1
