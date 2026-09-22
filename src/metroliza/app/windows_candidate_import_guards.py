@@ -8,12 +8,12 @@ ordinary worker, parser and repository still perform all work.
 
 from __future__ import annotations
 
-from contextlib import closing
 import hashlib
-import sqlite3
 from pathlib import Path
 from threading import Event
 import time
+from metroliza.reports.db import sqlite_readonly_connection_scope
+
 from typing import Any
 from unittest.mock import patch
 import uuid
@@ -59,7 +59,7 @@ def _database_state(database: Path) -> dict[str, Any]:
     # leave an empty WAL and SHM. Read the full SQLite view, including any WAL,
     # while owned workers are joined; the host checks strict sidecar shape and
     # immutable contents only after the complete Job has exited.
-    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+    with sqlite_readonly_connection_scope(str(database)) as db:
         names = tuple(sorted(row[0] for row in db.execute(
             "SELECT file_name FROM source_file_locations WHERE is_active = 1"
         )))
@@ -125,8 +125,11 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
     from PyQt6.QtCore import QCoreApplication, QEvent, QSettings
     from metroliza.app.windows_candidate_qualification import ScenarioFailure, _stage_reports
     from metroliza.parsing import parse_reports_thread
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from importlib import import_module
+    from metroliza.app.ui_entrypoint import load_main_window_factory
+
+    MainWindow = load_main_window_factory()
+    UiPreferences = import_module("metroliza.ui.ui_preferences").UiPreferences
 
     child = scratch / f"import-guards-{uuid.uuid4().hex}"
     child.mkdir()

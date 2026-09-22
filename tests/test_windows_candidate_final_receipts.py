@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -48,21 +50,37 @@ def _prepared(tmp_path):
                 value = ocr_observation()
             elif key == "process_evidence":
                 value = receipt["topology"]["supervised"][0]
-            _write(path, value)
+            if key in {"database", "before_reopen_database"}:
+                with closing(sqlite3.connect(path)) as connection, connection:
+                    connection.execute("CREATE TABLE synthetic_protocol (value INTEGER)")
+                    connection.execute("INSERT INTO synthetic_protocol VALUES (1)")
+            else:
+                _write(path, value)
             artifacts[key] = {"path": path.name, "sha256": core._hash(path)}
         browser = _source_receipt()
         browser["evidence"].update(host_platform="win32", input_sha256=artifacts["private_dashboard"]["sha256"])
         browser_path = directory / artifacts["browser_evidence"]["path"]
         _write(browser_path, browser)
         artifacts["browser_evidence"]["sha256"] = core._hash(browser_path)
+        from tests.test_windows_candidate_fresh_reopen import runtime_receipt
+        fresh = {"schema_version": 1, "status": "passed",
+                 "process_boundary": "new_owned_job_after_initial_job_drained",
+                 "observation": runtime_receipt(artifacts["database"]["sha256"], HEAD),
+                 "topology": receipt["topology"]["supervised"][0]}
+        fresh["observation"]["observation"]["database"].update(core._assert_reopen_databases_preserved(
+            directory / artifacts["before_reopen_database"]["path"], directory / artifacts["database"]["path"],
+            before_hash=artifacts["before_reopen_database"]["sha256"], after_hash=artifacts["database"]["sha256"]))
+        fresh_path = directory / artifacts["fresh_reopen_evidence"]["path"]
+        _write(fresh_path, fresh)
+        artifacts["fresh_reopen_evidence"]["sha256"] = core._hash(fresh_path)
         p = receipt["package"]
         value = {
             "schema_version": 1, "status": "passed", "source_sha": HEAD, "source_tree": TREE,
             "ui_scale": scale, "native_mode": mode, "package_tree_sha256": p["tested_tree_sha256"],
             "launcher_sha256": p["launcher_sha256"], "application_sha256": p["application_sha256"],
             "supervision_manifest_sha256": p["manifest_sha256"], "notice_hashes": p["notice_hashes"],
-            "scope": [*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"],
-            "facets": dict.fromkeys((*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"), "passed"),
+            "scope": [*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout", "fresh_process_reopen_preserves_completed_import"],
+            "facets": dict.fromkeys((*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout", "fresh_process_reopen_preserves_completed_import"), "passed"),
             "native_geometry": "passed", "offline_browser_rendering": "passed", "independent_oracle": "passed",
             "launch": "restricted_ordinary_user_native_windows_outside_checkout",
             "provenance_validated": True, "notices_validated": True, "artifacts": artifacts,
@@ -132,5 +150,43 @@ def test_combined_gate_rechecks_retained_bytes_and_native_proofs(tmp_path, defec
         payload["artifacts"][key]["sha256"] = core._hash(evidence)
         _write(path, payload)
     with pytest.raises((ValueError, OSError, RuntimeError)):
+        final.finalize(root, HEAD, TREE)
+    assert not (root / "combined-candidate-receipt.json").exists()
+
+
+@pytest.mark.parametrize("field", ["schema_sha256", "logical_dump_sha256"])
+def test_final_reopen_rejects_declared_digest_not_bound_to_retained_database(tmp_path, field):
+    root = _prepared(tmp_path)
+    directory = root / "core-dpr-1.0"
+    receipt_path = directory / "core-driver-receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    path = directory / receipt["artifacts"]["fresh_reopen_evidence"]["path"]
+    value = json.loads(path.read_bytes())
+    value["observation"]["observation"]["database"][field] = "f" * 64
+    _write(path, value)
+    receipt["artifacts"]["fresh_reopen_evidence"]["sha256"] = core._hash(path)
+    _write(receipt_path, receipt)
+    with pytest.raises(core.CandidateFailure, match="fresh_reopen_database_digest_mismatch"):
+        final.finalize(root, HEAD, TREE)
+    assert not (root / "combined-candidate-receipt.json").exists()
+
+
+@pytest.mark.parametrize("target", ["before_reopen_database", "database"])
+def test_final_reopen_rejects_database_change_during_semantic_observation(tmp_path, monkeypatch, target):
+    root = _prepared(tmp_path)
+    path = root / "core-dpr-1.0" / (target + ".json")
+    observe = core._reopen_database_semantics
+
+    def replacing_observer(database):
+        value = observe(database)
+        if database == path:
+            # Preserve SQLite logical contents, but replace the bytes after the
+            # first identity check and semantic read. A later recheck must fail.
+            with database.open("ab") as stream:
+                stream.write(b"changed retained bytes")
+        return value
+
+    monkeypatch.setattr(core, "_reopen_database_semantics", replacing_observer)
+    with pytest.raises(core.CandidateFailure, match="fresh_reopen_database_identity_changed"):
         final.finalize(root, HEAD, TREE)
     assert not (root / "combined-candidate-receipt.json").exists()

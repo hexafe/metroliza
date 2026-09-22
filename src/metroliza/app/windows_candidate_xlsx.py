@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import posixpath
 import subprocess
 import time
@@ -637,21 +636,3 @@ def run_source_export_proof(scratch_root: str | Path) -> dict[str, Any]:
     if relative:
         _atomic_json(root / relative / "xlsx-w07-source-receipt.json", result)
     return result
-
-
-def _main() -> int:
-    location = os.environ.get("METROLIZA_WINDOWS_CANDIDATE_ROOT")
-    if not location:
-        print(json.dumps({"status": "failed", "failure_code": "root_missing"}, sort_keys=True))
-        return 2
-    try:
-        result = run_source_export_proof(location)
-    except Exception:
-        print(json.dumps({"status": "failed", "failure_code": "operation_failed"}, sort_keys=True))
-        return 1
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0 if result.get("status") == "passed" else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(_main())

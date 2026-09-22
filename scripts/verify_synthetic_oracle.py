@@ -236,7 +236,7 @@ def verify(oracle_path: Path, database: Path, workbook: Path, grouping: Path,
 def _create_synthetic_database(oracle: dict[str, Any], path: Path) -> None:
     if path.exists():
         path.unlink()
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         connection.executescript(
             """
             CREATE TABLE source_files (id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL);
@@ -307,19 +307,19 @@ def self_check(oracle_path: Path, output: Path) -> dict[str, Any]:
 
     bad_database = output / "oracle-corrupt-measurement.sqlite"
     shutil.copyfile(database, bad_database)
-    with sqlite3.connect(bad_database) as connection:
+    with closing(sqlite3.connect(bad_database)) as connection, connection:
         connection.execute("UPDATE report_measurements SET meas = 10.03 WHERE id = 2")
     db_scope = _expect_mismatch("database", lambda: verify(oracle_path, bad_database, workbook, grouping))
 
     orphan_database = output / "oracle-orphan.sqlite"
     shutil.copyfile(database, orphan_database)
-    with sqlite3.connect(orphan_database) as connection:
+    with closing(sqlite3.connect(orphan_database)) as connection, connection:
         connection.execute("INSERT INTO source_files VALUES (?, ?)", (9, "orphan"))
     orphan_scope = _expect_mismatch("orphan", lambda: verify(oracle_path, orphan_database, workbook, grouping))
 
     nan_database = output / "oracle-nan.sqlite"
     shutil.copyfile(database, nan_database)
-    with sqlite3.connect(nan_database) as connection:
+    with closing(sqlite3.connect(nan_database)) as connection, connection:
         connection.execute("UPDATE report_measurements SET meas = ? WHERE id = 2", (float("nan"),))
     nan_scope = _expect_mismatch("nan", lambda: verify(oracle_path, nan_database, workbook, grouping))
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
+from importlib import import_module
 import os
 from pathlib import Path
 import sys
@@ -28,15 +29,18 @@ FACETS = ("private_creation_denial", "explicit_output_survives", "unowned_siblin
 def _window(child):
     from PyQt6.QtCore import QSettings
     from metroliza.app.bootstrap import get_or_create_qapplication
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from metroliza.app.ui_entrypoint import load_main_window_factory
 
     child.mkdir()
     database = child / "synthetic.sqlite"
     _seed_synthetic_database(database)
     app = get_or_create_qapplication()
+    preferences_module = import_module("metroliza.ui.ui_preferences")
     settings = QSettings(str(child / "ui.ini"), QSettings.Format.IniFormat)
-    window = MainWindow("candidate-privacy", None, ui_preferences=UiPreferences(settings))
+    window = load_main_window_factory()(
+        "candidate-privacy", None,
+        ui_preferences=preferences_module.UiPreferences(settings),
+    )
     try:
         window.show()
         app.processEvents()
@@ -47,7 +51,7 @@ def _window(child):
 
 
 def _open_realtime(window, child, *, temporary_root):
-    import metroliza.ui.realtime_industrial_monitoring_dialog as module
+    module = import_module("metroliza.ui.realtime_industrial_monitoring_dialog")
 
     with patch.object(tempfile, "tempdir", str(temporary_root)), patch.object(
         module, "default_industrial_source_config_path", return_value=child / "unused-sources.yaml"
@@ -59,7 +63,7 @@ def _open_realtime(window, child, *, temporary_root):
 
 
 def _creation_and_explicit_output(child, facets):
-    import metroliza.ui.realtime_industrial_monitoring_dialog as module
+    module = import_module("metroliza.ui.realtime_industrial_monitoring_dialog")
 
     with _window(child) as (app, window):
         rejected_parent = child / "not-a-directory"

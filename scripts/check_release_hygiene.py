@@ -75,6 +75,7 @@ ALLOWED_TRACKED_PATHS_LOWER = {path.lower() for path in ALLOWED_TRACKED_PATHS}
 # Public synthetic #1047 inputs are admitted only with their reviewed bytes.
 # A neighboring file or changed fixture remains blocked by the normal data guard.
 PINNED_SYNTHETIC_FIXTURES = {
+    "tests/fixtures/windows_candidate_ocr/image-header-only.pdf": "33065d26c788d9394c3e33876f885902ab95d21f5457f4f21fee3f333bf9609a",
     "tests/fixtures/windows_candidate/finite-source.csv": "de2724bd3b6b55d362016423a2f78168235d3833d7a89298a7fdf4a5ec747938",
     "tests/fixtures/windows_candidate/integer-precision.csv": "8e2c837472d6465d319b37b4afe09998f9c45680edc27d1a169f33e145a70508",
     "tests/fixtures/windows_candidate/reports/report-0.pdf": "183b46650a7e37113927f7a99eb6a66484d07126d3134b3a6056defaef21af3f",

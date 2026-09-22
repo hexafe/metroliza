@@ -8,6 +8,7 @@ Native geometry requires the caller's current Windows QPA and expected DPR.
 from __future__ import annotations
 
 import hashlib
+from importlib import import_module
 import os
 from pathlib import Path
 import shutil
@@ -204,9 +205,9 @@ def _geometry_dialog(dialog, app, controls: tuple[object, ...], *,
 
 def _check_native_geometry(app, window, child: Path, database: Path,
                            expected_dpr: float | None, result: dict[str, Any]) -> None:
-    from metroliza.ui.industrial_data_dialog import IndustrialDataDialog
-    from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
-    from metroliza.ui.industrial_sync_dialog import IndustrialSyncDialog
+    data_module = import_module("metroliza.ui.industrial_data_dialog")
+    profiles_module = import_module("metroliza.ui.industrial_source_profiles_dialog")
+    sync_module = import_module("metroliza.ui.industrial_sync_dialog")
 
     _require(app.platformName().casefold() == "windows", "native_qpa_mismatch")
     _require(expected_dpr is not None and expected_dpr > 0, "expected_dpr_missing")
@@ -217,9 +218,11 @@ def _check_native_geometry(app, window, child: Path, database: Path,
              "main_window_frame_outside_screen")
     config = child / "synthetic-sources.yaml"
     dialogs = (
-        IndustrialDataDialog(db_file=str(database)),
-        IndustrialSourceProfilesDialog(db_file=str(database), config_path=config),
-        IndustrialSyncDialog(db_file=str(database), config_path=config),
+        data_module.IndustrialDataDialog(db_file=str(database)),
+        profiles_module.IndustrialSourceProfilesDialog(
+            db_file=str(database), config_path=config,
+        ),
+        sync_module.IndustrialSyncDialog(db_file=str(database), config_path=config),
     )
     try:
         data, profiles, sync = dialogs
@@ -299,8 +302,7 @@ def run_ui_checks(scratch_directory: str | Path, *, expected_dpr: float | None =
     """Run real UI checks; native geometry is unassessed outside Windows."""
     from PyQt6.QtCore import QSettings
     from metroliza.app.bootstrap import get_or_create_qapplication
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from metroliza.app.ui_entrypoint import load_main_window_factory
 
     result: dict[str, Any] = {
         "schema_version": 1,
@@ -336,8 +338,12 @@ def run_ui_checks(scratch_directory: str | Path, *, expected_dpr: float | None =
         _seed_synthetic_database(database)
         app = get_or_create_qapplication()
         result["evidence"]["screen"] = _screen_evidence(app)
+        preferences_module = import_module("metroliza.ui.ui_preferences")
         settings = QSettings(str(child / "ui.ini"), QSettings.Format.IniFormat)
-        window = MainWindow("candidate-ui-checks", None, ui_preferences=UiPreferences(settings))
+        window = load_main_window_factory()(
+            "candidate-ui-checks", None,
+            ui_preferences=preferences_module.UiPreferences(settings),
+        )
         window.show()
         app.processEvents()
         _require(window.set_db_file(str(database)), "main_window_database_rejected")

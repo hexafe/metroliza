@@ -10,8 +10,13 @@ from contextlib import closing
 
 import hashlib
 import json
-import sqlite3
+import os
+import re
+import stat
+import sys
 from pathlib import Path
+from metroliza.reports.db import sqlite_readonly_connection_scope
+
 from typing import Any, Mapping
 
 
@@ -45,10 +50,6 @@ def _sidecars(database: Path) -> tuple[str, ...]:
     return tuple(suffix for suffix in _SIDECAR_SUFFIXES if database.with_name(database.name + suffix).exists())
 
 
-def _readonly_uri(database: Path) -> str:
-    return database.resolve().as_uri() + "?mode=ro&immutable=1"
-
-
 def _require(condition: bool, code: str) -> None:
     if not condition:
         raise ReopenScenarioFailure(code)
@@ -72,12 +73,12 @@ def _database_counts(database: Path) -> dict[str, int]:
         "metadata": "SELECT COUNT(*) FROM report_metadata",
         "measurements": "SELECT COUNT(*) FROM report_measurements",
     }
-    with closing(sqlite3.connect(_readonly_uri(database), uri=True)) as connection:
+    with sqlite_readonly_connection_scope(str(database), immutable=True) as connection:
         return {name: int(connection.execute(query).fetchone()[0]) for name, query in queries.items()}
 
 
 def _schema_digest(database: Path) -> str:
-    with closing(sqlite3.connect(_readonly_uri(database), uri=True)) as connection:
+    with sqlite_readonly_connection_scope(str(database), immutable=True) as connection:
         schema = list(
             connection.execute(
                 "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name"
@@ -88,13 +89,13 @@ def _schema_digest(database: Path) -> str:
 
 
 def _logical_dump_digest(database: Path) -> str:
-    with closing(sqlite3.connect(_readonly_uri(database), uri=True)) as connection:
-        dump = "\n".join(connection.iterdump()).encode("utf-8")
+    with sqlite_readonly_connection_scope(str(database), immutable=True) as connection:
+        dump = "\n".join(sorted(connection.iterdump())).encode("utf-8")
     return hashlib.sha256(dump).hexdigest()
 
 
 def _readonly_select_with_columns(database: str, query: str) -> tuple[list[tuple[Any, ...]], list[str]]:
-    with closing(sqlite3.connect(_readonly_uri(Path(database)), uri=True)) as connection:
+    with sqlite_readonly_connection_scope(database, immutable=True) as connection:
         with closing(connection.cursor()) as cursor:
             cursor.execute(query)
             rows = cursor.fetchall()
@@ -144,10 +145,13 @@ def _readonly_observation(
 
 
 def _reopen_window(database: Path, reports: Path) -> None:
-    from PyQt6.QtCore import QCoreApplication, QEvent, QSettings
+    from PyQt6.QtCore import QSettings
     from metroliza.app.bootstrap import get_or_create_qapplication
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from importlib import import_module
+    from metroliza.app.ui_entrypoint import load_main_window_factory
+
+    MainWindow = load_main_window_factory()
+    UiPreferences = import_module("metroliza.ui.ui_preferences").UiPreferences
 
     application = get_or_create_qapplication()
     settings = QSettings(str(database.with_name("reopen-settings.ini")), QSettings.Format.IniFormat)
@@ -165,11 +169,8 @@ def _reopen_window(database: Path, reports: Path) -> None:
         _require(workspace.directory == str(reports), "reopen_source_context")
         _require(workspace.db_file == str(database), "reopen_database_context")
     finally:
-        window.close()
-        window.deleteLater()
-        application.processEvents()
-        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        application.processEvents()
+        from metroliza.app.windows_candidate_native_check import close_report_owner
+        close_report_owner(window, application)
 
 
 def run_reopen_checks(
@@ -237,3 +238,74 @@ def run_reopen_checks(
             }
         )
     return result
+
+
+def _fresh_input(root: Path) -> tuple[Path, dict[str, str], str]:
+    from metroliza.app.windows_candidate_qualification import FIXTURES
+
+    raw = os.getenv("METROLIZA_WINDOWS_CANDIDATE_REOPEN_INPUT", "")
+    expected = os.getenv("METROLIZA_WINDOWS_CANDIDATE_REOPEN_SHA256", "")
+    child = Path(raw)
+    _require(child.is_absolute() and child.parent == root.parent / "core scenario"
+             and re.fullmatch(r"core-[0-9a-f]{32}", child.name) is not None,
+             "fresh_reopen_input_not_owned_sibling")
+    for path in (root.parent, child.parent, child, child / "reports"):
+        info = path.lstat()
+        _require(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400,
+                 "fresh_reopen_input_directory_invalid")
+    database = child / "reports.sqlite"
+    info = database.lstat()
+    _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+             and not getattr(info, "st_file_attributes", 0) & 0x400,
+             "fresh_reopen_database_invalid")
+    _require(re.fullmatch(r"[0-9a-f]{64}", expected) is not None and _sha256(database) == expected,
+             "fresh_reopen_database_identity_mismatch")
+    hashes = {f"REF001_2024-01-01_{i}.pdf": FIXTURES[f"report-{i}.pdf"] for i in range(5)}
+    reports = child / "reports"
+    _require({item.name for item in reports.iterdir()} == set(hashes), "fresh_reopen_sources_invalid")
+    for name in hashes:
+        info = (reports / name).lstat()
+        _require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                 and not getattr(info, "st_file_attributes", 0) & 0x400,
+                 "fresh_reopen_source_invalid")
+    _validate_inputs(database, reports, hashes)
+    return child, hashes, expected
+
+
+def run_fresh_qualification() -> int:
+    """Reopen only the prior synthetic import in a second application process."""
+    from metroliza.app import windows_candidate_qualification as core
+    from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
+
+    if core.requested_scenario() != "reopen":
+        return 20
+    root = None
+    receipt = {"schema_version": 1, "scenario": "reopen", "status": "failed",
+               "packaged": bool(getattr(sys, "frozen", False)), "qpa": None,
+               "ordinary_user": core._ordinary_user(),
+               "source_sha": core._runtime_provenance()["source_sha"]}
+    failure_stage = "input"
+    try:
+        root = core._root()
+        child, hashes, expected = _fresh_input(root)
+        core._atomic_json(root / "core-startup.json", {
+            "schema_version": 1, "scenario": "reopen", "stage": "startup_ready",
+        })
+        failure_stage = "host_ready"
+        wait_for_host_ready()
+        failure_stage = "reopen"
+        observed = run_reopen_checks(child / "reports.sqlite", child / "reports", hashes)
+        _require(observed.get("status") == "passed", "fresh_reopen_ui_failed")
+        failure_stage = "database_preservation"
+        _require(observed["database"]["before_sha256"] == expected,
+                 "fresh_reopen_input_identity_changed")
+        from metroliza.app.bootstrap import get_or_create_qapplication
+        receipt.update(status="passed", qpa=get_or_create_qapplication().platformName(), observation=observed)
+        core._atomic_json(root / "fresh-reopen-result.json", receipt)
+        return 0
+    except Exception:
+        # The host retains only a closed failure, never exception text or paths.
+        if root is not None:
+            receipt["failure_stage"] = failure_stage
+            core._atomic_json(root / "fresh-reopen-result.json", receipt)
+        return 21

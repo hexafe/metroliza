@@ -7,7 +7,6 @@ independent oracle; it never treats a source-engineering run as package evidence
 """
 from __future__ import annotations
 
-from contextlib import closing
 
 import hashlib
 import json
@@ -17,6 +16,8 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from metroliza.reports.db import sqlite_readonly_connection_scope
+
 from typing import Any
 
 SCENARIO = "core"
@@ -43,7 +44,8 @@ class ScenarioFailure(ValueError):
 
 def requested_scenario() -> str | None:
     if all(os.getenv(name) == "1" for name in GATES):
-        return SCENARIO
+        phase = os.getenv("METROLIZA_WINDOWS_CANDIDATE_PHASE", SCENARIO)
+        return phase if phase in {SCENARIO, "reopen"} else None
     return None
 
 
@@ -212,10 +214,9 @@ def _grouping_snapshot(database: Path) -> dict[str, Any]:
 
 
 def _database_observation(database: Path) -> dict[str, Any]:
-    import sqlite3
     if any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
         raise ScenarioFailure("database_observation_sidecars_present")
-    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+    with sqlite_readonly_connection_scope(str(database), immutable=True) as connection:
         tables = {
             "source_files": "SELECT COUNT(*) FROM source_files",
             "active_locations": "SELECT COUNT(*) FROM source_file_locations WHERE is_active = 1",
@@ -301,8 +302,11 @@ def _run_core(root: Path, fixtures: Path, receipt: dict[str, Any], app) -> None:
     from PyQt6.QtCore import QSettings
     from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
     from metroliza.exporting.export_data_thread import ExportDataThread
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from importlib import import_module
+    from metroliza.app.ui_entrypoint import load_main_window_factory
+
+    MainWindow = load_main_window_factory()
+    UiPreferences = import_module("metroliza.ui.ui_preferences").UiPreferences
 
     scratch = root / f"core-{uuid.uuid4().hex}"
     scratch.mkdir()
@@ -566,6 +570,9 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
 
 
 def run_qualification() -> int:
+    if requested_scenario() == "reopen":
+        from metroliza.app.windows_candidate_reopen import run_fresh_qualification
+        return run_fresh_qualification()
     if requested_scenario() != SCENARIO:
         return 20
     receipt: dict[str, Any] = {

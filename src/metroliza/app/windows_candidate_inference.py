@@ -13,10 +13,10 @@ import hashlib
 import json
 import math
 import shutil
-import sqlite3
 import uuid
-from contextlib import closing
 from pathlib import Path
+from metroliza.reports.db import sqlite_readonly_connection_scope
+
 from typing import Any, Mapping
 
 
@@ -168,7 +168,7 @@ def _report_ids_by_filename(database: Path) -> dict[str, int]:
           ON location.source_file_id = report.source_file_id
         WHERE location.is_active = 1
     """
-    with closing(sqlite3.connect(database)) as connection:
+    with sqlite_readonly_connection_scope(str(database)) as connection:
         rows = connection.execute(query).fetchall()
     mapped = {str(name): int(report_id) for name, report_id in rows}
     if set(mapped) != set(_EXPECTED_FILES) or len(mapped) != len(rows):
@@ -184,7 +184,7 @@ def _database_counts(database: Path) -> dict[str, int]:
         "metadata": "SELECT COUNT(*) FROM report_metadata",
         "measurements": "SELECT COUNT(*) FROM report_measurements",
     }
-    with closing(sqlite3.connect(database)) as connection:
+    with sqlite_readonly_connection_scope(str(database)) as connection:
         return {key: int(connection.execute(query).fetchone()[0]) for key, query in queries.items()}
 
 
@@ -300,8 +300,11 @@ def _run_gui_import(private: Path, reports: Path, database: Path) -> None:
     from PyQt6.QtCore import QSettings
     from metroliza.app.bootstrap import get_or_create_qapplication
     from metroliza.app.windows_candidate_qualification import DEADLINES_S, _wait
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from importlib import import_module
+    from metroliza.app.ui_entrypoint import load_main_window_factory
+
+    MainWindow = load_main_window_factory()
+    UiPreferences = import_module("metroliza.ui.ui_preferences").UiPreferences
 
     app = get_or_create_qapplication()
     settings = QSettings(str(private / "isolated-settings.ini"), QSettings.Format.IniFormat)

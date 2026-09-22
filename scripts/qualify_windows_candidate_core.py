@@ -583,18 +583,188 @@ def _verify_dashboard_rendering(diag, output: Path, artifacts: dict, browser: Pa
     artifacts["browser_evidence"] = {"path": path.name, "sha256": _hash(path)}
 
 
-def _observe_core_startup(work: Path, process, observed: bool) -> bool:
+def _observe_core_startup(work: Path, process, observed: bool, *, scenario="core") -> bool:
     if observed:
         return True
     marker = work / "core-startup.json"
     if not marker.exists():
         return False
     payload = _json(marker, 1024)
-    if (payload != {"schema_version": 1, "scenario": "core", "stage": "startup_ready"}
+    if (payload != {"schema_version": 1, "scenario": scenario, "stage": "startup_ready"}
             or type(payload.get("schema_version")) is not int):
         raise CandidateFailure("invalid_core_startup_receipt")
     process.mark_runtime_ready()
     return True
+
+
+def _validate_fresh_reopen(payload, prior, expected_source, *, packaged=True, after_hash=None):
+    expected_hash = prior["artifacts"]["database"]["sha256"]
+    expected = {
+        "schema_version": 1, "scenario": "reopen", "status": "passed",
+        "packaged": packaged, "qpa": "windows" if packaged else "offscreen",
+        "ordinary_user": True, "source_sha": expected_source,
+    }
+    if (type(payload) is not dict or set(payload) != set(expected) | {"observation"}
+            or any(type(payload.get(k)) is not type(v) or payload.get(k) != v for k, v in expected.items())):
+        raise CandidateFailure("fresh_reopen_runtime_mismatch")
+    observation = payload["observation"]
+    expected_database = dict(prior["reopen_database"], sha256=after_hash or expected_hash, before_sha256=expected_hash)
+    expected_observation = {
+        "schema_version": 1, "status": "passed",
+        "facets": {"reopen_preserves_completed_import": "passed"},
+        "database": expected_database, "source_hashes": prior["source_hashes"],
+    }
+    if (type(observation) is not dict or observation != expected_observation
+            or type(observation.get("schema_version")) is not int):
+        raise CandidateFailure("fresh_reopen_data_mismatch")
+    return payload
+
+
+def _validate_fresh_reopen_evidence(value, before_hash, after_hash, expected_source, diag):
+    if (type(value) is not dict
+            or set(value) != {"schema_version", "status", "process_boundary", "observation", "topology"}
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or value["status"] != "passed"
+            or value["process_boundary"] != "new_owned_job_after_initial_job_drained"):
+        raise CandidateFailure("fresh_reopen_boundary_not_proved")
+    payload = value["observation"]
+    observed = payload.get("observation") if type(payload) is dict else None
+    database = observed.get("database") if type(observed) is dict else None
+    counts = dict.fromkeys(("source_files", "active_locations", "parsed_reports", "metadata", "measurements"), 2)
+    if (type(database) is not dict
+            or set(database) != {"sha256", "before_sha256", "schema_sha256", "logical_dump_sha256", "counts"}
+            or database["counts"] != counts
+            or any(type(database[key]) is not str or re.fullmatch(r"[0-9a-f]{64}", database[key]) is None
+                   for key in ("sha256", "before_sha256", "schema_sha256", "logical_dump_sha256"))):
+        raise CandidateFailure("fresh_reopen_database_observation_invalid")
+    prior = {"artifacts": {"database": {"sha256": before_hash}}, "reopen_database": database,
+             "source_hashes": {f"REF001_2024-01-01_{i}.pdf": PUBLIC_FIXTURE_HASHES[f"report-{i}.pdf"] for i in range(5)}}
+    _validate_fresh_reopen(payload, prior, expected_source, after_hash=after_hash)
+    diag._validate_topology_record(value["topology"], supervised=True, require_runtime_evidence=True)
+
+
+def _reopen_database_semantics(database: Path):
+    # Compare every logical statement, including duplicates, plus the complete
+    # schema; file bytes may legitimately differ while both are preserved.
+    import sqlite3
+    from contextlib import closing
+
+    _hash(database)
+    _assert_database_sidecars_absent(database, "fresh_reopen_database_sidecar")
+    try:
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+            if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                raise CandidateFailure("fresh_reopen_database_integrity_failed")
+            schema = connection.execute(
+                "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type, name"
+            ).fetchall()
+            statements = sorted(connection.iterdump())
+            persistent = (
+                connection.execute("PRAGMA user_version").fetchone(),
+                connection.execute("PRAGMA application_id").fetchone(),
+                connection.execute("PRAGMA encoding").fetchone(),
+            )
+    except sqlite3.Error:
+        raise CandidateFailure("fresh_reopen_database_invalid") from None
+    return schema, statements, persistent
+
+
+def _assert_reopen_databases_preserved(before: Path, after: Path, *, before_hash, after_hash, observation=None):
+    for path, expected in ((before, before_hash), (after, after_hash)):
+        if _hash(path) != expected:
+            raise CandidateFailure("fresh_reopen_database_identity_changed")
+    before_semantics = _reopen_database_semantics(before)
+    if before_semantics != _reopen_database_semantics(after):
+        raise CandidateFailure("fresh_reopen_database_semantics_changed")
+    digests = {
+        "schema_sha256": hashlib.sha256(json.dumps(before_semantics[0], ensure_ascii=True,
+            separators=(",", ":"), default=str).encode("utf-8")).hexdigest(),
+        "logical_dump_sha256": hashlib.sha256("\n".join(before_semantics[1]).encode("utf-8")).hexdigest(),
+    }
+    if observation is not None and any(observation.get(key) != value for key, value in digests.items()):
+        raise CandidateFailure("fresh_reopen_database_digest_mismatch")
+    for path, expected in ((before, before_hash), (after, after_hash)):
+        _assert_database_sidecars_absent(path, "fresh_reopen_database_sidecar")
+        if _hash(path) != expected:
+            raise CandidateFailure("fresh_reopen_database_identity_changed")
+    return digests
+
+
+def _validate_reopen_sources(reports: Path):
+    expected = {f"REF001_2024-01-01_{i}.pdf": PUBLIC_FIXTURE_HASHES[f"report-{i}.pdf"] for i in range(5)}
+    _input_directory(reports)
+    if ({path.name for path in reports.iterdir()} != set(expected)
+            or any(_hash(reports / name) != digest for name, digest in expected.items())):
+        raise CandidateFailure("fresh_reopen_sources_changed")
+
+
+def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, args, deadline, output):
+    # The first Job has fully drained before this function creates another Job.
+    # A new launcher, application, root and runtime journal prove process reopen.
+    root, launch_cwd = private / "fresh reopen", private / "fresh launcher work"
+    root.mkdir()
+    launch_cwd.mkdir()
+    child = work / prior["relative_artifact_dir"]
+    database = child / "reports.sqlite"
+    expected_hash = prior["artifacts"]["database"]["sha256"]
+    if _hash(database) != expected_hash:
+        raise CandidateFailure("fresh_reopen_input_changed")
+    _assert_database_sidecars_absent(database, "fresh_reopen_database_sidecar")
+    _validate_reopen_sources(child / "reports")
+    before_database = output / "before-reopen.sqlite"
+    with database.open("rb") as source, before_database.open("xb") as destination:
+        shutil.copyfileobj(source, destination)
+    if _hash(before_database) != expected_hash:
+        raise CandidateFailure("fresh_reopen_copy_changed")
+    verifier = _independent_verifier()
+    verifier.assert_database(verifier._load_oracle(args.oracle), before_database)
+    next_environment = dict(environment, METROLIZA_WINDOWS_CANDIDATE_PHASE="reopen",
+                            METROLIZA_WINDOWS_CANDIDATE_ROOT=str(root),
+                            METROLIZA_WINDOWS_CANDIDATE_REOPEN_INPUT=str(child),
+                            METROLIZA_WINDOWS_CANDIDATE_REOPEN_SHA256=expected_hash)
+    owned = []
+    terminate = True
+    try:
+        process = diag._WindowsApi().launch(
+            relocated / "metroliza.exe", next_environment, launch_cwd, owned=owned,
+            expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
+        )
+        observed = False
+        while time.monotonic() < deadline:
+            process.observe()
+            observed = _observe_core_startup(root, process, observed, scenario="reopen")
+            code = process.poll()
+            if code is not None:
+                break
+            time.sleep(0.005)
+        else:
+            raise CandidateFailure("fresh_reopen_process_timeout")
+        if code != 0 or not observed:
+            raise CandidateFailure("fresh_reopen_process_failed")
+        if not diag._wait_for_job_exit(process, deadline):
+            raise CandidateFailure("fresh_reopen_owned_processes_remain")
+        after_hash = _hash(database)
+        payload = _validate_fresh_reopen(
+            _json(root / "fresh-reopen-result.json"), prior, args.expected_source_sha, after_hash=after_hash
+        )
+        topology = diag._topology_record(process.topology(relocated, all_exited=True))
+        diag._validate_topology_record(topology, supervised=True, require_runtime_evidence=True)
+        _assert_reopen_databases_preserved(before_database, database, before_hash=expected_hash, after_hash=after_hash,
+                                         observation=payload["observation"]["database"])
+        _validate_reopen_sources(child / "reports")
+        verifier.assert_database(verifier._load_oracle(args.oracle), database)
+        result = {"schema_version": 1, "status": "passed", "process_boundary": "new_owned_job_after_initial_job_drained",
+                  "observation": payload, "topology": topology}
+        destination = output / "fresh-reopen-observation.json"
+        with destination.open("x", encoding="ascii") as stream:
+            json.dump(result, stream, sort_keys=True)
+        terminate = False
+        return {
+            "fresh_reopen_evidence": {"path": destination.name, "sha256": _hash(destination)},
+            "before_reopen_database": {"path": before_database.name, "sha256": expected_hash},
+        }
+    finally:
+        diag._close_owned_processes(owned, terminate=terminate)
 
 
 def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
@@ -660,10 +830,16 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         # onedir-child topology contract, including both launcher processes.
         diag._validate_topology_record(diag._topology_record(topology), supervised=True,
                                        require_runtime_evidence=True)
+        fresh_reopen = _run_fresh_reopen(
+            private, diag=diag, relocated=relocated, environment=environment, work=work,
+            prior=payload, args=args, deadline=deadline, output=output,
+        )
         after = diag._tree_digest(diag._package_inventory(relocated))
         if after != before:
             raise CandidateFailure("package_tree_changed_during_scenario")
+        payload["artifacts"]["database"]["sha256"] = _hash(work / payload["relative_artifact_dir"] / "reports.sqlite")
         artifacts = _copy_verified_results(work, payload, output, args.oracle)
+        artifacts.update(fresh_reopen)
         process_result = output / "process-topology.json"
         with process_result.open("x", encoding="ascii") as stream:
             json.dump(diag._topology_record(topology), stream)
@@ -733,7 +909,7 @@ def qualify(args) -> dict:
         result = {
             "schema_version": 1,
             "status": "passed",
-            "scope": [*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"],
+            "scope": [*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout", "fresh_process_reopen_preserves_completed_import"],
             "source_sha": args.expected_source_sha,
             "ui_scale": args.dpi_scale,
             "native_mode": args.native_mode,
@@ -746,7 +922,7 @@ def qualify(args) -> dict:
             "launcher_sha256": identity["launcher_sha256"],
             "application_sha256": identity["application_sha256"],
             "artifacts": artifacts,
-            "facets": dict.fromkeys((*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"), "passed"),
+            "facets": dict.fromkeys((*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout", "fresh_process_reopen_preserves_completed_import"), "passed"),
             "independent_oracle": "passed",
             "launch": "restricted_ordinary_user_native_windows_outside_checkout",
             "provenance_validated": bool(identity),
@@ -785,7 +961,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         qualify(args)
-        print(json.dumps({"status": "passed", "scope": [*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"]}))
+        print(json.dumps({"status": "passed", "scope": [*REQUIRED_CHECKS, *CLOSEOUT_CHECKS, "offline_browser_dom_and_layout", "fresh_process_reopen_preserves_completed_import"]}))
         return 0
     except CandidateFailure as error:
         print(json.dumps({"status": "failed", "reason": str(error)}))

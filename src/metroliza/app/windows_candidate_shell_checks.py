@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import closing
+from importlib import import_module
 import os
 from pathlib import Path
-import sqlite3
 import sys
 import time
 from typing import Any
@@ -157,9 +156,10 @@ def _sha256(path: Path) -> str:
 
 def _import_oracle(database: Path) -> dict[str, Any]:
     """Independently read and match the pinned synthetic-report SQLite oracle."""
+    from metroliza.reports.db import sqlite_readonly_connection_scope
+
     before = _sha256(database)
-    uri = database.resolve().as_uri() + "?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True)) as connection:
+    with sqlite_readonly_connection_scope(str(database)) as connection:
         measurement_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(report_measurements)")
         }
@@ -219,8 +219,7 @@ def _run(scratch: Path, fixtures: Path, app, expected_dpr: float | None,
     from PyQt6.QtCore import QSettings
     from metroliza.app.windows_candidate_import_guards import _select_names
     from metroliza.app.windows_candidate_qualification import ScenarioFailure, _stage_reports
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from metroliza.app.ui_entrypoint import load_main_window_factory
 
     child = scratch / f"shell-checks-{uuid.uuid4().hex}"
     child.mkdir()
@@ -229,8 +228,12 @@ def _run(scratch: Path, fixtures: Path, app, expected_dpr: float | None,
     except ScenarioFailure as error:
         raise ShellChecksFailure("fixture_staging_failed") from error
     database = child / "shell.sqlite"
+    preferences_module = import_module("metroliza.ui.ui_preferences")
     settings = QSettings(str(child / "settings.ini"), QSettings.Format.IniFormat)
-    window = MainWindow("candidate-shell-checks", None, ui_preferences=UiPreferences(settings))
+    window = load_main_window_factory()(
+        "candidate-shell-checks", None,
+        ui_preferences=preferences_module.UiPreferences(settings),
+    )
     try:
         window.show()
         window._show_workspace_page("reports")

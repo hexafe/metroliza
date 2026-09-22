@@ -17,7 +17,7 @@ RUNS = (("core-dpr-1.0", "1.0", "default"), ("core-dpr-1.25", "1.25", "default")
         ("core-dpr-1.5", "1.5", "default"), ("core-native-unavailable", "1.0", "unavailable"))
 ARTIFACT_KEYS = set(core.ARTIFACTS) | {
     "import_guards_database", "private_dashboard", "ocr_evidence", "native_evidence",
-    "browser_evidence", "process_evidence", "closeout_evidence",
+    "browser_evidence", "process_evidence", "closeout_evidence", "fresh_reopen_evidence", "before_reopen_database",
 }
 
 
@@ -64,8 +64,8 @@ def _validate_run_identity(value, package, head, tree, scale, mode):
         "package_tree_sha256": package["tested_tree_sha256"],
         "launcher_sha256": package["launcher_sha256"], "application_sha256": package["application_sha256"],
         "supervision_manifest_sha256": package["manifest_sha256"], "notice_hashes": package["notice_hashes"],
-        "scope": [*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"],
-        "facets": dict.fromkeys((*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout"), "passed"),
+        "scope": [*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout", "fresh_process_reopen_preserves_completed_import"],
+        "facets": dict.fromkeys((*core.REQUIRED_CHECKS, *core.CLOSEOUT_CHECKS, "offline_browser_dom_and_layout", "fresh_process_reopen_preserves_completed_import"), "passed"),
         "native_geometry": "passed", "offline_browser_rendering": "passed", "independent_oracle": "passed",
         "launch": "restricted_ordinary_user_native_windows_outside_checkout",
         "provenance_validated": True, "notices_validated": True,
@@ -87,6 +87,12 @@ def _validate_run(directory, package, head, tree, scale, mode):
     core._validate_native_observation(core._json(artifacts["native_evidence"]), packaged=True, expected_mode=mode)
     core._validate_ocr_observation(core._json(artifacts["ocr_evidence"]), packaged=True)
     core._validate_closeout_observation(core._json(artifacts["closeout_evidence"]), packaged=True, expected_dpr=float(scale))
+    before_hash = value["artifacts"]["before_reopen_database"]["sha256"]
+    after_hash = value["artifacts"]["database"]["sha256"]
+    fresh = core._json(artifacts["fresh_reopen_evidence"])
+    core._validate_fresh_reopen_evidence(fresh, before_hash, after_hash, head, diagnostics)
+    core._assert_reopen_databases_preserved(artifacts["before_reopen_database"], artifacts["database"],
+        before_hash=before_hash, after_hash=after_hash, observation=fresh["observation"]["observation"]["database"])
     browser = core._adjacent_module("verify_windows_candidate_dashboard.py", "_metroliza_final_browser")
     browser.validate_receipt(core._json(artifacts["browser_evidence"]),
                              core._hash(artifacts["private_dashboard"]), require_windows=True)

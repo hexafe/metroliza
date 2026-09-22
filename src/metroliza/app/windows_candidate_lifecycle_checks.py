@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from contextlib import closing
 import hashlib
+from importlib import import_module
 import json
 import os
 from pathlib import Path
-import sqlite3
 import sys
 from threading import Event
 import tempfile
@@ -46,8 +45,10 @@ def _wait(app, predicate, *, seconds: float, code: str) -> None:
 
 
 def _logical_sha256(database: Path) -> str:
+    from metroliza.reports.db import sqlite_readonly_connection_scope
+
     _require(database.is_file(), "database_missing")
-    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+    with sqlite_readonly_connection_scope(str(database)) as db:
         # SQLite can recreate indexes in a different catalog order on reopen.
         # Preserve every statement and duplicate, while ignoring that order.
         payload = json.dumps(sorted(db.iterdump()), ensure_ascii=True).encode("ascii")
@@ -65,11 +66,14 @@ def _thread_running(thread) -> bool:
 
 def _new_window(child: Path, label: str):
     from PyQt6.QtCore import QSettings
-    from metroliza.ui.main_window import MainWindow
-    from metroliza.ui.ui_preferences import UiPreferences
+    from metroliza.app.ui_entrypoint import load_main_window_factory
 
+    preferences_module = import_module("metroliza.ui.ui_preferences")
     settings = QSettings(str(child / f"{label}-settings.ini"), QSettings.Format.IniFormat)
-    return MainWindow(f"candidate-{label}", None, ui_preferences=UiPreferences(settings))
+    return load_main_window_factory()(
+        f"candidate-{label}", None,
+        ui_preferences=preferences_module.UiPreferences(settings),
+    )
 
 
 def _close_seed_owner(window, app) -> None:
@@ -198,6 +202,7 @@ def _export_close(app, child: Path, database: Path, reports: Path,
     entered, release = Event(), Event()
     original = ExcelExportBackend.run
     worker = None
+    export_dialog_module = import_module("metroliza.ui.export_dialog")
 
     def gated_export(backend, thread):
         entered.set()
@@ -208,10 +213,10 @@ def _export_close(app, child: Path, database: Path, reports: Path,
     try:
         window.show()
         _require(window.set_db_file(str(database)), "export_context_rejected")
-        with patch("metroliza.ui.export_dialog.ExportDialog._load_dialog_config",
-                   return_value={"selected_preset": "fast_diagnostics"}), patch(
-            "metroliza.ui.export_dialog.save_export_dialog_config"
-        ), patch("metroliza.ui.export_dialog.show_export_result_message"), patch.object(
+        with patch.object(export_dialog_module.ExportDialog, "_load_dialog_config",
+                          return_value={"selected_preset": "fast_diagnostics"}), patch.object(
+            export_dialog_module, "save_export_dialog_config"
+        ), patch.object(export_dialog_module, "show_export_result_message"), patch.object(
             ExcelExportBackend, "run", gated_export
         ):
             window.launch_export_dialog()
@@ -271,6 +276,7 @@ def _realtime_refusal_and_rebind(app, child: Path, result: dict[str, Any]) -> No
     entered, release = Event(), Event()
     worker = None
     original = RealtimeDashboardService.dashboard_snapshot
+    source_profiles_module = import_module("metroliza.ui.industrial_source_profiles_dialog")
 
     def gated_snapshot(service, **kwargs):
         entered.set()
@@ -291,15 +297,15 @@ def _realtime_refusal_and_rebind(app, child: Path, result: dict[str, Any]) -> No
         editor = dialog.source_window
         _require(editor is not None and editor.isVisible(), "source_editor_missing")
         editor.source_name_edit.setText("Unsaved synthetic source")
-        with patch("metroliza.ui.industrial_source_profiles_dialog.QMessageBox.question",
-                   return_value=QMessageBox.StandardButton.No):
+        with patch.object(source_profiles_module.QMessageBox, "question",
+                          return_value=QMessageBox.StandardButton.No):
             _require(window.close() is False and window.isVisible()
                      and editor.isVisible() and not window._close_deferred_for_realtime,
                      "dirty_source_close_not_refused")
         result["facets"]["dirty_realtime_close_refusal"] = "passed"
 
-        with patch("metroliza.ui.industrial_source_profiles_dialog.QMessageBox.question",
-                   return_value=QMessageBox.StandardButton.Yes):
+        with patch.object(source_profiles_module.QMessageBox, "question",
+                          return_value=QMessageBox.StandardButton.Yes):
             _require(editor.close(), "source_editor_discard_refused")
         app.processEvents()
         _require(window.isVisible() and dialog.source_window is None,

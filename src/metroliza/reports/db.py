@@ -151,11 +151,20 @@ def sqlite_connection_scope(
 
 
 @contextmanager
-def sqlite_readonly_connection_scope(db_path: str) -> Iterator[sqlite3.Connection]:
-    """Yield a managed read-only connection without changing database PRAGMAs."""
+def sqlite_readonly_connection_scope(
+    db_path: str, *, immutable: bool = False
+) -> Iterator[sqlite3.Connection]:
+    """Yield a managed read-only connection without changing database PRAGMAs.
+
+    Use ``immutable`` only for a closed snapshot whose bytes cannot be modified
+    by another connection for the entire scope. It disables SQLite locking and
+    sidecar access; live databases must retain the default.
+    """
 
     resolved_path = Path(db_path).resolve(strict=False)
     database_uri = f"file:{quote(str(resolved_path))}?mode=ro"
+    if immutable:
+        database_uri += "&immutable=1"
     with closing(sqlite3.connect(database_uri, uri=True)) as connection:
         yield connection
 

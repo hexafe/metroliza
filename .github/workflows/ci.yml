@@ -1240,7 +1240,7 @@ jobs:
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py
+          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_fresh_reopen.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py
 
       - name: Run native Windows Qt lifecycle tests
         env:

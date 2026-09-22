@@ -1,6 +1,8 @@
 """Adverse protocol controls only; these do not execute or qualify an EXE."""
 from __future__ import annotations
 
+from contextlib import closing
+
 import copy
 import json
 from pathlib import Path
@@ -255,7 +257,7 @@ def test_persisted_oracle_rejects_inactive_extra_location(tmp_path):
     database = tmp_path / "scratch.sqlite"
     _create_synthetic_database(oracle, database)
     assert_database(oracle, database)
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute("INSERT INTO source_file_locations VALUES (1, 'inactive.pdf', 0)")
     with pytest.raises(OracleMismatch, match="database.locations"):
         assert_database(oracle, database)
@@ -319,7 +321,6 @@ def _complete_synthetic_artifacts(tmp_path):
         record["sha256"] = driver._hash(child / record["path"])
     import hashlib
     import sqlite3
-    from contextlib import closing
     guard = child / sample["import_guard_evidence"]["relative_artifact_dir"]
     (guard / "reports").mkdir(parents=True)
     for i in range(5):
@@ -367,7 +368,7 @@ def test_uncheckpointed_database_sidecars_cannot_be_lost_from_receipt(tmp_path, 
 def test_valid_digest_does_not_substitute_for_correct_persisted_measurement(tmp_path):
     import sqlite3
     sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
-    with sqlite3.connect(child / "database.sqlite") as connection:
+    with closing(sqlite3.connect(child / "database.sqlite")) as connection, connection:
         connection.execute("UPDATE report_measurements SET meas=999 WHERE id=1")
     sample["artifacts"]["database"]["sha256"] = driver._hash(child / "database.sqlite")
     with pytest.raises(driver.CandidateFailure, match="independent_core_oracle_failed"):
