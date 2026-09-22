@@ -210,3 +210,13 @@ disabled and remains the package qualification path; containment, cleanup,
 identity, privacy and all positive/negative controls remain mandatory.
 
 The owner-only public Windows lane `windows-diagnostic-qualification` is selected explicitly by `run_windows_diagnostic_qualification=1` (default 0), capped at 45 minutes, and isolated from ordinary CI cancellation. It builds the actual onedir with `build_windows_exe.ps1 -Mode onedir`, then runs a bounded driver with hash-pinned public synthetic input and a restricted ordinary-user child token. The driver checks useful startup/import/export history after child loss, local preview/export, no-development-Python/no-console operation, repeat and concurrent starts, normal main-window startup, observed process roles, missing components and matched performance measurements. The complete tested tree, canonical manifest and exact `qualified-windows-development-package.zip` are bound by SHA-256; that ZIP is the uploaded development package. Only validated fixed-schema receipts and the successful development ZIP are uploaded; scratch databases and business outputs are excluded. This feature-specific proof does not grant release or real-data acceptance.
+
+The restricted qualification token has a private default DACL for newly created
+kernel objects: its TokenUser SID and LocalSystem only. Administrator deny-only
+membership, removed privileges, medium integrity, Job containment and process
+identity checks remain in force. The qualifier verifies the exact non-NULL ACL
+readback before launch. This avoids inheriting an elevated build runner's object
+permissions that its restricted child cannot use. Native controls compare an
+unmodified token's default pipe permissions with an explicit private descriptor,
+then verify the corrected token; only closed synthetic outcomes are printed.
+This host qualification correction does not grant product users extra rights.
