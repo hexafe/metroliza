@@ -5711,35 +5711,65 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
     environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION", None)
     owned = []
     completed = False
+    diagnostic = {"stage": "launch", "cleanup": "not_attempted"}
+    failure = None
     try:
         process = api.launch(executable, environment, tmp_path, owned=owned,
                              expected_images=tuple(candidates.values()))
+        diagnostic["stage"] = "observe"
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             process.observe()
             if process.poll() is not None and process.active_processes() == 0:
                 break
             time.sleep(0.002)
-        assert process.poll() == 0 and process.active_processes() == 0
+        diagnostic["stage"] = "exit"
+        diagnostic["exit_code"] = process.poll()
+        assert diagnostic["exit_code"] == 0 and process.active_processes() == 0
         observed = []
         for observation in process._observations.values():
             observed.append(next((key for key, path in candidates.items()
                                   if api._same_requested_image(observation.image, path)), "unknown"))
+        diagnostic.update(observed_roles=sorted(observed)[:16],
+                          assigned_processes=min(16, process._assigned_processes),
+                          max_active_processes=min(16, process._max_active_processes))
+        diagnostic["stage"] = "receipt"
         receipt = qualification._bounded_json(tmp_path / "ui-process-control.json", 4096)
         assert set(receipt) == {"status", "audit", "window_seen", "closed"}
-        assert receipt["status"] == "passed" and receipt["window_seen"] is True and receipt["closed"] is True
         assert set(receipt["audit"]) == {"bootstrap_import", "window_import", "window_construct", "show_close"}
         assert all(set(values) == {"cmd_ver", "other"}
                    and all(type(count) is int and 0 <= count <= 16 for count in values.values())
                    for values in receipt["audit"].values())
-        diagnostic = {"audit": receipt["audit"], "observed_roles": sorted(observed),
-                      "assigned_processes": process._assigned_processes,
-                      "max_active_processes": process._max_active_processes}
-        # This is a discriminator for the rejected direct-window topology,
-        # never a waiver for extra processes or a packaged acceptance claim.
-        assert process._assigned_processes == 1 and observed == ["application"], (
-            "source_window_process_dependencies=" + json.dumps(diagnostic, sort_keys=True)
-        )
+        diagnostic["audit"] = receipt["audit"]
+        diagnostic["window_seen"] = receipt["window_seen"] is True
+        diagnostic["window_closed"] = receipt["closed"] is True
+        assert receipt["status"] == "passed" and receipt["window_seen"] is True and receipt["closed"] is True
+        diagnostic["stage"] = "topology"
+        # This is a discriminator for rejected topology, never a waiver.
+        assert process._assigned_processes == 1 and observed == ["application"]
         completed = True
-    finally:
+    except BaseException as error:
+        failure = error
+    # The production cleanup boundary intentionally projects arbitrary active
+    # exceptions to a closed failure. Call it outside the exception context so
+    # the test retains its own *already closed* observation, not raw errors.
+    try:
         qualification._close_owned_processes(owned, terminate=not completed)
+        diagnostic["cleanup"] = "complete"
+    except Exception:
+        diagnostic["cleanup"] = "failed"
+    if failure is not None and not isinstance(failure, Exception):
+        raise failure
+    if isinstance(failure, qualification.QualificationFailure):
+        diagnostic["qualification_reason"] = (
+            failure.qualification_reason
+            if failure.qualification_reason in qualification.QUALIFICATION_FAILURE_REASONS else "unexpected"
+        )
+        if failure.native_observation is not None:
+            try:
+                diagnostic["native_observation"] = failure.native_observation.receipt()
+            except qualification.QualificationFailure:
+                diagnostic["native_observation"] = "unavailable"
+    assert completed and diagnostic["cleanup"] == "complete", (
+        "source_window_process_dependencies=" + json.dumps(diagnostic, sort_keys=True)
+    )
