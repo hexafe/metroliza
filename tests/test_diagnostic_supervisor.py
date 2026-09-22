@@ -76,6 +76,80 @@ def test_missing_child_is_not_a_fabricated_process_exit(tmp_path):
     assert result.needs_incident
 
 
+@pytest.mark.skipif(os.name != "nt", reason="native Windows token and pipe contract")
+def test_qualified_nonadmin_token_can_create_its_anonymous_pipe():
+    # A separate child confines impersonation, including an adverse RevertToSelf
+    # result. No application input, raw native error text, SID or ACL is emitted.
+    program = r'''
+import ctypes
+import json
+import os
+from scripts.qualify_windows_diagnostics import _WindowsApi
+
+result = {"baseline": False, "restricted": False, "error_class": None, "stage": "baseline", "cleanup": True}
+api = _WindowsApi()
+api.advapi.ImpersonateLoggedOnUser.argtypes = [api.wintypes.HANDLE]
+api.advapi.ImpersonateLoggedOnUser.restype = api.wintypes.BOOL
+api.advapi.RevertToSelf.argtypes = []
+api.advapi.RevertToSelf.restype = api.wintypes.BOOL
+token = None
+impersonating = False
+def pipe_roundtrip(prefix):
+    pipes = []
+    try:
+        result["stage"] = prefix + "_first_pipe"
+        pipes.append(os.pipe())
+        result["stage"] = prefix + "_second_pipe"
+        pipes.append(os.pipe())
+        for read, write in pipes:
+            os.write(write, b"closed-control")
+            if os.read(read, 14) != b"closed-control":
+                return False
+        return True
+    finally:
+        for read, write in pipes:
+            os.close(write)
+            os.close(read)
+try:
+    result["baseline"] = pipe_roundtrip("baseline")
+    token = api._restricted_token()
+    if not api.advapi.ImpersonateLoggedOnUser(token):
+        raise RuntimeError()
+    impersonating = True
+    try:
+        result["restricted"] = pipe_roundtrip("restricted")
+        result["stage"] = "complete"
+    except OSError as error:
+        native = getattr(error, "winerror", None)
+        result["error_class"] = (
+            "access_denied" if native == 5
+            else "access_denied_mapped" if native is None and error.errno == 13
+            else "resource_failure" if native in (8, 14) or error.errno in (12, 24)
+            else "other"
+        )
+except Exception:
+    result["cleanup"] = False
+finally:
+    if impersonating and not api.advapi.RevertToSelf():
+        os._exit(3)
+    if token and not api.kernel.CloseHandle(token):
+        result["cleanup"] = False
+print(json.dumps(result, sort_keys=True))
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", program], cwd=ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+        check=False,
+    )
+    assert result.returncode == 0
+    observation = json.loads(result.stdout)
+    assert observation == {
+        "baseline": True, "restricted": True, "error_class": None,
+        "stage": "complete", "cleanup": True,
+    }
+
+
 @pytest.mark.parametrize("scenario", ["duplicate", "dropped"])
 def test_clean_process_return_cannot_erase_missing_event_evidence(scenario):
     result = launch_supervised(_command(scenario))
