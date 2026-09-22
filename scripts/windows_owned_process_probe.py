@@ -213,7 +213,11 @@ class OwnedProcessProbe:
                 ("dwFlags", wt.DWORD), ("szExeFile", wt.WCHAR * 260),
             ]
 
-        self.Entry = Entry
+        # All per-Job probes on one API share the same DLL function objects.
+        # ctypes rejects an earlier probe's pointer if a later probe replaces
+        # argtypes with a distinct (even layout-identical) Structure class.
+        self.Entry = getattr(self.api, "_owned_probe_snapshot_entry", Entry)
+        self.api._owned_probe_snapshot_entry = self.Entry
         kernel = self.api.kernel
         kernel.CreateToolhelp32Snapshot.argtypes = [wt.DWORD, wt.DWORD]
         kernel.CreateToolhelp32Snapshot.restype = wt.HANDLE
@@ -221,7 +225,7 @@ class OwnedProcessProbe:
         kernel.IsProcessInJob.restype = wt.BOOL
         for name in ("Process32FirstW", "Process32NextW"):
             function = getattr(kernel, name)
-            function.argtypes = [wt.HANDLE, ctypes.POINTER(Entry)]
+            function.argtypes = [wt.HANDLE, ctypes.POINTER(self.Entry)]
             function.restype = wt.BOOL
 
     def _parent_hint(self, process_id, owned_ids):
