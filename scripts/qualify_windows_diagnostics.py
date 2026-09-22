@@ -1204,6 +1204,10 @@ class _WindowsApi:
             ctypes.POINTER(wt.HANDLE),
         ]
         self.advapi.OpenProcessToken.restype = wt.BOOL
+        self.advapi.ImpersonateLoggedOnUser.argtypes = [wt.HANDLE]
+        self.advapi.ImpersonateLoggedOnUser.restype = wt.BOOL
+        self.advapi.RevertToSelf.argtypes = []
+        self.advapi.RevertToSelf.restype = wt.BOOL
         self.advapi.CreateWellKnownSid.argtypes = [
             ctypes.c_int,
             ctypes.c_void_p,
@@ -1674,6 +1678,32 @@ class _WindowsApi:
     def _require_closed_owned_token(self, token) -> None:
         self._require_closed_handles(token)
         token.value = None
+
+    def initialize_incident_store(self, store: IncidentStore) -> None:
+        # The elevated host must not become the owner of the application's
+        # private root. Materialize it under the same restricted identity used
+        # for every application launch, before any host-side listing creates it.
+        if store.root is None or store.root.exists() or store.root.is_symlink():
+            raise QualificationFailure("restricted_launch_unavailable")
+        token = self._restricted_token()
+        try:
+            try:
+                if not self.advapi.ImpersonateLoggedOnUser(token):
+                    raise QualificationFailure("restricted_launch_unavailable")
+                listing = store.list_reports()
+                if listing.status != StoreStatus.AVAILABLE or listing.reports:
+                    raise QualificationFailure("restricted_launch_unavailable")
+            finally:
+                # Continuing with an unexpectedly impersonated host is unsafe.
+                # No child has been launched at this initialization boundary.
+                try:
+                    reverted = self.advapi.RevertToSelf()
+                except BaseException:
+                    os._exit(22)
+                if not reverted:
+                    os._exit(22)
+        finally:
+            _attempt_cleanup(lambda: self._require_closed_owned_token(token))
 
     def _restricted_token(self):
         wt = self.wintypes
@@ -4210,6 +4240,7 @@ class _QualificationRunner:
                 qualification_reason="invalid_qualification_root",
             ) from None
         self.store = IncidentStore(self.state_base / "Metroliza" / "diagnostics")
+        self.api.initialize_incident_store(self.store)
         self.launcher = artifact / "metroliza.exe"
         self.application = artifact / "metroliza_application.exe"
         self.results: dict[str, ScenarioResult] = {}
