@@ -51,6 +51,30 @@ _ONEDIR_SCANNER_PARAMETERS = (
 )
 
 
+def validate_setuptools_runtime_hook(scripts: list, hook_root: Path) -> None:
+    """Fail the build if Analysis did not replace the eager setuptools hook."""
+    expected = (hook_root / "rthooks" / "metroliza_rth_setuptools.py").resolve()
+    selected = [Path(source).resolve() for _, source, _ in scripts
+                if Path(source).name in {"pyi_rth_setuptools.py", expected.name}]
+    if selected != [expected]:
+        raise RuntimeError("Windows setuptools runtime hook selection is invalid")
+
+
+def collect_setuptools_hook_metadata() -> list:
+    """Bind the non-importing runtime version to the module Analysis will load."""
+    from importlib.metadata import distribution
+
+    package = distribution("setuptools")
+    module = importlib.util.find_spec("setuptools")
+    origin = None if module is None else module.origin
+    if (package.metadata["Name"].lower() != "setuptools" or origin is None
+            or Path(origin).resolve(strict=True)
+            != Path(package.locate_file("setuptools/__init__.py")).resolve(strict=True)):
+        raise RuntimeError("Setuptools module and distribution metadata disagree")
+    int(package.version.split(".")[0])
+    return copy_metadata("setuptools")
+
+
 def read_version_label(root_dir: Path) -> str:
     """Return the release label used by packaged artifact names."""
     version_ns: dict[str, str] = {}
