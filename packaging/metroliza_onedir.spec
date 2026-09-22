@@ -17,6 +17,7 @@ from pyinstaller_common import (
     filter_onedir_hiddenimports,
     onedir_binary_scanner_probe,
     read_version_label,
+    validate_runtime_audit_hook,
     validate_setuptools_runtime_hook,
 )
 
@@ -47,7 +48,7 @@ with onedir_binary_scanner_probe():
         hiddenimports=filter_onedir_hiddenimports(COLLECTION["hiddenimports"]),
         hookspath=[str(WINDOWS_HOOKS)] if SUPERVISED_WINDOWS else [],
         hooksconfig={},
-        runtime_hooks=[],
+        runtime_hooks=[str(WINDOWS_HOOKS / "rthooks/metroliza_rth_runtime_audit.py")] if SUPERVISED_WINDOWS else [],
         excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES),
         win_no_prefer_redirects=False,
         win_private_assemblies=False,
@@ -55,6 +56,7 @@ with onedir_binary_scanner_probe():
         noarchive=False,
     )
 if SUPERVISED_WINDOWS:
+    validate_runtime_audit_hook(a.scripts, WINDOWS_HOOKS)
     validate_setuptools_runtime_hook(a.scripts, WINDOWS_HOOKS)
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

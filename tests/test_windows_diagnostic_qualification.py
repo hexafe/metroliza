@@ -3560,6 +3560,23 @@ def _metrics(value: int = 1) -> qualification.ProcessMetrics:
     return qualification.ProcessMetrics(value, value, value, value, value)
 
 
+def _zero_call_runtime_proof(supervised):
+    roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
+    return {
+        "installed": True, "events": [],
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling",
+        "owned": {
+            "schema_version": 1, "assigned": len(roles), "unobserved": 0,
+            "job_empty": True, "overflow": False, "observation_unavailable": False,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot",
+            "members": [{"role": role, "identity": "fixed_file_verified",
+                         "first_phase": "startup", "last_phase": "running",
+                         "parent_ordinal_advisory": "unknown", "lifecycle": "job_empty"}
+                        for role in roles],
+        },
+    }
+
+
 def _scenario(
     value: int = 1, *, supervised: bool = False
 ) -> qualification.ScenarioResult:
@@ -3575,6 +3592,7 @@ def _scenario(
             else ("application",)
         ),
         True,
+        _zero_call_runtime_proof(supervised),
     )
     return qualification.ScenarioResult(
         0, value, value, "complete", _metrics(value), topology

@@ -1,0 +1,454 @@
+from __future__ import annotations
+
+import ctypes
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from metroliza.shared import diagnostic_runtime_audit as audit
+from scripts import qualify_windows_diagnostics as qualification
+from scripts.windows_owned_process_probe import RuntimeEvidence, verified_runtime_order
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _frame(module, name, back=None):
+    return SimpleNamespace(
+        f_globals={"__name__": module}, f_code=SimpleNamespace(co_name=name), f_back=back
+    )
+
+
+def _journal(root, nonce, events):
+    audit._write(root, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+    for ordinal, event in enumerate(events, 1):
+        audit._write(
+            root,
+            f"event-{ordinal:02}.json",
+            {"schema_version": 1, "nonce": nonce, "ordinal": ordinal, **event},
+        )
+
+
+def _proof(supervised=False, helpers=True):
+    roles = (["package_launcher", "package_launcher"] if supervised else []) + [
+        "package_application"
+    ]
+    if helpers:
+        roles += ["system_cmd", "system_conhost"]
+    members = [
+        {
+            "role": role,
+            "identity": "fixed_file_verified",
+            "first_phase": "startup",
+            "last_phase": "startup",
+            "parent_ordinal_advisory": index - 1 if index else "unknown",
+            "lifecycle": "job_empty",
+        }
+        for index, role in enumerate(roles)
+    ]
+    return {
+        "installed": True,
+        "events": [{"kind": "platform_ver", "caller": "other", "phase": "startup"}]
+        if helpers
+        else [],
+        "owned": {
+            "schema_version": 1,
+            "members": members,
+            "assigned": len(roles),
+            "unobserved": 0,
+            "job_empty": True,
+            "overflow": False,
+            "observation_unavailable": False,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot",
+        },
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling",
+    }
+
+
+def test_command_and_required_frames_are_exact_not_basename_allowance():
+    expected = r"C:\Windows\System32\cmd.exe"
+    frame = _frame(
+        "platform",
+        "_syscmd_ver",
+        _frame("platform", "win32_ver", _frame("setuptools.windows_support", "windows_only")),
+    )
+    assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected) == (
+        "platform_ver",
+        "setuptools",
+    )
+    for command in (
+        "ver",
+        expected + ' /c "ver & echo private"',
+        expected + ' /c "echo synthetic"',
+    ):
+        assert audit.classify_call((expected, command), frame, expected)[0] == "other"
+    assert (
+        audit.classify_call((r"C:\private\cmd.exe", expected + ' /c "ver"'), frame, expected)[0]
+        == "other"
+    )
+    assert (
+        audit.classify_call(
+            (expected, expected + ' /c "ver"'), _frame("platform", "_syscmd_ver"), expected
+        )[0]
+        == "other"
+    )
+    for _ in range(65):
+        frame = _frame("private_module_name", "private_function", frame)
+    assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected)[0] == "other"
+
+
+def test_gate_off_installs_nothing(monkeypatch):
+    monkeypatch.delenv(audit.GATE, raising=False)
+    monkeypatch.setattr(audit, "_install", lambda: pytest.fail("ordinary launch must not install"))
+    audit.install()
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["nonce", "missing", "gap", "partial", "extra", "symlink", "hardlink", "overflow", "duplicate"],
+)
+def test_private_journal_rejects_missing_stale_or_unbounded_evidence(tmp_path, defect):
+    nonce = "1" * 32
+    event = {"kind": "platform_ver", "caller": "other", "phase": "startup"}
+    _journal(tmp_path, nonce, [event])
+    assert audit.read_evidence(tmp_path, nonce) == [event]
+    if defect == "nonce":
+        nonce = "2" * 32
+    elif defect == "missing":
+        (tmp_path / "installed.json").unlink()
+    elif defect == "gap":
+        (tmp_path / "event-01.json").rename(tmp_path / "event-02.json")
+    elif defect == "partial":
+        (tmp_path / "event-01.json").write_text('{"nonce":')
+    elif defect == "extra":
+        (tmp_path / "private-unexpected").touch()
+    elif defect in {"symlink", "hardlink"}:
+        original = tmp_path / "event-01.json"
+        outside = tmp_path.parent / (tmp_path.name + "-outside")
+        original.rename(outside)
+        if defect == "symlink":
+            try:
+                original.symlink_to(outside)
+            except OSError:
+                pytest.skip("symlink unavailable for native ordinary user")
+        else:
+            os.link(outside, original)
+    elif defect == "overflow":
+        for index in range(2, 18):
+            audit._write(
+                tmp_path,
+                f"event-{index:02}.json",
+                {"schema_version": 1, "nonce": nonce, "ordinal": index, **event},
+            )
+    elif defect == "duplicate":
+        with pytest.raises(FileExistsError):
+            audit._write(tmp_path, "event-01.json", {})
+        return
+    with pytest.raises((ValueError, OSError)):
+        audit.read_evidence(tmp_path, nonce)
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+@pytest.mark.parametrize("helpers", [False, True])
+def test_runtime_proof_keeps_physical_counts_and_exact_launcher_order(supervised, helpers):
+    proof = _proof(supervised, helpers)
+    order = verified_runtime_order(proof, supervised=supervised)
+    size = (3 if supervised else 1) + (2 if helpers else 0)
+    assert len(order) == size
+    topology = qualification.ProcessTopology(
+        2 if supervised else 0, 1, 0, size, size, order, True, proof
+    )
+    qualification._validate_topology_record(
+        qualification._topology_record(topology), supervised=supervised
+    )
+    assert topology.assigned_processes == size
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "no_event",
+        "no_helpers",
+        "other_event",
+        "late",
+        "two_events",
+        "wrong_role",
+        "unknown_image",
+        "wrong_parent",
+        "parent_reused",
+        "late_helper",
+        "live",
+        "gap",
+        "unavailable",
+        "overflow",
+        "wrong_count",
+    ],
+)
+@pytest.mark.parametrize("supervised", [False, True])
+def test_event_and_native_chain_must_agree_both_directions(supervised, defect):
+    proof = _proof(supervised)
+    owned = proof["owned"]
+    if defect == "no_event":
+        proof["events"] = []
+    elif defect == "no_helpers":
+        owned["members"] = owned["members"][:-2]
+        owned["assigned"] -= 2
+    elif defect == "other_event":
+        proof["events"][0]["kind"] = "other"
+    elif defect == "late":
+        proof["events"][0]["phase"] = "after_ready"
+    elif defect == "two_events":
+        proof["events"] *= 2
+    elif defect == "wrong_role":
+        owned["members"][-1]["role"] = "system_powershell"
+    elif defect == "unknown_image":
+        owned["members"][-1]["identity"] = "unknown"
+    elif defect == "wrong_parent":
+        owned["members"][-1]["parent_ordinal_advisory"] = 0
+    elif defect == "parent_reused":
+        owned["members"][-1]["parent_ordinal_advisory"] = "unknown"
+    elif defect == "late_helper":
+        owned["members"][-1]["last_phase"] = "running"
+    elif defect == "live":
+        owned["job_empty"] = False
+    elif defect == "gap":
+        owned["unobserved"] = 1
+    elif defect == "unavailable":
+        owned["observation_unavailable"] = True
+    elif defect == "overflow":
+        owned["overflow"] = True
+    elif defect == "wrong_count":
+        owned["assigned"] += 1
+    with pytest.raises(ValueError):
+        verified_runtime_order(proof, supervised=supervised)
+
+
+def test_analysis_requires_exact_earliest_hook_source(tmp_path):
+    spec = importlib.util.spec_from_file_location(
+        "runtime_audit_packaging", ROOT / "packaging/pyinstaller_common.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    hooks = ROOT / "packaging/hooks/windows"
+    hook = (
+        "metroliza_rth_runtime_audit",
+        str(hooks / "rthooks/metroliza_rth_runtime_audit.py"),
+        "PYSOURCE",
+    )
+    implied = ("pyi_rth_setuptools", str(tmp_path / "pyi_rth_setuptools.py"), "PYSOURCE")
+    module.validate_runtime_audit_hook([hook, implied], hooks)
+    for scripts in (
+        [],
+        [implied, hook],
+        [hook, hook],
+        [(hook[0], str(tmp_path / Path(hook[1]).name), hook[2])],
+    ):
+        with pytest.raises(RuntimeError, match="hook order"):
+            module.validate_runtime_audit_hook(scripts, hooks)
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+def test_final_success_record_requires_audit_even_without_helpers(supervised):
+    proof = _proof(supervised, helpers=False)
+    order = verified_runtime_order(proof, supervised=supervised)
+    topology = qualification.ProcessTopology(2 if supervised else 0, 1, 0, len(order), len(order), order, True, proof)
+    record = qualification._topology_record(topology)
+    qualification._validate_topology_record(record, supervised=supervised, require_runtime_evidence=True)
+    record.pop("runtime_evidence")
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_topology_record(record, supervised=supervised, require_runtime_evidence=True)
+    package = {"launcher_sha256": "a" * 64, "application_sha256": "b" * 64}
+    payload = {"launcher_image_sha256": package["launcher_sha256"],
+               "application_image_sha256": package["application_sha256"],
+               "direct": [], "supervised": []}
+    for kind, is_supervised in (("direct", False), ("supervised", True)):
+        for _ in range(2):
+            paired = _proof(is_supervised, helpers=False)
+            paired_order = verified_runtime_order(paired, supervised=is_supervised)
+            item = qualification.ProcessTopology(2 if is_supervised else 0, 1, 0, len(paired_order),
+                                                 len(paired_order), paired_order, True, paired)
+            payload[kind].append(qualification._topology_record(item))
+    qualification._validate_topology(payload, package)
+    payload["supervised" if supervised else "direct"][1].pop("runtime_evidence")
+    with pytest.raises(qualification.QualificationFailure):
+        qualification._validate_topology(payload, package)
+
+
+def _local_evidence(root):
+    root.mkdir()
+    evidence = object.__new__(RuntimeEvidence)
+    evidence.root = root
+    evidence.nonce = "f" * 32
+    evidence.failure_factory = lambda: qualification.QualificationFailure("output_failed")
+    evidence.root_identity = evidence._identity()
+    evidence.probe = SimpleNamespace(phase="startup", emit=lambda: None)
+    return evidence
+
+
+def test_runtime_cleanup_removes_only_its_bounded_regular_journal(tmp_path):
+    evidence = _local_evidence(tmp_path / "owned")
+    _journal(evidence.root, evidence.nonce, [])
+    evidence.ready()
+    evidence.close()
+    assert not evidence.root.exists()
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_runtime_constructor_owns_empty_root_even_when_identity_query_fails(tmp_path, monkeypatch, cleanup_fails):
+    from scripts import windows_owned_process_probe as probe_module
+
+    monkeypatch.setattr(probe_module, "OwnedProcessProbe", lambda *_: SimpleNamespace(phase="startup"))
+    def no_identity(_self):
+        raise OSError("synthetic identity failure")
+    monkeypatch.setattr(RuntimeEvidence, "_identity", no_identity)
+    if cleanup_fails:
+        def no_cleanup(_self):
+            raise OSError("synthetic cleanup failure")
+        monkeypatch.setattr(Path, "rmdir", no_cleanup)
+    environment = {}
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        RuntimeEvidence(None, tmp_path, tmp_path, environment,
+                        lambda: qualification.QualificationFailure("output_failed"))
+    assert caught.value.qualification_cleanup == ("failed" if cleanup_fails else "complete")
+    assert len(list(tmp_path.iterdir())) == (1 if cleanup_fails else 0)
+    assert environment == {}
+
+
+@pytest.mark.parametrize("defect", ["replace", "nested", "oversized", "unrecognized", "symlink", "hardlink"])
+def test_runtime_cleanup_refuses_replaced_root_or_unknown_content(tmp_path, defect):
+    evidence = _local_evidence(tmp_path / "owned")
+    protected = tmp_path / "protected"
+    protected.write_bytes(b"synthetic preserved")
+    if defect == "replace":
+        evidence.root.rename(tmp_path / "previous")
+        evidence.root.mkdir()
+    elif defect == "nested":
+        (evidence.root / "event-01.json").mkdir()
+        (evidence.root / "event-01.json" / "nested").write_bytes(b"keep")
+    elif defect == "oversized":
+        (evidence.root / "event-01.json").write_bytes(b"x" * 1025)
+    elif defect == "unrecognized":
+        (evidence.root / "unknown").write_bytes(b"keep")
+    elif defect == "hardlink":
+        os.link(protected, evidence.root / "event-01.json")
+    else:
+        try:
+            (evidence.root / "event-01.json").symlink_to(protected)
+        except OSError:
+            pytest.skip("symlink unavailable for native ordinary user")
+    with pytest.raises(qualification.QualificationFailure):
+        evidence.close()
+    assert evidence.root.is_dir() and protected.read_bytes() == b"synthetic preserved"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="real Windows owned process and audit control")
+@pytest.mark.parametrize(
+    "mode", ["none", "ver", "hard", "other", "write_failure", "blocked_install", "outer", "concurrent"]
+)
+def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, monkeypatch, mode):
+    api = qualification._WindowsApi()
+    advapi = api.advapi
+    pythonw = Path(sys.executable).resolve().with_name("pythonw.exe")
+    python = pythonw.with_name("python.exe")
+    fixture = ROOT / "tests/fixtures/windows_runtime_audit_control.py"
+    script_mode = "ver" if mode == "concurrent" else mode
+    executable = python if mode == "outer" else pythonw
+    command = subprocess.list2cmdline([str(executable), str(fixture), script_mode])
+
+    class FixedControl:
+        def __getattr__(self, name):
+            return getattr(advapi, name)
+
+        def CreateProcessAsUserW(self, *args):
+            values = list(args)
+            values[2] = ctypes.create_unicode_buffer(command)
+            return advapi.CreateProcessAsUserW(*values)
+
+        def CreateProcessWithTokenW(self, *args):
+            values = list(args)
+            values[3] = ctypes.create_unicode_buffer(command)
+            return advapi.CreateProcessWithTokenW(*values)
+
+    monkeypatch.setattr(api, "advapi", FixedControl())
+    owned = []
+    evidences = []
+    complete = False
+    proofs = []
+    expected_exit = 97 if mode in {"write_failure", "blocked_install"} else 9 if mode == "hard" else 0
+    try:
+        for index in range(2 if mode == "concurrent" else 1):
+            root = tmp_path / str(index)
+            root.mkdir()
+            environment = qualification._sanitized_environment(root, root, root / "state", "normal")
+            evidence = RuntimeEvidence(
+                api,
+                root,
+                root,
+                environment,
+                lambda: qualification.QualificationFailure("output_failed"),
+            )
+            evidence.probe.images = (
+                ("package_launcher", python),
+                ("package_application", pythonw),
+            ) + evidence.probe.images[2:]
+            evidences.append(evidence)
+            api.launch(
+                executable,
+                environment,
+                root,
+                owned=owned,
+                runtime_evidence=evidence,
+                expected_images=tuple(image for _, image in evidence.probe.images),
+            )
+        assert all(
+            process.runtime_evidence is evidence for process, evidence in zip(owned, evidences)
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            for index, process in enumerate(owned):
+                process.observe()
+                if (tmp_path / str(index) / "control-ready").exists():
+                    (tmp_path / str(index) / "control-finish").touch()
+            if all(
+                process.poll() is not None and process.active_processes() == 0 for process in owned
+            ):
+                break
+            time.sleep(0.005)
+        assert all(
+            process.poll() == expected_exit and process.active_processes() == 0 for process in owned
+        )
+        for process, evidence in zip(owned, evidences):
+            if mode in {"write_failure", "blocked_install"}:
+                with pytest.raises(qualification.QualificationFailure):
+                    evidence.proof()
+            else:
+                proof = evidence.proof()
+                proofs.append(proof)
+                if mode == "other":
+                    with pytest.raises(ValueError):
+                        verified_runtime_order(proof, supervised=False)
+                else:
+                    order = verified_runtime_order(proof, supervised=mode == "outer")
+                    assert process._assigned_processes == len(order)
+        if mode == "concurrent":
+            assert (
+                evidences[0].nonce != evidences[1].nonce and evidences[0].root != evidences[1].root
+            )
+            assert not set(evidences[0].probe.records) & set(evidences[1].probe.records)
+            with pytest.raises(ValueError):
+                audit.read_evidence(evidences[0].root, evidences[1].nonce)
+        serialized = json.dumps(proofs)
+        assert all(
+            evidence.nonce not in serialized and str(evidence.root) not in serialized
+            for evidence in evidences
+        )
+        complete = True
+    finally:
+        qualification._close_owned_processes(owned, terminate=not complete)
+    assert all(not evidence.root.exists() for evidence in evidences)

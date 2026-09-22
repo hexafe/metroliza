@@ -1,14 +1,169 @@
-"""Bounded, rejection-only observations; never a process acceptance policy."""
+"""Bounded owned-handle evidence; roles alone never grant acceptance."""
 from __future__ import annotations
 
 import ctypes
 import json
+import os
 from pathlib import Path
 import sys
 import time
+import stat
+import uuid
+
+from metroliza.shared import diagnostic_runtime_audit as audit
 
 MAX_MEMBERS = 16
-PHASES = frozenset({"suspended", "window_wait", "window_close", "drain"})
+PHASES = frozenset({"suspended", "window_wait", "window_close", "drain", "startup", "running"})
+
+
+class RuntimeEvidence:
+    """One application launch/Job, one private journal, one owned probe."""
+
+    def __init__(self, api, artifact: Path, cwd: Path, environment, failure_factory):
+        self.root = cwd / ("runtime-audit-" + uuid.uuid4().hex)
+        self.nonce = uuid.uuid4().hex
+        self.failure_factory = failure_factory
+        self.probe = OwnedProcessProbe(api, artifact, failure_factory)
+        self.probe.phase = "startup"
+        self._create_root()
+        environment.update({audit.GATE: "1", audit.ROOT: str(self.root), audit.NONCE: self.nonce})
+
+    def _create_root(self):
+        self.root.mkdir(mode=0o700)
+        try:
+            self.root_identity = self._identity()
+        except BaseException as primary:
+            failure = self.failure_factory()
+            try:
+                # The exclusively created root is still empty. Never recurse
+                # or delete a replacement's contents when identity is unknown.
+                self.root.rmdir()
+            except Exception:
+                failure.record_cleanup(succeeded=False)
+            else:
+                failure.record_cleanup(succeeded=True)
+            if not isinstance(primary, Exception):
+                raise
+            raise failure from None
+
+    def _identity(self):
+        info = self.root.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400
+                or not info.st_ino):
+            raise self.failure_factory()
+        return info.st_dev, info.st_ino
+
+    def _require_same_root(self):
+        if self._identity() != self.root_identity:
+            raise self.failure_factory()
+
+    def ready(self):
+        if self.probe.phase == "startup":
+            self._require_same_root()
+            (self.root / "ready").touch(exist_ok=False)
+            self.probe.phase = "running"
+
+    def proof(self):
+        try:
+            self._require_same_root()
+            events = audit.read_evidence(self.root, self.nonce)
+            self._require_same_root()
+        except Exception:
+            raise self.failure_factory() from None
+        return {"installed": True, "events": events, "owned": self.probe.receipt(),
+                "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"}
+
+    def close(self):
+        try:
+            self._require_same_root()
+            events = audit.read_evidence(self.root, self.nonce)
+            observation = {"status": "observed", "events": events}
+        except Exception:
+            observation = {"status": "unavailable"}
+        try:
+            print("qualification_runtime_audit=" + json.dumps(observation, sort_keys=True),
+                  file=sys.stderr, flush=True)
+        except Exception:
+            pass
+        self.probe.emit()
+        self._remove_journal()
+
+    def _remove_journal(self):
+        self._require_same_root()
+        allowed = {"installed.json", "ready"} | {f"event-{index:02}.json" for index in range(1, audit.MAX_EVENTS + 1)}
+        entries = []
+        with os.scandir(self.root) as iterator:
+            for entry in iterator:
+                entries.append(entry.name)
+                if len(entries) > audit.MAX_EVENTS + 2 or entry.name not in allowed:
+                    raise self.failure_factory()
+                info = entry.stat(follow_symlinks=False)
+                if (not audit._plain_file(info) or info.st_size > 1024
+                        or entry.name == "ready" and info.st_size != 0):
+                    raise self.failure_factory()
+        self._require_same_root()
+        for name in entries:
+            (self.root / name).unlink()
+        self.root.rmdir()
+
+
+def verified_runtime_order(proof, *, supervised: bool) -> tuple[str, ...]:
+    """Pair an audited attempt and exact native ancestry; neither suffices alone."""
+    def reject():
+        raise ValueError("runtime_evidence_invalid")
+
+    if (type(proof) is not dict or set(proof) != {"installed", "events", "owned", "probe_effect"}
+            or proof["installed"] is not True
+            or proof["probe_effect"] != "synchronous_private_prelaunch_journal_and_owned_handle_sampling"):
+        reject()
+    events = proof["events"]
+    if type(events) is not list or len(events) > 1:
+        reject()
+    if events:
+        event = events[0]
+        if (type(event) is not dict or set(event) != {"kind", "caller", "phase"}
+                or event["kind"] != "platform_ver" or event["phase"] != "startup"
+                or type(event["caller"]) is not str or event["caller"] not in audit.CALLERS):
+            reject()
+    owned = proof["owned"]
+    expected_roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
+    expected_order = (["launcher_bootloader", "launcher_supervisor"] if supervised else []) + ["application"]
+    if events:
+        expected_roles += ["system_cmd", "system_conhost"]
+        expected_order += ["windows_version_command", "windows_version_console"]
+    if (type(owned) is not dict
+            or set(owned) != {"schema_version", "members", "assigned", "unobserved", "job_empty", "overflow", "observation_unavailable", "probe_effect"}
+            or type(owned["schema_version"]) is not int or owned["schema_version"] != 1
+            or type(owned["assigned"]) is not int or owned["assigned"] != len(expected_roles)
+            or type(owned["unobserved"]) is not int or owned["unobserved"] != 0
+            or owned["job_empty"] is not True or owned["overflow"] is not False
+            or owned["observation_unavailable"] is not False
+            or owned["probe_effect"] != "extra_handle_queries_and_bounded_snapshot"
+            or type(owned["members"]) is not list or len(owned["members"]) != len(expected_roles)):
+        reject()
+    _verify_members(owned["members"], expected_roles)
+    return tuple(expected_order)
+
+
+def _verify_members(members, expected_roles):
+    def reject():
+        raise ValueError("runtime_evidence_invalid")
+
+    for index, (member, role) in enumerate(zip(members, expected_roles)):
+        if (type(member) is not dict or set(member) != {"role", "identity", "first_phase", "last_phase", "parent_ordinal_advisory", "lifecycle"}
+                or member["role"] != role or member["identity"] != "fixed_file_verified"
+                or member["lifecycle"] != "job_empty"
+                or member["first_phase"] not in PHASES or member["last_phase"] not in PHASES):
+            reject()
+        parent = member["parent_ordinal_advisory"]
+        if parent != "unknown" and not (type(parent) is int and 0 <= parent < index):
+            reject()
+        if role in {"system_cmd", "system_conhost"} and (
+            member["first_phase"] != "startup" or member["last_phase"] != "startup"
+            or type(member["parent_ordinal_advisory"]) is not int
+            or member["parent_ordinal_advisory"] != index - 1
+        ):
+            reject()
 
 
 class OwnedProcessProbe:
