@@ -6165,3 +6165,82 @@ def test_native_gui_stdio_facts_distinguish_redirected_handles_from_console(tmp_
                          "qualification_console_absent": True,
                          "stdout_none": False, "stderr_none": False,
                          "stdout_handle": "character_nonconsole", "stderr_handle": "character_nonconsole"}
+
+
+@pytest.mark.parametrize("first_status", ["publish_incomplete", "io_failed"])
+def test_concurrent_probe_retains_both_final_outcomes_without_claiming_missing_incident(
+    tmp_path, monkeypatch, first_status
+):
+    roots = _concurrent_roots(tmp_path)
+    for root, status in zip(roots, (first_status, "saved")):
+        directory = root / qualification.PROBE_DIRECTORY
+        directory.mkdir()
+        (directory / ("storage_" + status)).touch()
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE", "1")
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._finish_concurrent_processes(
+            (_FakeProcess(9, supervised=True), _FakeProcess(9, supervised=True)),
+            roots, (1, 1), tmp_path, time.monotonic() + 1,
+        )
+    assert caught.value.qualification_reason == "launcher_storage_not_saved"
+    assert caught.value.concurrent_phases == (("storage_" + first_status,), ("storage_saved",))
+
+
+def test_concurrent_probe_timeout_retains_both_roots_before_owned_cleanup(tmp_path, monkeypatch):
+    roots = _concurrent_roots(tmp_path)
+    for root, status in zip(roots, ("publish_incomplete", "io_failed")):
+        directory = root / qualification.PROBE_DIRECTORY
+        directory.mkdir()
+        (directory / ("storage_" + status)).touch()
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE", "1")
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._finish_concurrent_processes(
+            (_FakeProcess(None, supervised=True), _FakeProcess(None, supervised=True)),
+            roots, (1, 1), tmp_path, time.monotonic() + .01,
+        )
+    assert caught.value.failure_id == "scenario_timeout"
+    assert caught.value.concurrent_phases == (("storage_publish_incomplete",), ("storage_io_failed",))
+
+
+def test_concurrent_exit_success_still_requires_two_actual_incidents(tmp_path, monkeypatch):
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.store = object()
+    runner.api = object()
+    runner.launcher = tmp_path / "metroliza.exe"
+    runner.artifact = runner.state_base = tmp_path
+    runner.deadline = time.monotonic() + 1
+    runner.results = {}
+    roots = iter(_concurrent_roots(tmp_path))
+    runner._root = lambda _label: next(roots)
+    processes = (_FakeProcess(9, supervised=True), _FakeProcess(9, supervised=True))
+    monkeypatch.setattr(qualification, "_reports", lambda _store: [])
+    monkeypatch.setattr(qualification, "_launch_concurrent_pair", lambda *args, **kwargs: processes)
+    monkeypatch.setattr(qualification, "_wait_concurrent_barrier", lambda *args: (1, 1))
+    monkeypatch.setattr(qualification, "_finish_concurrent_processes", lambda *args: (None, None))
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        runner.run_concurrent_instances()
+    assert caught.value.failure_id == "incident_invalid"
+
+
+def test_concurrent_probe_child_receipt_mismatch_retains_valid_public_failure(tmp_path, monkeypatch):
+    roots = _concurrent_roots(tmp_path)
+    path = roots[0] / qualification.QUALIFICATION_RECEIPT_NAMES["ready"]
+    payload = json.loads(path.read_text())
+    payload["scenario"] = "normal"
+    path.write_text(json.dumps(payload))
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE", "1")
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._finish_concurrent_processes(
+            (_FakeProcess(9, supervised=True), _FakeProcess(9, supervised=True)),
+            roots, (1, 1), tmp_path, time.monotonic() + 1,
+        )
+    error = caught.value
+    assert error.qualification_stage == "concurrent_1"
+    assert error.qualification_reason == "qualification_scenario_mismatch"
+    detail = qualification._failure_detail(
+        error.qualification_stage, error.qualification_reason, error.qualification_child_stage,
+        error.qualification_exit_code, error.native_observation,
+        concurrent_phases=error.concurrent_phases,
+    )
+    assert detail["concurrent_phases"] == [[], []]
+    assert qualification._valid_failure_detail(detail)
