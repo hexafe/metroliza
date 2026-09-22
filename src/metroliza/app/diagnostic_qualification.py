@@ -163,13 +163,39 @@ def _integrity_level() -> str:
             kernel.CloseHandle(token)
 
 
+def _console_absent() -> bool:
+    """Observe console attachment, independently of redirected Python streams.
+
+    The supervisor intentionally redirects standard streams to DEVNULL. Their
+    existence does not imply a console. Unknown API failures remain RED.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetConsoleProcessList.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD]
+        kernel.GetConsoleProcessList.restype = wintypes.DWORD
+        kernel.GetConsoleWindow.argtypes = []
+        kernel.GetConsoleWindow.restype = wintypes.HWND
+        slot = wintypes.DWORD()
+        ctypes.set_last_error(0)
+        count = kernel.GetConsoleProcessList(ctypes.byref(slot), 1)
+        error = ctypes.get_last_error()
+        return count == 0 and error == 6 and not kernel.GetConsoleWindow()
+    except (OSError, AttributeError):
+        return False
+
+
 def write_receipt(scenario: str, stage: str) -> None:
     if scenario not in SCENARIOS or stage not in {"startup_ready", "ready", "complete", "failed"}:
         raise ValueError("invalid_qualification_receipt")
     payload = {
         "schema_version": 1, "scenario": scenario, "stage": stage,
         "packaged": bool(getattr(sys, "frozen", False)),
-        "console_none": sys.stdout is None and sys.stderr is None,
+        "console_none": _console_absent(),
         "ordinary_user": _ordinary_user(),
         "integrity_level": _integrity_level(),
     }

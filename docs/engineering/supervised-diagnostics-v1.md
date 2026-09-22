@@ -187,3 +187,13 @@ Native controls cover no call, the real version call, other commands, durable
 prelaunch evidence after hard exit, failed exclusive write, two launcher-like
 parents and two simultaneous Jobs. Their source proof cannot establish that
 a packaged candidate passed; the exact packaged head still needs qualification.
+
+Console qualification uses native attachment evidence, not Python stream-object
+absence. The supervisor deliberately redirects stdout/stderr to the OS null sink;
+Windows `pythonw` can therefore have both stream objects without an attached
+console. The closed `console_none` receipt is true only when a valid one-element
+`GetConsoleProcessList` query returns zero with `ERROR_INVALID_HANDLE` and
+`GetConsoleWindow` returns NULL. Attached consoles, contradictory window evidence
+and all other API failures are rejected. Direct GUI, real supervised/DEVNULL and
+explicit AllocConsole controls exercise the same predicate on native Windows.
+No process topology, identity, lifetime or unknown-role allowance is changed.
