@@ -26,6 +26,13 @@ line already contains substantial implementations. A capability remains open unt
 release contract, acceptance tests, documentation, diagnostics, compatibility behavior, and
 release evidence are complete.
 
+### Corrective quality trackers
+
+[#1018](https://github.com/hexafe/metroliza/issues/1018) corrects evidenced desktop geometry in
+the cache-first industrial source workflow and its scalable keyboard/accessibility surface. It
+supports the existing #940 and #946 capability rows; it is not a new product capability or a
+strict prerequisite, so the #926–#957 inventory and dependency graph remain unchanged.
+
 ## Maturity legend
 
 | Maturity | Meaning |
@@ -89,6 +96,12 @@ viewer without qualifying its packaged preview/export.
 | Multi-file CSV/Excel Summary with typed columns, large-data mode, grouping, dashboard, and workbook output | [#939](https://github.com/hexafe/metroliza/issues/939) | Release-candidate | 4 | #931, #932, #933, #934, #937, #936, #952 |
 | Cache-first Oznak/production-source configuration, bounded fetch, local analysis, and source freshness | [#940](https://github.com/hexafe/metroliza/issues/940) | Release-candidate | 4 | #930, #931, #932, #939, #944, #952 |
 | Operator-ready realtime monitoring, explainable anomaly review, replay, offsets, and recovery | [#941](https://github.com/hexafe/metroliza/issues/941) | Release-candidate / controlled experimental slice | 4 | #919, #940, #930, #937, #944, #952 |
+
+Within #941, [#1054](https://github.com/hexafe/metroliza/issues/1054) owns the bounded
+asynchronous dashboard scheduling regression: observable deferred startup, coalescing and closing.
+Its native continuation owns the protected, pinned temporary dashboard directory and generated
+HTML privacy checks, controlled creation failure and owned cleanup; shared filesystem policy is separate.
+Its source/native test evidence does not establish packaged or operational acceptance.
 
 ## 6. Automation, traceability, diagnostics, and support
 

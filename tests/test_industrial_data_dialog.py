@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 try:
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import QPoint, Qt
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QComboBox, QMessageBox, QWidget  # noqa: F401
 
@@ -613,6 +613,72 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     # forcing those rows into overlays or transient messages.
     assert dialog.sizeHint().height() <= 640
     dialog.close()
+
+
+def test_launcher_status_content_is_full_height_and_scroll_reachable(tmp_path):
+    app = _app()
+    dialog = IndustrialDataDialog(db_file=str(tmp_path / "metroliza.db"))
+    dialog.show()
+    app.processEvents()
+    try:
+        scroll = dialog.content_scroll
+        status_labels = (
+            dialog.storage_lifecycle_label,
+            dialog.workflow_label,
+            dialog.sync_summary_label,
+            dialog.cache_label,
+            dialog.sync_filter_label,
+            dialog.analytics_status_label,
+            dialog.status_label,
+        )
+        assert scroll.verticalScrollBar().maximum() > 0
+        assert all(label.height() >= label.sizeHint().height() for label in status_labels)
+
+        scroll.ensureWidgetVisible(dialog.status_label)
+        app.processEvents()
+        top_left = dialog.status_label.mapTo(scroll.viewport(), QPoint(0, 0))
+        assert 0 <= top_left.y()
+        assert top_left.y() + dialog.status_label.height() <= scroll.viewport().height()
+
+        dialog.sync_button.setFocus()
+        QTest.keyClick(dialog.sync_button, Qt.Key.Key_Tab)
+        focused = QApplication.focusWidget()
+        assert focused is not None
+        assert focused.isVisibleTo(dialog)
+        assert focused.isEnabled()
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
+def test_source_profile_status_and_form_are_scroll_reachable(tmp_path):
+    app = _app()
+    dialog = IndustrialSourceProfilesDialog(
+        db_file=str(tmp_path / "metroliza.db"),
+        config_path=tmp_path / "industrial_sources.yaml",
+    )
+    dialog.show()
+    app.processEvents()
+    try:
+        scroll = dialog.form_scroll
+        assert dialog.status_label.height() >= dialog.status_label.sizeHint().height()
+        assert scroll.verticalScrollBar().maximum() > 0
+
+        scroll.ensureWidgetVisible(dialog.timestamp_column_edit)
+        app.processEvents()
+        top_left = dialog.timestamp_column_edit.mapTo(scroll.viewport(), QPoint(0, 0))
+        assert 0 <= top_left.y()
+        assert top_left.y() + dialog.timestamp_column_edit.height() <= scroll.viewport().height()
+
+        dialog.timestamp_column_edit.setFocus()
+        QTest.keyClick(dialog.timestamp_column_edit, Qt.Key.Key_Tab)
+        focused = QApplication.focusWidget()
+        assert focused is not None
+        assert focused.isVisibleTo(dialog)
+        assert focused.isEnabled()
+    finally:
+        dialog.close()
+        app.processEvents()
 
 
 def test_sync_dialog_labels_bounded_access_check_clearly(tmp_path):

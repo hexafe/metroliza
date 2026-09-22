@@ -11,7 +11,9 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QMenu,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from metroliza.industrial.industrial_data_repository import (
@@ -169,6 +171,7 @@ class IndustrialDataDialog(QDialog):
         self._configure_accessibility()
         self.refresh_status()
         apply_metroliza_theme(self)
+        self._preserve_status_label_heights()
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -176,6 +179,17 @@ class IndustrialDataDialog(QDialog):
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Industrial data"))
+
+        # The lifecycle/status rows remain persistent operator context.  Keep
+        # their full label heights in a scrollable content surface so the
+        # launcher stays reachable on compact working areas without clipping
+        # text or replacing information with transient messages.
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setWidgetResizable(True)
+        content = QWidget(self.content_scroll)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -249,7 +263,23 @@ class IndustrialDataDialog(QDialog):
 
         row += 1
         grid.addWidget(self.status_label, row, 0, 1, 3)
-        layout.addLayout(grid)
+        self._persistent_status_labels = (
+            self.storage_lifecycle_label,
+            self.oznak_label,
+            self.workflow_label,
+            self.sync_summary_label,
+            self.cache_label,
+            self.sources_label,
+            self.sync_filter_label,
+            self.export_filter_label,
+            self.grouping_label,
+            self.export_options_label,
+            self.analytics_status_label,
+            self.status_label,
+        )
+        content_layout.addLayout(grid)
+        self.content_scroll.setWidget(content)
+        layout.addWidget(self.content_scroll, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -263,6 +293,14 @@ class IndustrialDataDialog(QDialog):
         actions.addStretch(1)
         actions.addWidget(self.close_button)
         layout.addLayout(actions)
+
+    def _preserve_status_label_heights(self) -> None:
+        """Let the scroll surface preserve themed status-label text heights."""
+
+        for status_label in self._persistent_status_labels:
+            status_label.setMinimumHeight(status_label.sizeHint().height())
+        content = self.content_scroll.widget()
+        content.setMinimumHeight(content.layout().sizeHint().height())
 
     def update_db_file(self, db_file: str | None) -> bool:
         """Point an already-open dialog at the current main-window database."""

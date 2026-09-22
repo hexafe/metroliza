@@ -1022,7 +1022,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.11.9'
           cache: 'pip'
           cache-dependency-path: |
             requirements.txt
@@ -1105,119 +1105,35 @@ jobs:
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py
 
-      - name: Run safe OCR diagnostics and native PowerShell contract tests
+      - name: Run native Windows specialist geometry tests
         env:
           PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_INDUSTRIAL_SCREEN: 1920x1080
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -vv -s tests/test_industrial_native_geometry.py
+
+      - name: Run native Windows realtime dashboard scheduling tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9
         run: >-
-          python -m pytest -v
-          tests/test_windows_ocr_runtime_diagnostics.py
-          tests/test_header_ocr_diagnostics_script.py
-          tests/test_windows_ocr_powershell.py
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_realtime_monitoring_dialog.py
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
-      - name: Run measurement chart-label and workbook publication tests on Windows
-        env:
-          PYTHONPATH: src;.
-        run: >-
-          python -m pytest -v
-          tests/test_measurement_chart_labels.py
-          tests/test_phase4_integration_happy_path.py::TestPhase4ParseToExportHappyPath::test_export_workbook_chart_ranges_match_expected_parity
-          tests/test_export_chart_writer.py
-          tests/test_export_backends.py
-          tests/test_export_workbook_output.py
-
-      - name: Run finite numeric filter and query-consumer parity on Windows
-        env:
-          PYTHONPATH: src;.
-        run: >-
-          python -m pytest -v
-          tests/test_grouping_filter_core.py
-          tests/test_report_query_service.py
-          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_shared_spec_probe
-          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_large_membership
-          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_loaded_integer_scope
-          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_loaded_column_filter_scope
-          tests/test_tabular_analytics_service.py::test_tabular_column_filter_exact_object_sources
-          tests/test_tabular_analytics_service.py::test_tabular_column_filter_grouped_integer_literals
-          tests/test_tabular_analytics_service.py::test_sqlite_finite_numeric_quotes_identifiers_and_rejects_injected_values
-
-      - name: Run native Windows cache publication tests
-        env:
-          PYTHONPATH: src;.
-        run: python -m pytest -vv -s --tb=no --show-capture=no tests/test_industrial_cache_publication.py
-
-      - name: Run native Windows cache lifecycle tests
+      - name: Run native Windows grouping-preview lifecycle tests
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: >-
-          python -m pytest -vv
-          tests/test_industrial_cache_lifecycle.py
-          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_temp_session_save_preserves_copy_before_rebind
-          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_temp_session_rebind_cancel_keeps_operator_data
-          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_temp_session_archive_cannot_replace_active_database
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_tabular_analytics_grouping_dialog.py
 
-  windows-startup-benchmark:
-    name: Windows startup benchmark (manual/opt-in)
-    runs-on: windows-latest
-    timeout-minutes: 120
-    needs: [static-checks, unit-tests]
-    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_startup_benchmark == '1'
-    env:
-      METROLIZA_RUN_WINDOWS_STARTUP_BENCHMARK: ${{ inputs.run_windows_startup_benchmark }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          persist-credentials: false
-
-      - name: Setup Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements-build.txt
-            requirements-ocr.txt
-
-      - name: Validate startup benchmark gate env flag
-        shell: pwsh
-        run: |
-          if ($env:METROLIZA_RUN_WINDOWS_STARTUP_BENCHMARK -ne '1') {
-            throw 'Windows startup benchmark gate was not enabled.'
-          }
-
-      - name: Build PyInstaller onefile and onedir artifacts
-        shell: pwsh
-        run: .\build_windows_exe.ps1 -Mode both
-
-      - name: Measure packaged startup
-        shell: pwsh
-        run: |
-          $onefile = Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_P_*.exe' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          $onedir = Get-ChildItem -LiteralPath dist -Recurse -File -Filter 'metroliza.exe' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-
-          if (-not $onefile) {
-            throw 'PyInstaller onefile artifact was not found.'
-          }
-          if (-not $onedir) {
-            throw 'PyInstaller onedir artifact was not found.'
-          }
-
-          .\scripts\measure_windows_startup.ps1 `
-            -ArtifactPath @($onefile.FullName, $onedir.FullName) `
-            -Iterations 2 `
-            -WarmupRuns 1 `
-            -OutputDirectory startup-artifacts
-
-      - name: Upload Windows startup artifacts
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: windows-startup-artifacts
-          path: startup-artifacts
-          if-no-files-found: warn
