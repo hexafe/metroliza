@@ -1013,3 +1013,21 @@ def test_diagnostic_thread_exhaustion_does_not_prevent_actual_app_start(
         assert delivery.storage_status is StoreStatus.SAVED
     else:
         assert delivery.storage_status is StoreStatus.IO_FAILED
+
+
+@pytest.mark.parametrize("scenario", ["normal", "hard_exit", "handled_failure", "preview", "idle", "flood", "concurrent"])
+@pytest.mark.parametrize("synthetic", [False, True])
+def test_fixed_notice_is_noninteractive_only_in_explicit_synthetic_scenarios(monkeypatch, scenario, synthetic):
+    import ctypes
+    from types import SimpleNamespace
+    from metroliza.app import diagnostic_launcher as launcher
+
+    calls = []
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=SimpleNamespace(
+        MessageBoxW=lambda *args: calls.append(args)
+    )), raising=False)
+    monkeypatch.setattr(launcher, "os", SimpleNamespace(name="nt", getenv=os.getenv))
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", scenario)
+    monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1" if synthetic else "0")
+    launcher._fixed_notice("fixed notice")
+    assert calls == ([] if synthetic else [(None, "fixed notice", "Metroliza", 0x10)])

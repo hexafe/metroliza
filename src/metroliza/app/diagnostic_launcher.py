@@ -25,7 +25,7 @@ from metroliza.shared.diagnostic_incident import (
 from metroliza.shared.diagnostic_package import inspect_package
 from metroliza.shared.diagnostic_ring import DiagnosticRing
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
-from metroliza.shared.diagnostic_startup_probe import mark
+from metroliza.shared.diagnostic_startup_probe import mark, mark_error
 from metroliza.shared.diagnostic_wire import decode_event
 
 
@@ -46,6 +46,7 @@ def persist_observation(
     on_saved: Callable[[], None] | None = None,
 ) -> StoreStatus:
     try:
+        mark("persist_entered")
         incident = build_incident(
             session_id=uuid.UUID(hex=observed.session_id), created_at_ms=round(time.time() * 1000),
             build_git_sha=git_sha,
@@ -61,13 +62,17 @@ def persist_observation(
             ),
             history=observed.history,
         )
+        mark("incident_built")
         result = store.publish(incident)
+        mark("store_publish_returned")
         if result.status is StoreStatus.SAVED and on_saved is not None:
             on_saved()
         if result.status is StoreStatus.SAVED and observed.termination != "still_running":
             store.resolve_session(observed.session_id, result.report_id)
         return result.status
-    except Exception:
+    except Exception as error:
+        mark("persist_failed")
+        mark_error(error)
         return StoreStatus.IO_FAILED
 
 
@@ -308,10 +313,12 @@ def _fixed_notice(message: str) -> None:
     # Fixed UI strings only. No exception, file path, native stack, or raw stream.
     if (os.getenv("METROLIZA_STARTUP_SMOKE") == "1"
             and os.getenv("METROLIZA_DIAGNOSTIC_QUALIFICATION") in
-            {"normal", "hard_exit", "handled_failure", "preview", "idle", "flood"}):
+            {"normal", "hard_exit", "handled_failure", "preview", "idle", "flood", "concurrent"}):
         # Disposable qualification asserts exit/store status and cannot dismiss
         # interactive native dialogs. The ordinary-user path retains its notice.
+        mark("notice_suppressed")
         return
+    mark("notice_requested")
     if os.name == "nt":
         import ctypes
 
@@ -350,7 +357,10 @@ def main() -> int:
     mark("supervision_entered")
     delivery = run_with_store(argv, store=store, git_sha=git_sha)
     mark("supervision_returned")
+    mark("storage_" + delivery.storage_status.value)
     if delivery.storage_status not in {StoreStatus.SAVED, StoreStatus.MARKER_CLEAN_ENDED}:
         _fixed_notice("Historia diagnostyczna jest niedostępna lub raport nie został zapisany.")
+    else:
+        mark("notice_not_required")
     code = delivery.observation.exit_code
     return code if code is not None else 1
