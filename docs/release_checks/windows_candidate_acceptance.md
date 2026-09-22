@@ -82,17 +82,31 @@ An independent standard-library comparator checks the actual persisted rows,
 group membership and public result against separately specified expected values.
 It checks both the original and retained inference database and JSON artifact.
 This fixed case supplements the preserved one-group negative boundary.
-The core reports W03, W05, W06 and the bounded W07 export contract as executed.
+The core reports W03, the named W04 guards, W05, W06 and the bounded W07 export contract as executed.
 A second real MainWindow reopens the completed import's Reports source and DB
 context. Exact schema and complete logical SQLite dump, public measurements,
 counts and source hashes must remain unchanged, with no sidecars. Normal startup
 recovery can rewrite the physical database without changing that content; both
 physical hashes are retained and the final artifact digest is bound only after
 semantic comparison succeeds. Each read-only observation itself must preserve
-bytes and leave no sidecars. This is context reopen/rebind only, without a second
-review scan. W04 remains incomplete:
-hidden selection, drift, duplicates and active import/close contracts are not all
-exercised by this core. W07 covers exact literal output plus failed,
+bytes and leave no sidecars. This reopen check is context rebind only. An additional real Reports workspace
+then imports the same two approved reports while a filter hides them, retains
+selection across Home/Tools/Reports navigation, rejects both duplicates on a
+fresh review, rejects a source changed after review and restores a valid plan
+with re-review. A barrier at the real parser batch entry lets an active worker
+receive the ordinary MainWindow close/cancel request before parsing/commit.
+The window must defer close, the real worker must cancel, and the prior logical
+SQLite contents and all source hashes must remain unchanged. This proves that
+named cancellation boundary, not every later transaction boundary.
+
+The W04 driver waits for the complete owned Job to exit, then rejects remaining
+SQLite sidecars, checks the entire logical dump against the pre-cancel digest,
+and independently verifies the persisted measurements using the existing public
+oracle. It rechecks all five source hashes and retains an independently verified
+copy of that database. Sidecars observed while the GUI process was alive are
+recorded separately and never treated as proof of final cleanup. The child
+physical database hashes describe in-process observations; the host calculates
+and verifies the retained artifact hash after the complete Job exits. W07 covers exact literal output plus failed,
 pre-cancelled and in-flight cancelled publication preservation; it does not
 establish arbitrary close paths or desktop Excel rendering. Cleanup always joins
 the export thread before returning, including after an operation failure; the
@@ -100,7 +114,7 @@ existing external Job/watchdog bounds a worker that cannot stop cooperatively.
 The host rejects inconsistent check statuses, and separately requires a native
 ordinary-user packaged runtime before accepting any Windows observation.
 
-After all application processes exit, the driver verifies seven artifact hashes
+After all application processes exit, the driver verifies the seven original artifact hashes and the additional W04 database
 and rejects SQLite sidecars. It compares the actual database, workbook, grouping
 and tabular results against the reviewed oracle and checks literal OOXML. It
 repeats comparison on retained copies. The receipt binds source/tree, package,

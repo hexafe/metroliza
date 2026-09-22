@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from scripts import qualify_windows_candidate_core as driver
+from tests.test_windows_candidate_core_protocol import import_guard_evidence
 
 
 def _payload():
@@ -16,7 +17,8 @@ def _payload():
         "ordinary_user": True,
         "source_sha": None,
         "relative_artifact_dir": "core-" + "a" * 32,
-        "checks": {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "passed"},
+        "checks": {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"},
+        "import_guard_evidence": import_guard_evidence(),
         "facets": {
             **{key: "passed" for key in driver.REQUIRED_CHECKS},
             "group_analysis_status": "insufficient_groups",

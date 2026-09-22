@@ -17,12 +17,29 @@ PUBLIC_FIXTURES = REPO / "tests/fixtures/windows_candidate"
 SHA = "1" * 40
 
 
+def import_guard_evidence():
+    import hashlib
+
+    return {
+        "relative_artifact_dir": "import-guards-" + "b" * 32,
+        "initial_imported": 2, "duplicate_count": 2, "drift_rejected": 1,
+        "cancelled_files": 1, "cancel_barrier_stage": "real_parse_batch_entry",
+        "committed_database_sha256": "2" * 64, "committed_logical_sha256": "3" * 64,
+        "database_sha256_after_close": "2" * 64, "sidecars_after_window_close": [],
+        "source_hashes": {
+            f"REF001_2024-01-01_{i}.pdf": hashlib.sha256((PUBLIC_FIXTURES / "reports" / f"report-{i}.pdf").read_bytes()).hexdigest()
+            for i in range(5)
+        },
+    }
+
+
 def payload():
     return {
         "schema_version": 1, "stage": "complete", "status": "passed",
         "packaged": True, "qpa": "windows", "ordinary_user": True,
         "source_sha": SHA, "relative_artifact_dir": "core-" + "a" * 32,
-        "checks": {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "passed"},
+        "checks": {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"},
+        "import_guard_evidence": import_guard_evidence(),
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
             key: {"path": key + extension, "sha256": "2" * 64}
@@ -39,7 +56,7 @@ def test_protocol_accepts_only_declared_native_complete_identity():
 @pytest.mark.parametrize("checks", [
     {},
     {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "not_executed", "W07": "passed"},
-    {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"},
+    {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "passed"},
     {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "not_executed"},
 ])
 def test_core_observations_cannot_contradict_completed_facets_or_claim_unexecuted_scope(checks):
@@ -260,6 +277,17 @@ def _complete_synthetic_artifacts(tmp_path):
     create_inference_case(child / "inference_database.sqlite", child / "group_inference.json")
     for record in sample["artifacts"].values():
         record["sha256"] = driver._hash(child / record["path"])
+    import hashlib
+    import sqlite3
+    from contextlib import closing
+    guard = child / sample["import_guard_evidence"]["relative_artifact_dir"]
+    (guard / "reports").mkdir(parents=True)
+    for i in range(5):
+        shutil.copyfile(PUBLIC_FIXTURES / "reports" / f"report-{i}.pdf", guard / "reports" / f"REF001_2024-01-01_{i}.pdf")
+    shutil.copyfile(child / "database.sqlite", guard / "reports.sqlite")
+    with closing(sqlite3.connect(guard / "reports.sqlite")) as db:
+        logical = hashlib.sha256("\n".join(db.iterdump()).encode()).hexdigest()
+    sample["import_guard_evidence"]["committed_logical_sha256"] = logical
     output = tmp_path / "output"
     output.mkdir()
     return sample, child, output, oracle_path
@@ -268,8 +296,14 @@ def _complete_synthetic_artifacts(tmp_path):
 def test_verified_preserved_copy_remains_readable_and_matches_oracle(tmp_path):
     sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
     copied = driver._copy_verified_results(tmp_path, sample, output, oracle)
-    assert copied == sample["artifacts"]
-    assert len(list(output.iterdir())) == 7
+    assert copied == {
+        **sample["artifacts"],
+        "import_guards_database": {
+            "path": "import-guards.sqlite",
+            "sha256": driver._hash(child / sample["import_guard_evidence"]["relative_artifact_dir"] / "reports.sqlite"),
+        },
+    }
+    assert len(list(output.iterdir())) == 8
 
 
 @pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
@@ -291,3 +325,41 @@ def test_valid_digest_does_not_substitute_for_correct_persisted_measurement(tmp_
     with pytest.raises(driver.CandidateFailure, match="independent_core_oracle_failed"):
         driver._copy_verified_results(tmp_path, sample, output, oracle)
     assert not list(output.iterdir())
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("relative_artifact_dir", "../escape"), ("initial_imported", True),
+    ("cancelled_files", 0), ("cancel_barrier_stage", "after_commit"),
+    ("source_hashes", {}), ("sidecars_after_window_close", ["-wal", "-wal"]),
+])
+def test_import_guard_receipt_rejects_false_or_unbounded_evidence(field, value):
+    sample = payload()
+    sample["import_guard_evidence"][field] = value
+    with pytest.raises(driver.CandidateFailure, match="invalid_import_guard_evidence"):
+        driver._validate_core_result(sample)
+
+
+def test_import_guard_cannot_be_missing_from_completed_core():
+    sample = payload()
+    del sample["import_guard_evidence"]
+    with pytest.raises(driver.CandidateFailure, match="invalid_import_guard_evidence"):
+        driver._validate_core_result(sample)
+
+
+@pytest.mark.parametrize("mutation", ["source", "sidecar", "logical"])
+def test_import_guard_postprocess_verification_rejects_changes(tmp_path, mutation):
+    sample, child, output, oracle = _complete_synthetic_artifacts(tmp_path)
+    record = sample["import_guard_evidence"]
+    guard = child / record["relative_artifact_dir"]
+    if mutation == "source":
+        (guard / "reports" / "REF001_2024-01-01_0.pdf").write_bytes(b"changed after close")
+        reason = "import_guard_sources_changed"
+    elif mutation == "sidecar":
+        (guard / "reports.sqlite-wal").write_bytes(b"")
+        reason = "import_guard_database_sidecars_remain"
+    else:
+        record["committed_logical_sha256"] = "0" * 64
+        reason = "import_guard_committed_database_changed"
+    with pytest.raises(driver.CandidateFailure, match=reason):
+        driver._verify_import_guard_outputs(child, sample, output, oracle)
+    assert not (output / "import-guards.sqlite").exists()

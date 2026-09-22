@@ -9,6 +9,7 @@ temporary-directory handling. No product worker or data service is substituted.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import importlib
 import importlib.util
@@ -16,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -30,12 +32,14 @@ REQUIRED_CHECKS = (
     "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
     "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
     "successful_group_inference", "reopen_preserves_completed_import",
+    "hidden_selection_import", "stale_source_rereview", "duplicate_review", "active_import_cancel_close",
 )
 ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")
-CORE_OBSERVATIONS = {"W03": "passed", "W04": "not_executed", "W05": "passed", "W06": "passed", "W07": "passed"}
+CORE_OBSERVATIONS = {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"}
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 MAX_SECONDS = 900
+PUBLIC_FIXTURE_HASHES = {'finite-source.csv': 'de2724bd3b6b55d362016423a2f78168235d3833d7a89298a7fdf4a5ec747938', 'integer-precision.csv': '8e2c837472d6465d319b37b4afe09998f9c45680edc27d1a169f33e145a70508', 'report-0.pdf': '183b46650a7e37113927f7a99eb6a66484d07126d3134b3a6056defaef21af3f', 'report-1.pdf': '315032987a656191260945242c89996976640f3629c4499c428f44ac9b3679ad', 'report-2.pdf': '7a6fe37457385188f9b466a8f9c3061bf7d118290b0c8e74583dba5e76f29048', 'report-3.pdf': 'cb801c452d9608c227606a4c10325d19d7d8a095fe80976fa60338fd6bfd0849', 'report-4.pdf': 'b9f83ee23a191eccfa3515594e6ba85ede670a2163444cd0daf7b9bb5edd83d9'}
 
 
 class CandidateFailure(RuntimeError):
@@ -125,7 +129,77 @@ def _validate_core_result(payload: object) -> dict:
     ):
         raise CandidateFailure("required_core_check_incomplete")
     _validate_core_artifacts(payload.get("artifacts"))
+    _validate_import_guard_evidence(payload.get("import_guard_evidence"))
     return payload
+
+
+def _validate_import_guard_evidence(record: object) -> dict:
+    keys = {
+        "relative_artifact_dir", "initial_imported", "duplicate_count", "drift_rejected",
+        "cancelled_files", "cancel_barrier_stage", "committed_database_sha256",
+        "committed_logical_sha256", "database_sha256_after_close", "sidecars_after_window_close",
+        "source_hashes",
+    }
+    if type(record) is not dict or set(record) != keys:
+        raise CandidateFailure("invalid_import_guard_evidence")
+    if (type(record["relative_artifact_dir"]) is not str
+            or re.fullmatch(r"import-guards-[0-9a-f]{32}", record["relative_artifact_dir"]) is None
+            or any(type(record[key]) is not int or record[key] != value for key, value in
+                   (("initial_imported", 2), ("duplicate_count", 2), ("drift_rejected", 1)))
+            or type(record["cancelled_files"]) is not int or not 1 <= record["cancelled_files"] <= 3
+            or record["cancel_barrier_stage"] != "real_parse_batch_entry"):
+        raise CandidateFailure("invalid_import_guard_evidence")
+    for key in ("committed_database_sha256", "committed_logical_sha256", "database_sha256_after_close"):
+        if type(record[key]) is not str or re.fullmatch(r"[0-9a-f]{64}", record[key]) is None:
+            raise CandidateFailure("invalid_import_guard_evidence")
+    sidecars = record["sidecars_after_window_close"]
+    if (type(sidecars) is not list or len(sidecars) > 3
+            or any(type(item) is not str or item not in {"-wal", "-shm", "-journal"} for item in sidecars)
+            or len(set(sidecars)) != len(sidecars)):
+        raise CandidateFailure("invalid_import_guard_evidence")
+    sources = record["source_hashes"]
+    expected_sources = {f"REF001_2024-01-01_{i}.pdf": PUBLIC_FIXTURE_HASHES[f"report-{i}.pdf"] for i in range(5)}
+    if type(sources) is not dict or sources != expected_sources:
+        raise CandidateFailure("invalid_import_guard_evidence")
+    return record
+
+
+def _verify_import_guard_outputs(child: Path, payload: dict, output: Path, oracle: Path) -> dict:
+    record = _validate_import_guard_evidence(payload.get("import_guard_evidence"))
+    guard = child / record["relative_artifact_dir"]
+    _directory(guard)
+    reports = guard / "reports"
+    _directory(reports)
+    if {path.name for path in reports.iterdir()} != set(record["source_hashes"]):
+        raise CandidateFailure("import_guard_sources_changed")
+    if any(_hash(reports / name) != digest for name, digest in record["source_hashes"].items()):
+        raise CandidateFailure("import_guard_sources_changed")
+    database = guard / "reports.sqlite"
+    _assert_database_sidecars_absent(database, "import_guard_database_sidecars_remain")
+    before = _hash(database)
+    with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+        logical = hashlib.sha256("\n".join(connection.iterdump()).encode("utf-8")).hexdigest()
+    if logical != record["committed_logical_sha256"]:
+        raise CandidateFailure("import_guard_committed_database_changed")
+    verifier = _adjacent_module("verify_synthetic_oracle.py", "_metroliza_import_guard_oracle")
+    expected = verifier._load_oracle(oracle)
+    try:
+        verifier.assert_database(expected, database)
+    except Exception:
+        raise CandidateFailure("independent_import_guard_oracle_failed") from None
+    if _hash(database) != before:
+        raise CandidateFailure("import_guard_observation_changed_database")
+    retained = output / "import-guards.sqlite"
+    with database.open("rb") as source, retained.open("xb") as destination:
+        shutil.copyfileobj(source, destination)
+    try:
+        verifier.assert_database(expected, retained)
+    except Exception:
+        raise CandidateFailure("retained_import_guard_oracle_failed") from None
+    if _hash(retained) != before or _hash(database) != before:
+        raise CandidateFailure("import_guard_retained_database_changed")
+    _assert_database_sidecars_absent(database, "import_guard_database_sidecars_created")
+    return {"path": retained.name, "sha256": before}
 
 
 def _validate_core_artifacts(artifacts: object) -> None:
@@ -178,7 +252,7 @@ def _source_driver(checkout: Path, source_sha: str):
 
 def _stage_known_fixtures(fixtures: Path, private: Path) -> Path:
     """Copy only the previously authored public byte set into the private job."""
-    expected = {'finite-source.csv': 'de2724bd3b6b55d362016423a2f78168235d3833d7a89298a7fdf4a5ec747938', 'integer-precision.csv': '8e2c837472d6465d319b37b4afe09998f9c45680edc27d1a169f33e145a70508', 'report-0.pdf': '183b46650a7e37113927f7a99eb6a66484d07126d3134b3a6056defaef21af3f', 'report-1.pdf': '315032987a656191260945242c89996976640f3629c4499c428f44ac9b3679ad', 'report-2.pdf': '7a6fe37457385188f9b466a8f9c3061bf7d118290b0c8e74583dba5e76f29048', 'report-3.pdf': 'cb801c452d9608c227606a4c10325d19d7d8a095fe80976fa60338fd6bfd0849', 'report-4.pdf': 'b9f83ee23a191eccfa3515594e6ba85ede670a2163444cd0daf7b9bb5edd83d9'}
+    expected = PUBLIC_FIXTURE_HASHES
     if {p.name for p in fixtures.iterdir()} != {"reports", "finite-source.csv", "integer-precision.csv"}:
         raise CandidateFailure("prepared_fixture_set_mismatch")
     reports = _input_directory(fixtures / "reports")
@@ -290,6 +364,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
     _check_inference_outputs(retained)
     _assert_artifact_hashes(retained, payload, "retained_artifact_changed_after_comparison")
     _assert_both_databases_closed(retained, "retained_database_sidecars_created_after_comparison")
+    copied["import_guards_database"] = _verify_import_guard_outputs(child, payload, output, oracle)
     return copied
 
 
@@ -428,7 +503,7 @@ def qualify(args) -> dict:
             "inference_verifier_sha256": _hash(Path(__file__).with_name("verify_group_inference.py")),
             "limits": [
                 "Observed core facets only; no complete W01-W16 gate is implied.",
-                "Pre-cancel and oversized-label rejection observed; active cancellation remains unqualified.",
+                "Import cancellation is observed at real batch entry; export cancellation occurs after real export progress. Arbitrary later commit boundaries are not implied.",
                 "Inference covers only the fixed public two-group PDF case; no general analysis or real-data qualification.",
                 "Build-host automation is not clean-machine evidence.",
                 "No representative operator data or release acceptance.",

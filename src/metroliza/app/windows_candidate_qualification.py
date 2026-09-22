@@ -428,9 +428,17 @@ def run_qualification() -> int:
             raise ScenarioFailure("group_inference_checks_failed")
         receipt["artifacts"].update(inference["artifacts"])
         receipt["facets"].update(inference["facets"])
+        from metroliza.app.windows_candidate_import_guards import FACETS, run_import_guard_checks
+        guards = run_import_guard_checks(child, fixtures)
+        if (guards.get("status") != "passed"
+                or guards.get("facets") != dict.fromkeys(FACETS, "passed")
+                or guards.get("error_codes") != []):
+            raise ScenarioFailure("import_guard_checks_failed")
+        receipt["facets"].update(guards["facets"])
+        receipt["import_guard_evidence"] = guards["evidence"]
         receipt["stage"] = "complete"
         receipt["status"] = "passed"
-        receipt["checks"].update({"W03": "passed", "W05": "passed", "W06": "passed", "W07": "passed"})
+        receipt["checks"].update({"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"})
         _atomic_json(root / "windows-candidate-result.json", receipt)
         return 0
     except Exception as error:
