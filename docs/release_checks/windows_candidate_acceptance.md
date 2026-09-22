@@ -24,6 +24,20 @@ Build on approved Windows CPython 3.11 x64 with the existing wrapper:
 .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
 ```
 
+After freezing finishes, install the pinned acceptance-host dependencies into
+the build interpreter. Keep them out of the frozen application. Use the installed
+Windows Edge executable explicitly; do not download a browser during acceptance.
+
+```powershell
+$candidatePython = '.\.venv-build\Scripts\python.exe'
+& $candidatePython -m pip install -r requirements-windows-candidate-host.txt
+if ($LASTEXITCODE -ne 0) { throw 'Acceptance host dependency installation failed' }
+$candidateBrowser = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
+if (-not (Test-Path -LiteralPath $candidateBrowser -PathType Leaf)) {
+  throw 'The approved installed Windows Edge executable is required'
+}
+```
+
 Then run the driver from that same clean source checkout. Replace the artifact
 path with the actual release-derived onedir directory produced by the wrapper;
 the output must be a new directory outside the source, fixture and package trees.
@@ -31,12 +45,13 @@ the output must be a new directory outside the source, fixture and package trees
 ```powershell
 $candidateSource = (Get-Location).Path
 $candidateHead = (git rev-parse HEAD).Trim()
-python scripts/qualify_windows_candidate_core.py `
+& $candidatePython scripts/qualify_windows_candidate_core.py `
   --source-checkout $candidateSource `
   --expected-source-sha $candidateHead `
   --artifact-dir 'C:\Metroliza acceptance\actual onedir' `
   --fixture-dir "$candidateSource\tests\fixtures\windows_candidate" `
   --oracle "$candidateSource\scripts\synthetic-report-oracle.json" `
+  --browser $candidateBrowser `
   --output-dir 'C:\Metroliza acceptance\new core receipt'
 ```
 
@@ -131,8 +146,16 @@ The same application scenario seeds two public synthetic industrial samples,
 opens realtime monitoring from the actual MainWindow, and uses its real debounced
 worker and private output owner to generate offline dashboard HTML. It checks
 source content, retains a byte-identical copy, and requires owned private output
-cleanup on close. The host independently checks the retained HTML and its hash;
-this establishes HTML generation, not browser rendering or DOM layout.
+cleanup on close. The host independently checks the retained HTML and its hash,
+then renders those exact bytes in the explicitly selected Windows browser through
+the pinned Playwright host tooling. The disposable browser profile runs offline,
+with its sandbox enabled and only the pinned local document allowed. Real DOM/JS
+and layout observations cover 1280x720 and 390x844 viewports, required sections,
+signal chart and sample points, containment and table scrolling. External resources,
+unexpected scripts, overflow, changed input bytes or incomplete browser/profile
+cleanup fail the gate. The host retains the separate `browser-observation.json`
+and its hash. The application receipt still records browser rendering as
+`not_assessed`: rendering belongs to this subsequent host observation.
 
 On Windows the slice also requires Windows QPA, a 1920x1080 physical display,
 and the requested DPR. It checks the main frame and actual industrial data,
@@ -141,13 +164,24 @@ focus access and overlapping bulk controls. Use `--dpi-scale 1.0`, `1.25`, and
 `1.5` in separate owned runs of the same immutable package. The driver rejects
 partial/source geometry observations as Windows evidence. A close refusal or a
 still-visible owner fails cleanup and retains the object instead of deleting it.
-Linux execution records geometry and browser rendering as `not_assessed`.
+Source execution records Windows geometry as `not_assessed`. A Linux browser
+receipt is source engineering evidence only and is rejected by the Windows host
+gate. The browser checks above still require execution on the final package.
+
+## OCR slice
+
+The application scenario also passes the pinned image-only-header PDF through the
+public parser and actual RapidOCR CPU inference. It binds the declared model
+assets and verifies extracted metadata provenance and measurements against an
+independent host oracle. The host retains `ocr-observation.json` and its hash.
+Existing source observations do not establish packaged Windows inference; run
+this check with the same final package used for the other core facets.
 
 ## Remaining acceptance boundaries
 
 This core receipt does not establish every active-work cancellation/close,
-reopening or drift path, inference beyond the fixed W06 case, offline dashboard rendering,
-packaged OCR inference, optional-native fallback parity, incident-menu behavior,
+reopening or drift path, inference beyond the fixed W06 case,
+optional-native fallback parity, incident-menu behavior,
 privacy negative paths beyond the observed owned-dashboard path, supported desktop geometry beyond the three named industrial dialogs, clean-machine launch or
 desktop Excel rendering. A one-group `insufficient_groups` result proves the
 specified grouping outcome; it does not prove inferential analysis.

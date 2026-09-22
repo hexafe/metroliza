@@ -2440,6 +2440,7 @@
         "scripts/synthetic-inference-oracle.json",
         "scripts/verify_group_inference.py",
         "scripts/verify_windows_candidate_ocr.py",
+        "scripts/verify_windows_candidate_dashboard.py",
         "scripts/windows_candidate_xlsx.py",
         "scripts/windows_owned_process_probe.py"
       ],

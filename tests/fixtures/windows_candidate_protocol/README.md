@@ -15,3 +15,5 @@ is qualified.
 The immutable public input PDFs and CSVs are in the adjacent
 `windows_candidate` fixture directory. Their seven hashes are enforced by the
 driver and application scenario.
+
+`browser-source-engineering-receipt.json` is a Linux Chromium/Playwright observation of the pinned HTML retained by the real joined source journey. It is a closed-protocol fixture, not Windows or package acceptance. Tests deliberately change individual fields to ensure stale/source/incomplete browser results cannot satisfy the final host gate.

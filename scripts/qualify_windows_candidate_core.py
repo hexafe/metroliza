@@ -516,6 +516,27 @@ def _prepare_paths(args) -> tuple[Path, Path, Path, Path]:
     return checkout, artifact, fixtures, output
 
 
+def _verify_dashboard_rendering(diag, output: Path, artifacts: dict, browser: Path) -> None:
+    verifier = _adjacent_module("verify_windows_candidate_dashboard.py", "_metroliza_candidate_browser_verifier")
+    dashboard = artifacts["private_dashboard"]
+    observations = []
+
+    def render(private):
+        observations.append(verifier.verify_dashboard(
+            output / dashboard["path"], dashboard["sha256"], browser, private
+        ))
+
+    diag._run_in_private_directory(render)
+    try:
+        result = verifier.validate_receipt(observations[0], dashboard["sha256"], require_windows=True)
+    except (ValueError, IndexError):
+        raise CandidateFailure("offline_browser_verification_failed") from None
+    path = output / "browser-observation.json"
+    with path.open("x", encoding="ascii") as stream:
+        json.dump(result, stream, sort_keys=True)
+    artifacts["browser_evidence"] = {"path": path.name, "sha256": _hash(path)}
+
+
 def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
                       output: Path, deadline: float, before: str) -> dict:
     relocated = diag._relocate_package(artifact, private, deadline)
@@ -593,6 +614,10 @@ def qualify(args) -> dict:
     if re.fullmatch(r"[0-9a-f]{40}", args.expected_source_sha) is None:
         raise CandidateFailure("invalid_expected_source_sha")
     checkout, artifact, fixtures, output = _prepare_paths(args)
+    try:
+        _adjacent_module("verify_windows_candidate_dashboard.py", "_metroliza_candidate_browser_verifier").check_host_runtime(args.browser)
+    except ValueError:
+        raise CandidateFailure("browser_host_prerequisite_missing") from None
     diag = _source_driver(checkout, args.expected_source_sha)
     identity = diag._validate_package(artifact)
     # The declared build writes the launcher sidecar; the adjacent child is
@@ -626,14 +651,15 @@ def qualify(args) -> dict:
         artifacts = diag._run_in_private_directory(guarded_run)
         if failures:
             raise failures[0]
+        _verify_dashboard_rendering(diag, output, artifacts, args.browser)
         result = {
             "schema_version": 1,
             "status": "passed",
-            "scope": list(REQUIRED_CHECKS),
+            "scope": [*REQUIRED_CHECKS, "offline_browser_dom_and_layout"],
             "source_sha": args.expected_source_sha,
             "ui_scale": args.dpi_scale,
             "native_geometry": "passed",
-            "offline_browser_rendering": "not_assessed",
+            "offline_browser_rendering": "passed",
             "source_tree": subprocess.check_output(
                 ["git", "rev-parse", "HEAD^{tree}"], cwd=checkout, text=True
             ).strip(),
@@ -641,7 +667,7 @@ def qualify(args) -> dict:
             "launcher_sha256": identity["launcher_sha256"],
             "application_sha256": identity["application_sha256"],
             "artifacts": artifacts,
-            "facets": {key: "passed" for key in REQUIRED_CHECKS},
+            "facets": dict.fromkeys((*REQUIRED_CHECKS, "offline_browser_dom_and_layout"), "passed"),
             "independent_oracle": "passed",
             "launch": "restricted_ordinary_user_native_windows_outside_checkout",
             "provenance_validated": bool(identity),
@@ -652,6 +678,7 @@ def qualify(args) -> dict:
             "verifier_sha256": _hash(Path(__file__).with_name("verify_synthetic_oracle.py")),
             "driver_sha256": _hash(Path(__file__)),
             "ocr_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_ocr.py")),
+            "browser_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_dashboard.py")),
             "ocr_fixture_sha256": _ocr_oracle().FIXTURE_SHA256,
             "literal_xlsx_verifier_sha256": _hash(Path(__file__).with_name("windows_candidate_xlsx.py")),
             "inference_oracle_sha256": _hash(Path(__file__).with_name("synthetic-inference-oracle.json")),
@@ -676,14 +703,14 @@ def qualify(args) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("source-checkout", "artifact-dir", "fixture-dir", "output-dir", "oracle"):
+    for name in ("source-checkout", "artifact-dir", "fixture-dir", "output-dir", "oracle", "browser"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--expected-source-sha", required=True)
     parser.add_argument("--dpi-scale", choices=("1.0", "1.25", "1.5"), default="1.0")
     args = parser.parse_args()
     try:
         qualify(args)
-        print(json.dumps({"status": "passed", "scope": list(REQUIRED_CHECKS)}))
+        print(json.dumps({"status": "passed", "scope": [*REQUIRED_CHECKS, "offline_browser_dom_and_layout"]}))
         return 0
     except CandidateFailure as error:
         print(json.dumps({"status": "failed", "reason": str(error)}))
