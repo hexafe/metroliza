@@ -199,6 +199,12 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "qualification_output_exists",
         "qualification_output_unavailable",
         "qualification_result_mismatch",
+        "qualification_packaged_flag_mismatch",
+        "qualification_console_streams_present",
+        "qualification_user_not_ordinary",
+        "qualification_integrity_not_medium",
+        "qualification_scenario_mismatch",
+        "qualification_stage_mismatch",
         "qualification_import_failed",
         "qualification_incident_missing",
         "qualification_measurements_missing",
@@ -2558,17 +2564,19 @@ def _validate_child_receipt(path: Path, scenario: str) -> dict[str, object]:
             "integrity_level",
         }:
             raise ValueError("invalid_receipt")
-        if (
-            payload["schema_version"] != 1
-            or type(payload["schema_version"]) is not int
-            or payload["scenario"] != scenario
-            or payload["stage"] not in {"startup_ready", "ready", "complete", "failed"}
-            or payload["packaged"] is not True
-            or payload["console_none"] is not True
-            or payload["ordinary_user"] is not True
-            or payload["integrity_level"] != "medium"
-        ):
+        if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
             raise ValueError("invalid_receipt")
+        checks = (
+            (payload["scenario"] == scenario, "qualification_scenario_mismatch"),
+            (payload["stage"] in {"startup_ready", "ready", "complete", "failed"}, "qualification_stage_mismatch"),
+            (payload["packaged"] is True, "qualification_packaged_flag_mismatch"),
+            (payload["console_none"] is True, "qualification_console_streams_present"),
+            (payload["ordinary_user"] is True, "qualification_user_not_ordinary"),
+            (payload["integrity_level"] == "medium", "qualification_integrity_not_medium"),
+        )
+        for passed, reason in checks:
+            if not passed:
+                raise QualificationFailure("scenario_failed", qualification_reason=reason)
         return payload
     except (OSError, ValueError, KeyError, TypeError):
         raise QualificationFailure(
