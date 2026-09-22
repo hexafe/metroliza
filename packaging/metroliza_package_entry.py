@@ -49,6 +49,14 @@ if __name__ == "__main__":
             scenario = requested_scenario()
             if scenario is not None:
                 code = run_qualification(scenario)
+            else:
+                from metroliza.app.windows_candidate_qualification import (
+                    requested_scenario as requested_candidate_scenario,
+                    run_qualification as run_candidate_qualification,
+                )
+
+                if requested_candidate_scenario() is not None:
+                    code = run_candidate_qualification()
         raise SystemExit(code)
     finally:
         if recorder is not None:
