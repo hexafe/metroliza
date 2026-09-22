@@ -103,11 +103,28 @@ def _select_names(model, names: set[str]) -> tuple[str, ...]:
     return selected
 
 
+def _check_duplicate_rows(model, expected_names) -> set[str]:
+    from PyQt6.QtCore import Qt
+    from metroliza.parsing.preflight import ParsePreflightStatus
+
+    duplicate_names = set()
+    for row in range(model.rowCount()):
+        item = model.item_at(row)
+        if item is not None and item.status is ParsePreflightStatus.DUPLICATE:
+            duplicate_names.add(item.display_name)
+            _require(not model.flags(model.index(row, 0))
+                     & Qt.ItemFlag.ItemIsUserCheckable, "duplicate_checkable")
+            _require(not model.setData(model.index(row, 0), Qt.CheckState.Checked,
+                                       Qt.ItemDataRole.CheckStateRole), "duplicate_selected")
+    _require(duplicate_names == expected_names and len(model.selected_ids) == 3,
+             "duplicate_review_mismatch")
+    return duplicate_names
+
+
 def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
-    from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, Qt
+    from PyQt6.QtCore import QCoreApplication, QEvent, QSettings
     from metroliza.app.windows_candidate_qualification import ScenarioFailure, _stage_reports
     from metroliza.parsing import parse_reports_thread
-    from metroliza.parsing.preflight import ParsePreflightStatus
     from metroliza.ui.main_window import MainWindow
     from metroliza.ui.ui_preferences import UiPreferences
 
@@ -165,17 +182,7 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
 
         workspace.report_planner.search.clear()
         _review(app, workspace, ready=3, code="duplicate_review")
-        duplicate_names = set()
-        for row in range(model.rowCount()):
-            item = model.item_at(row)
-            if item is not None and item.status is ParsePreflightStatus.DUPLICATE:
-                duplicate_names.add(item.display_name)
-                _require(not model.flags(model.index(row, 0))
-                         & Qt.ItemFlag.ItemIsUserCheckable, "duplicate_checkable")
-                _require(not model.setData(model.index(row, 0), Qt.CheckState.Checked,
-                                           Qt.ItemDataRole.CheckStateRole), "duplicate_selected")
-        _require(duplicate_names == expected_names and len(model.selected_ids) == 3,
-                 "duplicate_review_mismatch")
+        duplicate_names = _check_duplicate_rows(model, expected_names)
         _require(_committed_unchanged(database, committed), "duplicate_review_changed_database")
         result["facets"]["duplicate_review"] = "passed"
         result["evidence"]["duplicate_count"] = len(duplicate_names)

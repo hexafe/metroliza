@@ -363,6 +363,37 @@ def _run_core(root: Path, fixtures: Path, receipt: dict[str, Any], app) -> None:
         app.processEvents()
 
 
+def _run_ui_slice(child: Path, receipt: dict[str, Any]) -> None:
+    from metroliza.app.windows_candidate_ui_checks import run_ui_checks
+    scale = os.environ.get("METROLIZA_WINDOWS_CANDIDATE_DPR", "1.0")
+    if scale not in {"1.0", "1.25", "1.5"}:
+        raise ScenarioFailure("invalid_ui_scale")
+    ui = run_ui_checks(child, expected_dpr=float(scale))
+    receipt["ui_observation"] = ui
+    expected_ui = {
+        "private_dashboard_generation": "passed", "offline_html_source": "passed",
+        "industrial_geometry": "passed" if sys.platform == "win32" else "not_assessed",
+        "browser_rendering": "not_assessed",
+    }
+    if (ui.get("facets") != expected_ui or ui.get("error_codes") != []
+            or ui.get("status") != ("passed" if sys.platform == "win32" else "partial")):
+        raise ScenarioFailure("ui_checks_failed")
+    receipt["facets"].update({key: "passed" for key in (
+        "private_dashboard_generation", "offline_html_source",
+    )})
+
+
+def _run_import_guards_slice(child: Path, fixtures: Path, receipt: dict[str, Any]) -> None:
+    from metroliza.app.windows_candidate_import_guards import FACETS, run_import_guard_checks
+    guards = run_import_guard_checks(child, fixtures)
+    if (guards.get("status") != "passed"
+            or guards.get("facets") != dict.fromkeys(FACETS, "passed")
+            or guards.get("error_codes") != []):
+        raise ScenarioFailure("import_guard_checks_failed")
+    receipt["facets"].update(guards["facets"])
+    receipt["import_guard_evidence"] = guards["evidence"]
+
+
 def run_qualification() -> int:
     if requested_scenario() != SCENARIO:
         return 20
@@ -430,31 +461,8 @@ def run_qualification() -> int:
             raise ScenarioFailure("group_inference_checks_failed")
         receipt["artifacts"].update(inference["artifacts"])
         receipt["facets"].update(inference["facets"])
-        from metroliza.app.windows_candidate_import_guards import FACETS, run_import_guard_checks
-        guards = run_import_guard_checks(child, fixtures)
-        if (guards.get("status") != "passed"
-                or guards.get("facets") != dict.fromkeys(FACETS, "passed")
-                or guards.get("error_codes") != []):
-            raise ScenarioFailure("import_guard_checks_failed")
-        receipt["facets"].update(guards["facets"])
-        receipt["import_guard_evidence"] = guards["evidence"]
-        from metroliza.app.windows_candidate_ui_checks import run_ui_checks
-        scale = os.environ.get("METROLIZA_WINDOWS_CANDIDATE_DPR", "1.0")
-        if scale not in {"1.0", "1.25", "1.5"}:
-            raise ScenarioFailure("invalid_ui_scale")
-        ui = run_ui_checks(child, expected_dpr=float(scale))
-        receipt["ui_observation"] = ui
-        expected_ui = {
-            "private_dashboard_generation": "passed", "offline_html_source": "passed",
-            "industrial_geometry": "passed" if sys.platform == "win32" else "not_assessed",
-            "browser_rendering": "not_assessed",
-        }
-        if (ui.get("facets") != expected_ui or ui.get("error_codes") != []
-                or ui.get("status") != ("passed" if sys.platform == "win32" else "partial")):
-            raise ScenarioFailure("ui_checks_failed")
-        receipt["facets"].update({key: "passed" for key in (
-            "private_dashboard_generation", "offline_html_source",
-        )})
+        _run_import_guards_slice(child, fixtures, receipt)
+        _run_ui_slice(child, receipt)
         receipt["stage"] = "complete"
         receipt["status"] = "passed"
         receipt["checks"].update({"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"})
