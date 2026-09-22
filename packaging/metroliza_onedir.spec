@@ -13,9 +13,11 @@ sys.path.insert(0, str(ROOT_DIR / "src"))
 from pyinstaller_common import (
     ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES,
     build_pyinstaller_collection,
+    collect_setuptools_hook_metadata,
     filter_onedir_hiddenimports,
     onedir_binary_scanner_probe,
     read_version_label,
+    validate_setuptools_runtime_hook,
 )
 
 VERSION_LABEL = read_version_label(ROOT_DIR)
@@ -26,6 +28,11 @@ if SUPERVISED_WINDOWS:
     EXE_NAME = "metroliza_application"
 ICON_PATH = SPEC_DIR / "metroliza_icon2.ico"
 COLLECTION = build_pyinstaller_collection(ROOT_DIR)
+WINDOWS_HOOKS = SPEC_DIR / "hooks" / "windows"
+if SUPERVISED_WINDOWS:
+    # Read this bundled distribution's version without importing its compiler
+    # integration during GUI startup (which invokes a Windows version shell).
+    COLLECTION["datas"] += collect_setuptools_hook_metadata()
 
 
 # Windows builds preload ONNX Runtime after scanner path tracking begins. The
@@ -38,7 +45,7 @@ with onedir_binary_scanner_probe():
         binaries=COLLECTION["binaries"],
         datas=COLLECTION["datas"],
         hiddenimports=filter_onedir_hiddenimports(COLLECTION["hiddenimports"]),
-        hookspath=[],
+        hookspath=[str(WINDOWS_HOOKS)] if SUPERVISED_WINDOWS else [],
         hooksconfig={},
         runtime_hooks=[],
         excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES),
@@ -47,6 +54,8 @@ with onedir_binary_scanner_probe():
         cipher=block_cipher,
         noarchive=False,
     )
+if SUPERVISED_WINDOWS:
+    validate_setuptools_runtime_hook(a.scripts, WINDOWS_HOOKS)
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

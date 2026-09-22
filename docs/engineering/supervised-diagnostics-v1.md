@@ -17,6 +17,16 @@ The manifest is build provenance and consistency evidence, not a cryptographic s
 Frozen entrypoints preserve the bundled loader's import paths. Adding the repository source
 directory is confined to direct source execution.
 
+The Windows onedir replaces PyInstaller's eager setuptools runtime hook with the same
+distutils-shim policy using bundled distribution metadata. The original 6.22.3 hook imports
+the compiler integrations to obtain a version; setuptools 65.5.0's import queries
+`platform.system()`, whose Python 3.11 Windows implementation invokes a `cmd /c ver`
+probe. The replacement preserves the version-dependent default, environment override and
+optional-failure behavior without that import. The build checks module/metadata identity
+and rejects a missing, duplicate or surviving upstream hook. Native positive and negative
+controls compare the original hook and the replacement; packaged process acceptance stays
+strict and does not admit shell helpers on their names alone.
+
 The supervisor retains the `Popen` identity of its launched child. Two anonymous inherited pipes
 carry a fresh session ID and challenge/response token; Windows uses an explicit handle inheritance
 list. There is no listener, service, executable search through PATH or automatic restart.

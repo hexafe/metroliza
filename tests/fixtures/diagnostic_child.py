@@ -14,6 +14,16 @@ from metroliza.shared.diagnostic_events import (
 from metroliza.shared.diagnostic_transport import attach_child_recorder
 
 
+def await_authenticated_marker(path: Path) -> bool:
+    # A test-owned barrier, never a store file or a production launch behavior.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if path.is_file():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def main():
     scenario = sys.argv[1]
     if scenario == "early_exit":
@@ -26,6 +36,11 @@ def main():
         StartupCallsite.BOOTSTRAP, StartupOutcome.INVOCATION_STARTED,
     )
     recorder.enqueue(event)
+    if scenario in {"normal_after_marker", "hard_exit_after_marker"}:
+        if not await_authenticated_marker(Path(sys.argv[2])):
+            recorder.close()
+            return 10
+        scenario = "normal" if scenario == "normal_after_marker" else "hard_exit"
     # Allow the actual transport worker to deliver the safe event before loss.
     time.sleep(0.05)
     if scenario == "duplicate":
