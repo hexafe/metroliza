@@ -193,6 +193,8 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "invalid_qualification_root",
         "invalid_qualification_arguments",
         "qualification_barrier_timeout",
+        "runtime_ready_timeout",
+        "runtime_audit_invalid",
         "qualification_fixture_mismatch",
         "qualification_output_exists",
         "qualification_output_unavailable",

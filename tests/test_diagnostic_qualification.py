@@ -419,3 +419,84 @@ def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
         assert set(bundle.namelist()) == {"incident.json", "manifest.json", "summary.json"}
         incident = json.loads(bundle.read("incident.json"))
         assert incident["session_id"] == crashed.observation.session_id
+
+
+def test_real_qualification_work_waits_for_host_to_observe_startup(tmp_path, monkeypatch):
+    import threading
+    import time
+    from metroliza.shared import diagnostic_runtime_audit as audit
+    from scripts.windows_owned_process_probe import RuntimeEvidence
+    from types import SimpleNamespace
+
+    journal = tmp_path / "audit"
+    journal.mkdir()
+    nonce = "a" * 32
+    audit._write(journal, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(journal))
+    monkeypatch.setenv(audit.NONCE, nonce)
+    monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", "normal")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", str(tmp_path))
+    evidence = object.__new__(RuntimeEvidence)
+    evidence.root = journal
+    evidence.nonce = nonce
+    evidence.root_identity = evidence._identity()
+    evidence.failure_factory = lambda: ValueError("synthetic failure")
+    evidence.probe = SimpleNamespace(phase="startup")
+    work_phases = []
+    host_observed = []
+
+    def work(*_args):
+        work_phases.append(evidence.probe.phase)
+        assert evidence.probe.phase == "running"
+
+    def host():
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if (tmp_path / "startup.json").exists():
+                time.sleep(0.05)  # Host scheduling delay must not relabel work as startup.
+                host_observed.append(list(work_phases))
+                evidence.ready()
+                return
+            time.sleep(0.005)
+
+    monkeypatch.setattr(diagnostic_qualification, "_run_work", work)
+    observer = threading.Thread(target=host)
+    observer.start()
+    try:
+        result = diagnostic_qualification.run_qualification("normal")
+    finally:
+        observer.join(timeout=6)
+    assert not observer.is_alive()
+    assert host_observed == [[]]
+    assert result == 0
+    assert work_phases == ["running"]
+
+
+@pytest.mark.parametrize("fault,reason", [("absent", "runtime_ready_timeout"), ("directory", "runtime_audit_invalid")])
+def test_runtime_ack_failure_never_enters_work_and_is_closed_on_host(tmp_path, monkeypatch, fault, reason):
+    from metroliza.shared import diagnostic_runtime_audit as audit
+    from scripts import qualify_windows_diagnostics as host
+
+    journal = tmp_path / "audit"
+    journal.mkdir()
+    nonce = "a" * 32
+    audit._write(journal, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+    if fault == "directory":
+        (journal / "ready").mkdir()
+    monkeypatch.setenv(audit.GATE, "1")
+    monkeypatch.setenv(audit.ROOT, str(journal))
+    monkeypatch.setenv(audit.NONCE, nonce)
+    monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", "normal")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", str(tmp_path))
+    monkeypatch.setattr(diagnostic_qualification, "_run_work", lambda *_: pytest.fail("work ran before valid host ack"))
+    wait = audit.wait_for_host_ready
+    monkeypatch.setattr(audit, "wait_for_host_ready", lambda: wait(seconds=0 if fault == "absent" else 1))
+    assert diagnostic_qualification.run_qualification("normal") == 21
+    assert host._validate_child_failure(tmp_path / "failure.json") == {
+        "schema_version": 1, "stage": "receipt", "reason": reason,
+    }
+    assert not (tmp_path / "qualification-ready.json").exists()
+    assert not (tmp_path / "qualification-complete.json").exists()
