@@ -6081,3 +6081,84 @@ def test_native_source_window_process_dependencies_are_observed(tmp_path, monkey
     assert completed and diagnostic["cleanup"] == "complete", (
         "source_window_process_dependencies=" + json.dumps(diagnostic, sort_keys=True)
     )
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("packaged", False, "qualification_packaged_flag_mismatch"),
+    ("console_none", False, "qualification_console_streams_present"),
+    ("ordinary_user", False, "qualification_user_not_ordinary"),
+    ("integrity_level", "unavailable", "qualification_integrity_not_medium"),
+    ("scenario", "SYNTHETIC_PRIVATE_SCENARIO", "qualification_scenario_mismatch"),
+    ("stage", "SYNTHETIC_PRIVATE_STAGE", "qualification_stage_mismatch"),
+])
+def test_child_receipt_rejection_names_only_the_fixed_failed_predicate(tmp_path, field, value, reason):
+    payload = {"schema_version": 1, "scenario": "normal", "stage": "startup_ready",
+               "packaged": True, "console_none": True, "ordinary_user": True, "integrity_level": "medium"}
+    path = tmp_path / "startup.json"
+    path.write_text(json.dumps(payload))
+    assert qualification._validate_child_receipt(path, "normal") == payload
+    payload[field] = value
+    path.write_text(json.dumps(payload))
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        qualification._validate_child_receipt(path, "normal")
+    assert caught.value.qualification_reason == reason
+    assert reason in qualification.QUALIFICATION_FAILURE_REASONS
+    assert "SYNTHETIC_PRIVATE" not in str(caught.value)
+    assert "SYNTHETIC_PRIVATE" not in reason
+
+
+@pytest.mark.skipif(os.name != "nt", reason="actual Windows GUI Python and production supervised spawn")
+@pytest.mark.parametrize("mode", ["direct", "supervised", "attached"])
+def test_native_gui_stdio_facts_distinguish_redirected_handles_from_console(tmp_path, monkeypatch, mode):
+    import subprocess
+
+    pythonw = Path(sys.executable).resolve().with_name("pythonw.exe")
+    assert qualification._pe_subsystem(pythonw) == 2
+    fixture = Path(__file__).parent / "fixtures/windows_stream_control.py"
+    output = tmp_path / "stream-facts.json"
+    command = subprocess.list2cmdline([str(pythonw), str(fixture), str(output), mode])
+    api = qualification._WindowsApi()
+    advapi = api.advapi
+
+    class FixedControl:
+        def __getattr__(self, name):
+            return getattr(advapi, name)
+
+        def CreateProcessAsUserW(self, *args):
+            values = list(args)
+            values[2] = ctypes.create_unicode_buffer(command)
+            return advapi.CreateProcessAsUserW(*values)
+
+        def CreateProcessWithTokenW(self, *args):
+            values = list(args)
+            values[3] = ctypes.create_unicode_buffer(command)
+            return advapi.CreateProcessWithTokenW(*values)
+
+    monkeypatch.setattr(api, "advapi", FixedControl())
+    environment = qualification._sanitized_environment(tmp_path, tmp_path, tmp_path / "state", "normal")
+    owned = []
+    complete = False
+    try:
+        process = api.launch(pythonw, environment, tmp_path, owned=owned)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            code = process.poll()
+            if code is not None and process.active_processes() == 0:
+                complete = True
+                break
+            time.sleep(0.005)
+        assert complete and code == 0
+    finally:
+        qualification._close_owned_processes(owned, terminate=not complete)
+    facts = json.loads(output.read_bytes())
+    print("native_gui_stream_control=" + json.dumps({"mode": mode, **facts}, sort_keys=True))
+    assert facts["schema_version"] == 1
+    if mode == "attached":
+        assert facts["console_state"] == "attached" and facts["console_window"] is True
+    elif mode == "direct":
+        assert facts == {"schema_version": 1, "console_state": "absent", "console_window": False,
+                         "stdout_none": True, "stderr_none": True, "stdout_handle": "none", "stderr_handle": "none"}
+    else:
+        assert facts == {"schema_version": 1, "console_state": "absent", "console_window": False,
+                         "stdout_none": False, "stderr_none": False,
+                         "stdout_handle": "character_nonconsole", "stderr_handle": "character_nonconsole"}
