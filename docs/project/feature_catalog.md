@@ -26,6 +26,13 @@ line already contains substantial implementations. A capability remains open unt
 release contract, acceptance tests, documentation, diagnostics, compatibility behavior, and
 release evidence are complete.
 
+### Corrective quality trackers
+
+[#1018](https://github.com/hexafe/metroliza/issues/1018) corrects evidenced desktop geometry in
+the cache-first industrial source workflow and its scalable keyboard/accessibility surface. It
+supports the existing #940 and #946 capability rows; it is not a new product capability or a
+strict prerequisite, so the #926–#957 inventory and dependency graph remain unchanged.
+
 ## Maturity legend
 
 | Maturity | Meaning |
@@ -90,15 +97,30 @@ viewer without qualifying its packaged preview/export.
 | Cache-first Oznak/production-source configuration, bounded fetch, local analysis, and source freshness | [#940](https://github.com/hexafe/metroliza/issues/940) | Release-candidate | 4 | #930, #931, #932, #939, #944, #952 |
 | Operator-ready realtime monitoring, explainable anomaly review, replay, offsets, and recovery | [#941](https://github.com/hexafe/metroliza/issues/941) | Release-candidate / controlled experimental slice | 4 | #919, #940, #930, #937, #944, #952 |
 
+Within #941, [#1054](https://github.com/hexafe/metroliza/issues/1054) owns the bounded
+asynchronous dashboard scheduling regression: observable deferred startup, coalescing and closing.
+Its native continuation owns the protected, pinned temporary dashboard directory and generated
+HTML privacy checks, controlled creation failure and owned cleanup; shared filesystem policy is separate.
+Its source/native test evidence does not establish packaged or operational acceptance.
+
 ## 6. Automation, traceability, diagnostics, and support
 
 | Capability | Issue | Current maturity | Target phase | Strict prerequisites |
 |---|---:|---|---|---|
 | Supported headless CLI for preflight, import, analysis, export, replay, and validation | [#942](https://github.com/hexafe/metroliza/issues/942) | Planned / partial scripts | 5 | #912, #916, #926, #927, #935, #936, #937 |
 | Watched folders and scheduled local analysis jobs with quarantine and run manifests | [#943](https://github.com/hexafe/metroliza/issues/943) | Planned | 5 | #942, #926, #927, #935, #944, #949 |
-| Sanitized diagnostic bundle for support and Issue reporting | [#944](https://github.com/hexafe/metroliza/issues/944) | Partial diagnostics | 1 and 5 | #917, #920 |
+| Safe diagnostic foundation and supervised local incidents for support | [#944](https://github.com/hexafe/metroliza/issues/944) | Partial foundation; supervised V1 Planned / direction accepted | 1 and 5 | #917, #920 |
 | Analysis run history, provenance, artifact hashes, and reproducibility manifest | [#949](https://github.com/hexafe/metroliza/issues/949) | Partial / planned | 5 | #917, #926, #935, #942, #944 |
 | Contextual onboarding, local manuals, disabled-state explanations, and troubleshooting | [#955](https://github.com/hexafe/metroliza/issues/955) | Partial | 7 | #945, #944, #902, #920 |
+
+The [#944 V1 direction accepted by the PO](https://github.com/hexafe/metroliza/issues/1037#issuecomment-5625839939)
+builds on the integrated #1011 safe-event/managed-log foundation. The first bounded slice,
+[S1a #1039](https://github.com/hexafe/metroliza/issues/1039), adds correlated startup/build facts to
+existing logs; it does not implement crash survival or change logging destinations/retention.
+Delivery proceeds through selected import/export S1b, supervisor/store with source and Windows
+onedir qualification, then preview/export and explicit managed-log migration. Other packagers,
+responsiveness and sensitive native capture require separate gates; complete #944 and Windows V1
+remain unimplemented and are not release-qualified by S1a.
 
 ## 7. Application UX and accessibility
 
