@@ -1053,6 +1053,7 @@ def test_interrupted_final_current_token_close_attempts_restricted_cleanup(
     api._set_medium_integrity = lambda _token: None
     api._integrity_rid = lambda _token: qualification.MEDIUM_INTEGRITY_RID
     api._has_effective_admin_membership = lambda _token, _sid: False
+    api._set_private_default_dacl = lambda _token: None
     monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
 
     with pytest.raises(failure_type) as caught:
@@ -5536,3 +5537,71 @@ def test_native_windows_matches_and_closes_test_owned_qt_main_window() -> None:
         modal.close()
         window.close()
         application.processEvents()
+
+
+@pytest.mark.parametrize("observed_kind", ["exact", "null", "outside", "changed", "short"])
+def test_private_token_default_dacl_requires_nonnull_exact_readback(observed_kind):
+    from types import SimpleNamespace
+
+    api = object.__new__(qualification._WindowsApi)
+    acl = ctypes.create_string_buffer(b"fixed-private-acl")
+    api._private_default_acl = lambda token: acl
+    observed = ctypes.create_string_buffer(ctypes.sizeof(ctypes.c_void_p) + len(acl))
+    acl_address = ctypes.addressof(observed) + ctypes.sizeof(ctypes.c_void_p)
+    ctypes.memmove(acl_address, acl, len(acl))
+    ctypes.cast(observed, ctypes.POINTER(ctypes.c_void_p))[0] = acl_address
+    if observed_kind == "null":
+        ctypes.cast(observed, ctypes.POINTER(ctypes.c_void_p))[0] = None
+    elif observed_kind == "outside":
+        ctypes.cast(observed, ctypes.POINTER(ctypes.c_void_p))[0] = 1
+    elif observed_kind == "changed":
+        ctypes.memset(acl_address, 0, len(acl))
+    elif observed_kind == "short":
+        observed = ctypes.create_string_buffer(1)
+    api._token_information = lambda token, kind: observed
+    applied = []
+
+    def apply(token, kind, pointer, size):
+        assert token == 17
+        assert kind == qualification.TOKEN_DEFAULT_DACL
+        assert size == ctypes.sizeof(ctypes.c_void_p)
+        acl_pointer = ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p)).contents.value
+        assert acl_pointer
+        applied.append(ctypes.string_at(acl_pointer, len(acl)))
+        return True
+
+    api.advapi = SimpleNamespace(SetTokenInformation=apply)
+    if observed_kind == "exact":
+        api._set_private_default_dacl(17)
+    else:
+        with pytest.raises(qualification.QualificationFailure, match="restricted_launch_unavailable"):
+            api._set_private_default_dacl(17)
+    assert applied == [acl.raw]
+
+
+def test_private_token_default_dacl_rejects_failed_apply_before_query():
+    from types import SimpleNamespace
+
+    api = object.__new__(qualification._WindowsApi)
+    api._private_default_acl = lambda token: ctypes.create_string_buffer(b"private")
+    api.advapi = SimpleNamespace(SetTokenInformation=lambda *args: False)
+    api._token_information = lambda *args: pytest.fail("failed apply must not become acceptance")
+    with pytest.raises(qualification.QualificationFailure, match="restricted_launch_unavailable"):
+        api._set_private_default_dacl(17)
+
+
+@pytest.mark.parametrize("reported", [0, 257])
+def test_token_information_rejects_unbounded_allocation(reported):
+    from types import SimpleNamespace
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+
+    def query(token, kind, output, length, required):
+        assert output is None
+        ctypes.cast(required, ctypes.POINTER(ctypes.c_uint32))[0] = reported
+        return False
+
+    api.advapi = SimpleNamespace(GetTokenInformation=query)
+    with pytest.raises(qualification.QualificationFailure, match="restricted_launch_unavailable"):
+        api._token_information(17, qualification.TOKEN_USER)
