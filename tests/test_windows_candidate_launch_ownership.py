@@ -11,6 +11,8 @@ import pytest
 
 from scripts import qualify_windows_candidate_core as driver
 from scripts import qualify_windows_diagnostics as diagnostics
+from scripts import windows_owned_process_probe as owned_probe
+from metroliza.app import windows_candidate_qualification as application
 
 
 def _interrupt_after_launch_before_store(code, primary, action) -> None:
@@ -53,10 +55,13 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     primary = KeyboardInterrupt("candidate-transfer")
     secondary = SystemExit("cleanup-interrupt")
     closed = []
+    evidence = []
 
     class Process:
         def close(self, *, terminate):
             closed.append(terminate)
+            for item in evidence:
+                item.close()
             raise secondary
 
     process = Process()
@@ -64,7 +69,16 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     class Api:
         def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
             if owned is not None:
-                scratch = _cwd / "temporary files"
+                item = diagnostics._WindowsApi._prepare_runtime_evidence(
+                    self, _executable, expected_images, _cwd, _environment, None
+                )
+                assert item is not None and item.root.parent == _cwd
+                evidence.append(item)
+                with monkeypatch.context() as launch_environment:
+                    launch_environment.setenv(application.ROOT_ENV, _environment[application.ROOT_ENV])
+                    root = application._root()
+                    assert root != _cwd and root.parent == _cwd.parent
+                scratch = _cwd.parent / "temporary files"
                 assert scratch.is_dir()
                 assert all(_environment[key] == str(scratch) for key in ("TEMP", "TMP", "TMPDIR"))
                 assert expected_images == (_executable, _executable.with_name("metroliza_application.exe"))
@@ -81,9 +95,15 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
 
     monkeypatch.setattr(driver, "_stage_known_fixtures", lambda _fixtures, private: private)
     monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda _checkout, private: private / "ocr.pdf")
+    monkeypatch.setattr(
+        owned_probe, "OwnedProcessProbe",
+        lambda *_args: SimpleNamespace(phase="startup", emit=lambda: None),
+    )
     diag = SimpleNamespace(
         _relocate_package=lambda _artifact, private, _deadline: private / "relocated",
-        _sanitized_environment=lambda *_args: {},
+        _sanitized_environment=lambda *args: diagnostics._sanitized_environment(
+            *args, inherited={"SYSTEMROOT": str(tmp_path / "Windows")}
+        ),
         _WindowsApi=lambda: api,
         _close_owned_processes=diagnostics._close_owned_processes,
     )
@@ -103,3 +123,4 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
 
     assert current.value is primary
     assert closed == [True]
+    assert len(evidence) == 1 and not evidence[0].root.exists()

@@ -522,9 +522,11 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     staged_fixtures = _stage_known_fixtures(fixtures, private)
     staged_ocr = _stage_ocr_fixture(args.source_checkout, private)
     work = private / "core scenario"
+    launch_cwd = private / "launcher work"
     state = private / "ordinary user state"
     work.mkdir()
-    scratch_temp = work / "temporary files"
+    launch_cwd.mkdir()
+    scratch_temp = private / "temporary files"
     scratch_temp.mkdir()
     (state / "Roaming").mkdir(parents=True)
     environment = diag._sanitized_environment(relocated, work, state, "idle")
@@ -546,7 +548,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     terminate = True
     try:
         process = diag._WindowsApi().launch(
-            relocated / "metroliza.exe", environment, work, owned=owned,
+            relocated / "metroliza.exe", environment, launch_cwd, owned=owned,
             expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
         )
         while time.monotonic() < deadline:
