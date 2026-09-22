@@ -162,6 +162,31 @@ def test_snapshot_discards_foreign_rows_and_closes_handle(monkeypatch, tmp_path)
     assert closed == [99, 99, 99]
 
 
+def test_second_probe_preserves_first_probe_ctypes_snapshot_calls(monkeypatch, tmp_path):
+    first, api, closed = _probe(monkeypatch, tmp_path)
+
+    def row(_snapshot, pointer):
+        entry = ctypes.cast(pointer, ctypes.POINTER(first.Entry)).contents
+        entry.th32ProcessID, entry.th32ParentProcessID = 44, 55
+        return True
+
+    # Real ctypes parameter conversion, unlike the ordinary Python API fake:
+    # redeclaring a DLL call with a different Structure class rejects old pointers.
+    callback = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+    api.kernel.Process32FirstW = callback(row)
+    api.kernel.Process32NextW = callback(lambda *_: False)
+    second = OwnedProcessProbe(
+        api, tmp_path / "other-package",
+        lambda: qualification.QualificationFailure("scenario_failed"),
+    )
+    assert first._parent_hint(44, (44, 55)) == 55
+    assert second._parent_hint(44, (44, 55)) == 55
+    assert first._parent_hint(44, (44,)) is None
+    assert not first.unavailable and not second.unavailable
+    assert first.records is not second.records
+    assert closed == [99, 99, 99]
+
+
 def test_probe_snapshot_cleanup_failure_remains_fatal(monkeypatch, tmp_path):
     probe, api, _ = _probe(monkeypatch, tmp_path)
     def fail_close(_):

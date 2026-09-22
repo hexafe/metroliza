@@ -19,7 +19,7 @@ from metroliza.shared.diagnostic_events import (
     WorkflowStage,
 )
 from metroliza.shared.diagnostic_ring import DiagnosticRing
-from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
+from metroliza.shared.diagnostic_store import IncidentStore, StoreResult, StoreStatus
 from metroliza.shared.diagnostic_wire import encode_event
 
 
@@ -377,26 +377,23 @@ def test_transient_cross_process_store_lock_does_not_lose_live_incident(tmp_path
         lock.release()
 
 
-def test_final_incident_retries_real_store_lock_within_close_deadline(
+def test_final_incident_retries_one_lock_denial_then_real_publication_within_close_deadline(
     tmp_path, monkeypatch
 ):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
-    from metroliza.shared.diagnostic_store import _StoreLock
-
     store = IncidentStore(tmp_path / "state")
     assert store.list_reports().status is StoreStatus.AVAILABLE
-    lock = _StoreLock(store.root)
-    assert lock.acquire()
     observed = replace(_live_observation(), termination="observed_exit", exit_code=9)
-    first_finished = threading.Event()
     attempted_statuses = []
     original_publish = store.publish
 
     def recorded_publish(incident):
-        result = original_publish(incident)
+        # Retry policy is separate from the real store's 0.25s lock wait.
+        # Held-lock denial/no partial file and over-deadline close have their
+        # own real-lock controls. The accepted retry still writes the real store.
+        result = (StoreResult(StoreStatus.LOCK_UNAVAILABLE)
+                  if not attempted_statuses else original_publish(incident))
         attempted_statuses.append(result.status)
-        if len(attempted_statuses) == 1:
-            first_finished.set()
         return result
 
     def unnecessary_marker_call(*_args, **_kwargs):
@@ -407,19 +404,12 @@ def test_final_incident_retries_real_store_lock_within_close_deadline(
     monkeypatch.setattr(store, "authenticate_session", unnecessary_marker_call)
     publisher = _OperationPublisher(store, "unknown", observed.session_id)
     assert publisher.start()
-    statuses = []
-    closer = threading.Thread(target=lambda: statuses.append(publisher.close(observed)))
-    closer.start()
     try:
-        assert first_finished.wait(0.6)
-        assert attempted_statuses == [StoreStatus.LOCK_UNAVAILABLE]
-        lock.release()
-        closer.join(1)
+        status = publisher.close(observed)
     finally:
-        lock.release()
-        closer.join(1)
+        publisher.worker.join(1)
 
-    assert statuses == [StoreStatus.SAVED]
+    assert status is StoreStatus.SAVED
     assert attempted_statuses == [StoreStatus.LOCK_UNAVAILABLE, StoreStatus.SAVED]
     reports = store.list_reports().reports
     assert len(reports) == 1
@@ -431,12 +421,10 @@ def test_final_incident_retries_real_store_lock_within_close_deadline(
     assert store.list_unclean_sessions().sessions == ()
 
 
-def test_clean_marker_retries_real_store_lock_within_close_deadline(
+def test_clean_marker_retries_one_lock_denial_then_real_end_within_close_deadline(
     tmp_path, monkeypatch
 ):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
-    from metroliza.shared.diagnostic_store import _StoreLock
-
     store = IncidentStore(tmp_path / "state")
     assert store.list_reports().status is StoreStatus.AVAILABLE
     observed = replace(
@@ -452,33 +440,22 @@ def test_clean_marker_retries_real_store_lock_within_close_deadline(
     assert publisher._ensure_authenticated() is StoreStatus.MARKER_AUTHENTICATED
     assert publisher.start()
     marker = store.root / f"marker-{observed.session_id}.json"
-    lock = _StoreLock(store.root)
-    assert lock.acquire()
-    first_finished = threading.Event()
     attempted_statuses = []
     original_end = store.end_session
 
     def recorded_end(*args, **kwargs):
-        result = original_end(*args, **kwargs)
+        result = (StoreResult(StoreStatus.LOCK_UNAVAILABLE)
+                  if not attempted_statuses else original_end(*args, **kwargs))
         attempted_statuses.append(result.status)
-        if len(attempted_statuses) == 1:
-            first_finished.set()
         return result
 
     monkeypatch.setattr(store, "end_session", recorded_end)
-    statuses = []
-    closer = threading.Thread(target=lambda: statuses.append(publisher.close(observed)))
-    closer.start()
     try:
-        assert first_finished.wait(0.6)
-        assert attempted_statuses == [StoreStatus.LOCK_UNAVAILABLE]
-        lock.release()
-        closer.join(1)
+        status = publisher.close(observed)
     finally:
-        lock.release()
-        closer.join(1)
+        publisher.worker.join(1)
 
-    assert statuses == [StoreStatus.MARKER_CLEAN_ENDED]
+    assert status is StoreStatus.MARKER_CLEAN_ENDED
     assert attempted_statuses == [
         StoreStatus.LOCK_UNAVAILABLE,
         StoreStatus.MARKER_CLEAN_ENDED,
