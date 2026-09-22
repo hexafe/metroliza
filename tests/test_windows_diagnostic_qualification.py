@@ -5444,7 +5444,7 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path, 
             if exit_code is not None:
                 break
             time.sleep(0.02)
-        assert exit_code is not None
+        assert exit_code == 0, {"native_whoami_exit_code": exit_code}
         process.observe()
         while time.monotonic() < deadline and process.active_processes() != 0:
             time.sleep(0.02)
@@ -5454,8 +5454,14 @@ def test_native_windows_restricted_token_job_launches_without_console(tmp_path, 
         # Retain only the existing fixed-schema observer detail. This remains
         # a failing gate; raw image paths, PID and exception text stay private.
         detail = error.native_observation
+        # Query only the already-owned primary handle, without an extra wait.
+        try:
+            primary_exit = process.poll()
+        except qualification.QualificationFailure:
+            primary_exit = "unavailable"
         pytest.fail("native_token_job_observation=" + json.dumps({
             "rejected_images": rejected_images[:16],
+            "primary_exit_code": primary_exit,
             "reason": error.qualification_reason,
             "native_observation": detail.receipt() if detail is not None else None,
         }, sort_keys=True), pytrace=False)
