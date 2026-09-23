@@ -4921,6 +4921,38 @@ def test_missing_qt_negative_control_revalidates_reused_hwnd(replacement) -> Non
     assert api.user.posted == []
 
 
+@pytest.mark.parametrize("disappears", (False, True))
+def test_missing_qt_revalidation_class_query_failure_preserves_window_state(
+    disappears,
+) -> None:
+    api = _window_api({1: _normal_window(9123, "private title")})
+    observation = (
+        qualification._ProcessObservation(9123, 1, r"C:\private\metroliza_application.exe"),
+    )
+    original = api._enumerate_owned_missing_qt_dialog
+
+    def selected(process_id):
+        window = original(process_id)
+
+        def failed_class_query(_window, _name, _capacity):
+            if disappears:
+                api.user.windows.pop(1, None)
+            return 0
+
+        api.user.GetClassNameW = failed_class_query
+        return window
+
+    api._enumerate_owned_missing_qt_dialog = selected
+    application = Path(r"C:\private\metroliza_application.exe")
+    if disappears:
+        assert api.close_owned_missing_qt_dialog(observation, application) is False
+    else:
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            api.close_owned_missing_qt_dialog(observation, application)
+        assert caught.value.qualification_reason == "normal_window_invalid"
+    assert api.user.posted == []
+
+
 def test_missing_resource_deadline_stops_before_dialog_action() -> None:
     runner = object.__new__(qualification._QualificationRunner)
     runner.deadline = time.monotonic() + 0.05
