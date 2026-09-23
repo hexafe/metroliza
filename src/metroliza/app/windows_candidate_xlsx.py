@@ -59,6 +59,7 @@ _SAFE_FAILURE_CODES = {
     "active_cancel_staging_cleanup",
     "active_cancel_thread_deadline",
     "active_cancel_callback_thread",
+    "active_cancel_measurement_barrier_missing",
     "chart_count",
     "chart_cache_changed_in_control",
     "chart_value_ranges",

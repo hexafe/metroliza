@@ -669,11 +669,17 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
     finally:
+        active_failure = sys.exc_info()[0] is not None
         release.set()
-        wait_until(app, host.can_change_workspace)
-        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
-        if not sip.isdeleted(writer):
-            writer.close()
+        try:
+            wait_until(app, host.can_change_workspace)
+        except AssertionError:
+            if not active_failure:
+                raise
+        finally:
+            monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+            if not sip.isdeleted(writer):
+                writer.close()
 
 
 def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):

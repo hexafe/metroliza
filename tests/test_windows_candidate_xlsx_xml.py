@@ -50,6 +50,12 @@ def test_core_qualification_uses_only_the_canonical_xlsx_module() -> None:
     assert "from windows_candidate_xlsx import run_export_checks" not in source
 
 
+@pytest.mark.parametrize("module", (application_xlsx, standalone_xlsx))
+def test_missing_real_measurement_barrier_remains_a_safe_specific_receipt(module) -> None:
+    failure = module.XlsxScenarioFailure("active_cancel_measurement_barrier_missing")
+    assert module._safe_failure_code(failure) == "active_cancel_measurement_barrier_missing"
+
+
 @pytest.fixture(scope="session")
 def candidate_application():
     application = QApplication.instance() or QApplication([])
