@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from pathlib import Path
 import sys
@@ -8,7 +9,10 @@ import pytest
 from metroliza.app.diagnostic_launcher import run_with_store
 from metroliza.app import diagnostic_qualification
 from metroliza.app.diagnostic_qualification import requested_scenario
+from metroliza.shared.diagnostic_events import WorkflowDiagnosticEvent, WorkflowOutcome
+from metroliza.shared.diagnostic_ring import DEFAULT_MAX_OPERATIONS, DiagnosticRing
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
+from metroliza.shared.diagnostic_wire import encode_event
 
 
 @pytest.mark.parametrize("count,error,window,expected", [
@@ -79,6 +83,24 @@ def test_destructive_synthetic_scenario_requires_both_explicit_test_flags(monkey
     assert requested_scenario() == "hard_exit"
     monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", "arbitrary-command")
     assert requested_scenario() is None
+
+
+def test_flood_stimulus_forces_explicit_receiver_loss_when_transport_keeps_up(caplog):
+    with caplog.at_level(logging.INFO, logger="metroliza.shared.workflow_diagnostics"):
+        diagnostic_qualification._flood()
+
+    emitted = [
+        record.msg for record in caplog.records
+        if type(record.msg) is WorkflowDiagnosticEvent
+    ]
+    starts = [event for event in emitted if event.outcome is WorkflowOutcome.STARTED]
+    assert len({event.operation_id for event in starts}) > DEFAULT_MAX_OPERATIONS
+
+    ring = DiagnosticRing()
+    for event in emitted:
+        ring.add(encode_event(event), 0.0)
+    loss = ring.snapshot(0.0).loss
+    assert loss.normal_count_dropped_events > 0
 
 
 @pytest.mark.parametrize("marker_kind", ("absent", "directory"))

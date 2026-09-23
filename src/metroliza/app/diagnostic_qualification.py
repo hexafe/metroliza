@@ -457,12 +457,15 @@ def _preview_export(root: Path) -> None:
 
 def _flood() -> None:
     from metroliza.shared.diagnostic_events import WorkflowOperation, WorkflowStage
+    from metroliza.shared.diagnostic_ring import DEFAULT_MAX_OPERATIONS
     from metroliza.shared.workflow_diagnostics import start_workflow_trace
 
-    trace = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
-    for _ in range(10_000):
+    # Distinct operations exceed the receiver's hard cap even when it keeps up
+    # with the transport. Repeated stages in one operation may be coalesced.
+    for _ in range(2 * DEFAULT_MAX_OPERATIONS + 1):
+        trace = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
         trace.stage(WorkflowStage.OUTPUT_STAGING)
-    trace.finish_export(completed=True, cancelled=False)
+        trace.finish_export(completed=True, cancelled=False)
 
 
 def _run_work(scenario: str, root: Path) -> None:
