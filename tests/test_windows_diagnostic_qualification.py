@@ -6456,6 +6456,33 @@ def test_concurrent_exit_success_still_requires_two_actual_incidents(tmp_path, m
     assert caught.value.failure_id == "incident_invalid"
 
 
+@pytest.mark.parametrize("boundary", ("incident", "loss"))
+def test_flood_rejection_identifies_only_its_fixed_observation_boundary(monkeypatch, boundary):
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.store = object()
+    runner._scenario = lambda *_args: None
+    monkeypatch.setattr(qualification, "_reports", lambda _store: ())
+    if boundary == "incident":
+        def unavailable(*_args):
+            raise qualification.QualificationFailure("incident_invalid")
+
+        monkeypatch.setattr(qualification, "_newest_incident", unavailable)
+    else:
+        incident = SimpleNamespace(
+            observation=SimpleNamespace(channel=ChannelState.COMPLETE, source_dropped=0),
+            ring_loss=RingLoss(),
+        )
+        monkeypatch.setattr(qualification, "_newest_incident", lambda *_args: incident)
+
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        runner.run_flood()
+    assert caught.value.failure_id == "incident_invalid"
+    assert caught.value.qualification_reason == (
+        "flood_incident_unavailable" if boundary == "incident" else "flood_loss_unobserved"
+    )
+    assert caught.value.qualification_reason in qualification.QUALIFICATION_FAILURE_REASONS
+
+
 def test_concurrent_probe_child_receipt_mismatch_retains_valid_public_failure(tmp_path, monkeypatch):
     roots = _concurrent_roots(tmp_path)
     path = roots[0] / qualification.QUALIFICATION_RECEIPT_NAMES["ready"]
