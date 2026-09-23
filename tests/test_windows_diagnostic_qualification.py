@@ -4768,7 +4768,7 @@ def test_missing_qt_restore_failure_preserves_classified_primary(
         qualification_exit_code=7,
     )
 
-    def fail_after_hiding(_process):
+    def fail_after_hiding(_process, **_kwargs):
         resource.with_name("qwindows.qualification-missing").unlink()
         raise primary
 
@@ -4858,7 +4858,7 @@ def test_missing_qt_timeout_logging_does_not_replace_failure(tmp_path, monkeypat
     runner.api = _FakeApi(1, "ready")
     runner._root = lambda _label: tmp_path
     primary = qualification.QualificationFailure("scenario_timeout")
-    runner._wait_missing_exit = lambda _process: (_ for _ in ()).throw(primary)
+    runner._wait_missing_exit = lambda _process, **_kwargs: (_ for _ in ()).throw(primary)
 
     def output_unavailable(*_args, **_kwargs):
         raise OSError("closed stdout")
@@ -4870,6 +4870,56 @@ def test_missing_qt_timeout_logging_does_not_replace_failure(tmp_path, monkeypat
 
     assert caught.value is primary
     assert resource.read_bytes() == b"fixed qwindows"
+
+
+def test_missing_qt_negative_control_closes_only_verified_owned_dialog() -> None:
+    api = _window_api({1: _normal_window(9123, "private title")})
+    observation = (
+        qualification._ProcessObservation(9123, 1, r"C:\private\metroliza_application.exe"),
+    )
+    application = Path(r"C:\private\metroliza_application.exe")
+
+    assert api.close_owned_missing_qt_dialog(observation, application) is True
+    assert api.user.posted == [(1, qualification.WM_CLOSE, 0, 0)]
+
+    api.user.posted.clear()
+    assert api.close_owned_missing_qt_dialog(
+        (qualification._ProcessObservation(9124, 1, r"C:\private\metroliza.exe"),),
+        application,
+    ) is False
+    assert api.user.posted == []
+
+    api.user.windows[2] = _normal_window(9123, "second private title")
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.close_owned_missing_qt_dialog(observation, application)
+    assert caught.value.qualification_reason == "normal_window_ambiguous"
+    assert api.user.posted == []
+
+
+def test_missing_qt_negative_control_dismissal_precedes_required_exit(
+    tmp_path, capsys
+) -> None:
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = tmp_path
+    runner.deadline = time.monotonic() + 2
+
+    class _DialogProcess:
+        dismissed = False
+
+        def observe(self):
+            pass
+
+        def poll(self):
+            return 1 if self.dismissed else None
+
+        def close_missing_qt_dialog(self, _application):
+            self.dismissed = True
+            return True
+
+    process = _DialogProcess()
+    assert runner._wait_missing_qt_exit(process) == 1
+    assert process.dismissed is True
+    assert '"owned_dialog_dismissed"' in capsys.readouterr().out
 
 
 def test_immutable_receipts_preserve_ready_during_complete_observation(

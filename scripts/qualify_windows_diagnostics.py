@@ -905,6 +905,11 @@ class _WindowsProcess:
             self._current_job_state()[0], application, expected_title, window
         )
 
+    def close_missing_qt_dialog(self, application: Path) -> bool:
+        return self._api.close_owned_missing_qt_dialog(
+            self._current_job_state()[0], application
+        )
+
     def topology(self, artifact_dir: Path, *, all_exited: bool) -> ProcessTopology:
         topology = _classify_topology(
             tuple(self._observations.values()),
@@ -2296,6 +2301,81 @@ class _WindowsApi:
         except Exception:
             return {"status": "unavailable"}
         return self._classify_window_enum(completed, overflow, callback_errors, windows)
+
+    def close_owned_missing_qt_dialog(
+        self, observations: tuple[_ProcessObservation, ...], application: Path
+    ) -> bool:
+        expected = ntpath.normcase(str(application))
+        identities = [
+            item.process_id for item in observations
+            if ntpath.normcase(item.image) == expected
+        ]
+        if not identities:
+            return False
+        if len(identities) != 1:
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="qualification_observation_failed"
+            )
+        window = self._enumerate_owned_missing_qt_dialog(identities[0])
+        if window is None or not self.user.IsWindow(window):
+            return False
+        if not self.user.PostMessageW(window, WM_CLOSE, 0, 0):
+            if not self.user.IsWindow(window):
+                return False
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_close_failed"
+            )
+        return True
+
+    def _missing_qt_window_kind(self, window, expected_process_id: int) -> str:
+        process_id = self.wintypes.DWORD()
+        if not self.user.GetWindowThreadProcessId(window, ctypes.byref(process_id)):
+            return "skip"
+        if int(process_id.value) != expected_process_id or not self.user.IsWindowVisible(window):
+            return "skip"
+        name = ctypes.create_unicode_buffer(128)
+        if not self.user.GetClassNameW(window, name, len(name)):
+            raise OSError("window_class_unavailable")
+        return "dialog" if name.value == "#32770" else "other"
+
+    def _enumerate_owned_missing_qt_dialog(self, process_id: int):
+        windows: list[object] = []
+        callback_errors: list[BaseException] = []
+
+        def visit(window, _parameter):
+            try:
+                kind = self._missing_qt_window_kind(window, process_id)
+                if kind != "skip":
+                    windows.append(window if kind == "dialog" else None)
+                return len(windows) < 2
+            except BaseException as error:
+                callback_errors.append(error)
+                return False
+
+        completed = self.user.EnumWindows(self.WNDENUMPROC(visit), 0)
+        return self._classify_owned_missing_qt_dialog(completed, windows, callback_errors)
+
+    @staticmethod
+    def _classify_owned_missing_qt_dialog(
+        completed: bool, windows: list[object], callback_errors: list[BaseException]
+    ):
+        if callback_errors:
+            if not isinstance(callback_errors[0], Exception):
+                raise callback_errors[0]
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_enumeration_failed"
+            )
+        if not completed and len(windows) < 2:
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_enumeration_failed"
+            )
+        if not windows:
+            return None
+        if len(windows) != 1 or windows[0] is None:
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_ambiguous"
+            )
+        return windows[0]
 
     @staticmethod
     def _classify_window_enum(
@@ -4851,19 +4931,42 @@ class _QualificationRunner:
         ):
             raise QualificationFailure("incident_invalid")
 
-    def _wait_missing_exit(self, process: _WindowsProcess) -> int | None:
+    def _wait_missing_exit(
+        self, process: _WindowsProcess,
+        *, on_alive: Callable[[_WindowsProcess], None] | None = None,
+    ) -> int | None:
         deadline = min(self.deadline, time.monotonic() + MAX_SCENARIO_SECONDS)
         while time.monotonic() < deadline:
             process.observe()
             exit_code = process.poll()
             if exit_code is not None:
                 return exit_code
+            if on_alive is not None:
+                on_alive(process)
             time.sleep(0.02)
         raise QualificationFailure("scenario_timeout")
 
     def _wait_missing_qt_exit(self, process: _WindowsProcess) -> int | None:
+        dismissed = False
+        next_observation = 0.0
+
+        def on_alive(current: _WindowsProcess) -> None:
+            nonlocal dismissed, next_observation
+            now = time.monotonic()
+            if dismissed or now < next_observation:
+                return
+            next_observation = now + 0.2
+            dismissed = current.close_missing_qt_dialog(
+                self.artifact / "metroliza_application.exe"
+            )
+            if dismissed:
+                try:
+                    print('qualification_missing_qt_dialog={"status":"owned_dialog_dismissed"}', flush=True)
+                except Exception:
+                    pass
+
         try:
-            return self._wait_missing_exit(process)
+            return self._wait_missing_exit(process, on_alive=on_alive)
         except QualificationFailure as error:
             if error.failure_id == "scenario_timeout":
                 try:
