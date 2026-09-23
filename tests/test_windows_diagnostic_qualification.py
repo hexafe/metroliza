@@ -4776,6 +4776,32 @@ def test_missing_qt_restore_failure_preserves_classified_primary(
     assert caught.value.qualification_exit_code == 7
 
 
+def test_missing_qt_timeout_observation_discards_native_identity_and_titles() -> None:
+    observations = (
+        qualification._ProcessObservation(9123, 1, r"C:\private\metroliza.exe"),
+        qualification._ProcessObservation(9124, 2, r"C:\private\metroliza_application.exe"),
+    )
+    api = SimpleNamespace(
+        visible_owned_window_classes=lambda _observations: {
+            "status": "observed", "classes": ["application_dialog"], "overflow": False
+        }
+    )
+    process = SimpleNamespace(
+        _current_job_state=lambda: (observations, 2, 2),
+        poll=lambda: None,
+        _api=api,
+    )
+
+    result = qualification._missing_qt_timeout_probe(process)
+
+    assert result["roles"] == ["application", "launcher"]
+    assert result["windows"]["classes"] == ["application_dialog"]
+    assert result["primary_running"] is True
+    serialized = json.dumps(result)
+    assert "9123" not in serialized and "9124" not in serialized
+    assert "C:\\private" not in serialized
+
+
 def test_immutable_receipts_preserve_ready_during_complete_observation(
     tmp_path,
 ) -> None:
