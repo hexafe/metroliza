@@ -1,336 +1,244 @@
 # Codex orchestration and model-routing playbook
 
-Status: Active supporting engineering policy
-Owner: Product/architecture maintainer
-Last reviewed: 2026-08-25
+Status: policy update for new or explicitly reconciled tasks; repository adoption requires review.
+Owner: external product/development orchestration. Reviewed: 2026-09-23. Refs #1061.
 
-This playbook expands the concise repository rules in [`../../AGENTS.md`](../../AGENTS.md). It
-defines a reusable orchestration core, then binds that core to Metroliza's engineering and evidence
-contracts. It does not replace the active Issue, product specification, architecture, development
-workflow, branch/release policy, or a separately required approval.
+Root [AGENTS](../../AGENTS.md) is the concise router. The
+[dated research](model-routing-research-2026-09-23.md) records vendor facts and limitations.
+This document is a working policy, not an agent configuration, benchmark result or release approval.
 
-## Universal orchestration core
+## 1. Authority and continuity
 
-### 1. Authority
+PO owns product/release direction and separately approved remote/destructive operations. External
+orchestration owns the leaf packet, risk/routing decision, independent merge assessment and merge.
+The coordinator owns complete in-scope execution and integration; helpers own explicit slices only.
+Ordinary related edits, fixtures, tests and review corrections need no repeated PO approval.
+Actual scope, security, data ownership, cost or capability conflicts require adjudication.
 
-The authority chain is:
+**An active or paused packet is grandfathered.** This update must not switch WIN-DLV-1 or another
+running executor, change its budget, reset failed attempts, rebase its source, restart it, or send it
+new instructions. Apply revised routing at the next new task or an explicit reconciled handoff.
+Old evidence keeps its actual model/source identity. Never relabel a 5.6 result as a GPT-6 result.
+Updating a Project mirror does not edit ChatGPT settings.
 
-1. **Product Owner** — owns product direction and approval for separately gated remote or
-   destructive decisions.
-2. **External project orchestrator** — owns the Issue/specification, task packet, whole-PR scope,
-   routing selection, independent exact-head review, and merge decision.
-3. **Codex coordinator** — owns bounded execution, useful decomposition, worker integration,
-   validation, an internal exact-head readiness audit, and PR preparation.
-4. **Workers** — own only the files, symbols, validation, and operations explicitly assigned in a
-   bounded slice.
+Follow the [source hierarchy](../project/README.md). Read live relevant Issues/code/CI, not the full
+old conversation each time. Recover lost sessions from published commits and accessible evidence;
+mark unavailable local objects honestly and reconstruct only necessary missing work. Transfer
+ownership before writes; a named archive path is not proof its bytes were transferred.
 
-The external orchestrator's independent exact-head merge review is distinct from the coordinator's
-internal diff/readiness audit. Neither role may treat the other role's unobserved work as evidence.
-Workers cannot override the task packet or sources of truth.
+## 2. Delivery outcomes and severity triage
 
-The task packet is the active scope boundary. A coordinator or worker must not reopen product
-strategy, broaden the roadmap, or invent missing architecture, security, privacy, data-ownership,
-release, or remote-operation authority. A contradiction or missing authority is a stop condition.
+One leaf/PR delivers one coherent outcome or root-cause repair. A milestone coordinator joins leaves;
+it does not turn the project into one giant PR. Roughly eight meaningful files or 600 net lines
+prompt a slicing check, not an automatic stop or a cheaper risk classification.
 
-### 2. Two separate routing decisions
+Every distinct confirmed defect receives an existing/new deduplicated Issue with evidence,
+impact/confidence, affected MUST, severity, owner, workaround and target release/pack. Unconfirmed
+hypotheses stay labeled. A bot's P1/P2 badge alone neither sets severity nor authorizes deferral.
 
-Every nontrivial PR has two independent classifications:
+- **Critical/major or violated current MUST:** correct or safely contain now within the right leaf.
+  Examples include confidential exposure, lost/corrupt data, materially wrong measurement/statistical
+  results, blocked primary journeys and relevant serious crashes/hangs. Independent safe work may
+  continue while a blocker is assigned; no competing fixes in unrelated PRs.
+- **Minor with bounded impact:** record and target a coherent stabilization pack. Do not expand the
+  current feature into unrelated refactors. The orchestrator explicitly adjudicates merge/release
+  deferral; an unmet MUST cannot become minor just to save effort.
+- **Cosmetic/speculative:** DEFERRED unless deliberately selected. Accessibility that prevents a main
+  operation is not cosmetic. Missing root cause proves neither harmlessness nor product guilt.
 
-1. **Whole-PR coordinator class**, selected from the complete change, consequence, and acceptance
-   burden.
-2. **Worker slice risk**, selected separately for each bounded slice when delegation is useful.
+Before each minor and major release, select related minor Issues by component/shared verification,
+finish those packs, inspect the integrated release delta and run required regression and packaged
+Windows journeys. Remaining minor items need explicit owner, rationale and next review target.
+A patch release normally uses targeted verification plus every applicable security/data/package gate.
+Do not postpone development testing until release or audit every unchanged file by ritual.
 
-A GREEN or YELLOW slice never downgrades a FEATURE / CROSS-LAYER or CRITICAL / MILESTONE
-coordinator. The external orchestrator's requested coordinator cannot be silently downgraded.
-Upward escalation is permitted when live evidence reveals greater risk or complexity. If a named
-model is unavailable, use an equivalent or stronger capability only when the runtime allows it;
-escalate before substituting a weaker coordinator.
+## 3. Routing dimensions and actual support
 
-### 3. Whole-PR coordinator classes
+Classify whole-change risk separately from model, effort, delegation, speed and permissions.
+Capability, tool access, client support, source evidence and release authority are not interchangeable.
+A stronger model does not fix missing Windows/Docker access or retrieve an unavailable local file.
 
-Capability-class wording is durable even when named models change. The named routes below are the
-currently accepted mapping.
+Verified current IDs: `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`, and legacy `gpt-5.6-terra`.
+No official GPT-6 Terra was confirmed in the inspected catalogue. Terra remains available only as
+an explicit compatibility/availability or measured-workload choice; it is not a mandatory price tier.
+Resolve ID and effort in the actual client at dispatch. Planned, configured and observed settings
+are separate; absent telemetry is `not visible`, not a guess based on self-identification.
 
-| Class | Default coordinator | Reasoning | Whole-change test |
-| --- | --- | --- | --- |
-| MICRO | GPT-5.6 Luna | Medium | One explicit correction, accepted contract, focused proof, no new boundary or milestone |
-| BOUNDED INTEGRATION | GPT-5.6 Terra | High | One accepted seam across limited layers/files, without new architecture, security boundary, or phase closure |
-| FEATURE / CROSS-LAYER | GPT-5.6 Sol | High | Normal feature, new durable contract, several layers, production/privacy boundary, or broad evidence |
-| CRITICAL / MILESTONE | GPT-5.6 Sol | Ultra | Security/data-loss/destructive/remote boundary, migration, release/phase completion, or major durable decision |
+## 4. Whole-PR coordinator and reviewer
 
-#### MICRO
+These defaults are provisional local engineering choices, not a Metroliza benchmark ranking.
 
-Use only when all relevant facts are already accepted: typically one to three files, one explicit
-correction, no new public/runtime boundary, no security or privacy boundary, no milestone closure,
-and focused validation can prove the outcome.
-
-#### BOUNDED INTEGRATION
-
-Use for one accepted seam, typically across two to six meaningful files or a small number of
-symbols. It does not own new domain/security architecture, migrations, destructive/remote behavior,
-formal phase closure, or broad requirement-to-evidence reconciliation.
-
-#### FEATURE / CROSS-LAYER
-
-Use for a normal product feature or new durable contract, runtime plus UI plus tests, several
-application layers, a provider/privacy/build boundary, significant negative-path design, broad
-integration evidence, or a defect likely to cause meaningful rework. Routine leaf slices may still
-go to Luna or Terra while Sol retains whole-PR integration and evidence ownership.
-
-#### CRITICAL / MILESTONE
-
-Use for security, confidential-data exposure or data-loss risk, database schema/data migration,
-concurrency or atomicity, secrets, release promotion/closure, packaged production decisions,
-remote/destructive work, or a policy/architecture decision whose error would cause broad drift.
-Ultra is high-compute coordination and review, not permission for a monolithic PR or for a remote
-operation.
-
-File count is a reviewability signal, not a substitute for semantics. Roughly eight meaningful
-files, 600 net new lines, multiple independent outcomes, or overlapping central-file ownership
-requires re-slicing or concise justification. Staying below a threshold never lowers a semantically
-cross-layer or critical change.
-
-### 4. Worker slice routing
-
-| Slice risk | Default worker | Typical bounded ownership |
+| Class and actual scope | Coordinator | One independent scope reviewer |
 | --- | --- | --- |
-| GREEN | GPT-5.6 Luna | Leaf UI/docs/copy, fixtures, mappings, predictable tests, mechanical refactors |
-| YELLOW | GPT-5.6 Terra | Bounded integration, routing/state, accepted adapters, E2E/accessibility workflows |
-| RED | GPT-5.6 Sol | Architecture, durable/public contracts, privacy/exposure boundaries, difficult integration or review |
-| CRITICAL | GPT-5.6 Sol | Security, migrations, data integrity, concurrency, secrets, remote/database or destructive boundaries |
+| MICRO, explicit code correction under a fixed contract | Luna 6 / high | Sol 6 / medium |
+| BOUNDED INTEGRATION, accepted seam without new critical boundary | Sol 6 / medium | Sol 6 / high |
+| FEATURE / CROSS-LAYER, ordinary multi-layer feature | Sol 6 / medium | Sol 6 / high |
+| Complex feature state, failure paths or contracts | Sol 6 / high | Sol 6 / high |
+| CRITICAL, proven settled bounded implementation exception below | Sol 6 / high | Astra 6 / high |
+| Unresolved critical ownership/architecture, data-loss/concurrency reasoning | Astra 6 / high | Independent Astra 6 / high for the critical boundary |
+| Formal milestone/release assessment | Astra 6 / high | Independent Astra 6 / high for unresolved critical acceptance |
 
-GREEN work stops on ambiguity and does not alter architecture or public/private boundaries. YELLOW
-work integrates accepted contracts but escalates new ownership, security, privacy, or architecture
-decisions. RED and CRITICAL work own difficult boundaries but still remain bounded by the packet.
+A release assessor reuses already accepted independent reviews; it does not order another complete
+review of every merged leaf. For a new unresolved critical change, an author cannot provide the
+independent review of its own implementation. Required configured GitHub review remains; do not
+request duplicate bot passes or add Sol review before the selected Astra review without a distinct risk.
 
-Delegation is an ownership and context tool, not a ritual. Skip it when worker startup or
-context-loading cost exceeds the work. Keep write ownership disjoint; never assign concurrent
-workers to overlapping paths or symbols. If per-worker model selection is unavailable, prefer
-sequential bounded work under the selected coordinator. Do not claim economy-model savings by
-spawning inherited expensive agents.
+### Settled-critical exception: all conditions are required
 
-### 5. Actual-runtime honesty
+External orchestration may explicitly select Sol/high for a still-CRITICAL leaf only if the packet:
 
-Pre-dispatch records the requested route. Post-execution records only observed runtime evidence:
+1. Names an accepted versioned contract and complete owned boundary, including failure/cancel paths.
+2. States data/authorization/concurrency invariants, testable negative cases and rollback or safe
+   recovery/idempotence where relevant; no unresolved ownership or irreversible side effect remains.
+3. Does not ask the implementer to invent a new trust/transaction/native-lifetime architecture or
+   decide release risk. Small file count and the word "migration" do not establish settlement.
+4. Assigns one independent Astra/high review of that whole affected critical boundary and retains
+   all specialized tests and separate operational approvals.
 
-- requested and actual coordinator model/reasoning;
-- requested and actual worker model/reasoning, and inheritance when visible;
-- routing deviations and their reason.
+If any condition is unproved, use Astra/high for the unresolved work. An expensive reviewer after
+implementation is not a substitute for resolving a missing design beforehand. Conversely, a
+mechanical fixture next to SQLite is not automatically critical. Formal release ownership remains
+with the designated release owner, not the model.
 
-When model or reasoning identity is unavailable, report `not visible`. Never fabricate or infer a
-model, reasoning mode, token/credit usage, latency, cost, or savings. Do not blame a named model
-when runtime identity was hidden; distinguish model limits from oversized scope, ambiguous packets,
-weak acceptance evidence, and integration failures.
+### Reasoning and escalation
 
-The optimization goal is the lowest reasonable total effort to a correct merge. It includes
-context loading, failed attempts, QA/CI reruns, review corrections, follow-up commits, and
-architectural rework—not only the first execution.
+For coding, begin at Luna/high or Sol/medium; use Sol/high for complex states/invariants.
+Astra/high is our deliberate critical-risk choice, not OpenAI's universal default. For a bounded
+noncritical question requiring Astra, low/medium may suffice. Trivial non-code can use Luna low/medium.
 
-### 6. Task packets and bounded ownership
+Do not translate old Ultra into `xhigh`, `max` or an API value automatically. Client Ultra combines
+reasoning/delegation; API model cards expose a different effort enum. Luna has no Ultra mode in the
+current client guide. Higher effort and Fast need a specific expected benefit and a finite budget.
+Keep standard speed by default. A prompt requesting a setting does not configure it.
 
-Every nontrivial task packet uses the
-[`codex-task-packet-template.md`](./codex-task-packet-template.md) and distinguishes:
+A packet may preauthorize one escalation ceiling and question (for example Sol medium to high).
+First distinguish insufficient evidence, environment denial, ambiguity and oversized scope from
+reasoning difficulty. No automatic Luna -> Sol -> Astra ladder or new team after every P2.
+Switch only with one writer and a recorded handoff; do not silently weaken a selected critical route.
+Unavailable required models get one concrete alternative for orchestration, not fabricated access.
 
-- **MUST** — merge-blocking requirements and invariants;
-- **SHOULD** — expected improvements that must remain inside approved scope;
-- **DEFERRED** — explicitly forbidden or later work.
+## 5. Adaptive workers and effective permissions
 
-A packet also states the exact objective, whole-PR class/model/reasoning, delegated slice risk and
-route, owned files/symbols, forbidden surfaces and operations, preserved contracts, observable
-acceptance criteria, focused validation, stop/escalation conditions, and remote-operation policy.
-Workers and coordinators do not silently promote SHOULD or DEFERRED items.
+GREEN code/fixtures: Luna/high (trivial non-code low/medium). YELLOW accepted integration: Sol/medium.
+RED complex reasoning: Sol/high. CRITICAL: Astra/high unless the same explicit settled exception is
+satisfied. Worker risk does not downgrade the whole-PR coordinator or reviewer.
 
-Orchestration never creates an autonomous unbounded agent loop. Every coordinator and worker stays
-inside a finite packet, bounded ownership, explicit stop conditions, and the recorded authority for
-local and remote operations.
+Start with zero implementation helpers. Add one for one genuinely independent slice and two only
+when there are two useful disjoint slices. Default maximum: two additional contexts concurrently,
+including the independent reviewer. Thus two workers plus a reviewer need staging, not four live
+contexts by default. A distinct exceptional specialist needs explicit scope and total budget.
+No recursive swarm, overlapping writers or helper invented merely to stay busy.
 
-Prefer one durable/public contract, one security boundary, one primary runtime concern, and one
-product outcome per PR. Keep behavior changes separate from structural refactors and keep formal
-release/phase closure separate from ordinary implementation when practical.
+Choose both model and effort for each helper; verify actual inheritance before claiming economy.
+Give it only the needed contract, paths, positive/negative acceptance and evidence pointers.
+Helpers return a compact result and focused tests; the coordinator owns aggregate validation.
+If safe isolation or the requested model selection cannot be enforced, serialize the work.
 
-### 7. Validation ownership and evidence
+**Read-only is both a role and an effective-permission question.** Check the child's actual sandbox,
+approval mode, connector tools and write authority after inheritance/overrides. An instruction or
+custom-agent default alone does not prove enforcement. If effective read-only cannot be assured,
+review a controlled snapshot or use a separate no-write context. Do not change the active parent's
+permissions as a side effect of adopting this policy. Independent reviewers inspect requirements and
+source/tests rather than merely endorsing the author's conclusion; reuse their context for deltas.
 
-Workers run only the focused validation assigned to their slice and return sanitized evidence. The
-coordinator runs the integrated local gate, checks the final diff and scope, and prepares exact-head
-evidence. The external orchestrator independently verifies the exact PR head and merge state.
+## 6. Bounded review, tests and budgets
 
-Evidence records the exact command or GitHub check, the observed outcome, relevant environment or
-fixture, and the commit SHA. Never turn a mocked/unit result into a manual, packaged, live-service,
-or production claim. An unrelated failing gate is reported and triaged, not silently repaired in
-another Issue's PR.
+Default cycle: implement with focused tests -> one complete affected-scope review -> consolidate
+blocking families -> regression checks -> delta review of fixes/direct consumers -> exact-head merge
+disposition. Extra review needs a named substantive blocker/invalidated assumption and a limited
+question. Critical discoveries are raised promptly; other safe review work may finish together.
+This is a review-effort default, never permission to accept a serious remaining defect.
 
-Each repository's active workflow and task packet select the applicable focused, CI, integration,
-manual, data, security, performance, packaging, and release gates. Passing an aggregate automated
-suite never substitutes for an applicable manual or production claim. A gate that cannot apply is
-reported as not applicable with a reason rather than presented as unrun success.
+Use representative fail-before/negative controls for consequential new invariants, not test-count
+claims or an enormous redundant Cartesian matrix. Distinguish a test-oracle defect, product defect,
+environment issue and unknown. Preserve all original failures and retries. A later PASS is not a
+retroactive fix of an unexplained older failure. No retry-until-green, skip/xfail, sleeps, forced
+clicks, silent threshold changes or fabricated source edits to obtain another run.
 
-### 8. Strong-model readiness gate
+Plan aggregate checks on stabilized source once where they add evidence; existing required CI is
+canonical integration evidence when it actually covers the contract. Do not duplicate its entire
+suite locally per comment/worker. An explicitly required local/manual/specialized gate remains until
+its owner changes it with evidence. Changes to CI or protected gates require a separate approved
+infrastructure/policy change. Relevant tests and security/data checks continue during development.
 
-Before external review, every FEATURE / CROSS-LAYER and CRITICAL / MILESTONE PR must provide:
+A task defines finite reasoning/agent/experiment and resource boundaries. Prefer meaningful effort
+or runner-time budgets over approvals per routine commit. Record API charges, subscription allowance,
+CI runner time and wall time separately; no invented conversion or savings. An approved model change
+does not reset a shared subscription quota. Existing task limits remain intact until reconciled.
+At exhaustion, preserve work and escalate one concrete decision; no automatic restart or hidden new
+budget. Further diagnostic runs need a correction or a named evidence question, not random sampling.
 
-1. a concise MUST-to-evidence matrix;
-2. an exact-head diff and authorized-scope review;
-3. an adversarial gap hunt covering negative paths, confidentiality/security, production or
-   disabled behavior where applicable, source-of-truth consistency, and tests that could pass
-   without proving the claimed invariant;
-4. evidence that a representative broken behavior would fail acceptance validation, or a precise
-   explanation of why that falsification is not applicable to a documentation-only contract;
-5. actionable findings by severity and confirmation that no known risk is hidden by green
-   aggregate results;
-6. correction-cycle count, routing adequacy, and a recommendation for the next materially similar
-   task;
-7. actual model/reasoning evidence or `not visible`.
+## 7. Context and optional new capabilities
 
-A formal milestone uses Ultra coordination or a separately justified Ultra exact-head review.
-MICRO work does not inherit this full gate; BOUNDED INTEGRATION uses evidence appropriate to its
-accepted seam.
+Keep AGENTS a router; load specialized guidance only for its affected boundary. Keep a compact task
+state/ownership/decision table on GitHub, not repeated historical logs in every prompt. After
+compaction or a lost session, recheck current refs, ownership and accessible evidence before writing.
+Do not throw away accepted unchanged evidence solely because a model or head changed.
 
-### 9. Review and empirical routing feedback
+Optional client/API capabilities are described, not enabled, by the research. `configuration_update`
+can change GPT-6 effort between API responses under documented constraints; it is not a model switch
+or guaranteed Codex/Herdr feature. Track effective settings explicitly and respect its compaction
+restrictions. Astra's experimental context notes/search, when available, concern the same task and do
+not recover lost local files or replace GitHub authority. Enable only in a separately chosen new task.
+Async tool calls and steering do not grant parallel write permission or approval to interrupt an
+active operation. No application SDK/framework or `.codex` configuration is introduced here.
 
-All PRs retain focused validation, required GitHub Actions, GitHub Codex Review, an independent
-exact-head review, and zero unresolved review threads. A changed head invalidates prior exact-head
-readiness. A later blocking comment or newly discovered contradiction reopens readiness even if CI
-is still green.
+## 8. Three distinct acceptance gates
 
-For each nontrivial PR, record:
+**Publication for CI/review:** verify scope, branch authority, secrets and side effects. An authorized
+Draft can honestly carry incomplete/red local results. A bounded synthetic engineering experiment
+can obtain missing evidence under its explicit authority without declaring unrelated failed gates
+green. A Draft badge is not a security sandbox or release permission.
 
-- actionable P0/P1/P2 findings;
-- correction cycles after readiness was first claimed;
-- whether the coordinator class proved adequate;
-- the recommended class for the next materially similar task.
+**Merge:** only external orchestration squash-merges under standing PO authorization after its own
+independent exact-head verdict READY FOR MERGE, unchanged reviewed head, terminal-success required
+checks for the current integration result/base, every applicable project-specific gate, adjudicated
+and resolved review threads, no later blocker and actual mergeability. Refresh integration evidence
+when base movement invalidates it. The review can reuse bound unchanged evidence and inspect the
+new delta; it is not an automatic third full audit. No author self-merge or force/direct-base shortcut.
 
-Apply the feedback as follows:
+**Release/package:** merge alone does not qualify an EXE, clean machine, live-service operation,
+legal approval or real-data workflow. Bind the complete candidate, artifact identity and actual
+journeys; apply [development tiers](../project/development_workflow.md#6-validation-tiers) and
+[branch/release rules](../release_checks/branching_strategy.md). After minor/major stabilization,
+record remaining issue dispositions and the release owner's Go/No-Go. Source publication, release,
+tag/deploy, migration, credentials, billing and destructive operations retain separate authority.
 
-- any P1 after readiness requires explicit routing review;
-- a P2 or repeated correction cycle normally escalates the next similar task by one class when the
-  higher class's semantic criteria apply;
-- otherwise retain the class and strengthen model/reasoning or independent review; CRITICAL /
-  MILESTONE is the ceiling;
-- three materially similar clean PRs may justify considering one lower class;
-- CRITICAL / MILESTONE is never automatically downgraded.
+## 9. Metroliza-specific evidence binding
 
-Prefer one strong independent reviewer over several repetitive same-context reviews. Add reviewers
-for disjoint critical boundaries, not prestige. A focused follow-up may review the new commit and
-previously accepted boundary after first confirming the current head and integration state.
+Normal base/target: `develop`; `master` is production/history, with the frozen release references
+controlled by the branch decision, not changed by model policy. Canonical `src/metroliza`,
+compatibility-only `modules`, local-first/confidential data, SQLite transactions/publication,
+bounded processing, deterministic cleanup/fallback and offline dashboards remain mandatory.
 
-### 10. Standing merge authorization
-
-Codex coordinators and workers never merge their own PR.
-
-The external project orchestrator has standing Product Owner authorization to squash-merge an
-ordinary green PR only when all are observed:
-
-- its own independent exact-head review concludes `READY FOR MERGE`;
-- the reviewed head is unchanged;
-- required CI and every applicable project-specific/manual/integration-result gate is
-  terminal-green for that head/current base;
-- zero review threads remain unresolved;
-- no later blocker exists;
-- GitHub reports the PR mergeable.
-
-Update the branch when integration-result checks would otherwise be stale. Any changed head, base
-movement that invalidates evidence, or later blocker revokes the earlier readiness conclusion.
-
-Standing merge authorization does **not** include release promotion, migrations against real data,
-deployment, destructive operations, secrets, billing, external publication, or other remote
-product mutations. It does not authorize force-pushes, long-lived-ref changes, tag operations, or
-closing an Issue before merge evidence. Each such action retains its separate explicit approval.
-
-## Metroliza-specific binding
-
-The rules below bind the reusable core to this repository. They must not be generalized into a
-one-size-fits-all policy for other projects.
-
-### 11. Sources, engineering, and branch contracts
-
-When sources disagree, apply the hierarchy in
-[`../project/README.md`](../project/README.md#source-of-truth-hierarchy). An accepted current
-GitHub Issue/PR defines in-flight work; `docs/project/` owns current product, architecture, roadmap,
-and delivery policy; `docs/release_checks/` owns release evidence and promotion decisions; and the
-code, tests, configuration, `README.md`, and `CONTRIBUTING.md` remain binding executable/build
-contracts. Chat, memory, unmerged branches, and historical documents are not durable authority.
-
-Metroliza-specific contracts are:
-
-- `develop` is the canonical integration base and target for normal Issue work. `master` is the
-  production/history anchor; `release/2026.06-rc2` is frozen and `rc2` is transition/reference only.
-- GitHub Issues and repository documents are durable truth; chat and memory are working context.
-- `src/metroliza`/`metroliza.*` is canonical and `modules.*` is compatibility-only.
-- Preserve local-first behavior, SQLite atomic transactions/publication and deterministic cleanup,
-  bounded/cache-first processing, offline dashboards, and last-complete-output safety.
-- Native acceleration remains optional. Python is the behavioral reference; parity includes normal,
-  warning, failure, cancellation, fallback, packaging, and representative performance behavior.
-- Preserve supported packaged Windows behavior and distinguish automated Windows core checks from
-  real packaged/clean-machine evidence.
-- Treat customer/supplier reports, measurement geometry/traceability, production databases and
-  extracts, credentials, keys, and unredacted diagnostics as confidential.
-- Do not claim test, CI, benchmark, packaging, merge, release, or remote-operation success without
-  direct observation.
-- Dependabot default-branch activation remains separately owned by
-  [#966](https://github.com/hexafe/metroliza/issues/966); this orchestration policy neither
-  implements nor authorizes it.
-
-Follow the detailed architecture, compatibility, data-integrity, security, and release contracts in
-[`../project/architecture.md`](../project/architecture.md),
-[`../project/development_workflow.md`](../project/development_workflow.md), and
-[`../release_checks/branching_strategy.md`](../release_checks/branching_strategy.md) instead of
-duplicating them here.
-
-#### Metroliza evidence binding
-
-Use the validation tiers in
-[`../project/development_workflow.md`](../project/development_workflow.md#6-validation-tiers). The
-following gates are conditional on the changed contract rather than boilerplate claims:
-
-| Impact | Required Metroliza evidence when applicable |
+| Impact | Required evidence when applicable |
 | --- | --- |
-| Documentation/policy | Markdown links and indexes, policy consistency, release hygiene, `git diff --check`, focused policy tests |
-| Normal CI | Required GitHub Actions terminal-green for the exact head/current integration result |
-| Packaged Windows | Windows core/packaging checks plus real packaged or clean-machine evidence when the acceptance criterion requires it |
-| Native/Rust | Locked build/tests, Python reference parity including failure/cancel/fallback behavior, packaging proof, representative benchmark, rollback |
-| Performance | Representative benchmark command, baseline and environment; never extrapolate from a microbenchmark |
-| Database/SQLite | Transaction/atomicity, rollback, migration/idempotence, concurrency, cleanup, and data-integrity proof appropriate to the change |
-| Security/privacy | Secret and dependency checks plus negative-path/exposure review; sanitized evidence only |
-| Release | Exact candidate automation plus all required manual Windows, Google, notices/legal, rollback, and release-owner evidence |
+| Documentation/process | Tier 0 structure/links, policy consistency, hygiene, diff and affected policy tests; not invented product QA |
+| Normal integration | Exact-head/current-base required GitHub checks and focused behavior, real Qt append/coverage where required |
+| SQLite/data | Atomicity, rollback/idempotence, concurrency, connection/worker ownership and correct row/result identity |
+| Native/Rust | Locked build, Python parity including warning/failure/cancel/fallback, representative performance, packaging, rollback |
+| Privacy/security | Appropriate negative-path/exposure and dependency/secret checks; no raw measurement/credential evidence |
+| Windows packaging | Real packaged path, ordinary-user/no-developer-Python, relevant cancel/reopen, OCR/SQLite/workbook/dashboard/fallback behavior |
+| Performance | Representative command/baseline/environment; advisory failure stays recorded, not extrapolated from a microbenchmark |
+| Release | Exact full candidate plus applicable clean-machine Windows, Google, notices/legal, rollback and release-owner evidence |
 
-Passing ordinary CI does not satisfy an applicable Tier 4 packaged/manual/release gate. A
-documentation-only PR reports product gates as not applicable instead of pretending to rerun them.
-For Metroliza, the universal standing merge predicate therefore means required exact-head CI plus
-every applicable Windows, native/Python parity, benchmark, SQLite/database, security,
-documentation, manual, release, and current-`develop` integration gate.
+No benchmark/model name certifies scientific correctness or data safety. A documentation-only
+change cannot mark runtime evidence PASS; a native source test cannot certify a packaged EXE.
+Separate product decisions still govern real-data usage and local representative-data acceptance.
+Dependabot activation and other separately owned infrastructure remain outside this policy.
 
-### 12. TupTup-to-Metroliza adaptation record
+## 10. Adoption record and reporting
 
-Current accepted TupTup policy was reviewed at the two exact blobs recorded by #965:
+This replaces the reusable routing/process guidance adopted in #965 while preserving its Metroliza
+bindings. Historical reference blobs remain recorded: TupTup AGENTS `2e2e5013decdf025e8e5d55ef354ddc2b2af9c5b`
+and old playbook `2e49a655b0f8098abf498c7f2e5b795c0cf2f8a0`. Current comparison is TupTup PR175
+at `d0db1cc476942cb77e26adb8e759c4edbb8e5e67`, still an unmerged proposal at inspection.
+We adopt independently verified model facts and the approved delivery-first direction, not TupTup's
+Next.js/Supabase/RLS/space/GPX/Mapy/Vercel rules or its CI check names. Metroliza's Windows/native/data
+rules are equally not universal requirements for other repositories.
 
-- `hexafe/TupTup/AGENTS.md` — `2e2e5013decdf025e8e5d55ef354ddc2b2af9c5b`;
-- `hexafe/TupTup/docs/engineering/codex-model-routing.md` —
-  `2e49a655b0f8098abf498c7f2e5b795c0cf2f8a0`.
-
-TupTup PR #31 and commit `18751a76d46f83597f6abf49fad509060abb1677` are supporting
-provenance; the accepted current files are authoritative.
-This adoption documents the reusable core; it does not bootstrap `hexafe/ai-dev-platform`, add
-runtime/schema tooling, or authorize a cross-repository mutation.
-
-| Universal core retained | TupTup-specific rule excluded | Metroliza-specific rule added |
-| --- | --- | --- |
-| Product Owner → external orchestrator → coordinator → bounded worker authority chain | Next.js generated agent rules, TypeScript/App Router, and `pnpm` commands | Python/PyQt repository and canonical `src/metroliza` package contracts |
-| Separate whole-PR coordinator and worker-slice routing | Supabase, RLS, private Storage, signed-URL, Auth, and `space` ownership rules | SQLite atomicity, idempotence, cleanup, migration, and last-complete-publication safety |
-| Accepted Luna/Terra/Sol mapping and no silent coordinator downgrade | OpenAI/Mapy provider constraints and real-key-free TupTup build rules | Deterministic Python fallback and Python/Rust parity, locked native builds, benchmark and rollback gates |
-| Explicit MUST/SHOULD/DEFERRED packets, bounded ownership, and stop conditions | GPX/source-bank/ZIP/import identity, importer dry-run, and two-run database invariants | Bounded/cache-first measurement processing and confidential supplier/customer data handling |
-| Actual-runtime honesty and no unsupported token/cost/savings claims | Private-space/couple-focused catalogue, public-registration, SaaS, entitlements, and billing roadmap rules | Offline dashboards and packaged Windows/core-versus-clean-machine evidence distinction |
-| Strong-model exact-head evidence, independent review, GitHub Codex Review, and zero threads | PWA/Play Store and Vercel staging/production policy | `develop` integration, frozen RC branch, `master` production anchor, #901 release evidence, and release reconciliation |
-| Empirical P0/P1/P2 and correction-cycle feedback loop | Literal `CI`, `Database`, and `Security` checks against TupTup `main` as a universal gate | Applicable exact-head CI plus Windows/native/benchmark/SQLite/security/docs/release gates against Metroliza's current base |
-| Narrow standing squash-merge authorization plus explicit remote/destructive exclusions | Supabase/import-specific remote exclusions as if shared by every repository | Real-data migration, release promotion, deployment/publication, long-lived refs, and tag changes remain separately gated |
-
-The adversarial adaptation rule is bidirectional: no TupTup product rule may leak into Metroliza,
-and no Metroliza architecture, data, Windows, native, branch, or release rule may be generalized as
-a universal requirement for other repositories.
-
-### 13. Completion standard
-
-Use [`pr-routing-report-template.md`](./pr-routing-report-template.md) for the durable PR record.
-Completion means the approved current outcome is proven at the exact head: authorized scope,
-acceptance, local validation, applicable CI/manual gates, document consistency, review findings,
-threads, runtime honesty, deferrals, and remote-operation status are all recorded. The coordinator
-stops rather than inventing missing authority or evidence.
+Use the [task packet](codex-task-packet-template.md) and [PR report](pr-routing-report-template.md).
+Report delivered behavior, precise blockers, fixed/deferred Issues, actual source/artifact evidence,
+review rounds and observed usage. Learn from the next real bounded tasks without running a new
+four-model benchmark campaign. Repeated misses trigger examination of scope/tests/instructions and
+then justified routing adjustment, not automatic model escalation or automatic critical downgrade.
