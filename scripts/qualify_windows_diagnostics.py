@@ -2319,6 +2319,12 @@ class _WindowsApi:
         window = self._enumerate_owned_missing_qt_dialog(identities[0])
         if window is None or not self.user.IsWindow(window):
             return False
+        if self._missing_qt_window_kind(window, identities[0]) != "dialog":
+            if not self.user.IsWindow(window):
+                return False
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_invalid"
+            )
         if not self.user.PostMessageW(window, WM_CLOSE, 0, 0):
             if not self.user.IsWindow(window):
                 return False
@@ -4939,6 +4945,8 @@ class _QualificationRunner:
         while time.monotonic() < deadline:
             process.observe()
             exit_code = process.poll()
+            if time.monotonic() >= deadline:
+                break
             if exit_code is not None:
                 return exit_code
             if on_alive is not None:
