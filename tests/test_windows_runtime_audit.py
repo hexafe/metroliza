@@ -675,6 +675,14 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
     finally:
         qualification._close_owned_processes(owned, terminate=not complete)
     if failure is not None:
+        if isinstance(failure, qualification.QualificationFailure):
+            native = failure.native_observation
+            raise AssertionError(json.dumps({
+                "failure_id": failure.failure_id,
+                "reason": failure.qualification_reason,
+                "cleanup": failure.qualification_cleanup,
+                "native": native.receipt() if native is not None else None,
+            }, sort_keys=True)) from failure
         raise failure
     assert all(not evidence.root.exists() for evidence in evidences)
 
