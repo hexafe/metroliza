@@ -2317,19 +2317,32 @@ class _WindowsApi:
                 "scenario_failed", qualification_reason="qualification_observation_failed"
             )
         window = self._enumerate_owned_missing_qt_dialog(identities[0])
-        if window is None or not self.user.IsWindow(window):
+        if window is None or not self._revalidate_missing_qt_dialog(window, identities[0]):
             return False
-        if self._missing_qt_window_kind(window, identities[0]) != "dialog":
-            if not self.user.IsWindow(window):
-                return False
-            raise QualificationFailure(
-                "scenario_failed", qualification_reason="normal_window_invalid"
-            )
         if not self.user.PostMessageW(window, WM_CLOSE, 0, 0):
             if not self.user.IsWindow(window):
                 return False
             raise QualificationFailure(
                 "scenario_failed", qualification_reason="normal_window_close_failed"
+            )
+        return True
+
+    def _revalidate_missing_qt_dialog(self, window, process_id: int) -> bool:
+        if not self.user.IsWindow(window):
+            return False
+        try:
+            kind = self._missing_qt_window_kind(window, process_id)
+        except OSError:
+            if not self.user.IsWindow(window):
+                return False
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_invalid"
+            ) from None
+        if kind != "dialog":
+            if not self.user.IsWindow(window):
+                return False
+            raise QualificationFailure(
+                "scenario_failed", qualification_reason="normal_window_invalid"
             )
         return True
 
