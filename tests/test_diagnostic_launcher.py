@@ -4,7 +4,7 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
@@ -866,11 +866,17 @@ def test_stalled_store_io_is_bounded_and_preserves_actual_child_exit(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(store, method, stalled)
-    trace = _trace_publisher_calls(monkeypatch, store)
     child = Path(__file__).parent / "fixtures" / "diagnostic_child.py"
+    command = [sys.executable, str(child), scenario]
+    child_context = (
+        _authenticated_marker_child(tmp_path, monkeypatch, store, "normal_after_marker")
+        if method == "end_session" else nullcontext(command)
+    )
+    trace = _trace_publisher_calls(monkeypatch, store)
     started = time.monotonic()
     try:
-        delivery = run_with_store([sys.executable, str(child), scenario], store=store)
+        with child_context as selected_command:
+            delivery = run_with_store(selected_command, store=store)
         assert entered.is_set(), json.dumps(trace(), sort_keys=True)
         assert delivery.observation.exit_code == expected_exit
         assert delivery.storage_status is StoreStatus.PUBLISH_INCOMPLETE
