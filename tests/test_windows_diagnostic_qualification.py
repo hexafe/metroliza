@@ -4896,6 +4896,54 @@ def test_missing_qt_negative_control_closes_only_verified_owned_dialog() -> None
     assert api.user.posted == []
 
 
+@pytest.mark.parametrize("replacement", ("owner", "class"))
+def test_missing_qt_negative_control_revalidates_reused_hwnd(replacement) -> None:
+    api = _window_api({1: _normal_window(9123, "private title")})
+    observation = (
+        qualification._ProcessObservation(9123, 1, r"C:\private\metroliza_application.exe"),
+    )
+    original = api._enumerate_owned_missing_qt_dialog
+
+    def recycled(process_id):
+        window = original(process_id)
+        if replacement == "owner":
+            api.user.windows[1]["process_id"] = 9999
+        else:
+            api.user.windows[1]["class_name"] = "replaced"
+        return window
+
+    api._enumerate_owned_missing_qt_dialog = recycled
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.close_owned_missing_qt_dialog(
+            observation, Path(r"C:\private\metroliza_application.exe")
+        )
+    assert caught.value.qualification_reason == "normal_window_invalid"
+    assert api.user.posted == []
+
+
+def test_missing_resource_deadline_stops_before_dialog_action() -> None:
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.deadline = time.monotonic() + 0.05
+    actions = []
+
+    class _SlowObservation:
+        observations = 0
+
+        def observe(self):
+            self.observations += 1
+            time.sleep(0.07)
+
+        def poll(self):
+            return None
+
+    process = _SlowObservation()
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        runner._wait_missing_exit(process, on_alive=lambda _process: actions.append(True))
+    assert caught.value.failure_id == "scenario_timeout"
+    assert process.observations == 1
+    assert actions == []
+
+
 def test_missing_qt_negative_control_dismissal_precedes_required_exit(
     tmp_path, capsys
 ) -> None:
