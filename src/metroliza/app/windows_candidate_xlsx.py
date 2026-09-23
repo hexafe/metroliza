@@ -11,6 +11,7 @@ import hashlib
 import json
 import posixpath
 import subprocess
+from threading import Event
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -489,6 +490,18 @@ def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any)
     )
     progress_values: list[int] = []
     cancellation_observation: dict[str, int | bool] = {}
+    release_progress = Event()
+    measurement_progress_paused = Event()
+    original_emit_progress = getattr(active, "_emit_progress", None)
+    if callable(original_emit_progress):
+        def pause_after_real_progress(value: int) -> None:
+            previous = getattr(active, "_last_emitted_progress", -1)
+            original_emit_progress(value)
+            if previous <= 30 < getattr(active, "_last_emitted_progress", -1):
+                measurement_progress_paused.set()
+                release_progress.wait(DEADLINE_S)
+
+        active._emit_progress = pause_after_real_progress
 
     def request_cancellation(value: int) -> None:
         progress = int(value)
@@ -499,7 +512,10 @@ def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any)
             cancellation_observation["progress"] = progress
             cancellation_observation["running_before_stop"] = active.isRunning()
             cancellation_observation["application_thread"] = QThread.currentThread() == application.thread()
-            active.stop_exporting()
+            try:
+                active.stop_exporting()
+            finally:
+                release_progress.set()
 
     active.update_progress.connect(request_cancellation)
     before_cancel = _directory_snapshot(scratch)
@@ -513,6 +529,7 @@ def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any)
         if active.isRunning():
             raise XlsxScenarioFailure("active_cancel_thread_deadline")
     finally:
+        release_progress.set()
         if active.isRunning():
             active.stop_exporting()
         # Never unwind or destroy a running QThread. The existing external Job
@@ -525,6 +542,8 @@ def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any)
         raise XlsxScenarioFailure("active_cancel_request_not_observed")
     if not cancellation_observation.get("application_thread"):
         raise XlsxScenarioFailure("active_cancel_callback_thread")
+    if not measurement_progress_paused.is_set():
+        raise XlsxScenarioFailure("active_cancel_measurement_barrier_missing")
     if (
         active.export_run_result is None
         or active.export_run_result.status is not ExportRunStatus.CANCELLED
