@@ -1195,6 +1195,8 @@ class _WindowsApi:
         self.user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
         self.user.GetWindowTextW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
         self.user.GetWindowTextW.restype = ctypes.c_int
+        self.user.GetClassNameW.argtypes = [wt.HWND, wt.LPWSTR, ctypes.c_int]
+        self.user.GetClassNameW.restype = ctypes.c_int
         self.user.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
         self.user.PostMessageW.restype = wt.BOOL
 
@@ -1679,6 +1681,11 @@ class _WindowsApi:
         self._require_closed_handles(token)
         token.value = None
 
+    @staticmethod
+    def _register_restricted_token(token, owned) -> None:
+        if owned is not None:
+            owned.append(token)
+
     def initialize_incident_store(self, store: IncidentStore) -> None:
         # The elevated host must not become the owner of the application's
         # private root. Materialize it under the same restricted identity used
@@ -1746,8 +1753,7 @@ class _WindowsApi:
             if self._has_effective_admin_membership(restricted, sid):
                 raise QualificationFailure("restricted_launch_unavailable")
             self._set_private_default_dacl(restricted)
-            if owned is not None:
-                owned.append(restricted)
+            self._register_restricted_token(restricted, owned)
             return restricted
         except BaseException:
             if restricted:
@@ -2246,6 +2252,55 @@ class _WindowsApi:
         title = ctypes.create_unicode_buffer(len(expected_title) + 2)
         copied = self.user.GetWindowTextW(window, title, len(title))
         return copied == len(expected_title) and title.value == expected_title
+
+    def visible_owned_window_classes(
+        self, observations: tuple[_ProcessObservation, ...]
+    ) -> dict[str, object]:
+        """Bounded, title-free observation after a failed synthetic launch."""
+        roles = {
+            item.process_id: (
+                "application" if ntpath.basename(item.image).lower() == "metroliza_application.exe"
+                else "launcher" if ntpath.basename(item.image).lower() == "metroliza.exe"
+                else "other"
+            )
+            for item in observations
+        }
+        windows: list[str] = []
+        callback_failed = False
+
+        def visit(window, _parameter):
+            nonlocal callback_failed
+            try:
+                process_id = self.wintypes.DWORD()
+                if not self.user.GetWindowThreadProcessId(window, ctypes.byref(process_id)):
+                    return True
+                role = roles.get(int(process_id.value))
+                if role is None or not self.user.IsWindowVisible(window):
+                    return True
+                if len(windows) == 8:
+                    return False
+                name = ctypes.create_unicode_buffer(128)
+                if not self.user.GetClassNameW(window, name, len(name)):
+                    callback_failed = True
+                    return False
+                windows.append(role + ("_dialog" if name.value == "#32770" else "_other"))
+                return True
+            except Exception:
+                callback_failed = True
+                return False
+
+        callback = self.WNDENUMPROC(visit)
+        try:
+            completed = bool(self.user.EnumWindows(callback, 0))
+        except Exception:
+            return {"status": "unavailable"}
+        if callback_failed:
+            return {"status": "unavailable"}
+        return {
+            "status": "observed",
+            "classes": sorted(windows),
+            "overflow": not completed,
+        }
 
     def _enumerate_normal_windows(
         self, process_id: int, expected_title: str
@@ -2870,6 +2925,31 @@ def _wait_for_job_exit(process: _WindowsProcess, deadline: float) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+def _missing_qt_timeout_probe(process: _WindowsProcess) -> dict[str, object]:
+    # Observe only after the synthetic scenario has already failed. Never
+    # retain a process ID, path, window title, or native error text.
+    try:
+        observations, active, assigned = process._current_job_state()
+        roles = [
+            "application" if ntpath.basename(item.image).lower() == "metroliza_application.exe"
+            else "launcher" if ntpath.basename(item.image).lower() == "metroliza.exe"
+            else "other"
+            for item in observations[:8]
+        ]
+        return {
+            "status": "observed",
+            "primary_running": process.poll() is None,
+            "active": active,
+            "assigned": assigned,
+            "roles": sorted(roles),
+            "roles_overflow": len(observations) > 8,
+            "windows": process._api.visible_owned_window_classes(observations),
+            "probe_effect": "one_extra_job_snapshot_and_window_enumeration_after_timeout",
+        }
+    except Exception:
+        return {"status": "unavailable"}
 
 
 def _finish_process_without_receipt(
@@ -4715,7 +4795,16 @@ class _QualificationRunner:
                         self.artifact / "metroliza_application.exe",
                     ),
                 )
-                exit_code = self._wait_missing_exit(process)
+                try:
+                    exit_code = self._wait_missing_exit(process)
+                except QualificationFailure as error:
+                    if error.failure_id == "scenario_timeout":
+                        print(
+                            "qualification_missing_qt_timeout="
+                            + json.dumps(_missing_qt_timeout_probe(process)),
+                            flush=True,
+                        )
+                    raise
                 if exit_code is None:
                     raise QualificationFailure("scenario_timeout")
                 if exit_code == 0:
