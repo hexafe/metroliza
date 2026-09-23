@@ -2266,10 +2266,11 @@ class _WindowsApi:
             for item in observations
         }
         windows: list[str] = []
-        callback_failed = False
+        callback_errors: list[BaseException] = []
+        overflow = False
 
         def visit(window, _parameter):
-            nonlocal callback_failed
+            nonlocal overflow
             try:
                 process_id = self.wintypes.DWORD()
                 if not self.user.GetWindowThreadProcessId(window, ctypes.byref(process_id)):
@@ -2278,15 +2279,15 @@ class _WindowsApi:
                 if role is None or not self.user.IsWindowVisible(window):
                     return True
                 if len(windows) == 8:
+                    overflow = True
                     return False
                 name = ctypes.create_unicode_buffer(128)
                 if not self.user.GetClassNameW(window, name, len(name)):
-                    callback_failed = True
-                    return False
+                    raise OSError("window_class_unavailable")
                 windows.append(role + ("_dialog" if name.value == "#32770" else "_other"))
                 return True
-            except Exception:
-                callback_failed = True
+            except BaseException as error:
+                callback_errors.append(error)
                 return False
 
         callback = self.WNDENUMPROC(visit)
@@ -2294,12 +2295,23 @@ class _WindowsApi:
             completed = bool(self.user.EnumWindows(callback, 0))
         except Exception:
             return {"status": "unavailable"}
-        if callback_failed:
+        return self._classify_window_enum(completed, overflow, callback_errors, windows)
+
+    @staticmethod
+    def _classify_window_enum(
+        completed: bool, overflow: bool,
+        callback_errors: list[BaseException], windows: list[str],
+    ) -> dict[str, object]:
+        if callback_errors:
+            if not isinstance(callback_errors[0], Exception):
+                raise callback_errors[0]
+            return {"status": "unavailable"}
+        if not completed and not overflow:
             return {"status": "unavailable"}
         return {
             "status": "observed",
             "classes": sorted(windows),
-            "overflow": not completed,
+            "overflow": overflow,
         }
 
     def _enumerate_normal_windows(
@@ -4795,16 +4807,7 @@ class _QualificationRunner:
                         self.artifact / "metroliza_application.exe",
                     ),
                 )
-                try:
-                    exit_code = self._wait_missing_exit(process)
-                except QualificationFailure as error:
-                    if error.failure_id == "scenario_timeout":
-                        print(
-                            "qualification_missing_qt_timeout="
-                            + json.dumps(_missing_qt_timeout_probe(process)),
-                            flush=True,
-                        )
-                    raise
+                exit_code = self._wait_missing_qt_exit(process)
                 if exit_code is None:
                     raise QualificationFailure("scenario_timeout")
                 if exit_code == 0:
@@ -4857,6 +4860,21 @@ class _QualificationRunner:
                 return exit_code
             time.sleep(0.02)
         raise QualificationFailure("scenario_timeout")
+
+    def _wait_missing_qt_exit(self, process: _WindowsProcess) -> int | None:
+        try:
+            return self._wait_missing_exit(process)
+        except QualificationFailure as error:
+            if error.failure_id == "scenario_timeout":
+                try:
+                    print(
+                        "qualification_missing_qt_timeout="
+                        + json.dumps(_missing_qt_timeout_probe(process)),
+                        flush=True,
+                    )
+                except Exception:
+                    pass
+            raise
 
     def run(
         self,
