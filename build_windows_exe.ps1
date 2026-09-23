@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $originalBuildProvenancePath = $env:METROLIZA_BUILD_PROVENANCE_PATH
+$originalVirtualEnv = $env:VIRTUAL_ENV
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvDir = Join-Path $repoRoot '.venv-build'
@@ -140,6 +141,7 @@ try {
     }
 
     $env:Path = "$venvScripts;$env:Path"
+    $env:VIRTUAL_ENV = $venvDir
 
     if (-not $SkipInstall) {
         Invoke-Step 'Installing packaging dependencies' {
@@ -286,6 +288,12 @@ try {
     }
 }
 finally {
+    if ($null -eq $originalVirtualEnv) {
+        Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:VIRTUAL_ENV = $originalVirtualEnv
+    }
     if ($null -eq $originalBuildProvenancePath) {
         Remove-Item Env:METROLIZA_BUILD_PROVENANCE_PATH -ErrorAction SilentlyContinue
     }
