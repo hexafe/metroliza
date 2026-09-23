@@ -624,13 +624,30 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
         for process in owned:
             process.resume()
         deadline = time.monotonic() + 30
+        concurrent_released = False
         while time.monotonic() < deadline:
-            for index, process in enumerate(owned):
-                process.observe()
-                if (tmp_path / str(index) / "control-ready").exists():
-                    if mode.startswith("late_"):
-                        process.mark_runtime_ready()
-                    (tmp_path / str(index) / "control-finish").touch()
+            if mode == "concurrent":
+                # Keep both controlled applications alive throughout the two
+                # Job observations. This case proves journal separation, not
+                # image-query behavior while a peer is exiting; the other
+                # modes and the negative identity controls cover that edge.
+                if not concurrent_released:
+                    for process in owned:
+                        process.observe()
+                    if all(
+                        (tmp_path / str(index) / "control-ready").exists()
+                        for index in range(len(owned))
+                    ):
+                        for index in range(len(owned)):
+                            (tmp_path / str(index) / "control-finish").touch()
+                        concurrent_released = True
+            else:
+                for index, process in enumerate(owned):
+                    process.observe()
+                    if (tmp_path / str(index) / "control-ready").exists():
+                        if mode.startswith("late_"):
+                            process.mark_runtime_ready()
+                        (tmp_path / str(index) / "control-finish").touch()
             if all(
                 process.poll() is not None and process.active_processes() == 0 for process in owned
             ):
