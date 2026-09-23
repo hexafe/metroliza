@@ -6,10 +6,12 @@ from contextlib import closing
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import qualify_windows_candidate_core as driver
+from scripts import qualify_windows_diagnostics as diagnostics
 from tests.test_windows_candidate_closeout import closeout_observation
 
 REPO = Path(__file__).resolve().parents[1]
@@ -47,6 +49,25 @@ def test_private_core_guard_preserves_known_failure_and_closes_unknown_stage() -
     assert [str(error) for error in failures] == [
         "core_startup_receipt_missing", "unexpected_private_core_unknown",
     ]
+
+
+@pytest.mark.parametrize("reason,cleanup,expected", (
+    ("qualification_cleanup_failed", "failed", "private_root_cleanup_failed"),
+    ("invalid_qualification_root", "not_attempted", "private_root_unavailable"),
+    ("unexpected", "complete", "unexpected_private_root_wrapper"),
+))
+def test_private_root_wrapper_preserves_only_closed_failure(reason, cleanup, expected) -> None:
+    def rejected(_action):
+        raise diagnostics.QualificationFailure(
+            "scenario_failed", qualification_reason=reason, qualification_cleanup=cleanup,
+        )
+
+    diag = SimpleNamespace(
+        QualificationFailure=diagnostics.QualificationFailure,
+        _run_in_private_directory=rejected,
+    )
+    with pytest.raises(driver.CandidateFailure, match=f"^{expected}$"):
+        driver._run_private_directory_closed(diag, lambda _: None)
 
 
 def import_guard_evidence():

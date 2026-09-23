@@ -89,6 +89,18 @@ def _guard_private_core(action, stage: dict[str, str], failures: list[CandidateF
     return None
 
 
+def _run_private_directory_closed(diag, action):
+    try:
+        return diag._run_in_private_directory(action)
+    except diag.QualificationFailure as error:
+        reason = error.qualification_reason
+        if reason == "qualification_cleanup_failed" or error.qualification_cleanup == "failed":
+            raise CandidateFailure("private_root_cleanup_failed") from None
+        if reason == "invalid_qualification_root":
+            raise CandidateFailure("private_root_unavailable") from None
+        raise CandidateFailure("unexpected_private_root_wrapper") from None
+
+
 def _regular(path: Path) -> bool:
     info = path.lstat()
     return (
@@ -947,7 +959,7 @@ def qualify(args) -> dict:
         )
 
     try:
-        artifacts = diag._run_in_private_directory(guarded_run)
+        artifacts = _run_private_directory_closed(diag, guarded_run)
         if failures:
             raise failures[0]
         _verify_dashboard_closed(diag, output, artifacts, args.browser)
