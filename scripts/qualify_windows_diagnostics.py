@@ -207,6 +207,8 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "qualification_stage_mismatch",
         "qualification_import_failed",
         "qualification_incident_missing",
+        "flood_incident_unavailable",
+        "flood_loss_unobserved",
         "qualification_measurements_missing",
         "qualification_export_failed",
         "qualification_export_unavailable",
@@ -4792,7 +4794,12 @@ class _QualificationRunner:
     def run_flood(self) -> None:
         before = {record.report_id for record in _reports(self.store)}
         self._scenario("flood", "flood")
-        incident = _newest_incident(self.store, before)
+        try:
+            incident = _newest_incident(self.store, before)
+        except QualificationFailure as error:
+            raise QualificationFailure(
+                "incident_invalid", qualification_reason="flood_incident_unavailable"
+            ) from error
         explicit_channel = incident.observation.channel in {
             ChannelState.FLOODED,
             ChannelState.LOSS_OBSERVED,
@@ -4810,7 +4817,9 @@ class _QualificationRunner:
         if not explicit_channel or (
             incident.observation.channel is ChannelState.LOSS_OBSERVED and not explicit_loss
         ):
-            raise QualificationFailure("incident_invalid")
+            raise QualificationFailure(
+                "incident_invalid", qualification_reason="flood_loss_unobserved"
+            )
         self.flood_loss = {
             "source_dropped": incident.observation.source_dropped,
             **{field: getattr(loss, field) for field in RING_LOSS_FIELDS},
