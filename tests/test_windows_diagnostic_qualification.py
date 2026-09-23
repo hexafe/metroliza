@@ -42,12 +42,13 @@ class _WindowUser:
         self.posted = []
         self.failure = None
         self.post_succeeds = True
+        self.enum_failure = False
 
     def EnumWindows(self, callback, parameter):
         for window in tuple(self.windows):
             if not callback(window, parameter):
                 return False
-        return True
+        return not self.enum_failure
 
     def IsWindow(self, window):
         if self.failure is not None:
@@ -76,6 +77,11 @@ class _WindowUser:
     def GetWindowTextW(self, window, title, capacity):
         value = self.windows[window]["title"][: capacity - 1]
         title.value = value
+        return len(value)
+
+    def GetClassNameW(self, window, name, capacity):
+        value = self.windows[window].get("class_name", "#32770")[: capacity - 1]
+        name.value = value
         return len(value)
 
     def PostMessageW(self, window, message, word, long_value):
@@ -4762,7 +4768,7 @@ def test_missing_qt_restore_failure_preserves_classified_primary(
         qualification_exit_code=7,
     )
 
-    def fail_after_hiding(_process):
+    def fail_after_hiding(_process, **_kwargs):
         resource.with_name("qwindows.qualification-missing").unlink()
         raise primary
 
@@ -4800,6 +4806,120 @@ def test_missing_qt_timeout_observation_discards_native_identity_and_titles() ->
     serialized = json.dumps(result)
     assert "9123" not in serialized and "9124" not in serialized
     assert "C:\\private" not in serialized
+
+
+def test_missing_qt_window_probe_separates_overflow_from_win32_failure() -> None:
+    observation = (qualification._ProcessObservation(9123, 1, r"C:\private\metroliza_application.exe"),)
+    windows = {index: _normal_window(9123, "private title") for index in range(1, 10)}
+    api = _window_api(windows)
+
+    observed = api.visible_owned_window_classes(observation)
+
+    assert observed == {
+        "status": "observed", "classes": ["application_dialog"] * 8, "overflow": True
+    }
+    assert "private title" not in json.dumps(observed)
+
+    api.user.windows = {}
+    api.user.enum_failure = True
+    assert api.visible_owned_window_classes(observation) == {"status": "unavailable"}
+
+
+def test_missing_qt_window_probe_preserves_native_callback_interrupt() -> None:
+    api = _window_api({1: _normal_window(9123, "private title")})
+    observation = (qualification._ProcessObservation(9123, 1, r"C:\private\metroliza_application.exe"),)
+    primary = KeyboardInterrupt("callback interrupt")
+
+    def interrupted(_window, _process_id):
+        raise primary
+
+    api.user.GetWindowThreadProcessId = interrupted
+    with pytest.raises(KeyboardInterrupt) as caught:
+        api.visible_owned_window_classes(observation)
+    assert caught.value is primary
+
+
+def test_missing_qt_timeout_logging_does_not_replace_failure(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setattr(qualification, "_reports", lambda _store: ())
+    resource = (
+        tmp_path / "artifact" / "_internal" / "PyQt6" / "Qt6"
+        / "plugins" / "platforms" / "qwindows.dll"
+    )
+    resource.parent.mkdir(parents=True)
+    resource.write_bytes(b"fixed qwindows")
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = tmp_path / "artifact"
+    runner.state_base = tmp_path / "state"
+    runner.state_base.mkdir()
+    runner.launcher = runner.artifact / "metroliza.exe"
+    runner.store = qualification.IncidentStore(runner.state_base / "diagnostics")
+    runner.results = {}
+    runner.api = _FakeApi(1, "ready")
+    runner._root = lambda _label: tmp_path
+    primary = qualification.QualificationFailure("scenario_timeout")
+    runner._wait_missing_exit = lambda _process, **_kwargs: (_ for _ in ()).throw(primary)
+
+    def output_unavailable(*_args, **_kwargs):
+        raise OSError("closed stdout")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr("builtins.print", output_unavailable)
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            runner.run_missing_qt_resource()
+
+    assert caught.value is primary
+    assert resource.read_bytes() == b"fixed qwindows"
+
+
+def test_missing_qt_negative_control_closes_only_verified_owned_dialog() -> None:
+    api = _window_api({1: _normal_window(9123, "private title")})
+    observation = (
+        qualification._ProcessObservation(9123, 1, r"C:\private\metroliza_application.exe"),
+    )
+    application = Path(r"C:\private\metroliza_application.exe")
+
+    assert api.close_owned_missing_qt_dialog(observation, application) is True
+    assert api.user.posted == [(1, qualification.WM_CLOSE, 0, 0)]
+
+    api.user.posted.clear()
+    assert api.close_owned_missing_qt_dialog(
+        (qualification._ProcessObservation(9124, 1, r"C:\private\metroliza.exe"),),
+        application,
+    ) is False
+    assert api.user.posted == []
+
+    api.user.windows[2] = _normal_window(9123, "second private title")
+    with pytest.raises(qualification.QualificationFailure) as caught:
+        api.close_owned_missing_qt_dialog(observation, application)
+    assert caught.value.qualification_reason == "normal_window_ambiguous"
+    assert api.user.posted == []
+
+
+def test_missing_qt_negative_control_dismissal_precedes_required_exit(
+    tmp_path, capsys
+) -> None:
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.artifact = tmp_path
+    runner.deadline = time.monotonic() + 2
+
+    class _DialogProcess:
+        dismissed = False
+
+        def observe(self):
+            pass
+
+        def poll(self):
+            return 1 if self.dismissed else None
+
+        def close_missing_qt_dialog(self, _application):
+            self.dismissed = True
+            return True
+
+    process = _DialogProcess()
+    assert runner._wait_missing_qt_exit(process) == 1
+    assert process.dismissed is True
+    assert '"owned_dialog_dismissed"' in capsys.readouterr().out
 
 
 def test_immutable_receipts_preserve_ready_during_complete_observation(
