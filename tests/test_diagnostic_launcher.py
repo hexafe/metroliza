@@ -818,9 +818,10 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
 
     def held_begin(*args, **kwargs):
         sequence.append("begin_entered")
-        begin_entered.set()
-        release_begin.wait(2)
         result = original_begin(*args, **kwargs)
+        assert result.status is StoreStatus.MARKER_STARTED
+        begin_entered.set()
+        assert release_begin.wait(2)
         sequence.append("begin_finished")
         return result
 
@@ -835,7 +836,19 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     assert publisher.begin()
     assert begin_entered.wait(1)
     statuses = []
-    closer = threading.Thread(target=lambda: statuses.append(publisher.close(observed)))
+    close_observation = []
+
+    def close_and_observe():
+        started = time.monotonic()
+        statuses.append(publisher.close(observed))
+        close_observation.append({
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "worker_alive": publisher.worker.is_alive(),
+            "done": publisher.done.is_set(),
+            "final_saved": publisher.final_saved.is_set(),
+        })
+
+    closer = threading.Thread(target=close_and_observe)
     closer.start()
     try:
         release_begin.set()
@@ -844,7 +857,9 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
         release_begin.set()
         closer.join(2)
 
-    assert statuses == [StoreStatus.SAVED]
+    assert statuses == [StoreStatus.SAVED], {
+        "sequence": sequence, "at_close": close_observation,
+    }
     assert sequence == ["begin_entered", "begin_finished", "publish"]
     assert store.list_unclean_sessions().sessions == ()
 
