@@ -651,7 +651,18 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
         assert window._report_start_allowed()
         release.set()
         (host.parse_button if stage == "import" else host.scan_button).click()
-        wait_until(app, host.can_change_workspace)
+        try:
+            wait_until(app, host.can_change_workspace)
+        except AssertionError as error:
+            worker = host.parse_thread if stage == "import" else host.preflight_thread
+            raise AssertionError(
+                "report_worker_terminal_timeout: "
+                f"stage={stage} target_entered={entered.is_set()} "
+                f"worker_present={worker is not None} "
+                f"worker_running={worker.isRunning() if worker is not None else False} "
+                f"parse_error={bool(host.parse_error_message)} "
+                f"cancelled={host.parsing_canceled}"
+            ) from error
         if stage == "review":
             host.parse_button.click()
             wait_until(app, host.can_change_workspace)

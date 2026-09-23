@@ -91,6 +91,18 @@ jobs:
           & .\.venv-build\Scripts\python.exe scripts/qualify_windows_diagnostics.py --artifact-dir $env:CANDIDATE_PACKAGE --output-dir (Join-Path $env:CANDIDATE_RECEIPTS 'diagnostics')
           if ($LASTEXITCODE -ne 0) { throw 'Candidate supervised incident acceptance failed' }
 
+      - name: Verify exact source checkout remains clean after build
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw 'Candidate source head changed during build' }
+          $dirty = @(git status --porcelain)
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate source status unavailable' }
+          if ($dirty.Count -ne 0) {
+            $dirty | Write-Host
+            throw 'Candidate source checkout is dirty after build'
+          }
+
       - name: Qualify actual core, OCR, private dashboard and geometry at each scale
         shell: pwsh
         env:
