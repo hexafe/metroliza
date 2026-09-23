@@ -642,7 +642,11 @@ def test_launch_failure_cleans_created_process_and_preserves_primary(
     api.EXTENDED_LIMITS = _Limits
     api.STARTUPINFOW = _Startup
     api.PROCESS_INFORMATION = _Process
-    api._restricted_token = lambda: "token"
+    def acquire_token(*, owned):
+        owned.append("token")
+        return "token"
+
+    api._restricted_token = acquire_token
     api._job_accounting = lambda _job: (0, 1)
     monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
     monkeypatch.setattr(qualification.ctypes, "sizeof", lambda _value: 1)
@@ -718,7 +722,11 @@ def _fake_launch_api(tmp_path, monkeypatch, kernel):
         "Limits", (), {"BasicLimitInformation": type("Basic", (), {"LimitFlags": 0})()}
     )()
     api.STARTUPINFOW = lambda: type("Startup", (), {"cb": 0})()
-    api._restricted_token = lambda: "token"
+    def acquire_token(*, owned):
+        owned.append("token")
+        return "token"
+
+    api._restricted_token = acquire_token
 
     def create(*arguments):
         process = arguments[-1]
@@ -6254,7 +6262,11 @@ def test_private_store_initialization_restores_identity_and_closes_token(tmp_pat
     calls = []
     token = object()
     primary = KeyboardInterrupt("controlled interruption")
-    api._restricted_token = lambda: token
+    def acquire(*, owned):
+        owned.append(token)
+        return token
+
+    api._restricted_token = acquire
 
     def impersonate(value):
         assert value is token
@@ -6314,7 +6326,50 @@ def test_private_store_initialization_refuses_unowned_or_existing_root(tmp_path,
     from types import SimpleNamespace
 
     api = object.__new__(qualification._WindowsApi)
-    api._restricted_token = lambda: pytest.fail("must reject before acquiring token")
+    api._restricted_token = lambda **kwargs: pytest.fail("must reject before acquiring token")
     store = SimpleNamespace(root=None if root_kind == "missing" else tmp_path)
     with pytest.raises(qualification.QualificationFailure):
         api.initialize_incident_store(store)
+
+
+@pytest.mark.parametrize("cleanup_interrupt", [False, True])
+@pytest.mark.parametrize("boundary", ["initialize_incident_store", "launch"])
+def test_store_token_transfer_interrupt_closes_registered_native_handle(tmp_path, monkeypatch, cleanup_interrupt, boundary):
+    primary = KeyboardInterrupt("controlled acquisition transfer")
+    secondary = SystemExit("controlled close interruption")
+    closed = []
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = SimpleNamespace(HANDLE=ctypes.c_void_p, DWORD=ctypes.c_uint32)
+
+    def open_current(_process, _access, current):
+        current.value = 1
+        return True
+
+    def restrict(*arguments):
+        arguments[-1].value = 2
+        return True
+
+    def close(handle):
+        closed.append(handle.value)
+        if handle.value == 2 and cleanup_interrupt:
+            raise secondary
+        return True
+
+    api.kernel = SimpleNamespace(GetCurrentProcess=lambda: -1, CloseHandle=close)
+    api.advapi = SimpleNamespace(OpenProcessToken=open_current, CreateRestrictedToken=restrict,
+        CreateWellKnownSid=lambda *args: True,
+        ImpersonateLoggedOnUser=lambda *args: pytest.fail("interrupt precedes impersonation"))
+    api.SID_AND_ATTRIBUTES = lambda *args: object()
+    api._set_medium_integrity = lambda token: None
+    api._integrity_rid = lambda token: qualification.MEDIUM_INTEGRITY_RID
+    api._has_effective_admin_membership = lambda *args: False
+    api._set_private_default_dacl = lambda token: None
+    monkeypatch.setattr(qualification.ctypes, "byref", lambda value: value)
+    api.PROCESS_INFORMATION = _LaunchTransferProcessInfo
+    store = SimpleNamespace(root=tmp_path / "new")
+    action = (lambda: api.initialize_incident_store(store)) if boundary == "initialize_incident_store" else (
+        lambda: api.launch(tmp_path / "app.exe", {}, tmp_path))
+    with pytest.raises(KeyboardInterrupt) as caught:
+        _interrupt_after_call(getattr(api, boundary).__code__, "token", primary, action)
+    assert caught.value is primary
+    assert closed == [1, 2]

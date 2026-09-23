@@ -1685,8 +1685,9 @@ class _WindowsApi:
         # for every application launch, before any host-side listing creates it.
         if store.root is None or store.root.exists() or store.root.is_symlink():
             raise QualificationFailure("restricted_launch_unavailable")
-        token = self._restricted_token()
+        owned_tokens = []
         try:
+            token = self._restricted_token(owned=owned_tokens)
             try:
                 if not self.advapi.ImpersonateLoggedOnUser(token):
                     raise QualificationFailure("restricted_launch_unavailable")
@@ -1703,9 +1704,14 @@ class _WindowsApi:
                 if not reverted:
                     os._exit(22)
         finally:
-            _attempt_cleanup(lambda: self._require_closed_owned_token(token))
+            primary = sys.exc_info()[1]
+            for owned_token in owned_tokens:
+                if primary is not None:
+                    self._close_restricted_after_current_close_failure(owned_token, primary)
+                else:
+                    _attempt_cleanup(lambda: self._require_closed_owned_token(owned_token))
 
-    def _restricted_token(self):
+    def _restricted_token(self, *, owned=None):
         wt = self.wintypes
         current = wt.HANDLE()
         restricted = wt.HANDLE()
@@ -1740,6 +1746,8 @@ class _WindowsApi:
             if self._has_effective_admin_membership(restricted, sid):
                 raise QualificationFailure("restricted_launch_unavailable")
             self._set_private_default_dacl(restricted)
+            if owned is not None:
+                owned.append(restricted)
             return restricted
         except BaseException:
             if restricted:
@@ -1769,6 +1777,7 @@ class _WindowsApi:
     ) -> _WindowsProcess:
         process = self.PROCESS_INFORMATION()
         token = None
+        owned_tokens = []
         job = None
         launched = None
         try:
@@ -1777,7 +1786,7 @@ class _WindowsApi:
                 executable, expected_images, cwd, environment, runtime_evidence
             )
             probe = None if runtime_evidence is None else runtime_evidence.probe
-            token = self._restricted_token()
+            token = self._restricted_token(owned=owned_tokens)
             job = self.kernel.CreateJobObjectW(None, None)
             if not job:
                 raise QualificationFailure("restricted_launch_unavailable")
@@ -1832,10 +1841,13 @@ class _WindowsApi:
             launched._resume_pending = defer_resume
             if owned is not None:
                 owned.append(launched)
+            # The complete wrapper (and possibly its caller) now owns the
+            # handle. No acquisition-only registry is needed on success.
+            owned_tokens.clear()
             return launched
         except BaseException as error:
             cleanup_succeeded, cleanup_error = self._cleanup_failed_launch(
-                process, job, token, launched
+                process, job, owned_tokens[0] if owned_tokens else token, launched
             )
             cleanup_succeeded, cleanup_error = self._close_failed_runtime_evidence(
                 runtime_evidence, cleanup_succeeded, cleanup_error, launched=launched
