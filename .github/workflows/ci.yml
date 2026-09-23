@@ -148,7 +148,11 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-candidate-acceptance-receipts
-          path: ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.json
+          path: |
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.json
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.sqlite
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.xlsx
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.html
           if-no-files-found: warn
 
       - name: Retain accepted engineering package for orchestrator review

@@ -57,7 +57,11 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate()
     assert "--expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree" in final["run"]
     assert "if ($LASTEXITCODE -ne 0) { throw" in final["run"]
     uploads = [step for step in steps if "actions/upload-artifact@" in step.get("uses", "")]
-    receipts = next(step for step in uploads if step["with"]["path"].endswith("/**/*.json"))
+    receipts = next(step for step in uploads if step["with"]["name"] == "windows-candidate-acceptance-receipts")
+    receipt_root = "${{ runner.temp }}/metroliza-candidate-acceptance/**/*"
+    assert set(receipts["with"]["path"].splitlines()) == {
+        f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")
+    }
     package = next(step for step in uploads if step["with"]["path"].endswith(".zip"))
     assert receipts["if"] == "always()" and package["if"] == "success()"
     assert package["with"]["if-no-files-found"] == "error"

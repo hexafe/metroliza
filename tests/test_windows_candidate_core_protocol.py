@@ -20,6 +20,35 @@ PUBLIC_FIXTURES = REPO / "tests/fixtures/windows_candidate"
 SHA = "1" * 40
 
 
+def test_unexpected_private_core_exception_reports_only_the_fixed_stage() -> None:
+    failures = []
+
+    def unexpected():
+        raise OSError("SYNTHETIC_PRIVATE_PATH")
+
+    assert driver._guard_private_core(unexpected, {"name": "runtime_receipt"}, failures) is None
+    assert [str(error) for error in failures] == ["unexpected_runtime_receipt"]
+    assert "SYNTHETIC_PRIVATE_PATH" not in repr(failures)
+
+
+def test_private_core_guard_preserves_known_failure_and_closes_unknown_stage() -> None:
+    failures = []
+
+    def known_failure():
+        raise driver.CandidateFailure("core_startup_receipt_missing")
+
+    assert driver._guard_private_core(known_failure, {"name": "runtime_observation"}, failures) is None
+    assert [str(error) for error in failures] == ["core_startup_receipt_missing"]
+
+    def unknown_stage():
+        raise RuntimeError("SYNTHETIC_PRIVATE_STAGE")
+
+    assert driver._guard_private_core(unknown_stage, {"name": "SYNTHETIC_PRIVATE_STAGE"}, failures) is None
+    assert [str(error) for error in failures] == [
+        "core_startup_receipt_missing", "unexpected_private_core_unknown",
+    ]
+
+
 def import_guard_evidence():
     import hashlib
 

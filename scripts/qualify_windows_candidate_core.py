@@ -66,6 +66,29 @@ class CandidateFailure(RuntimeError):
     """Only fixed identifiers from this driver are exposed in its receipt."""
 
 
+_PRIVATE_CORE_STAGES = frozenset({
+    "package_relocation", "fixtures", "owned_launch", "runtime_observation",
+    "runtime_receipt", "owned_topology", "fresh_reopen", "package_integrity",
+    "retained_artifacts", "evidence_receipts", "cleanup",
+})
+
+
+def _closed_unexpected_stage(stage: str) -> CandidateFailure:
+    return CandidateFailure(
+        "unexpected_" + (stage if stage in _PRIVATE_CORE_STAGES else "private_core_unknown")
+    )
+
+
+def _guard_private_core(action, stage: dict[str, str], failures: list[CandidateFailure]):
+    try:
+        return action()
+    except CandidateFailure as error:
+        failures.append(error)
+    except Exception:
+        failures.append(_closed_unexpected_stage(stage["name"]))
+    return None
+
+
 def _regular(path: Path) -> bool:
     info = path.lstat()
     return (
@@ -583,6 +606,15 @@ def _verify_dashboard_rendering(diag, output: Path, artifacts: dict, browser: Pa
     artifacts["browser_evidence"] = {"path": path.name, "sha256": _hash(path)}
 
 
+def _verify_dashboard_closed(diag, output: Path, artifacts: dict, browser: Path) -> None:
+    try:
+        _verify_dashboard_rendering(diag, output, artifacts, browser)
+    except CandidateFailure:
+        raise
+    except Exception:
+        raise CandidateFailure("unexpected_browser_verifier") from None
+
+
 def _observe_core_startup(work: Path, process, observed: bool, *, scenario="core") -> bool:
     if observed:
         return True
@@ -768,8 +800,10 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
 
 
 def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
-                      output: Path, deadline: float, before: str) -> dict:
+                      output: Path, deadline: float, before: str, stage: dict[str, str]) -> dict:
+    stage["name"] = "package_relocation"
     relocated = diag._relocate_package(artifact, private, deadline)
+    stage["name"] = "fixtures"
     staged_fixtures = _stage_known_fixtures(fixtures, private)
     staged_ocr = _stage_ocr_fixture(args.source_checkout, private)
     work = private / "core scenario"
@@ -799,10 +833,12 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     owned = []
     terminate = True
     try:
+        stage["name"] = "owned_launch"
         process = diag._WindowsApi().launch(
             relocated / "metroliza.exe", environment, launch_cwd, owned=owned,
             expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
         )
+        stage["name"] = "runtime_observation"
         startup_observed = False
         while time.monotonic() < deadline:
             process.observe()
@@ -817,6 +853,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             raise CandidateFailure("package_scenario_nonzero_exit")
         if not startup_observed:
             raise CandidateFailure("core_startup_receipt_missing")
+        stage["name"] = "runtime_receipt"
         result_path = work / SCENARIO_FILE
         if not result_path.exists():
             raise CandidateFailure("package_core_hook_or_receipt_missing")
@@ -825,21 +862,26 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         _validate_closeout_observation(payload.get("closeout_observation"), packaged=True, expected_dpr=float(args.dpi_scale))
         if not diag._wait_for_job_exit(process, deadline):
             raise CandidateFailure("owned_processes_remain")
+        stage["name"] = "owned_topology"
         topology = process.topology(relocated, all_exited=True)
         # Use the accepted dependency's complete onefile-supervisor /
         # onedir-child topology contract, including both launcher processes.
         diag._validate_topology_record(diag._topology_record(topology), supervised=True,
                                        require_runtime_evidence=True)
+        stage["name"] = "fresh_reopen"
         fresh_reopen = _run_fresh_reopen(
             private, diag=diag, relocated=relocated, environment=environment, work=work,
             prior=payload, args=args, deadline=deadline, output=output,
         )
+        stage["name"] = "package_integrity"
         after = diag._tree_digest(diag._package_inventory(relocated))
         if after != before:
             raise CandidateFailure("package_tree_changed_during_scenario")
+        stage["name"] = "retained_artifacts"
         payload["artifacts"]["database"]["sha256"] = _hash(work / payload["relative_artifact_dir"] / "reports.sqlite")
         artifacts = _copy_verified_results(work, payload, output, args.oracle)
         artifacts.update(fresh_reopen)
+        stage["name"] = "evidence_receipts"
         process_result = output / "process-topology.json"
         with process_result.open("x", encoding="ascii") as stream:
             json.dump(diag._topology_record(topology), stream)
@@ -859,7 +901,11 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         terminate = False
         return artifacts
     finally:
-        diag._close_owned_processes(owned, terminate=terminate)
+        try:
+            diag._close_owned_processes(owned, terminate=terminate)
+        except Exception:
+            stage["name"] = "cleanup"
+            raise
 
 
 def qualify(args) -> dict:
@@ -890,22 +936,21 @@ def qualify(args) -> dict:
     # Keep our closed failure identifier across the dependency's wrapper, which
     # intentionally replaces unknown exception text. Cleanup still has to pass.
     failures = []
+    private_stage = {"name": "package_relocation"}
 
     def guarded_run(private):
-        try:
-            return _run_private_core(
+        return _guard_private_core(
+            lambda: _run_private_core(
                 private, args=args, diag=diag, artifact=artifact, fixtures=fixtures,
-                output=output, deadline=deadline, before=before,
-            )
-        except CandidateFailure as error:
-            failures.append(error)
-            return None
+                output=output, deadline=deadline, before=before, stage=private_stage,
+            ), private_stage, failures,
+        )
 
     try:
         artifacts = diag._run_in_private_directory(guarded_run)
         if failures:
             raise failures[0]
-        _verify_dashboard_rendering(diag, output, artifacts, args.browser)
+        _verify_dashboard_closed(diag, output, artifacts, args.browser)
         result = {
             "schema_version": 1,
             "status": "passed",
