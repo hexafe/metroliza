@@ -478,10 +478,32 @@ def _verify_preservation(scratch: Path, workbook: Path) -> dict[str, str]:
     }
 
 
+def _require_active_cancellation_result(
+    active: Any,
+    progress_values: list[int],
+    cancellation_observation: dict[str, int | bool],
+    measurement_progress_paused: Event,
+) -> None:
+    from metroliza.exporting.export_outcomes import ExportRunStatus
+
+    if not progress_values or progress_values[0] != 0:
+        raise XlsxScenarioFailure("active_cancel_operation_not_started")
+    if not cancellation_observation.get("running_before_stop"):
+        raise XlsxScenarioFailure("active_cancel_request_not_observed")
+    if not cancellation_observation.get("application_thread"):
+        raise XlsxScenarioFailure("active_cancel_callback_thread")
+    if not measurement_progress_paused.is_set():
+        raise XlsxScenarioFailure("active_cancel_measurement_barrier_missing")
+    if (
+        active.export_run_result is None
+        or active.export_run_result.status is not ExportRunStatus.CANCELLED
+    ):
+        raise XlsxScenarioFailure("active_cancel_outcome")
+
+
 def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any) -> dict[str, str]:
     """Cancel a running real exporter after its measurement stage begins."""
     from PyQt6.QtCore import QThread
-    from metroliza.exporting.export_outcomes import ExportRunStatus
 
     completed = workbook.read_bytes()
     active = _make_thread(
@@ -537,19 +559,9 @@ def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any)
         # watchdog bounds cleanup if cooperative cancellation cannot complete.
         active.wait()
         active.update_progress.disconnect(request_cancellation)
-    if not progress_values or progress_values[0] != 0:
-        raise XlsxScenarioFailure("active_cancel_operation_not_started")
-    if not cancellation_observation.get("running_before_stop"):
-        raise XlsxScenarioFailure("active_cancel_request_not_observed")
-    if not cancellation_observation.get("application_thread"):
-        raise XlsxScenarioFailure("active_cancel_callback_thread")
-    if not measurement_progress_paused.is_set():
-        raise XlsxScenarioFailure("active_cancel_measurement_barrier_missing")
-    if (
-        active.export_run_result is None
-        or active.export_run_result.status is not ExportRunStatus.CANCELLED
-    ):
-        raise XlsxScenarioFailure("active_cancel_outcome")
+    _require_active_cancellation_result(
+        active, progress_values, cancellation_observation, measurement_progress_paused,
+    )
     _require_equal(workbook.read_bytes(), completed, "active_cancel_preservation")
     _require_equal(_directory_snapshot(scratch), before_cancel, "active_cancel_staging_cleanup")
     return {"active_export_cancellation_preserves_workbook": "passed"}
