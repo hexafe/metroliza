@@ -20,6 +20,7 @@ NONCE = "METROLIZA_WINDOWS_RUNTIME_AUDIT_NONCE"
 MAX_EVENTS = 16
 FAILURE_EXIT = 97
 CALLERS = frozenset({"setuptools", "numpy", "matplotlib", "platformdirs", "metroliza", "other"})
+PLATFORM_CALLERS = CALLERS - {"metroliza", "other"}
 KINDS = frozenset({
     "platform_ver", "ocr_worker_launch", "other", "other_arguments", "other_executable",
     "other_command", "other_frames", "other_depth",
@@ -90,7 +91,7 @@ def classify_call(
         name = frame.f_code.co_name
         if module == "platform" and name in {"_syscmd_ver", "win32_ver"}:
             required.add(name)
-        if type(module) is str and module.split(".", 1)[0] in CALLERS - {"other"}:
+        if type(module) is str and module.split(".", 1)[0] in PLATFORM_CALLERS:
             caller = module.split(".", 1)[0]
         frame = frame.f_back
     else:

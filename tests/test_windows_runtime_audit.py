@@ -216,6 +216,14 @@ def test_command_and_required_frames_are_exact_not_basename_allowance():
         "platform_ver",
         "setuptools",
     )
+    nested = _frame("platform", "_syscmd_ver", _frame(
+        "platform", "win32_ver", _frame(
+            "numpy", "version", _frame("metroliza.app.windows_candidate_qualification", "core"),
+        ),
+    ))
+    assert audit.classify_call((expected, expected + ' /c "ver"'), nested, expected) == (
+        "platform_ver", "numpy",
+    )
     for command in (
         "ver",
         expected + ' /c "ver & echo private"',
