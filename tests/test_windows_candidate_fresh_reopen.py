@@ -128,13 +128,57 @@ def test_fresh_process_launch_transfer_interrupt_closes_registered_job(tmp_path,
     ))
     dependency = SimpleNamespace(_WindowsApi=Api, _close_owned_processes=diag._close_owned_processes)
     prior = {"relative_artifact_dir": child.name, "artifacts": {"database": {"sha256": core._hash(database)}}}
+    stage = {"name": "fresh_reopen"}
     with pytest.raises(KeyboardInterrupt) as caught:
         _interrupt_after_launch_before_store(core._run_fresh_reopen.__code__, primary,
             lambda: core._run_fresh_reopen(tmp_path, diag=dependency, relocated=tmp_path,
                 environment={}, work=root, prior=prior, args=SimpleNamespace(expected_source_sha="b" * 40, oracle=tmp_path / "oracle.json"),
-                deadline=time.monotonic() + 1, output=tmp_path))
+                deadline=time.monotonic() + 1, output=tmp_path, stage=stage))
     assert caught.value is primary
     assert calls == [True]
+    assert stage["name"] == "fresh_reopen"
+
+
+def test_fresh_reopen_keeps_closed_primary_after_real_cleanup_wrapper(tmp_path, monkeypatch):
+    root = tmp_path / "core scenario"
+    child = root / ("core-" + "a" * 32)
+    child.mkdir(parents=True)
+    database = child / "reports.sqlite"
+    database.write_bytes(b"synthetic reopen boundary fixture")
+    closed = []
+
+    class Process:
+        def observe(self):
+            raise core.CandidateFailure("fresh_reopen_process_failed")
+
+        def close(self, *, terminate):
+            closed.append(terminate)
+            diag._attempt_cleanup(lambda: None)
+
+    class Api:
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+            process = Process()
+            owned.append(process)
+            return process
+
+    monkeypatch.setattr(core, "_validate_reopen_sources", lambda _reports: None)
+    monkeypatch.setattr(core, "_independent_verifier", lambda: SimpleNamespace(
+        _load_oracle=lambda _path: {}, assert_database=lambda *args: None,
+    ))
+    dependency = SimpleNamespace(
+        QualificationFailure=diag.QualificationFailure,
+        _WindowsApi=Api, _close_owned_processes=diag._close_owned_processes,
+    )
+    prior = {"relative_artifact_dir": child.name, "artifacts": {"database": {"sha256": core._hash(database)}}}
+    stage = {"name": "fresh_reopen"}
+    with pytest.raises(core.CandidateFailure, match="^fresh_reopen_process_failed$"):
+        core._run_fresh_reopen(
+            tmp_path, diag=dependency, relocated=tmp_path, environment={}, work=root,
+            prior=prior, args=SimpleNamespace(oracle=tmp_path / "oracle.json"),
+            deadline=time.monotonic() + 1, output=tmp_path, stage=stage,
+        )
+    assert closed == [True]
+    assert stage == {"name": "fresh_reopen"}
 
 
 @pytest.mark.parametrize("fault", ["row", "schema", "user_version", "application_id", "baseline_copy", "post_replaced"])

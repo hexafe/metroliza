@@ -797,7 +797,7 @@ def _validate_reopen_sources(reports: Path):
         raise CandidateFailure("fresh_reopen_sources_changed")
 
 
-def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, args, deadline, output):
+def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, args, deadline, output, stage):
     # The first Job has fully drained before this function creates another Job.
     # A new launcher, application, root and runtime journal prove process reopen.
     root, launch_cwd = private / "fresh reopen", private / "fresh launcher work"
@@ -863,7 +863,7 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
             "before_reopen_database": {"path": before_database.name, "sha256": expected_hash},
         }
     finally:
-        diag._close_owned_processes(owned, terminate=terminate)
+        _close_private_core_owned(diag, owned, terminate=terminate, stage=stage)
 
 
 def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
@@ -938,7 +938,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         stage["name"] = "fresh_reopen"
         fresh_reopen = _run_fresh_reopen(
             private, diag=diag, relocated=relocated, environment=environment, work=work,
-            prior=payload, args=args, deadline=deadline, output=output,
+            prior=payload, args=args, deadline=deadline, output=output, stage=stage,
         )
         stage["name"] = "package_integrity"
         after = diag._tree_digest(diag._package_inventory(relocated))
