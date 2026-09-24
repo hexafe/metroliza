@@ -69,10 +69,14 @@ def _owned_ocr_launch(arguments, frame, expected_worker: str | None) -> bool:
 def classify_call(
     arguments, frame, expected_cmd: str, expected_worker: str | None = None,
 ) -> tuple[str, str]:
-    import ntpath
-
     if _owned_ocr_launch(arguments, frame, expected_worker):
         return "ocr_worker_launch", "metroliza"
+    return _classify_platform_call(arguments, frame, expected_cmd)
+
+
+def _classify_platform_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
+    import ntpath
+
     if len(arguments) < 2:
         return "other_arguments", "other"
     executable, command = arguments[:2]

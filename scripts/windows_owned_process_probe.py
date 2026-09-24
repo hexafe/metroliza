@@ -143,18 +143,10 @@ def _expected_runtime_roles(supervised, platform_event, allow_ocr_worker):
     return roles, order
 
 
-def verified_runtime_order(
-    proof, *, supervised: bool, allow_ocr_worker: bool = False,
-) -> tuple[str, ...]:
-    """Pair an audited attempt and exact native ancestry; neither suffices alone."""
+def _verified_audit_events(events, allow_ocr_worker):
     def reject():
         raise ValueError("runtime_evidence_invalid")
 
-    if (type(proof) is not dict or set(proof) != {"installed", "events", "owned", "probe_effect"}
-            or proof["installed"] is not True
-            or proof["probe_effect"] != "synchronous_private_prelaunch_journal_and_owned_handle_sampling"):
-        reject()
-    events = proof["events"]
     if type(events) is not list or len(events) > 2:
         reject()
     platform_events = [event for event in events if type(event) is dict and event.get("kind") == "platform_ver"]
@@ -181,6 +173,21 @@ def verified_runtime_order(
         "kind": "ocr_worker_launch", "caller": "metroliza", "phase": "after_ready",
     }:
         reject()
+    return platform_events, helper_phase
+
+
+def verified_runtime_order(
+    proof, *, supervised: bool, allow_ocr_worker: bool = False,
+) -> tuple[str, ...]:
+    """Pair an audited attempt and exact native ancestry; neither suffices alone."""
+    def reject():
+        raise ValueError("runtime_evidence_invalid")
+
+    if (type(proof) is not dict or set(proof) != {"installed", "events", "owned", "probe_effect"}
+            or proof["installed"] is not True
+            or proof["probe_effect"] != "synchronous_private_prelaunch_journal_and_owned_handle_sampling"):
+        reject()
+    platform_events, helper_phase = _verified_audit_events(proof["events"], allow_ocr_worker)
     owned = proof["owned"]
     expected_roles, expected_order = _expected_runtime_roles(
         supervised, platform_events, allow_ocr_worker,
