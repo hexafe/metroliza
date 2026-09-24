@@ -95,6 +95,10 @@ def test_flood_stimulus_forces_explicit_receiver_loss_when_transport_keeps_up(ca
     ]
     starts = [event for event in emitted if event.outcome is WorkflowOutcome.STARTED]
     assert len({event.operation_id for event in starts}) > DEFAULT_MAX_OPERATIONS
+    first_finished = next(
+        index for index, event in enumerate(emitted) if event.outcome is WorkflowOutcome.COMPLETED
+    )
+    assert len({event.operation_id for event in emitted[:first_finished]}) > DEFAULT_MAX_OPERATIONS
 
     ring = DiagnosticRing()
     for event in emitted:

@@ -460,11 +460,15 @@ def _flood() -> None:
     from metroliza.shared.diagnostic_ring import DEFAULT_MAX_OPERATIONS
     from metroliza.shared.workflow_diagnostics import start_workflow_trace
 
-    # Distinct operations exceed the receiver's hard cap even when it keeps up
-    # with the transport. Repeated stages in one operation may be coalesced.
+    # Keep distinct operations active until the receiver's hard cap is crossed.
+    # Finishing each one immediately can evict it before the next arrives, so
+    # a fast transport may produce no observable flood or recording loss.
+    traces = []
     for _ in range(2 * DEFAULT_MAX_OPERATIONS + 1):
         trace = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
         trace.stage(WorkflowStage.OUTPUT_STAGING)
+        traces.append(trace)
+    for trace in traces:
         trace.finish_export(completed=True, cancelled=False)
 
 
