@@ -811,7 +811,8 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         code = None
     marker = _closed_value(observation.get("startup_marker"), {"observed", "not_observed"}, "unavailable")
     receipt_state = _closed_value(observation.get("receipt_state"), {
-        "not_checked", "missing", "invalid", "valid_allowlisted", "valid_unclassified", "valid_reopen_failed",
+        "not_checked", "missing", "invalid", "valid_allowlisted", "valid_unclassified",
+        "valid_reopen_failed", "valid_success",
     }, "not_checked")
     stage_marker_state = _closed_value(observation.get("stage_marker_state"),
                                        {"not_checked", "missing", "invalid", "valid"}, "not_checked")
@@ -824,6 +825,14 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
                                  _SAFE_FAILURE_CODES | {"operation_failed"}, "unavailable")
     xlsx_stage = _closed_value(observation.get("xlsx_failure_stage"),
                                _SAFE_FAILURE_STAGES | {"unavailable"}, "unavailable")
+    from scripts.windows_owned_process_probe import UNAVAILABLE_SOURCES
+
+    raw_sources = observation.get("probe_unavailable_sources")
+    probe_sources = (
+        sorted({source for source in raw_sources
+                if type(source) is str and source in UNAVAILABLE_SOURCES})
+        if type(raw_sources) is list and len(raw_sources) <= len(UNAVAILABLE_SOURCES) else []
+    )
     host_stage = _closed_value(stage.get("before_cleanup", stage.get("name")), _PRIVATE_CORE_STAGES, "unavailable")
     owned_cleanup = _closed_value(observation.get("owned_cleanup"), {"not_attempted", "complete", "failed"},
                                   "not_attempted")
@@ -850,6 +859,7 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         "receipt_state": receipt_state,
         "allowlisted_failure": failure_code, "failure_category": category,
         "xlsx_failure": xlsx_failure, "xlsx_failure_stage": xlsx_stage,
+        "probe_unavailable_sources": probe_sources,
         "owned_cleanup": owned_cleanup, "private_cleanup": private_cleanup,
     }
 
@@ -1166,16 +1176,25 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         if not result_path.exists():
             raise CandidateFailure("package_core_hook_or_receipt_missing")
         payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha, native_mode=args.native_mode)
+        if failure_observation is not None:
+            failure_observation.update(receipt_state="valid_success", producer_stage="complete")
         _validate_ui_observation(payload.get("ui_observation"), expected_dpr=float(args.dpi_scale))
         _validate_closeout_observation(payload.get("closeout_observation"), packaged=True, expected_dpr=float(args.dpi_scale))
         if not diag._wait_for_job_exit(process, deadline):
             raise CandidateFailure("owned_processes_remain")
         stage["name"] = "owned_topology"
-        topology = process.topology(relocated, all_exited=True)
-        # Use the accepted dependency's complete onefile-supervisor /
-        # onedir-child topology contract, including both launcher processes.
-        diag._validate_topology_record(diag._topology_record(topology), supervised=True,
-                                       require_runtime_evidence=True, allow_ocr_worker=True)
+        try:
+            topology = process.topology(relocated, all_exited=True)
+            # Use the accepted dependency's complete onefile-supervisor /
+            # onedir-child topology contract, including both launcher processes.
+            diag._validate_topology_record(diag._topology_record(topology), supervised=True,
+                                           require_runtime_evidence=True, allow_ocr_worker=True)
+        except diag.QualificationFailure:
+            if failure_observation is not None:
+                evidence = getattr(process, "runtime_evidence", None)
+                sources = getattr(getattr(evidence, "probe", None), "unavailable_sources", None)
+                failure_observation["probe_unavailable_sources"] = sorted(sources) if type(sources) is set else []
+            raise
         stage["name"] = "fresh_reopen"
         fresh_reopen = _run_fresh_reopen(
             private, diag=diag, relocated=relocated, environment=environment, work=work,
@@ -1249,7 +1268,7 @@ def qualify(args) -> dict:
         "observed_process": "unavailable", "observed_exit_code": None,
         "startup_marker": "not_observed", "receipt_state": "not_checked",
         "stage_marker_state": "not_checked", "producer_stage": "unavailable",
-        "allowlisted_failure": "unavailable",
+        "allowlisted_failure": "unavailable", "probe_unavailable_sources": [],
         "owned_cleanup": "not_attempted", "private_cleanup": "not_attempted",
     }
 

@@ -14,6 +14,15 @@ from metroliza.shared import diagnostic_runtime_audit as audit
 
 MAX_MEMBERS = 16
 PHASES = frozenset({"suspended", "window_wait", "window_close", "drain", "startup", "running"})
+UNAVAILABLE_SOURCES = frozenset({
+    "system_directory", "parent_snapshot_open", "parent_snapshot_missing",
+    "native_process_image", "probe_callback",
+    "expected_file_package_launcher", "expected_file_package_application",
+    "expected_file_package_ocr_worker", "expected_file_system_cmd",
+    "expected_file_system_conhost", "expected_file_system_werfault",
+    "expected_file_system_wermgr", "expected_file_system_openconsole",
+    "expected_file_system_powershell",
+})
 
 
 class RuntimeEvidence:
@@ -212,6 +221,7 @@ class OwnedProcessProbe:
         self.api = api
         self.failure_factory = failure_factory
         self.unavailable = False
+        self.unavailable_sources = set()
         self.images = (
             ("package_launcher", artifact / "metroliza.exe"),
             ("package_application", artifact / "metroliza_application.exe"),
@@ -233,7 +243,7 @@ class OwnedProcessProbe:
         buffer = ctypes.create_unicode_buffer(32768)
         copied = function(buffer, len(buffer))
         if not 0 < copied < len(buffer) or len(buffer.value) != copied or not Path(buffer.value).is_absolute():
-            self.unavailable = True
+            self._mark_unavailable("system_directory")
             return ()
         system = Path(buffer.value)
         return tuple((role, system / name) for role, name in (
@@ -242,6 +252,10 @@ class OwnedProcessProbe:
             ("system_openconsole", "OpenConsole.exe"),
             ("system_powershell", "WindowsPowerShell/v1.0/powershell.exe"),
         ))
+
+    def _mark_unavailable(self, source):
+        self.unavailable = True
+        self.unavailable_sources.add(source if source in UNAVAILABLE_SOURCES else "probe_callback")
 
     def _declare_snapshot(self):
         wt = self.api.wintypes
@@ -274,7 +288,7 @@ class OwnedProcessProbe:
         """Read only the requested owned row; discard all other snapshot fields."""
         snapshot = self.api.kernel.CreateToolhelp32Snapshot(0x2, 0)
         if not self.api._valid_file_handle(snapshot):
-            self.unavailable = True
+            self._mark_unavailable("parent_snapshot_open")
             return None
         try:
             entry = self.Entry()
@@ -288,7 +302,7 @@ class OwnedProcessProbe:
                     parent = int(entry.th32ParentProcessID)
                     return parent if parent in owned_ids else None
                 present = self.api.kernel.Process32NextW(snapshot, ctypes.byref(entry))
-            self.unavailable = True
+            self._mark_unavailable("parent_snapshot_missing")
             return None
         finally:
             # A new owned handle must close successfully even when observation
@@ -298,14 +312,14 @@ class OwnedProcessProbe:
     def _role(self, handle, failure):
         native, unavailable = self.api._native_process_image(handle)
         if unavailable is not None:
-            self.unavailable = True
+            self._mark_unavailable("native_process_image")
             return "unknown"
         for role, expected in self.images:
             matched, unavailable = self.api._expected_file_native_image(expected, native, failure)
             if failure.qualification_cleanup == "failed":
                 raise failure
             if unavailable is not None:
-                self.unavailable = True
+                self._mark_unavailable("expected_file_" + role)
             if matched is True and unavailable is None:
                 return role
         return "unknown"

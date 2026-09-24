@@ -319,6 +319,7 @@ def test_failed_diagnostic_drops_untrusted_values(tmp_path) -> None:
         "observed_process": raw, "observed_exit_code": 2**40,
         "startup_marker": raw, "receipt_state": raw,
         "producer_stage": raw, "allowlisted_failure": raw,
+        "probe_unavailable_sources": [raw, "expected_file_system_openconsole"],
         "owned_cleanup": raw, "private_cleanup": raw,
     }
     payload = driver._failed_diagnostic_payload(
@@ -329,7 +330,28 @@ def test_failed_diagnostic_drops_untrusted_values(tmp_path) -> None:
     assert raw not in content
     assert payload["observed_exit_code"] is None
     assert payload["failure_category"] == "closed_driver_failure"
+    assert payload["probe_unavailable_sources"] == ["expected_file_system_openconsole"]
     assert len(content.encode("ascii")) <= driver.MAX_FAILED_DIAGNOSTIC_BYTES
+
+
+def test_downstream_failure_preserves_validated_success_receipt_and_fixed_probe_reason(tmp_path) -> None:
+    payload = driver._failed_diagnostic_payload(
+        {
+            "observed_process": "requested_launcher_handle", "observed_exit_code": 0,
+            "startup_marker": "observed", "receipt_state": "valid_success",
+            "producer_stage": "complete", "stage_marker_state": "not_checked",
+            "probe_unavailable_sources": ["expected_file_system_openconsole"],
+            "owned_cleanup": "complete", "private_cleanup": "complete",
+        },
+        {"name": "owned_topology"}, driver.CandidateFailure("unexpected_owned_topology"), SHA,
+    )
+    assert payload["receipt_state"] == "valid_success"
+    assert payload["producer_stage"] == "complete"
+    assert payload["host_stage"] == "owned_topology"
+    assert payload["failure_category"] == "closed_driver_failure"
+    assert payload["probe_unavailable_sources"] == ["expected_file_system_openconsole"]
+    driver._write_failed_diagnostic(tmp_path, payload)
+    assert driver._json(tmp_path / driver.FAILED_DIAGNOSTIC_FILE, driver.MAX_FAILED_DIAGNOSTIC_BYTES) == payload
 
 
 def test_failed_output_cleanup_is_reported_instead_of_claiming_safe_retention(tmp_path, monkeypatch) -> None:

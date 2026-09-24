@@ -1007,8 +1007,12 @@ class _WindowsApi:
             if error.qualification_cleanup == "failed":
                 raise
             probe.unavailable = True
+            if hasattr(probe, "unavailable_sources"):
+                probe.unavailable_sources.add("probe_callback")
         except Exception:
             probe.unavailable = True
+            if hasattr(probe, "unavailable_sources"):
+                probe.unavailable_sources.add("probe_callback")
 
     def _declare_structures(self) -> None:
         wt = self.wintypes

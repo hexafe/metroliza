@@ -16,9 +16,32 @@ import pytest
 
 from metroliza.shared import diagnostic_runtime_audit as audit
 from scripts import qualify_windows_diagnostics as qualification
-from scripts.windows_owned_process_probe import RuntimeEvidence, verified_runtime_order
+from scripts.windows_owned_process_probe import OwnedProcessProbe, RuntimeEvidence, verified_runtime_order
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_probe_names_unavailable_expected_file_even_after_later_verified_match():
+    probe = object.__new__(OwnedProcessProbe)
+    probe.images = (
+        ("system_openconsole", Path("OpenConsole.exe")),
+        ("package_ocr_worker", Path("metroliza_ocr_worker.exe")),
+    )
+    probe.unavailable = False
+    probe.unavailable_sources = set()
+
+    def expected_file(expected, _native, _failure):
+        if expected.name == "OpenConsole.exe":
+            return None, "synthetic_unavailable"
+        return True, None
+
+    probe.api = SimpleNamespace(
+        _native_process_image=lambda _handle: ("synthetic_native", None),
+        _expected_file_native_image=expected_file,
+    )
+    assert probe._role(object(), SimpleNamespace(qualification_cleanup="complete")) == "package_ocr_worker"
+    assert probe.unavailable is True
+    assert probe.unavailable_sources == {"expected_file_system_openconsole"}
 
 
 def _frame(module, name, back=None):
