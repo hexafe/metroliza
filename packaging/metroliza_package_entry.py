@@ -21,15 +21,6 @@ from metroliza.shared.diagnostic_startup_probe import mark  # noqa: E402
 
 mark("child_entry")
 
-# The bundled Windows OCR path loads ONNX Runtime after the Qt UI has opened.
-# The pinned native scanner proves that importing it after PyQt6 can terminate
-# the process, while importing it first succeeds. Keep that library resident
-# before bootstrap can import Qt for both ordinary use and qualification.
-if sys.platform == "win32" and getattr(sys, "frozen", False):
-    import importlib
-
-    importlib.import_module("onnxruntime")
-
 from metroliza.shared.diagnostic_transport import (  # noqa: E402
     attach_child_recorder,
     supervised_mode_requested,

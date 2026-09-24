@@ -32,7 +32,9 @@ FAILED_DIAGNOSTIC_FILE = "core-failed-diagnostic.json"
 MAX_FAILED_DIAGNOSTIC_BYTES = 2048
 _CHILD_FAILURE_STAGES = frozenset({
     "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
-    "qapplication", "selected_import", "ocr", "reopen", "tabular", "xlsx",
+    "qapplication", "selected_import", "ocr", "ocr_fixture_validation",
+    "ocr_asset_validation", "ocr_fixture_inspection", "ocr_parser_construction",
+    "ocr_parser_execution", "ocr_result_validation", "reopen", "tabular", "xlsx",
     "inference", "import_guards", "ui", "closeout", "complete",
 })
 _REOPEN_FAILURE_STAGES = frozenset({

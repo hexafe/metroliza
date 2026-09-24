@@ -145,6 +145,20 @@ def test_producer_failure_receipt_matches_bounded_host_reader(tmp_path, monkeypa
     assert driver._child_stage_observation(tmp_path, SHA)["stage_marker_state"] == "missing"
 
 
+def test_ocr_execution_stage_round_trips_through_bounded_host_reader(tmp_path) -> None:
+    receipt = {"source_sha": SHA}
+    producer._record_core_stage(tmp_path, receipt, "ocr_parser_execution")
+
+    assert receipt["stage"] == "ocr_parser_execution"
+    assert (tmp_path / driver.STAGE_FILE).stat().st_size <= 1024
+    assert driver._child_stage_observation(tmp_path, SHA) == {
+        "stage_marker_state": "valid", "producer_stage": "ocr_parser_execution",
+    }
+    assert driver._child_stage_observation(tmp_path, "2" * 40) == {
+        "stage_marker_state": "invalid", "producer_stage": "unavailable",
+    }
+
+
 def test_producer_cannot_write_receipt_before_root_is_known(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(producer, "requested_scenario", lambda: "core")
     monkeypatch.setattr(producer, "_ordinary_user", lambda: True)

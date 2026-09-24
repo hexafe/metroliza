@@ -58,9 +58,11 @@ def test_helper_rejects_a_mutated_fixture_before_inference(tmp_path):
     shutil.copyfile(FIXTURE, fixture)
     fixture.write_bytes(fixture.read_bytes() + b"mutated")
 
-    result = run_ocr_check(tmp_path.resolve(), fixture)
+    stages = []
+    result = run_ocr_check(tmp_path.resolve(), fixture, stage_recorder=stages.append)
 
     assert result["status"] == "failed"
+    assert stages == ["ocr_fixture_validation"]
     assert result["error_codes"] == ["fixture_digest_mismatch"]
     assert result["facets"] == {name: "not_run" for name in FACETS}
     assert result["evidence"]["fixture_sha256"] is None
@@ -87,7 +89,8 @@ def test_qualification_requires_a_separate_absolute_ocr_fixture(monkeypatch, tmp
 def test_real_rapidocr_parser_path_returns_closed_provenance(tmp_path, monkeypatch):
     monkeypatch.setenv("METROLIZA_HEADER_OCR_THREADS", "1")
     receipt = {"packaged": False, "facets": {}}
-    _run_ocr_slice(tmp_path.resolve(), FIXTURE, receipt)
+    stages = []
+    _run_ocr_slice(tmp_path.resolve(), FIXTURE, receipt, stage_recorder=stages.append)
     result = receipt["ocr_observation"]
 
     assert result["status"] == "passed"
@@ -119,6 +122,10 @@ def test_real_rapidocr_parser_path_returns_closed_provenance(tmp_path, monkeypat
         "latin_PP-OCRv3_rec_mobile.onnx",
     }
     assert receipt["facets"] == {name: "passed" for name in FACETS}
+    assert stages == [
+        "ocr_fixture_validation", "ocr_asset_validation", "ocr_fixture_inspection",
+        "ocr_parser_construction", "ocr_parser_execution", "ocr_result_validation",
+    ]
 
 
 def test_qualification_rejects_runtime_context_mismatch(tmp_path, monkeypatch):

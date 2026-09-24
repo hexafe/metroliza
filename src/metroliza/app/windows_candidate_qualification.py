@@ -27,7 +27,9 @@ OCR_FIXTURE_ENV = "METROLIZA_WINDOWS_CANDIDATE_OCR_FIXTURE"
 GATES = ("METROLIZA_STARTUP_SMOKE", "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION")
 FAILURE_STAGES = frozenset({
     "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
-    "qapplication", "selected_import", "ocr", "reopen", "tabular", "xlsx",
+    "qapplication", "selected_import", "ocr", "ocr_fixture_validation",
+    "ocr_asset_validation", "ocr_fixture_inspection", "ocr_parser_construction",
+    "ocr_parser_execution", "ocr_result_validation", "reopen", "tabular", "xlsx",
     "inference", "import_guards", "ui", "closeout", "complete",
 })
 DEADLINES_S = {"review": 30.0, "import": 45.0}
@@ -424,7 +426,10 @@ def _run_import_guards_slice(child: Path, fixtures: Path, receipt: dict[str, Any
     receipt["import_guard_evidence"] = guards["evidence"]
 
 
-def _run_ocr_slice(child: Path, fixture: Path, receipt: dict[str, Any]) -> None:
+def _run_ocr_slice(
+    child: Path, fixture: Path, receipt: dict[str, Any], *,
+    stage_recorder=None,
+) -> None:
     from metroliza.app.windows_candidate_ocr_check import (
         EMBEDDED_TEXT_SHA256,
         EXPECTED_FIELD_SOURCES,
@@ -437,7 +442,10 @@ def _run_ocr_slice(child: Path, fixture: Path, receipt: dict[str, Any]) -> None:
     )
     from metroliza.parsing.header_ocr_backend import RAPIDOCR_MODEL_ASSET_MANIFEST
 
-    observation = run_ocr_check(child, fixture)
+    if stage_recorder is None:
+        observation = run_ocr_check(child, fixture)
+    else:
+        observation = run_ocr_check(child, fixture, stage_recorder=stage_recorder)
     receipt["ocr_observation"] = observation
     expected_top_level = {
         "schema_version", "status", "facets", "error_codes", "evidence",
@@ -533,7 +541,10 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     _run_core(root, fixtures, receipt, application)
     child = root / receipt["relative_artifact_dir"]
     _record_core_stage(root, receipt, "ocr")
-    _run_ocr_slice(child, ocr_fixture, receipt)
+    _run_ocr_slice(
+        child, ocr_fixture, receipt,
+        stage_recorder=lambda stage: _record_core_stage(root, receipt, stage),
+    )
     from metroliza.app.windows_candidate_reopen import run_reopen_checks
     completed_import = root / receipt["relative_artifact_dir"]
     _record_core_stage(root, receipt, "reopen")

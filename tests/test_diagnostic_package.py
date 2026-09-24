@@ -86,20 +86,11 @@ def test_frozen_entry_preserves_loader_import_paths(tmp_path, entry, frozen):
         copied.write_bytes(entry_path.read_bytes())
         entry_path = copied
     code = """
-import importlib, os, runpy, sys
+import os, runpy, sys
 sys.frozen = sys.argv[2] == '1'
 if sys.frozen:
     sys.path = [path for path in sys.path if path not in ('', os.getcwd())]
 before = tuple(sys.path)
-# This checks the frozen loader's paths, not the native OCR installation.
-# The package-entry preload has its own order test and packaged Windows gate.
-if sys.frozen and sys.argv[1].endswith('metroliza_package_entry.py'):
-    original_import = importlib.import_module
-    def import_without_native_ocr(name, package=None):
-        if name == 'onnxruntime':
-            return object()
-        return original_import(name, package)
-    importlib.import_module = import_without_native_ocr
 runpy.run_path(sys.argv[1], run_name='import_probe')
 if sys.frozen:
     assert tuple(sys.path) == before, 'frozen_entry_changed_import_path'

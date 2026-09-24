@@ -14,7 +14,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 SCHEMA_VERSION = 1
@@ -151,6 +151,8 @@ def _classify_ocr_failure(metadata_json: dict[str, Any]) -> str:
 def run_ocr_check(
     scratch_directory: str | Path,
     fixture_path: str | Path,
+    *,
+    stage_recorder: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Run real RapidOCR through the public parser factory on a pinned fixture."""
 
@@ -181,6 +183,8 @@ def run_ocr_check(
         },
     }
     try:
+        if stage_recorder is not None:
+            stage_recorder("ocr_fixture_validation")
         scratch = Path(scratch_directory)
         fixture = Path(fixture_path)
         _require(scratch.is_absolute(), "scratch_not_absolute")
@@ -191,6 +195,8 @@ def run_ocr_check(
         _require(fixture_digest == FIXTURE_SHA256, "fixture_digest_mismatch")
         result["evidence"]["fixture_sha256"] = fixture_digest
 
+        if stage_recorder is not None:
+            stage_recorder("ocr_asset_validation")
         model_hashes = _verify_model_assets()
         result["evidence"]["model_asset_sha256"] = model_hashes
         result["facets"]["declared_ocr_model_assets"] = "passed"
@@ -199,18 +205,26 @@ def run_ocr_check(
             staged = Path(child_name) / FIXTURE_NAME
             shutil.copyfile(fixture, staged)
             _require(_sha256(staged) == FIXTURE_SHA256, "staged_fixture_digest_mismatch")
+            if stage_recorder is not None:
+                stage_recorder("ocr_fixture_inspection")
             fixture_evidence = _inspect_image_only_fixture(staged)
             result["evidence"].update(fixture_evidence)
             result["facets"]["image_only_header_provenance"] = "passed"
 
             from metroliza.parsing.report_parser_factory import get_parser
 
+            if stage_recorder is not None:
+                stage_recorder("ocr_parser_construction")
             parser = get_parser(
                 staged,
                 database=str(Path(child_name) / "ocr.sqlite"),
                 metadata_parsing_mode="complete",
             )
+            if stage_recorder is not None:
+                stage_recorder("ocr_parser_execution")
             parsed = parser.parse_to_v2()
+            if stage_recorder is not None:
+                stage_recorder("ocr_result_validation")
             metadata = parser.canonical_metadata
             metadata_json = dict(metadata.metadata_json or {})
 
