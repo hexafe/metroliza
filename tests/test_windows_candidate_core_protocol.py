@@ -159,6 +159,45 @@ def test_ocr_runtime_stage_round_trips_through_bounded_host_reader(tmp_path) -> 
     }
 
 
+def test_w07_failure_substage_round_trips_without_raw_workbook_data(tmp_path) -> None:
+    receipt = {
+        "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+        "scenario": "core", "status": "failed", "stage": "xlsx", "source_sha": SHA,
+        "xlsx_failure": "active_cancel_thread_deadline",
+        "xlsx_failure_stage": "active_cancellation",
+    }
+    failed = producer._failed_core_receipt(receipt, "literal_workbook_checks_failed")
+    assert set(failed) == {
+        "schema", "schema_version", "scenario", "status", "stage", "source_sha",
+        "failure", "xlsx_failure", "xlsx_failure_stage",
+    }
+    path = tmp_path / driver.SCENARIO_FILE
+    path.write_text(json.dumps(failed), encoding="ascii")
+    observed = driver._child_failure_observation(tmp_path, SHA)
+    assert observed["receipt_state"] == "valid_allowlisted"
+    assert observed["xlsx_failure"] == "active_cancel_thread_deadline"
+    assert observed["xlsx_failure_stage"] == "active_cancellation"
+    bounded = driver._failed_diagnostic_payload(
+        observed, {"name": "runtime_observation"},
+        driver.CandidateFailure(observed["reason"]), SHA,
+    )
+    assert bounded["xlsx_failure"] == "active_cancel_thread_deadline"
+    assert bounded["xlsx_failure_stage"] == "active_cancellation"
+    driver._write_failed_diagnostic(tmp_path, bounded)
+    assert (tmp_path / driver.FAILED_DIAGNOSTIC_FILE).stat().st_size <= driver.MAX_FAILED_DIAGNOSTIC_BYTES
+
+    failed["xlsx_failure"] = "SYNTHETIC_PRIVATE_WORKBOOK_VALUE"
+    path.write_text(json.dumps(failed), encoding="ascii")
+    rejected = driver._child_failure_observation(tmp_path, SHA)
+    assert rejected["receipt_state"] == "invalid"
+    assert "xlsx_failure" not in rejected
+    receipt["xlsx_failure"] = "SYNTHETIC_PRIVATE_WORKBOOK_VALUE"
+    receipt["xlsx_failure_stage"] = "SYNTHETIC_PRIVATE_WORKBOOK_VALUE"
+    sanitized = producer._failed_core_receipt(receipt, "literal_workbook_checks_failed")
+    assert sanitized["xlsx_failure"] == "operation_failed"
+    assert sanitized["xlsx_failure_stage"] == "unavailable"
+
+
 def test_producer_cannot_write_receipt_before_root_is_known(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(producer, "requested_scenario", lambda: "core")
     monkeypatch.setattr(producer, "_ordinary_user", lambda: True)

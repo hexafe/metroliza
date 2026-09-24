@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import zipfile
 from pathlib import Path
 
@@ -48,6 +49,37 @@ def test_core_qualification_uses_only_the_canonical_xlsx_module() -> None:
     source = inspect.getsource(qualification)
     assert "from metroliza.app.windows_candidate_xlsx import run_export_checks" in source
     assert "from windows_candidate_xlsx import run_export_checks" not in source
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows W07 discriminator")
+def test_native_canonical_w07_export_and_cancellation(tmp_path: Path, candidate_application) -> None:
+    result = application_xlsx.run_export_checks(tmp_path)
+    assert result["status"] == "passed", (
+        "native_w07_failed:"
+        f"{result.get('failure_stage', 'unavailable')}:"
+        f"{result.get('failure_code', 'unavailable')}"
+    )
+    assert set(result["facets"]) == {
+        "literal_chart_titles_series_caches_references", "value_limit_order",
+        "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
+        "active_export_cancellation_preserves_workbook",
+        "oversized_label_rejection_preserves_workbook",
+    }
+    assert all(value == "passed" for value in result["facets"].values())
+
+
+def test_canonical_w07_failure_reports_fixed_stage_without_exception_text(
+    tmp_path: Path, candidate_application, monkeypatch,
+) -> None:
+    def reject_thread(*_args):
+        raise RuntimeError("SYNTHETIC_PRIVATE_WORKBOOK_VALUE")
+
+    monkeypatch.setattr(application_xlsx, "_make_thread", reject_thread)
+    result = application_xlsx.run_export_checks(tmp_path)
+    assert result["status"] == "failed"
+    assert result["failure_stage"] == "complete_export"
+    assert result["failure_code"] == "operation_failed"
+    assert "SYNTHETIC_PRIVATE_WORKBOOK_VALUE" not in str(result)
 
 
 @pytest.mark.parametrize("module", (application_xlsx, standalone_xlsx))

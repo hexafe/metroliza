@@ -152,7 +152,7 @@ def _worker_executable() -> Path:
 def _private_work_directory():
     if os.name == "nt":
         # Reuse the product's pinned, owner-only Windows directory primitive.
-        from metroliza.ui.private_dashboard_directory import create_private_dashboard_directory
+        from metroliza.shared.private_temporary_directory import create_private_dashboard_directory
 
         return create_private_dashboard_directory()
     return tempfile.TemporaryDirectory(prefix="metroliza_ocr_worker_")

@@ -1336,6 +1336,7 @@ jobs:
           tests/test_export_chart_writer.py
           tests/test_export_backends.py
           tests/test_export_workbook_output.py
+          tests/test_windows_candidate_xlsx_xml.py::test_native_canonical_w07_export_and_cancellation
 
       - name: Run finite numeric filter and query-consumer parity on Windows
         env:

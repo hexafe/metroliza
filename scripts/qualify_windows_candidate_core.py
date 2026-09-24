@@ -138,6 +138,20 @@ def _child_failure_observation(work: Path, expected_source_sha: str | None = Non
                 and type(payload.get("failure")) is str):
             failure = payload["failure"]
             observation["producer_stage"] = payload["stage"]
+            base_fields = {"schema", "schema_version", "scenario", "status", "stage", "source_sha", "failure"}
+            if failure == "literal_workbook_checks_failed":
+                from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES, _SAFE_FAILURE_STAGES
+
+                code = payload.get("xlsx_failure")
+                substage = payload.get("xlsx_failure_stage")
+                if (set(payload) != base_fields | {"xlsx_failure", "xlsx_failure_stage"}
+                        or type(code) is not str or code not in _SAFE_FAILURE_CODES | {"operation_failed"}
+                        or type(substage) is not str or substage not in _SAFE_FAILURE_STAGES | {"unavailable"}):
+                    return observation
+                observation["xlsx_failure"] = code
+                observation["xlsx_failure_stage"] = substage
+            elif set(payload) != base_fields:
+                return observation
             if failure in _CLOSED_CHILD_FAILURES:
                 observation["receipt_state"] = "valid_allowlisted"
                 observation["allowlisted_failure"] = failure
@@ -146,6 +160,16 @@ def _child_failure_observation(work: Path, expected_source_sha: str | None = Non
                 observation["receipt_state"] = "valid_unclassified"
                 observation["reason"] = "package_scenario_nonzero_exit_receipt_unclassified"
     return observation
+
+
+def _retain_child_failure_observation(observation: dict, child: dict, marker: dict) -> None:
+    observation.update({
+        key: child[key] for key in ("receipt_state", "producer_stage", "allowlisted_failure")
+    })
+    for key in ("xlsx_failure", "xlsx_failure_stage"):
+        if key in child:
+            observation[key] = child[key]
+    observation["stage_marker_state"] = marker["stage_marker_state"]
 
 
 def _closed_child_exit_reason(work: Path) -> str:
@@ -794,6 +818,12 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
     producer_stage = _closed_value(observation.get("producer_stage"),
                                    _CHILD_FAILURE_STAGES | _REOPEN_FAILURE_STAGES, "unavailable")
     failure_code = _closed_value(observation.get("allowlisted_failure"), _CLOSED_CHILD_FAILURES, "unavailable")
+    from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES, _SAFE_FAILURE_STAGES
+
+    xlsx_failure = _closed_value(observation.get("xlsx_failure"),
+                                 _SAFE_FAILURE_CODES | {"operation_failed"}, "unavailable")
+    xlsx_stage = _closed_value(observation.get("xlsx_failure_stage"),
+                               _SAFE_FAILURE_STAGES | {"unavailable"}, "unavailable")
     host_stage = _closed_value(stage.get("before_cleanup", stage.get("name")), _PRIVATE_CORE_STAGES, "unavailable")
     owned_cleanup = _closed_value(observation.get("owned_cleanup"), {"not_attempted", "complete", "failed"},
                                   "not_attempted")
@@ -819,6 +849,7 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         "producer_stage": producer_stage, "stage_marker_state": stage_marker_state,
         "receipt_state": receipt_state,
         "allowlisted_failure": failure_code, "failure_category": category,
+        "xlsx_failure": xlsx_failure, "xlsx_failure_stage": xlsx_stage,
         "owned_cleanup": owned_cleanup, "private_cleanup": private_cleanup,
     }
 
@@ -1124,12 +1155,9 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
                     "reason": "package_scenario_nonzero_exit_receipt_invalid",
                 }
             if failure_observation is not None:
-                failure_observation.update({
-                    key: child_failure[key] for key in (
-                        "receipt_state", "producer_stage", "allowlisted_failure",
-                    )
-                })
-                failure_observation["stage_marker_state"] = stage_observation["stage_marker_state"]
+                _retain_child_failure_observation(
+                    failure_observation, child_failure, stage_observation,
+                )
             raise CandidateFailure(child_failure["reason"])
         if not startup_observed:
             raise CandidateFailure("core_startup_receipt_missing")

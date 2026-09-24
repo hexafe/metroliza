@@ -99,6 +99,10 @@ _SAFE_FAILURE_CODES = {
     "lsl_cache",
     "worksheet_missing",
 }
+_SAFE_FAILURE_STAGES = frozenset({
+    "scratch", "application", "complete_export", "workbook_verify",
+    "cell_control", "preservation", "active_cancellation", "deadline",
+})
 
 
 def _sha256(path: Path) -> str:
@@ -612,6 +616,7 @@ def run_export_checks(scratch_root: str | Path) -> dict[str, Any]:
         },
         "status": "failed",
     }
+    stage = "application"
     try:
         # A QCoreApplication is sufficient for the actual QThread signal
         # surface; it does not start a GUI or replace any production worker.
@@ -620,23 +625,30 @@ def run_export_checks(scratch_root: str | Path) -> dict[str, Any]:
         if application is None:
             raise XlsxScenarioFailure("qt_application_unavailable")
         workbook = scratch / "literal-measurement-labels.xlsx"
+        stage = "complete_export"
         thread = _make_thread(scratch / "complete.sqlite", workbook, IMPORTED_HEADERS)
         outcome = thread.get_export_backend().run(thread)
         from metroliza.exporting.execution import ExportOutcomeKind
         _require_equal(outcome.kind, ExportOutcomeKind.COMPLETED, "complete_outcome")
+        stage = "workbook_verify"
         workbook_details = _verify_workbook(workbook)
         result["facets"]["literal_chart_titles_series_caches_references"] = "passed"
         result["facets"]["value_limit_order"] = "passed"
+        stage = "cell_control"
         _verify_local_cell_negative_control(workbook)
         result["facets"]["local_chart_cells_and_negative_control"] = "passed"
+        stage = "preservation"
         result["facets"].update(_verify_preservation(scratch, workbook))
+        stage = "active_cancellation"
         result["facets"].update(_verify_active_cancellation(scratch, workbook, application))
+        stage = "deadline"
         if time.monotonic() - started > DEADLINE_S:
             raise XlsxScenarioFailure("operation_deadline")
         result["artifacts"] = {"workbook": workbook_details}
         result["status"] = "passed"
     except Exception as exc:
         result["failure_code"] = _safe_failure_code(exc)
+        result["failure_stage"] = stage
     result["elapsed_s"] = round(time.monotonic() - started, 6)
     return result
 

@@ -570,6 +570,7 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
     receipt["facets"]["finite_precision_filters"] = "passed"
     from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes
+    from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_STAGES as xlsx_failure_stages
     from metroliza.app.windows_candidate_xlsx import run_export_checks
     _record_core_stage(root, receipt, "xlsx")
     xlsx_result = run_export_checks(child)
@@ -583,6 +584,11 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
             or any(value != "passed" for value in xlsx_facets.values())):
         failure = xlsx_result.get("failure_code")
         receipt["xlsx_failure"] = failure if type(failure) is str and failure in xlsx_failure_codes else "operation_failed"
+        failure_stage = xlsx_result.get("failure_stage", "scratch")
+        receipt["xlsx_failure_stage"] = (
+            failure_stage if type(failure_stage) is str and failure_stage in xlsx_failure_stages
+            else "unavailable"
+        )
         raise ScenarioFailure("literal_workbook_checks_failed")
     original_workbook = child / xlsx_result["relative_artifact_dir"] / xlsx_result["artifacts"]["workbook"]["workbook"]
     literal_workbook = child / "literal-workbook.xlsx"
@@ -605,6 +611,26 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     _run_ui_slice(child, receipt)
     _record_core_stage(root, receipt, "closeout")
     _run_closeout_slices(child, fixtures, receipt)
+
+
+def _failed_core_receipt(receipt: dict, failure: str) -> dict:
+    failed = {
+        key: receipt[key] for key in ("schema", "schema_version", "scenario", "status", "stage", "source_sha")
+    } | {"failure": failure}
+    if failure == "literal_workbook_checks_failed":
+        from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES, _SAFE_FAILURE_STAGES
+
+        subcode = receipt.get("xlsx_failure")
+        substage = receipt.get("xlsx_failure_stage")
+        failed["xlsx_failure"] = (
+            subcode if type(subcode) is str and subcode in _SAFE_FAILURE_CODES
+            else "operation_failed"
+        )
+        failed["xlsx_failure_stage"] = (
+            substage if type(substage) is str and substage in _SAFE_FAILURE_STAGES
+            else "unavailable"
+        )
+    return failed
 
 
 def run_qualification() -> int:
@@ -649,9 +675,7 @@ def run_qualification() -> int:
         # limit and may contain paths or measurements from later slices.
         failure = type(error).__name__ if not isinstance(error, ScenarioFailure) else str(error)
         if root is not None:
-            _atomic_json(root / "windows-candidate-result.json", {
-                key: receipt[key] for key in ("schema", "schema_version", "scenario", "status", "stage", "source_sha")
-            } | {"failure": failure})
+            _atomic_json(root / "windows-candidate-result.json", _failed_core_receipt(receipt, failure))
         return 21
 
 
