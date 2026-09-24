@@ -5,6 +5,7 @@ import hashlib
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -104,7 +105,7 @@ def test_copy_rejects_sidecars_created_by_comparison(tmp_path, monkeypatch, phas
         if (phase == "scenario" and len(calls) == 1) or (phase == "retained" and len(calls) == 2):
             database.with_name(database.name + "-shm").write_bytes(b"comparator-sidecar")
 
-    monkeypatch.setattr(driver, "_independent_verifier", lambda: core_verifier)
+    monkeypatch.setattr(driver, "_independent_verifier", lambda: SimpleNamespace(verify=core_verifier))
     monkeypatch.setattr(driver, "_independent_xlsx_verifier", lambda: lambda _workbook: None)
     monkeypatch.setattr(driver, "_independent_inference_verifier", lambda: lambda *_args: None)
 
@@ -132,7 +133,7 @@ def test_copy_rejects_artifact_hash_drift_after_comparison(tmp_path, monkeypatch
         if (phase == "scenario" and len(calls) == 1) or (phase == "retained" and len(calls) == 2):
             workbook.write_bytes(b"changed-by-comparator")
 
-    monkeypatch.setattr(driver, "_independent_verifier", lambda: core_verifier)
+    monkeypatch.setattr(driver, "_independent_verifier", lambda: SimpleNamespace(verify=core_verifier))
     monkeypatch.setattr(driver, "_independent_xlsx_verifier", lambda: lambda _workbook: None)
     monkeypatch.setattr(driver, "_independent_inference_verifier", lambda: lambda *_args: None)
 

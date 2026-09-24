@@ -37,7 +37,8 @@ _CHILD_FAILURE_STAGES = frozenset({
     "ocr_parser_execution", "ocr_onnxruntime_import", "ocr_rapidocr_import",
     "ocr_engine_construction", "ocr_engine_inference", "ocr_result_normalization",
     "ocr_result_validation", "reopen", "tabular", "xlsx",
-    "inference", "import_guards", "ui", "closeout", "complete",
+    "inference", "import_guards", "ui", "closeout", "closeout_privacy",
+    "closeout_shell", "closeout_lifecycle", "complete",
 })
 _REOPEN_FAILURE_STAGES = frozenset({
     "input", "host_ready", "reopen", "database_preservation",
@@ -646,7 +647,7 @@ def _adjacent_module(filename: str, name: str):
 
 
 def _independent_verifier():
-    return _adjacent_module("verify_synthetic_oracle.py", "_metroliza_independent_candidate_oracle").verify
+    return _adjacent_module("verify_synthetic_oracle.py", "_metroliza_independent_candidate_oracle")
 
 
 def _independent_xlsx_verifier():
@@ -719,7 +720,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
     # from application output. Its independent expected inputs were reviewed.
     verify = _independent_verifier()
     try:
-        verify(oracle, actual["database"], actual["workbook"], actual["grouping"], actual["tabular"])
+        verify.verify(oracle, actual["database"], actual["workbook"], actual["grouping"], actual["tabular"])
     except Exception:
         raise CandidateFailure("independent_core_oracle_failed") from None
     verify_xlsx = _independent_xlsx_verifier()
@@ -740,7 +741,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
             raise CandidateFailure("copied_artifact_hash_mismatch")
         copied[key] = {"path": destination.name, "sha256": digest}
     try:
-        verify(oracle, *(output / copied[key]["path"] for key in ARTIFACTS[:4]))
+        verify.verify(oracle, *(output / copied[key]["path"] for key in ARTIFACTS[:4]))
         verify_xlsx(output / copied["literal_workbook"]["path"])
     except Exception:
         raise CandidateFailure("retained_outputs_oracle_failed") from None

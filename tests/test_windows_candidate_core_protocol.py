@@ -704,7 +704,14 @@ def test_independent_verifier_is_not_shadowed_by_source_checkout(tmp_path, monke
     shadow.write_text("raise AssertionError('unexpected shadow import')")
     monkeypatch.syspath_prepend(str(tmp_path))
     verify = driver._independent_verifier()
-    assert Path(verify.__code__.co_filename).resolve() == (REPO / "scripts/verify_synthetic_oracle.py").resolve()
+    assert Path(verify.verify.__code__.co_filename).resolve() == (REPO / "scripts/verify_synthetic_oracle.py").resolve()
+
+
+def test_independent_verifier_exposes_both_core_and_reopen_contracts():
+    verifier = driver._independent_verifier()
+    assert callable(verifier.verify)
+    assert callable(verifier._load_oracle)
+    assert callable(verifier.assert_database)
 
 
 def test_unknown_facet_cannot_extend_acceptance_claim():

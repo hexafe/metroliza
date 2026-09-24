@@ -32,7 +32,8 @@ FAILURE_STAGES = frozenset({
     "ocr_parser_execution", "ocr_onnxruntime_import", "ocr_rapidocr_import",
     "ocr_engine_construction", "ocr_engine_inference", "ocr_result_normalization",
     "ocr_result_validation", "reopen", "tabular", "xlsx",
-    "inference", "import_guards", "ui", "closeout", "complete",
+    "inference", "import_guards", "ui", "closeout", "closeout_privacy",
+    "closeout_shell", "closeout_lifecycle", "complete",
 })
 DEADLINES_S = {"review": 30.0, "import": 45.0}
 FIXTURES = {
@@ -511,7 +512,7 @@ def _run_ocr_slice(
     receipt["facets"].update(observation["facets"])
 
 
-def _run_closeout_slices(child, fixtures, receipt):
+def _run_closeout_slices(child, fixtures, receipt, *, stage_recorder=None):
     from metroliza.app.windows_candidate_privacy_checks import run_privacy_checks
     from metroliza.app.windows_candidate_shell_checks import run_shell_checks
     from metroliza.app.windows_candidate_lifecycle_checks import run_lifecycle_checks
@@ -526,6 +527,8 @@ def _run_closeout_slices(child, fixtures, receipt):
         ("shell", lambda: run_shell_checks(child, fixtures, expected_dpr=float(scale))),
         ("lifecycle", lambda: run_lifecycle_checks(child, fixtures)),
     ):
+        if stage_recorder is not None:
+            stage_recorder("closeout_" + name)
         record = operation()
         observations[name] = record
         expected = "passed" if os.name == "nt" or name == "lifecycle" else "partial"
@@ -610,7 +613,10 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     _record_core_stage(root, receipt, "ui")
     _run_ui_slice(child, receipt)
     _record_core_stage(root, receipt, "closeout")
-    _run_closeout_slices(child, fixtures, receipt)
+    _run_closeout_slices(
+        child, fixtures, receipt,
+        stage_recorder=lambda stage: _record_core_stage(root, receipt, stage),
+    )
 
 
 def _failed_core_receipt(receipt: dict, failure: str) -> dict:

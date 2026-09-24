@@ -20,6 +20,7 @@ from metroliza.app import windows_candidate_reopen as reopen
 from metroliza.app.bootstrap import get_or_create_qapplication
 from scripts import qualify_windows_candidate_core as core
 from scripts import qualify_windows_diagnostics as diag
+from scripts import verify_synthetic_oracle as oracle_verifier
 from tests.test_windows_candidate_reopen import _seed_completed_import
 from tests.test_windows_candidate_launch_ownership import _interrupt_after_launch_before_store
 
@@ -101,6 +102,41 @@ def test_fresh_reopen_refuses_input_outside_owned_prior_sibling(tmp_path, monkey
     monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_REOPEN_INPUT", str(tmp_path / "user data"))
     with pytest.raises(reopen.ReopenScenarioFailure, match="fresh_reopen_input_not_owned_sibling"):
         reopen._fresh_input(root)
+
+
+def test_fresh_reopen_real_oracle_reaches_new_process_boundary(tmp_path, monkeypatch):
+    work = tmp_path / "core scenario"
+    child = work / "core-synthetic"
+    child.mkdir(parents=True)
+    database = child / "reports.sqlite"
+    oracle_path = Path(__file__).resolve().parents[1] / "scripts" / "synthetic-report-oracle.json"
+    oracle_verifier._create_synthetic_database(oracle_verifier._load_oracle(oracle_path), database)
+    expected_hash = core._hash(database)
+    output = tmp_path / "output"
+    output.mkdir()
+    monkeypatch.setattr(core, "_validate_reopen_sources", lambda _reports: None)
+
+    class ReachedLaunch(Exception):
+        pass
+
+    class Api:
+        def launch(self, *_args, **_kwargs):
+            raise ReachedLaunch
+
+    dependency = SimpleNamespace(
+        _WindowsApi=Api, _close_owned_processes=lambda *_args, **_kwargs: None,
+    )
+    stage = {"name": "fresh_reopen"}
+    with pytest.raises(ReachedLaunch):
+        core._run_fresh_reopen(
+            tmp_path, diag=dependency, relocated=tmp_path, environment={}, work=work,
+            prior={"relative_artifact_dir": child.name,
+                   "artifacts": {"database": {"sha256": expected_hash}}},
+            args=SimpleNamespace(oracle=oracle_path), deadline=time.monotonic() + 1,
+            output=output, stage=stage,
+        )
+    assert stage["name"] == "fresh_reopen"
+    assert core._hash(output / "before-reopen.sqlite") == expected_hash
 
 
 @pytest.mark.parametrize("fault,expected_stage", [

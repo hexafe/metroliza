@@ -95,8 +95,40 @@ def test_actual_source_closeout_hooks_match_the_host_contract(tmp_path, monkeypa
     assert app is not None
     fixtures = Path(__file__).parent / "fixtures/windows_candidate/reports"
     receipt = {}
-    _run_closeout_slices(tmp_path, fixtures, receipt)
+    stages = []
+    _run_closeout_slices(tmp_path, fixtures, receipt, stage_recorder=stages.append)
+    assert stages == ["closeout_privacy", "closeout_shell", "closeout_lifecycle"]
     observation = receipt["closeout_observation"]
     assert gate.validate(observation) is observation
     with pytest.raises(ValueError):
         gate.validate(observation, packaged=True, expected_dpr=1.0)
+
+
+@pytest.mark.parametrize("failed_slice", ["privacy", "shell", "lifecycle"])
+def test_closeout_stage_precedes_each_slice_even_when_process_exits(monkeypatch, failed_slice):
+    from metroliza.app import windows_candidate_lifecycle_checks as lifecycle
+    from metroliza.app import windows_candidate_privacy_checks as privacy
+    from metroliza.app import windows_candidate_shell_checks as shell
+    from metroliza.app.windows_candidate_qualification import _run_closeout_slices
+
+    calls = []
+
+    def operation(name):
+        def run(*_args, **_kwargs):
+            calls.append(name)
+            if name == failed_slice:
+                raise SystemExit(-1)
+            return {"status": "passed" if os.name == "nt" or name == "lifecycle" else "partial",
+                    "error_codes": []}
+        return run
+
+    monkeypatch.setattr(privacy, "run_privacy_checks", operation("privacy"))
+    monkeypatch.setattr(shell, "run_shell_checks", operation("shell"))
+    monkeypatch.setattr(lifecycle, "run_lifecycle_checks", operation("lifecycle"))
+    stages = []
+    with pytest.raises(SystemExit) as caught:
+        _run_closeout_slices(Path("unused"), Path("unused"), {}, stage_recorder=stages.append)
+    assert caught.value.code == -1
+    expected = ["privacy", "shell", "lifecycle"]
+    assert calls == expected[:expected.index(failed_slice) + 1]
+    assert stages == ["closeout_" + name for name in calls]
