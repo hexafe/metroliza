@@ -83,7 +83,8 @@ class CandidateFailure(RuntimeError):
 
 _PRIVATE_CORE_STAGES = frozenset({
     "package_relocation", "fixtures", "owned_launch", "runtime_observation",
-    "runtime_receipt", "owned_topology", "fresh_reopen", "package_integrity",
+    "runtime_receipt", "owned_topology", "fresh_reopen", "fresh_reopen_prepare",
+    "fresh_reopen_input", "fresh_reopen_copy", "fresh_reopen_oracle", "package_integrity",
     "retained_artifacts", "evidence_receipts", "cleanup",
 })
 _CLOSED_CHILD_FAILURES = frozenset({
@@ -1026,21 +1027,25 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
                       failure_observation=None):
     # The first Job has fully drained before this function creates another Job.
     # A new launcher, application, root and runtime journal prove process reopen.
+    stage["name"] = "fresh_reopen_prepare"
     root, launch_cwd = private / "fresh reopen", private / "fresh launcher work"
     root.mkdir()
     launch_cwd.mkdir()
     child = work / prior["relative_artifact_dir"]
     database = child / "reports.sqlite"
     expected_hash = prior["artifacts"]["database"]["sha256"]
+    stage["name"] = "fresh_reopen_input"
     if _hash(database) != expected_hash:
         raise CandidateFailure("fresh_reopen_input_changed")
     _assert_database_sidecars_absent(database, "fresh_reopen_database_sidecar")
     _validate_reopen_sources(child / "reports")
+    stage["name"] = "fresh_reopen_copy"
     before_database = output / "before-reopen.sqlite"
     with database.open("rb") as source, before_database.open("xb") as destination:
         shutil.copyfileobj(source, destination)
     if _hash(before_database) != expected_hash:
         raise CandidateFailure("fresh_reopen_copy_changed")
+    stage["name"] = "fresh_reopen_oracle"
     verifier = _independent_verifier()
     verifier.assert_database(verifier._load_oracle(args.oracle), before_database)
     next_environment = dict(environment, METROLIZA_WINDOWS_CANDIDATE_PHASE="reopen",
@@ -1056,6 +1061,7 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
             "stage_marker_state": "not_checked", "producer_stage": "unavailable",
             "allowlisted_failure": "unavailable",
         })
+    stage["name"] = "fresh_reopen"
     try:
         process = diag._WindowsApi().launch(
             relocated / "metroliza.exe", next_environment, launch_cwd, owned=owned,

@@ -103,6 +103,70 @@ def test_fresh_reopen_refuses_input_outside_owned_prior_sibling(tmp_path, monkey
         reopen._fresh_input(root)
 
 
+@pytest.mark.parametrize("fault,expected_stage", [
+    ("prepare", "fresh_reopen_prepare"),
+    ("input", "fresh_reopen_input"),
+    ("copy", "fresh_reopen_copy"),
+    ("oracle", "fresh_reopen_oracle"),
+])
+def test_fresh_reopen_prelaunch_failure_keeps_fixed_stage_and_valid_core_receipt(
+    tmp_path, monkeypatch, fault, expected_stage,
+):
+    work = tmp_path / "core scenario"
+    child = work / "core-synthetic"
+    child.mkdir(parents=True)
+    database = child / "reports.sqlite"
+    database.write_bytes(b"synthetic completed import")
+    expected_hash = core._hash(database)
+    output = tmp_path / "output"
+    output.mkdir()
+    if fault == "prepare":
+        (tmp_path / "fresh reopen").mkdir()
+    else:
+        def validate_sources(_reports):
+            if fault == "input":
+                raise RuntimeError("PRIVATE_SOURCE")
+
+        monkeypatch.setattr(core, "_validate_reopen_sources", validate_sources)
+    if fault == "copy":
+        monkeypatch.setattr(core.shutil, "copyfileobj", lambda *_: (_ for _ in ()).throw(OSError("PRIVATE_COPY")))
+    if fault == "oracle":
+        def reject_oracle(*_args):
+            raise ValueError("PRIVATE_DATABASE")
+
+        monkeypatch.setattr(core, "_independent_verifier", lambda: SimpleNamespace(
+            _load_oracle=lambda _path: {}, assert_database=reject_oracle,
+        ))
+    prior = {"relative_artifact_dir": child.name, "artifacts": {"database": {"sha256": expected_hash}}}
+    observation = {
+        "observed_process": "requested_launcher_handle", "observed_exit_code": 0,
+        "receipt_state": "valid_success", "producer_stage": "complete",
+        "owned_cleanup": "complete", "private_cleanup": "complete",
+    }
+    stage = {"name": "fresh_reopen"}
+    with pytest.raises((OSError, ValueError, RuntimeError)):
+        core._run_fresh_reopen(
+            tmp_path, diag=SimpleNamespace(_WindowsApi=lambda: pytest.fail("reopen must not launch")),
+            relocated=tmp_path, environment={}, work=work, prior=prior,
+            args=SimpleNamespace(oracle=tmp_path / "oracle.json"),
+            deadline=time.monotonic() + 1, output=output, stage=stage,
+            failure_observation=observation,
+        )
+    assert stage == {"name": expected_stage}
+    payload = core._failed_diagnostic_payload(
+        observation, stage, core._closed_unexpected_stage(stage["name"]), "a" * 40,
+    )
+    assert payload["host_stage"] == expected_stage
+    assert payload["observed_process"] == "requested_launcher_handle"
+    assert payload["observed_exit_code"] == 0
+    assert payload["receipt_state"] == "valid_success"
+    assert payload["producer_stage"] == "complete"
+    assert payload["owned_cleanup"] == payload["private_cleanup"] == "complete"
+    assert database.read_bytes() == b"synthetic completed import"
+    serialized = json.dumps(payload)
+    assert "PRIVATE_" not in serialized and str(tmp_path) not in serialized
+
+
 def test_fresh_process_launch_transfer_interrupt_closes_registered_job(tmp_path, monkeypatch):
     root = tmp_path / "core scenario"
     child = root / ("core-" + "a" * 32)
