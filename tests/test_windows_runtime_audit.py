@@ -659,6 +659,7 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             process.resume()
         deadline = time.monotonic() + 30
         concurrent_released = False
+        single_released = False
         while time.monotonic() < deadline:
             if mode == "concurrent":
                 if not concurrent_released:
@@ -685,16 +686,23 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                         process.observe()
                     break
             else:
-                for index, process in enumerate(owned):
-                    process.observe()
-                    if (tmp_path / str(index) / "control-ready").exists():
+                process = owned[0]
+                if not single_released:
+                    if process.poll() is not None and api._job_accounting(process._job)[0] == 0:
+                        # Hard-exit controls need no finish marker.
+                        single_released = True
+                    else:
+                        # Identity-bearing observation belongs to the held
+                        # phase; an exit-phase image query races with teardown.
+                        process.observe()
+                    if not single_released and (tmp_path / "0" / "control-ready").exists():
                         if mode.startswith("late_"):
                             process.mark_runtime_ready()
-                        (tmp_path / str(index) / "control-finish").touch()
-            if mode != "concurrent" and all(
-                process.poll() is not None and process.active_processes() == 0 for process in owned
-            ):
-                break
+                        (tmp_path / "0" / "control-finish").touch()
+                        single_released = True
+                if single_released and process.poll() is not None and api._job_accounting(process._job)[0] == 0:
+                    process.observe()
+                    break
             time.sleep(0.005)
         if mode == "concurrent":
             assert concurrent_released
@@ -703,9 +711,9 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                 for process in owned
             )
         else:
-            assert all(
-                process.poll() == expected_exit and process.active_processes() == 0 for process in owned
-            )
+            assert single_released
+            assert owned[0].poll() == expected_exit
+            assert api._job_accounting(owned[0]._job)[0] == 0
         for process, evidence in zip(owned, evidences):
             if mode in {"write_failure", "blocked_install"}:
                 with pytest.raises(qualification.QualificationFailure):
