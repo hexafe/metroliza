@@ -187,6 +187,12 @@ class ReportPlanner(QWidget):
         self.outcome_button.show()
         self.outcome_button.setChecked(True)
 
+    def clear_outcome(self):
+        """Drop the prior context's outcome when the shell accepts new inputs."""
+        self.outcome_button.setChecked(False)
+        self.outcome.clear()
+        self.outcome_button.hide()
+
     def _selection_updated(self):
         self._update_counts()
         self.selection_changed.emit()

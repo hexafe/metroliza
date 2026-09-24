@@ -36,6 +36,7 @@ class DiagnosticEventCode(str, Enum):
     EXCEPTION_DIAGNOSTIC = "exception_diagnostic"
     RUNTIME_PROVENANCE = "runtime_provenance"
     STARTUP_DIAGNOSTIC = "startup_diagnostic"
+    WORKFLOW_DIAGNOSTIC = "workflow_diagnostic"
 
 
 class DiagnosticOperation(str, Enum):
@@ -132,6 +133,57 @@ class BuildPackager(str, Enum):
     NUITKA = "nuitka"
 
 
+class WorkflowOperation(str, Enum):
+    """Approved product workflows with V1 incident coverage."""
+
+    SELECTED_IMPORT = "selected_import"
+    LOCAL_EXPORT = "local_export"
+
+
+class WorkflowStage(str, Enum):
+    """Closed, content-free workflow boundaries."""
+
+    STARTED = "started"
+    PREFLIGHT_COMPLETE = "preflight_complete"
+    PROCESSING = "processing"
+    PERSISTENCE_COMPLETE = "persistence_complete"
+    OUTPUT_STAGING = "output_staging"
+    OUTPUT_PUBLISHED = "output_published"
+    FINISHED = "finished"
+
+
+class WorkflowOutcome(str, Enum):
+    """Observed state at a workflow boundary."""
+
+    STARTED = "started"
+    MILESTONE = "milestone"
+    COMPLETED = "completed"
+    COMPLETED_WITH_FALLBACK = "completed_with_fallback"
+    COMPLETED_WITH_OMISSIONS = "completed_with_omissions"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class WorkflowError(str, Enum):
+    """Fixed failure identities; never exception-controlled text."""
+
+    NONE = "none"
+    INPUT_REJECTED = "input_rejected"
+    PROCESSING_FAILED = "processing_failed"
+    PERSISTENCE_FAILED = "persistence_failed"
+    OUTPUT_FAILED = "output_failed"
+    UNKNOWN = "unknown"
+
+
+class ValidationStatus(str, Enum):
+    """Explicit domain-validation status for an observed result."""
+
+    NOT_PERFORMED = "not_performed"
+    PASSED = "passed"
+    FAILED = "failed"
+
+
 _STARTUPMODE_LITERALS = (
     (StartupMode.UNKNOWN, "unknown"),
     (StartupMode.INTERACTIVE, "interactive"),
@@ -198,6 +250,7 @@ _DIAGNOSTIC_EVENT_CODE_LITERALS = (
     (DiagnosticEventCode.EXCEPTION_DIAGNOSTIC, "exception_diagnostic"),
     (DiagnosticEventCode.RUNTIME_PROVENANCE, "runtime_provenance"),
     (DiagnosticEventCode.STARTUP_DIAGNOSTIC, "startup_diagnostic"),
+    (DiagnosticEventCode.WORKFLOW_DIAGNOSTIC, "workflow_diagnostic"),
 )
 _DIAGNOSTIC_OPERATION_LITERALS = (
     (DiagnosticOperation.UNHANDLED_EXCEPTION, "unhandled_exception"),
@@ -219,6 +272,11 @@ _SOURCE_CLASS_LITERALS = (
     (SourceClass.EXTERNAL, "external"),
     (SourceClass.UNKNOWN, "unknown"),
 )
+_WORKFLOW_OPERATION_LITERALS = tuple((member, member.value) for member in WorkflowOperation)
+_WORKFLOW_STAGE_LITERALS = tuple((member, member.value) for member in WorkflowStage)
+_WORKFLOW_OUTCOME_LITERALS = tuple((member, member.value) for member in WorkflowOutcome)
+_WORKFLOW_ERROR_LITERALS = tuple((member, member.value) for member in WorkflowError)
+_VALIDATION_STATUS_LITERALS = tuple((member, member.value) for member in ValidationStatus)
 
 
 def _canonical_literal(
@@ -372,9 +430,38 @@ class StartupDiagnosticEvent:
         _startup_payload(self)
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowDiagnosticEvent:
+    """One bounded, content-free boundary in an approved product workflow.
+
+    ``sequence`` is monotonically increasing per ``operation_id``. The in-memory
+    recorder enforces that ordering when it receives events.
+    """
+
+    invocation_id: uuid.UUID
+    operation_id: uuid.UUID
+    sequence: int
+    operation: WorkflowOperation
+    stage: WorkflowStage
+    outcome: WorkflowOutcome
+    error: WorkflowError = WorkflowError.NONE
+    validation_status: ValidationStatus = ValidationStatus.NOT_PERFORMED
+    selected_report_count: int | None = None
+    imported_report_count: int | None = None
+    published_artifact_count: int | None = None
+    duration_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        _workflow_payload(self)
+
+
 DiagnosticEvent = (
-    LegacyLogSuppressedEvent | InvalidDiagnosticEvent | ExceptionDiagnosticEvent
-    | RuntimeProvenanceEvent | StartupDiagnosticEvent
+    LegacyLogSuppressedEvent
+    | InvalidDiagnosticEvent
+    | ExceptionDiagnosticEvent
+    | RuntimeProvenanceEvent
+    | StartupDiagnosticEvent
+    | WorkflowDiagnosticEvent
 )
 
 
@@ -814,6 +901,190 @@ def _startup_payload(event: StartupDiagnosticEvent) -> dict[str, object]:
     }
 
 
+_WORKFLOW_STAGES = {
+    WorkflowOperation.SELECTED_IMPORT: (
+        WorkflowStage.STARTED,
+        WorkflowStage.PREFLIGHT_COMPLETE,
+        WorkflowStage.PROCESSING,
+        WorkflowStage.PERSISTENCE_COMPLETE,
+        WorkflowStage.FINISHED,
+    ),
+    WorkflowOperation.LOCAL_EXPORT: (
+        WorkflowStage.STARTED,
+        WorkflowStage.PROCESSING,
+        WorkflowStage.OUTPUT_STAGING,
+        WorkflowStage.OUTPUT_PUBLISHED,
+        WorkflowStage.FINISHED,
+    ),
+}
+_WORKFLOW_TERMINAL_OUTCOMES = (
+    WorkflowOutcome.COMPLETED,
+    WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+    WorkflowOutcome.COMPLETED_WITH_OMISSIONS,
+    WorkflowOutcome.COMPLETED_WITH_WARNINGS,
+    WorkflowOutcome.CANCELLED,
+    WorkflowOutcome.FAILED,
+)
+
+
+def _workflow_identity(event: WorkflowDiagnosticEvent) -> dict[str, object]:
+    invocation_id = _uuid_hex(event.invocation_id)
+    operation_id = _uuid_hex(event.operation_id)
+    for identifier in (invocation_id, operation_id):
+        if identifier[12] != "4" or identifier[16] not in "89ab":
+            raise DiagnosticEventValidationError("invalid generated identifier")
+    if invocation_id == operation_id:
+        raise DiagnosticEventValidationError("workflow identifiers must be distinct")
+    if not _bounded_integer(event.sequence, 65535) or event.sequence == 0:
+        raise DiagnosticEventValidationError("invalid workflow sequence")
+    return {
+        "invocation_id": invocation_id,
+        "operation_id": operation_id,
+        "sequence": event.sequence,
+    }
+
+
+def _validate_workflow_state(event: WorkflowDiagnosticEvent) -> None:
+    _validate_workflow_outcome(event)
+    _validate_workflow_error(event)
+    _validate_workflow_validation(event)
+    _validate_workflow_counts(event)
+
+
+def _validate_workflow_outcome(event: WorkflowDiagnosticEvent) -> None:
+    if not any(event.stage is stage for stage in _WORKFLOW_STAGES[event.operation]):
+        raise DiagnosticEventValidationError("invalid workflow stage")
+    if event.stage is WorkflowStage.STARTED:
+        valid_outcome = event.outcome is WorkflowOutcome.STARTED
+    elif event.stage is WorkflowStage.FINISHED:
+        valid_outcome = any(event.outcome is outcome for outcome in _WORKFLOW_TERMINAL_OUTCOMES)
+    else:
+        valid_outcome = event.outcome is WorkflowOutcome.MILESTONE
+    if not valid_outcome:
+        raise DiagnosticEventValidationError("inconsistent workflow outcome")
+    if event.outcome in (
+        WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+        WorkflowOutcome.COMPLETED_WITH_OMISSIONS,
+    ):
+        if event.operation is not WorkflowOperation.LOCAL_EXPORT:
+            raise DiagnosticEventValidationError("invalid workflow fallback")
+    if event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS:
+        if event.operation is not WorkflowOperation.SELECTED_IMPORT:
+            raise DiagnosticEventValidationError("invalid workflow warnings")
+
+
+def _validate_workflow_error(event: WorkflowDiagnosticEvent) -> None:
+    failed = event.outcome is WorkflowOutcome.FAILED
+    warnings = event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS
+    if (failed or warnings) is (event.error is WorkflowError.NONE):
+        raise DiagnosticEventValidationError("inconsistent workflow error")
+    if warnings and event.error not in (
+        WorkflowError.INPUT_REJECTED,
+        WorkflowError.PROCESSING_FAILED,
+    ):
+        raise DiagnosticEventValidationError("invalid workflow warning")
+    allowed_errors = {
+        WorkflowOperation.SELECTED_IMPORT: (
+            WorkflowError.NONE,
+            WorkflowError.INPUT_REJECTED,
+            WorkflowError.PROCESSING_FAILED,
+            WorkflowError.PERSISTENCE_FAILED,
+            WorkflowError.UNKNOWN,
+        ),
+        WorkflowOperation.LOCAL_EXPORT: (
+            WorkflowError.NONE,
+            WorkflowError.INPUT_REJECTED,
+            WorkflowError.PROCESSING_FAILED,
+            WorkflowError.OUTPUT_FAILED,
+            WorkflowError.UNKNOWN,
+        ),
+    }
+    if not any(event.error is error for error in allowed_errors[event.operation]):
+        raise DiagnosticEventValidationError("invalid workflow error")
+
+
+def _validate_workflow_validation(event: WorkflowDiagnosticEvent) -> None:
+    if event.validation_status is ValidationStatus.FAILED and event.outcome is not WorkflowOutcome.FAILED:
+        raise DiagnosticEventValidationError("inconsistent validation status")
+    if event.validation_status is not ValidationStatus.NOT_PERFORMED:
+        if event.stage is not WorkflowStage.FINISHED:
+            raise DiagnosticEventValidationError("validation before workflow terminal")
+    if event.duration_ms is not None and event.stage is not WorkflowStage.FINISHED:
+        raise DiagnosticEventValidationError("duration before workflow terminal")
+
+
+def _validate_workflow_counts(event: WorkflowDiagnosticEvent) -> None:
+    if event.selected_report_count is not None:
+        if event.operation is not WorkflowOperation.SELECTED_IMPORT:
+            raise DiagnosticEventValidationError("invalid selected report count")
+    if event.imported_report_count is not None:
+        valid_imported_stage = (
+            event.operation is WorkflowOperation.SELECTED_IMPORT
+            and event.stage in (WorkflowStage.PERSISTENCE_COMPLETE, WorkflowStage.FINISHED)
+        )
+        if not valid_imported_stage:
+            raise DiagnosticEventValidationError("invalid imported report count")
+        if (
+            event.selected_report_count is not None
+            and event.imported_report_count > event.selected_report_count
+        ):
+            raise DiagnosticEventValidationError("inconsistent report counts")
+    if event.published_artifact_count is not None:
+        valid_artifact_stage = (
+            event.operation is WorkflowOperation.LOCAL_EXPORT
+            and event.stage
+            in (
+                WorkflowStage.OUTPUT_PUBLISHED,
+                WorkflowStage.FINISHED,
+            )
+        )
+        if not valid_artifact_stage:
+            raise DiagnosticEventValidationError("invalid published artifact count")
+
+
+
+def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
+    operation = _canonical_literal(
+        event.operation, _WORKFLOW_OPERATION_LITERALS, "invalid workflow operation"
+    )
+    stage = _canonical_literal(event.stage, _WORKFLOW_STAGE_LITERALS, "invalid workflow stage")
+    outcome = _canonical_literal(
+        event.outcome, _WORKFLOW_OUTCOME_LITERALS, "invalid workflow outcome"
+    )
+    error = _canonical_literal(event.error, _WORKFLOW_ERROR_LITERALS, "invalid workflow error")
+    validation_status = _canonical_literal(
+        event.validation_status, _VALIDATION_STATUS_LITERALS, "invalid validation status"
+    )
+    if event.selected_report_count is not None and not _bounded_integer(
+        event.selected_report_count, 10_000
+    ):
+        raise DiagnosticEventValidationError("invalid selected report count")
+    if event.published_artifact_count is not None and not _bounded_integer(
+        event.published_artifact_count, 32
+    ):
+        raise DiagnosticEventValidationError("invalid published artifact count")
+    if event.imported_report_count is not None and not _bounded_integer(
+        event.imported_report_count, 10_000
+    ):
+        raise DiagnosticEventValidationError("invalid imported report count")
+    if event.duration_ms is not None and not _bounded_integer(event.duration_ms, 86_400_000):
+        raise DiagnosticEventValidationError("invalid workflow duration")
+    _validate_workflow_state(event)
+    return {
+        "event_code": _event_code_literal(DiagnosticEventCode.WORKFLOW_DIAGNOSTIC),
+        **_workflow_identity(event),
+        "operation": operation,
+        "stage": stage,
+        "outcome": outcome,
+        "error": error,
+        "validation_status": validation_status,
+        "selected_report_count": event.selected_report_count,
+        "imported_report_count": event.imported_report_count,
+        "published_artifact_count": event.published_artifact_count,
+        "duration_ms": event.duration_ms,
+    }
+
+
 def serialize_diagnostic_event(event: object) -> str:
     """Serialize one exact approved event without fallback string conversion."""
     try:
@@ -825,6 +1096,8 @@ def serialize_diagnostic_event(event: object) -> str:
             payload = _provenance_payload(event)
         elif type(event) is StartupDiagnosticEvent:
             payload = _startup_payload(event)
+        elif type(event) is WorkflowDiagnosticEvent:
+            payload = _workflow_payload(event)
         else:
             raise DiagnosticEventValidationError("unsupported diagnostic event")
         output = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False)

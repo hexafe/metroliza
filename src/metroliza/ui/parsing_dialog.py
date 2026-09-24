@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QWidget,
 )
 import logging
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
@@ -297,24 +298,13 @@ def _build_parse_completion_summary(result, db_file, enrichment_result=None, *, 
     return severity, title, message + "\n\n" + enrichment_group
 
 
-class ParsingDialog(QDialog):
-    """Collect parse inputs and coordinate parsing thread lifecycle.
+class _ReportOperations:
+    """One implementation of report state, controls and worker ownership."""
 
-    The dialog tracks selected source/database paths and handles cancellation,
-    error propagation, and completion feedback from the worker thread.
-    """
-
-    metadata_enrichment_requested = pyqtSignal(str)
-
-    def __init__(self, parent=None, directory=None, db_file=None):
-        super().__init__(parent)
-
-        # Set the window title and geometry
-        self.setWindowTitle("Import reports")
-        # Keep the compact workspace within the native frame allowance, including
-        # 200% scaling on a 1080px desktop with its taskbar present.
-        configure_window_size(self, minimum=(620, 440), initial=(1000, 680), screen_margin=32)
-
+    def _initialize_report_operations(self, directory=None, db_file=None, *, external_context=False):
+        self._external_context = external_context
+        self.operation_start_allowed = None
+        self._operation_progress = 0
         # Initialize variables
         self.directory = directory
         self.db_file = db_file
@@ -567,6 +557,49 @@ class ParsingDialog(QDialog):
                        self.directory_button, self.archive_button, self.database_button),
             quiet=(self.review_scan_button,),
         )
+        self.state_changed.emit()
+
+    def apply_workspace_snapshot(self, snapshot):
+        """Apply accepted context without creating an independent selection owner."""
+        paths = (snapshot.source_directory, snapshot.database_file)
+        if paths == (self.directory, self.db_file):
+            return
+        if not self.can_change_workspace():
+            raise RuntimeError("Report operation must finish before context changes")
+        self._invalidate_preflight()
+        self.report_planner.clear_outcome()
+        self.directory, self.db_file = paths
+        update_path_field(self.directory_text_label, self.directory)
+        update_path_field(self.database_text_label, self.db_file)
+        self._sync_readiness_state()
+
+    def can_change_workspace(self):
+        return self.preflight_thread is None and self.parse_thread is None
+
+    def focus_primary_action(self):
+        if not self.directory:
+            control = self.directory_button
+        elif not self.db_file:
+            control = self.database_button
+        elif self.parse_button.isEnabled():
+            control = self.parse_button
+        elif self.can_change_workspace():
+            control = self.scan_button
+        else:
+            control = self.report_planner.search
+        control.setFocus()
+
+    def request_shutdown(self):
+        if self.can_change_workspace():
+            return True
+        self._close_requested = True
+        self._request_active_worker_cancellation()
+        return False
+
+    @pyqtSlot(int)
+    def _on_operation_progress(self, value):
+        self._operation_progress = value
+        self.state_changed.emit()
 
     def _review_approval(self, *, refresh_registry=False):
         """Cache immutable review approval; selection edits only change the count."""
@@ -637,6 +670,9 @@ class ParsingDialog(QDialog):
     def _set_parse_source(self, selected_source):
         if not selected_source:
             return
+        if self._external_context:
+            self.source_change_requested.emit(selected_source)
+            return
         logger.info("Selected parse source: %s", selected_source)
         self._invalidate_preflight()
         self.directory = selected_source
@@ -703,6 +739,9 @@ class ParsingDialog(QDialog):
             if filename:
                 if not filename.endswith(".db"):
                     filename += ".db"
+                if self._external_context:
+                    self.database_change_requested.emit(filename)
+                    return
                 logger.info("Selected parse database file: %s", filename)
                 self._invalidate_preflight()
                 self.db_file = filename
@@ -720,6 +759,9 @@ class ParsingDialog(QDialog):
 
         if self.preflight_thread is not None or self.parse_thread is not None:
             return
+        if self.operation_start_allowed is not None and not self.operation_start_allowed():
+            return
+        self._operation_progress = 0
         try:
             metadata_parsing_mode, _background, _modeless = self._build_parse_request_fields()
             request = validate_parse_request(
@@ -748,6 +790,8 @@ class ParsingDialog(QDialog):
                 ),
                 on_cancel=self.stop_scanning,
             )
+            if self._external_context:
+                self.scan_loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
             self.scan_button.setEnabled(False)
             self.parse_button.setEnabled(False)
             self.preflight_thread = ParsePreflightThread(
@@ -760,6 +804,7 @@ class ParsingDialog(QDialog):
             )
             self.preflight_thread.update_label.connect(self.scan_loading_label.setText)
             self.preflight_thread.update_progress.connect(self.scan_loading_bar.setValue)
+            self.preflight_thread.update_progress.connect(self._on_operation_progress)
             self.preflight_thread.completed.connect(self.on_preflight_completed)
             self.preflight_thread.failed.connect(self.on_preflight_failed)
             self.preflight_thread.start()
@@ -858,6 +903,9 @@ class ParsingDialog(QDialog):
         """Start a plan; direct legacy callers retain the atomic compatibility adapter."""
         if self.preflight_thread is not None or self.parse_thread is not None:
             return
+        if self.operation_start_allowed is not None and not self.operation_start_allowed():
+            return
+        self._operation_progress = 0
         try:
             (
                 metadata_parsing_mode,
@@ -883,6 +931,8 @@ class ParsingDialog(QDialog):
                 ),
                 on_cancel=self.stop_parsing,
             )
+            if self._external_context:
+                self.loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
 
             # Disable the parse button before the worker starts.
             self.parse_button.setEnabled(False)
@@ -904,6 +954,7 @@ class ParsingDialog(QDialog):
             )
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
+            self.parse_thread.update_progress.connect(self._on_operation_progress)
             self.parse_thread.error_occurred.connect(self.on_parse_error)
             self.parse_thread.start()
             self._sync_readiness_state()
@@ -1013,7 +1064,7 @@ class ParsingDialog(QDialog):
             elif self.parsing_canceled and result is None:
                 outcome_title = "Import cancelled"
             self.report_planner.show_outcome(outcome_title + "\n\n" + outcome_message)
-            if not close_requested:
+            if not close_requested and not self._external_context:
                 self._show_parse_completion(feedback, enrichment_requested, should_request_modeless_enrichment)
 
             # Reset parse state flags
@@ -1021,7 +1072,7 @@ class ParsingDialog(QDialog):
             self.parse_error_message = None
             self._pending_modeless_metadata_enrichment = False
 
-            if should_request_modeless_enrichment:
+            if should_request_modeless_enrichment and not self._external_context:
                 parent = self.parent()
                 if parent is not None and hasattr(parent, "set_db_file"):
                     parent.set_db_file(self.db_file)
@@ -1096,18 +1147,49 @@ class ParsingDialog(QDialog):
         if not getattr(self, "_close_requested", False) or self._workers_running():
             return
         self._close_requested = False
-        QDialog.reject(self)
+        self.shutdown_ready.emit()
+
+    def log_and_exit(self, exception):
+        CustomLogger(exception, reraise=False)
+
+
+class ReportsWorkspace(_ReportOperations, QWidget):
+    """Persistent embedded owner; the shell supplies authoritative context."""
+
+    metadata_enrichment_requested = pyqtSignal(str)
+    source_change_requested = pyqtSignal(str)
+    database_change_requested = pyqtSignal(str)
+    state_changed = pyqtSignal()
+    shutdown_ready = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._initialize_report_operations(external_context=True)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+
+
+class ParsingDialog(_ReportOperations, QDialog):
+    """Standalone compatibility chrome over the same report operation host."""
+
+    metadata_enrichment_requested = pyqtSignal(str)
+    source_change_requested = pyqtSignal(str)
+    database_change_requested = pyqtSignal(str)
+    state_changed = pyqtSignal()
+    shutdown_ready = pyqtSignal()
+
+    def __init__(self, parent=None, directory=None, db_file=None):
+        super().__init__(parent)
+        self.setWindowTitle("Import reports")
+        configure_window_size(self, minimum=(620, 440), initial=(1000, 680), screen_margin=32)
+        self._initialize_report_operations(directory, db_file)
+        self.shutdown_ready.connect(self.reject)
 
     def reject(self):
-        if self._defer_close_for_active_workers():
-            return
-        QDialog.reject(self)
+        if not self._defer_close_for_active_workers():
+            super().reject()
 
     def closeEvent(self, event):
         if self._defer_close_for_active_workers():
             event.ignore()
             return
         super().closeEvent(event)
-
-    def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
