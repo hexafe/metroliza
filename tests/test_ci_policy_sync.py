@@ -777,7 +777,7 @@ def test_windows_incident_qualification_is_bounded_and_native_selection_is_block
     assert job['concurrency']['cancel-in-progress'] == 'false'
     assert all('continue-on-error' not in step for step in job['steps'])
     runs = '\n'.join(step.get('run', '') for step in job['steps'])
-    assert '.\\build_windows_exe.ps1 -Mode onedir' in runs
+    assert '.\\build_windows_exe.ps1 -Clean -WithNative -Mode onedir' in runs
     assert 'scripts/qualify_windows_diagnostics.py' in runs
     uploads = [step for step in job['steps']
                if step.get('uses', '').startswith('actions/upload-artifact@')]

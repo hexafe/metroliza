@@ -193,7 +193,7 @@ jobs:
         shell: pwsh
         env:
           METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
-        run: .\build_windows_exe.ps1 -Mode onedir
+        run: .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
 
       - name: Build and run bounded native process identity controls
         if: inputs.diagnostic_mode == 'identity'
