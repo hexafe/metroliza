@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import platform
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,6 +39,57 @@ def _request(root: Path) -> dict:
             "params": {}, "source": "rapidocr_latin",
         },
     }
+
+
+def test_worker_version_fallback_uses_native_windows_tuple_without_shell(monkeypatch):
+    fake_sys = SimpleNamespace(
+        frozen=True, platform="win32",
+        getwindowsversion=lambda: SimpleNamespace(platform_version=(10, 0, 20348)),
+    )
+    monkeypatch.setattr(worker, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(worker, "sys", fake_sys)
+    monkeypatch.setattr(platform, "_syscmd_ver", lambda *_args, **_kwargs: pytest.fail("shell fallback called"))
+
+    worker._use_native_windows_version()
+
+    assert platform._syscmd_ver() == ("", "", "10.0.20348")
+    assert platform._syscmd_ver(version="unchanged", supported_platforms=()) == (
+        "", "", "unchanged",
+    )
+
+
+@pytest.mark.parametrize("native", (None, (10, 0), (10, "0", 20348), (0, 0, 0)))
+def test_worker_rejects_invalid_native_windows_version(monkeypatch, native):
+    monkeypatch.setattr(worker, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(worker, "sys", SimpleNamespace(
+        frozen=True, platform="win32",
+        getwindowsversion=lambda: SimpleNamespace(platform_version=native),
+    ))
+    with pytest.raises(worker.OcrWorkerFailure, match="^ocr_windows_version_unavailable$"):
+        worker._use_native_windows_version()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows version API")
+def test_native_worker_version_fallback_does_not_launch_shell():
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import platform,sys\n"
+        "from metroliza.parsing.frozen_ocr_worker import _use_native_windows_version\n"
+        "sys.frozen=True\n"
+        "def unavailable(*_args): raise OSError('controlled WMI unavailable')\n"
+        "platform._wmi_query=unavailable\n"
+        "platform._uname_cache=None\n"
+        "_use_native_windows_version()\n"
+        "def no_shell(event,_args):\n"
+        "    if event=='subprocess.Popen': raise RuntimeError('unexpected shell')\n"
+        "sys.addaudithook(no_shell)\n"
+        "assert platform.win32_ver()[1]=='.'.join(map(str,sys.getwindowsversion().platform_version))\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", code],
+        env=dict(os.environ, PYTHONPATH=str(root / "src")),
+        check=True, capture_output=True,
+    )
 
 
 def test_worker_runs_real_protocol_without_qt_or_native_output(tmp_path, monkeypatch, capsys):

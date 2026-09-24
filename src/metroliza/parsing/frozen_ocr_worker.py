@@ -239,12 +239,34 @@ def recognize_in_frozen_worker(config, image_path: Path):
         raise OcrWorkerFailure("ocr_worker_boundary_failed") from None
 
 
+def _use_native_windows_version() -> None:
+    """Keep the isolated worker's version fallback inside the owned process."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    import platform
+
+    native = sys.getwindowsversion().platform_version
+    if (type(native) is not tuple or len(native) != 3
+            or any(type(part) is not int or part < 0 for part in native)
+            or native[0] == 0):
+        raise OcrWorkerFailure("ocr_windows_version_unavailable")
+    native_version = ".".join(str(part) for part in native)
+
+    def from_native(system="", release="", version="", supported_platforms=("win32", "win16", "dos")):
+        if sys.platform not in supported_platforms:
+            return system, release, version
+        return system, release, native_version
+
+    # CPython's win32_ver() uses this private fallback after WMI fails. Its
+    # stock implementation shells out, although it falls back to the same
+    # platform_version tuple when that command cannot provide a version.
+    if not callable(getattr(platform, "_syscmd_ver", None)):
+        raise OcrWorkerFailure("ocr_windows_version_unavailable")
+    platform._syscmd_ver = from_native
+
+
 def worker_main(argv: list[str] | None = None) -> int:
     """Consume only a private request; never print OCR text or errors."""
-
-    from metroliza.parsing.header_ocr_backend import (
-        RapidOcrLatinBackend, RapidOcrLatinBackendConfig, RapidOcrLatinModelPaths,
-    )
 
     values = sys.argv[1:] if argv is None else argv
     try:
@@ -262,6 +284,10 @@ def worker_main(argv: list[str] | None = None) -> int:
                 or not _valid_config(request["config"])):
             return 1
         _regular_image(root / "header.png")
+        _use_native_windows_version()
+        from metroliza.parsing.header_ocr_backend import (
+            RapidOcrLatinBackend, RapidOcrLatinBackendConfig, RapidOcrLatinModelPaths,
+        )
         config = request["config"]
         paths = config["model_paths"]
         backend = RapidOcrLatinBackend(RapidOcrLatinBackendConfig(
