@@ -34,7 +34,9 @@ _CHILD_FAILURE_STAGES = frozenset({
     "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
     "qapplication", "selected_import", "ocr", "ocr_fixture_validation",
     "ocr_asset_validation", "ocr_fixture_inspection", "ocr_parser_construction",
-    "ocr_parser_execution", "ocr_result_validation", "reopen", "tabular", "xlsx",
+    "ocr_parser_execution", "ocr_onnxruntime_import", "ocr_rapidocr_import",
+    "ocr_engine_construction", "ocr_engine_inference", "ocr_result_normalization",
+    "ocr_result_validation", "reopen", "tabular", "xlsx",
     "inference", "import_guards", "ui", "closeout", "complete",
 })
 _REOPEN_FAILURE_STAGES = frozenset({

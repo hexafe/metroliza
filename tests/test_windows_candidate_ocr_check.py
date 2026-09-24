@@ -122,10 +122,13 @@ def test_real_rapidocr_parser_path_returns_closed_provenance(tmp_path, monkeypat
         "latin_PP-OCRv3_rec_mobile.onnx",
     }
     assert receipt["facets"] == {name: "passed" for name in FACETS}
-    assert stages == [
+    assert stages[:5] == [
         "ocr_fixture_validation", "ocr_asset_validation", "ocr_fixture_inspection",
-        "ocr_parser_construction", "ocr_parser_execution", "ocr_result_validation",
+        "ocr_parser_construction", "ocr_parser_execution",
     ]
+    assert "ocr_engine_inference" in stages
+    assert "ocr_result_normalization" in stages
+    assert stages[-1] == "ocr_result_validation"
 
 
 def test_qualification_rejects_runtime_context_mismatch(tmp_path, monkeypatch):

@@ -222,7 +222,12 @@ def run_ocr_check(
             )
             if stage_recorder is not None:
                 stage_recorder("ocr_parser_execution")
-            parsed = parser.parse_to_v2()
+            from metroliza.parsing.header_ocr_backend import (
+                observe_ocr_qualification_stages,
+            )
+
+            with observe_ocr_qualification_stages(stage_recorder):
+                parsed = parser.parse_to_v2()
             if stage_recorder is not None:
                 stage_recorder("ocr_result_validation")
             metadata = parser.canonical_metadata
