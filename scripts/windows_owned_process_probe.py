@@ -248,8 +248,6 @@ class OwnedProcessProbe:
         system = Path(buffer.value)
         return tuple((role, system / name) for role, name in (
             ("system_cmd", "cmd.exe"), ("system_conhost", "conhost.exe"),
-            ("system_werfault", "WerFault.exe"), ("system_wermgr", "wermgr.exe"),
-            ("system_powershell", "WindowsPowerShell/v1.0/powershell.exe"),
         ))
 
     def _mark_unavailable(self, source):

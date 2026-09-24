@@ -235,10 +235,16 @@ def test_system_roles_ignore_overridden_environment_directory(monkeypatch, tmp_p
     assert dict(probe.images)["system_cmd"] == tmp_path / "OS_SYSTEM32" / "cmd.exe"
 
 
-def test_absent_optional_openconsole_is_not_queried_or_admitted(monkeypatch, tmp_path):
+@pytest.mark.parametrize("image", (
+    "WerFault.exe", "wermgr.exe", "OpenConsole.exe", "WindowsPowerShell/v1.0/powershell.exe",
+))
+def test_unadmitted_system_images_are_not_queried_or_admitted(monkeypatch, tmp_path, image):
     probe, api, _ = _probe(monkeypatch, tmp_path, allow_ocr_worker=True)
     roles = dict(probe.images)
-    assert "system_openconsole" not in roles
+    assert set(roles) == {
+        "package_launcher", "package_application", "system_cmd", "system_conhost",
+        "package_ocr_worker",
+    }
     queried = []
 
     def exact_file(expected, native, _failure):
@@ -249,8 +255,8 @@ def test_absent_optional_openconsole_is_not_queried_or_admitted(monkeypatch, tmp
     failure = qualification.QualificationFailure("scenario_failed")
     assert probe._role(str(roles["package_ocr_worker"]), failure) == "package_ocr_worker"
     assert probe.unavailable is False
-    assert "OpenConsole.exe" not in queried
-    assert probe._role(str(tmp_path / "OS_SYSTEM32" / "OpenConsole.exe"), failure) == "unknown"
+    assert image.rsplit("/", 1)[-1] not in queried
+    assert probe._role(str(tmp_path / "OS_SYSTEM32" / image), failure) == "unknown"
 
 
 @pytest.mark.parametrize("error", [OSError, ValueError, TypeError, RuntimeError])
