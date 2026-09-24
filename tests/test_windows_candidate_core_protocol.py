@@ -212,6 +212,21 @@ def test_producer_cannot_write_receipt_before_root_is_known(tmp_path, monkeypatc
     assert list(tmp_path.iterdir()) == []
 
 
+def test_launcher_observer_rejects_expired_deadline_without_claiming_an_exit(tmp_path) -> None:
+    class Process:
+        def observe(self):
+            pytest.fail("expired observer must not sample the process")
+
+    observation = {"observed_exit_code": None}
+    with pytest.raises(driver.CandidateFailure, match="^owned_package_scenario_timeout$"):
+        driver._wait_for_launcher_exit(
+            tmp_path, Process(), time.monotonic() - 1,
+            scenario="core", timeout_reason="owned_package_scenario_timeout",
+            failure_observation=observation,
+        )
+    assert observation == {"observed_exit_code": None}
+
+
 @pytest.mark.parametrize("cleanup_failed", [False, True])
 @pytest.mark.parametrize("receipt_present", [False, True])
 def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
@@ -280,7 +295,9 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     driver._run_private_directory_closed(diag, lambda private: driver._guard_private_core(
         lambda: driver._run_private_core(
             private, args=args, diag=diag, artifact=tmp_path, fixtures=tmp_path,
-            output=tmp_path, deadline=time.monotonic() + 1, before="synthetic",
+            # The fake exits immediately, but native ACL/directory setup precedes
+            # observation. Its deadline must not expire during that setup.
+            output=tmp_path, deadline=time.monotonic() + 30, before="synthetic",
             stage=stage, failure_observation=observation,
         ), stage, failures,
     ), observation)
