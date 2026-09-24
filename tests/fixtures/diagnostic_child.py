@@ -77,6 +77,12 @@ def main():
         with destination.open("a", encoding="ascii") as stream:
             stream.write("one_commit\n")
     recorder.close()
+    if scenario == "supervisor_loss":
+        # The parent test observes this only after the product-side write and
+        # diagnostic recorder have both closed.
+        staged = destination.with_suffix(".done.tmp")
+        staged.write_text("done", encoding="ascii")
+        os.replace(staged, destination.with_suffix(".done"))
     return 0
 
 

@@ -290,8 +290,9 @@ def test_supervisor_loss_does_not_kill_or_replay_child_write(tmp_path):
         supervisor.kill()  # Only this test-owned parent; product has no kill policy.
         supervisor.wait(timeout=3)
         deadline = time.monotonic() + 5
-        while not destination.exists() and time.monotonic() < deadline:
+        while not destination.with_suffix(".done").exists() and time.monotonic() < deadline:
             time.sleep(0.02)
+        assert destination.with_suffix(".done").read_text(encoding="ascii") == "done"
         assert destination.read_text(encoding="ascii") == "one_commit\n"
     finally:
         if supervisor.poll() is None:
