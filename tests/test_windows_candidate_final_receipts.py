@@ -14,6 +14,8 @@ from scripts import qualify_windows_diagnostics as diag
 from tests.test_windows_diagnostic_qualification import _success_payload
 from tests.test_windows_candidate_core_protocol import native_observation, ocr_observation
 from tests.test_windows_candidate_dashboard import _source_receipt
+from tests.test_windows_runtime_audit import _proof
+from scripts.windows_owned_process_probe import verified_runtime_order
 
 HEAD = "a" * 40
 TREE = "b" * 40
@@ -21,6 +23,25 @@ TREE = "b" * 40
 
 def _write(path, value):
     path.write_text(json.dumps(value), encoding="ascii")
+
+
+def _verified_ocr_topology(*, defect=None):
+    proof = _proof(supervised=True, helpers=True, ocr_worker=True)
+    proof["events"][0].update(caller="numpy", phase="after_ready")
+    for member in proof["owned"]["members"][-3:-1]:
+        member.update(first_phase="running", last_phase="running")
+    order = verified_runtime_order(proof, supervised=True, allow_ocr_worker=True)
+    record = {
+        "launcher_processes_observed": 2, "application_processes_observed": 1,
+        "unexpected_processes_observed": 0, "assigned_processes": len(order),
+        "max_active_processes": len(order), "creation_order": list(order),
+        "all_processes_exited": True, "runtime_evidence": proof,
+    }
+    if defect == "unknown_worker":
+        proof["owned"]["members"][-1]["identity"] = "unknown"
+    elif defect == "extra_event":
+        proof["events"].append({"kind": "other_arguments", "caller": "other", "phase": "after_ready"})
+    return record
 
 
 def _prepared(tmp_path):
@@ -49,7 +70,7 @@ def _prepared(tmp_path):
             elif key == "ocr_evidence":
                 value = ocr_observation()
             elif key == "process_evidence":
-                value = receipt["topology"]["supervised"][0]
+                value = _verified_ocr_topology()
             if key in {"database", "before_reopen_database"}:
                 with closing(sqlite3.connect(path)) as connection, connection:
                     connection.execute("CREATE TABLE synthetic_protocol (value INTEGER)")
@@ -90,6 +111,16 @@ def _prepared(tmp_path):
     return root
 
 
+def _with_verified_ocr_topology(root, *, defect=None):
+    directory = root / "core-dpr-1.0"
+    path = directory / "process_evidence.json"
+    _write(path, _verified_ocr_topology(defect=defect))
+    receipt_path = directory / "core-driver-receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["artifacts"]["process_evidence"]["sha256"] = core._hash(path)
+    _write(receipt_path, receipt)
+
+
 def test_same_package_protocol_fixture_binds_archive_and_all_four_runs(tmp_path):
     root = _prepared(tmp_path)
     result = final.finalize(root, HEAD, TREE)
@@ -97,6 +128,22 @@ def test_same_package_protocol_fixture_binds_archive_and_all_four_runs(tmp_path)
     assert result["source_sha"] == HEAD
     assert result["scope"] == "same_package_diagnostics_and_core_four_runs"
     assert json.loads((root / "combined-candidate-receipt.json").read_bytes()) == result
+
+
+def test_finalizer_accepts_only_verified_ocr_worker_in_core_topology(tmp_path):
+    root = _prepared(tmp_path)
+    _with_verified_ocr_topology(root)
+    result = final.finalize(root, HEAD, TREE)
+    assert result["status"] == "passed"
+
+
+@pytest.mark.parametrize("defect", ["unknown_worker", "extra_event"])
+def test_finalizer_rejects_unverified_ocr_topology(tmp_path, defect):
+    root = _prepared(tmp_path)
+    _with_verified_ocr_topology(root, defect=defect)
+    with pytest.raises(diag.QualificationFailure, match="output_failed"):
+        final.finalize(root, HEAD, TREE)
+    assert not (root / "combined-candidate-receipt.json").exists()
 
 
 @pytest.mark.parametrize("field,value", [

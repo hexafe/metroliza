@@ -97,7 +97,8 @@ def _validate_run(directory, package, head, tree, scale, mode):
     browser.validate_receipt(core._json(artifacts["browser_evidence"]),
                              core._hash(artifacts["private_dashboard"]), require_windows=True)
     diagnostics._validate_topology_record(core._json(artifacts["process_evidence"]),
-                                          supervised=True, require_runtime_evidence=True)
+                                          supervised=True, require_runtime_evidence=True,
+                                          allow_ocr_worker=True)
     return {"path": str(Path(directory.name) / path.name).replace("\\", "/"), "sha256": core._hash(path)}
 
 
