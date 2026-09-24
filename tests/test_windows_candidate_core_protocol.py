@@ -126,6 +126,10 @@ def test_producer_failure_receipt_matches_bounded_host_reader(tmp_path, monkeypa
         "schema", "schema_version", "scenario", "status", "stage", "source_sha", "failure",
     }
     assert (tmp_path / driver.SCENARIO_FILE).stat().st_size < driver.MAX_RECEIPT_BYTES
+    assert driver._child_stage_observation(tmp_path, SHA) == {
+        "stage_marker_state": "valid", "producer_stage": "fixture_validation",
+    }
+    assert driver._child_stage_observation(tmp_path, "2" * 40)["stage_marker_state"] == "invalid"
     observed = driver._child_failure_observation(tmp_path, SHA)
     assert observed == {
         "receipt_state": "valid_allowlisted", "producer_stage": "fixture_validation",
@@ -135,6 +139,10 @@ def test_producer_failure_receipt_matches_bounded_host_reader(tmp_path, monkeypa
     assert driver._child_failure_observation(tmp_path, "2" * 40)["receipt_state"] == "invalid"
     (tmp_path / driver.SCENARIO_FILE).write_bytes(b"X" * (driver.MAX_RECEIPT_BYTES + 1))
     assert driver._child_failure_observation(tmp_path, SHA)["receipt_state"] == "invalid"
+    (tmp_path / driver.STAGE_FILE).write_bytes(b"X" * 1025)
+    assert driver._child_stage_observation(tmp_path, SHA)["stage_marker_state"] == "invalid"
+    (tmp_path / driver.STAGE_FILE).unlink()
+    assert driver._child_stage_observation(tmp_path, SHA)["stage_marker_state"] == "missing"
 
 
 def test_producer_cannot_write_receipt_before_root_is_known(tmp_path, monkeypatch) -> None:
@@ -152,8 +160,9 @@ def test_producer_cannot_write_receipt_before_root_is_known(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("cleanup_failed", [False, True])
+@pytest.mark.parametrize("receipt_present", [False, True])
 def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
-    tmp_path, monkeypatch, cleanup_failed,
+    tmp_path, monkeypatch, cleanup_failed, receipt_present,
 ) -> None:
     closes = []
     ready = []
@@ -166,11 +175,15 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
             producer._atomic_json(self.root / "core-startup.json", {
                 "schema_version": 1, "scenario": "core", "stage": "startup_ready",
             })
-            producer._atomic_json(self.root / driver.SCENARIO_FILE, {
-                "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
-                "scenario": "core", "status": "failed", "stage": "fixture_validation",
-                "source_sha": SHA, "failure": "fixture_dir_invalid",
+            producer._atomic_json(self.root / driver.STAGE_FILE, {
+                "schema_version": 1, "scenario": "core", "stage": "fixture_validation", "source_sha": SHA,
             })
+            if receipt_present:
+                producer._atomic_json(self.root / driver.SCENARIO_FILE, {
+                    "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+                    "scenario": "core", "status": "failed", "stage": "fixture_validation",
+                    "source_sha": SHA, "failure": "fixture_dir_invalid",
+                })
 
         def mark_runtime_ready(self):
             ready.append(True)
@@ -203,7 +216,8 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     observation = {
         "observed_process": "unavailable", "observed_exit_code": None,
         "startup_marker": "not_observed", "receipt_state": "not_checked",
-        "producer_stage": "unavailable", "allowlisted_failure": "unavailable",
+        "stage_marker_state": "not_checked", "producer_stage": "unavailable",
+        "allowlisted_failure": "unavailable",
         "owned_cleanup": "not_attempted", "private_cleanup": "not_attempted",
     }
     stage = {"name": "package_relocation"}
@@ -219,7 +233,8 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     ), observation)
     expected_reason = (
         "private_process_cleanup_failed_at_runtime_observation" if cleanup_failed
-        else "package_scenario_nonzero_exit_fixture_dir_invalid"
+        else "package_scenario_nonzero_exit_fixture_dir_invalid" if receipt_present
+        else "package_scenario_nonzero_exit_receipt_missing"
     )
     assert [str(failure) for failure in failures] == [expected_reason]
     assert ready == [True] and closes == [True]
@@ -227,13 +242,16 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
                      else {"name": "runtime_observation"})
     assert observation == {
         "observed_process": "requested_launcher_handle", "observed_exit_code": 7,
-        "startup_marker": "observed", "receipt_state": "valid_allowlisted",
-        "producer_stage": "fixture_validation", "allowlisted_failure": "fixture_dir_invalid",
+        "startup_marker": "observed", "receipt_state": "valid_allowlisted" if receipt_present else "missing",
+        "stage_marker_state": "valid", "producer_stage": "fixture_validation",
+        "allowlisted_failure": "fixture_dir_invalid" if receipt_present else "unavailable",
         "owned_cleanup": "failed" if cleanup_failed else "complete", "private_cleanup": "complete",
     }
     payload = driver._failed_diagnostic_payload(observation, stage, failures[0], SHA)
+    assert payload["stage_marker_state"] == "valid"
     assert payload["failure_category"] == (
-        "cleanup_failure" if cleanup_failed else "allowlisted_producer_failure"
+        "cleanup_failure" if cleanup_failed else
+        "allowlisted_producer_failure" if receipt_present else "unclassified_nonzero_exit"
     )
     diagnostic = tmp_path / "diagnostic"
     diagnostic.mkdir()
