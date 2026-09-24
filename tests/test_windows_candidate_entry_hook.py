@@ -1,6 +1,7 @@
 """Regression coverage for the normal package-entry qualification seam."""
 from __future__ import annotations
 
+import importlib
 import runpy
 import sys
 import types
@@ -19,8 +20,22 @@ def _module(**members):
     return value
 
 
-def _run_entry(monkeypatch, *, startup_code: int, diagnostic_scenario, candidate_scenario):
+def _run_entry(monkeypatch, *, startup_code: int, diagnostic_scenario, candidate_scenario,
+               packaged_windows: bool = False):
     events = []
+
+    if packaged_windows:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        original_import = importlib.import_module
+
+        def observed_import(name, package=None):
+            if name == "onnxruntime":
+                events.append("onnxruntime")
+                return _module()
+            return original_import(name, package)
+
+        monkeypatch.setattr(importlib, "import_module", observed_import)
 
     class Recorder:
         def close(self):
@@ -70,6 +85,15 @@ def test_recorder_closes_when_bootstrap_fails_before_all_qualification_gates(mon
     )
     assert code == 7
     assert events == ["bootstrap", "recorder_close"]
+
+
+def test_packaged_windows_preloads_ocr_runtime_before_ordinary_qt_bootstrap(monkeypatch):
+    code, events = _run_entry(
+        monkeypatch, startup_code=0, diagnostic_scenario=None, candidate_scenario=None,
+        packaged_windows=True,
+    )
+    assert code == 0
+    assert events == ["onnxruntime", "bootstrap", "candidate_requested", "recorder_close"]
 
 
 def test_candidate_gate_requires_both_explicit_environment_values(monkeypatch):
