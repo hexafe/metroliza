@@ -1,6 +1,14 @@
 # Changelog (for end users)
 
-## 2026.06 RC2 (build 260711) — current version
+## 2026.09 RC1 (build 260924) — current version
+- A refreshed Windows workspace brings report review, selected PDF import, analysis, and export together.
+- Completed imports remain in SQLite and can be reopened without duplicating saved measurements.
+- Numeric filters and grouping agree between the table, analysis, and workbook output.
+- Excel chart titles and series names preserve literal report text.
+- Supervised runs retain private incident reports that can be previewed and exported from the Help menu.
+- Canceling active work protects completed database and workbook output.
+
+## 2026.06 RC2 (build 260711)
 - Parser selection now validates and atomically refreshes plugin generations,
   recognizes report families from decoded measurement rows rather than file
   names, retries transient inspection failures, and rejects ambiguous or empty

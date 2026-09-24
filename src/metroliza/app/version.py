@@ -1,11 +1,21 @@
-RELEASE_VERSION = "2026.06rc2"
-VERSION_DATE = "260711"
+RELEASE_VERSION = "2026.09rc1"
+VERSION_DATE = "260924"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates."
-PUBLIC_VERSION_LABEL = "2026.06 RC2 (build 260711)"
+CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for selecting and importing reports, exploring saved measurements, exporting workbooks, and reviewing private diagnostic reports."
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 260924)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>
+    - Select PDF reports before import and reopen saved measurements without repeating completed work<br>
+    - Filters and grouping keep numeric results consistent between the table and analysis views<br>
+    - Excel exports preserve chart titles and series names as literal text<br>
+    - The Help menu opens private incident reports for preview and export when a supervised run fails<br>
+    - Canceling active work protects completed database and workbook output<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.06rc2 (build 260711):</b><br>
     - Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result<br>
     - Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state<br>
     - Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, and reject stale source-health updates<br>
@@ -58,8 +68,6 @@ release_notes = f"""
     - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>
     - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>
     - The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.05rc5 (build 260612):</b><br>
     - Saved report updates are safer if a database write fails partway through<br>
