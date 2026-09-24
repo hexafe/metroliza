@@ -92,9 +92,13 @@ def test_nonzero_child_exit_projects_only_known_synthetic_failure(tmp_path) -> N
         "package_scenario_nonzero_exit_root_not_new_empty_directory"
     )
     receipt.write_text(json.dumps({"failure": "SYNTHETIC_PRIVATE_PATH"}))
-    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_unclassified"
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_unclassified"
+    receipt.write_text("{SYNTHETIC_PRIVATE_PATH")
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_invalid"
+    receipt.write_text(json.dumps({"failure": 42}))
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_invalid"
     receipt.unlink()
-    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_unclassified"
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_missing"
 
 
 @pytest.mark.parametrize("reason,cleanup,expected", (

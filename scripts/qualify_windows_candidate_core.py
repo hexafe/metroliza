@@ -104,10 +104,16 @@ def _closed_unexpected_stage(stage: str) -> CandidateFailure:
 def _closed_child_exit_reason(work: Path) -> str:
     try:
         payload = _json(work / SCENARIO_FILE)
-        failure = payload.get("failure") if type(payload) is dict else None
+    except FileNotFoundError:
+        detail = "receipt_missing"
     except (CandidateFailure, OSError, ValueError, TypeError):
-        failure = None
-    detail = failure if type(failure) is str and failure in _CLOSED_CHILD_FAILURES else "unclassified"
+        detail = "receipt_invalid"
+    else:
+        failure = payload.get("failure") if type(payload) is dict else None
+        if type(failure) is not str:
+            detail = "receipt_invalid"
+        else:
+            detail = failure if failure in _CLOSED_CHILD_FAILURES else "receipt_unclassified"
     return "package_scenario_nonzero_exit_" + detail
 
 
