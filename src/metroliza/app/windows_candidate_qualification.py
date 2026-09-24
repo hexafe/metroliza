@@ -25,6 +25,11 @@ ROOT_ENV = "METROLIZA_WINDOWS_CANDIDATE_ROOT"
 FIXTURES_ENV = "METROLIZA_WINDOWS_CANDIDATE_FIXTURE_DIR"
 OCR_FIXTURE_ENV = "METROLIZA_WINDOWS_CANDIDATE_OCR_FIXTURE"
 GATES = ("METROLIZA_STARTUP_SMOKE", "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION")
+FAILURE_STAGES = frozenset({
+    "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
+    "selected_import", "ocr", "reopen", "tabular", "xlsx", "inference",
+    "import_guards", "ui", "closeout",
+})
 DEADLINES_S = {"review": 30.0, "import": 45.0}
 FIXTURES = {
     "finite-source.csv": "de2724bd3b6b55d362016423a2f78168235d3833d7a89298a7fdf4a5ec747938",
@@ -513,11 +518,14 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     # Each stage closes its own windows. Keep their shared application alive
     # until all subsequent widget and worker stages have finished.
     application = get_or_create_qapplication()
+    receipt["stage"] = "selected_import"
     _run_core(root, fixtures, receipt, application)
     child = root / receipt["relative_artifact_dir"]
+    receipt["stage"] = "ocr"
     _run_ocr_slice(child, ocr_fixture, receipt)
     from metroliza.app.windows_candidate_reopen import run_reopen_checks
     completed_import = root / receipt["relative_artifact_dir"]
+    receipt["stage"] = "reopen"
     reopened = run_reopen_checks(
         completed_import / "reports.sqlite", completed_import / "reports", receipt["source_hashes"]
     )
@@ -533,11 +541,13 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     receipt["reopen_database"] = reopened["database"]
     receipt["facets"].update(reopened["facets"])
     tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
+    receipt["stage"] = "tabular"
     capture_tabular_w05(fixtures, tabular_file)
     receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
     receipt["facets"]["finite_precision_filters"] = "passed"
     from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes
     from metroliza.app.windows_candidate_xlsx import run_export_checks
+    receipt["stage"] = "xlsx"
     xlsx_result = run_export_checks(child)
     expected_xlsx_facets = {
         "literal_chart_titles_series_caches_references", "value_limit_order",
@@ -559,13 +569,17 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     receipt["artifacts"]["literal_workbook"] = {"path": literal_workbook.name, "sha256": literal_hash}
     receipt["facets"].update(xlsx_facets)
     from metroliza.app.windows_candidate_inference import run_inference_checks
+    receipt["stage"] = "inference"
     inference = run_inference_checks(child, fixtures)
     if inference.get("status") != "passed" or inference.get("facets") != {"successful_group_inference": "passed"}:
         raise ScenarioFailure("group_inference_checks_failed")
     receipt["artifacts"].update(inference["artifacts"])
     receipt["facets"].update(inference["facets"])
+    receipt["stage"] = "import_guards"
     _run_import_guards_slice(child, fixtures, receipt)
+    receipt["stage"] = "ui"
     _run_ui_slice(child, receipt)
+    receipt["stage"] = "closeout"
     _run_closeout_slices(child, fixtures, receipt)
 
 
@@ -577,7 +591,7 @@ def run_qualification() -> int:
         return 20
     receipt: dict[str, Any] = {
         "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
-        "scenario": SCENARIO, "stage": "failed", "status": "failed",
+        "scenario": SCENARIO, "stage": "root_validation", "status": "failed",
         "packaged": bool(getattr(sys, "frozen", False)), "qpa": None,
         "ordinary_user": _ordinary_user(), "source_sha": _runtime_provenance()["source_sha"],
         "checks": {key: "not_executed" for key in ("W03", "W04", "W05", "W06", "W07")},
@@ -586,12 +600,15 @@ def run_qualification() -> int:
     root: Path | None = None
     try:
         root = _root()
+        receipt["stage"] = "fixture_validation"
         fixtures = _fixture_dir()
         ocr_fixture = _ocr_fixture()
         from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
+        receipt["stage"] = "startup_marker"
         _atomic_json(root / "core-startup.json", {
             "schema_version": 1, "scenario": "core", "stage": "startup_ready",
         })
+        receipt["stage"] = "runtime_ack"
         wait_for_host_ready()
         from metroliza.app.windows_candidate_native_check import run_with_native_mode
         receipt["native_observation"] = run_with_native_mode(
@@ -603,9 +620,14 @@ def run_qualification() -> int:
         _atomic_json(root / "windows-candidate-result.json", receipt)
         return 0
     except Exception as error:
-        receipt["failure"] = type(error).__name__ if not isinstance(error, ScenarioFailure) else str(error)
+        # The host's bounded failure reader needs only these fixed protocol
+        # fields. A partial success receipt can grow beyond that reader's
+        # limit and may contain paths or measurements from later slices.
+        failure = type(error).__name__ if not isinstance(error, ScenarioFailure) else str(error)
         if root is not None:
-            _atomic_json(root / "windows-candidate-result.json", receipt)
+            _atomic_json(root / "windows-candidate-result.json", {
+                key: receipt[key] for key in ("schema", "schema_version", "scenario", "status", "stage", "source_sha")
+            } | {"failure": failure})
         return 21
 
 

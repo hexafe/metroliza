@@ -27,6 +27,16 @@ from pathlib import Path
 from scripts.verify_windows_candidate_closeout import ALL_FACETS as CLOSEOUT_CHECKS
 
 SCENARIO_FILE = "windows-candidate-result.json"
+FAILED_DIAGNOSTIC_FILE = "core-failed-diagnostic.json"
+MAX_FAILED_DIAGNOSTIC_BYTES = 2048
+_CHILD_FAILURE_STAGES = frozenset({
+    "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
+    "selected_import", "ocr", "reopen", "tabular", "xlsx", "inference",
+    "import_guards", "ui", "closeout",
+})
+_REOPEN_FAILURE_STAGES = frozenset({
+    "input", "host_ready", "reopen", "database_preservation",
+})
 REQUIRED_CHECKS = (
     "selected_import", "zero_selection_no_write", "finite_precision_filters", "persisted_measurements",
     "group_membership", "workbook_cells",
@@ -101,20 +111,59 @@ def _closed_unexpected_stage(stage: str) -> CandidateFailure:
     )
 
 
-def _closed_child_exit_reason(work: Path) -> str:
+def _child_failure_observation(work: Path, expected_source_sha: str | None = None) -> dict[str, str]:
+    observation = {
+        "receipt_state": "invalid", "producer_stage": "unavailable",
+        "allowlisted_failure": "unavailable", "reason": "package_scenario_nonzero_exit_receipt_invalid",
+    }
     try:
         payload = _json(work / SCENARIO_FILE)
     except FileNotFoundError:
-        detail = "receipt_missing"
+        observation["receipt_state"] = "missing"
+        observation["reason"] = "package_scenario_nonzero_exit_receipt_missing"
     except (CandidateFailure, OSError, ValueError, TypeError):
-        detail = "receipt_invalid"
+        pass
     else:
-        failure = payload.get("failure") if type(payload) is dict else None
-        if type(failure) is not str:
-            detail = "receipt_invalid"
-        else:
-            detail = failure if failure in _CLOSED_CHILD_FAILURES else "receipt_unclassified"
-    return "package_scenario_nonzero_exit_" + detail
+        if (type(payload) is dict
+                and payload.get("schema") == "metroliza-windows-candidate-core-v1"
+                and type(payload.get("schema_version")) is int and payload["schema_version"] == 1
+                and payload.get("scenario") == "core" and payload.get("status") == "failed"
+                and type(payload.get("stage")) is str and payload["stage"] in _CHILD_FAILURE_STAGES
+                and (expected_source_sha is None or payload.get("source_sha") == expected_source_sha)
+                and type(payload.get("failure")) is str):
+            failure = payload["failure"]
+            observation["producer_stage"] = payload["stage"]
+            if failure in _CLOSED_CHILD_FAILURES:
+                observation["receipt_state"] = "valid_allowlisted"
+                observation["allowlisted_failure"] = failure
+                observation["reason"] = "package_scenario_nonzero_exit_" + failure
+            else:
+                observation["receipt_state"] = "valid_unclassified"
+                observation["reason"] = "package_scenario_nonzero_exit_receipt_unclassified"
+    return observation
+
+
+def _closed_child_exit_reason(work: Path) -> str:
+    return _child_failure_observation(work)["reason"]
+
+
+def _reopen_failure_observation(root: Path, expected_source_sha: str) -> dict[str, str]:
+    observation = {"receipt_state": "invalid", "producer_stage": "unavailable"}
+    try:
+        payload = _json(root / "fresh-reopen-result.json")
+    except FileNotFoundError:
+        observation["receipt_state"] = "missing"
+    except (CandidateFailure, OSError, ValueError, TypeError):
+        pass
+    else:
+        if (type(payload) is dict and payload.get("schema_version") == 1
+                and type(payload.get("schema_version")) is int
+                and payload.get("scenario") == "reopen" and payload.get("status") == "failed"
+                and payload.get("source_sha") == expected_source_sha
+                and type(payload.get("failure_stage")) is str
+                and payload["failure_stage"] in _REOPEN_FAILURE_STAGES):
+            observation.update(receipt_state="valid_reopen_failed", producer_stage=payload["failure_stage"])
+    return observation
 
 
 def _guard_private_core(action, stage: dict[str, str], failures: list[CandidateFailure]):
@@ -132,11 +181,17 @@ def _guard_private_core(action, stage: dict[str, str], failures: list[CandidateF
     return None
 
 
-def _close_private_core_owned(diag, owned, *, terminate: bool, stage: dict[str, str]) -> None:
+def _close_private_core_owned(diag, owned, *, terminate: bool, stage: dict[str, str],
+                              failure_observation: dict | None = None) -> None:
     primary = sys.exc_info()[1]
     try:
         diag._close_owned_processes(owned, terminate=terminate)
     except Exception as error:
+        if failure_observation is not None:
+            if getattr(error, "qualification_cleanup", None) != "complete":
+                failure_observation["owned_cleanup"] = "failed"
+            elif failure_observation["owned_cleanup"] != "failed":
+                failure_observation["owned_cleanup"] = "complete"
         # The diagnostics helper intentionally hides arbitrary primary errors
         # with QualificationFailure("unexpected") even when cleanup succeeded.
         # Keep our already-closed core reason; a failed cleanup still wins.
@@ -148,18 +203,26 @@ def _close_private_core_owned(diag, owned, *, terminate: bool, stage: dict[str, 
         stage["before_cleanup"] = stage["name"]
         stage["name"] = "cleanup"
         raise
+    else:
+        if failure_observation is not None and failure_observation["owned_cleanup"] != "failed":
+            failure_observation["owned_cleanup"] = "complete"
 
 
-def _run_private_directory_closed(diag, action):
+def _run_private_directory_closed(diag, action, failure_observation: dict | None = None):
     try:
-        return diag._run_in_private_directory(action)
+        result = diag._run_in_private_directory(action)
     except diag.QualificationFailure as error:
+        if failure_observation is not None:
+            failure_observation["private_cleanup"] = error.qualification_cleanup
         reason = error.qualification_reason
         if reason == "qualification_cleanup_failed" or error.qualification_cleanup == "failed":
             raise CandidateFailure("private_root_cleanup_failed") from None
         if reason == "invalid_qualification_root":
             raise CandidateFailure("private_root_unavailable") from None
         raise CandidateFailure("unexpected_private_root_wrapper") from None
+    if failure_observation is not None:
+        failure_observation["private_cleanup"] = "complete"
+    return result
 
 
 def _regular(path: Path) -> bool:
@@ -688,6 +751,86 @@ def _verify_dashboard_closed(diag, output: Path, artifacts: dict, browser: Path)
         raise CandidateFailure("unexpected_browser_verifier") from None
 
 
+def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: CandidateFailure,
+                               expected_source_sha: str) -> dict:
+    role = observation.get("observed_process")
+    if type(role) is not str or role not in {"requested_launcher_handle", "fresh_reopen_launcher_handle"}:
+        role = "unavailable"
+    code = observation.get("observed_exit_code")
+    if type(code) is not int or not 0 <= code <= 2**32 - 1:
+        code = None
+    marker = observation.get("startup_marker")
+    if type(marker) is not str or marker not in {"observed", "not_observed"}:
+        marker = "unavailable"
+    receipt_state = observation.get("receipt_state")
+    if type(receipt_state) is not str or receipt_state not in {
+            "not_checked", "missing", "invalid", "valid_allowlisted", "valid_unclassified",
+            "valid_reopen_failed"}:
+        receipt_state = "not_checked"
+    producer_stage = observation.get("producer_stage")
+    if type(producer_stage) is not str or producer_stage not in _CHILD_FAILURE_STAGES | _REOPEN_FAILURE_STAGES:
+        producer_stage = "unavailable"
+    failure_code = observation.get("allowlisted_failure")
+    if type(failure_code) is not str or failure_code not in _CLOSED_CHILD_FAILURES:
+        failure_code = "unavailable"
+    host_stage = stage.get("before_cleanup", stage.get("name"))
+    if type(host_stage) is not str or host_stage not in _PRIVATE_CORE_STAGES:
+        host_stage = "unavailable"
+    owned_cleanup = observation.get("owned_cleanup")
+    if type(owned_cleanup) is not str or owned_cleanup not in {"not_attempted", "complete", "failed"}:
+        owned_cleanup = "not_attempted"
+    private_cleanup = observation.get("private_cleanup")
+    if type(private_cleanup) is not str or private_cleanup not in {"not_attempted", "complete", "failed"}:
+        private_cleanup = "not_attempted"
+    reason = str(error)
+    if reason == "private_root_cleanup_failed" or owned_cleanup == "failed":
+        category = "cleanup_failure"
+    elif receipt_state == "valid_allowlisted":
+        category = "allowlisted_producer_failure"
+    elif receipt_state == "valid_reopen_failed":
+        category = "reopen_producer_failure"
+    elif receipt_state in {"missing", "invalid", "valid_unclassified"}:
+        category = "unclassified_nonzero_exit"
+    else:
+        category = "closed_driver_failure"
+    return {
+        "schema_version": 1, "status": "failed",
+        "source_sha": expected_source_sha if type(expected_source_sha) is str
+        and re.fullmatch(r"[0-9a-f]{40}", expected_source_sha) else "unavailable",
+        "observed_process": role, "observed_exit_code": code,
+        "host_stage": host_stage, "startup_marker": marker,
+        "producer_stage": producer_stage, "receipt_state": receipt_state,
+        "allowlisted_failure": failure_code, "failure_category": category,
+        "owned_cleanup": owned_cleanup, "private_cleanup": private_cleanup,
+    }
+
+
+def _write_failed_diagnostic(output: Path, payload: dict) -> None:
+    data = (json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("ascii")
+    if len(data) > MAX_FAILED_DIAGNOSTIC_BYTES:
+        raise CandidateFailure("failed_diagnostic_too_large")
+    with (output / FAILED_DIAGNOSTIC_FILE).open("xb") as stream:
+        stream.write(data)
+
+
+def _remove_partial_output(output: Path) -> None:
+    try:
+        shutil.rmtree(output)
+    except OSError:
+        raise CandidateFailure("failed_output_cleanup_failed") from None
+
+
+def _retain_failed_diagnostic(output: Path, payload: dict) -> None:
+    _remove_partial_output(output)
+    try:
+        output.mkdir(mode=0o700)
+        _write_failed_diagnostic(output, payload)
+    except (OSError, CandidateFailure):
+        if output.exists():
+            _remove_partial_output(output)
+        raise CandidateFailure("failed_diagnostic_write_failed") from None
+
+
 def _observe_core_startup(work: Path, process, observed: bool, *, scenario="core") -> bool:
     if observed:
         return True
@@ -803,7 +946,8 @@ def _validate_reopen_sources(reports: Path):
         raise CandidateFailure("fresh_reopen_sources_changed")
 
 
-def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, args, deadline, output, stage):
+def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, args, deadline, output, stage,
+                      failure_observation=None):
     # The first Job has fully drained before this function creates another Job.
     # A new launcher, application, root and runtime journal prove process reopen.
     root, launch_cwd = private / "fresh reopen", private / "fresh launcher work"
@@ -829,22 +973,38 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
                             METROLIZA_WINDOWS_CANDIDATE_REOPEN_SHA256=expected_hash)
     owned = []
     terminate = True
+    if failure_observation is not None:
+        failure_observation.update({
+            "observed_process": "unavailable", "observed_exit_code": None,
+            "startup_marker": "not_observed", "receipt_state": "not_checked",
+            "producer_stage": "unavailable", "allowlisted_failure": "unavailable",
+        })
     try:
         process = diag._WindowsApi().launch(
             relocated / "metroliza.exe", next_environment, launch_cwd, owned=owned,
             expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
         )
+        if failure_observation is not None:
+            failure_observation["observed_process"] = "fresh_reopen_launcher_handle"
         observed = False
         while time.monotonic() < deadline:
             process.observe()
             observed = _observe_core_startup(root, process, observed, scenario="reopen")
+            if observed and failure_observation is not None:
+                failure_observation["startup_marker"] = "observed"
             code = process.poll()
             if code is not None:
+                if failure_observation is not None:
+                    failure_observation["observed_exit_code"] = code
                 break
             time.sleep(0.005)
         else:
             raise CandidateFailure("fresh_reopen_process_timeout")
-        if code != 0 or not observed:
+        if code != 0:
+            if failure_observation is not None:
+                failure_observation.update(_reopen_failure_observation(root, args.expected_source_sha))
+            raise CandidateFailure("fresh_reopen_process_failed")
+        if not observed:
             raise CandidateFailure("fresh_reopen_process_failed")
         if not diag._wait_for_job_exit(process, deadline):
             raise CandidateFailure("fresh_reopen_owned_processes_remain")
@@ -869,11 +1029,15 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
             "before_reopen_database": {"path": before_database.name, "sha256": expected_hash},
         }
     finally:
-        _close_private_core_owned(diag, owned, terminate=terminate, stage=stage)
+        _close_private_core_owned(
+            diag, owned, terminate=terminate, stage=stage,
+            failure_observation=failure_observation,
+        )
 
 
 def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
-                      output: Path, deadline: float, before: str, stage: dict[str, str]) -> dict:
+                      output: Path, deadline: float, before: str, stage: dict[str, str],
+                      failure_observation: dict | None = None) -> dict:
     stage["name"] = "package_relocation"
     relocated = diag._relocate_package(artifact, private, deadline)
     stage["name"] = "fixtures"
@@ -911,19 +1075,32 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             relocated / "metroliza.exe", environment, launch_cwd, owned=owned,
             expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
         )
+        if failure_observation is not None:
+            failure_observation["observed_process"] = "requested_launcher_handle"
         stage["name"] = "runtime_observation"
         startup_observed = False
         while time.monotonic() < deadline:
             process.observe()
             startup_observed = _observe_core_startup(work, process, startup_observed)
+            if startup_observed and failure_observation is not None:
+                failure_observation["startup_marker"] = "observed"
             code = process.poll()
             if code is not None:
+                if failure_observation is not None:
+                    failure_observation["observed_exit_code"] = code
                 break
             time.sleep(0.005)
         else:
             raise CandidateFailure("owned_package_scenario_timeout")
         if code != 0:
-            raise CandidateFailure(_closed_child_exit_reason(work))
+            child_failure = _child_failure_observation(work, args.expected_source_sha)
+            if failure_observation is not None:
+                failure_observation.update({
+                    key: child_failure[key] for key in (
+                        "receipt_state", "producer_stage", "allowlisted_failure",
+                    )
+                })
+            raise CandidateFailure(child_failure["reason"])
         if not startup_observed:
             raise CandidateFailure("core_startup_receipt_missing")
         stage["name"] = "runtime_receipt"
@@ -945,6 +1122,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         fresh_reopen = _run_fresh_reopen(
             private, diag=diag, relocated=relocated, environment=environment, work=work,
             prior=payload, args=args, deadline=deadline, output=output, stage=stage,
+            failure_observation=failure_observation,
         )
         stage["name"] = "package_integrity"
         after = diag._tree_digest(diag._package_inventory(relocated))
@@ -974,7 +1152,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         terminate = False
         return artifacts
     finally:
-        _close_private_core_owned(diag, owned, terminate=terminate, stage=stage)
+        _close_private_core_owned(
+            diag, owned, terminate=terminate, stage=stage,
+            failure_observation=failure_observation,
+        )
 
 
 def qualify(args) -> dict:
@@ -1006,17 +1187,24 @@ def qualify(args) -> dict:
     # intentionally replaces unknown exception text. Cleanup still has to pass.
     failures = []
     private_stage = {"name": "package_relocation"}
+    failure_observation = {
+        "observed_process": "unavailable", "observed_exit_code": None,
+        "startup_marker": "not_observed", "receipt_state": "not_checked",
+        "producer_stage": "unavailable", "allowlisted_failure": "unavailable",
+        "owned_cleanup": "not_attempted", "private_cleanup": "not_attempted",
+    }
 
     def guarded_run(private):
         return _guard_private_core(
             lambda: _run_private_core(
                 private, args=args, diag=diag, artifact=artifact, fixtures=fixtures,
                 output=output, deadline=deadline, before=before, stage=private_stage,
+                failure_observation=failure_observation,
             ), private_stage, failures,
         )
 
     try:
-        artifacts = _run_private_directory_closed(diag, guarded_run)
+        artifacts = _run_private_directory_closed(diag, guarded_run, failure_observation)
         if failures:
             raise failures[0]
         _verify_dashboard_closed(diag, output, artifacts, args.browser)
@@ -1059,8 +1247,12 @@ def qualify(args) -> dict:
             json.dump(result, stream, indent=2)
             stream.write("\n")
         return result
+    except CandidateFailure as error:
+        payload = _failed_diagnostic_payload(failure_observation, private_stage, error, args.expected_source_sha)
+        _retain_failed_diagnostic(output, payload)
+        raise
     except BaseException:
-        shutil.rmtree(output)
+        _remove_partial_output(output)
         raise
 
 
