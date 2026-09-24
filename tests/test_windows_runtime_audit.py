@@ -787,12 +787,13 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
         while time.monotonic() < deadline:
             if mode == "concurrent":
                 if not concurrent_released:
-                    # Observe both complete Jobs while the applications are
-                    # held. Their short-lived version helpers can have exited
-                    # already, but any identity failure remains fatal here.
+                    # Establish each Job's three fixed-file roles while held.
+                    # Requerying an already verified short-lived helper can
+                    # race its exit without adding identity evidence.
                     for process in owned:
-                        process.observe()
-                    if all(
+                        if len(process._observations) < 3:
+                            process.observe()
+                    if all(len(process._observations) == 3 for process in owned) and all(
                         (tmp_path / str(index) / "control-ready").exists()
                         for index in range(len(owned))
                     ):
