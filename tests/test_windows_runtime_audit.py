@@ -84,9 +84,11 @@ def _proof(supervised=False, helpers=True, ocr_worker=False):
     ]
     return {
         "installed": True,
-        "events": [{"kind": "platform_ver", "caller": "other", "phase": "startup"}]
-        if helpers
-        else [],
+        "events": (
+            ([{"kind": "platform_ver", "caller": "other", "phase": "startup"}] if helpers else [])
+            + ([{"kind": "ocr_worker_launch", "caller": "metroliza", "phase": "after_ready"}]
+               if ocr_worker else [])
+        ),
         "owned": {
             "schema_version": 1,
             "members": members,
@@ -111,6 +113,96 @@ def test_ocr_worker_role_requires_explicit_core_allowance_and_exact_native_membe
     proof["owned"]["members"][-1]["first_phase"] = "startup"
     with pytest.raises(ValueError, match="runtime_evidence_invalid"):
         verified_runtime_order(proof, supervised=True, allow_ocr_worker=True)
+
+
+def test_ocr_worker_audit_classifies_only_exact_windows_popen_payload():
+    worker = r"C:\Program Files\Metroliza\metroliza_ocr_worker.exe"
+    root = r"C:\Users\runner\AppData\Local\Temp\metroliza-private"
+    command = subprocess.list2cmdline([worker, root])
+    environment = {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    frame = _frame("subprocess", "_execute_child", _frame(
+        "metroliza.parsing.frozen_ocr_worker", "_run_owned_worker",
+    ))
+    arguments = (None, command, root, environment)
+    expected = ("ocr_worker_launch", "metroliza")
+    assert audit.classify_call(arguments, frame, "cmd.exe", worker) == expected
+    assert audit.classify_call(arguments, frame, "cmd.exe") == ("other_arguments", "other")
+    altered = [
+        (worker, command, root, environment),
+        (None, command + " & private", root, environment),
+        (None, command, root + "-other", environment),
+        (None, command, r"C:relative", environment),
+        (None, command, root, {}),
+        (None, command, root, {**environment, audit.GATE: "1"}),
+    ]
+    for value in altered:
+        assert audit.classify_call(value, frame, "cmd.exe", worker) != expected
+    wrong_frame = _frame("private", "_run_owned_worker")
+    assert audit.classify_call(arguments, wrong_frame, "cmd.exe", worker) != expected
+    assert audit.classify_call(arguments, frame, "cmd.exe", worker + "-other") != expected
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+@pytest.mark.parametrize("helpers", [False, True])
+def test_ocr_worker_journal_and_owned_member_must_match(supervised, helpers):
+    proof = _proof(supervised, helpers, ocr_worker=True)
+    if helpers:
+        proof["events"][0].update(caller="numpy", phase="after_ready")
+        for member in proof["owned"]["members"][-3:-1]:
+            member.update(first_phase="running", last_phase="running")
+    order = verified_runtime_order(proof, supervised=supervised, allow_ocr_worker=True)
+    assert order[-1] == "ocr_worker"
+    assert order.count("windows_version_command") == int(helpers)
+    for defect in ("missing_event", "extra_event", "wrong_caller", "wrong_phase",
+                   "wrong_order", "unknown_image", "missing_worker", "live", "gap"):
+        changed = json.loads(json.dumps(proof))
+        events, owned = changed["events"], changed["owned"]
+        if defect == "missing_event":
+            events.pop()
+        elif defect == "extra_event":
+            events.append({"kind": "other_arguments", "caller": "other", "phase": "after_ready"})
+        elif defect == "wrong_caller":
+            events[-1]["caller"] = "other"
+        elif defect == "wrong_phase":
+            events[-1]["phase"] = "startup"
+        elif defect == "wrong_order":
+            events.reverse()
+            if not helpers:
+                events.append({"kind": "platform_ver", "caller": "other", "phase": "startup"})
+        elif defect == "unknown_image":
+            owned["members"][-1]["identity"] = "unknown"
+        elif defect == "missing_worker":
+            owned["members"].pop()
+            owned["assigned"] -= 1
+        elif defect == "live":
+            owned["job_empty"] = False
+        elif defect == "gap":
+            owned["unobserved"] = 1
+        with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+            verified_runtime_order(changed, supervised=supervised, allow_ocr_worker=True)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="CPython Windows Popen audit payload")
+def test_native_windows_popen_audit_payload_matches_worker_classifier(tmp_path):
+    environment = {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    worker = str(Path(sys.executable).resolve())
+    observed = []
+
+    def capture(event, arguments):
+        if event == "subprocess.Popen" and arguments[2] == str(tmp_path):
+            observed.append(arguments)
+
+    sys.addaudithook(capture)
+    process = subprocess.Popen(
+        [worker, str(tmp_path)], cwd=tmp_path, env=environment,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    process.wait(timeout=15)
+    assert len(observed) == 1
+    frame = _frame("metroliza.parsing.frozen_ocr_worker", "_run_owned_worker")
+    assert audit.classify_call(observed[0], frame, "cmd.exe", worker) == (
+        "ocr_worker_launch", "metroliza",
+    )
 
 
 def test_command_and_required_frames_are_exact_not_basename_allowance():

@@ -131,10 +131,10 @@ class RuntimeEvidence:
         self.root.rmdir()
 
 
-def _expected_runtime_roles(supervised, events, allow_ocr_worker):
+def _expected_runtime_roles(supervised, platform_event, allow_ocr_worker):
     roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
     order = (["launcher_bootloader", "launcher_supervisor"] if supervised else []) + ["application"]
-    if events:
+    if platform_event:
         roles += ["system_cmd", "system_conhost"]
         order += ["windows_version_command", "windows_version_console"]
     if allow_ocr_worker:
@@ -155,11 +155,17 @@ def verified_runtime_order(
             or proof["probe_effect"] != "synchronous_private_prelaunch_journal_and_owned_handle_sampling"):
         reject()
     events = proof["events"]
-    if type(events) is not list or len(events) > 1:
+    if type(events) is not list or len(events) > 2:
+        reject()
+    platform_events = [event for event in events if type(event) is dict and event.get("kind") == "platform_ver"]
+    worker_events = [event for event in events if type(event) is dict and event.get("kind") == "ocr_worker_launch"]
+    if (len(platform_events) > 1 or len(worker_events) != int(allow_ocr_worker)
+            or len(events) != len(platform_events) + len(worker_events)
+            or events != platform_events + worker_events):
         reject()
     helper_phase = "startup"
-    if events:
-        event = events[0]
+    if platform_events:
+        event = platform_events[0]
         if (type(event) is not dict or set(event) != {"kind", "caller", "phase"}
                 or event["kind"] != "platform_ver"
                 or type(event["caller"]) is not str or event["caller"] not in audit.CALLERS):
@@ -171,9 +177,13 @@ def verified_runtime_order(
             helper_phase = "running"
         elif event["phase"] != "startup":
             reject()
+    if worker_events and worker_events[0] != {
+        "kind": "ocr_worker_launch", "caller": "metroliza", "phase": "after_ready",
+    }:
+        reject()
     owned = proof["owned"]
     expected_roles, expected_order = _expected_runtime_roles(
-        supervised, events, allow_ocr_worker,
+        supervised, platform_events, allow_ocr_worker,
     )
     if (type(owned) is not dict
             or set(owned) != {"schema_version", "members", "assigned", "unobserved", "job_empty", "overflow", "observation_unavailable", "probe_effect"}

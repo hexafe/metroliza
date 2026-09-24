@@ -939,7 +939,7 @@ class _WindowsProcess:
             raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
         # The semantic suffix accounts for real physical members, not a count
         # projection. The independent native image and journal proof must agree.
-        helpers = (2 if proof["events"] else 0) + int(allow_ocr_worker)
+        helpers = (2 if any(event["kind"] == "platform_ver" for event in proof["events"]) else 0) + int(allow_ocr_worker)
         if (topology.unexpected_processes_observed != helpers
                 or topology.assigned_processes != len(order)
                 or topology.application_processes_observed != 1
