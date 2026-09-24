@@ -209,6 +209,11 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "qualification_incident_missing",
         "flood_incident_unavailable",
         "flood_loss_unobserved",
+        "flood_channel_complete",
+        "flood_channel_incomplete",
+        "flood_channel_invalid",
+        "flood_loss_other_counter_only",
+        "flood_loss_no_counter",
         "qualification_measurements_missing",
         "qualification_export_failed",
         "qualification_export_unavailable",
@@ -3460,6 +3465,24 @@ def _newest_incident(store: IncidentStore, previous: set[uuid.UUID]):
     return loaded.incident
 
 
+def _flood_failure_reason(incident) -> str:
+    """Retain only a closed channel/counter class when synthetic loss is absent."""
+    channel = incident.observation.channel
+    if channel is ChannelState.LOSS_OBSERVED:
+        loss = incident.ring_loss
+        if loss.counters_saturated or any(getattr(loss, field) for field in (
+            "count_evicted_events", "byte_evicted_events", "age_evicted_events",
+            "operation_evicted_events",
+        )):
+            return "flood_loss_other_counter_only"
+        return "flood_loss_no_counter"
+    return {
+        ChannelState.COMPLETE: "flood_channel_complete",
+        ChannelState.INCOMPLETE: "flood_channel_incomplete",
+        ChannelState.INVALID: "flood_channel_invalid",
+    }.get(channel, "flood_loss_unobserved")
+
+
 def _wait_newest_incident(
     store: IncidentStore,
     previous: set[uuid.UUID],
@@ -4841,7 +4864,7 @@ class _QualificationRunner:
             incident.observation.channel is ChannelState.LOSS_OBSERVED and not explicit_loss
         ):
             raise QualificationFailure(
-                "incident_invalid", qualification_reason="flood_loss_unobserved"
+                "incident_invalid", qualification_reason=_flood_failure_reason(incident)
             )
         self.flood_loss = {
             "source_dropped": incident.observation.source_dropped,
