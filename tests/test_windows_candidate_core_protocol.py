@@ -5,11 +5,13 @@ from contextlib import closing
 
 import copy
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from metroliza.app import windows_candidate_qualification as producer
 from scripts import qualify_windows_candidate_core as driver
 from scripts import qualify_windows_diagnostics as diagnostics
 from tests.test_windows_candidate_closeout import closeout_observation
@@ -87,14 +89,236 @@ def test_private_core_keeps_primary_only_after_proven_cleanup(primary, cleanup, 
 
 def test_nonzero_child_exit_projects_only_known_synthetic_failure(tmp_path) -> None:
     receipt = tmp_path / driver.SCENARIO_FILE
-    receipt.write_text(json.dumps({"failure": "root_not_new_empty_directory"}))
+    base = {"schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+            "scenario": "core", "status": "failed", "stage": "fixture_validation",
+            "source_sha": SHA}
+    receipt.write_text(json.dumps(dict(base, failure="root_not_new_empty_directory")))
     assert driver._closed_child_exit_reason(tmp_path) == (
         "package_scenario_nonzero_exit_root_not_new_empty_directory"
     )
-    receipt.write_text(json.dumps({"failure": "SYNTHETIC_PRIVATE_PATH"}))
-    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_unclassified"
+    receipt.write_text(json.dumps(dict(base, failure="SYNTHETIC_PRIVATE_PATH")))
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_unclassified"
+    receipt.write_text("{SYNTHETIC_PRIVATE_PATH")
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_invalid"
+    receipt.write_text(json.dumps(dict(base, failure=42)))
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_invalid"
     receipt.unlink()
-    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_unclassified"
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_missing"
+
+
+def test_producer_failure_receipt_matches_bounded_host_reader(tmp_path, monkeypatch) -> None:
+    assert producer.FAILURE_STAGES == driver._CHILD_FAILURE_STAGES
+    monkeypatch.setattr(producer, "requested_scenario", lambda: "core")
+    monkeypatch.setattr(producer, "_root", lambda: tmp_path)
+    monkeypatch.setattr(producer, "_ordinary_user", lambda: True)
+    monkeypatch.setattr(producer, "_runtime_provenance", lambda: {"source_sha": SHA})
+
+    def reject_fixture():
+        raise producer.ScenarioFailure("fixture_dir_invalid")
+
+    monkeypatch.setattr(producer, "_fixture_dir", reject_fixture)
+    assert producer.run_qualification() == 21
+    payload = driver._json(tmp_path / driver.SCENARIO_FILE)
+    assert payload["stage"] == "fixture_validation"
+    assert payload["status"] == "failed"
+    assert payload["failure"] == "fixture_dir_invalid"
+    assert set(payload) == {
+        "schema", "schema_version", "scenario", "status", "stage", "source_sha", "failure",
+    }
+    assert (tmp_path / driver.SCENARIO_FILE).stat().st_size < driver.MAX_RECEIPT_BYTES
+    observed = driver._child_failure_observation(tmp_path, SHA)
+    assert observed == {
+        "receipt_state": "valid_allowlisted", "producer_stage": "fixture_validation",
+        "allowlisted_failure": "fixture_dir_invalid",
+        "reason": "package_scenario_nonzero_exit_fixture_dir_invalid",
+    }
+    assert driver._child_failure_observation(tmp_path, "2" * 40)["receipt_state"] == "invalid"
+    (tmp_path / driver.SCENARIO_FILE).write_bytes(b"X" * (driver.MAX_RECEIPT_BYTES + 1))
+    assert driver._child_failure_observation(tmp_path, SHA)["receipt_state"] == "invalid"
+
+
+def test_producer_cannot_write_receipt_before_root_is_known(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(producer, "requested_scenario", lambda: "core")
+    monkeypatch.setattr(producer, "_ordinary_user", lambda: True)
+    monkeypatch.setattr(producer, "_runtime_provenance", lambda: {"source_sha": SHA})
+
+    def reject_root():
+        raise producer.ScenarioFailure("root_missing")
+
+    monkeypatch.setattr(producer, "_root", reject_root)
+    assert producer.run_qualification() == 21
+    assert driver._child_failure_observation(tmp_path, SHA)["receipt_state"] == "missing"
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("cleanup_failed", [False, True])
+def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
+    tmp_path, monkeypatch, cleanup_failed,
+) -> None:
+    closes = []
+    ready = []
+
+    class Process:
+        def __init__(self, root):
+            self.root = root
+
+        def observe(self):
+            producer._atomic_json(self.root / "core-startup.json", {
+                "schema_version": 1, "scenario": "core", "stage": "startup_ready",
+            })
+            producer._atomic_json(self.root / driver.SCENARIO_FILE, {
+                "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+                "scenario": "core", "status": "failed", "stage": "fixture_validation",
+                "source_sha": SHA, "failure": "fixture_dir_invalid",
+            })
+
+        def mark_runtime_ready(self):
+            ready.append(True)
+
+        def poll(self):
+            return 7
+
+        def close(self, *, terminate):
+            closes.append(terminate)
+            def cleanup():
+                if cleanup_failed:
+                    raise OSError("SYNTHETIC_PRIVATE_PATH")
+            diagnostics._attempt_cleanup(cleanup)
+
+    class Api:
+        def launch(self, _executable, environment, _cwd, owned=None, expected_images=None):
+            process = Process(Path(environment[producer.ROOT_ENV]))
+            owned.append(process)
+            return process
+
+    monkeypatch.setattr(driver, "_stage_known_fixtures", lambda *_: tmp_path)
+    monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda *_: tmp_path)
+    diag = SimpleNamespace(
+        QualificationFailure=diagnostics.QualificationFailure,
+        _run_in_private_directory=diagnostics._run_in_private_directory,
+        _close_owned_processes=diagnostics._close_owned_processes,
+        _relocate_package=lambda _artifact, private, _deadline: private,
+        _sanitized_environment=lambda *_: {}, _WindowsApi=Api,
+    )
+    observation = {
+        "observed_process": "unavailable", "observed_exit_code": None,
+        "startup_marker": "not_observed", "receipt_state": "not_checked",
+        "producer_stage": "unavailable", "allowlisted_failure": "unavailable",
+        "owned_cleanup": "not_attempted", "private_cleanup": "not_attempted",
+    }
+    stage = {"name": "package_relocation"}
+    failures = []
+    args = SimpleNamespace(expected_source_sha=SHA, dpi_scale="1.0", native_mode="default",
+                           source_checkout=tmp_path)
+    driver._run_private_directory_closed(diag, lambda private: driver._guard_private_core(
+        lambda: driver._run_private_core(
+            private, args=args, diag=diag, artifact=tmp_path, fixtures=tmp_path,
+            output=tmp_path, deadline=time.monotonic() + 1, before="synthetic",
+            stage=stage, failure_observation=observation,
+        ), stage, failures,
+    ), observation)
+    expected_reason = (
+        "private_process_cleanup_failed_at_runtime_observation" if cleanup_failed
+        else "package_scenario_nonzero_exit_fixture_dir_invalid"
+    )
+    assert [str(failure) for failure in failures] == [expected_reason]
+    assert ready == [True] and closes == [True]
+    assert stage == ({"name": "cleanup", "before_cleanup": "runtime_observation"} if cleanup_failed
+                     else {"name": "runtime_observation"})
+    assert observation == {
+        "observed_process": "requested_launcher_handle", "observed_exit_code": 7,
+        "startup_marker": "observed", "receipt_state": "valid_allowlisted",
+        "producer_stage": "fixture_validation", "allowlisted_failure": "fixture_dir_invalid",
+        "owned_cleanup": "failed" if cleanup_failed else "complete", "private_cleanup": "complete",
+    }
+    payload = driver._failed_diagnostic_payload(observation, stage, failures[0], SHA)
+    assert payload["failure_category"] == (
+        "cleanup_failure" if cleanup_failed else "allowlisted_producer_failure"
+    )
+    diagnostic = tmp_path / "diagnostic"
+    diagnostic.mkdir()
+    driver._write_failed_diagnostic(diagnostic, payload)
+    assert driver._json(diagnostic / driver.FAILED_DIAGNOSTIC_FILE, driver.MAX_FAILED_DIAGNOSTIC_BYTES) == payload
+    assert "SYNTHETIC_PRIVATE_PATH" not in (diagnostic / driver.FAILED_DIAGNOSTIC_FILE).read_text()
+
+
+def test_failed_diagnostic_drops_untrusted_values(tmp_path) -> None:
+    raw = "SYNTHETIC_PRIVATE_PATH"
+    observation = {
+        "observed_process": raw, "observed_exit_code": 2**40,
+        "startup_marker": raw, "receipt_state": raw,
+        "producer_stage": raw, "allowlisted_failure": raw,
+        "owned_cleanup": raw, "private_cleanup": raw,
+    }
+    payload = driver._failed_diagnostic_payload(
+        observation, {"name": raw}, driver.CandidateFailure(raw), raw,
+    )
+    driver._write_failed_diagnostic(tmp_path, payload)
+    content = (tmp_path / driver.FAILED_DIAGNOSTIC_FILE).read_text()
+    assert raw not in content
+    assert payload["observed_exit_code"] is None
+    assert payload["failure_category"] == "closed_driver_failure"
+    assert len(content.encode("ascii")) <= driver.MAX_FAILED_DIAGNOSTIC_BYTES
+
+
+def test_failed_output_cleanup_is_reported_instead_of_claiming_safe_retention(tmp_path, monkeypatch) -> None:
+    output = tmp_path / "partial-output"
+    output.mkdir()
+    (output / "partial.json").write_text("synthetic")
+
+    def failed_cleanup(_path):
+        raise OSError("SYNTHETIC_PRIVATE_PATH")
+
+    monkeypatch.setattr(driver.shutil, "rmtree", failed_cleanup)
+    with pytest.raises(driver.CandidateFailure, match="^failed_output_cleanup_failed$"):
+        driver._retain_failed_diagnostic(output, {"status": "failed"})
+    assert not (output / driver.FAILED_DIAGNOSTIC_FILE).exists()
+
+
+def test_failed_qualification_retains_only_closed_record_after_private_cleanup(tmp_path, monkeypatch) -> None:
+    artifact = tmp_path / "package"
+    artifact.mkdir()
+    (artifact / "metroliza.exe.provenance.json").write_text('{"dirty": false}')
+    output = tmp_path / "output"
+    args = SimpleNamespace(
+        source_checkout=tmp_path, artifact_dir=artifact, fixture_dir=tmp_path,
+        output_dir=output, browser=tmp_path, oracle=tmp_path, expected_source_sha=SHA,
+        dpi_scale="1.0", native_mode="default",
+    )
+    diag = SimpleNamespace(
+        QualificationFailure=diagnostics.QualificationFailure,
+        _run_in_private_directory=diagnostics._run_in_private_directory,
+        _validate_package=lambda _: {"git_sha": SHA},
+        _validate_sidecar=lambda *_: None,
+        _validate_notices=lambda *_: True,
+        _tree_digest=lambda *_: "synthetic",
+        _package_inventory=lambda *_: (),
+    )
+    monkeypatch.setattr(driver, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(driver, "_prepare_paths", lambda _: (tmp_path, artifact, tmp_path, output))
+    monkeypatch.setattr(driver, "_source_driver", lambda *_: diag)
+    monkeypatch.setattr(driver, "_adjacent_module", lambda *_: SimpleNamespace(check_host_runtime=lambda _: None))
+
+    def fail_core(_private, **kwargs):
+        kwargs["stage"]["name"] = "runtime_observation"
+        kwargs["failure_observation"].update({
+            "observed_process": "requested_launcher_handle", "observed_exit_code": 7,
+            "startup_marker": "not_observed", "receipt_state": "missing",
+            "owned_cleanup": "complete",
+        })
+        (output / "raw.json").write_text("SYNTHETIC_PRIVATE_PATH")
+        raise driver.CandidateFailure("package_scenario_nonzero_exit_receipt_missing")
+
+    monkeypatch.setattr(driver, "_run_private_core", fail_core)
+    with pytest.raises(driver.CandidateFailure, match="^package_scenario_nonzero_exit_receipt_missing$"):
+        driver.qualify(args)
+    assert {path.name for path in output.iterdir()} == {driver.FAILED_DIAGNOSTIC_FILE}
+    record = driver._json(output / driver.FAILED_DIAGNOSTIC_FILE, driver.MAX_FAILED_DIAGNOSTIC_BYTES)
+    assert record["observed_process"] == "requested_launcher_handle"
+    assert record["observed_exit_code"] == 7
+    assert record["receipt_state"] == "missing"
+    assert record["owned_cleanup"] == record["private_cleanup"] == "complete"
+    assert "SYNTHETIC_PRIVATE_PATH" not in json.dumps(record)
 
 
 @pytest.mark.parametrize("reason,cleanup,expected", (

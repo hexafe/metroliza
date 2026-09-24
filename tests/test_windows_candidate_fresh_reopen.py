@@ -126,7 +126,10 @@ def test_fresh_process_launch_transfer_interrupt_closes_registered_job(tmp_path,
     monkeypatch.setattr(core, "_independent_verifier", lambda: SimpleNamespace(
         _load_oracle=lambda _path: {}, assert_database=lambda *args: None,
     ))
-    dependency = SimpleNamespace(_WindowsApi=Api, _close_owned_processes=diag._close_owned_processes)
+    dependency = SimpleNamespace(
+        QualificationFailure=diag.QualificationFailure,
+        _WindowsApi=Api, _close_owned_processes=diag._close_owned_processes,
+    )
     prior = {"relative_artifact_dir": child.name, "artifacts": {"database": {"sha256": core._hash(database)}}}
     stage = {"name": "fresh_reopen"}
     with pytest.raises(KeyboardInterrupt) as caught:
@@ -179,6 +182,91 @@ def test_fresh_reopen_keeps_closed_primary_after_real_cleanup_wrapper(tmp_path, 
         )
     assert closed == [True]
     assert stage == {"name": "fresh_reopen"}
+
+
+def test_reopen_failure_producer_reader_and_nonzero_launcher_observation(tmp_path, monkeypatch):
+    source_sha = "b" * 40
+    core_root = tmp_path / "core scenario"
+    child = core_root / ("core-" + "a" * 32)
+    child.mkdir(parents=True)
+    database = child / "reports.sqlite"
+    database.write_bytes(b"synthetic completed import")
+    reopen_root = tmp_path / "fresh reopen"
+    monkeypatch.setattr(application, "requested_scenario", lambda: "reopen")
+    monkeypatch.setattr(application, "_root", lambda: reopen_root)
+    monkeypatch.setattr(application, "_ordinary_user", lambda: True)
+    monkeypatch.setattr(application, "_runtime_provenance", lambda: {"source_sha": source_sha})
+
+    def fail_input(_root):
+        raise reopen.ReopenScenarioFailure("synthetic input rejection")
+
+    monkeypatch.setattr(reopen, "_fresh_input", fail_input)
+    reopen_root.mkdir()
+    assert reopen.run_fresh_qualification() == 21
+    receipt_path = reopen_root / "fresh-reopen-result.json"
+    assert receipt_path.stat().st_size < core.MAX_RECEIPT_BYTES
+    assert core._reopen_failure_observation(reopen_root, source_sha) == {
+        "receipt_state": "valid_reopen_failed", "producer_stage": "input",
+    }
+    assert core._reopen_failure_observation(reopen_root, "c" * 40)["receipt_state"] == "invalid"
+    receipt_path.unlink()
+    assert core._reopen_failure_observation(reopen_root, source_sha)["receipt_state"] == "missing"
+    reopen_root.rmdir()
+
+    closed = []
+    ready = []
+
+    class Process:
+        def observe(self):
+            application._atomic_json(reopen_root / "core-startup.json", {
+                "schema_version": 1, "scenario": "reopen", "stage": "startup_ready",
+            })
+            application._atomic_json(receipt_path, {
+                "schema_version": 1, "scenario": "reopen", "status": "failed",
+                "source_sha": source_sha, "failure_stage": "reopen",
+            })
+
+        def mark_runtime_ready(self):
+            ready.append(True)
+
+        def poll(self):
+            return 7
+
+        def close(self, *, terminate):
+            closed.append(terminate)
+            diag._attempt_cleanup(lambda: None)
+
+    class Api:
+        def launch(self, _executable, _environment, _cwd, owned=None, expected_images=None):
+            process = Process()
+            owned.append(process)
+            return process
+
+    monkeypatch.setattr(core, "_validate_reopen_sources", lambda _reports: None)
+    monkeypatch.setattr(core, "_independent_verifier", lambda: SimpleNamespace(
+        _load_oracle=lambda _path: {}, assert_database=lambda *args: None,
+    ))
+    dependency = SimpleNamespace(
+        QualificationFailure=diag.QualificationFailure,
+        _WindowsApi=Api, _close_owned_processes=diag._close_owned_processes,
+    )
+    prior = {"relative_artifact_dir": child.name, "artifacts": {"database": {"sha256": core._hash(database)}}}
+    observation = {"owned_cleanup": "not_attempted", "private_cleanup": "not_attempted"}
+    stage = {"name": "fresh_reopen"}
+    with pytest.raises(core.CandidateFailure, match="^fresh_reopen_process_failed$"):
+        core._run_fresh_reopen(
+            tmp_path, diag=dependency, relocated=tmp_path, environment={}, work=core_root,
+            prior=prior, args=SimpleNamespace(expected_source_sha=source_sha, oracle=tmp_path / "oracle.json"),
+            deadline=time.monotonic() + 1, output=tmp_path, stage=stage,
+            failure_observation=observation,
+        )
+    assert observation["observed_process"] == "fresh_reopen_launcher_handle"
+    assert observation["observed_exit_code"] == 7
+    assert observation["startup_marker"] == "observed"
+    assert observation["receipt_state"] == "valid_reopen_failed"
+    assert observation["producer_stage"] == "reopen"
+    assert observation["owned_cleanup"] == "complete"
+    assert ready == [True] and closed == [True]
 
 
 @pytest.mark.parametrize("fault", ["row", "schema", "user_version", "application_id", "baseline_copy", "post_replaced"])
