@@ -51,6 +51,52 @@ def test_private_core_guard_preserves_known_failure_and_closes_unknown_stage() -
     ]
 
 
+@pytest.mark.parametrize(("primary", "cleanup", "expected"), (
+    (driver.CandidateFailure("package_scenario_nonzero_exit"), "complete", "package_scenario_nonzero_exit"),
+    (OSError("SYNTHETIC_PRIVATE_PATH"), "complete", "unexpected_runtime_observation"),
+    (driver.CandidateFailure("package_scenario_nonzero_exit"), "failed", "private_process_cleanup_failed_at_runtime_observation"),
+))
+def test_private_core_keeps_primary_only_after_proven_cleanup(primary, cleanup, expected) -> None:
+    class Process:
+        def close(self, *, terminate):
+            assert terminate is True
+
+            def close_handle():
+                if cleanup == "failed":
+                    raise OSError("SYNTHETIC_PRIVATE_PATH")
+
+            diagnostics._attempt_cleanup(close_handle)
+
+    diag = SimpleNamespace(
+        QualificationFailure=diagnostics.QualificationFailure,
+        _close_owned_processes=diagnostics._close_owned_processes,
+    )
+    stage = {"name": "runtime_observation"}
+    failures = []
+
+    def core_action():
+        try:
+            raise primary
+        finally:
+            driver._close_private_core_owned(diag, [Process()], terminate=True, stage=stage)
+
+    assert driver._guard_private_core(core_action, stage, failures) is None
+    assert [str(error) for error in failures] == [expected]
+    assert "SYNTHETIC_PRIVATE_PATH" not in repr(failures)
+
+
+def test_nonzero_child_exit_projects_only_known_synthetic_failure(tmp_path) -> None:
+    receipt = tmp_path / driver.SCENARIO_FILE
+    receipt.write_text(json.dumps({"failure": "root_not_new_empty_directory"}))
+    assert driver._closed_child_exit_reason(tmp_path) == (
+        "package_scenario_nonzero_exit_root_not_new_empty_directory"
+    )
+    receipt.write_text(json.dumps({"failure": "SYNTHETIC_PRIVATE_PATH"}))
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_unclassified"
+    receipt.unlink()
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_unclassified"
+
+
 @pytest.mark.parametrize("reason,cleanup,expected", (
     ("qualification_cleanup_failed", "failed", "private_root_cleanup_failed"),
     ("invalid_qualification_root", "not_attempted", "private_root_unavailable"),

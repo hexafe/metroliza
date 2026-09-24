@@ -71,6 +71,28 @@ _PRIVATE_CORE_STAGES = frozenset({
     "runtime_receipt", "owned_topology", "fresh_reopen", "package_integrity",
     "retained_artifacts", "evidence_receipts", "cleanup",
 })
+_CLOSED_CHILD_FAILURES = frozenset({
+    "completed_import_reopen_failed", "database_observation_sidecars_present",
+    "export_failed", "export_failed_or_cancelled", "fixture_dir_invalid",
+    "fixture_dir_missing", "fixture_hash_mismatch", "fixture_set_mismatch",
+    "group_assignment_not_applied", "group_inference_checks_failed",
+    "group_metric_missing", "grouped_row_count", "import_count_mismatch",
+    "import_deadline", "import_guard_checks_failed", "import_worker_not_started",
+    "invalid_ui_scale", "literal_workbook_checks_failed",
+    "literal_workbook_copy_mismatch", "ocr_checks_failed", "ocr_evidence_mismatch",
+    "ocr_evidence_schema_mismatch", "ocr_fixture_invalid", "ocr_fixture_missing",
+    "ocr_observation_schema_mismatch", "reopen_input_identity_mismatch",
+    "reopen_output_identity_mismatch", "reports_navigation_missing",
+    "review_deadline", "review_mutated_or_count_mismatch", "root_missing",
+    "root_not_new_empty_directory", "selection_control_rejected",
+    "selection_mismatch", "source_preservation_failed", "staged_source_changed",
+    "tabular_filter_ids_mismatch", "tabular_fixture_mismatch",
+    "tabular_public_store_missing", "ui_checks_failed", "workbook_incomplete",
+    "workspace_context_rejected", "zero_selection_guard_failed",
+    "closeout_privacy_failed", "closeout_shell_failed", "closeout_lifecycle_failed",
+    "TypeError", "ValueError", "KeyError", "OSError", "RuntimeError",
+    "AssertionError", "OperationalError", "FileNotFoundError", "PermissionError",
+})
 
 
 def _closed_unexpected_stage(stage: str) -> CandidateFailure:
@@ -79,14 +101,47 @@ def _closed_unexpected_stage(stage: str) -> CandidateFailure:
     )
 
 
+def _closed_child_exit_reason(work: Path) -> str:
+    try:
+        payload = _json(work / SCENARIO_FILE)
+        failure = payload.get("failure") if type(payload) is dict else None
+    except (CandidateFailure, OSError, ValueError, TypeError):
+        failure = None
+    detail = failure if type(failure) is str and failure in _CLOSED_CHILD_FAILURES else "unclassified"
+    return "package_scenario_nonzero_exit_" + detail
+
+
 def _guard_private_core(action, stage: dict[str, str], failures: list[CandidateFailure]):
     try:
         return action()
     except CandidateFailure as error:
         failures.append(error)
-    except Exception:
-        failures.append(_closed_unexpected_stage(stage["name"]))
+    except Exception as error:
+        if getattr(error, "qualification_cleanup", None) == "failed":
+            prior = stage.get("before_cleanup", stage["name"])
+            code = prior if prior in _PRIVATE_CORE_STAGES else "private_core_unknown"
+            failures.append(CandidateFailure("private_process_cleanup_failed_at_" + code))
+        else:
+            failures.append(_closed_unexpected_stage(stage["name"]))
     return None
+
+
+def _close_private_core_owned(diag, owned, *, terminate: bool, stage: dict[str, str]) -> None:
+    primary = sys.exc_info()[1]
+    try:
+        diag._close_owned_processes(owned, terminate=terminate)
+    except Exception as error:
+        # The diagnostics helper intentionally hides arbitrary primary errors
+        # with QualificationFailure("unexpected") even when cleanup succeeded.
+        # Keep our already-closed core reason; a failed cleanup still wins.
+        qualification = getattr(diag, "QualificationFailure", ())
+        if (isinstance(primary, Exception) and isinstance(error, qualification)
+                and error.qualification_reason == "unexpected"
+                and error.qualification_cleanup == "complete"):
+            raise primary from None
+        stage["before_cleanup"] = stage["name"]
+        stage["name"] = "cleanup"
+        raise
 
 
 def _run_private_directory_closed(diag, action):
@@ -862,7 +917,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         else:
             raise CandidateFailure("owned_package_scenario_timeout")
         if code != 0:
-            raise CandidateFailure("package_scenario_nonzero_exit")
+            raise CandidateFailure(_closed_child_exit_reason(work))
         if not startup_observed:
             raise CandidateFailure("core_startup_receipt_missing")
         stage["name"] = "runtime_receipt"
@@ -913,11 +968,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         terminate = False
         return artifacts
     finally:
-        try:
-            diag._close_owned_processes(owned, terminate=terminate)
-        except Exception:
-            stage["name"] = "cleanup"
-            raise
+        _close_private_core_owned(diag, owned, terminate=terminate, stage=stage)
 
 
 def qualify(args) -> dict:
