@@ -65,7 +65,13 @@ def main():
     _exercise_subprocess(mode)
     if mode == "hard":
         os._exit(9)
-    (Path.cwd() / "control-ready").touch()
+    if mode.startswith("late_"):
+        # The first marker acknowledges readiness, not completion of the
+        # post-ready helper operation. Keep the control alive for the host's
+        # final owned-member observation before it releases the process.
+        (Path.cwd() / "control-done").touch()
+    else:
+        (Path.cwd() / "control-ready").touch()
     return 0 if _wait_for_marker("control-finish") else 98
 
 
