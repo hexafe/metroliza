@@ -7,7 +7,7 @@ PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 260924)"
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
     - A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>
-    - Select PDF reports before import and reopen saved measurements without repeating completed work<br>
+    - Choose PDF reports before import and reopen saved measurements without repeating completed work<br>
     - Filters and grouping keep numeric results consistent between the table and analysis views<br>
     - Excel exports preserve chart titles and series names as literal text<br>
     - The Help menu opens private incident reports for preview and export when a supervised run fails<br>
