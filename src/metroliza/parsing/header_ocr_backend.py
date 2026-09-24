@@ -604,12 +604,18 @@ class RapidOcrLatinBackend:
         self._engine = rapidocr_class(params=self._build_engine_params(rapidocr_module, params))
         return self._engine
 
-    def recognize(self, image_path: str | Path) -> HeaderOcrRun:
+    def recognize(self, image_path: str | Path, *, _in_process: bool = False) -> HeaderOcrRun:
         """Run OCR against a rendered crop and normalize the result."""
 
         image = Path(image_path).expanduser()
         if not image.exists():
             raise FileNotFoundError(str(image))
+
+        if (not _in_process and sys.platform == "win32" and getattr(sys, "frozen", False)
+                and Path(sys.executable).name.lower() == "metroliza_application.exe"):
+            from metroliza.parsing.frozen_ocr_worker import recognize_in_frozen_worker
+
+            return recognize_in_frozen_worker(self.config, image)
 
         engine = self.load_engine()
         _mark_qualification_stage("ocr_engine_inference")

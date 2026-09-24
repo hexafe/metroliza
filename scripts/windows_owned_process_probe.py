@@ -19,11 +19,14 @@ PHASES = frozenset({"suspended", "window_wait", "window_close", "drain", "startu
 class RuntimeEvidence:
     """One application launch/Job, one private journal, one owned probe."""
 
-    def __init__(self, api, artifact: Path, cwd: Path, environment, failure_factory):
+    def __init__(self, api, artifact: Path, cwd: Path, environment, failure_factory,
+                 *, allow_ocr_worker: bool = False):
         self.root = cwd / ("runtime-audit-" + uuid.uuid4().hex)
         self.nonce = uuid.uuid4().hex
         self.failure_factory = failure_factory
-        self.probe = OwnedProcessProbe(api, artifact, failure_factory)
+        self.probe = OwnedProcessProbe(
+            api, artifact, failure_factory, allow_ocr_worker=allow_ocr_worker,
+        )
         self.probe.phase = "startup"
         self._create_root()
         environment.update({audit.GATE: "1", audit.ROOT: str(self.root), audit.NONCE: self.nonce})
@@ -119,7 +122,21 @@ class RuntimeEvidence:
         self.root.rmdir()
 
 
-def verified_runtime_order(proof, *, supervised: bool) -> tuple[str, ...]:
+def _expected_runtime_roles(supervised, events, allow_ocr_worker):
+    roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
+    order = (["launcher_bootloader", "launcher_supervisor"] if supervised else []) + ["application"]
+    if events:
+        roles += ["system_cmd", "system_conhost"]
+        order += ["windows_version_command", "windows_version_console"]
+    if allow_ocr_worker:
+        roles += ["package_ocr_worker"]
+        order += ["ocr_worker"]
+    return roles, order
+
+
+def verified_runtime_order(
+    proof, *, supervised: bool, allow_ocr_worker: bool = False,
+) -> tuple[str, ...]:
     """Pair an audited attempt and exact native ancestry; neither suffices alone."""
     def reject():
         raise ValueError("runtime_evidence_invalid")
@@ -146,11 +163,9 @@ def verified_runtime_order(proof, *, supervised: bool) -> tuple[str, ...]:
         elif event["phase"] != "startup":
             reject()
     owned = proof["owned"]
-    expected_roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
-    expected_order = (["launcher_bootloader", "launcher_supervisor"] if supervised else []) + ["application"]
-    if events:
-        expected_roles += ["system_cmd", "system_conhost"]
-        expected_order += ["windows_version_command", "windows_version_console"]
+    expected_roles, expected_order = _expected_runtime_roles(
+        supervised, events, allow_ocr_worker,
+    )
     if (type(owned) is not dict
             or set(owned) != {"schema_version", "members", "assigned", "unobserved", "job_empty", "overflow", "observation_unavailable", "probe_effect"}
             or type(owned["schema_version"]) is not int or owned["schema_version"] != 1
@@ -184,17 +199,26 @@ def _verify_members(members, expected_roles, helper_phase):
             or member["parent_ordinal_advisory"] != index - 1
         ):
             reject()
+        if role == "package_ocr_worker" and (
+            member["first_phase"] not in {"running", "drain"}
+            or member["last_phase"] not in {"running", "drain"}
+            or parent not in {"unknown", expected_roles.index("package_application")}
+        ):
+            reject()
 
 
 class OwnedProcessProbe:
-    def __init__(self, api, artifact: Path, failure_factory):
+    def __init__(self, api, artifact: Path, failure_factory, *, allow_ocr_worker=False):
         self.api = api
         self.failure_factory = failure_factory
         self.unavailable = False
         self.images = (
             ("package_launcher", artifact / "metroliza.exe"),
             ("package_application", artifact / "metroliza_application.exe"),
-        ) + self._system_images()
+        ) + self._system_images() + (
+            (("package_ocr_worker", artifact / "metroliza_ocr_worker.exe"),)
+            if allow_ocr_worker else ()
+        )
         self.phase = "suspended"
         self.records = {}
         self.active = None

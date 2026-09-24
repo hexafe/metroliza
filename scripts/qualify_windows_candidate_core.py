@@ -1099,7 +1099,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         stage["name"] = "owned_launch"
         process = diag._WindowsApi().launch(
             relocated / "metroliza.exe", environment, launch_cwd, owned=owned,
-            expected_images=(relocated / "metroliza.exe", relocated / "metroliza_application.exe"),
+            expected_images=(
+                relocated / "metroliza.exe", relocated / "metroliza_application.exe",
+                relocated / "metroliza_ocr_worker.exe",
+            ),
         )
         if failure_observation is not None:
             failure_observation["observed_process"] = "requested_launcher_handle"
@@ -1144,7 +1147,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         # Use the accepted dependency's complete onefile-supervisor /
         # onedir-child topology contract, including both launcher processes.
         diag._validate_topology_record(diag._topology_record(topology), supervised=True,
-                                       require_runtime_evidence=True)
+                                       require_runtime_evidence=True, allow_ocr_worker=True)
         stage["name"] = "fresh_reopen"
         fresh_reopen = _run_fresh_reopen(
             private, diag=diag, relocated=relocated, environment=environment, work=work,

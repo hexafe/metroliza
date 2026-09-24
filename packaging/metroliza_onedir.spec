@@ -79,11 +79,49 @@ exe = EXE(
     icon=[str(ICON_PATH)],
 )
 
+if SUPERVISED_WINDOWS:
+    # OCR uses ONNX in a separate executable without Qt's Python/runtime hooks.
+    # Both executables use the same immutable onedir assets and provenance.
+    ocr_packages = {"rapidocr", "onnxruntime", "cv2", "numpy", "openvino"}
+    ocr_hiddenimports = [
+        name for name in filter_onedir_hiddenimports(COLLECTION["hiddenimports"])
+        if name.split(".", 1)[0] in ocr_packages
+    ]
+    ocr_analysis = Analysis(
+        [str(SPEC_DIR / "metroliza_ocr_worker_entry.py")],
+        pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
+        binaries=[], datas=[], hiddenimports=ocr_hiddenimports,
+        hookspath=[str(WINDOWS_HOOKS)], hooksconfig={}, runtime_hooks=[],
+        excludes=["PyQt6", "matplotlib", "pandas", "metroliza.ui",
+                  "metroliza.app.bootstrap", "pymupdf", "fitz"],
+        noarchive=False,
+    )
+    forbidden_ocr_modules = ("PyQt6", "metroliza.ui", "metroliza.app.bootstrap")
+    if any(
+        name == prefix or name.startswith(prefix + ".")
+        for name, _, _ in ocr_analysis.pure
+        for prefix in forbidden_ocr_modules
+    ) or any(
+        "pyqt" in Path(source).name.lower() for _, source, _ in ocr_analysis.scripts
+    ):
+        raise RuntimeError("OCR worker must not bundle Qt runtime hooks or UI modules")
+    ocr_pyz = PYZ(ocr_analysis.pure, ocr_analysis.zipped_data, cipher=block_cipher)
+    ocr_exe = EXE(
+        ocr_pyz, ocr_analysis.scripts, [], exclude_binaries=True,
+        name="metroliza_ocr_worker", debug=False, bootloader_ignore_signals=False,
+        strip=False, upx=True, console=False, disable_windowed_traceback=True,
+        icon=[str(ICON_PATH)],
+    )
+
 coll = COLLECT(
     exe,
+    *([ocr_exe] if SUPERVISED_WINDOWS else []),
     a.binaries,
+    *([ocr_analysis.binaries] if SUPERVISED_WINDOWS else []),
     a.zipfiles,
+    *([ocr_analysis.zipfiles] if SUPERVISED_WINDOWS else []),
     a.datas,
+    *([ocr_analysis.datas] if SUPERVISED_WINDOWS else []),
     strip=False,
     upx=True,
     upx_exclude=[],

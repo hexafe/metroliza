@@ -37,19 +37,24 @@ def _journal(root, nonce, events):
         )
 
 
-def _proof(supervised=False, helpers=True):
+def _proof(supervised=False, helpers=True, ocr_worker=False):
     roles = (["package_launcher", "package_launcher"] if supervised else []) + [
         "package_application"
     ]
     if helpers:
         roles += ["system_cmd", "system_conhost"]
+    if ocr_worker:
+        roles += ["package_ocr_worker"]
     members = [
         {
             "role": role,
             "identity": "fixed_file_verified",
-            "first_phase": "startup",
-            "last_phase": "startup",
-            "parent_ordinal_advisory": index - 1 if index else "unknown",
+            "first_phase": "running" if role == "package_ocr_worker" else "startup",
+            "last_phase": "running" if role == "package_ocr_worker" else "startup",
+            "parent_ordinal_advisory": (
+                roles.index("package_application") if role == "package_ocr_worker"
+                else index - 1 if index else "unknown"
+            ),
             "lifecycle": "job_empty",
         }
         for index, role in enumerate(roles)
@@ -71,6 +76,18 @@ def _proof(supervised=False, helpers=True):
         },
         "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling",
     }
+
+
+def test_ocr_worker_role_requires_explicit_core_allowance_and_exact_native_member():
+    proof = _proof(supervised=True, helpers=False, ocr_worker=True)
+    assert verified_runtime_order(proof, supervised=True, allow_ocr_worker=True) == (
+        "launcher_bootloader", "launcher_supervisor", "application", "ocr_worker",
+    )
+    with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+        verified_runtime_order(proof, supervised=True)
+    proof["owned"]["members"][-1]["first_phase"] = "startup"
+    with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+        verified_runtime_order(proof, supervised=True, allow_ocr_worker=True)
 
 
 def test_command_and_required_frames_are_exact_not_basename_allowance():
@@ -511,7 +528,7 @@ def test_runtime_cleanup_uses_full_metadata_when_directory_cache_has_no_link_cou
 def test_runtime_constructor_owns_empty_root_even_when_identity_query_fails(tmp_path, monkeypatch, cleanup_fails):
     from scripts import windows_owned_process_probe as probe_module
 
-    monkeypatch.setattr(probe_module, "OwnedProcessProbe", lambda *_: SimpleNamespace(phase="startup"))
+    monkeypatch.setattr(probe_module, "OwnedProcessProbe", lambda *_, **__: SimpleNamespace(phase="startup"))
     def no_identity(_self):
         raise OSError("synthetic identity failure")
     monkeypatch.setattr(RuntimeEvidence, "_identity", no_identity)

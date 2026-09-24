@@ -68,7 +68,10 @@ def test_minimal_entry_precedes_application_imports():
                    env=dict(os.environ, PYTHONPATH=str(root / "src")))
 
 
-@pytest.mark.parametrize("entry", ["metroliza_supervisor_entry.py", "metroliza_package_entry.py"])
+@pytest.mark.parametrize("entry", [
+    "metroliza_supervisor_entry.py", "metroliza_package_entry.py",
+    "metroliza_ocr_worker_entry.py",
+])
 @pytest.mark.parametrize("frozen", [False, True], ids=["source", "frozen-flag"])
 def test_frozen_entry_preserves_loader_import_paths(tmp_path, entry, frozen):
     import os

@@ -927,13 +927,19 @@ class _WindowsProcess:
         from scripts.windows_owned_process_probe import verified_runtime_order
 
         proof = evidence.proof()
+        allow_ocr_worker = (
+            artifact_dir / "metroliza_ocr_worker.exe" in self._expected_images
+        )
         try:
-            order = verified_runtime_order(proof, supervised=topology.launcher_processes_observed == 2)
+            order = verified_runtime_order(
+                proof, supervised=topology.launcher_processes_observed == 2,
+                allow_ocr_worker=allow_ocr_worker,
+            )
         except (ValueError, TypeError, KeyError):
             raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
         # The semantic suffix accounts for real physical members, not a count
         # projection. The independent native image and journal proof must agree.
-        helpers = 2 if proof["events"] else 0
+        helpers = (2 if proof["events"] else 0) + int(allow_ocr_worker)
         if (topology.unexpected_processes_observed != helpers
                 or topology.assigned_processes != len(order)
                 or topology.application_processes_observed != 1
@@ -1878,14 +1884,21 @@ class _WindowsApi:
             raise primary from None
 
     def _prepare_runtime_evidence(self, executable, images, cwd, environment, existing):
+        pair = (executable.parent / "metroliza.exe",
+                executable.parent / "metroliza_application.exe")
+        allow_ocr_worker = (
+            images == pair + (executable.parent / "metroliza_ocr_worker.exe",)
+            and environment.get("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION") == "1"
+            and environment.get("METROLIZA_WINDOWS_CANDIDATE_PHASE", "core") == "core"
+        )
         if (existing is None and environment.get("METROLIZA_WINDOWS_RUNTIME_AUDIT") == "1"
-                and images == (executable.parent / "metroliza.exe",
-                               executable.parent / "metroliza_application.exe")):
+                and (images == pair or allow_ocr_worker)):
             from scripts.windows_owned_process_probe import RuntimeEvidence
 
             return RuntimeEvidence(
                 self, executable.parent, cwd, environment,
                 lambda: QualificationFailure("output_failed", qualification_reason="qualification_topology_failed"),
+                allow_ocr_worker=allow_ocr_worker,
             )
         return existing
 
@@ -4088,7 +4101,7 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
         count = value.get(key)
         result[key] = count if type(count) is int and 0 <= count <= 16 else "invalid"
     order = value.get("creation_order")
-    roles = {"launcher_bootloader", "launcher_supervisor", "application", "unexpected",
+    roles = {"launcher_bootloader", "launcher_supervisor", "application", "ocr_worker", "unexpected",
              "windows_version_command", "windows_version_console"}
     result["creation_order"] = (
         order if type(order) is list and len(order) <= 16
@@ -4099,7 +4112,10 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
     return result
 
 
-def _validate_topology_record(value: object, *, supervised: bool, require_runtime_evidence: bool = False) -> None:
+def _validate_topology_record(
+    value: object, *, supervised: bool, require_runtime_evidence: bool = False,
+    allow_ocr_worker: bool = False,
+) -> None:
     expected = {
         "launcher_processes_observed",
         "application_processes_observed",
@@ -4128,7 +4144,10 @@ def _validate_topology_record(value: object, *, supervised: bool, require_runtim
         from scripts.windows_owned_process_probe import verified_runtime_order
 
         try:
-            expected_order = list(verified_runtime_order(value["runtime_evidence"], supervised=supervised))
+            expected_order = list(verified_runtime_order(
+                value["runtime_evidence"], supervised=supervised,
+                allow_ocr_worker=allow_ocr_worker,
+            ))
         except (ValueError, TypeError, KeyError):
             raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
     if (

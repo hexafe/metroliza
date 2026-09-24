@@ -13,6 +13,7 @@ import stat
 MANIFEST_NAME = "supervision_manifest.json"
 COMPONENTS = (
     "metroliza_application.exe",
+    "metroliza_ocr_worker.exe",
     "_internal/python311.dll",
     "_internal/base_library.zip",
     "_internal/metroliza/app/build_provenance.json",

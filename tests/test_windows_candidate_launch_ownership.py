@@ -81,7 +81,10 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
                 scratch = _cwd.parent / "temporary files"
                 assert scratch.is_dir()
                 assert all(_environment[key] == str(scratch) for key in ("TEMP", "TMP", "TMPDIR"))
-                assert expected_images == (_executable, _executable.with_name("metroliza_application.exe"))
+                assert expected_images == (
+                    _executable, _executable.with_name("metroliza_application.exe"),
+                    _executable.with_name("metroliza_ocr_worker.exe"),
+                )
                 owned.append(process)
             return process
 
@@ -97,7 +100,7 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda _checkout, private: private / "ocr.pdf")
     monkeypatch.setattr(
         owned_probe, "OwnedProcessProbe",
-        lambda *_args: SimpleNamespace(phase="startup", emit=lambda: None),
+        lambda *_args, **_kwargs: SimpleNamespace(phase="startup", emit=lambda: None),
     )
     diag = SimpleNamespace(
         _relocate_package=lambda _artifact, private, _deadline: private / "relocated",
