@@ -627,11 +627,10 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
         concurrent_released = False
         while time.monotonic() < deadline:
             if mode == "concurrent":
-                # Keep both controlled applications alive throughout the two
-                # Job observations. This case proves journal separation, not
-                # image-query behavior while a peer is exiting; the other
-                # modes and the negative identity controls cover that edge.
                 if not concurrent_released:
+                    # Observe both complete Jobs while the applications are
+                    # held. Their short-lived version helpers can have exited
+                    # already, but any identity failure remains fatal here.
                     for process in owned:
                         process.observe()
                     if all(
@@ -641,6 +640,16 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                         for index in range(len(owned)):
                             (tmp_path / str(index) / "control-finish").touch()
                         concurrent_released = True
+                elif all(
+                    process.poll() is not None and api._job_accounting(process._job)[0] == 0
+                    for process in owned
+                ):
+                    # No more image queries in the exit transition. Once both
+                    # Jobs are empty, refresh their final owned accounting and
+                    # journal state without attributing any vanished member.
+                    for process in owned:
+                        process.observe()
+                    break
             else:
                 for index, process in enumerate(owned):
                     process.observe()
@@ -648,14 +657,21 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                         if mode.startswith("late_"):
                             process.mark_runtime_ready()
                         (tmp_path / str(index) / "control-finish").touch()
-            if all(
+            if mode != "concurrent" and all(
                 process.poll() is not None and process.active_processes() == 0 for process in owned
             ):
                 break
             time.sleep(0.005)
-        assert all(
-            process.poll() == expected_exit and process.active_processes() == 0 for process in owned
-        )
+        if mode == "concurrent":
+            assert concurrent_released
+            assert all(
+                process.poll() == expected_exit and api._job_accounting(process._job)[0] == 0
+                for process in owned
+            )
+        else:
+            assert all(
+                process.poll() == expected_exit and process.active_processes() == 0 for process in owned
+            )
         for process, evidence in zip(owned, evidences):
             if mode in {"write_failure", "blocked_install"}:
                 with pytest.raises(qualification.QualificationFailure):
