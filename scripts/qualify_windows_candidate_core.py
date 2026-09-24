@@ -38,7 +38,9 @@ _CHILD_FAILURE_STAGES = frozenset({
     "ocr_engine_construction", "ocr_engine_inference", "ocr_result_normalization",
     "ocr_result_validation", "reopen", "tabular", "xlsx",
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
-    "closeout_shell", "closeout_lifecycle", "complete",
+    "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
+    "closeout_lifecycle_seed", "closeout_lifecycle_export",
+    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "complete",
 })
 _REOPEN_FAILURE_STAGES = frozenset({
     "input", "host_ready", "reopen", "database_preservation",

@@ -33,7 +33,9 @@ FAILURE_STAGES = frozenset({
     "ocr_engine_construction", "ocr_engine_inference", "ocr_result_normalization",
     "ocr_result_validation", "reopen", "tabular", "xlsx",
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
-    "closeout_shell", "closeout_lifecycle", "complete",
+    "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
+    "closeout_lifecycle_seed", "closeout_lifecycle_export",
+    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "complete",
 })
 DEADLINES_S = {"review": 30.0, "import": 45.0}
 FIXTURES = {
@@ -525,7 +527,9 @@ def _run_closeout_slices(child, fixtures, receipt, *, stage_recorder=None):
     for name, operation in (
         ("privacy", lambda: run_privacy_checks(child)),
         ("shell", lambda: run_shell_checks(child, fixtures, expected_dpr=float(scale))),
-        ("lifecycle", lambda: run_lifecycle_checks(child, fixtures)),
+        ("lifecycle", lambda: run_lifecycle_checks(
+            child, fixtures, stage_recorder=stage_recorder,
+        )),
     ):
         if stage_recorder is not None:
             stage_recorder("closeout_" + name)

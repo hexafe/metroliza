@@ -97,7 +97,12 @@ def test_actual_source_closeout_hooks_match_the_host_contract(tmp_path, monkeypa
     receipt = {}
     stages = []
     _run_closeout_slices(tmp_path, fixtures, receipt, stage_recorder=stages.append)
-    assert stages == ["closeout_privacy", "closeout_shell", "closeout_lifecycle"]
+    assert stages == [
+        "closeout_privacy", "closeout_shell", "closeout_lifecycle",
+        "closeout_lifecycle_review", "closeout_lifecycle_seed",
+        "closeout_lifecycle_export", "closeout_lifecycle_realtime",
+        "closeout_lifecycle_final",
+    ]
     observation = receipt["closeout_observation"]
     assert gate.validate(observation) is observation
     with pytest.raises(ValueError):

@@ -347,7 +347,8 @@ def _realtime_refusal_and_rebind(app, child: Path, result: dict[str, Any]) -> No
             raise LifecycleChecksFailure(error)
 
 
-def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
+def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any],
+         *, stage_recorder=None) -> None:
     from metroliza.app.windows_candidate_import_guards import _source_hashes
     from metroliza.app.windows_candidate_qualification import ScenarioFailure, _stage_reports
 
@@ -360,15 +361,25 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
     _require(_source_hashes(reports) == source_hashes, "fixture_hash_mismatch")
     result["evidence"]["relative_artifact_dir"] = child.name
     result["evidence"]["fixture_count"] = len(source_hashes)
+    if stage_recorder is not None:
+        stage_recorder("closeout_lifecycle_review")
     _review_close(app, child, reports, source_hashes, result)
+    if stage_recorder is not None:
+        stage_recorder("closeout_lifecycle_seed")
     database = _seed_report_database(app, child, reports)
+    if stage_recorder is not None:
+        stage_recorder("closeout_lifecycle_export")
     _export_close(app, child, database, reports, source_hashes, result)
+    if stage_recorder is not None:
+        stage_recorder("closeout_lifecycle_realtime")
     _realtime_refusal_and_rebind(app, child, result)
+    if stage_recorder is not None:
+        stage_recorder("closeout_lifecycle_final")
     _require(_source_hashes(reports) == source_hashes, "final_source_hash_mismatch")
 
 
 def run_lifecycle_checks(scratch_directory: str | Path,
-                         fixture_directory: str | Path) -> dict[str, Any]:
+                         fixture_directory: str | Path, *, stage_recorder=None) -> dict[str, Any]:
     """Run real W04 worker ownership checks and return fixed, closed evidence."""
     from metroliza.app.bootstrap import get_or_create_qapplication
 
@@ -402,7 +413,7 @@ def run_lifecycle_checks(scratch_directory: str | Path,
         result["evidence"]["native_windows_assessed"] = (
             os.name == "nt" and app.platformName().casefold() == "windows"
         )
-        _run(scratch, fixtures, app, result)
+        _run(scratch, fixtures, app, result, stage_recorder=stage_recorder)
         _require(all(value == "passed" for value in result["facets"].values()),
                  "facet_incomplete")
         result["status"] = "passed"

@@ -154,6 +154,21 @@ def test_ocr_runtime_stage_round_trips_through_bounded_host_reader(tmp_path) -> 
     assert driver._child_stage_observation(tmp_path, SHA) == {
         "stage_marker_state": "valid", "producer_stage": "ocr_onnxruntime_import",
     }
+
+
+@pytest.mark.parametrize("stage", [
+    "closeout_lifecycle_review", "closeout_lifecycle_seed",
+    "closeout_lifecycle_export", "closeout_lifecycle_realtime",
+    "closeout_lifecycle_final",
+])
+def test_lifecycle_stage_round_trips_through_bounded_host_reader(tmp_path, stage) -> None:
+    receipt = {"source_sha": SHA}
+    producer._record_core_stage(tmp_path, receipt, stage)
+    assert (tmp_path / driver.STAGE_FILE).stat().st_size <= 1024
+    assert driver._child_stage_observation(tmp_path, SHA) == {
+        "stage_marker_state": "valid", "producer_stage": stage,
+    }
+    assert driver._child_stage_observation(tmp_path, "2" * 40)["stage_marker_state"] == "invalid"
     assert driver._child_stage_observation(tmp_path, "2" * 40) == {
         "stage_marker_state": "invalid", "producer_stage": "unavailable",
     }

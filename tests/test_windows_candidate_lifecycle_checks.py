@@ -10,6 +10,39 @@ from metroliza.app.windows_candidate_lifecycle_checks import FACETS, run_lifecyc
 FIXTURES = Path(__file__).parent / "fixtures" / "windows_candidate" / "reports"
 
 
+@pytest.mark.parametrize(("failed", "stage"), [
+    ("_review_close", "closeout_lifecycle_review"),
+    ("_seed_report_database", "closeout_lifecycle_seed"),
+    ("_export_close", "closeout_lifecycle_export"),
+    ("_realtime_refusal_and_rebind", "closeout_lifecycle_realtime"),
+])
+def test_lifecycle_stage_is_recorded_before_interrupted_operation(
+    tmp_path, monkeypatch, failed, stage,
+):
+    from metroliza.app import windows_candidate_import_guards as guards
+    from metroliza.app import windows_candidate_qualification as producer
+
+    monkeypatch.setattr(producer, "_stage_reports", lambda *_: (tmp_path, {}))
+    monkeypatch.setattr(guards, "_source_hashes", lambda *_: {})
+    for name in ("_review_close", "_seed_report_database", "_export_close",
+                 "_realtime_refusal_and_rebind"):
+        def operation(*_args, name=name):
+            if name == failed:
+                raise SystemExit(-1)
+            return tmp_path / "synthetic.sqlite" if name == "_seed_report_database" else None
+        monkeypatch.setattr(checks, name, operation)
+
+    stages = []
+    with pytest.raises(SystemExit) as caught:
+        checks._run(tmp_path, tmp_path, object(), {"evidence": {}}, stage_recorder=stages.append)
+    assert caught.value.code == -1
+    assert stages[-1] == stage
+    assert stages == [
+        "closeout_lifecycle_review", "closeout_lifecycle_seed",
+        "closeout_lifecycle_export", "closeout_lifecycle_realtime",
+    ][:len(stages)]
+
+
 def test_logical_digest_ignores_catalog_order_but_detects_data_and_schema_changes(tmp_path):
     from contextlib import closing
     import sqlite3
