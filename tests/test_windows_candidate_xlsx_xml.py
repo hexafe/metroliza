@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from contextlib import closing
 import inspect
 import os
 import sqlite3
@@ -95,7 +96,7 @@ def test_grouped_cancellation_seed_keeps_all_real_header_units(tmp_path, module,
     database = tmp_path / "active.sqlite"
     module._make_thread(database, tmp_path / "output.xlsx", headers, group_headers=True)
 
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         reports = connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()[0]
         counts = connection.execute(
             "SELECT header, COUNT(*) FROM report_measurements GROUP BY header"
