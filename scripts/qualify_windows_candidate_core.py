@@ -770,40 +770,31 @@ def _verify_dashboard_closed(diag, output: Path, artifacts: dict, browser: Path)
         raise CandidateFailure("unexpected_browser_verifier") from None
 
 
+def _closed_value(value: object, allowed: frozenset[str] | set[str], fallback: str) -> str:
+    return value if type(value) is str and value in allowed else fallback
+
+
 def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: CandidateFailure,
                                expected_source_sha: str) -> dict:
-    role = observation.get("observed_process")
-    if type(role) is not str or role not in {"requested_launcher_handle", "fresh_reopen_launcher_handle"}:
-        role = "unavailable"
+    role = _closed_value(observation.get("observed_process"),
+                         {"requested_launcher_handle", "fresh_reopen_launcher_handle"}, "unavailable")
     code = observation.get("observed_exit_code")
     if type(code) is not int or not 0 <= code <= 2**32 - 1:
         code = None
-    marker = observation.get("startup_marker")
-    if type(marker) is not str or marker not in {"observed", "not_observed"}:
-        marker = "unavailable"
-    receipt_state = observation.get("receipt_state")
-    if type(receipt_state) is not str or receipt_state not in {
-            "not_checked", "missing", "invalid", "valid_allowlisted", "valid_unclassified",
-            "valid_reopen_failed"}:
-        receipt_state = "not_checked"
-    stage_marker_state = observation.get("stage_marker_state")
-    if type(stage_marker_state) is not str or stage_marker_state not in {"not_checked", "missing", "invalid", "valid"}:
-        stage_marker_state = "not_checked"
-    producer_stage = observation.get("producer_stage")
-    if type(producer_stage) is not str or producer_stage not in _CHILD_FAILURE_STAGES | _REOPEN_FAILURE_STAGES:
-        producer_stage = "unavailable"
-    failure_code = observation.get("allowlisted_failure")
-    if type(failure_code) is not str or failure_code not in _CLOSED_CHILD_FAILURES:
-        failure_code = "unavailable"
-    host_stage = stage.get("before_cleanup", stage.get("name"))
-    if type(host_stage) is not str or host_stage not in _PRIVATE_CORE_STAGES:
-        host_stage = "unavailable"
-    owned_cleanup = observation.get("owned_cleanup")
-    if type(owned_cleanup) is not str or owned_cleanup not in {"not_attempted", "complete", "failed"}:
-        owned_cleanup = "not_attempted"
-    private_cleanup = observation.get("private_cleanup")
-    if type(private_cleanup) is not str or private_cleanup not in {"not_attempted", "complete", "failed"}:
-        private_cleanup = "not_attempted"
+    marker = _closed_value(observation.get("startup_marker"), {"observed", "not_observed"}, "unavailable")
+    receipt_state = _closed_value(observation.get("receipt_state"), {
+        "not_checked", "missing", "invalid", "valid_allowlisted", "valid_unclassified", "valid_reopen_failed",
+    }, "not_checked")
+    stage_marker_state = _closed_value(observation.get("stage_marker_state"),
+                                       {"not_checked", "missing", "invalid", "valid"}, "not_checked")
+    producer_stage = _closed_value(observation.get("producer_stage"),
+                                   _CHILD_FAILURE_STAGES | _REOPEN_FAILURE_STAGES, "unavailable")
+    failure_code = _closed_value(observation.get("allowlisted_failure"), _CLOSED_CHILD_FAILURES, "unavailable")
+    host_stage = _closed_value(stage.get("before_cleanup", stage.get("name")), _PRIVATE_CORE_STAGES, "unavailable")
+    owned_cleanup = _closed_value(observation.get("owned_cleanup"), {"not_attempted", "complete", "failed"},
+                                  "not_attempted")
+    private_cleanup = _closed_value(observation.get("private_cleanup"), {"not_attempted", "complete", "failed"},
+                                    "not_attempted")
     reason = str(error)
     if reason == "private_root_cleanup_failed" or owned_cleanup == "failed":
         category = "cleanup_failure"
@@ -866,6 +857,23 @@ def _observe_core_startup(work: Path, process, observed: bool, *, scenario="core
         raise CandidateFailure("invalid_core_startup_receipt")
     process.mark_runtime_ready()
     return True
+
+
+def _wait_for_launcher_exit(work: Path, process, deadline: float, *, scenario: str,
+                            timeout_reason: str, failure_observation: dict | None) -> tuple[int, bool]:
+    startup_observed = False
+    while time.monotonic() < deadline:
+        process.observe()
+        startup_observed = _observe_core_startup(work, process, startup_observed, scenario=scenario)
+        if startup_observed and failure_observation is not None:
+            failure_observation["startup_marker"] = "observed"
+        code = process.poll()
+        if code is not None:
+            if failure_observation is not None:
+                failure_observation["observed_exit_code"] = code
+            return code, startup_observed
+        time.sleep(0.005)
+    raise CandidateFailure(timeout_reason)
 
 
 def _validate_fresh_reopen(payload, prior, expected_source, *, packaged=True, after_hash=None):
@@ -1010,20 +1018,10 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
         )
         if failure_observation is not None:
             failure_observation["observed_process"] = "fresh_reopen_launcher_handle"
-        observed = False
-        while time.monotonic() < deadline:
-            process.observe()
-            observed = _observe_core_startup(root, process, observed, scenario="reopen")
-            if observed and failure_observation is not None:
-                failure_observation["startup_marker"] = "observed"
-            code = process.poll()
-            if code is not None:
-                if failure_observation is not None:
-                    failure_observation["observed_exit_code"] = code
-                break
-            time.sleep(0.005)
-        else:
-            raise CandidateFailure("fresh_reopen_process_timeout")
+        code, observed = _wait_for_launcher_exit(
+            root, process, deadline, scenario="reopen", timeout_reason="fresh_reopen_process_timeout",
+            failure_observation=failure_observation,
+        )
         if code != 0:
             if failure_observation is not None:
                 failure_observation.update(_reopen_failure_observation(root, args.expected_source_sha))
@@ -1102,20 +1100,10 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         if failure_observation is not None:
             failure_observation["observed_process"] = "requested_launcher_handle"
         stage["name"] = "runtime_observation"
-        startup_observed = False
-        while time.monotonic() < deadline:
-            process.observe()
-            startup_observed = _observe_core_startup(work, process, startup_observed)
-            if startup_observed and failure_observation is not None:
-                failure_observation["startup_marker"] = "observed"
-            code = process.poll()
-            if code is not None:
-                if failure_observation is not None:
-                    failure_observation["observed_exit_code"] = code
-                break
-            time.sleep(0.005)
-        else:
-            raise CandidateFailure("owned_package_scenario_timeout")
+        code, startup_observed = _wait_for_launcher_exit(
+            work, process, deadline, scenario="core", timeout_reason="owned_package_scenario_timeout",
+            failure_observation=failure_observation,
+        )
         if code != 0:
             child_failure = _child_failure_observation(work, args.expected_source_sha)
             stage_observation = _child_stage_observation(work, args.expected_source_sha)
