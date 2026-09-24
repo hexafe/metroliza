@@ -1102,6 +1102,32 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
         )
 
 
+def _validated_core_payload(work: Path, args, failure_observation: dict | None):
+    result_path = work / SCENARIO_FILE
+    if not result_path.exists():
+        raise CandidateFailure("package_core_hook_or_receipt_missing")
+    payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha, native_mode=args.native_mode)
+    if failure_observation is not None:
+        failure_observation.update(receipt_state="valid_success", producer_stage="complete")
+    return payload
+
+
+def _verified_core_topology(diag, process, relocated: Path, failure_observation: dict | None):
+    try:
+        topology = process.topology(relocated, all_exited=True)
+        # The accepted dependency checks both launcher processes plus the
+        # fixed OCR worker; a failed probe remains a hard topology failure.
+        diag._validate_topology_record(diag._topology_record(topology), supervised=True,
+                                       require_runtime_evidence=True, allow_ocr_worker=True)
+    except diag.QualificationFailure:
+        if failure_observation is not None:
+            evidence = getattr(process, "runtime_evidence", None)
+            sources = getattr(getattr(evidence, "probe", None), "unavailable_sources", None)
+            failure_observation["probe_unavailable_sources"] = sorted(sources) if type(sources) is set else []
+        raise
+    return topology
+
+
 def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Path,
                       output: Path, deadline: float, before: str, stage: dict[str, str],
                       failure_observation: dict | None = None) -> dict:
@@ -1172,29 +1198,13 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         if not startup_observed:
             raise CandidateFailure("core_startup_receipt_missing")
         stage["name"] = "runtime_receipt"
-        result_path = work / SCENARIO_FILE
-        if not result_path.exists():
-            raise CandidateFailure("package_core_hook_or_receipt_missing")
-        payload = validate_runtime_receipt(_json(result_path), args.expected_source_sha, native_mode=args.native_mode)
-        if failure_observation is not None:
-            failure_observation.update(receipt_state="valid_success", producer_stage="complete")
+        payload = _validated_core_payload(work, args, failure_observation)
         _validate_ui_observation(payload.get("ui_observation"), expected_dpr=float(args.dpi_scale))
         _validate_closeout_observation(payload.get("closeout_observation"), packaged=True, expected_dpr=float(args.dpi_scale))
         if not diag._wait_for_job_exit(process, deadline):
             raise CandidateFailure("owned_processes_remain")
         stage["name"] = "owned_topology"
-        try:
-            topology = process.topology(relocated, all_exited=True)
-            # Use the accepted dependency's complete onefile-supervisor /
-            # onedir-child topology contract, including both launcher processes.
-            diag._validate_topology_record(diag._topology_record(topology), supervised=True,
-                                           require_runtime_evidence=True, allow_ocr_worker=True)
-        except diag.QualificationFailure:
-            if failure_observation is not None:
-                evidence = getattr(process, "runtime_evidence", None)
-                sources = getattr(getattr(evidence, "probe", None), "unavailable_sources", None)
-                failure_observation["probe_unavailable_sources"] = sorted(sources) if type(sources) is set else []
-            raise
+        topology = _verified_core_topology(diag, process, relocated, failure_observation)
         stage["name"] = "fresh_reopen"
         fresh_reopen = _run_fresh_reopen(
             private, diag=diag, relocated=relocated, environment=environment, work=work,
