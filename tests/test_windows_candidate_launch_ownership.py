@@ -110,6 +110,7 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     args = SimpleNamespace(source_checkout=tmp_path, expected_source_sha="1" * 40, oracle=tmp_path / "oracle.json", dpi_scale="1.0", native_mode="default")
     private = tmp_path / "private"
     private.mkdir()
+    stage = {"name": "package_relocation"}
 
     with pytest.raises(KeyboardInterrupt) as current:
         _interrupt_after_launch_before_store(
@@ -117,11 +118,12 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
             lambda: driver._run_private_core(
                 private, args=args, diag=diag, artifact=tmp_path,
                 fixtures=tmp_path, output=tmp_path / "output",
-                deadline=time.monotonic() + 1, before="before",
+                deadline=time.monotonic() + 1, before="before", stage=stage,
             ),
         )
 
     assert current.value is primary
+    assert stage["name"] == "owned_launch"
     assert closed == [True]
     assert len(evidence) == 1 and not evidence[0].root.exists()
 
