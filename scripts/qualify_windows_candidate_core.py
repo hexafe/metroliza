@@ -27,12 +27,13 @@ from pathlib import Path
 from scripts.verify_windows_candidate_closeout import ALL_FACETS as CLOSEOUT_CHECKS
 
 SCENARIO_FILE = "windows-candidate-result.json"
+STAGE_FILE = "core-stage.json"
 FAILED_DIAGNOSTIC_FILE = "core-failed-diagnostic.json"
 MAX_FAILED_DIAGNOSTIC_BYTES = 2048
 _CHILD_FAILURE_STAGES = frozenset({
     "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
-    "selected_import", "ocr", "reopen", "tabular", "xlsx", "inference",
-    "import_guards", "ui", "closeout",
+    "qapplication", "selected_import", "ocr", "reopen", "tabular", "xlsx",
+    "inference", "import_guards", "ui", "closeout", "complete",
 })
 _REOPEN_FAILURE_STAGES = frozenset({
     "input", "host_ready", "reopen", "database_preservation",
@@ -145,6 +146,24 @@ def _child_failure_observation(work: Path, expected_source_sha: str | None = Non
 
 def _closed_child_exit_reason(work: Path) -> str:
     return _child_failure_observation(work)["reason"]
+
+
+def _child_stage_observation(work: Path, expected_source_sha: str) -> dict[str, str]:
+    observation = {"stage_marker_state": "invalid", "producer_stage": "unavailable"}
+    try:
+        payload = _json(work / STAGE_FILE, 1024)
+    except FileNotFoundError:
+        observation["stage_marker_state"] = "missing"
+    except (CandidateFailure, OSError, ValueError, TypeError):
+        pass
+    else:
+        if (type(payload) is dict
+                and set(payload) == {"schema_version", "scenario", "stage", "source_sha"}
+                and type(payload.get("schema_version")) is int and payload["schema_version"] == 1
+                and payload["scenario"] == "core" and payload["source_sha"] == expected_source_sha
+                and type(payload["stage"]) is str and payload["stage"] in _CHILD_FAILURE_STAGES):
+            observation.update(stage_marker_state="valid", producer_stage=payload["stage"])
+    return observation
 
 
 def _reopen_failure_observation(root: Path, expected_source_sha: str) -> dict[str, str]:
@@ -767,6 +786,9 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
             "not_checked", "missing", "invalid", "valid_allowlisted", "valid_unclassified",
             "valid_reopen_failed"}:
         receipt_state = "not_checked"
+    stage_marker_state = observation.get("stage_marker_state")
+    if type(stage_marker_state) is not str or stage_marker_state not in {"not_checked", "missing", "invalid", "valid"}:
+        stage_marker_state = "not_checked"
     producer_stage = observation.get("producer_stage")
     if type(producer_stage) is not str or producer_stage not in _CHILD_FAILURE_STAGES | _REOPEN_FAILURE_STAGES:
         producer_stage = "unavailable"
@@ -799,7 +821,8 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         and re.fullmatch(r"[0-9a-f]{40}", expected_source_sha) else "unavailable",
         "observed_process": role, "observed_exit_code": code,
         "host_stage": host_stage, "startup_marker": marker,
-        "producer_stage": producer_stage, "receipt_state": receipt_state,
+        "producer_stage": producer_stage, "stage_marker_state": stage_marker_state,
+        "receipt_state": receipt_state,
         "allowlisted_failure": failure_code, "failure_category": category,
         "owned_cleanup": owned_cleanup, "private_cleanup": private_cleanup,
     }
@@ -977,7 +1000,8 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
         failure_observation.update({
             "observed_process": "unavailable", "observed_exit_code": None,
             "startup_marker": "not_observed", "receipt_state": "not_checked",
-            "producer_stage": "unavailable", "allowlisted_failure": "unavailable",
+            "stage_marker_state": "not_checked", "producer_stage": "unavailable",
+            "allowlisted_failure": "unavailable",
         })
     try:
         process = diag._WindowsApi().launch(
@@ -1094,12 +1118,23 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             raise CandidateFailure("owned_package_scenario_timeout")
         if code != 0:
             child_failure = _child_failure_observation(work, args.expected_source_sha)
+            stage_observation = _child_stage_observation(work, args.expected_source_sha)
+            if child_failure["receipt_state"] in {"missing", "invalid"}:
+                child_failure["producer_stage"] = stage_observation["producer_stage"]
+            elif (stage_observation["stage_marker_state"] == "valid"
+                  and child_failure["producer_stage"] != stage_observation["producer_stage"]):
+                child_failure = {
+                    "receipt_state": "invalid", "producer_stage": stage_observation["producer_stage"],
+                    "allowlisted_failure": "unavailable",
+                    "reason": "package_scenario_nonzero_exit_receipt_invalid",
+                }
             if failure_observation is not None:
                 failure_observation.update({
                     key: child_failure[key] for key in (
                         "receipt_state", "producer_stage", "allowlisted_failure",
                     )
                 })
+                failure_observation["stage_marker_state"] = stage_observation["stage_marker_state"]
             raise CandidateFailure(child_failure["reason"])
         if not startup_observed:
             raise CandidateFailure("core_startup_receipt_missing")
@@ -1190,7 +1225,8 @@ def qualify(args) -> dict:
     failure_observation = {
         "observed_process": "unavailable", "observed_exit_code": None,
         "startup_marker": "not_observed", "receipt_state": "not_checked",
-        "producer_stage": "unavailable", "allowlisted_failure": "unavailable",
+        "stage_marker_state": "not_checked", "producer_stage": "unavailable",
+        "allowlisted_failure": "unavailable",
         "owned_cleanup": "not_attempted", "private_cleanup": "not_attempted",
     }
 

@@ -27,8 +27,8 @@ OCR_FIXTURE_ENV = "METROLIZA_WINDOWS_CANDIDATE_OCR_FIXTURE"
 GATES = ("METROLIZA_STARTUP_SMOKE", "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION")
 FAILURE_STAGES = frozenset({
     "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
-    "selected_import", "ocr", "reopen", "tabular", "xlsx", "inference",
-    "import_guards", "ui", "closeout",
+    "qapplication", "selected_import", "ocr", "reopen", "tabular", "xlsx",
+    "inference", "import_guards", "ui", "closeout", "complete",
 })
 DEADLINES_S = {"review": 30.0, "import": 45.0}
 FIXTURES = {
@@ -111,6 +111,16 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, stream, sort_keys=True, indent=2)
         stream.write("\n")
     stage.replace(path)
+
+
+def _record_core_stage(root: Path, receipt: dict[str, Any], stage: str) -> None:
+    if stage not in FAILURE_STAGES:
+        raise ValueError("invalid_core_stage")
+    receipt["stage"] = stage
+    _atomic_json(root / "core-stage.json", {
+        "schema_version": 1, "scenario": SCENARIO,
+        "stage": stage, "source_sha": receipt["source_sha"],
+    })
 
 
 def _runtime_provenance() -> dict[str, Any]:
@@ -517,15 +527,16 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     from metroliza.app.bootstrap import get_or_create_qapplication
     # Each stage closes its own windows. Keep their shared application alive
     # until all subsequent widget and worker stages have finished.
+    _record_core_stage(root, receipt, "qapplication")
     application = get_or_create_qapplication()
-    receipt["stage"] = "selected_import"
+    _record_core_stage(root, receipt, "selected_import")
     _run_core(root, fixtures, receipt, application)
     child = root / receipt["relative_artifact_dir"]
-    receipt["stage"] = "ocr"
+    _record_core_stage(root, receipt, "ocr")
     _run_ocr_slice(child, ocr_fixture, receipt)
     from metroliza.app.windows_candidate_reopen import run_reopen_checks
     completed_import = root / receipt["relative_artifact_dir"]
-    receipt["stage"] = "reopen"
+    _record_core_stage(root, receipt, "reopen")
     reopened = run_reopen_checks(
         completed_import / "reports.sqlite", completed_import / "reports", receipt["source_hashes"]
     )
@@ -541,13 +552,13 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     receipt["reopen_database"] = reopened["database"]
     receipt["facets"].update(reopened["facets"])
     tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
-    receipt["stage"] = "tabular"
+    _record_core_stage(root, receipt, "tabular")
     capture_tabular_w05(fixtures, tabular_file)
     receipt["artifacts"]["tabular"] = {"path": tabular_file.name, "sha256": _sha256(tabular_file)}
     receipt["facets"]["finite_precision_filters"] = "passed"
     from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES as xlsx_failure_codes
     from metroliza.app.windows_candidate_xlsx import run_export_checks
-    receipt["stage"] = "xlsx"
+    _record_core_stage(root, receipt, "xlsx")
     xlsx_result = run_export_checks(child)
     expected_xlsx_facets = {
         "literal_chart_titles_series_caches_references", "value_limit_order",
@@ -569,17 +580,17 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     receipt["artifacts"]["literal_workbook"] = {"path": literal_workbook.name, "sha256": literal_hash}
     receipt["facets"].update(xlsx_facets)
     from metroliza.app.windows_candidate_inference import run_inference_checks
-    receipt["stage"] = "inference"
+    _record_core_stage(root, receipt, "inference")
     inference = run_inference_checks(child, fixtures)
     if inference.get("status") != "passed" or inference.get("facets") != {"successful_group_inference": "passed"}:
         raise ScenarioFailure("group_inference_checks_failed")
     receipt["artifacts"].update(inference["artifacts"])
     receipt["facets"].update(inference["facets"])
-    receipt["stage"] = "import_guards"
+    _record_core_stage(root, receipt, "import_guards")
     _run_import_guards_slice(child, fixtures, receipt)
-    receipt["stage"] = "ui"
+    _record_core_stage(root, receipt, "ui")
     _run_ui_slice(child, receipt)
-    receipt["stage"] = "closeout"
+    _record_core_stage(root, receipt, "closeout")
     _run_closeout_slices(child, fixtures, receipt)
 
 
@@ -600,21 +611,21 @@ def run_qualification() -> int:
     root: Path | None = None
     try:
         root = _root()
-        receipt["stage"] = "fixture_validation"
+        _record_core_stage(root, receipt, "fixture_validation")
         fixtures = _fixture_dir()
         ocr_fixture = _ocr_fixture()
         from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
-        receipt["stage"] = "startup_marker"
+        _record_core_stage(root, receipt, "startup_marker")
         _atomic_json(root / "core-startup.json", {
             "schema_version": 1, "scenario": "core", "stage": "startup_ready",
         })
-        receipt["stage"] = "runtime_ack"
+        _record_core_stage(root, receipt, "runtime_ack")
         wait_for_host_ready()
         from metroliza.app.windows_candidate_native_check import run_with_native_mode
         receipt["native_observation"] = run_with_native_mode(
             lambda: _execute_core_checks(root, fixtures, ocr_fixture, receipt)
         )
-        receipt["stage"] = "complete"
+        _record_core_stage(root, receipt, "complete")
         receipt["status"] = "passed"
         receipt["checks"].update({"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"})
         _atomic_json(root / "windows-candidate-result.json", receipt)
