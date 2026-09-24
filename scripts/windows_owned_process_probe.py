@@ -60,8 +60,12 @@ class RuntimeEvidence:
     def ready(self):
         if self.probe.phase == "startup":
             self._require_same_root()
-            (self.root / "ready").touch(exist_ok=False)
             self.probe.phase = "running"
+            # The child can resume as soon as this marker exists. Publish the
+            # probe phase first so its first post-ack event cannot be
+            # attributed to startup by a cross-process scheduling race. A
+            # failed marker write remains fatal; no later phase is accepted.
+            (self.root / "ready").touch(exist_ok=False)
 
     def proof(self):
         try:

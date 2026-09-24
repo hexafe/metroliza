@@ -417,6 +417,23 @@ def test_runtime_cleanup_removes_only_its_bounded_regular_journal(tmp_path):
     assert not evidence.root.exists()
 
 
+def test_runtime_ready_publishes_running_phase_before_visible_ack(tmp_path, monkeypatch):
+    evidence = _local_evidence(tmp_path / "owned")
+    original_touch = Path.touch
+    observed = []
+
+    def touch(path, *args, **kwargs):
+        if path == evidence.root / "ready":
+            observed.append(evidence.probe.phase)
+            assert evidence.probe.phase == "running"
+        return original_touch(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "touch", touch)
+    evidence.ready()
+    assert observed == ["running"]
+    assert (evidence.root / "ready").is_file()
+
+
 @pytest.mark.parametrize("interrupt_type", [KeyboardInterrupt, SystemExit])
 @pytest.mark.parametrize("point", ["partial_unlink", "after_rmdir"])
 def test_interrupted_journal_cleanup_retains_owner_until_actual_removal(
