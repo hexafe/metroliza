@@ -223,6 +223,20 @@ from different Qt major/minor lines.
 
 PyInstaller onefile remains the closest turnkey single-file distribution for
 non-technical users because it bundles the Python runtime into one artifact.
+The older `packaging/metroliza_onefile.spec` starts the application directly and
+does not provide the supervised incident history of the Windows onedir. For a
+single user-facing EXE **with** that history, run
+`build_windows_portable_exe.ps1`: it builds the current supervised onedir and
+then embeds the complete onedir inside a versioned, windowed outer EXE. On each
+launch PyInstaller extracts the payload to its temporary directory; the outer
+process verifies the child manifest and launcher provenance, starts the existing
+supervisor, and stays alive until it exits. This preserves the private incident
+store under the user's application state. It does not reuse an installed cache,
+so startup and temporary disk use can be higher than onedir. The user receives
+only `metroliza_<release>_<build>.exe`; all inner executables are internal.
+Run `scripts/qualify_windows_portable_onefile.py` against the exact Windows EXE
+before claiming packaged behavior. Release still needs its own notice,
+clean-machine, independent-review and approval gates.
 For startup-sensitive Windows testing, prefer the onedir artifact: it avoids
 bootloader extraction of the full scientific/OCR payload on every cold launch
 and gives Windows Defender a more stable file set to cache. Treat both outputs

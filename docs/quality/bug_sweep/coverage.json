@@ -1045,6 +1045,7 @@
       "include": [
         "build_windows_exe.bat",
         "build_windows_exe.ps1",
+        "build_windows_portable_exe.ps1",
         "setup_windows_runtime.bat",
         "setup_windows_runtime.ps1"
       ],
@@ -2433,6 +2434,7 @@
         "scripts/windows_ocr_runtime_diagnostics.py",
         "scripts/build_diagnostic_manifest.py",
         "scripts/qualify_windows_diagnostics.py",
+        "scripts/qualify_windows_portable_onefile.py",
         "scripts/windows_native_identity_control.py",
         "scripts/qualify_windows_candidate_core.py",
         "scripts/finalize_windows_candidate_receipts.py",

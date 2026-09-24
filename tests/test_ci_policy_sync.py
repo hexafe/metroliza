@@ -376,7 +376,7 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
     assert 'concurrency:' in workflow
     assert (
         "cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && "
-        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1')) }}"
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1')) }}"
     ) in workflow
     assert workflow.count('uses: actions/checkout@') == workflow.count(
         'persist-credentials: false'
@@ -386,6 +386,26 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
     maturin_builds = [line for line in workflow.splitlines() if 'maturin build' in line]
     assert maturin_builds
     assert all('--locked' in line for line in maturin_builds)
+
+
+def test_supervised_portable_onefile_requires_owner_opt_in_and_native_smoke() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-portable-onefile']
+    gate = job['if']
+    assert "github.event_name == 'workflow_dispatch'" in gate
+    assert "inputs.run_windows_portable_onefile == '1'" in gate
+    assert 'github.actor == github.repository_owner' in gate
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_portable_onefile'][
+        'default'
+    ] == '0'
+    assert job['runs-on'] == 'windows-latest'
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    steps = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'build_windows_portable_exe.ps1' in steps
+    assert 'qualify_windows_portable_onefile.py' in steps
+    assert job['steps'][-1]['if'] == 'success()'
 
 
 def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
@@ -483,10 +503,12 @@ def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> No
         "inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}"
         "${{ github.event_name == 'workflow_dispatch' && "
         "inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}"
     )  # Opted-in experiments get separate groups; ordinary CI keeps its key.
     assert workflow['concurrency']['cancel-in-progress'] == (
         "${{ !(github.event_name == 'workflow_dispatch' && "
-        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1')) }}"
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1')) }}"
     )
     for step in job['steps']:
         assert 'actions/upload-artifact@' not in step.get('uses', '')
