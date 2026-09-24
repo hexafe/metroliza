@@ -1,15 +1,13 @@
 [CmdletBinding()]
-param([switch]$SkipInnerBuild)
+param()
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $root
 try {
-    if (-not $SkipInnerBuild) {
-        & .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
-        if ($LASTEXITCODE -ne 0) { throw 'Supervised onedir build failed' }
-    }
+    & .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
+    if ($LASTEXITCODE -ne 0) { throw 'Supervised onedir build failed' }
 
     $python = Join-Path $root '.venv-build/Scripts/python.exe'
     $provenancePath = Join-Path $root 'build/provenance/build_provenance.json'
