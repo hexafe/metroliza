@@ -837,12 +837,22 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     assert begin_entered.wait(1)
     statuses = []
     close_observation = []
+    close_wait_entered = threading.Event()
+    original_wait = publisher.done.wait
+
+    def observed_close_wait(timeout):
+        # close() has published its final observation under the lock before
+        # reaching this wait. The begin worker is still held at this point.
+        close_wait_entered.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(publisher.done, "wait", observed_close_wait)
 
     def close_and_observe():
         started = time.monotonic()
         statuses.append(publisher.close(observed))
         close_observation.append({
-            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "elapsed_ms": (time.monotonic() - started) * 1000,
             "worker_alive": publisher.worker.is_alive(),
             "done": publisher.done.is_set(),
             "final_saved": publisher.final_saved.is_set(),
@@ -851,6 +861,7 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     closer = threading.Thread(target=close_and_observe)
     closer.start()
     try:
+        assert close_wait_entered.wait(1)
         release_begin.set()
         closer.join(2)
     finally:
@@ -860,6 +871,7 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     assert statuses == [StoreStatus.SAVED], {
         "sequence": sequence, "at_close": close_observation,
     }
+    assert close_observation[0]["elapsed_ms"] < 750, close_observation
     assert sequence == ["begin_entered", "begin_finished", "publish"]
     assert store.list_unclean_sessions().sessions == ()
 
