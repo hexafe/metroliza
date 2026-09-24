@@ -240,7 +240,7 @@ def _require_equal(actual: Any, expected: Any, check: str) -> None:
         raise XlsxScenarioFailure(check)
 
 
-def _persist_measurement(repository: Any, source_dir: Path, *, report_id: int, sample: int, header: str, measurement: float) -> None:
+def _persist_measurement(repository: Any, source_dir: Path, *, report_id: int, sample: int, headers: tuple[str, ...], measurement: float) -> None:
     source_path = source_dir / f"report-{report_id}.pdf"
     source_path.write_bytes(f"synthetic-xlsx-report-{report_id}".encode("ascii"))
     repository.persist_parsed_report(
@@ -265,7 +265,7 @@ def _persist_measurement(repository: Any, source_dir: Path, *, report_id: int, s
         },
         measurements=[{
             "page_number": 1,
-            "row_order": 1,
+            "row_order": row_order,
             "header": header,
             "section_name": header,
             "feature_label": header,
@@ -282,14 +282,14 @@ def _persist_measurement(repository: Any, source_dir: Path, *, report_id: int, s
             "outtol": 0,
             "is_nok": False,
             "status_code": "ok",
-        }],
+        } for row_order, header in enumerate(headers, start=1)],
         candidates=[],
         warnings=[],
         metadata_version="report_metadata_v1",
         metadata_profile_id="cmm_pdf_header_box",
         metadata_profile_version="1",
         page_count=1,
-        measurement_count=1,
+        measurement_count=len(headers),
         has_nok=False,
         nok_count=0,
         metadata_confidence=0.9,
@@ -297,7 +297,7 @@ def _persist_measurement(repository: Any, source_dir: Path, *, report_id: int, s
     )
 
 
-def _make_thread(database: Path, workbook: Path, headers: tuple[str, ...]) -> Any:
+def _make_thread(database: Path, workbook: Path, headers: tuple[str, ...], *, group_headers=False) -> Any:
     """Seed a new synthetic database and return the actual exporter thread."""
     from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
     from metroliza.exporting.export_data_thread import ExportDataThread
@@ -309,12 +309,15 @@ def _make_thread(database: Path, workbook: Path, headers: tuple[str, ...]) -> An
     sources = database.parent / f"{database.stem}-sources"
     sources.mkdir()
     report_id = 0
-    for header in headers:
+    # The cancellation scenario still exports every header, but two synthetic
+    # reports can carry its two samples without 192 independent SQLite commits.
+    header_groups = (headers,) if group_headers else ((header,) for header in headers)
+    for group in header_groups:
         for sample, value in enumerate(VALUES, start=1):
             report_id += 1
             _persist_measurement(
                 repository, sources, report_id=report_id, sample=sample,
-                header=header, measurement=value,
+                headers=group, measurement=value,
             )
     request = ExportRequest(
         paths=AppPaths(db_file=str(database), excel_file=str(workbook)),
@@ -511,6 +514,7 @@ def _verify_active_cancellation(scratch: Path, workbook: Path, application: Any)
         scratch / "active-cancel.sqlite",
         workbook,
         tuple(f"Active cancellation {index:03d}" for index in range(96)),
+        group_headers=True,
     )
     progress_values: list[int] = []
     cancellation_observation: dict[str, int | bool] = {}

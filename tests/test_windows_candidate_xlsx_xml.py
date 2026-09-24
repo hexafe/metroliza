@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import inspect
 import os
+import sqlite3
 import zipfile
 from pathlib import Path
 
@@ -88,6 +89,21 @@ def test_missing_real_measurement_barrier_remains_a_safe_specific_receipt(module
     assert module._safe_failure_code(failure) == "active_cancel_measurement_barrier_missing"
 
 
+@pytest.mark.parametrize("module", (application_xlsx, standalone_xlsx))
+def test_grouped_cancellation_seed_keeps_all_real_header_units(tmp_path, module, candidate_application) -> None:
+    headers = tuple(f"Active cancellation {index:03d}" for index in range(96))
+    database = tmp_path / "active.sqlite"
+    module._make_thread(database, tmp_path / "output.xlsx", headers, group_headers=True)
+
+    with sqlite3.connect(database) as connection:
+        reports = connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()[0]
+        counts = connection.execute(
+            "SELECT header, COUNT(*) FROM report_measurements GROUP BY header"
+        ).fetchall()
+    assert reports == 2
+    assert counts == [(header, 2) for header in headers]
+
+
 @pytest.fixture(scope="session")
 def candidate_application():
     application = QApplication.instance() or QApplication([])
@@ -138,7 +154,7 @@ def test_active_cancel_failure_joins_thread_before_unwinding(tmp_path, monkeypat
     worker = SlowStop()
     workbook = tmp_path / "completed.xlsx"
     workbook.write_bytes(b"preserved complete workbook")
-    monkeypatch.setattr(module, "_make_thread", lambda *_: worker)
+    monkeypatch.setattr(module, "_make_thread", lambda *_, **__: worker)
     if failure == "deadline":
         monkeypatch.setattr(module, "DEADLINE_S", 0)
         application = candidate_application
