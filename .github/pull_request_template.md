@@ -5,6 +5,16 @@
 
 A normal PR should have one primary Issue. Use `Refs #...` instead of `Closes #...` when this is only one slice of a larger Issue.
 
+## Branch lifecycle
+
+- Execution owner:
+- Actual base / dependency PRs (or `none`):
+- Live downstream consumers (or `none`):
+- Retirement condition / post-merge owner:
+
+Use [the branch lifecycle](../docs/release_checks/branching_strategy.md#8-branch-lifecycle-and-housekeeping).
+A dependency must name its PR/branch; a historical source link does not automatically keep a branch alive.
+
 ## Change type
 
 - [ ] Bug fix
@@ -119,3 +129,10 @@ export UI/contracts, or the Google transport/credential boundary.
 - [ ] No credentials, OAuth tokens, proprietary reports, production extracts, private keys, or unredacted sensitive diagnostics are included.
 - [ ] Follow-up work has separate Issues rather than hidden TODOs.
 - [ ] CI/manual evidence refers to the exact PR head.
+
+## Post-merge closeout — external orchestrator
+
+- [ ] Source branch is retired, or a KEEP_ACTIVE / KEEP_EVIDENCE / DELETE_CANDIDATE / BLOCKED_TOOLING decision records owner and next trigger.
+- [ ] Any deletion records exact SHA, integrated disposition, live-consumer check, verified recovery and guarded result.
+
+Leave these unchecked before merge. No branch deletion, protected-ref change or release is authorized by this template.
