@@ -2492,6 +2492,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                     rows.append(
                         {
                             'REFERENCE': ref,
+                            'EXPORT_PARTITION_KEY': f'reference:{ref}',
+                            'EXPORT_PARTITION_LABEL': ref,
                             'HEADER - AX': header,
                             'NOM': 10.0,
                             '+TOL': 1.0,
@@ -2561,10 +2563,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._active_backend = fake_backend
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: __import__('pandas').DataFrame()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
@@ -2628,10 +2630,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
@@ -2691,10 +2693,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
@@ -2775,10 +2777,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
