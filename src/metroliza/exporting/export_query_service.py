@@ -106,6 +106,27 @@ def _build_scoped_export_query(filter_query):
     return f"SELECT * FROM ({filter_query}) AS export_scope"
 
 
+def build_analytical_partition_query(filter_query):
+    """Add an export-only identity for rows without business REFERENCE metadata.
+
+    A known reference keeps its normal shared partition. Missing or whitespace-only
+    references are partitioned by the persisted report identity instead; the
+    business REFERENCE column and database remain untouched. The typed key keeps
+    a real reference from colliding with a report fallback label.
+    """
+    missing_reference = "NULLIF(TRIM(REFERENCE), '') IS NULL"
+    return f'''
+        SELECT export_scope.*,
+            CASE WHEN {missing_reference}
+                THEN 'report:' || CAST(REPORT_ID AS TEXT)
+                ELSE 'reference:' || REFERENCE END AS EXPORT_PARTITION_KEY,
+            CASE WHEN {missing_reference}
+                THEN 'Report ' || CAST(REPORT_ID AS TEXT) || ' (no reference)'
+                ELSE REFERENCE END AS EXPORT_PARTITION_LABEL
+        FROM ({filter_query}) AS export_scope
+    '''
+
+
 def _validated_partition_header_expression(header_expr: str) -> str:
     normalized = " ".join(str(header_expr).split())
     if normalized not in _PARTITION_HEADER_EXPRESSIONS:

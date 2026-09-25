@@ -554,7 +554,9 @@ class DataGrouping(QDialog):
         reference_text = "none"
         selected_reference = self._selected_reference_name()
         if selected_reference:
-            reference_text = selected_reference
+            reference_text = getattr(self, '_reference_key_to_label', {}).get(
+                selected_reference, selected_reference
+            )
         if reference_label is not None and hasattr(reference_label, "setText"):
             reference_label.setText(f"Reference: {reference_text}")
 
@@ -1214,10 +1216,29 @@ class DataGrouping(QDialog):
         if rows_df is None or rows_df.empty:
             return rows_df
         if selected_reference:
-            rows_df = rows_df[rows_df['REFERENCE'].astype(str) == str(selected_reference)]
+            rows_df = self._with_reference_selection(rows_df)
+            rows_df = rows_df[rows_df['_REFERENCE_SELECTION_KEY'] == str(selected_reference)]
         if selected_group:
             rows_df = rows_df[rows_df['GROUP'].astype(str) == str(selected_group)]
         return rows_df
+
+    @staticmethod
+    def _with_reference_selection(rows_df):
+        """Give missing references a report-scoped UI key without changing REFERENCE."""
+        selected = rows_df.copy()
+        reference = selected['REFERENCE'].astype('string')
+        missing = reference.isna() | reference.str.strip().eq('').fillna(False)
+        report_identity = 'REPORT_ID' if 'REPORT_ID' in selected.columns else 'GROUP_KEY'
+        report_ids = selected[report_identity].astype('string')
+        selected['_REFERENCE_SELECTION_KEY'] = reference.fillna('')
+        selected['_REFERENCE_SELECTION_LABEL'] = reference.fillna('')
+        selected.loc[missing, '_REFERENCE_SELECTION_KEY'] = (
+            '\x1fmissing-report:' + report_ids[missing]
+        )
+        selected.loc[missing, '_REFERENCE_SELECTION_LABEL'] = (
+            'Report ' + report_ids[missing] + ' (no reference)'
+        )
+        return selected
 
     def _add_list_limit_marker(self, list_widget, total_rows):
         remaining = int(total_rows) - _GROUPING_LIST_PREVIEW_LIMIT
@@ -1347,7 +1368,7 @@ class DataGrouping(QDialog):
         try:
             self._apply_list_theme_styles()
             self._ensure_group_color_integrity()
-            row_index = self._grouping_row_index()
+            row_index = self._with_reference_selection(self._grouping_row_index())
             group_row_index = self._current_full_grouping_row_index()
             unique_groups = group_row_index["GROUP"].unique()
             self._group_display_to_name = {}
@@ -1356,14 +1377,24 @@ class DataGrouping(QDialog):
             # Populate reference_list
             self.reference_list.clear()
             reference_counts = (
-                row_index.groupby("REFERENCE", sort=False, dropna=False)["GROUP_KEY"]
+                row_index.groupby(
+                    ['_REFERENCE_SELECTION_KEY', '_REFERENCE_SELECTION_LABEL'],
+                    sort=False,
+                    dropna=False,
+                )["GROUP_KEY"]
                 .nunique()
                 .reset_index(name="sample_size")
             )
-            unique_references = list(map(str, reference_counts["REFERENCE"].tolist()))
-            for record in reference_counts.head(_GROUPING_LIST_PREVIEW_LIMIT).itertuples(index=False):
-                reference_name = str(record.REFERENCE)
-                display_label = self._reference_display_label(reference_name, int(record.sample_size))
+            unique_references = reference_counts['_REFERENCE_SELECTION_KEY'].tolist()
+            self._reference_key_to_label = dict(zip(
+                reference_counts['_REFERENCE_SELECTION_KEY'],
+                reference_counts['_REFERENCE_SELECTION_LABEL'],
+            ))
+            for record in reference_counts.head(_GROUPING_LIST_PREVIEW_LIMIT).to_dict('records'):
+                reference_name = record['_REFERENCE_SELECTION_KEY']
+                display_label = self._reference_display_label(
+                    record['_REFERENCE_SELECTION_LABEL'], int(record['sample_size'])
+                )
                 item = QListWidgetItem(display_label)
                 item.setData(Qt.ItemDataRole.UserRole, reference_name)
                 self._reference_display_to_name[display_label] = reference_name
@@ -1790,7 +1821,9 @@ class DataGrouping(QDialog):
         filter_state = getattr(parent, "filter_state", None) if parent is not None else None
         headers = tuple(getattr(filter_state, "header_values", ()) or ()) if filter_state is not None else ()
         references = tuple(getattr(filter_state, "reference_values", ()) or ()) if filter_state is not None else ()
-        selected_reference = str(reference_name or "").strip()
+        selected_reference = str(
+            getattr(self, '_reference_key_to_label', {}).get(reference_name, reference_name) or ''
+        ).strip()
         if not selected_reference and len(references) == 1:
             selected_reference = str(references[0]).strip()
         if selected_reference and len(headers) == 1:
