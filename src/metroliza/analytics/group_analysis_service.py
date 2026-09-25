@@ -145,8 +145,6 @@ def _filter_table(table, predicate) -> RowTable:
 def _filter_known_reference_rows(table) -> RowTable:
     """Keep reference-specific comparisons clear of unknown report identity."""
     row_table = _as_row_table(table)
-    if 'REFERENCE' not in row_table.columns:
-        return row_table
     return _filter_table(row_table, lambda row: bool(_normalize_text(row.get('REFERENCE'))))
 
 
@@ -1564,7 +1562,7 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
     effective_scope = resolve_group_analysis_scope(requested_scope, reference_count)
     forced_scope = str(requested_scope or 'auto').strip().lower()
 
-    if original_table.rows and not grouped_table.rows and 'REFERENCE' in original_table.columns:
+    if original_table.rows and not grouped_table.rows:
         return {
             'runnable': False,
             'effective_scope': effective_scope,

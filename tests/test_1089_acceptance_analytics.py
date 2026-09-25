@@ -217,6 +217,7 @@ def test_grouping_can_select_and_apply_two_named_groups_to_export(tmp_path, monk
         assert thread.completion_metadata['html_dashboard_section_count'] == 3
         assert captured['group_analysis']['diagnostics']['group_count'] >= 2
         assert captured['group_analysis']['metric_rows'], captured['group_analysis']
+        assert thread.completion_metadata['group_analysis_completed'] is True
         assert thread.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS
         assert 'without a reference' in thread.completion_metadata['group_analysis_warnings'][0]
         dashboard = (tmp_path / 'grouped_dashboard.html').read_text(encoding='utf-8')
@@ -256,6 +257,17 @@ def test_group_analysis_with_only_missing_references_has_explicit_skip_reason():
         {'REFERENCE': None, 'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Alpha', 'MEAS': 10.0},
         {'REFERENCE': '', 'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Beta', 'MEAS': 10.1},
     ])
+    assert payload['status'] == 'skipped'
+    assert payload['metric_rows'] == []
+    assert payload['skip_reason']['code'] == 'missing_reference_metadata'
+
+
+@pytest.mark.parametrize('scope', ['auto', 'single_reference'])
+def test_group_analysis_with_no_reference_column_has_explicit_skip_reason(scope):
+    payload = build_group_analysis_payload([
+        {'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Alpha', 'MEAS': 10.0},
+        {'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Beta', 'MEAS': 10.1},
+    ], requested_scope=scope)
     assert payload['status'] == 'skipped'
     assert payload['metric_rows'] == []
     assert payload['skip_reason']['code'] == 'missing_reference_metadata'

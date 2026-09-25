@@ -3591,6 +3591,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             ),
             "summary_sheet_requested": bool(validated_request.options.generate_summary_sheet),
             "group_analysis_requested": validated_request.options.group_analysis_level != 'off',
+            "group_analysis_completed": False,
             "group_analysis_warnings": [],
             "html_dashboard_plotly_spec_count": 0,
             "html_dashboard_embedded_plotly_spec_count": 0,
@@ -4693,6 +4694,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return True
         return False
 
+    def _run_group_analysis_outputs(self, writer):
+        self._write_group_analysis_outputs(writer)
+        if self.group_analysis_level != 'off' and not self.export_canceled:
+            self.completion_metadata['group_analysis_completed'] = True
+
     def run_export_pipeline(self, excel_writer):
         """Handle `run_export_pipeline` for `ExportDataThread`.
 
@@ -4725,7 +4731,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 ),
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing grouped comparisons", "ETA --")),
-                    self._write_group_analysis_outputs(excel_writer),
+                    self._run_group_analysis_outputs(excel_writer),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -4745,7 +4751,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 ),
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing dashboard statistics", "ETA --")),
-                    self._write_group_analysis_outputs(dashboard_writer),
+                    self._run_group_analysis_outputs(dashboard_writer),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -5783,7 +5789,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
         finally:
             self._record_stage_timing('group_analysis_payload', time.perf_counter() - payload_start)
-        missing_reference = any(
+        missing_reference = 'REFERENCE' not in grouped_export_df.columns or any(
             value is None or (isinstance(value, str) and not value.strip())
             for value in grouped_export_df['REFERENCE']
         )

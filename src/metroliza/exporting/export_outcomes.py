@@ -297,6 +297,7 @@ def _cancelled_export_result(
     workbook_path: str,
     workbook_requested: bool,
     summary_requested: bool,
+    group_analysis_requested: bool,
     dashboard_requested: bool,
     google_requested: bool,
     terminal_failure: str,
@@ -340,6 +341,24 @@ def _cancelled_export_result(
                 artifact_label="Summary charts",
                 stage_id="summary_charts",
                 stage_label="Summary chart generation",
+                required=False,
+            )
+    if group_analysis_requested:
+        if metadata.get('group_analysis_completed') is True:
+            _append_group_analysis_outcome(
+                artifacts,
+                stages,
+                _text_values(metadata.get('group_analysis_warnings', ())),
+                completed=True,
+            )
+        else:
+            _append_cancelled_outcome(
+                artifacts,
+                stages,
+                artifact_id='group_analysis',
+                artifact_label='Group Analysis',
+                stage_id='group_analysis',
+                stage_label='Grouped comparison',
                 required=False,
             )
     if dashboard_requested:
@@ -501,13 +520,19 @@ def _append_summary_outcome(artifacts, stages, warnings: tuple[str, ...]) -> Non
     )
 
 
-def _append_group_analysis_outcome(artifacts, stages, warnings: tuple[str, ...]) -> None:
-    status = ExportArtifactStatus.PARTIAL if warnings else ExportArtifactStatus.COMPLETE
-    message = (
-        'Some grouped comparisons need two groups within one reference or '
-        'completed reference metadata; review Group Analysis warnings.'
-        if warnings else ''
-    )
+def _append_group_analysis_outcome(
+    artifacts, stages, warnings: tuple[str, ...], *, completed: bool, terminal_failure: bool = False,
+) -> None:
+    if completed:
+        status = ExportArtifactStatus.PARTIAL if warnings else ExportArtifactStatus.COMPLETE
+        message = (
+            'Some grouped comparisons need two groups within one reference or '
+            'completed reference metadata; review Group Analysis warnings.'
+            if warnings else ''
+        )
+    else:
+        status = ExportArtifactStatus.FAILED if terminal_failure else ExportArtifactStatus.OMITTED
+        message = 'Group Analysis did not complete.'
     diagnostic_ids = tuple(f'group_analysis-{index}' for index in range(1, len(warnings) + 1))
     artifacts.append(ExportArtifactResult(
         artifact_id='group_analysis',
@@ -704,6 +729,7 @@ def derive_export_run_result(
             workbook_path=_display_path(metadata.get("local_xlsx_path") or excel_file),
             workbook_requested=workbook_requested,
             summary_requested=summary_requested,
+            group_analysis_requested=group_analysis_requested,
             dashboard_requested=dashboard_requested,
             google_requested=google_requested,
             terminal_failure=terminal_failure,
@@ -731,6 +757,8 @@ def derive_export_run_result(
             artifacts,
             stages,
             _text_values(metadata.get('group_analysis_warnings', ())),
+            completed=metadata.get('group_analysis_completed') is True,
+            terminal_failure=bool(terminal_failure),
         )
     if dashboard_requested:
         _append_dashboard_outcome(
