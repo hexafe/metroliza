@@ -67,7 +67,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1918b31037e4ffb405a9925339abd9300719c7f2c3c840260910b208c6c73add",
+      "fingerprint": "63e7da8a6a1b288687c2b940debed029df1fe698dd4c98f2e6112b36bdc00ddd",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -76,7 +76,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "9899c637896368ec54c9aadb2d1b73515c57a35c36bbb6b61bbdc0aff1437057",
+      "fingerprint": "b42ab68583b2ebce5338be9017574d049cb0b04ed1ae8312a9d40dfe89ac38e5",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -94,7 +94,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1273ba4a294f6064c02bb1d7fdda9cc700ebf89dfe90c96bdc3bd9a90f7fea4d",
+      "fingerprint": "5af1daeb963bd15e6f3d7c27cc987d7b6bcbc2a0abeb99392f961bbac5e281d8",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/export_query_service.py",
+      "owner": "Security review",
+      "rationale": "Export-only partition query wraps the existing export SELECT scope; its CASE expressions use fixed REFERENCE and REPORT_ID columns with no interpolated data or identifiers.",
+      "expires_on": "2026-10-31"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "bac0da658b7c49896a95b80d7d86900aeda2954c2f0fefc9f7e6ad46d6c3e80c",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -103,7 +112,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "75856f87cc7c3c4b93bdea550a2fe471897959f8aae7c1980ce1d6097fe1b201",
+      "fingerprint": "5dec3e79b9b1b67d5e44f424a8af11e3ff05179689fb04e2bc7c04ca80ee990b",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -112,7 +121,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "f3ff928f5f51c11df99a1c965bcc4f330ebd35a25ff837e0123d480524982be9",
+      "fingerprint": "12a20d90383c8428b427eca34147e0dae6b32d27cee3220a467bc2a95356bff6",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -121,7 +130,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "eb9b713cdccb6c60f456c3b1d279cd37d6346b17144f388cff7f29f6775ff9dd",
+      "fingerprint": "098274bd3925ee94eb97724024a0bb80f85dd38add220a2978019152327fde17",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -130,7 +139,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "cdf1296886be8c7fe80f9d8f486dfcf97d802ecfaa1f0ed0012b430138040cc8",
+      "fingerprint": "c50dc92b1f9493f45ba56dfbbfcb8c03d73355f1d85b96c31496b8400dd4837c",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -895,7 +904,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "24f8312adbbf8305180e05f7fafab9024476396d8fce48026dd0e844691b189c",
+      "fingerprint": "7e2aced08e046594e0991a78c34d98aaa296297230fc248f9451696ce89c710e",
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
@@ -904,7 +913,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "84ff3faf8a926f519f73297bd5382e3f96886e7cc42845c8d462f36d6b6f3879",
+      "fingerprint": "b177f40f30ce707e7687891849b56ce5fd860a6ff14086eced237c2df241d64d",
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
