@@ -459,7 +459,11 @@ class _ReportOperations:
         )
         for first, second in zip(focus_order, focus_order[1:]):
             self.setTabOrder(first, second)
-        apply_metroliza_theme(self)
+        # The embedded Reports owner inherits the application's live semantic
+        # theme. A full local stylesheet would retain its creation-time colors
+        # when the main window switches theme; only standalone dialogs own one.
+        if not external_context:
+            apply_metroliza_theme(self)
         for button in (self.directory_button, self.archive_button, self.database_button,
                        self.scan_button, self.parse_button):
             button.setStyleSheet(PLANNER_ACTION_STYLE)

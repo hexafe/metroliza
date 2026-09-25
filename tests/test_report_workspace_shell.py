@@ -11,11 +11,14 @@ from types import SimpleNamespace
 import pytest
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, Qt
+from PyQt6.QtGui import QPalette
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton
 
 from metroliza.ui.main_window import MainWindow
 from metroliza.ui.ui_preferences import UiPreferences
+from metroliza.ui import ui_theme_tokens
+from metroliza.ui.ui_foundation import apply_metroliza_application_theme
 from tests.test_report_planner_integration import reports as reports, wait_until
 
 
@@ -58,6 +61,113 @@ def prepare_review(app, window, reports):
     assert host.report_planner.model.counts["ready"] == 5
     assert not database.exists()
     return host, source, database
+
+
+def assert_reports_theme(app, window, host, *, dark_mode):
+    palette = ui_theme_tokens.theme_tokens(dark_mode=dark_mode)
+    role = QPalette.ColorRole
+
+    def color(widget, color_role, group=QPalette.ColorGroup.Active):
+        return widget.palette().color(group, color_role).name().upper()
+
+    assert host.styleSheet() == "", "Embedded Reports must inherit the current application theme"
+    assert color(window.reports_page, role.Window) == palette["WINDOW_BACKGROUND"]
+    assert color(host, role.Window) == palette["WINDOW_BACKGROUND"]
+    assert color(host.directory_label, role.WindowText) == palette["TEXT_PRIMARY"]
+    assert color(host.mode_guidance_label, role.WindowText) == palette["TEXT_SECONDARY"]
+    assert color(host.readiness_label, role.WindowText) == palette["STATUS_COLORS"]["warning"][0]
+    assert color(host.readiness_label, role.Window) == palette["STATUS_COLORS"]["warning"][1]
+
+    planner = host.report_planner
+    for control in (host.directory_button, planner.select_ready):
+        assert color(control, role.Button) == palette["SURFACE_BACKGROUND"]
+        assert color(control, role.ButtonText) == palette["TEXT_PRIMARY"]
+    for control in (planner.search, planner.status_filter, planner.table):
+        assert color(control, role.Base) == palette["SURFACE_BACKGROUND"]
+        assert color(control, role.Text) == palette["TEXT_PRIMARY"]
+    assert color(planner.table.horizontalHeader(), role.WindowText) == palette["TEXT_PRIMARY"]
+    assert color(planner.table, role.Highlight) == ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
+    assert ui_theme_tokens.contrast_ratio(
+        color(planner.table, role.HighlightedText), color(planner.table, role.Highlight)
+    ) >= 4.5
+    for pane in (planner.details, planner.outcome, host.directory_text_label):
+        assert pane.isReadOnly()
+        assert color(pane, role.Base) == palette["SURFACE_MUTED_BACKGROUND"]
+        assert color(pane, role.Text) == palette["TEXT_SECONDARY"]
+        assert ui_theme_tokens.contrast_ratio(color(pane, role.Text), color(pane, role.Base)) >= 4.5
+    assert not host.parse_button.isEnabled()
+    assert color(host.parse_button, role.ButtonText, QPalette.ColorGroup.Disabled) == (
+        palette["DISABLED_TEXT"]
+    )
+    assert palette["TEXT_PRIMARY"] in app.styleSheet()
+    assert palette["SURFACE_MUTED_BACKGROUND"] in app.styleSheet()
+    assert palette["BORDER_SUBTLE"] in app.styleSheet()
+
+
+@pytest.mark.parametrize("initial,target", [("light", "dark"), ("dark", "light")])
+def test_existing_reports_inherits_runtime_theme(app, window, initial, target):
+    window._set_theme_mode(initial)
+    host = window.launch_parsing_dialog()
+    app.processEvents()
+
+    window._set_theme_mode(target)
+    app.processEvents()
+
+    assert_reports_theme(app, window, host, dark_mode=target == "dark")
+
+
+@pytest.mark.parametrize("mode", ["dark", "light"])
+def test_reports_created_after_theme_switch_inherits_theme(app, window, mode):
+    assert window._reports_workspace is None
+    window._set_theme_mode(mode)
+    host = window.launch_parsing_dialog()
+    app.processEvents()
+    assert_reports_theme(app, window, host, dark_mode=mode == "dark")
+
+
+def test_persisted_dark_theme_precedes_lazy_reports_creation(app, tmp_path):
+    preferences = UiPreferences(QSettings(str(tmp_path / "persisted.ini"), QSettings.Format.IniFormat))
+    preferences.set("theme/mode", "dark")
+    window = MainWindow("synthetic", None, ui_preferences=preferences)
+    try:
+        assert window._reports_workspace is None
+        window.show()
+        app.processEvents()
+        host = window.launch_parsing_dialog()
+        app.processEvents()
+        assert_reports_theme(app, window, host, dark_mode=True)
+    finally:
+        window.close()
+        window.deleteLater()
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        apply_metroliza_application_theme(app, mode="system")
+
+
+def test_embedded_reports_restores_system_high_contrast_and_system_theme(app, window):
+    host = window.launch_parsing_dialog()
+    window._set_theme_mode("dark")
+    app.processEvents()
+    assert_reports_theme(app, window, host, dark_mode=True)
+
+    window._set_theme_mode("high_contrast")
+    app.processEvents()
+    assert host.styleSheet() == ""
+    assert window.styleSheet() == ""
+    assert host.palette().color(QPalette.ColorRole.Window) == app.palette().color(
+        QPalette.ColorRole.Window
+    )
+    assert host.report_planner.search.palette().color(QPalette.ColorRole.Text) == app.palette().color(
+        QPalette.ColorRole.Text
+    )
+
+    window._set_theme_mode("system")
+    app.processEvents()
+    assert host.styleSheet() == ""
+    system_dark = ui_theme_tokens.is_dark_mode_base(
+        app._metroliza_system_palette.color(QPalette.ColorRole.Window).name()
+    )
+    assert_reports_theme(app, window, host, dark_mode=system_dark)
 
 
 @pytest.mark.parametrize("saved_page", ["home", "reports"])
