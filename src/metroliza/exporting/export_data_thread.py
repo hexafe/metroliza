@@ -5787,24 +5787,24 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             value is None or (isinstance(value, str) and not value.strip())
             for value in grouped_export_df['REFERENCE']
         )
-        warning = ''
+        warnings = []
         if not payload.get('metric_rows'):
-            warning = (
+            warnings.append(
                 'Group Analysis has no metric with measurements from two groups '
                 'in the selected reference scope; review group assignments.'
             )
-        elif missing_reference and payload.get('effective_scope') == 'multi_reference':
-            warning = (
+        if missing_reference:
+            warnings.append(
                 'Reports without a reference remain in measurement charts, but '
                 'reference-specific Group Analysis cannot compare them; complete '
                 'reference metadata to include those reports in grouped comparisons.'
             )
-        if warning:
-            self.completion_metadata.setdefault('group_analysis_warnings', []).append(warning)
+        if warnings:
+            self.completion_metadata.setdefault('group_analysis_warnings', []).extend(warnings)
             warning_summary = payload.setdefault('diagnostics', {}).setdefault(
                 'warning_summary', {'count': 0, 'messages': []}
             )
-            warning_summary['messages'] = [*warning_summary.get('messages', []), warning]
+            warning_summary['messages'] = [*warning_summary.get('messages', []), *warnings]
             warning_summary['count'] = len(warning_summary['messages'])
         if self.generate_html_dashboard:
             self._html_group_analysis_payload = payload

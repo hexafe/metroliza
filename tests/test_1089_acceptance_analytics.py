@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 import sqlite3
 import zipfile
 
@@ -10,13 +11,14 @@ from openpyxl import load_workbook
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QDialog, QInputDialog
 
+from metroliza.analytics.group_analysis_service import build_group_analysis_payload
 from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
 from metroliza.exporting.export_outcomes import ExportRunStatus
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.reports.report_query_service import build_measurement_filter_query
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.data_grouping import DataGrouping
-from test_export_workbook_output import _load_export_thread_type
+from metroliza.exporting.export_data_thread import ExportDataThread
 
 
 def _persist_report(repository, root, *, number, reference, header="FEATURE_1", ax="X", meas=10.1):
@@ -100,7 +102,7 @@ def _workbook_parts(path):
 
 def test_missing_reference_reports_keep_analytical_workbook_and_dashboard(tmp_path):
     db_path = _fixture_db(tmp_path)
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection:
         assert connection.execute("SELECT COUNT(*) FROM report_measurements").fetchone()[0] == 3
         assert connection.execute(
             "SELECT COUNT(*) FROM report_metadata WHERE reference IS NULL OR TRIM(reference) = ''"
@@ -111,7 +113,7 @@ def test_missing_reference_reports_keep_analytical_workbook_and_dashboard(tmp_pa
         paths=AppPaths(db_file=str(db_path), excel_file=str(workbook_path)),
         options=ExportOptions(generate_summary_sheet=True, generate_html_dashboard=True),
     )
-    thread = _load_export_thread_type()(request)
+    thread = ExportDataThread(request)
     thread.run()
 
     assert workbook_path.exists()
@@ -192,7 +194,7 @@ def test_grouping_can_select_and_apply_two_named_groups_to_export(tmp_path, monk
             options=ExportOptions(generate_html_dashboard=True, group_analysis_level='standard'),
             grouping_df=parent.df_for_grouping,
         )
-        thread = _load_export_thread_type()(request)
+        thread = ExportDataThread(request)
         captured = {}
         original_write = thread._write_html_dashboard_if_requested
 
@@ -216,7 +218,7 @@ def test_grouping_can_select_and_apply_two_named_groups_to_export(tmp_path, monk
         assert 'Alpha' in dashboard and 'Beta' in dashboard
 
         complete_path = tmp_path / 'complete-groups.xlsx'
-        complete_thread = _load_export_thread_type()(
+        complete_thread = ExportDataThread(
             ExportRequest(
                 paths=AppPaths(db_file=str(db_path), excel_file=str(complete_path)),
                 options=ExportOptions(generate_html_dashboard=True, group_analysis_level='standard'),
@@ -233,6 +235,64 @@ def test_grouping_can_select_and_apply_two_named_groups_to_export(tmp_path, monk
         parent.close()
 
 
+@pytest.mark.parametrize('missing_reference', [None, '', '   '])
+def test_group_analysis_never_compares_known_with_missing_reference(missing_reference):
+    payload = build_group_analysis_payload([
+        {'REFERENCE': 'REF-A', 'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Alpha', 'MEAS': 10.0},
+        {'REFERENCE': missing_reference, 'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Beta', 'MEAS': 10.1},
+    ])
+    assert payload['metric_rows'] == []
+    assert payload['status'] == 'skipped'
+    assert payload['diagnostics']['reference_count'] == 1
+
+
+def test_group_analysis_with_only_missing_references_has_explicit_skip_reason():
+    payload = build_group_analysis_payload([
+        {'REFERENCE': None, 'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Alpha', 'MEAS': 10.0},
+        {'REFERENCE': '', 'HEADER - AX': 'FEATURE_A - X', 'GROUP': 'Beta', 'MEAS': 10.1},
+    ])
+    assert payload['status'] == 'skipped'
+    assert payload['metric_rows'] == []
+    assert payload['skip_reason']['code'] == 'missing_reference_metadata'
+
+
+def test_grouped_export_keeps_missing_report_charts_without_false_comparison(tmp_path):
+    db_path = tmp_path / 'one-known-one-missing.sqlite'
+    ensure_report_schema(str(db_path))
+    repository = ReportRepository(str(db_path))
+    _persist_report(repository, tmp_path, number=1, reference=None)
+    _persist_report(repository, tmp_path, number=2, reference='REF-A', meas=10.2)
+    workbook_path = tmp_path / 'one-known-one-missing.xlsx'
+    thread = ExportDataThread(
+        ExportRequest(
+            paths=AppPaths(db_file=str(db_path), excel_file=str(workbook_path)),
+            options=ExportOptions(generate_html_dashboard=True, group_analysis_level='standard'),
+            grouping_df=(
+                {'REPORT_ID': 1, 'GROUP': 'Beta'},
+                {'REPORT_ID': 2, 'GROUP': 'Alpha'},
+            ),
+        )
+    )
+    captured = {}
+    original_write = thread._write_html_dashboard_if_requested
+
+    def capture_group_payload():
+        original_write()
+        captured['group_analysis'] = thread._html_group_analysis_payload
+
+    thread._write_html_dashboard_if_requested = capture_group_payload
+    thread.run()
+
+    assert workbook_path.exists()
+    workbook = load_workbook(workbook_path)
+    assert workbook['MEASUREMENTS'].max_row == 3
+    assert sum(bool(workbook[sheet]._charts) for sheet in workbook.sheetnames) == 2
+    assert thread.completion_metadata['html_dashboard_section_count'] == 2
+    assert captured['group_analysis']['metric_rows'] == []
+    assert thread.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS
+    assert any('without a reference' in warning for warning in thread.completion_metadata['group_analysis_warnings'])
+
+
 def test_filters_constrain_measurements_and_analytical_partitions_together(tmp_path):
     db_path = _fixture_db(tmp_path)
     cases = (
@@ -244,7 +304,7 @@ def test_filters_constrain_measurements_and_analytical_partitions_together(tmp_p
     )
     for name, fields, expected in cases:
         workbook_path = tmp_path / f'filtered-{name}.xlsx'
-        thread = _load_export_thread_type()(
+        thread = ExportDataThread(
             ExportRequest(
                 paths=AppPaths(db_file=str(db_path), excel_file=str(workbook_path)),
                 options=ExportOptions(),
@@ -260,7 +320,7 @@ def test_filters_constrain_measurements_and_analytical_partitions_together(tmp_p
 def test_html_only_keeps_missing_reference_sections(tmp_path):
     db_path = _fixture_db(tmp_path)
     html_path = tmp_path / 'dashboard-only.html'
-    thread = _load_export_thread_type()(
+    thread = ExportDataThread(
         ExportRequest(
             paths=AppPaths(db_file=str(db_path), html_dashboard_file=str(html_path)),
             options=ExportOptions(
@@ -287,7 +347,7 @@ def test_html_only_keeps_missing_reference_sections(tmp_path):
 def test_grouped_export_with_no_comparable_metric_reports_omission(tmp_path, dashboard_requested):
     db_path = _fixture_db(tmp_path)
     workbook_path = tmp_path / 'uncomparable-groups.xlsx'
-    thread = _load_export_thread_type()(
+    thread = ExportDataThread(
         ExportRequest(
             paths=AppPaths(db_file=str(db_path), excel_file=str(workbook_path)),
             options=ExportOptions(
@@ -319,7 +379,7 @@ def test_nonempty_scope_without_analytical_keys_fails_before_workbook_publicatio
         number=1, reference=None, header=None,
     )
     workbook_path = tmp_path / 'incomplete.xlsx'
-    thread = _load_export_thread_type()(
+    thread = ExportDataThread(
         ExportRequest(
             paths=AppPaths(db_file=str(db_path), excel_file=str(workbook_path)),
             options=ExportOptions(),
