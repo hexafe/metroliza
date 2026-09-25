@@ -344,23 +344,7 @@ def _cancelled_export_result(
                 required=False,
             )
     if group_analysis_requested:
-        if metadata.get('group_analysis_completed') is True:
-            _append_group_analysis_outcome(
-                artifacts,
-                stages,
-                _text_values(metadata.get('group_analysis_warnings', ())),
-                completed=True,
-            )
-        else:
-            _append_cancelled_outcome(
-                artifacts,
-                stages,
-                artifact_id='group_analysis',
-                artifact_label='Group Analysis',
-                stage_id='group_analysis',
-                stage_label='Grouped comparison',
-                required=False,
-            )
+        _append_cancelled_group_analysis_outcome(artifacts, stages, metadata)
     if dashboard_requested:
         dashboard_path = _display_path(metadata.get("html_dashboard_path"))
         dashboard_warnings = _text_values(metadata.get("html_dashboard_warnings", ()))
@@ -549,6 +533,26 @@ def _append_group_analysis_outcome(
         public_message=message,
         diagnostic_ids=diagnostic_ids,
     ))
+
+
+def _append_cancelled_group_analysis_outcome(artifacts, stages, metadata) -> None:
+    if metadata.get('group_analysis_completed') is True:
+        _append_group_analysis_outcome(
+            artifacts,
+            stages,
+            _text_values(metadata.get('group_analysis_warnings', ())),
+            completed=True,
+        )
+    else:
+        _append_cancelled_outcome(
+            artifacts,
+            stages,
+            artifact_id='group_analysis',
+            artifact_label='Group Analysis',
+            stage_id='group_analysis',
+            stage_label='Grouped comparison',
+            required=False,
+        )
 
 
 def _dashboard_status(path: str, warnings: tuple[str, ...], *, required: bool):
