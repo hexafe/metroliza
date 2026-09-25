@@ -21,6 +21,9 @@ from metroliza.ui.data_grouping import DataGrouping
 from metroliza.exporting.export_data_thread import ExportDataThread
 
 
+_APP = None
+
+
 def _persist_report(repository, root, *, number, reference, header="FEATURE_1", ax="X", meas=10.1):
     source = root / f"public-synthetic-{number}.pdf"
     source.write_bytes(f"public-synthetic-report-{number}".encode())
@@ -136,12 +139,14 @@ def test_missing_reference_reports_keep_analytical_workbook_and_dashboard(tmp_pa
 
 
 def test_grouping_can_select_and_apply_two_named_groups_to_export(tmp_path, monkeypatch):
+    global _APP
     db_path = _fixture_db(tmp_path)
     _persist_report(
         ReportRepository(str(db_path)), tmp_path, number=4,
         reference='REF-3', header='FEATURE_A', ax='X', meas=10.4,
     )
-    app = QApplication.instance() or QApplication([])
+    _APP = QApplication.instance() or _APP or QApplication([])
+    app = _APP
 
     class Parent(QDialog):
         def __init__(self):
