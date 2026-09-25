@@ -3591,7 +3591,6 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             ),
             "summary_sheet_requested": bool(validated_request.options.generate_summary_sheet),
             "group_analysis_requested": validated_request.options.group_analysis_level != 'off',
-            "group_analysis_completed": False,
             "group_analysis_warnings": [],
             "html_dashboard_plotly_spec_count": 0,
             "html_dashboard_embedded_plotly_spec_count": 0,
