@@ -1351,7 +1351,7 @@ def test_realtime_monitoring_dialog_default_dashboard_directory_is_private(
     IndustrialDataRepository(db_path).ensure_schema()
     with ExitStack() as stack:
         if os.name == "nt" and parent_policy == "default":
-            import metroliza.ui.private_dashboard_directory as private_directory
+            import metroliza.shared.private_temporary_directory as private_directory
             from tests.windows_dashboard_privacy import (
                 inspect_dashboard_privacy,
                 null_dacl_directory,

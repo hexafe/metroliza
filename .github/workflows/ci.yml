@@ -22,6 +22,10 @@ on:
         description: "Set to 1 for owner-only bounded Windows incident feature qualification"
         required: false
         default: "0"
+      run_windows_candidate_acceptance:
+        description: "Set to 1 for the authorized combined diagnostic/core Windows candidate acceptance"
+        required: false
+        default: "0"
       diagnostic_mode:
         description: "Native identity discriminator or full incident qualification"
         type: choice
@@ -33,10 +37,132 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1')) }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1')) }}
 
 jobs:
+  windows-candidate-acceptance:
+    name: Combined Windows candidate acceptance (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 60
+    concurrency:
+      group: windows-candidate-acceptance-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup build and acceptance host Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Build actual candidate with optional native modules
+        shell: pwsh
+        env:
+          METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
+        run: .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
+
+      - name: Prepare acceptance host after freezing
+        shell: pwsh
+        run: |
+          & .\.venv-build\Scripts\python.exe -m pip install -r requirements-windows-candidate-host.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate host dependencies failed' }
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          $browser = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
+          if (-not (Test-Path -LiteralPath $browser -PathType Leaf)) { throw 'Installed Windows Edge is required' }
+          $package = @(Get-ChildItem -LiteralPath dist -Directory -Filter '*_onedir')
+          if ($package.Count -ne 1) { throw 'Expected exactly one candidate package' }
+          $receipts = Join-Path $env:RUNNER_TEMP 'metroliza-candidate-acceptance'
+          if (Test-Path -LiteralPath $receipts) { throw 'Candidate receipt root must be new' }
+          New-Item -Path $receipts -ItemType Directory | Out-Null
+          "CANDIDATE_BROWSER=$browser" >> $env:GITHUB_ENV
+          "CANDIDATE_PACKAGE=$($package[0].FullName)" >> $env:GITHUB_ENV
+          "CANDIDATE_RECEIPTS=$receipts" >> $env:GITHUB_ENV
+
+      - name: Qualify supervisor and incident menu on the same candidate
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_diagnostics.py --artifact-dir $env:CANDIDATE_PACKAGE --output-dir (Join-Path $env:CANDIDATE_RECEIPTS 'diagnostics')
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate supervised incident acceptance failed' }
+
+      - name: Verify exact source checkout remains clean after build
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw 'Candidate source head changed during build' }
+          $dirty = @(git status --porcelain)
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate source status unavailable' }
+          if ($dirty.Count -ne 0) {
+            $dirty | Write-Host
+            throw 'Candidate source checkout is dirty after build'
+          }
+
+      - name: Qualify actual core, OCR, private dashboard and geometry at each scale
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          foreach ($scale in @('1.0', '1.25', '1.5')) {
+            & .\.venv-build\Scripts\python.exe scripts/qualify_windows_candidate_core.py `
+              --source-checkout $env:GITHUB_WORKSPACE --expected-source-sha $env:GITHUB_SHA `
+              --artifact-dir $env:CANDIDATE_PACKAGE `
+              --fixture-dir (Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_candidate') `
+              --oracle (Join-Path $env:GITHUB_WORKSPACE 'scripts/synthetic-report-oracle.json') `
+              --browser $env:CANDIDATE_BROWSER --dpi-scale $scale --native-mode default `
+              --output-dir (Join-Path $env:CANDIDATE_RECEIPTS "core-dpr-$scale")
+            if ($LASTEXITCODE -ne 0) { throw "Candidate core failed at DPR $scale" }
+          }
+
+      - name: Qualify unavailable-native fallback using unchanged package bytes
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_candidate_core.py `
+            --source-checkout $env:GITHUB_WORKSPACE --expected-source-sha $env:GITHUB_SHA `
+            --artifact-dir $env:CANDIDATE_PACKAGE `
+            --fixture-dir (Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_candidate') `
+            --oracle (Join-Path $env:GITHUB_WORKSPACE 'scripts/synthetic-report-oracle.json') `
+            --browser $env:CANDIDATE_BROWSER --dpi-scale 1.0 --native-mode unavailable `
+            --output-dir (Join-Path $env:CANDIDATE_RECEIPTS 'core-native-unavailable')
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate native fallback acceptance failed' }
+
+      - name: Verify every receipt binds the same source and immutable package
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate tree identity unavailable' }
+          & .\.venv-build\Scripts\python.exe scripts/finalize_windows_candidate_receipts.py --receipt-root $env:CANDIDATE_RECEIPTS --expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate combined receipt gate failed' }
+
+      - name: Retain bounded synthetic candidate receipts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-candidate-acceptance-receipts
+          path: |
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.json
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.sqlite
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.xlsx
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.html
+          if-no-files-found: warn
+
+      - name: Retain accepted engineering package for orchestrator review
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-candidate-development-onedir
+          path: ${{ runner.temp }}/metroliza-candidate-acceptance/diagnostics/qualified-windows-development-package.zip
+          if-no-files-found: error
+
   windows-diagnostic-qualification:
     name: Windows incident feature qualification (manual/opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && github.actor == github.repository_owner && github.event.repository.private == false
@@ -67,7 +193,7 @@ jobs:
         shell: pwsh
         env:
           METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
-        run: .\build_windows_exe.ps1 -Mode onedir
+        run: .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
 
       - name: Build and run bounded native process identity controls
         if: inputs.diagnostic_mode == 'identity'
@@ -1123,6 +1249,15 @@ jobs:
           tests/test_packaging_setuptools_hook.py
           tests/test_windows_runtime_audit.py
 
+      - name: Run Windows candidate receipt and ownership contracts
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_fresh_reopen.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_frozen_ocr_worker.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py
+
       - name: Run native Windows Qt lifecycle tests
         env:
           PYTHONPATH: src;.
@@ -1201,6 +1336,7 @@ jobs:
           tests/test_export_chart_writer.py
           tests/test_export_backends.py
           tests/test_export_workbook_output.py
+          tests/test_windows_candidate_xlsx_xml.py::test_native_canonical_w07_export_and_cancellation
 
       - name: Run finite numeric filter and query-consumer parity on Windows
         env:

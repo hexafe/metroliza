@@ -14,16 +14,28 @@ from metroliza.shared import diagnostic_runtime_audit as audit
 
 MAX_MEMBERS = 16
 PHASES = frozenset({"suspended", "window_wait", "window_close", "drain", "startup", "running"})
+UNAVAILABLE_SOURCES = frozenset({
+    "system_directory", "parent_snapshot_open", "parent_snapshot_missing",
+    "native_process_image", "probe_callback",
+    "expected_file_package_launcher", "expected_file_package_application",
+    "expected_file_package_ocr_worker", "expected_file_system_cmd",
+    "expected_file_system_conhost", "expected_file_system_werfault",
+    "expected_file_system_wermgr", "expected_file_system_openconsole",
+    "expected_file_system_powershell",
+})
 
 
 class RuntimeEvidence:
     """One application launch/Job, one private journal, one owned probe."""
 
-    def __init__(self, api, artifact: Path, cwd: Path, environment, failure_factory):
+    def __init__(self, api, artifact: Path, cwd: Path, environment, failure_factory,
+                 *, allow_ocr_worker: bool = False):
         self.root = cwd / ("runtime-audit-" + uuid.uuid4().hex)
         self.nonce = uuid.uuid4().hex
         self.failure_factory = failure_factory
-        self.probe = OwnedProcessProbe(api, artifact, failure_factory)
+        self.probe = OwnedProcessProbe(
+            api, artifact, failure_factory, allow_ocr_worker=allow_ocr_worker,
+        )
         self.probe.phase = "startup"
         self._create_root()
         environment.update({audit.GATE: "1", audit.ROOT: str(self.root), audit.NONCE: self.nonce})
@@ -119,21 +131,33 @@ class RuntimeEvidence:
         self.root.rmdir()
 
 
-def verified_runtime_order(proof, *, supervised: bool) -> tuple[str, ...]:
-    """Pair an audited attempt and exact native ancestry; neither suffices alone."""
+def _expected_runtime_roles(supervised, platform_event, allow_ocr_worker):
+    roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
+    order = (["launcher_bootloader", "launcher_supervisor"] if supervised else []) + ["application"]
+    if platform_event:
+        roles += ["system_cmd", "system_conhost"]
+        order += ["windows_version_command", "windows_version_console"]
+    if allow_ocr_worker:
+        roles += ["package_ocr_worker"]
+        order += ["ocr_worker"]
+    return roles, order
+
+
+def _verified_audit_events(events, allow_ocr_worker):
     def reject():
         raise ValueError("runtime_evidence_invalid")
 
-    if (type(proof) is not dict or set(proof) != {"installed", "events", "owned", "probe_effect"}
-            or proof["installed"] is not True
-            or proof["probe_effect"] != "synchronous_private_prelaunch_journal_and_owned_handle_sampling"):
+    if type(events) is not list or len(events) > 2:
         reject()
-    events = proof["events"]
-    if type(events) is not list or len(events) > 1:
+    platform_events = [event for event in events if type(event) is dict and event.get("kind") == "platform_ver"]
+    worker_events = [event for event in events if type(event) is dict and event.get("kind") == "ocr_worker_launch"]
+    if (len(platform_events) > 1 or len(worker_events) != int(allow_ocr_worker)
+            or len(events) != len(platform_events) + len(worker_events)
+            or events != platform_events + worker_events):
         reject()
     helper_phase = "startup"
-    if events:
-        event = events[0]
+    if platform_events:
+        event = platform_events[0]
         if (type(event) is not dict or set(event) != {"kind", "caller", "phase"}
                 or event["kind"] != "platform_ver"
                 or type(event["caller"]) is not str or event["caller"] not in audit.CALLERS):
@@ -145,12 +169,29 @@ def verified_runtime_order(proof, *, supervised: bool) -> tuple[str, ...]:
             helper_phase = "running"
         elif event["phase"] != "startup":
             reject()
+    if worker_events and worker_events[0] != {
+        "kind": "ocr_worker_launch", "caller": "metroliza", "phase": "after_ready",
+    }:
+        reject()
+    return platform_events, helper_phase
+
+
+def verified_runtime_order(
+    proof, *, supervised: bool, allow_ocr_worker: bool = False,
+) -> tuple[str, ...]:
+    """Pair an audited attempt and exact native ancestry; neither suffices alone."""
+    def reject():
+        raise ValueError("runtime_evidence_invalid")
+
+    if (type(proof) is not dict or set(proof) != {"installed", "events", "owned", "probe_effect"}
+            or proof["installed"] is not True
+            or proof["probe_effect"] != "synchronous_private_prelaunch_journal_and_owned_handle_sampling"):
+        reject()
+    platform_events, helper_phase = _verified_audit_events(proof["events"], allow_ocr_worker)
     owned = proof["owned"]
-    expected_roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
-    expected_order = (["launcher_bootloader", "launcher_supervisor"] if supervised else []) + ["application"]
-    if events:
-        expected_roles += ["system_cmd", "system_conhost"]
-        expected_order += ["windows_version_command", "windows_version_console"]
+    expected_roles, expected_order = _expected_runtime_roles(
+        supervised, platform_events, allow_ocr_worker,
+    )
     if (type(owned) is not dict
             or set(owned) != {"schema_version", "members", "assigned", "unobserved", "job_empty", "overflow", "observation_unavailable", "probe_effect"}
             or type(owned["schema_version"]) is not int or owned["schema_version"] != 1
@@ -184,17 +225,27 @@ def _verify_members(members, expected_roles, helper_phase):
             or member["parent_ordinal_advisory"] != index - 1
         ):
             reject()
+        if role == "package_ocr_worker" and (
+            member["first_phase"] not in {"running", "drain"}
+            or member["last_phase"] not in {"running", "drain"}
+            or parent not in {"unknown", expected_roles.index("package_application")}
+        ):
+            reject()
 
 
 class OwnedProcessProbe:
-    def __init__(self, api, artifact: Path, failure_factory):
+    def __init__(self, api, artifact: Path, failure_factory, *, allow_ocr_worker=False):
         self.api = api
         self.failure_factory = failure_factory
         self.unavailable = False
+        self.unavailable_sources = set()
         self.images = (
             ("package_launcher", artifact / "metroliza.exe"),
             ("package_application", artifact / "metroliza_application.exe"),
-        ) + self._system_images()
+        ) + self._system_images() + (
+            (("package_ocr_worker", artifact / "metroliza_ocr_worker.exe"),)
+            if allow_ocr_worker else ()
+        )
         self.phase = "suspended"
         self.records = {}
         self.active = None
@@ -209,15 +260,16 @@ class OwnedProcessProbe:
         buffer = ctypes.create_unicode_buffer(32768)
         copied = function(buffer, len(buffer))
         if not 0 < copied < len(buffer) or len(buffer.value) != copied or not Path(buffer.value).is_absolute():
-            self.unavailable = True
+            self._mark_unavailable("system_directory")
             return ()
         system = Path(buffer.value)
         return tuple((role, system / name) for role, name in (
             ("system_cmd", "cmd.exe"), ("system_conhost", "conhost.exe"),
-            ("system_werfault", "WerFault.exe"), ("system_wermgr", "wermgr.exe"),
-            ("system_openconsole", "OpenConsole.exe"),
-            ("system_powershell", "WindowsPowerShell/v1.0/powershell.exe"),
         ))
+
+    def _mark_unavailable(self, source):
+        self.unavailable = True
+        self.unavailable_sources.add(source if source in UNAVAILABLE_SOURCES else "probe_callback")
 
     def _declare_snapshot(self):
         wt = self.api.wintypes
@@ -250,7 +302,7 @@ class OwnedProcessProbe:
         """Read only the requested owned row; discard all other snapshot fields."""
         snapshot = self.api.kernel.CreateToolhelp32Snapshot(0x2, 0)
         if not self.api._valid_file_handle(snapshot):
-            self.unavailable = True
+            self._mark_unavailable("parent_snapshot_open")
             return None
         try:
             entry = self.Entry()
@@ -264,7 +316,7 @@ class OwnedProcessProbe:
                     parent = int(entry.th32ParentProcessID)
                     return parent if parent in owned_ids else None
                 present = self.api.kernel.Process32NextW(snapshot, ctypes.byref(entry))
-            self.unavailable = True
+            self._mark_unavailable("parent_snapshot_missing")
             return None
         finally:
             # A new owned handle must close successfully even when observation
@@ -274,14 +326,14 @@ class OwnedProcessProbe:
     def _role(self, handle, failure):
         native, unavailable = self.api._native_process_image(handle)
         if unavailable is not None:
-            self.unavailable = True
+            self._mark_unavailable("native_process_image")
             return "unknown"
         for role, expected in self.images:
             matched, unavailable = self.api._expected_file_native_image(expected, native, failure)
             if failure.qualification_cleanup == "failed":
                 raise failure
             if unavailable is not None:
-                self.unavailable = True
+                self._mark_unavailable("expected_file_" + role)
             if matched is True and unavailable is None:
                 return role
         return "unknown"

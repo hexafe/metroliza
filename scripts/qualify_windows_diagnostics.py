@@ -209,6 +209,11 @@ QUALIFICATION_FAILURE_REASONS = frozenset(
         "qualification_incident_missing",
         "flood_incident_unavailable",
         "flood_loss_unobserved",
+        "flood_channel_complete",
+        "flood_channel_incomplete",
+        "flood_channel_invalid",
+        "flood_loss_other_counter_only",
+        "flood_loss_no_counter",
         "qualification_measurements_missing",
         "qualification_export_failed",
         "qualification_export_unavailable",
@@ -927,13 +932,19 @@ class _WindowsProcess:
         from scripts.windows_owned_process_probe import verified_runtime_order
 
         proof = evidence.proof()
+        allow_ocr_worker = (
+            artifact_dir / "metroliza_ocr_worker.exe" in self._expected_images
+        )
         try:
-            order = verified_runtime_order(proof, supervised=topology.launcher_processes_observed == 2)
+            order = verified_runtime_order(
+                proof, supervised=topology.launcher_processes_observed == 2,
+                allow_ocr_worker=allow_ocr_worker,
+            )
         except (ValueError, TypeError, KeyError):
             raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
         # The semantic suffix accounts for real physical members, not a count
         # projection. The independent native image and journal proof must agree.
-        helpers = 2 if proof["events"] else 0
+        helpers = (2 if any(event["kind"] == "platform_ver" for event in proof["events"]) else 0) + int(allow_ocr_worker)
         if (topology.unexpected_processes_observed != helpers
                 or topology.assigned_processes != len(order)
                 or topology.application_processes_observed != 1
@@ -1001,8 +1012,12 @@ class _WindowsApi:
             if error.qualification_cleanup == "failed":
                 raise
             probe.unavailable = True
+            if hasattr(probe, "unavailable_sources"):
+                probe.unavailable_sources.add("probe_callback")
         except Exception:
             probe.unavailable = True
+            if hasattr(probe, "unavailable_sources"):
+                probe.unavailable_sources.add("probe_callback")
 
     def _declare_structures(self) -> None:
         wt = self.wintypes
@@ -1878,14 +1893,21 @@ class _WindowsApi:
             raise primary from None
 
     def _prepare_runtime_evidence(self, executable, images, cwd, environment, existing):
+        pair = (executable.parent / "metroliza.exe",
+                executable.parent / "metroliza_application.exe")
+        allow_ocr_worker = (
+            images == pair + (executable.parent / "metroliza_ocr_worker.exe",)
+            and environment.get("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION") == "1"
+            and environment.get("METROLIZA_WINDOWS_CANDIDATE_PHASE", "core") == "core"
+        )
         if (existing is None and environment.get("METROLIZA_WINDOWS_RUNTIME_AUDIT") == "1"
-                and images == (executable.parent / "metroliza.exe",
-                               executable.parent / "metroliza_application.exe")):
+                and (images == pair or allow_ocr_worker)):
             from scripts.windows_owned_process_probe import RuntimeEvidence
 
             return RuntimeEvidence(
                 self, executable.parent, cwd, environment,
                 lambda: QualificationFailure("output_failed", qualification_reason="qualification_topology_failed"),
+                allow_ocr_worker=allow_ocr_worker,
             )
         return existing
 
@@ -3443,6 +3465,24 @@ def _newest_incident(store: IncidentStore, previous: set[uuid.UUID]):
     return loaded.incident
 
 
+def _flood_failure_reason(incident) -> str:
+    """Retain only a closed channel/counter class when synthetic loss is absent."""
+    channel = incident.observation.channel
+    if channel is ChannelState.LOSS_OBSERVED:
+        loss = incident.ring_loss
+        if loss.counters_saturated or any(getattr(loss, field) for field in (
+            "count_evicted_events", "byte_evicted_events", "age_evicted_events",
+            "operation_evicted_events",
+        )):
+            return "flood_loss_other_counter_only"
+        return "flood_loss_no_counter"
+    return {
+        ChannelState.COMPLETE: "flood_channel_complete",
+        ChannelState.INCOMPLETE: "flood_channel_incomplete",
+        ChannelState.INVALID: "flood_channel_invalid",
+    }.get(channel, "flood_loss_unobserved")
+
+
 def _wait_newest_incident(
     store: IncidentStore,
     previous: set[uuid.UUID],
@@ -4088,7 +4128,7 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
         count = value.get(key)
         result[key] = count if type(count) is int and 0 <= count <= 16 else "invalid"
     order = value.get("creation_order")
-    roles = {"launcher_bootloader", "launcher_supervisor", "application", "unexpected",
+    roles = {"launcher_bootloader", "launcher_supervisor", "application", "ocr_worker", "unexpected",
              "windows_version_command", "windows_version_console"}
     result["creation_order"] = (
         order if type(order) is list and len(order) <= 16
@@ -4099,7 +4139,10 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
     return result
 
 
-def _validate_topology_record(value: object, *, supervised: bool, require_runtime_evidence: bool = False) -> None:
+def _validate_topology_record(
+    value: object, *, supervised: bool, require_runtime_evidence: bool = False,
+    allow_ocr_worker: bool = False,
+) -> None:
     expected = {
         "launcher_processes_observed",
         "application_processes_observed",
@@ -4128,7 +4171,10 @@ def _validate_topology_record(value: object, *, supervised: bool, require_runtim
         from scripts.windows_owned_process_probe import verified_runtime_order
 
         try:
-            expected_order = list(verified_runtime_order(value["runtime_evidence"], supervised=supervised))
+            expected_order = list(verified_runtime_order(
+                value["runtime_evidence"], supervised=supervised,
+                allow_ocr_worker=allow_ocr_worker,
+            ))
         except (ValueError, TypeError, KeyError):
             raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
     if (
@@ -4818,7 +4864,7 @@ class _QualificationRunner:
             incident.observation.channel is ChannelState.LOSS_OBSERVED and not explicit_loss
         ):
             raise QualificationFailure(
-                "incident_invalid", qualification_reason="flood_loss_unobserved"
+                "incident_invalid", qualification_reason=_flood_failure_reason(incident)
             )
         self.flood_loss = {
             "source_dropped": incident.observation.source_dropped,

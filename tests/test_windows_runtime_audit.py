@@ -16,9 +16,32 @@ import pytest
 
 from metroliza.shared import diagnostic_runtime_audit as audit
 from scripts import qualify_windows_diagnostics as qualification
-from scripts.windows_owned_process_probe import RuntimeEvidence, verified_runtime_order
+from scripts.windows_owned_process_probe import OwnedProcessProbe, RuntimeEvidence, verified_runtime_order
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_probe_names_unavailable_expected_file_even_after_later_verified_match():
+    probe = object.__new__(OwnedProcessProbe)
+    probe.images = (
+        ("system_openconsole", Path("OpenConsole.exe")),
+        ("package_ocr_worker", Path("metroliza_ocr_worker.exe")),
+    )
+    probe.unavailable = False
+    probe.unavailable_sources = set()
+
+    def expected_file(expected, _native, _failure):
+        if expected.name == "OpenConsole.exe":
+            return None, "synthetic_unavailable"
+        return True, None
+
+    probe.api = SimpleNamespace(
+        _native_process_image=lambda _handle: ("synthetic_native", None),
+        _expected_file_native_image=expected_file,
+    )
+    assert probe._role(object(), SimpleNamespace(qualification_cleanup="complete")) == "package_ocr_worker"
+    assert probe.unavailable is True
+    assert probe.unavailable_sources == {"expected_file_system_openconsole"}
 
 
 def _frame(module, name, back=None):
@@ -37,28 +60,35 @@ def _journal(root, nonce, events):
         )
 
 
-def _proof(supervised=False, helpers=True):
+def _proof(supervised=False, helpers=True, ocr_worker=False):
     roles = (["package_launcher", "package_launcher"] if supervised else []) + [
         "package_application"
     ]
     if helpers:
         roles += ["system_cmd", "system_conhost"]
+    if ocr_worker:
+        roles += ["package_ocr_worker"]
     members = [
         {
             "role": role,
             "identity": "fixed_file_verified",
-            "first_phase": "startup",
-            "last_phase": "startup",
-            "parent_ordinal_advisory": index - 1 if index else "unknown",
+            "first_phase": "running" if role == "package_ocr_worker" else "startup",
+            "last_phase": "running" if role == "package_ocr_worker" else "startup",
+            "parent_ordinal_advisory": (
+                roles.index("package_application") if role == "package_ocr_worker"
+                else index - 1 if index else "unknown"
+            ),
             "lifecycle": "job_empty",
         }
         for index, role in enumerate(roles)
     ]
     return {
         "installed": True,
-        "events": [{"kind": "platform_ver", "caller": "other", "phase": "startup"}]
-        if helpers
-        else [],
+        "events": (
+            ([{"kind": "platform_ver", "caller": "other", "phase": "startup"}] if helpers else [])
+            + ([{"kind": "ocr_worker_launch", "caller": "metroliza", "phase": "after_ready"}]
+               if ocr_worker else [])
+        ),
         "owned": {
             "schema_version": 1,
             "members": members,
@@ -73,6 +103,108 @@ def _proof(supervised=False, helpers=True):
     }
 
 
+def test_ocr_worker_role_requires_explicit_core_allowance_and_exact_native_member():
+    proof = _proof(supervised=True, helpers=False, ocr_worker=True)
+    assert verified_runtime_order(proof, supervised=True, allow_ocr_worker=True) == (
+        "launcher_bootloader", "launcher_supervisor", "application", "ocr_worker",
+    )
+    with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+        verified_runtime_order(proof, supervised=True)
+    proof["owned"]["members"][-1]["first_phase"] = "startup"
+    with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+        verified_runtime_order(proof, supervised=True, allow_ocr_worker=True)
+
+
+def test_ocr_worker_audit_classifies_only_exact_windows_popen_payload():
+    worker = r"C:\Program Files\Metroliza\metroliza_ocr_worker.exe"
+    root = r"C:\Users\runner\AppData\Local\Temp\metroliza-private"
+    command = subprocess.list2cmdline([worker, root])
+    environment = {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    frame = _frame("subprocess", "_execute_child", _frame(
+        "metroliza.parsing.frozen_ocr_worker", "_run_owned_worker",
+    ))
+    arguments = (None, command, root, environment)
+    expected = ("ocr_worker_launch", "metroliza")
+    assert audit.classify_call(arguments, frame, "cmd.exe", worker) == expected
+    assert audit.classify_call(arguments, frame, "cmd.exe") == ("other_arguments", "other")
+    altered = [
+        (worker, command, root, environment),
+        (None, command + " & private", root, environment),
+        (None, command, root + "-other", environment),
+        (None, command, r"C:relative", environment),
+        (None, command, root, {}),
+        (None, command, root, {**environment, audit.GATE: "1"}),
+    ]
+    for value in altered:
+        assert audit.classify_call(value, frame, "cmd.exe", worker) != expected
+    wrong_frame = _frame("private", "_run_owned_worker")
+    assert audit.classify_call(arguments, wrong_frame, "cmd.exe", worker) != expected
+    assert audit.classify_call(arguments, frame, "cmd.exe", worker + "-other") != expected
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+@pytest.mark.parametrize("helpers", [False, True])
+def test_ocr_worker_journal_and_owned_member_must_match(supervised, helpers):
+    proof = _proof(supervised, helpers, ocr_worker=True)
+    if helpers:
+        proof["events"][0].update(caller="numpy", phase="after_ready")
+        for member in proof["owned"]["members"][-3:-1]:
+            member.update(first_phase="running", last_phase="running")
+    order = verified_runtime_order(proof, supervised=supervised, allow_ocr_worker=True)
+    assert order[-1] == "ocr_worker"
+    assert order.count("windows_version_command") == int(helpers)
+    for defect in ("missing_event", "extra_event", "wrong_caller", "wrong_phase",
+                   "wrong_order", "unknown_image", "missing_worker", "live", "gap"):
+        changed = json.loads(json.dumps(proof))
+        events, owned = changed["events"], changed["owned"]
+        if defect == "missing_event":
+            events.pop()
+        elif defect == "extra_event":
+            events.append({"kind": "other_arguments", "caller": "other", "phase": "after_ready"})
+        elif defect == "wrong_caller":
+            events[-1]["caller"] = "other"
+        elif defect == "wrong_phase":
+            events[-1]["phase"] = "startup"
+        elif defect == "wrong_order":
+            events.reverse()
+            if not helpers:
+                events.append({"kind": "platform_ver", "caller": "other", "phase": "startup"})
+        elif defect == "unknown_image":
+            owned["members"][-1]["identity"] = "unknown"
+        elif defect == "missing_worker":
+            owned["members"].pop()
+            owned["assigned"] -= 1
+        elif defect == "live":
+            owned["job_empty"] = False
+        elif defect == "gap":
+            owned["unobserved"] = 1
+        with pytest.raises(ValueError, match="runtime_evidence_invalid"):
+            verified_runtime_order(changed, supervised=supervised, allow_ocr_worker=True)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="CPython Windows Popen audit payload")
+def test_native_windows_popen_audit_payload_matches_worker_classifier(tmp_path):
+    environment = {"PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    worker = str(Path(sys.executable).resolve())
+    observed = []
+
+    def capture(event, arguments):
+        if event == "subprocess.Popen" and arguments[2] == str(tmp_path):
+            observed.append(arguments)
+
+    sys.addaudithook(capture)
+    process = subprocess.Popen(
+        [worker, str(tmp_path)], cwd=tmp_path, env=environment,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    process.wait(timeout=15)
+    assert len(observed) == 1
+    frame = _frame("metroliza.parsing.frozen_ocr_worker", "_run_owned_worker")
+    assert audit.classify_call(observed[0], frame, "cmd.exe", worker) == (
+        "ocr_worker_launch", "metroliza",
+    )
+
+
 def test_command_and_required_frames_are_exact_not_basename_allowance():
     expected = r"C:\Windows\System32\cmd.exe"
     frame = _frame(
@@ -83,6 +215,14 @@ def test_command_and_required_frames_are_exact_not_basename_allowance():
     assert audit.classify_call((expected, expected + ' /c "ver"'), frame, expected) == (
         "platform_ver",
         "setuptools",
+    )
+    nested = _frame("platform", "_syscmd_ver", _frame(
+        "platform", "win32_ver", _frame(
+            "numpy", "version", _frame("metroliza.app.windows_candidate_qualification", "core"),
+        ),
+    ))
+    assert audit.classify_call((expected, expected + ' /c "ver"'), nested, expected) == (
+        "platform_ver", "numpy",
     )
     for command in (
         "ver",
@@ -511,7 +651,7 @@ def test_runtime_cleanup_uses_full_metadata_when_directory_cache_has_no_link_cou
 def test_runtime_constructor_owns_empty_root_even_when_identity_query_fails(tmp_path, monkeypatch, cleanup_fails):
     from scripts import windows_owned_process_probe as probe_module
 
-    monkeypatch.setattr(probe_module, "OwnedProcessProbe", lambda *_: SimpleNamespace(phase="startup"))
+    monkeypatch.setattr(probe_module, "OwnedProcessProbe", lambda *_, **__: SimpleNamespace(phase="startup"))
     def no_identity(_self):
         raise OSError("synthetic identity failure")
     monkeypatch.setattr(RuntimeEvidence, "_identity", no_identity)
@@ -642,15 +782,18 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             process.resume()
         deadline = time.monotonic() + 30
         concurrent_released = False
+        single_released = False
+        late_ready_acknowledged = False
         while time.monotonic() < deadline:
             if mode == "concurrent":
                 if not concurrent_released:
-                    # Observe both complete Jobs while the applications are
-                    # held. Their short-lived version helpers can have exited
-                    # already, but any identity failure remains fatal here.
+                    # Establish each Job's three fixed-file roles while held.
+                    # Requerying an already verified short-lived helper can
+                    # race its exit without adding identity evidence.
                     for process in owned:
-                        process.observe()
-                    if all(
+                        if len(process._observations) < 3:
+                            process.observe()
+                    if all(len(process._observations) == 3 for process in owned) and all(
                         (tmp_path / str(index) / "control-ready").exists()
                         for index in range(len(owned))
                     ):
@@ -668,16 +811,28 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                         process.observe()
                     break
             else:
-                for index, process in enumerate(owned):
-                    process.observe()
-                    if (tmp_path / str(index) / "control-ready").exists():
-                        if mode.startswith("late_"):
+                process = owned[0]
+                if not single_released:
+                    if process.poll() is not None and api._job_accounting(process._job)[0] == 0:
+                        # Hard-exit controls need no finish marker.
+                        single_released = True
+                    else:
+                        # Identity-bearing observation belongs to the held
+                        # phase; an exit-phase image query races with teardown.
+                        process.observe()
+                    if mode.startswith("late_"):
+                        if not late_ready_acknowledged and (tmp_path / "0" / "control-ready").exists():
                             process.mark_runtime_ready()
-                        (tmp_path / str(index) / "control-finish").touch()
-            if mode != "concurrent" and all(
-                process.poll() is not None and process.active_processes() == 0 for process in owned
-            ):
-                break
+                            late_ready_acknowledged = True
+                        finish_ready = late_ready_acknowledged and (tmp_path / "0" / "control-done").exists()
+                    else:
+                        finish_ready = (tmp_path / "0" / "control-ready").exists()
+                    if not single_released and finish_ready:
+                        (tmp_path / "0" / "control-finish").touch()
+                        single_released = True
+                if single_released and process.poll() is not None and api._job_accounting(process._job)[0] == 0:
+                    process.observe()
+                    break
             time.sleep(0.005)
         if mode == "concurrent":
             assert concurrent_released
@@ -686,9 +841,11 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                 for process in owned
             )
         else:
-            assert all(
-                process.poll() == expected_exit and process.active_processes() == 0 for process in owned
-            )
+            assert single_released
+            if mode.startswith("late_"):
+                assert late_ready_acknowledged
+            assert owned[0].poll() == expected_exit
+            assert api._job_accounting(owned[0]._job)[0] == 0
         for process, evidence in zip(owned, evidences):
             if mode in {"write_failure", "blocked_install"}:
                 with pytest.raises(qualification.QualificationFailure):

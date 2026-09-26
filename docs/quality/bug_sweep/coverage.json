@@ -988,9 +988,9 @@
       "id": "root-repository-configuration",
       "include": [
         ".gitignore",
-        ".gitattributes",
         ".pre-commit-config.yaml",
-        ".python-version"
+        ".python-version",
+        ".gitattributes"
       ],
       "exclude": [],
       "class": "workflow/configuration",
@@ -2434,6 +2434,16 @@
         "scripts/build_diagnostic_manifest.py",
         "scripts/qualify_windows_diagnostics.py",
         "scripts/windows_native_identity_control.py",
+        "scripts/qualify_windows_candidate_core.py",
+        "scripts/finalize_windows_candidate_receipts.py",
+        "scripts/verify_windows_candidate_closeout.py",
+        "scripts/synthetic-report-oracle.json",
+        "scripts/verify_synthetic_oracle.py",
+        "scripts/synthetic-inference-oracle.json",
+        "scripts/verify_group_inference.py",
+        "scripts/verify_windows_candidate_ocr.py",
+        "scripts/verify_windows_candidate_dashboard.py",
+        "scripts/windows_candidate_xlsx.py",
         "scripts/windows_owned_process_probe.py"
       ],
       "exclude": [],

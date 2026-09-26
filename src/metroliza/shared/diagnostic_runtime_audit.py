@@ -19,9 +19,10 @@ ROOT = "METROLIZA_WINDOWS_RUNTIME_AUDIT_ROOT"
 NONCE = "METROLIZA_WINDOWS_RUNTIME_AUDIT_NONCE"
 MAX_EVENTS = 16
 FAILURE_EXIT = 97
-CALLERS = frozenset({"setuptools", "numpy", "matplotlib", "platformdirs", "other"})
+CALLERS = frozenset({"setuptools", "numpy", "matplotlib", "platformdirs", "metroliza", "other"})
+PLATFORM_CALLERS = CALLERS - {"metroliza", "other"}
 KINDS = frozenset({
-    "platform_ver", "other", "other_arguments", "other_executable",
+    "platform_ver", "ocr_worker_launch", "other", "other_arguments", "other_executable",
     "other_command", "other_frames", "other_depth",
 })
 
@@ -39,7 +40,41 @@ def _write(root: Path, name: str, value: dict) -> None:
         stream.write(data)
 
 
-def classify_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
+def _owned_ocr_launch(arguments, frame, expected_worker: str | None) -> bool:
+    import ntpath
+    from subprocess import list2cmdline
+
+    if expected_worker is None or len(arguments) != 4:
+        return False
+    executable, command, cwd, environment = arguments
+    if (executable is not None or type(command) is not str
+            or type(cwd) is not str or not ntpath.isabs(cwd) or ntpath.normpath(cwd) != cwd
+            or command != list2cmdline([expected_worker, cwd])
+            or type(environment) is not dict
+            or environment.get("PYINSTALLER_RESET_ENVIRONMENT") != "1"
+            or any(key in environment for key in (
+                GATE, ROOT, NONCE, "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION",
+            ))):
+        return False
+    for _ in range(64):
+        if frame is None:
+            break
+        if (frame.f_globals.get("__name__") == "metroliza.parsing.frozen_ocr_worker"
+                and frame.f_code.co_name == "_run_owned_worker"):
+            return True
+        frame = frame.f_back
+    return False
+
+
+def classify_call(
+    arguments, frame, expected_cmd: str, expected_worker: str | None = None,
+) -> tuple[str, str]:
+    if _owned_ocr_launch(arguments, frame, expected_worker):
+        return "ocr_worker_launch", "metroliza"
+    return _classify_platform_call(arguments, frame, expected_cmd)
+
+
+def _classify_platform_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
     import ntpath
 
     if len(arguments) < 2:
@@ -60,7 +95,7 @@ def classify_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
         name = frame.f_code.co_name
         if module == "platform" and name in {"_syscmd_ver", "win32_ver"}:
             required.add(name)
-        if type(module) is str and module.split(".", 1)[0] in CALLERS - {"other"}:
+        if type(module) is str and module.split(".", 1)[0] in PLATFORM_CALLERS:
             caller = module.split(".", 1)[0]
         frame = frame.f_back
     else:
@@ -102,6 +137,11 @@ def _install() -> None:
     if not 0 < copied < len(buffer) or not Path(buffer.value).is_absolute():
         raise ValueError("runtime_audit_invalid")
     expected_cmd = str(Path(buffer.value) / "cmd.exe")
+    application = Path(sys.executable)
+    expected_worker = (
+        str(application.with_name("metroliza_ocr_worker.exe"))
+        if application.name.lower() == "metroliza_application.exe" else None
+    )
     lock = _thread.allocate_lock()
     count = 0
     installed_seen = False
@@ -119,7 +159,7 @@ def _install() -> None:
             if not acquired or count >= MAX_EVENTS:
                 raise ValueError("runtime_audit_invalid")
             count += 1
-            kind, caller = classify_call(arguments, sys._getframe(1), expected_cmd)
+            kind, caller = classify_call(arguments, sys._getframe(1), expected_cmd, expected_worker)
             phase = "after_ready" if (root / "ready").exists() else "startup"
             _write(
                 root,

@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.06 RC2 (build 260711)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 260924)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,60 +50,16 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
-                "- Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result<br>",
-                "- Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state<br>",
-                "- Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, and reject stale source-health updates<br>",
-                "- CSV Summary group edits now use an isolated session-local assignment store, avoiding source-table pollution and database-lock failures when multiple dialogs or previews are active<br>",
-                "- Packaged release artifacts now carry a generated Python/Rust dependency inventory, visible third-party notice sidecars, and a hash manifest for release review<br>",
-                "- Legacy Group Comparison worksheet and BOM Manager entry points now emit deprecation notices while remaining compatible for this release window<br>",
-                "- Excel and industrial workbook exports now keep imported formula-like and URL-like text literal, preventing source data from becoming active workbook formulas or links<br>",
-                "- Google OAuth tokens now use an atomic private application file, exclude client secrets, reject symlink targets, and migrate legacy local tokens only after a secure write succeeds<br>",
-                "- HTML and realtime dashboards now publish atomically, use private session output where appropriate, and preserve the last complete generation when publication fails<br>",
-                "- Parser resolution now reuses one bounded source inspection, validates source content during metadata enrichment, caps declarative regex work, and stores bounded provenance instead of duplicate parse trees<br>",
-                "- Report paths, typed membership filters, report identifiers, tabular numeric shadows, and measurement summaries now preserve stricter ownership and data-integrity invariants<br>",
-                "- CMM import now processes a valid final line without requiring a trailing newline and rejects empty parses without recording a successful fingerprint<br>",
-                "- Realtime industrial sync now stages streamed rows until atomic promotion, recovers abandoned staging at startup, quarantines permanent poison events, and keeps source health current even when no rows arrive<br>",
-                "- Realtime timestamps now use fixed-width UTC storage with explicit source timezones, detector inputs and identifiers are validated strictly, and legacy pickle model loading is disabled without deserialization<br>",
-                "- Realtime polling now commits samples, stream events, and monotonic offsets together, rejects stale pollers, handles bounded catch-up and late data, and streams replay files in bounded batches<br>",
-                "- Realtime shutdown now waits for database workers before removing session files, and test isolation guards prevent module-scope Qt stubs from contaminating later tests<br>",
-                "- Packaging now reports missing required components instead of silently producing incomplete builds, while automated security checks block newly introduced findings<br>",
-                "- CSV Summary and Excel inputs now use one consistent local row store, keeping large files responsive while avoiding extra data copies<br>",
-                "- CSV Summary filters, grouping, and dashboard preparation can stream selected rows in smaller batches, reducing memory pressure on large tables<br>",
-                "- Grouped metric summaries now calculate directly from stored rows, so large CSV Summary analysis spends less time preparing intermediate tables<br>",
-                "- Export and industrial analytics paths now share lighter table helpers, improving stability when optional spreadsheet packages are unavailable<br>",
-                "- Parser and report data paths now use clearer reusable row-query contracts for filtering, counting, and streaming report-backed results<br>",
-                "- Magic filter expressions now accept field names and AND, OR, IN, and NOT IN wording in any letter case, including shorthand ranges<br>",
-                "- Industrial Data now opens cached rows in CSV Summary from indexed local metadata, so filter lists and simple grouping previews respond faster on large production caches<br>",
-                "- Industrial Data workbook export can now include raw cached data directly without first loading the full cache into the interactive table<br>",
-                "- Industrial export filters now apply consistently to cached and live exports, including additional production-field filters entered in the filter dialog<br>",
-                "- Industrial cache updates now refresh same-session filter lists more reliably, even when rows and production field values change within the same second<br>",
-                "- Industrial Data now clears abandoned temporary tabular views before preparing a new cache handoff, keeping long sessions lighter<br>",
-                "- Large SQL fetches now report saved rows clearly when rows were already streamed before a later read or save warning occurs<br>",
-                "- Realtime monitoring now reloads only newly inserted sample rows for anomaly review, keeping polling cycles quicker as monitoring history grows<br>",
-                "- Realtime diagnostics now keep source status messages more specific when a polling or dashboard refresh step fails<br>",
-                "- Realtime Industrial Monitoring now has a separate foundation for append-only samples, signal definitions, stream offsets, explainable anomaly events, replay, and dashboard review<br>",
-                "- Deterministic anomaly detectors now cover specification limits, warning limits, IQR fences, MAD robust z-score, rolling z-score, and stale-source checks with operator-readable explanations<br>",
-                "- Realtime polling now uses generated bounded queries, cursor offsets, chunk limits, safe diagnostics, and offset advancement only after local persistence succeeds<br>",
-                "- Industrial Data fetches can now save rows into the local cache while large guided or SQL reads are still running, with clearer progress for saving rows, refreshing links, and updating summaries<br>",
-                "- Industrial Data can now run the same guided filters or SQL query across checked production sources, then report one batch result for all successful and failed sources<br>",
-                "- Industrial source setup now accepts copied CSV headers or an approved all-columns marker when a reviewed table or view is allowed to expose simple columns<br>",
-                "- SQL query work now has a larger editor with a preview table for reviewed production queries before fetching rows<br>",
-                "- Realtime Industrial Monitoring now opens an operator dialog with checked-source selection, polling interval and timeout settings, row limits, status, diagnostics, and dashboard output controls<br>",
-                "- Realtime source selection now keeps disabled production sources out of polling and separates saving one source from intentionally applying settings to all checked sources<br>",
-                "- Realtime Industrial Monitoring can now import the shared production source YAML file, reload source changes, and open the shared source editor from the monitor<br>",
-                "- Realtime dashboard snapshots now refresh in the background after polling, and Open Dashboard queues safely when a refresh is already running<br>",
-                "- Interactive HTML dashboards can now find points by TraceCode, record key, series, axis value, or point details, then save browser-local point marks without changing source data<br>",
-                "- Realtime dashboard review can open without selecting a Metroliza report database first; the app uses a temporary session SQLite store unless a persistent database is selected<br>",
-                "- Synthetic realtime fixtures and replay validation are available for pre-live testing without a production database<br>",
-                "- Optional advanced anomaly tooling stays separate from normal app startup, so standard users do not need extra ML packages<br>",
-                "- Industrial diagnostics now redact nested credentials, URI passwords, token-like fields, and raw SQL text from operator-facing status and persisted diagnostics<br>",
-                "- CMM parser probing now uses marker-based confidence so generic PDFs no longer look like perfect CMM report matches<br>",
-                "- CMM report import now rechecks encoded PDF page text before rejecting valid reports whose markers are hidden in compressed PDF bytes<br>",
-                "- Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>",
-                "- Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>",
-                "- The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>",
+                "- A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>",
+                "- Choose PDF reports before import and reopen saved measurements without repeating completed work<br>",
+                "- Filters and grouping keep numeric results consistent between the table and analysis views<br>",
+                "- Excel exports preserve chart titles and series names as literal text<br>",
+                "- The Help menu opens private incident reports for preview and export when a supervised run fails<br>",
+                "- Canceling active work protects completed database and workbook output<br>",
             ],
         )
+        self.assertIn("Version 2026.06rc2 (build 260711)", VersionDate.release_notes)
+
         changelog_bullets = [
             line.strip()
             for line in sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8").splitlines()
@@ -128,7 +84,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("RC2", updated)
+            self.assertIn("RC1", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

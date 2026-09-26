@@ -18,7 +18,7 @@ class Function:
         return self.action(*args)
 
 
-def _probe(monkeypatch, tmp_path):
+def _probe(monkeypatch, tmp_path, *, allow_ocr_worker=False):
     monkeypatch.setenv("SYSTEMROOT", str(tmp_path / "FAKE_SYSTEMROOT"))
     api = SimpleNamespace(wintypes=SimpleNamespace(
         DWORD=ctypes.c_uint32, LONG=ctypes.c_int32, WCHAR=ctypes.c_wchar,
@@ -47,7 +47,10 @@ def _probe(monkeypatch, tmp_path):
     api._expected_file_native_image = lambda expected, native, _: (str(expected) == native, None)
     api._open_job_process = lambda _job, pid: pid
     api._process_creation_time = lambda _handle: 100
-    probe = OwnedProcessProbe(api, tmp_path / "package", lambda: qualification.QualificationFailure("scenario_failed"))
+    probe = OwnedProcessProbe(
+        api, tmp_path / "package", lambda: qualification.QualificationFailure("scenario_failed"),
+        allow_ocr_worker=allow_ocr_worker,
+    )
     return probe, api, closed
 
 
@@ -230,6 +233,30 @@ def test_unobserved_assignment_overflow_is_explicit(monkeypatch, tmp_path):
 def test_system_roles_ignore_overridden_environment_directory(monkeypatch, tmp_path):
     probe, _, _ = _probe(monkeypatch, tmp_path)
     assert dict(probe.images)["system_cmd"] == tmp_path / "OS_SYSTEM32" / "cmd.exe"
+
+
+@pytest.mark.parametrize("image", (
+    "WerFault.exe", "wermgr.exe", "OpenConsole.exe", "WindowsPowerShell/v1.0/powershell.exe",
+))
+def test_unadmitted_system_images_are_not_queried_or_admitted(monkeypatch, tmp_path, image):
+    probe, api, _ = _probe(monkeypatch, tmp_path, allow_ocr_worker=True)
+    roles = dict(probe.images)
+    assert set(roles) == {
+        "package_launcher", "package_application", "system_cmd", "system_conhost",
+        "package_ocr_worker",
+    }
+    queried = []
+
+    def exact_file(expected, native, _failure):
+        queried.append(expected.name)
+        return str(expected) == native, None
+
+    api._expected_file_native_image = exact_file
+    failure = qualification.QualificationFailure("scenario_failed")
+    assert probe._role(str(roles["package_ocr_worker"]), failure) == "package_ocr_worker"
+    assert probe.unavailable is False
+    assert image.rsplit("/", 1)[-1] not in queried
+    assert probe._role(str(tmp_path / "OS_SYSTEM32" / image), failure) == "unknown"
 
 
 @pytest.mark.parametrize("error", [OSError, ValueError, TypeError, RuntimeError])

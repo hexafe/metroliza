@@ -6478,9 +6478,25 @@ def test_flood_rejection_identifies_only_its_fixed_observation_boundary(monkeypa
         runner.run_flood()
     assert caught.value.failure_id == "incident_invalid"
     assert caught.value.qualification_reason == (
-        "flood_incident_unavailable" if boundary == "incident" else "flood_loss_unobserved"
+        "flood_incident_unavailable" if boundary == "incident" else "flood_channel_complete"
     )
     assert caught.value.qualification_reason in qualification.QUALIFICATION_FAILURE_REASONS
+
+
+@pytest.mark.parametrize("channel,loss,reason", [
+    (ChannelState.COMPLETE, RingLoss(), "flood_channel_complete"),
+    (ChannelState.INCOMPLETE, RingLoss(), "flood_channel_incomplete"),
+    (ChannelState.INVALID, RingLoss(), "flood_channel_invalid"),
+    (ChannelState.LOSS_OBSERVED, RingLoss(), "flood_loss_no_counter"),
+    (ChannelState.LOSS_OBSERVED, RingLoss(operation_evicted_events=1),
+     "flood_loss_other_counter_only"),
+])
+def test_flood_failure_class_is_closed_and_retained_without_event_payload(channel, loss, reason):
+    incident = SimpleNamespace(
+        observation=SimpleNamespace(channel=channel), ring_loss=loss,
+    )
+    assert qualification._flood_failure_reason(incident) == reason
+    assert qualification._valid_failure_detail({"stage": "flood", "reason": reason})
 
 
 def test_concurrent_probe_child_receipt_mismatch_retains_valid_public_failure(tmp_path, monkeypatch):

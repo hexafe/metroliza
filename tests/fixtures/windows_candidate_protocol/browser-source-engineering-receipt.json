@@ -1,0 +1,72 @@
+{
+  "error_codes": [],
+  "evidence": {
+    "automation_driver": "playwright-1.63.0",
+    "browser_disconnected": true,
+    "browser_version": "152.0.7977.82",
+    "host_platform": "linux",
+    "input_sha256": "1082c0ba5e396459306f1aad2e2cfcf3ecd3a8298d361cc78c7adfff2ef1dab9",
+    "input_size": 12436,
+    "network_request_count": 2,
+    "network_request_schemes": [
+      "file"
+    ],
+    "profile_removed": true,
+    "source_unchanged": true,
+    "viewports": [
+      {
+        "clipped_element_count": 0,
+        "external_reference_count": 0,
+        "global_overflow_px": 0,
+        "heading_present": true,
+        "inline_script_count": 0,
+        "js_evaluated": true,
+        "main_present": true,
+        "name": "desktop",
+        "ready_state": "complete",
+        "required_sections_match": true,
+        "resource_entry_count": 0,
+        "sample_point_count": 2,
+        "section_count": 7,
+        "signal_chart_count": 1,
+        "signal_panel_count": 1,
+        "summary_card_count": 5,
+        "table_scroll_count": 3,
+        "table_scroll_violation_count": 0,
+        "viewport_height": 720,
+        "viewport_width": 1280
+      },
+      {
+        "clipped_element_count": 0,
+        "external_reference_count": 0,
+        "global_overflow_px": 0,
+        "heading_present": true,
+        "inline_script_count": 0,
+        "js_evaluated": true,
+        "main_present": true,
+        "name": "mobile",
+        "ready_state": "complete",
+        "required_sections_match": true,
+        "resource_entry_count": 0,
+        "sample_point_count": 2,
+        "section_count": 7,
+        "signal_chart_count": 1,
+        "signal_panel_count": 1,
+        "summary_card_count": 5,
+        "table_scroll_count": 3,
+        "table_scroll_violation_count": 0,
+        "viewport_height": 844,
+        "viewport_width": 390
+      }
+    ]
+  },
+  "facets": {
+    "browser_dom_execution": "passed",
+    "isolated_profile_cleanup": "passed",
+    "offline_resource_boundary": "passed",
+    "pinned_input_bytes": "passed",
+    "responsive_layout": "passed"
+  },
+  "schema_version": 1,
+  "status": "passed"
+}

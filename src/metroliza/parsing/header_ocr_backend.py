@@ -7,12 +7,14 @@ text, confidence, box, and diagnostics for downstream header geometry handling.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 import importlib
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from metroliza.shared.env_utils import env_bool, env_int, env_value
 
@@ -98,6 +100,28 @@ RAPIDOCR_ENUM_PARAM_TYPES = {
     "Rec.ocr_version": "OCRVersion",
 }
 _THREAD_LOCAL_CACHE = threading.local()
+_QUALIFICATION_STAGE: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "metroliza_ocr_qualification_stage", default=None,
+)
+
+
+@contextmanager
+def observe_ocr_qualification_stages(
+    recorder: Callable[[str], None] | None,
+) -> Iterator[None]:
+    """Scope fixed phase markers to one synthetic OCR qualification call."""
+
+    token = _QUALIFICATION_STAGE.set(recorder)
+    try:
+        yield
+    finally:
+        _QUALIFICATION_STAGE.reset(token)
+
+
+def _mark_qualification_stage(stage: str) -> None:
+    recorder = _QUALIFICATION_STAGE.get()
+    if recorder is not None:
+        recorder(stage)
 
 
 @dataclass(frozen=True)
@@ -568,24 +592,35 @@ class RapidOcrLatinBackend:
         # Preloading ONNX Runtime first avoids native DLL load-order failures
         # seen as ``onnxruntime_pybind11_state`` initialization errors.
         if self._uses_onnxruntime(params):
+            _mark_qualification_stage("ocr_onnxruntime_import")
             importlib.import_module("onnxruntime")
+        _mark_qualification_stage("ocr_rapidocr_import")
         rapidocr_module = importlib.import_module("rapidocr")
         rapidocr_class = getattr(rapidocr_module, "RapidOCR", None)
         if rapidocr_class is None:
             raise ImportError("rapidocr.RapidOCR is not available in the installed package.")
 
+        _mark_qualification_stage("ocr_engine_construction")
         self._engine = rapidocr_class(params=self._build_engine_params(rapidocr_module, params))
         return self._engine
 
-    def recognize(self, image_path: str | Path) -> HeaderOcrRun:
+    def recognize(self, image_path: str | Path, *, _in_process: bool = False) -> HeaderOcrRun:
         """Run OCR against a rendered crop and normalize the result."""
 
         image = Path(image_path).expanduser()
         if not image.exists():
             raise FileNotFoundError(str(image))
 
+        if (not _in_process and sys.platform == "win32" and getattr(sys, "frozen", False)
+                and Path(sys.executable).name.lower() == "metroliza_application.exe"):
+            from metroliza.parsing.frozen_ocr_worker import recognize_in_frozen_worker
+
+            return recognize_in_frozen_worker(self.config, image)
+
         engine = self.load_engine()
+        _mark_qualification_stage("ocr_engine_inference")
         result = engine(str(image))
+        _mark_qualification_stage("ocr_result_normalization")
         run = normalize_rapidocr_result(
             result,
             source=self.config.source_name,

@@ -761,18 +761,35 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
         assert window._report_start_allowed()
         release.set()
         (host.parse_button if stage == "import" else host.scan_button).click()
-        wait_until(app, host.can_change_workspace)
+        try:
+            wait_until(app, host.can_change_workspace)
+        except AssertionError as error:
+            worker = host.parse_thread if stage == "import" else host.preflight_thread
+            raise AssertionError(
+                "report_worker_terminal_timeout: "
+                f"stage={stage} target_entered={entered.is_set()} "
+                f"worker_present={worker is not None} "
+                f"worker_running={worker.isRunning() if worker is not None else False} "
+                f"parse_error={bool(host.parse_error_message)} "
+                f"cancelled={host.parsing_canceled}"
+            ) from error
         if stage == "review":
             host.parse_button.click()
             wait_until(app, host.can_change_workspace)
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
     finally:
+        active_failure = sys.exc_info()[0] is not None
         release.set()
-        wait_until(app, host.can_change_workspace)
-        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
-        if not sip.isdeleted(writer):
-            writer.close()
+        try:
+            wait_until(app, host.can_change_workspace)
+        except AssertionError:
+            if not active_failure:
+                raise
+        finally:
+            monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+            if not sip.isdeleted(writer):
+                writer.close()
 
 
 def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):
