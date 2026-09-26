@@ -5,6 +5,17 @@
 
 A normal PR should have one primary Issue. Use `Refs #...` instead of `Closes #...` when this is only one slice of a larger Issue.
 
+## Branch lifecycle
+
+- Execution owner:
+- Actual base:
+- Named live dependency that requires this ref after merge (or `none`):
+- Retirement: `DELETE_CANDIDATE` by default; otherwise name the exact live dependency and trigger:
+
+Remote branches are temporary WIP. Do not keep them for historical evidence; PRs, commit/tree SHAs,
+CI runs, artifacts and release tags preserve that history. Do not create extra branches for workers,
+reviewers, test attempts or checkpoints.
+
 ## Change type
 
 - [ ] Bug fix
@@ -119,3 +130,12 @@ export UI/contracts, or the Google transport/credential boundary.
 - [ ] No credentials, OAuth tokens, proprietary reports, production extracts, private keys, or unredacted sensitive diagnostics are included.
 - [ ] Follow-up work has separate Issues rather than hidden TODOs.
 - [ ] CI/manual evidence refers to the exact PR head.
+
+## Post-merge closeout — external orchestrator
+
+- [ ] Source branch is DELETE_CANDIDATE after merge, or a named live dependency and exact retirement trigger are recorded.
+- [ ] Any physical deletion was executed only from a Product-Owner-approved exact-ref/full-SHA cleanup manifest with guarded expected-old-value checks.
+- [ ] If this PR replaced/closed another proposal, its obsolete branch was also retired or explicitly held by a named dependency.
+
+Leave these unchecked before merge. Branch deletion never authorizes protected-ref changes, release,
+deployment, force history rewrite, or deletion of an active dependency.
