@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Maintainer  
-Last reviewed: 2026-08-22
+Last reviewed: 2026-09-26
 
 ## 1. Core rule: Issue first
 
@@ -19,6 +19,16 @@ slices, use several pull requests and keep the Issue open until all acceptance c
 
 The branch decision and exact validation evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md).
+
+### Steady-state repository shape
+
+Keep the remote branch set intentionally small: `master`, `develop`, at most the currently active
+`release/*` line, and branches that are heads of genuinely active PRs. Temporary delivery
+integration/acceptance branches are explicit exceptions, not a permanent layer.
+
+Branches are disposable work refs. PRs, commit/tree SHAs, CI runs, artifacts and tags preserve
+history/evidence; keeping an old branch name does not add evidence. Merge closeout includes deleting
+the source branch unless a named live dependency still needs that exact ref.
 
 ### Normal development
 
@@ -182,6 +192,7 @@ only when history/evidence requires it.
 - [ ] Temporary files/flags/dead plans are removed or explicitly tracked.
 - [ ] Follow-up work has separate Issues rather than hidden TODOs.
 - [ ] The primary Issue is closed by the merge or closed with a final evidence comment.
+- [ ] The merged source branch is deleted, or a named live dependency and retirement trigger are recorded.
 
 ## 4. Priority model
 
