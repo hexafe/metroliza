@@ -103,6 +103,7 @@ from metroliza.charts.export_chart_writer import (
     insert_measurement_chart,
 )
 from metroliza.exporting.export_query_service import (
+    build_analytical_partition_query,
     build_export_dataframe as _build_export_dataframe,
     build_measurement_export_dataframe as _build_measurement_export_dataframe,
     execute_export_query as _execute_export_query,
@@ -3589,6 +3590,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 or validated_request.options.export_target == "html_dashboard"
             ),
             "summary_sheet_requested": bool(validated_request.options.generate_summary_sheet),
+            "group_analysis_requested": validated_request.options.group_analysis_level != 'off',
+            "group_analysis_warnings": [],
             "html_dashboard_plotly_spec_count": 0,
             "html_dashboard_embedded_plotly_spec_count": 0,
             "html_dashboard_plotly_serialized_json_bytes": 0,
@@ -4029,6 +4032,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._sql_measurement_summary_cache.clear()
 
     def _iter_reference_partitions(self):
+        partition_query = build_analytical_partition_query(self._active_export_query)
         try:
             partition_values = list(self._partition_header_counts().keys())
         except Exception:
@@ -4038,26 +4042,27 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             )
             partition_values = fetch_partition_values(
                 self.db_file,
-                self._active_export_query,
-                partition_column='REFERENCE',
+                partition_query,
+                partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
             )
         for partition_value in partition_values:
             partition_df = load_measurement_export_partition_dataframe(
                 self.db_file,
-                self._active_export_query,
+                partition_query,
                 partition_value,
-                partition_column='REFERENCE',
+                partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
             )
-            yield partition_value, partition_df
+            if not partition_df.empty:
+                yield partition_df['EXPORT_PARTITION_LABEL'].iloc[0], partition_df
 
     def _partition_header_counts(self):
         if self._partition_header_counts_cache is None:
             self._partition_header_counts_cache = fetch_partition_header_counts(
                 self.db_file,
-                self._active_export_query,
-                partition_column='REFERENCE',
+                build_analytical_partition_query(self._active_export_query),
+                partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
             )
         return self._partition_header_counts_cache
@@ -4377,6 +4382,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
     def _insert_summary_image(worksheet, slot, image_data):
         """Insert summary image and guard against missing worksheet backends."""
 
+        if worksheet is None:
+            return
+
         options = {'image_data': image_data}
         for key in ('x_scale', 'y_scale'):
             if slot.get(key) is not None:
@@ -4685,6 +4693,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return True
         return False
 
+    def _run_group_analysis_outputs(self, writer):
+        self._write_group_analysis_outputs(writer)
+        if self.group_analysis_level != 'off' and not self.export_canceled:
+            self.completion_metadata['group_analysis_completed'] = True
+
     def run_export_pipeline(self, excel_writer):
         """Handle `run_export_pipeline` for `ExportDataThread`.
 
@@ -4717,7 +4730,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 ),
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing grouped comparisons", "ETA --")),
-                    self._write_group_analysis_outputs(excel_writer),
+                    self._run_group_analysis_outputs(excel_writer),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -4737,7 +4750,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 ),
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing dashboard statistics", "ETA --")),
-                    self._write_group_analysis_outputs(dashboard_writer),
+                    self._run_group_analysis_outputs(dashboard_writer),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -5044,6 +5057,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             partition_header_counts = self._partition_header_counts()
             total_references = len(partition_header_counts)
             total_header_units = sum(partition_header_counts.values())
+            if total_references == 0 or total_header_units == 0:
+                if len(self._build_export_filtered_dataframe()) > 0:
+                    raise ValueError(
+                        'Selected measurements have no usable reference/report partition '
+                        'with HEADER and AX; review imported measurement metadata.'
+                    )
             completed_header_units = 0
             measurement_stage_start = time.perf_counter()
             label_emit_every_headers = 10
@@ -5150,7 +5169,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     if self._check_canceled():
                         return
 
-                    if self.generate_summary_sheet:
+                    if self.generate_summary_sheet or self.generate_html_dashboard:
                         self.summary_sheet_fill(summary_worksheet, header, header_group, col)
                         if self._check_canceled():
                             return
@@ -5705,6 +5724,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 'Group Analysis skipped: grouping assignments could not be matched '
                 'to the exported measurement rows.'
             )
+            self.completion_metadata.setdefault('group_analysis_warnings', []).append(message)
             if self.generate_html_dashboard:
                 self._html_group_analysis_payload = {
                     'status': 'skipped',
@@ -5768,6 +5788,29 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
         finally:
             self._record_stage_timing('group_analysis_payload', time.perf_counter() - payload_start)
+        missing_reference = 'REFERENCE' not in grouped_export_df.columns or any(
+            value is None or (isinstance(value, str) and not value.strip())
+            for value in grouped_export_df['REFERENCE']
+        )
+        warnings = []
+        if not payload.get('metric_rows'):
+            warnings.append(
+                'Group Analysis has no metric with measurements from two groups '
+                'in the selected reference scope; review group assignments.'
+            )
+        if missing_reference:
+            warnings.append(
+                'Reports without a reference remain in measurement charts, but '
+                'reference-specific Group Analysis cannot compare them; complete '
+                'reference metadata to include those reports in grouped comparisons.'
+            )
+        if warnings:
+            self.completion_metadata.setdefault('group_analysis_warnings', []).extend(warnings)
+            warning_summary = payload.setdefault('diagnostics', {}).setdefault(
+                'warning_summary', {'count': 0, 'messages': []}
+            )
+            warning_summary['messages'] = [*warning_summary.get('messages', []), *warnings]
+            warning_summary['count'] = len(warning_summary['messages'])
         if self.generate_html_dashboard:
             self._html_group_analysis_payload = payload
             self._html_group_analysis_plot_assets = {'metrics': {}}
@@ -6040,7 +6083,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             header_value = header_group['HEADER'].iloc[0] if 'HEADER' in header_group.columns and not header_group.empty else None
             axis_value = header_group['AX'].iloc[0] if 'AX' in header_group.columns and not header_group.empty else None
             sql_summary = None
-            if reference_value is not None and header_value is not None and axis_value is not None:
+            if (
+                reference_value is not None
+                and str(reference_value).strip()
+                and header_value is not None
+                and axis_value is not None
+            ):
                 sql_summary = self._lookup_sql_measurement_summary(
                     reference=reference_value,
                     header=header_value,
@@ -6132,10 +6180,15 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             capability_badge = summary_table_composition['capability_badge']
             histogram_row_badges = summary_table_composition['histogram_row_badges']
             panel_subtitle = worksheet_plan['subtitle_value']
+            display_reference = (
+                header_group['EXPORT_PARTITION_LABEL'].iloc[0]
+                if 'EXPORT_PARTITION_LABEL' in header_group.columns and not header_group.empty
+                else reference_value
+            )
             dashboard_section = self._begin_html_dashboard_section(
                 header=header,
                 subtitle=panel_subtitle,
-                reference=reference_value,
+                reference=display_reference,
                 axis=axis_value,
                 grouping_applied=grouping_applied,
                 sample_size=summary_stats.get('sample_size', 0),
@@ -6202,8 +6255,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return scaled_slot
 
             write_start = time.perf_counter()
-            summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
-            summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, worksheet_plan['subtitle_value'])
+            if summary_worksheet is not None:
+                summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
+                summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, worksheet_plan['subtitle_value'])
             self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._summary_chart_required('distribution'):
