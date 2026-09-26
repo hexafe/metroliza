@@ -8,12 +8,13 @@ A normal PR should have one primary Issue. Use `Refs #...` instead of `Closes #.
 ## Branch lifecycle
 
 - Execution owner:
-- Actual base / dependency PRs (or `none`):
-- Live downstream consumers (or `none`):
-- Retirement condition / post-merge owner:
+- Actual base:
+- Named live dependency that requires this ref after merge (or `none`):
+- Retirement: `DELETE_AFTER_MERGE` by default; otherwise name the exact trigger:
 
-Use [the branch lifecycle](../docs/release_checks/branching_strategy.md#8-branch-lifecycle-and-housekeeping).
-A dependency must name its PR/branch; a historical source link does not automatically keep a branch alive.
+Remote branches are temporary WIP. Do not keep them for historical evidence; PRs, commit/tree SHAs,
+CI runs, artifacts and release tags preserve that history. Do not create extra branches for workers,
+reviewers, test attempts or checkpoints.
 
 ## Change type
 
@@ -132,7 +133,8 @@ export UI/contracts, or the Google transport/credential boundary.
 
 ## Post-merge closeout — external orchestrator
 
-- [ ] Source branch is retired, or a KEEP_ACTIVE / KEEP_EVIDENCE / DELETE_CANDIDATE / BLOCKED_TOOLING decision records owner and next trigger.
-- [ ] Any deletion records exact SHA, integrated disposition, live-consumer check, verified recovery and guarded result.
+- [ ] Source branch deleted after merge, or a named live dependency and exact retirement trigger are recorded.
+- [ ] If this PR replaced/closed another proposal, its obsolete branch was also retired or explicitly held by a named dependency.
 
-Leave these unchecked before merge. No branch deletion, protected-ref change or release is authorized by this template.
+Leave these unchecked before merge. Branch deletion never authorizes protected-ref changes, release,
+deployment, force history rewrite, or deletion of an active dependency.
