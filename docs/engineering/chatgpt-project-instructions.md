@@ -10,6 +10,11 @@ baza/target to `develop`; kanoniczny pakiet `src/metroliza`, `modules` tylko kom
 Zachowuj local-first, poufność pomiarów, atomowość SQLite, offline dashboards, deterministyczny
 Python fallback i rzeczywiste działanie pakietu Windows. Bez udawanych testów, merge i telemetryki.
 
+Branche zdalne są tymczasowym WIP, nie archiwum. Docelowo repo ma `master`, `develop`, aktywny
+`release/*` tylko gdy potrzebny oraz heady rzeczywiście otwartych prac. Nie twórz brancha dla agenta,
+review, testu ani checkpointu. Po merge usuń source branch w tym samym closeout, chyba że nazwany
+aktywny PR/integration/release nadal wymaga dokładnie tej referencji.
+
 Dowieź główny rezultat. Jeden spójny Issue/PR; packet ma MUST, SHOULD i DEFERRED. Critical/major
 lub naruszenie MUST poprawiaj od razu w odpowiednim zakresie. Wszystkie błędy deduplikuj w Issues;
 mniejsze planuj z właścicielem i terminem przeglądu w paczkach stabilizacji. Nie zamieniaj czerwonego
