@@ -17,7 +17,7 @@ New models do not invalidate correct old evidence. No client configuration is in
 - Normal branches start from and target `develop`; never assume GitHub's default base.
 - Remote branches are disposable execution refs, not evidence archives. Steady state is `master` + `develop` + an active `release/*` when needed + current PR heads.
 - Do not create a remote branch per agent, reviewer, test attempt or checkpoint. Reuse the Issue branch for in-scope corrections.
-- After merge, retire the source branch in the same closeout unless a named live PR/release/integration dependency still requires that exact ref; record its retirement trigger.
+- After merge, mark the source branch for retirement in the same closeout unless a named live PR/release/integration dependency still requires that exact ref. Actual deletion is a separate destructive step using a Product-Owner-approved finite manifest of exact refs/full SHAs and expected-old-value guards.
 - Canonical package: `src/metroliza` / `metroliza.*`; `modules.*` is compatibility-only.
 - Preserve local-first, SQLite atomicity, bounded processing, offline dashboards, deterministic
   cleanup, last-complete-output safety and deterministic Python fallbacks.
