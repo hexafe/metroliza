@@ -27,8 +27,9 @@ Keep the remote branch set intentionally small: `master`, `develop`, at most the
 integration/acceptance branches are explicit exceptions, not a permanent layer.
 
 Branches are disposable work refs. PRs, commit/tree SHAs, CI runs, artifacts and tags preserve
-history/evidence; keeping an old branch name does not add evidence. Merge closeout includes deleting
-the source branch unless a named live dependency still needs that exact ref.
+history/evidence; keeping an old branch name does not add evidence. Merge closeout marks the source
+branch `DELETE_CANDIDATE` unless a named live dependency still needs that exact ref. Physical
+ref deletion is a separate PO-approved exact-ref/full-SHA cleanup batch.
 
 ### Normal development
 
@@ -192,7 +193,7 @@ only when history/evidence requires it.
 - [ ] Temporary files/flags/dead plans are removed or explicitly tracked.
 - [ ] Follow-up work has separate Issues rather than hidden TODOs.
 - [ ] The primary Issue is closed by the merge or closed with a final evidence comment.
-- [ ] The merged source branch is deleted, or a named live dependency and retirement trigger are recorded.
+- [ ] The merged source branch is marked `DELETE_CANDIDATE`, or a named live dependency and retirement trigger are recorded.
 
 ## 4. Priority model
 
