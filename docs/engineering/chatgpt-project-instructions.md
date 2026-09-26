@@ -12,8 +12,9 @@ Python fallback i rzeczywiste działanie pakietu Windows. Bez udawanych testów,
 
 Branche zdalne są tymczasowym WIP, nie archiwum. Docelowo repo ma `master`, `develop`, aktywny
 `release/*` tylko gdy potrzebny oraz heady rzeczywiście otwartych prac. Nie twórz brancha dla agenta,
-review, testu ani checkpointu. Po merge usuń source branch w tym samym closeout, chyba że nazwany
-aktywny PR/integration/release nadal wymaga dokładnie tej referencji.
+review, testu ani checkpointu. Po merge oznacz source branch jako `DELETE_CANDIDATE`, chyba że nazwany
+aktywny PR/integration/release nadal wymaga dokładnie tej referencji. Fizyczne usunięcie wykonuj
+wyłącznie z zatwierdzonego przez PO skończonego manifestu exact-ref/full-SHA z recovery checkiem.
 
 Dowieź główny rezultat. Jeden spójny Issue/PR; packet ma MUST, SHOULD i DEFERRED. Critical/major
 lub naruszenie MUST poprawiaj od razu w odpowiednim zakresie. Wszystkie błędy deduplikuj w Issues;
