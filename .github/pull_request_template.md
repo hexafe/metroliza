@@ -10,7 +10,7 @@ A normal PR should have one primary Issue. Use `Refs #...` instead of `Closes #.
 - Execution owner:
 - Actual base:
 - Named live dependency that requires this ref after merge (or `none`):
-- Retirement: `DELETE_AFTER_MERGE` by default; otherwise name the exact trigger:
+- Retirement: `DELETE_CANDIDATE` by default; otherwise name the exact live dependency and trigger:
 
 Remote branches are temporary WIP. Do not keep them for historical evidence; PRs, commit/tree SHAs,
 CI runs, artifacts and release tags preserve that history. Do not create extra branches for workers,
