@@ -261,110 +261,84 @@ Not allowed:
 
 ## 8) Branch lifecycle and housekeeping
 
-Owner: external orchestrator. Operational decisions and the current inventory are recorded in
-[#921](https://github.com/hexafe/metroliza/issues/921). The August #960
-[execution ledger](../project/branch_cleanup_execution.md) remains historical evidence, not a
-current branch count or a mandate to repeat its complete archaeology for each cleanup.
+The intended steady state is deliberately small:
 
-### Create only for an owned outcome
+```text
+master                 # production/history anchor (rename to main is a separate repository decision)
+develop                # canonical integration branch
+release/YYYY.MM-rcN    # only while that release/evidence cycle is active
+<active PR heads>      # feature/fix/docs/test/chore/etc. currently being reviewed or integrated
+```
 
-One primary Issue and one coherent result per topic branch/PR. Create the branch when execution
-starts, not for every backlog idea. Each PR records its owner, actual base, dependency PRs (or
-`none`), live downstream consumers and retirement condition. Do not make a remote branch per
-agent, test attempt, review round or checkpoint. Reuse the existing branch for in-scope corrections.
+A remote branch is a **temporary execution ref, not an archive or evidence store**. Durable evidence
+lives in the linked Issue/PR, commit/tree SHA, CI run, retained artifact, and release tag when
+applicable.
 
-A replacement such as `-v2` requires a recorded reason and predecessor/successor links. Preserve
-needed unique work and close the superseded proposal explicitly; do not silently abandon the old
-branch or assume the new name contains its history. Research/design proposals end in an accepted
-document, a named implementation, or a reasoned rejection with recoverable evidence, not indefinite
-competing instructions. Closing a proposal does not mean its implementation was accepted or merged.
+### Create fewer branches
 
-### Keep dependent branches explicit
+- Create one branch for one primary Issue/PR when implementation actually starts.
+- Do not create remote branches for backlog ideas, read-only reviewers, agents, test attempts,
+  review rounds, checkpoints, or "maybe useful later" snapshots.
+- Keep in-scope corrections on the existing branch/PR.
+- Research/design work uses an Issue/comment or a documentation PR. It gets a dedicated remote
+  branch only when it contains a concrete mergeable deliverable.
+- A replacement `-v2` branch is exceptional: record why the first branch cannot continue and close
+  or retire the predecessor rather than keeping competing versions indefinitely.
 
-Normal work still targets `develop`. A temporary integration/acceptance stack is an explicit
-exception with one delivery owner, a dependency map and a retirement condition. A composed source
-is not automatically merged, and a passing source test is not package acceptance.
+### Delete as part of merge closeout
 
-Before integrating or retiring a parent, check every open PR's head and base, the current delivery
-packet and active workflow use. Agree the next base with the affected owner; never silently retarget
-an active stack. Update retained branches through normal integration and refresh the affected
-exact-head evidence. Do not force-rebase an active executor or use cleanup to change its source.
+The merging orchestrator owns branch retirement in the same closeout as the merge.
 
-After a leaf is integrated, its ordinary branch can retire as soon as no live consumer needs it;
-it does not need to wait for unrelated features or the entire release. Engineering/acceptance
-parents retire only after dependent work is integrated or explicitly preserved and the owner has
-released their live names. A historical link by SHA/PR is not by itself an active-name dependency.
+Default rule:
 
-### Make retirement part of post-merge closeout
+> **Merged PR -> delete its source branch immediately.**
 
-The merging orchestrator owns the retirement decision in the same closeout. Record one of:
+Keep the branch only when a **named live dependency** still requires that ref name, such as an open
+PR based on it, an active release/integration stack, or a currently running executor/workflow that
+cannot yet move. The keep decision must name the consumer and the exact retirement trigger.
 
-- `RETIRED`: actual guarded deletion and post-delete verification recorded;
-- `KEEP_ACTIVE`: named downstream PR, executor or workflow plus release condition;
-- `KEEP_EVIDENCE`: exact historical use plus verified preservation/next review plan;
-- `DELETE_CANDIDATE`: merge disposition known, but one or more deletion checks remain;
-- `BLOCKED_TOOLING`: the safe mutation/recovery capability is unavailable; assign an executor and
-  retain the exact pending set instead of claiming deletion.
+A historical link, old CI run, benchmark, audit, review, or useful commit is **not** a reason to keep
+the branch. Those remain recoverable through the PR/commit history.
 
-A remaining branch is not a product-merge failure, but it must have an owner and a concrete next
-trigger. Do not rewrite application code, restart reviews or add full QA merely to remove a ref.
-A proposal may be closed as superseded without merging stale code. Never merge a dependency bump,
-prototype, diagnostic experiment or incomplete product PR merely to make the branch list shorter.
-Actual required merge and release gates remain unchanged.
+Closed or superseded unmerged PRs also retire once unique useful work is either integrated elsewhere
+or deliberately preserved in a durable PR/commit/document. Do not merge stale code merely to make
+the branch list shorter.
 
-### Safe deletion gate
+### Temporary integration stacks are exceptions
 
-A retirement candidate is not deletion approval. Prepare one finite exact-ref manifest for approval;
-one approval may name multiple independently checked entries. Each entry records the full expected
-SHA, PR/disposition, retained integration result, dependency check, recovery proof and executor.
-Protected/default/release refs and unique unmerged work are excluded from routine batches.
+Normal work starts from and targets `develop`. A delivery may temporarily use an integration branch
+and, when genuinely required, one acceptance/package branch. Such a stack must have:
 
-Before deleting an entry:
+- one delivery owner;
+- an explicit dependency map;
+- a named final destination;
+- a retirement trigger.
 
-1. Re-read its current full SHA and PR state. Require no post-merge unreviewed commits. Verify the
-   integration result exists in the intended retained branch. For squash/cherry-pick history,
-   compare the accepted tree/patch as well as the graph; `git branch --merged` alone is insufficient.
-2. Require no open PR using the name as head/base, no active executor/CI use and no other live
-   release, workflow, settings or packet dependency. Unknown means retain that entry. Do not modify
-   another executor's local branches, worktrees or uncommitted work.
-3. In a clean disposable repository, actually fetch the exact commit/tree through a retained
-   recovery ref such as `refs/pull/<number>/head`. Alternatively use a separately approved,
-   checksummed, restore-tested durable archive. A remembered SHA, API page or local path alone is
-   not a backup. Do not create/move archive or release tags implicitly.
-4. Use the approved exact-SHA deletion, with an explicit expected-old-value lease. Recheck the
-   dependency snapshot immediately before mutation. A moved ref or new consumer cancels that entry,
-   not the entire completed batch. No bare name-only deletion, wildcard pruning or `--force`.
-5. Verify the ref is absent and retained refs/recovery still match, then record the actual result.
-   Recovery is a separate authorized create-ref operation that refuses an already-existing target;
-   never overwrite a concurrently recreated branch.
+Do not grow a tree of per-worker/per-test integration branches. When leaf work is integrated into the
+retained integration branch, retire the leaf branch. When the delivery is reconciled into its final
+branch, retire the integration/acceptance refs.
 
-The lease is a compare-and-delete safety check, not permission to rewrite history. Its form is
-`--force-with-lease=refs/heads/<branch>:<full-expected-sha>` with one explicit deletion refspec.
-See [Git's push contract](https://git-scm.com/docs/git-push). Do not replace this with an unguarded
-REST delete when the required lease-capable execution surface is unavailable.
+### Cleanup gate
 
-### Prevent accumulation without automatic destruction
+Before deleting a branch:
 
-Review unresolved post-merge entries during ordinary weekly planning and before release freeze.
-This is a small inventory/dependency check, not a recurring code audit or an automation started by
-this document. Fourteen days without meaningful activity triggers owner/status review; thirty days
-requires an explicit continue, park, supersede or archive decision. Age never authorizes deletion.
+1. re-read its current SHA and PR state;
+2. confirm no open PR uses it as head/base and no active workflow/executor needs the ref name;
+3. confirm accepted work is present in the retained destination or intentionally preserved through
+   the PR/commit history;
+4. delete only the exact expected ref/SHA, never by wildcard or blind force;
+5. verify the ref is absent and record the cleanup result in #921 when the operation is part of a
+   batch.
 
-Track merged-but-unretired topics and ownerless/stale branches, not a cosmetic global branch limit.
-The intended steady state is the justified long-lived refs plus current delivery slices. Start new
-slices only with useful ownership; finish or explicitly park existing work first. No separate
-remote branches are required for read-only reviewers or mechanical subagent work.
-
-Automatic head deletion may be enabled only by a separate settings decision after recovery,
-protected/release refs and active stacks are accounted for. GitHub supports this setting and notes
-that branch protection/rulesets can prevent deletion; the toggle is not proof of our stronger
-recovery/consumer gate. See [GitHub's automatic-deletion documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-the-automatic-deletion-of-branches).
-This policy does not change that setting or install a cleanup workflow.
+A branch with no open PR and no explicit release/integration role is a cleanup candidate immediately.
+Housekeeping should happen continuously after merges, not as a rare repository-wide archaeology
+project. There is no cosmetic numeric branch cap, but the normal count should be approximately the
+long-lived refs plus genuinely active PR heads.
 
 ### Long-lived and historical release refs
 
-Keep `develop` and `master` in their existing roles. Keep an active release/evidence branch while
-its cycle is open. Retire `rc2` only through #924 after promotion or explicit abandonment,
-reconciliation and preservation of useful references. Equal tips for `rc2` and a release branch
-are not sufficient authority to delete either. Default-branch changes, tags and release promotion
-remain separate decisions.
+Keep `develop` and `master` in their current roles. Keep an active `release/*` branch only while
+its release/evidence cycle is open. Prefer immutable tags for historical release points rather than
+keeping old release branches indefinitely. Retire the historical `rc2` only through its recorded
+release-transition decision; default-branch renaming and release promotion remain separate actions.
+
