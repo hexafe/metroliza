@@ -133,7 +133,8 @@ export UI/contracts, or the Google transport/credential boundary.
 
 ## Post-merge closeout — external orchestrator
 
-- [ ] Source branch deleted after merge, or a named live dependency and exact retirement trigger are recorded.
+- [ ] Source branch is DELETE_CANDIDATE after merge, or a named live dependency and exact retirement trigger are recorded.
+- [ ] Any physical deletion was executed only from a Product-Owner-approved exact-ref/full-SHA cleanup manifest with guarded expected-old-value checks.
 - [ ] If this PR replaced/closed another proposal, its obsolete branch was also retired or explicitly held by a named dependency.
 
 Leave these unchecked before merge. Branch deletion never authorizes protected-ref changes, release,
