@@ -287,11 +287,16 @@ applicable.
 
 ### Delete as part of merge closeout
 
-The merging orchestrator owns branch retirement in the same closeout as the merge.
+The merging orchestrator owns the **retirement decision** in the same closeout as the merge.
+Merge authority does not itself authorize destructive ref deletion.
 
-Default rule:
+Default lifecycle:
 
-> **Merged PR -> delete its source branch immediately.**
+> **Merged PR -> mark its source branch DELETE_CANDIDATE immediately -> delete it in the next approved exact-ref cleanup batch.**
+
+A cleanup batch may contain many branches, so this safety gate must not turn ordinary housekeeping
+into one approval per branch. Before mutation, however, the Product Owner approval must name the
+finite manifest containing each exact branch and expected full SHA.
 
 Keep the branch only when a **named live dependency** still requires that ref name, such as an open
 PR based on it, an active release/integration stack, or a currently running executor/workflow that
@@ -324,10 +329,14 @@ Before deleting a branch:
 
 1. re-read its current SHA and PR state;
 2. confirm no open PR uses it as head/base and no active workflow/executor needs the ref name;
-3. confirm accepted work is present in the retained destination or intentionally preserved through
-   the PR/commit history;
-4. delete only the exact expected ref/SHA, never by wildcard or blind force;
-5. verify the ref is absent and record the cleanup result in #921 when the operation is part of a
+3. confirm accepted work is present in the retained destination. For a closed/superseded unmerged
+   PR containing unique work, also prove in a clean disposable repository that the exact head is
+   fetchable through a retained recovery ref such as `refs/pull/<number>/head`; a SHA or web page
+   alone is not recovery proof;
+4. obtain Product Owner approval for the finite exact-ref manifest (branch + full expected SHA);
+5. delete only the approved exact ref/SHA with an expected-old-value lease, never by wildcard or
+   blind force;
+6. verify the ref is absent and record the cleanup result in #921 when the operation is part of a
    batch.
 
 A branch with no open PR and no explicit release/integration role is a cleanup candidate immediately.
