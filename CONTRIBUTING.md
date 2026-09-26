@@ -12,7 +12,7 @@
 - GitHub currently presents `master` as the default branch, so select the pull-request base explicitly.
 - Keep one primary Issue per pull request and separate behavior changes from structural refactors.
 - Keep remote branches short-lived: normally only `master`, `develop`, the active `release/*` line, and current PR heads should exist. A branch is work-in-progress, not evidence storage.
-- After merge, delete the source branch unless a named live dependency still requires that exact ref; record the dependency and retirement trigger. Do not create branches for reviewers, agents, test attempts, checkpoints, or backlog ideas.
+- After merge, mark the source branch for deletion unless a named live dependency still requires that exact ref; record the dependency and retirement trigger. Physical deletion is performed from a Product-Owner-approved finite exact-ref/SHA manifest with guarded expected-old-value checks. Do not create branches for reviewers, agents, test attempts, checkpoints, or backlog ideas.
 
 The exact branch decision and automated evidence are recorded in
 [`docs/release_checks/rc2_branch_transition_decision_2026-08-22.md`](docs/release_checks/rc2_branch_transition_decision_2026-08-22.md).
