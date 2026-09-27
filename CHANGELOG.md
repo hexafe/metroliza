@@ -1,10 +1,12 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 260924) — current version
+## 2026.09 RC1 (build 260927) — current version
 - A refreshed Windows workspace brings report review, selected PDF import, analysis, and export together.
 - Completed imports remain in SQLite and can be reopened without duplicating saved measurements.
 - Numeric filters and grouping agree between the table, analysis, and workbook output.
 - Excel chart titles and series names preserve literal report text.
+- Reports follow the selected app theme, including changes made while the app is open.
+- Reports with missing reference metadata remain exportable; Group Analysis identifies omitted rows instead of treating them as a shared reference.
 - Supervised runs retain private incident reports that can be previewed and exported from the Help menu.
 - Canceling active work protects completed database and workbook output.
 

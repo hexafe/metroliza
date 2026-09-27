@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 260924)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 260927)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -54,6 +54,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 "- Choose PDF reports before import and reopen saved measurements without repeating completed work<br>",
                 "- Filters and grouping keep numeric results consistent between the table and analysis views<br>",
                 "- Excel exports preserve chart titles and series names as literal text<br>",
+                "- Reports follow the selected app theme, including after a theme change<br>",
+                "- Reports without a reference remain exportable, while group comparisons identify missing references<br>",
                 "- The Help menu opens private incident reports for preview and export when a supervised run fails<br>",
                 "- Canceling active work protects completed database and workbook output<br>",
             ],

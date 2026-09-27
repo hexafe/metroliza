@@ -290,3 +290,5 @@ windows. Check their displayed database before continuing.
 ### Context and navigation during a session
 
 The main window and Reports share accepted source/database changes. Navigation preferences remember the chosen page; report selection and active operations remain session state. Check the current paths before starting work.
+
+Reports also follows the selected application theme when you change it during the same session.

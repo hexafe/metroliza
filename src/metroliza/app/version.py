@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "260924"
+VERSION_DATE = "260927"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for selecting and importing reports, exploring saved measurements, exporting workbooks, and reviewing private diagnostic reports."
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 260924)"
+CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, analyzing measurements, exporting workbooks, and reviewing private diagnostic reports."
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 260927)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
@@ -10,6 +10,8 @@ release_notes = f"""
     - Choose PDF reports before import and reopen saved measurements without repeating completed work<br>
     - Filters and grouping keep numeric results consistent between the table and analysis views<br>
     - Excel exports preserve chart titles and series names as literal text<br>
+    - Reports follow the selected app theme, including after a theme change<br>
+    - Reports without a reference remain exportable, while group comparisons identify missing references<br>
     - The Help menu opens private incident reports for preview and export when a supervised run fails<br>
     - Canceling active work protects completed database and workbook output<br>
 
