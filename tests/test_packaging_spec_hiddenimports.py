@@ -1,4 +1,7 @@
+import importlib.util
 from pathlib import Path
+
+import pytest
 
 
 def test_onefile_spec_includes_builtin_cmm_parser_hiddenimport():
@@ -154,3 +157,37 @@ def test_onefile_spec_enables_windows_bootloader_splash_only():
     assert "splash.binaries" in spec_text
     assert "Splash(" not in onedir_text
     assert "metroliza_bootloader_splash.png" not in onedir_text
+
+
+def test_onedir_hiddenimports_keep_only_onnxruntime_inference_modules():
+    module_spec = importlib.util.spec_from_file_location(
+        "pyinstaller_common_under_test", Path("packaging/pyinstaller_common.py")
+    )
+    common = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(common)
+    hiddenimports = [
+        "onnxruntime",
+        "onnxruntime.capi",
+        "onnxruntime.capi.onnxruntime_pybind11_state",
+        "onnxruntime.quantization",
+        "onnxruntime.quantization.fusions",
+        "onnxruntime.tools.mobile_helpers",
+        "onnxruntime.transformers.models.gpt2",
+        "rapidocr",
+        "cv2",
+    ]
+    assert common.filter_onedir_hiddenimports(hiddenimports) == [
+        "onnxruntime",
+        "onnxruntime.capi",
+        "onnxruntime.capi.onnxruntime_pybind11_state",
+        "rapidocr",
+        "cv2",
+    ]
+
+
+@pytest.mark.parametrize("spec_name", ["metroliza_onedir.spec", "metroliza_onefile.spec"])
+def test_specs_exclude_offline_onnxruntime_namespaces(spec_name):
+    # These namespaces crash PyInstaller's isolated import child on Windows (#1106).
+    spec_text = Path("packaging", spec_name).read_text(encoding="utf-8")
+    assert "excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES)" in spec_text
+    assert 'hiddenimports=filter_onedir_hiddenimports(COLLECTION["hiddenimports"])' in spec_text

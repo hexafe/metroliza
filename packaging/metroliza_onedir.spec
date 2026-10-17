@@ -9,7 +9,12 @@ ROOT_DIR = SPEC_DIR.parent
 sys.path.insert(0, str(SPEC_DIR))
 sys.path.insert(0, str(ROOT_DIR / "src"))
 
-from pyinstaller_common import build_pyinstaller_collection, read_version_label
+from pyinstaller_common import (
+    ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES,
+    build_pyinstaller_collection,
+    filter_onedir_hiddenimports,
+    read_version_label,
+)
 
 VERSION_LABEL = read_version_label(ROOT_DIR)
 OUTPUT_DIR_NAME = f"metroliza_P_{VERSION_LABEL}_onedir"
@@ -23,11 +28,13 @@ a = Analysis(
     pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
     binaries=COLLECTION["binaries"],
     datas=COLLECTION["datas"],
-    hiddenimports=COLLECTION["hiddenimports"],
+    hiddenimports=filter_onedir_hiddenimports(COLLECTION["hiddenimports"]),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Offline ONNX tooling is unused at runtime and crashes the isolated import
+    # child on Windows (#1106).
+    excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES),
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
