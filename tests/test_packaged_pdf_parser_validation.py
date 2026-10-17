@@ -382,7 +382,7 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'THIRD_PARTY_NOTICES.md' in common
     assert 'binaries=COLLECTION["binaries"]' in spec
     assert 'datas=COLLECTION["datas"]' in spec
-    assert 'hiddenimports=COLLECTION["hiddenimports"]' in spec
+    assert 'hiddenimports=filter_onedir_hiddenimports(COLLECTION["hiddenimports"])' in spec
     assert '"metroliza.parsing.cmm_report_parser"' in common
     assert '"metroliza.charts.native_chart_compositor"' in common
     assert '"modules.cmm_report_parser"' in common

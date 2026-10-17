@@ -9,12 +9,8 @@ ROOT_DIR = SPEC_DIR.parent
 sys.path.insert(0, str(SPEC_DIR))
 sys.path.insert(0, str(ROOT_DIR / "src"))
 
-from pyinstaller_common import (
-    ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES,
-    build_pyinstaller_collection,
-    filter_onedir_hiddenimports,
-    read_version_label,
-)
+from pyinstaller_common import build_pyinstaller_collection, read_version_label
+from pyinstaller_common import ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES, filter_onedir_hiddenimports
 
 VERSION_LABEL = read_version_label(ROOT_DIR)
 OUTPUT_DIR_NAME = f"metroliza_P_{VERSION_LABEL}_onedir"
