@@ -290,6 +290,39 @@ def _schedule_startup_ui_smoke_exit(app) -> None:
     QTimer.singleShot(0, record_and_quit)
 
 
+def _schedule_after_first_event_loop_tick(callback) -> None:
+    """Run ``callback`` on the first Qt event-loop turn after the window was shown."""
+    from PyQt6.QtCore import QTimer
+
+    QTimer.singleShot(0, callback)
+
+
+def _schedule_splash_finish_then_warmup(app, splash, main_window) -> None:
+    """Close the splash once the main window is painted, then warm feature imports.
+
+    Feature-module warmup only prepares tools the user has not opened yet, so it
+    must not keep the splash on screen. Warmup starts after the splash is gone and
+    reports progress through the main window status bar only (the splash status
+    callback is deliberately not wired up).
+    """
+
+    def finish_splash_and_start_warmup() -> None:
+        record_event("main_window_first_paint_tick")
+        try:
+            # Flush the pending paint of the freshly shown window before the
+            # splash disappears so the user never sees an empty frame.
+            app.processEvents()
+            splash.finish(main_window)
+            record_event("splash_finished_after_first_paint")
+        finally:
+            main_window.schedule_feature_import_warmup(
+                delay_ms=0,
+                on_finished=lambda: record_event("launch_ui_warmup_finished"),
+            )
+
+    _schedule_after_first_event_loop_tick(finish_splash_and_start_warmup)
+
+
 def log_and_exit(exception: Exception) -> None:
     """Handles logging exceptions using CustomLogger."""
     record_event("top_level_exception", error_type=type(exception).__name__)
@@ -397,11 +430,7 @@ def launch_ui(
         splash.finish(main_window)
         _schedule_startup_ui_smoke_exit(app)
     else:
-        main_window.schedule_feature_import_warmup(
-            delay_ms=0,
-            on_finished=lambda: splash.finish(main_window),
-            status_callback=lambda message: splash.show_message(message, phase="warmup"),
-        )
+        _schedule_splash_finish_then_warmup(app, splash, main_window)
     record_event("event_loop_enter")
     _startup_event(StartupCallsite.EVENT_LOOP_EXEC_REQUEST, StartupOutcome.STARTUP_COMPLETED)
     exit_code = app.exec()

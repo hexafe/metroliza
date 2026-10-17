@@ -73,6 +73,8 @@ class TestBootstrapStartup(unittest.TestCase):
 
     def test_launch_ui_creates_qapplication_before_importing_main_window(self):
         call_order = []
+        deferred_callbacks = []
+        self_status_callbacks = []
         app_state = {"created": False}
 
         class FakeApplication:
@@ -84,8 +86,14 @@ class TestBootstrapStartup(unittest.TestCase):
                 app_state["created"] = True
                 call_order.append("qapplication_created")
 
+            def processEvents(self):
+                call_order.append("process_events")
+
             def exec(self):
                 call_order.append("app_exec")
+                # Simulate the first event-loop turn running queued singleShot(0) work.
+                while deferred_callbacks:
+                    deferred_callbacks.pop(0)()
                 return 0
 
         class FakeMainWindow:
@@ -103,8 +111,9 @@ class TestBootstrapStartup(unittest.TestCase):
                 status_callback=None,
             ):
                 call_order.append(f"main_window_schedule:{delay_ms}")
-                if status_callback is not None:
-                    status_callback("Loading tools...")
+                # The splash must be gone, so no splash status callback may be wired up.
+                self_status_callbacks.append(status_callback)
+                call_order.append("warmup_done")
                 if on_finished is not None:
                     on_finished()
 
@@ -153,6 +162,9 @@ class TestBootstrapStartup(unittest.TestCase):
         ), patch(
             "metroliza.app.bootstrap.load_main_window_factory",
             side_effect=load_main_window_factory,
+        ), patch(
+            "metroliza.app.bootstrap._schedule_after_first_event_loop_tick",
+            side_effect=deferred_callbacks.append,
         ):
             result = bootstrap.launch_ui(config)
 
@@ -165,11 +177,15 @@ class TestBootstrapStartup(unittest.TestCase):
                 "import_main_window",
                 "main_window_init",
                 "main_window_show",
-                "main_window_schedule:0",
-                "splash_finish",
+                # The splash closes on the first event-loop tick after show, before warmup starts.
                 "app_exec",
+                "process_events",
+                "splash_finish",
+                "main_window_schedule:0",
+                "warmup_done",
             ],
         )
+        self.assertEqual(self_status_callbacks, [None])
 
     def test_load_startup_config_defaults_to_license_verification_disabled(self):
         with patch.dict("os.environ", {}, clear=True):
@@ -371,11 +387,13 @@ def startup_trace(tmp_path, monkeypatch):
         return logging_utils.ensure_application_logging(config=config)
     monkeypatch.setattr(bootstrap, "ensure_application_logging", setup)
     setup()
-    state = {"calls": [], "exit_code": 0, "caught": [], "valid_license": True}
+    state = {"calls": [], "exit_code": 0, "caught": [], "valid_license": True, "deferred": []}
 
     class Application:
         def exec(self):
             state["calls"].append("exec")
+            while state["deferred"]:
+                state["deferred"].pop(0)()
             return state["exit_code"]
 
         def processEvents(self):
@@ -390,6 +408,7 @@ def startup_trace(tmp_path, monkeypatch):
 
         def schedule_feature_import_warmup(self, **kwargs):
             state["calls"].append("warmup")
+            assert kwargs.get("status_callback") is None
             kwargs["on_finished"]()
 
     app = Application()
@@ -398,8 +417,9 @@ def startup_trace(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap, "create_startup_splash", lambda *args, **kwargs: types.SimpleNamespace(
         show_message=lambda *args, **kwargs: None,
         close=lambda: None,
-        finish=lambda *args: None,
+        finish=lambda *args: state["calls"].append("splash_finish"),
     ))
+    monkeypatch.setattr(bootstrap, "_schedule_after_first_event_loop_tick", state["deferred"].append)
     monkeypatch.setattr(bootstrap, "validate_license_bootstrap", lambda enabled: types.SimpleNamespace(
         is_valid=state["valid_license"], days_until_expiration=None,
     ))
@@ -468,7 +488,9 @@ def test_correlated_startup_trace_uses_real_serializer_formatter_and_sinks(start
     assert startup[-2]["exit_code"] is None
     assert startup[-1]["outcome"] == "application_returned"
     assert startup[-1]["exit_code"] == 0
-    assert startup_trace.state["calls"] == ["construct", "show", "warmup", "exec"]
+    assert startup_trace.state["calls"] == [
+        "construct", "show", "exec", "process_events", "splash_finish", "warmup",
+    ]
     assert sys.excepthook is original_hook
     assert bootstrap._STARTUP_INVOCATION.get() is None
 
@@ -717,3 +739,19 @@ def test_unrepresentable_return_preserves_original_without_coercion(startup_trac
     assert bootstrap.run_application() is returned
     assert _startup_records(startup_trace)[-1]["callsite"] == "event_loop_exec_request"
     assert not startup_trace.state["caught"]
+
+
+def test_splash_finish_is_recorded_before_warmup_completion(startup_trace, monkeypatch):
+    events = []
+    monkeypatch.setattr(bootstrap, "record_event", lambda name, **extra: events.append(name))
+
+    assert bootstrap.run_application() == 0
+
+    assert "main_window_show_called" in events
+    assert (
+        events.index("main_window_show_called")
+        < events.index("main_window_first_paint_tick")
+        < events.index("splash_finished_after_first_paint")
+        < events.index("launch_ui_warmup_finished")
+    )
+    assert startup_trace.state["calls"].index("splash_finish") < startup_trace.state["calls"].index("warmup")
