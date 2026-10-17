@@ -18,6 +18,10 @@ on:
         description: "Set to 1 for the owner-only bounded Windows wrapper discriminator"
         required: false
         default: "0"
+      run_windows_launcher_qualification:
+        description: "Set to 1 to build and qualify the native Windows launcher (synthetic payload)"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -27,6 +31,77 @@ concurrency:
   cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1') }}
 
 jobs:
+  windows-launcher-qualification:
+    name: Native launcher qualification (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_launcher_qualification == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 30
+    concurrency:
+      group: windows-launcher-qualification-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Launcher unit and integration tests (Windows file-system semantics)
+        working-directory: packaging/launcher
+        run: cargo test --locked
+
+      - name: Build launcher, packer and test entry
+        working-directory: packaging/launcher
+        run: cargo build --release --locked
+
+      - name: Qualify launcher with a synthetic payload
+        shell: pwsh
+        run: |
+          $bin = 'packaging/launcher/target/release'
+          New-Item -ItemType Directory -Force -Path qualification | Out-Null
+          python scripts/qualify_windows_launcher.py --synthetic `
+            --launcher "$bin/metroliza-launcher.exe" `
+            --packer "$bin/metroliza-packer.exe" `
+            --test-entry "$bin/launcher-test-entry.exe" `
+            --filler-mb 128 `
+            --output qualification/launcher-qualification.json
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher qualification failed' }
+
+      - name: Exercise the packaging script on a synthetic onedir
+        shell: pwsh
+        run: |
+          $bin = 'packaging/launcher/target/release'
+          python scripts/qualify_windows_launcher.py --write-synthetic-onedir qualification/onedir `
+            --test-entry "$bin/launcher-test-entry.exe" --filler-mb 8
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic onedir creation failed' }
+          .\build_windows_launcher_exe.ps1 -OnedirPath qualification/onedir `
+            -Entry launcher-test-entry.exe -ReleaseLabel '2026.00test(260101)' `
+            -Output qualification/metroliza_2026.00test_260101.exe
+          $env:METROLIZA_RUNTIME_ROOT = (Join-Path $PWD 'qualification/packaging-root')
+          $env:METROLIZA_LAUNCHER_NO_UI = '1'
+          $process = Start-Process -FilePath qualification/metroliza_2026.00test_260101.exe `
+            -ArgumentList '--exit-code', '3' -Wait -PassThru
+          if ($process.ExitCode -ne 3) { throw "Unexpected launcher exit code $($process.ExitCode)" }
+
+      - name: Upload launcher EXE and qualification report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-launcher-qualification
+          path: |
+            qualification/launcher-qualification.json
+            qualification/metroliza_2026.00test_260101.exe
+          if-no-files-found: warn
+
   windows-wrapper-diagnostics:
     name: Windows wrapper discriminator (manual/opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && github.actor == github.repository_owner && github.event.repository.private == false
@@ -500,6 +575,9 @@ jobs:
           python -m maturin build --locked --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release --out dist/native
           python -m maturin build --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release --out dist/native
           python -m maturin build --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release --out dist/native
+
+      - name: Native launcher tests (cross-platform logic)
+        run: cargo test --locked --manifest-path packaging/launcher/Cargo.toml
 
       - name: Install built native wheel
         run: |

@@ -221,6 +221,20 @@ library paths, and VC++ Redistributable registry status. Do not release a Window
 artifact from an environment where the PyQt wrapper and bundled Qt payload are
 from different Qt major/minor lines.
 
+Native launcher (single EXE with a persistent runtime cache):
+
+`packaging/launcher` is a Rust launcher that replaces per-launch onefile extraction. The
+`build_windows_launcher_exe.ps1` wrapper builds the onedir (`-BuildOnedir`) or takes an existing
+one, builds the launcher with `cargo build --release --locked`, and appends the onedir as an LZ4
+payload, producing `dist/metroliza_<version>_<yymmdd>.exe`. On first start of a version the
+payload is unpacked once to `%LOCALAPPDATA%\Metroliza\runtime\<version>_<sha8>\`; later starts
+only check the cache and run the entry EXE recorded in the payload manifest. Optional Authenticode
+signing runs on the final EXE when `METROLIZA_SIGNING_*` variables are configured (see the
+script); without them the step is skipped. Format, cache states and security notes are in
+`packaging/launcher/README.md`. The launcher is a standalone Rust binary, not a Python
+extension: it has no Python fallback, and the PyInstaller onefile remains available as the
+fallback delivery.
+
 PyInstaller onefile remains the closest turnkey single-file distribution for
 non-technical users because it bundles the Python runtime into one artifact.
 For startup-sensitive Windows testing, prefer the onedir artifact: it avoids
