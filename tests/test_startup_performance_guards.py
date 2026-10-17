@@ -107,3 +107,57 @@ def test_windows_startup_benchmark_fails_on_crash_or_missing_profile_evidence():
     assert "Startup profile JSONL is empty" in script
     assert "missing required event" in script
     assert "Assert-StartupRunSucceeded -Run $run -ProfilePath $profilePath -Events $events" in script
+
+
+def _run_import_probe(script):
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        env={
+            **{key: value for key, value in os.environ.items() if key != "QT_QPA_PLATFORMTHEME"},
+            "PYTHONPATH": "src:.",
+            "QT_QPA_PLATFORM": "offscreen",
+        },
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_industrial_analytics_dialog_import_does_not_load_scipy_stats():
+    script = """
+import json
+import sys
+import metroliza.ui.industrial_analytics_dialog  # noqa: F401
+
+print(json.dumps({
+    "scipy.stats": "scipy.stats" in sys.modules,
+    "hexafe_groupstats": "hexafe_groupstats" in sys.modules,
+}))
+"""
+    loaded_modules = json.loads(_run_import_probe(script).stdout)
+
+    assert loaded_modules == {"scipy.stats": False, "hexafe_groupstats": False}
+
+
+def test_groupstats_adapter_loads_engine_on_first_analysis():
+    script = """
+import json
+import sys
+from metroliza.analytics.hexafe_groupstats_adapter import analyze_group_metric
+
+before = "scipy.stats" in sys.modules
+payload = analyze_group_metric(
+    "Length",
+    {"A": [1.0, 1.1, 1.2, 1.3, 1.4], "B": [2.0, 2.1, 2.2, 2.3, 2.4]},
+    spec_records=[{"lsl": 0.5, "nominal": 1.5, "usl": 2.5}],
+    backend="python",
+)
+print(json.dumps({
+    "before": before,
+    "after": "scipy.stats" in sys.modules,
+    "has_rows": bool(payload["descriptive_stats"]),
+}))
+"""
+    result = json.loads(_run_import_probe(script).stdout)
+
+    assert result == {"before": False, "after": True, "has_rows": True}
