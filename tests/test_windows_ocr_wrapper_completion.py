@@ -52,11 +52,15 @@ class _Kernel:
 
 
 class _Child:
-    _handle = 41
-
     def __init__(self):
+        self._handle = None
         self.returncode = None
         self.killed = False
+        self.closed = 0
+        self.launch_cleanup_complete = True
+
+    def start(self, *_args, **_kwargs):
+        self._handle = 41
 
     def poll(self):
         return self.returncode
@@ -64,6 +68,10 @@ class _Child:
     def kill(self):
         self.killed = True
         self.returncode = 1
+
+    def close(self):
+        self.closed += 1
+        self._handle = None
 
 
 class _Job:
@@ -92,7 +100,7 @@ def _mock_owned(monkeypatch, job):
     job.child = child
     monkeypatch.setattr(process, "os", SimpleNamespace(name="nt", fstat=os.fstat))
     monkeypatch.setattr(process.contract, "_WindowsJob", lambda: job)
-    monkeypatch.setattr(process.subprocess, "Popen", lambda *_args, **_kwargs: child)
+    monkeypatch.setattr(process, "_SuspendedChild", lambda *_args: child)
 
     def resume_exact(_child, _job):
         if job.resume_error:
@@ -115,7 +123,7 @@ def test_owned_failures_close_retained_job_and_process(monkeypatch, failure, rea
     result = run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
     assert result.reason == reason
     assert result.cleanup_complete and result.tree_empty
-    assert job.closed == 1 and child.killed
+    assert job.closed == child.closed == 1 and child.killed
 
 
 def test_owned_unexpected_base_exception_cleans_up_then_reraises(monkeypatch):
@@ -123,7 +131,7 @@ def test_owned_unexpected_base_exception_cleans_up_then_reraises(monkeypatch):
     child = _mock_owned(monkeypatch, job)
     with pytest.raises(_Abort):
         run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
-    assert job.closed == 1 and child.killed
+    assert job.closed == child.closed == 1 and child.killed
 
 
 def test_owned_cancellation_closes_tree_once(monkeypatch):
@@ -136,20 +144,262 @@ def test_owned_cancellation_closes_tree_once(monkeypatch):
     )
     assert result.reason == "cancelled"
     assert result.cleanup_complete and result.tree_empty
-    assert job.closed == 1 and child.killed
+    assert job.closed == child.closed == 1 and child.killed
 
 
 def test_start_failure_closes_fresh_job(monkeypatch):
     job = _Job()
-    _mock_owned(monkeypatch, job)
+    child = _mock_owned(monkeypatch, job)
 
     def fail_start(*_args, **_kwargs):
         raise OSError
 
-    monkeypatch.setattr(process.subprocess, "Popen", fail_start)
+    monkeypatch.setattr(child, "start", fail_start)
     result = run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
     assert result.reason == "startup_failed"
-    assert result.cleanup_complete and result.tree_empty and job.closed == 1
+    assert result.cleanup_complete and result.tree_empty
+    assert job.closed == child.closed == 1 and not child.killed
+
+
+@pytest.mark.parametrize("failure", [KeyboardInterrupt(), OSError(), _Abort()])
+def test_interrupted_creation_retains_suspended_child_for_cleanup(monkeypatch, failure):
+    job = _Job()
+    child = _mock_owned(monkeypatch, job)
+
+    def interrupted_start(*_args, **_kwargs):
+        child._handle = 41  # Native creation wrote the already-owned output slot.
+        raise failure
+
+    monkeypatch.setattr(child, "start", interrupted_start)
+    if isinstance(failure, _Abort):
+        with pytest.raises(_Abort):
+            run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
+    else:
+        result = run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
+        assert result.reason == (
+            "cancelled" if isinstance(failure, KeyboardInterrupt) else "startup_failed"
+        )
+        assert result.cleanup_complete and result.tree_empty
+    assert child.killed and job.closed == child.closed == 1
+
+
+def test_failed_handle_close_cannot_publish_completed(monkeypatch):
+    job = _Job()
+    child = _mock_owned(monkeypatch, job)
+    child.returncode = 0
+
+    def fail_close():
+        raise OSError("close_failed")
+
+    monkeypatch.setattr(child, "close", fail_close)
+    result = run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
+    assert result.reason == "not_completed" and not result.cleanup_complete
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_failed_launch_handle_close_survives_process_cleanup(monkeypatch, interrupted):
+    job = _Job()
+    child = _mock_owned(monkeypatch, job)
+
+    def incomplete_start(*_args, **_kwargs):
+        child._handle = 41
+        child.launch_cleanup_complete = False
+        raise KeyboardInterrupt if interrupted else OSError("handle_close_failed")
+
+    monkeypatch.setattr(child, "start", incomplete_start)
+    result = run_owned(["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1)
+    assert result.reason == ("cancelled" if interrupted else "startup_failed")
+    assert result.tree_empty and not result.cleanup_complete
+    assert job.closed == child.closed == 1 and child.killed
+
+
+class _NativeFunction:
+    def __init__(self, function):
+        self.function = function
+
+    def __call__(self, *args):
+        return self.function(*args)
+
+
+def _identity_kernel(order=(41, 43), *, mismatch=None):
+    resumed, enumerated = [], []
+    position = iter(order)
+
+    def entry(_snapshot, pointer):
+        enumerated.append(True)
+        tid = next(position, None)
+        if tid is None:
+            return False
+        pointer._obj.owner, pointer._obj.thread_id = 123, tid
+        return True
+
+    def in_job(_process, _job, pointer):
+        pointer._obj.value = mismatch != "membership_false"
+        return mismatch != "membership_unavailable"
+
+    def resume(thread):
+        resumed.append(thread)
+        return {"count_zero": 0, "count_two": 2, "resume_failed": 0xffffffff}.get(mismatch, 1)
+
+    functions = {
+        "WaitForSingleObject": lambda handle, _: (
+            0 if (handle, mismatch) in {(61, "process_dead"), (41, "thread_dead")} else 258
+        ),
+        "IsProcessInJob": in_job,
+        "GetThreadId": lambda _: 43 if mismatch == "thread_id" else 41,
+        "GetProcessIdOfThread": lambda _: 124 if mismatch == "process_id" else 123,
+        "ResumeThread": resume,
+        # Available to the old algorithm: both owned candidates have count one.
+        "CreateToolhelp32Snapshot": lambda *_: 71,
+        "Thread32First": entry, "Thread32Next": entry,
+        "OpenThread": lambda _rights, _inherit, tid: tid,
+        "CloseHandle": lambda _: True,
+    }
+    kernel = SimpleNamespace(**{
+        name: _NativeFunction(callback) for name, callback in functions.items()
+    })
+    child = SimpleNamespace(pid=123, _handle=61, primary_thread=41, primary_thread_id=41)
+    return child, SimpleNamespace(kernel=kernel, handle=81), resumed, enumerated
+
+
+@pytest.mark.parametrize("order", [(41, 43), (43, 41)], ids=["primary-first", "secondary-first"])
+def test_resume_uses_creation_primary_thread_independently_of_snapshot_order(order):
+    child, job, resumed, enumerated = _identity_kernel(order)
+    process._resume_exact(child, job)
+    # Independent origin fact: CreateProcess designated 41, even when 43 is
+    # first in the snapshot, belongs to the same process, and has count one.
+    assert resumed == [41]
+    assert not enumerated
+
+
+@pytest.mark.parametrize("mismatch", [
+    "thread_id", "process_id", "thread_dead", "process_dead", "membership_false",
+    "membership_unavailable", "count_zero", "count_two", "resume_failed",
+])
+def test_resume_rejects_invalid_retained_identity_or_suspend_state(mismatch):
+    child, job, resumed, enumerated = _identity_kernel(mismatch=mismatch)
+    with pytest.raises(OSError, match="resume_failed"):
+        process._resume_exact(child, job)
+    assert resumed == ([41] if mismatch in {"count_zero", "count_two", "resume_failed"} else [])
+    assert not enumerated
+
+
+@pytest.mark.parametrize("failed_handle", [None, 41, 61])
+def test_native_child_closes_both_retained_handles_even_if_one_close_fails(failed_handle):
+    closed = []
+
+    def close(handle):
+        closed.append(handle)
+        return handle != failed_handle
+
+    child = process._SuspendedChild(SimpleNamespace(CloseHandle=close))
+    child.info.thread, child.info.process = 41, 61
+    if failed_handle is None:
+        child.close()
+        child.close()
+        assert child.primary_thread is None and child._handle is None
+    else:
+        with pytest.raises(OSError, match="handle_close_failed"):
+            child.close()
+    assert closed == [41, 61]
+
+
+@pytest.mark.parametrize("failure", [
+    None, "interrupt", "duplicate_first", "duplicate_second", "initialize", "update", "create",
+    "close_duplicate", "interrupt_and_close_duplicate",
+])
+@pytest.mark.parametrize("capture", [False, True])
+def test_creation_owns_output_slots_and_inherits_only_selected_streams(
+    monkeypatch, tmp_path, failure, capture,
+):
+    """Exercise the actual launch path against a recording API, without processes."""
+    observed = {"duplicates": [], "closed": [], "attributes_deleted": 0}
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(get_osfhandle=lambda fd: fd))
+
+    def duplicate(_owner, source, _target, pointer, _access, inherit, options):
+        assert inherit and options == 2
+        observed["duplicates"].append(source)
+        if (failure, len(observed["duplicates"])) in {
+            ("duplicate_first", 1), ("duplicate_second", 2),
+        }:
+            return False
+        pointer._obj.value = 100 + len(observed["duplicates"])
+        return True
+
+    def initialize(attributes, count, _flags, size):
+        assert count == 1
+        size._obj.value = 64
+        return attributes is not None and failure != "initialize"
+
+    def update(_attributes, _flags, attribute, handles, _size, _previous, _returned):
+        assert attribute == 0x20002
+        observed["inherited"] = list(handles)
+        return failure != "update"
+
+    def delete(_attributes):
+        observed["attributes_deleted"] += 1
+
+    def create(_app, _command, process_security, thread_security, inherit, flags,
+               environment, _cwd, startup, info):
+        assert process_security is thread_security is None
+        assert inherit and flags == 0x80404
+        assert "".join(environment) == "A=synthetic\0\0"
+        assert startup._obj.startup.flags == 0x100
+        assert [startup._obj.startup.stdin, startup._obj.startup.stdout,
+                startup._obj.startup.stderr] == observed["inherited"] == [101, 102, 103]
+        if failure == "create":
+            return False
+        info._obj.process, info._obj.thread = 61, 41
+        info._obj.pid, info._obj.tid = 123, 41
+        if failure in {"interrupt", "interrupt_and_close_duplicate"}:
+            raise KeyboardInterrupt
+        return True
+
+    def close(handle):
+        observed["closed"].append(handle)
+        return not (handle == 102 and failure in {"close_duplicate", "interrupt_and_close_duplicate"})
+
+    functions = {
+        "GetCurrentProcess": lambda: 71, "DuplicateHandle": duplicate,
+        "InitializeProcThreadAttributeList": initialize,
+        "UpdateProcThreadAttribute": update, "DeleteProcThreadAttributeList": delete,
+        "CreateProcessW": create, "CloseHandle": close,
+    }
+    kernel = SimpleNamespace(**{
+        name: _NativeFunction(callback) for name, callback in functions.items()
+    })
+    child = process._SuspendedChild(kernel)
+    with (tmp_path / "stdout").open("w+b") as stdout, (tmp_path / "stderr").open("w+b") as stderr:
+        kwargs = {"cwd": None, "env": {"A": "synthetic"},
+                  "stdout_target": stdout if capture else None,
+                  "stderr_target": stderr if capture else None}
+        if failure:
+            with pytest.raises(
+                KeyboardInterrupt if failure in {"interrupt", "interrupt_and_close_duplicate"}
+                else OSError
+            ):
+                child.start(["synthetic"], **kwargs)
+        else:
+            child.start(["synthetic"], **kwargs)
+        assert not stdout.closed and not stderr.closed
+        if capture and len(observed["duplicates"]) == 3:
+            assert observed["duplicates"][1:] == [stdout.fileno(), stderr.fileno()]
+        elif not capture:
+            assert len(set(observed["duplicates"])) == 1
+    created = failure in {None, "interrupt", "close_duplicate", "interrupt_and_close_duplicate"}
+    assert child._handle == (61 if created else None)
+    assert child.primary_thread == (41 if created else None)
+    assert child.pid == (123 if created else 0) and child.primary_thread_id == (41 if created else 0)
+    duplicated = {"duplicate_first": [], "duplicate_second": [101]}.get(failure, [101, 102, 103])
+    assert observed["closed"] == duplicated
+    assert observed["attributes_deleted"] == (
+        0 if failure in {"duplicate_first", "duplicate_second", "initialize"} else 1
+    )
+    assert child.launch_cleanup_complete is (
+        failure not in {"close_duplicate", "interrupt_and_close_duplicate"}
+    )
+    child.close()
+    assert observed["closed"] == duplicated + ([41, 61] if created else [])
 
 
 class _NoReadCapture:
@@ -175,11 +425,11 @@ def test_output_over_limit_is_bounded_without_reading_capture(monkeypatch, tmp_p
         capture = _NoReadCapture(raw)
 
         def write_flood(*_args, **_kwargs):
+            child._handle = 41
             raw.write(b"x" * 33)
             raw.flush()
-            return child
 
-        monkeypatch.setattr(process.subprocess, "Popen", write_flood)
+        monkeypatch.setattr(child, "start", write_flood)
         result = run_owned(
             ["synthetic"], cwd=None, env=None, timeout_s=1, cleanup_timeout_s=1,
             stdout_target=capture, output_limit=32,
@@ -264,7 +514,7 @@ def _read_phase(path: Path) -> str:
         return "unobserved"
     except (OSError, UnicodeError, json.JSONDecodeError):
         return "fixture_mismatch"
-    stages = ("shell_initialized", "native_factory_ready", "child_created")
+    stages = ("shell_entered", "shell_initialized", "native_factory_ready", "child_created")
     expected = [{"schema_version": 1, "stage": stage} for stage in stages]
     if not rows:
         return "unobserved"
@@ -275,7 +525,7 @@ def _read_phase(path: Path) -> str:
 
 @pytest.mark.parametrize('rows,expected', [
     ([], "unobserved"),
-    ([{"schema_version": 1, "stage": "shell_initialized"}], "shell_initialized"),
+    ([{"schema_version": 1, "stage": "shell_entered"}], "shell_entered"),
     ([{"schema_version": 1, "stage": "native_factory_ready"}], "fixture_mismatch"),
     ([{"schema_version": 1, "stage": "SYNTHETIC_PRIVATE_CANARY"}], "fixture_mismatch"),
     ([{"schema_version": 1, "stage": "shell_initialized", "extra": True}], "fixture_mismatch"),
@@ -289,8 +539,8 @@ def test_phase_reader_requires_closed_ordered_records(tmp_path, rows, expected):
 def test_phase_reader_retains_complete_prefix_only(tmp_path):
     path = tmp_path / "phase.jsonl"
     records = [{"schema_version": 1, "stage": stage} for stage in
-               ("shell_initialized", "native_factory_ready", "child_created")]
-    for length in (2, 3):
+               ("shell_entered", "shell_initialized", "native_factory_ready", "child_created")]
+    for length in (1, 2, 3, 4):
         text = "".join(json.dumps(row) + "\n" for row in records[:length])
         path.write_text(text + '{"stage":', encoding="utf-8")
         assert _read_phase(path) == records[length - 1]["stage"]
@@ -349,7 +599,7 @@ def _record(shell, scenario, result, ready=None, probe=(), outcome=(), phase="un
         expected_stage = "shell_ready" if scenario == "live_shell" else "child_ready"
         fixture_ready = fixture_stage == expected_stage
     fixture_phase = phase if phase in {
-        "unobserved", "shell_initialized", "native_factory_ready", "child_created",
+        "unobserved", "shell_entered", "shell_initialized", "native_factory_ready", "child_created",
     } else "fixture_mismatch"
     expected_phase = "shell_initialized" if scenario == "live_shell" else "child_created"
     completed = (
@@ -412,6 +662,55 @@ def test_00_native_containment_preflight(tmp_path):
     }]
     assert result.reason == "completed" and result.returncode == 0
     assert result.cleanup_complete and result.tree_empty
+
+
+@_NATIVE
+def test_native_resumed_thread_matches_child_initial_thread(monkeypatch, tmp_path):
+    observed = {}
+    original_resume = process._resume_exact
+
+    def observe_resume(child, job):
+        observed["pid"] = child.pid
+        observed["tid"] = child.primary_thread_id
+        original_resume(child, job)
+
+    monkeypatch.setattr(process, "_resume_exact", observe_resume)
+    # The base interpreter is the executable under test, avoiding a venv
+    # redirector whose Python code would correctly run in a different process.
+    result = run_owned(
+        [sys._base_executable, "-I", "-S", "-c",
+         "import ctypes,json,os; from pathlib import Path; "
+         "ctypes.windll.kernel32.GetCurrentThreadId.restype=ctypes.c_uint32; "
+         "Path('identity.json').write_text(json.dumps({'pid':os.getpid(),"
+         "'tid':ctypes.windll.kernel32.GetCurrentThreadId()}),encoding='ascii')"],
+        cwd=tmp_path, env=os.environ.copy(), timeout_s=8, cleanup_timeout_s=5,
+    )
+    assert result.reason == "completed" and result.returncode == 0
+    assert result.cleanup_complete and result.tree_empty
+    identity = json.loads((tmp_path / "identity.json").read_text(encoding="ascii"))
+    assert identity == observed and identity["tid"] > 0
+
+
+@_NATIVE
+def test_native_interrupted_creation_cleans_unresumed_primary_thread(monkeypatch, tmp_path):
+    original_start = process._SuspendedChild.start
+    children = []
+
+    def interrupted_start(child, *args, **kwargs):
+        children.append(child)
+        original_start(child, *args, **kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(process._SuspendedChild, "start", interrupted_start)
+    result = run_owned(
+        [sys._base_executable, "-I", "-S", "-c",
+         "from pathlib import Path; Path('must-not-run').touch()"],
+        cwd=tmp_path, env=os.environ.copy(), timeout_s=8, cleanup_timeout_s=5,
+    )
+    assert result.reason == "cancelled" and result.cleanup_complete and result.tree_empty
+    assert not (tmp_path / "must-not-run").exists()
+    assert len(children) == 1
+    assert children[0]._handle is None and children[0].primary_thread is None
 
 
 def _run_scenario(

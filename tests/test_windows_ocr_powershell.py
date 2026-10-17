@@ -20,6 +20,7 @@ import pytest
 
 from scripts import ocr_diagnostic_contract as contract
 from tests import windows_ocr_process as process
+from tests import windows_ocr_stages as stages
 
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(
@@ -109,7 +110,7 @@ if '--output' in args:
 else: print(text)
 """
     source += f"raise SystemExit({17 if mode == 'fail' else 0})\n"
-    (root / "scripts/windows_ocr_runtime_diagnostics.py").write_text(source)
+    (root / "scripts/windows_ocr_runtime_diagnostics.py").write_bytes(source.encode("utf-8"))
 
 
 def _read_captures(stdout_file, stderr_file):
@@ -267,8 +268,10 @@ def public_text(result):
         ("malformed", 1), ("partial", 1),
     ],
 )
-def test_native_wrapper_output_and_exit(powershell, fixture_repo, mode, expected):
+def test_native_wrapper_output_and_exit(powershell, fixture_repo, mode, expected, record_property):
     write_child(fixture_repo, mode)
+    if mode in {"pass", "fail"}:
+        stages.instrument_wrapper(fixture_repo)
     result = invoke(
         powershell,
         fixture_repo,
@@ -279,12 +282,39 @@ def test_native_wrapper_output_and_exit(powershell, fixture_repo, mode, expected
         "-DbFile",
         CANARY + " database.sqlite",
     )
+    if mode in {"pass", "fail"}:
+        observation = {
+            "shell": Path(powershell).stem,
+            "mode": mode,
+            "wrapper": stages.read_stages(fixture_repo / "wrapper.stages", stages.WRAPPER_STAGES),
+            "child": stages.read_stages(fixture_repo / "scripts/child.stages", stages.CHILD_STAGES),
+        }
+        closed = stages.validate_observation(json.dumps(observation))
+        record_property("wrapper_completion_stages", json.dumps(closed, sort_keys=True))
+        assert result.reason == "completed", closed
+        assert set(closed["wrapper"]) == set(stages.WRAPPER_STAGES), closed
+        assert closed["child"] == list(stages.CHILD_STAGES), closed
     text = public_text(result)
     assert (result.returncode != 0) == bool(expected), text
     if mode in {"pass", "fail"}:
         data = json.loads(result.stdout)
         assert data["schema_version"] == 1
         assert any(check["id"] == "engine_smoke" for check in data["checks"])
+
+
+@pytest.mark.parametrize("mode,expected", [("pass", 0), ("fail", 1)])
+def test_native_wrapper_without_stage_probe(powershell, fixture_repo, mode, expected):
+    """Original bytes and arguments; a prior -x failure leaves this control unrun."""
+    write_child(fixture_repo, mode)
+    result = invoke(
+        powershell, fixture_repo, "diagnose_windows_ocr.ps1", "-Compact",
+        "-PdfPath", CANARY + " document.pdf", "-DbFile", CANARY + " database.sqlite",
+    )
+    public_text(result)
+    assert result.returncode == expected
+    data = json.loads(result.stdout)
+    assert data["schema_version"] == 1
+    assert any(check["id"] == "engine_smoke" for check in data["checks"])
 
 
 def test_native_wrapper_safe_file(powershell, fixture_repo):

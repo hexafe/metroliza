@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
 from PyQt6.QtWidgets import (
     QDialog,
@@ -113,7 +113,6 @@ _DATE_FILTER_OPERATOR_SYMBOLS = {
     "lte": "<=",
 }
 _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS = 250_000
-_DETACHED_SELECTOR_PREVIEW_THREADS: list[QThread] = []
 _SQLITE_SOURCE_EXCLUDED_COLUMNS = {
     "source_row_number",
     "source_file",
@@ -166,12 +165,6 @@ def _is_missing_scalar(value) -> bool:
     )
 
 
-def _release_detached_selector_preview_thread(thread: QThread) -> None:
-    if thread in _DETACHED_SELECTOR_PREVIEW_THREADS:
-        _DETACHED_SELECTOR_PREVIEW_THREADS.remove(thread)
-    thread.deleteLater()
-
-
 @dataclass(frozen=True)
 class _SelectorFilterState:
     text: str
@@ -196,8 +189,9 @@ class _SqliteSelectorPreviewThread(QThread):
         offset: int,
         limit: int,
         scope_kwargs: dict[str, object],
+        parent=None,
     ):
-        super().__init__()
+        super().__init__(parent)
         self.request_id = int(request_id)
         self.sqlite_store = sqlite_store
         self.selector_columns = tuple(selector_columns)
@@ -208,6 +202,8 @@ class _SqliteSelectorPreviewThread(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             rows, total = self.sqlite_store.preview_group_rows(
                 self.selector_columns,
                 search_text=self.search_text,
@@ -215,6 +211,8 @@ class _SqliteSelectorPreviewThread(QThread):
                 limit=self.limit,
                 **self.scope_kwargs,
             )
+            if self.isInterruptionRequested():
+                return
             self.result_ready.emit(
                 self.request_id,
                 self.selector_columns,
@@ -223,7 +221,8 @@ class _SqliteSelectorPreviewThread(QThread):
                 int(total),
             )
         except Exception as exc:
-            self.error_occurred.emit(self.request_id, str(exc))
+            if not self.isInterruptionRequested():
+                self.error_occurred.emit(self.request_id, str(exc))
 
 
 class TabularAnalyticsGroupingDialog(QDialog):
@@ -283,6 +282,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_total_rows = 0
         self._selector_preview_request_id = 0
         self._selector_preview_threads: list[_SqliteSelectorPreviewThread] = []
+        self._selector_preview_close_action: str | None = None
+        self._selector_preview_join_timer = QTimer(self)
+        self._selector_preview_join_timer.setSingleShot(True)
+        self._selector_preview_join_timer.setInterval(10)
+        self._selector_preview_join_timer.timeout.connect(self._on_sqlite_selector_preview_stopped)
         self._selector_preview_loading_dialog = None
         self._selector_preview_loading_label = None
         self._selector_preview_loading_bar = None
@@ -631,7 +635,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         return answer == QMessageBox.StandardButton.Yes
 
-    def _reset_grouping_draft(self) -> None:
+    def _reset_grouping_draft(self, *, refresh: bool = True) -> None:
         self.default_group = getattr(self, "_committed_default_group", TABULAR_DEFAULT_GROUP)
         assignments = dict(getattr(self, "_committed_group_assignments", {}))
         self._apply_group_assignments(assignments)
@@ -640,7 +644,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         self._invalidate_sqlite_assignment_cache()
         self.df = self._empty_grouping_dataframe()
-        self._refresh_all(preferred_group=self.default_group)
+        if refresh:
+            self._refresh_all(preferred_group=self.default_group)
 
     def _request_reset_grouping(self) -> None:
         if not self._is_grouping_dirty():
@@ -675,7 +680,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self._discard_gate_active = False
             if not allowed:
                 return False
-        self._reset_grouping_draft()
+        self._reset_grouping_draft(refresh=False)
         return True
 
     def showEvent(self, event) -> None:
@@ -1474,7 +1479,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         return bool(row_count >= _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS and len(self.selector_columns) > 1)
 
     def _start_sqlite_selector_preview(self, filter_state: _SelectorFilterState) -> None:
-        self._selector_preview_request_id += 1
         request_id = self._selector_preview_request_id
         self.selector_preview_label.setText("Loading matching groups...")
         set_status_variant(self.selector_preview_label, "neutral")
@@ -1499,18 +1503,17 @@ class TabularAnalyticsGroupingDialog(QDialog):
             offset=self._selector_page_offset,
             limit=_SELECTOR_PAGE_SIZE,
             scope_kwargs=self._sqlite_scope_kwargs(),
+            parent=self,
         )
         self._selector_preview_threads.append(thread)
         thread.result_ready.connect(self._on_sqlite_selector_preview_ready)
         thread.error_occurred.connect(self._on_sqlite_selector_preview_error)
-        thread.finished.connect(lambda thread=thread: self._on_sqlite_selector_preview_stopped(thread))
+        thread.finished.connect(self._on_sqlite_selector_preview_stopped)
         thread.start()
         self._selector_preview_loading_dialog.show()
 
     def _cancel_sqlite_selector_preview(self) -> None:
-        self._selector_preview_request_id += 1
-        for thread in tuple(self._selector_preview_threads):
-            thread.requestInterruption()
+        self._invalidate_sqlite_selector_preview()
         if self._selector_preview_loading_label is not None:
             self._selector_preview_loading_label.setText(
                 "Canceling group preview...\nWaiting for the current SQLite read to stop\nETA --"
@@ -1520,13 +1523,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._close_selector_preview_loading_dialog()
 
     def _close_selector_preview_loading_dialog(self) -> None:
+        if self._selector_preview_loading_gif is not None:
+            self._selector_preview_loading_gif.stop()
         if self._selector_preview_loading_dialog is not None:
             self._selector_preview_loading_dialog.close()
+            delete_later = getattr(self._selector_preview_loading_dialog, "deleteLater", None)
+            if callable(delete_later):
+                delete_later()
         self._selector_preview_loading_dialog = None
         self._selector_preview_loading_label = None
         self._selector_preview_loading_bar = None
         self._selector_preview_loading_gif = None
 
+    @pyqtSlot(int, tuple, int, list, int)
     def _on_sqlite_selector_preview_ready(
         self,
         request_id: int,
@@ -1549,42 +1558,55 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return
         self._render_selector_preview(filter_state, preview_rows, int(total_rows))
 
+    @pyqtSlot(int, str)
     def _on_sqlite_selector_preview_error(self, request_id: int, message: str) -> None:
         if request_id != self._selector_preview_request_id:
             return
         self.selector_preview_label.setText(f"Could not load groups: {message}")
         set_status_variant(self.selector_preview_label, "danger")
 
-    def _on_sqlite_selector_preview_stopped(self, thread: _SqliteSelectorPreviewThread) -> None:
-        if thread in self._selector_preview_threads:
+    @pyqtSlot()
+    def _on_sqlite_selector_preview_stopped(self) -> None:
+        """Keep ownership until native completion, then dispose on the GUI thread."""
+        for thread in tuple(self._selector_preview_threads):
+            if not thread.wait(0):
+                continue
             self._selector_preview_threads.remove(thread)
-        if thread.request_id == self._selector_preview_request_id:
-            self._close_selector_preview_loading_dialog()
-        thread.deleteLater()
+            if thread.request_id == self._selector_preview_request_id:
+                self._close_selector_preview_loading_dialog()
+            thread.deleteLater()
+        # QThread.finished can precede thread-local/native cleanup. Never block
+        # the GUI or treat the notification as permission to release its DB.
+        if self._selector_preview_threads:
+            self._selector_preview_join_timer.start()
+        else:
+            self._selector_preview_join_timer.stop()
+        if not self._selector_preview_threads and self._selector_preview_close_action is not None:
+            action = self._selector_preview_close_action
+            self._selector_preview_close_action = None
+            self.setEnabled(True)
+            getattr(self, action)()
+
+    def _invalidate_sqlite_selector_preview(self) -> None:
+        self._selector_preview_request_id += 1
+        for thread in self._selector_preview_threads:
+            thread.requestInterruption()
+
+    def _defer_close_for_sqlite_selector_preview(self, action: str) -> bool:
+        if not self._selector_preview_threads:
+            return False
+        if self._selector_preview_close_action is None:
+            self._selector_preview_close_action = action
+            self._cancel_sqlite_selector_preview()
+            self.setEnabled(False)
+        self._selector_preview_join_timer.start()
+        return True
 
     def _detach_sqlite_selector_preview_threads(self) -> None:
-        self._selector_preview_request_id += 1
+        """Finalize joined ownership; live workers are never detached from a DB owner."""
+        self._invalidate_sqlite_selector_preview()
         self._close_selector_preview_loading_dialog()
-        for thread in tuple(self._selector_preview_threads):
-            for signal, slot in (
-                (thread.result_ready, self._on_sqlite_selector_preview_ready),
-                (thread.error_occurred, self._on_sqlite_selector_preview_error),
-            ):
-                try:
-                    signal.disconnect(slot)
-                except TypeError:
-                    pass
-            try:
-                thread.finished.disconnect()
-            except TypeError:
-                pass
-            thread.requestInterruption()
-            self._selector_preview_threads.remove(thread)
-            if not thread.isRunning():
-                thread.deleteLater()
-                continue
-            _DETACHED_SELECTOR_PREVIEW_THREADS.append(thread)
-            thread.finished.connect(lambda thread=thread: _release_detached_selector_preview_thread(thread))
+        self._selector_preview_join_timer.stop()
 
     def _sqlite_selector_row_count(self) -> int:
         if not self._is_sqlite_backed():
@@ -2115,6 +2137,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.use_grouping_button.setEnabled(filter_state.mode != "invalid")
 
     def _refresh_selectors(self) -> None:
+        if self._selector_preview_close_action is not None:
+            return
+        self._invalidate_sqlite_selector_preview()
+        self._close_selector_preview_loading_dialog()
         self.selector_list.blockSignals(True)
         self.selector_list.clear()
         filter_state = self._selector_filter_state()
@@ -2453,17 +2479,24 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._cleanup_sqlite_assignment_store()
 
     def accept(self) -> None:
+        if self._defer_close_for_sqlite_selector_preview("accept"):
+            return
         self._cleanup_dialog_once()
         super().accept()
 
     def reject(self) -> None:
         if not self._discard_draft_if_allowed():
             return
+        if self._defer_close_for_sqlite_selector_preview("reject"):
+            return
         self._cleanup_dialog_once()
         super().reject()
 
     def closeEvent(self, event) -> None:
         if not self._discard_draft_if_allowed():
+            event.ignore()
+            return
+        if self._defer_close_for_sqlite_selector_preview("close"):
             event.ignore()
             return
         self._cleanup_dialog_once()

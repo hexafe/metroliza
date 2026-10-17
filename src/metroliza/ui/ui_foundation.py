@@ -221,6 +221,7 @@ QListView, QListWidget, QTreeView, QTreeWidget, QTableView, QTableWidget {{
     padding: 3px;
     min-height: 22px;
     selection-background-color: {tokens.SELECTED_ROW_BACKGROUND_FALLBACK};
+    selection-color: {tokens.selected_text_color(tokens.SELECTED_ROW_BACKGROUND_FALLBACK)};
 }}
 QLineEdit:read-only, QPlainTextEdit:read-only, QTextEdit:read-only {{
     background: {palette["SURFACE_MUTED_BACKGROUND"]};

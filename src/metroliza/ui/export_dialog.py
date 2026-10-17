@@ -312,6 +312,8 @@ class ExportDialog(QDialog):
     """
 
     close_deferral_cancelled = pyqtSignal()
+    database_change_allowed = None
+    database_context_transition_active = False
 
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
@@ -1105,6 +1107,8 @@ class ExportDialog(QDialog):
     def select_db_file(self):
         try:
             """Open a file dialog to select a database file"""
+            if self.database_change_allowed is not None and not self.database_change_allowed():
+                return
             filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
                                                     "SQLite database (*.db);;All files (*)")
             if filename:
@@ -1143,19 +1147,29 @@ class ExportDialog(QDialog):
         return accepted
 
     def _update_database_context(self, db_file):
-        if not self._discard_child_drafts():
+        if self.database_context_transition_active:
             return False
-        self.db_file = db_file
-        self._set_path_field_value(self.database_text_label, db_file)
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return False
+        self.database_context_transition_active = True
+        try:
+            if not self._discard_child_drafts():
+                return False
+            if self.database_change_allowed is not None and not self.database_change_allowed():
+                return False
+            self.db_file = db_file
+            self._set_path_field_value(self.database_text_label, db_file)
 
-        self.filter_query = DEFAULT_FILTER_QUERY
-        self.filter_state = None
-        self.df_for_grouping = None
-        self._refresh_filter_state_summary()
-        self.set_grouping_applied(False)
-        self._update_export_button_enabled_state()
+            self.filter_query = DEFAULT_FILTER_QUERY
+            self.filter_state = None
+            self.df_for_grouping = None
+            self._refresh_filter_state_summary()
+            self.set_grouping_applied(False)
+            self._update_export_button_enabled_state()
 
-        return True
+            return True
+        finally:
+            self.database_context_transition_active = False
 
     def open_filter_window(self):
         """Open or focus the filter dialog while keeping a single dialog instance."""

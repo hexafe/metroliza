@@ -33,6 +33,7 @@ from metroliza.shared.diagnostic_events import (
     build_exception_diagnostic_event,
 )
 from metroliza.shared.logging_utils import ensure_application_logging
+from metroliza.shared.diagnostic_transport import supervised_invocation_id
 
 VERSION_DATE = VersionDate.VERSION_DATE
 STARTUP_SMOKE_ENV = "METROLIZA_STARTUP_SMOKE"
@@ -63,7 +64,11 @@ def _begin_startup_context():
     # Clearing first also isolates a nested invocation when UUID generation fails.
     token = _STARTUP_INVOCATION.set(None)
     try:
-        _STARTUP_INVOCATION.set(_StartupInvocation())
+        context = _StartupInvocation()
+        supervised_id = supervised_invocation_id()
+        if supervised_id is not None:
+            context.invocation_id = supervised_id
+        _STARTUP_INVOCATION.set(context)
     except Exception:
         pass
     return token

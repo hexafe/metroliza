@@ -19,6 +19,8 @@ from metroliza.shared.parse_contracts import ParseRequest, validate_parse_reques
 from metroliza.reports.db import execute_with_retry
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
+from metroliza.shared.diagnostic_events import WorkflowError, WorkflowOperation, WorkflowStage
+from metroliza.shared.workflow_diagnostics import start_workflow_trace
 from metroliza.shared.progress_status import (
     MonotonicProgressEmitterMixin,
     build_three_line_status,
@@ -1772,11 +1774,13 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         )
 
     def run(self):
+        diagnostic = start_workflow_trace(WorkflowOperation.SELECTED_IMPORT)
         try:
             plan = self._validated_import_plan()
             preflight = plan.preflight_result
             preflight_counts = preflight.status_counts
             selected_files = len(plan.selected_reports)
+            diagnostic.stage(WorkflowStage.PREFLIGHT_COMPLETE, selected_report_count=selected_files)
             intentionally_excluded_files = len(
                 {item.stable_occurrence_id for item in preflight.ready_files}
                 - {identity.occurrence_id for identity in plan.selected_reports}
@@ -2005,6 +2009,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 def _record_accepted_report(work_item, _parser, _outcome):
                     accepted_reports.setdefault(work_item.selected_identity, work_item.report_path)
 
+                diagnostic.stage(WorkflowStage.PROCESSING)
                 result = parse_new_reports(
                     reports_to_parse,
                     report_fingerprints,
@@ -2069,6 +2074,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     ),
                 )
                 self.last_parse_result = result
+                diagnostic.stage(WorkflowStage.PERSISTENCE_COMPLETE)
 
                 self._complete_requested_enrichment(list(accepted_reports.values()), connection)
 
@@ -2094,8 +2100,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
             self.parsing_finished.emit()
         except Exception as e:
+            diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(e)
         finally:
+            diagnostic.finish_import(self.last_parse_result, self.parsing_canceled)
             if self._extracted_archive_dir is not None:
                 self._extracted_archive_dir.cleanup()
                 self._extracted_archive_dir = None
