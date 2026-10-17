@@ -9,7 +9,12 @@ from pathlib import Path
 import sys
 from typing import Iterable
 
-from scripts.build_flavor import (
+# Specs put only packaging/ and src/ on sys.path; the shared flavor helper lives in scripts/.
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.append(_REPO_ROOT)
+
+from scripts.build_flavor import (  # noqa: E402
     BENCHMARK_BUILD_FLAVOR,
     flavor_includes_openvino,
     resolve_build_flavor,

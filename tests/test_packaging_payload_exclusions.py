@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -179,3 +181,24 @@ def test_nuitka_user_flavor_excludes_match_pyinstaller_rules():
     assert "'--noinclude-data-files=rapidocr/models/*'" in script
     benchmark_branch = script.index("if ($resolvedBuildFlavor -eq 'benchmark')")
     assert script.index("'--include-package=openvino'") > benchmark_branch
+
+
+def test_common_module_imports_with_the_spec_sys_path(tmp_path):
+    # PyInstaller executes the specs with only packaging/ and src/ added to sys.path.
+    repo = Path(__file__).resolve().parents[1]
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sys; sys.path[:0] = [sys.argv[1], sys.argv[2]];"
+            "import pyinstaller_common as c; print(c.filter_payload_toc([('openvino/x.dll', 's', 'BINARY')], flavor='user'))",
+            str(repo / "packaging"),
+            str(repo / "src"),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert probe.stdout.strip() == "[]"
