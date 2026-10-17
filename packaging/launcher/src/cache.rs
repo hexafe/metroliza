@@ -471,8 +471,16 @@ fn extract_locked(
 
     // The marker is the commit record: written (and flushed) only after everything else.
     let marker = dir.join(MARKER);
-    fs::write(&marker, format!("{}\n", payload.manifest_hash()))
-        .and_then(|()| File::open(&marker)?.sync_all())
+    // Flush through the writing handle: Windows refuses FlushFileBuffers on a read-only handle.
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&marker)
+        .and_then(|mut file| {
+            io::Write::write_all(&mut file, format!("{}\n", payload.manifest_hash()).as_bytes())?;
+            file.sync_all()
+        })
         .map_err(|e| LauncherError::extraction(format!("marker: {e}")))?;
     Ok(if existed {
         Outcome::Repaired
