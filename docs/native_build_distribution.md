@@ -186,6 +186,23 @@ Distribution audit status:
   `requirements-ocr.txt`, and runs the packaged-dependency validator with
   `--require-header-ocr` before building, so missing build dependencies, RapidOCR
   dependencies, or model files fail before a broken EXE is produced.
+- User builds (default, `METROLIZA_BUILD_FLAVOR` unset or `user`) exclude payload the
+  product does not use: OpenVINO, `cv2/opencv_videoio_ffmpeg*.dll`, `cv2/data/*`,
+  RapidOCR's bundled `rapidocr/models/*`, and `opengl32sw.dll`. Header OCR uses the
+  ONNX Runtime models vendored under `src/metroliza/resources/ocr_models/rapidocr`.
+  The backend passes that directory as `Global.model_root_dir`: RapidOCR 3.8.1 otherwise
+  requires its own `rapidocr/models/` directory to exist even when every model path is
+  explicit, and the packaged recognizer reads its character list from the vendored model's
+  embedded metadata. The rules live in `packaging/pyinstaller_common.py`
+  (`filter_payload_toc`) and are mirrored in `packaging/build_nuitka.ps1`. Set
+  `METROLIZA_BUILD_FLAVOR=benchmark` (and install `requirements-ocr-benchmark.txt`) only
+  for a dev/benchmark build that keeps OpenVINO and the unfiltered payload.
+- In the supervised Windows onedir the filter is applied to both the application analysis
+  and the Qt-free `metroliza_ocr_worker.exe` analysis before the single `COLLECT`, and
+  OpenVINO is excluded from both analyses (and from the worker's hidden imports) unless the
+  flavor is `benchmark`. `supervision_manifest.json` is written from the collected
+  directory afterwards, so it only hashes files that were actually packaged. The portable
+  onefile spec embeds that finished onedir unchanged and must not filter it again.
 - Commercial or external distributions must keep `THIRD_PARTY_NOTICES.md` with the
   packaged artifact and retain the bundled package license/metadata files where the
   packager preserves them.
@@ -237,6 +254,20 @@ fallback delivery.
 
 PyInstaller onefile remains the closest turnkey single-file distribution for
 non-technical users because it bundles the Python runtime into one artifact.
+The older `packaging/metroliza_onefile.spec` starts the application directly and
+does not provide the supervised incident history of the Windows onedir. For a
+single user-facing EXE **with** that history, run
+`build_windows_portable_exe.ps1`: it builds the current supervised onedir and
+then embeds the complete onedir inside a versioned, windowed outer EXE. On each
+launch PyInstaller extracts the payload to its temporary directory; the outer
+process verifies the child manifest and launcher provenance, starts the existing
+supervisor, and stays alive until it exits. This preserves the private incident
+store under the user's application state. It does not reuse an installed cache,
+so startup and temporary disk use can be higher than onedir. The user receives
+only `metroliza_<release>_<build>.exe`; all inner executables are internal.
+Run `scripts/qualify_windows_portable_onefile.py` against the exact Windows EXE
+before claiming packaged behavior. Release still needs its own notice,
+clean-machine, independent-review and approval gates.
 For startup-sensitive Windows testing, prefer the onedir artifact: it avoids
 bootloader extraction of the full scientific/OCR payload on every cold launch
 and gives Windows Defender a more stable file set to cache. Treat both outputs

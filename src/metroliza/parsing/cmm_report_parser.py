@@ -26,6 +26,7 @@ from metroliza.parsing.header_ocr_backend import (
     default_rapidocr_latin_model_paths,
     get_cached_rapidocr_latin_backend,
     missing_rapidocr_latin_model_paths,
+    rapidocr_engine_unavailable_reason,
     rapidocr_latin_runtime_config_from_env,
 )
 from metroliza.reports.header_ocr_corrections import (
@@ -623,6 +624,9 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             runtime_config = rapidocr_latin_runtime_config_from_env(
                 ocr_thread_count=ocr_thread_count
             )
+            engine_unavailable = rapidocr_engine_unavailable_reason(runtime_config.engine)
+            if engine_unavailable:
+                return [], engine_unavailable
             backend = get_cached_rapidocr_latin_backend(
                 RapidOcrLatinBackendConfig(
                     model_paths=model_paths,

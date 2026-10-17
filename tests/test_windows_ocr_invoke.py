@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import json
 import os
 from pathlib import Path
 import shutil
@@ -14,10 +15,83 @@ import pytest
 
 from scripts import ocr_diagnostic_contract as contract
 from tests import test_windows_ocr_powershell as harness
+from tests import windows_ocr_stages as stages
 
 
 CANARY = b"SYNTHETIC_INVOKE_PRIVATE_1043"
 _REAL_TEMPORARY_FILE = tempfile.TemporaryFile
+
+
+@pytest.mark.parametrize("raw", [
+    b"shell_entered", b"shell_entered\ntype_enter", b"", b"x" * 1025,
+    b"shell_entered\nshell_entered\n", b"SYNTHETIC_PRIVATE\n", b"\xff\n",
+    b"type_entered\nshell_entered\n", b"result_published\nshell_entered\n",
+])
+def test_stage_observer_never_publishes_partial_duplicate_or_private_records(tmp_path, raw):
+    path = tmp_path / "wrapper.stages"
+    path.write_bytes(raw)
+    assert stages.read_stages(path, stages.WRAPPER_STAGES) == ["fixture_mismatch"]
+
+
+def test_stage_observer_missing_and_complete_records(tmp_path):
+    path = tmp_path / "wrapper.stages"
+    assert stages.read_stages(path, stages.WRAPPER_STAGES) == ["unobserved"]
+    path.write_bytes(b"shell_entered\ntype_entered\n")
+    assert stages.read_stages(path, stages.WRAPPER_STAGES) == ["shell_entered", "type_entered"]
+
+
+@pytest.mark.parametrize("changed", [
+    {"wrapper": ["SYNTHETIC_PRIVATE"]}, {"wrapper": ["unobserved", "shell_entered"]},
+    {"wrapper": ["shell_entered", "shell_entered"]}, {"wrapper": []},
+    {"child": [None]}, {"shell": "SYNTHETIC_PRIVATE"}, {"mode": "unknown"},
+    {"extra": "SYNTHETIC_PRIVATE"},
+    {"wrapper": ["type_entered", "shell_entered"]},
+    {"wrapper": ["shell_entered", "type_entered", "cleanup_entered", "type_ready"]},
+])
+def test_stage_receipt_revalidates_private_junit_before_publication(changed):
+    value = {"shell": "pwsh", "mode": "pass", "wrapper": ["shell_entered"],
+             "child": ["unobserved"]}
+    value.update(changed)
+    with pytest.raises(ValueError, match="stage_receipt"):
+        stages.validate_observation(json.dumps(value))
+
+
+def test_stage_receipt_accepts_only_closed_observation():
+    value = {"shell": "powershell", "mode": "fail", "wrapper": list(stages.WRAPPER_STAGES),
+             "child": list(stages.CHILD_STAGES)}
+    assert stages.validate_observation(json.dumps(value)) == value
+
+
+def test_stage_receipt_accepts_interleaved_eof_exit_and_early_cleanup():
+    value = {"shell": "pwsh", "mode": "pass", "wrapper": list(stages.WRAPPER_STAGES),
+             "child": ["unobserved"]}
+    value["wrapper"][9:12] = ["stderr_eof", "child_exited", "stdout_eof"]
+    assert stages.validate_observation(json.dumps(value)) == value
+    value["wrapper"] = ["shell_entered", "type_entered", "cleanup_entered", "cleanup_returned"]
+    assert stages.validate_observation(json.dumps(value)) == value
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_disposable_stage_probe_preserves_source_and_rejects_anchor_drift(tmp_path, newline):
+    script = tmp_path / "diagnose_windows_ocr.ps1"
+    production = harness.ROOT / script.name
+    original = production.read_bytes()
+    script.write_bytes(original.replace(b"\r\n", b"\n").replace(b"\n", newline))
+    (tmp_path / "scripts").mkdir()
+    harness.write_child(tmp_path, "pass")
+    stages.instrument_wrapper(tmp_path)
+    assert production.read_bytes() == original
+    observed = script.read_text(encoding="utf-8-sig")
+    assert not script.read_bytes().startswith(b"\xef\xbb\xbf")
+    if newline == b"\r\n":
+        assert script.read_bytes().count(b"\r\n") == script.read_bytes().count(b"\n")
+    else:
+        assert b"\r\n" not in script.read_bytes()
+    assert "Write-TestStage 'type_entered'" in observed
+    child = tmp_path / "scripts/windows_ocr_runtime_diagnostics.py"
+    compile(child.read_text(), str(child), "exec")
+    with pytest.raises(ValueError, match="fixture_anchor_mismatch"):
+        stages.instrument_wrapper(tmp_path)
 
 
 @dataclass

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import textwrap
 import types
@@ -173,6 +174,47 @@ def test_validate_nuitka_report_has_header_ocr_accepts_report(tmp_path):
     )
 
     assert 'rapidocr' in validate_nuitka_report_has_header_ocr(report)
+
+
+def _nuitka_report_without_openvino(tmp_path):
+    report = tmp_path / 'nuitka-build-report.xml'
+    report.write_text(
+        textwrap.dedent(
+            '''
+            <nuitka-report>
+              <module name="metroliza.parsing.header_ocr_backend" />
+              <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.reports.header_ocr_corrections" />
+              <module name="metroliza.parsing.header_ocr_corrections" />
+              <module name="rapidocr" />
+              <module name="onnxruntime" />
+              <module name="cv2" />
+              <module name="numpy" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx" />
+              <data-file name="THIRD_PARTY_NOTICES.md" />
+            </nuitka-report>
+            '''
+        ).strip(),
+        encoding='utf-8',
+    )
+    return report
+
+
+def test_user_build_flavor_does_not_require_openvino(tmp_path, monkeypatch):
+    monkeypatch.delenv('METROLIZA_BUILD_FLAVOR', raising=False)
+
+    assert 'openvino' not in validator.required_header_ocr_modules()
+    assert 'rapidocr' in validate_nuitka_report_has_header_ocr(_nuitka_report_without_openvino(tmp_path))
+
+
+def test_benchmark_build_flavor_requires_openvino(tmp_path, monkeypatch):
+    monkeypatch.setenv('METROLIZA_BUILD_FLAVOR', 'benchmark')
+
+    assert 'openvino' in validator.required_header_ocr_modules()
+    with pytest.raises(PackagingValidationError, match='openvino'):
+        validate_nuitka_report_has_header_ocr(_nuitka_report_without_openvino(tmp_path))
 
 
 def test_validate_nuitka_report_has_header_ocr_rejects_missing_model_data(tmp_path):
@@ -367,12 +409,13 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'collect_required_runtime_assets("oznak")' in common
     assert 'collect_required_runtime_assets(\n        "rapidocr"\n    )' in common
     assert 'collect_required_runtime_assets("onnxruntime")' in common
-    assert 'collect_required_runtime_assets(\n        "openvino"\n    )' in common
+    assert 'collect_required_runtime_assets(\n            "openvino"\n        )' in common
+    assert "flavor_includes_openvino(resolve_build_flavor())" in common
     assert 'collect_required_runtime_assets("cv2")' in common
     assert 'collect_required_runtime_assets("numpy")' in common
     assert 'collect_optional_distribution_metadata("rapidocr")' in common
     assert 'collect_optional_distribution_metadata("onnxruntime")' in common
-    assert 'collect_optional_distribution_metadata("openvino")' in common
+    assert 'openvino_metadata = collect_optional_distribution_metadata("openvino")' in common
     assert 'collect_optional_distribution_metadata("opencv-python")' in common
     assert 'collect_optional_distribution_metadata("numpy")' in common
     assert 'collect_optional_distribution_metadata("hexafe-plotstats")' in common
@@ -389,7 +432,7 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert '"modules.native_chart_compositor"' in common
     assert '"rapidocr"' in common
     assert '"onnxruntime"' in common
-    assert '"openvino"' in common
+    assert '*openvino_module_names' in common
     assert '"cv2"' in common
     assert '"numpy"' in common
     assert '"_metroliza_group_stats_native"' in common
@@ -513,6 +556,490 @@ def test_pyinstaller_installed_optional_collection_does_not_hide_hook_failures(m
 
     with pytest.raises(ValueError, match="broken optional hook"):
         module.collect_optional_runtime_assets("optional_dependency")
+
+
+def test_pyinstaller_onedir_collects_only_onnx_inference_runtime_graph():
+    onedir = Path("packaging/metroliza_onedir.spec").read_text(encoding="utf-8")
+    onefile = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
+    common = Path("packaging/pyinstaller_common.py").read_text(encoding="utf-8")
+    module_name = "_metroliza_pyinstaller_onedir_onnx_runtime_test"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    hiddenimports = [
+        "onnxruntime",
+        "onnxruntime.backend",
+        "onnxruntime.capi",
+        "onnxruntime.capi.onnxruntime_inference_collection",
+        "onnxruntime.capi._pybind_state",
+        "onnxruntime.datasets",
+        "onnxruntime.future_offline",
+        "onnxruntime.quantization",
+        "onnxruntime.tools",
+        "onnxruntime.transformers.models.gpt2",
+        "rapidocr.inference_engine.onnxruntime",
+        "metroliza.parsing.header_ocr_backend",
+    ]
+
+    assert module.filter_onedir_hiddenimports(hiddenimports) == [
+        "onnxruntime",
+        "onnxruntime.capi",
+        "onnxruntime.capi.onnxruntime_inference_collection",
+        "onnxruntime.capi._pybind_state",
+        "rapidocr.inference_engine.onnxruntime",
+        "metroliza.parsing.header_ocr_backend",
+    ]
+    assert module.ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES == (
+        "onnxruntime.backend",
+        "onnxruntime.datasets",
+        "onnxruntime.quantization",
+        "onnxruntime.tools",
+        "onnxruntime.transformers",
+    )
+
+    assert 'filter_onedir_hiddenimports(COLLECTION["hiddenimports"])' in onedir
+    assert (
+        'excludes=[*ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES, *COLLECTION["excludes"]]' in onedir
+    )
+    assert 'collect_required_runtime_assets("onnxruntime")' in common
+    assert "+ onnxruntime_binaries" in common
+    assert "+ onnxruntime_datas" in common
+    assert "*onnxruntime_hiddenimports" in common
+    assert 'collect_optional_distribution_metadata("onnxruntime")' in common
+    assert "collect_optional_vendored_model_data(root_dir)" in common
+    assert 'hiddenimports=COLLECTION["hiddenimports"]' in onefile
+    assert "filter_onedir_hiddenimports" not in onefile
+    for root in (Path("src/metroliza"), Path("modules")):
+        assert not any(
+            any(
+                namespace in source.read_text(encoding="utf-8")
+                for namespace in module.ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES
+            )
+            for source in root.rglob("*.py")
+        )
+
+
+def _load_pyinstaller_common(module_name: str):
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        Path("packaging/pyinstaller_common.py"),
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fake_scanner_isolated(native_death):
+    import_sessions = []
+
+    class _Child:
+        def __init__(self):
+            self.imported = []
+            self._child = types.SimpleNamespace(returncode=3221225477)
+
+        def call(self, function, *args, **kwargs):
+            if function.__name__ == "_verify_loaded_module":
+                return args[0] in self.imported
+            if function.__name__ == "import_library":
+                package = args[0]
+                if (
+                    package == "onnxruntime"
+                    and "PyQt6" in self.imported
+                    and package not in self.imported
+                ):
+                    raise native_death("expected control crash")
+                if package not in self.imported:
+                    self.imported.append(package)
+                return None
+            return function(*args, **kwargs)
+
+    class _Python:
+        def __enter__(self):
+            child = _Child()
+            import_sessions.append(child.imported)
+            return child
+
+        def __exit__(self, *_args):
+            return False
+
+    isolated = types.SimpleNamespace(
+        Python=_Python,
+        SubprocessDiedError=native_death,
+        call=lambda *_args, **_kwargs: True,
+    )
+    return isolated, import_sessions, _Python
+
+
+def _run_fake_scanner_child(isolated, setup, import_library, packages):
+    try:
+        with isolated.Python() as child:
+            child.call(setup, [])
+            for package in packages:
+                child.call(import_library, package)
+    except isolated.SubprocessDiedError as inner:
+        raise isolated.SubprocessDiedError("outer scanner failure") from inner
+
+
+def test_windows_onedir_scanner_probe_delegates_full_scan_and_restores(
+    monkeypatch,
+    capsys,
+):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_probe_delegate_test")
+    calls = []
+
+    class SubprocessDiedError(RuntimeError):
+        pass
+
+    isolated, isolated_imports, original_python = _fake_scanner_isolated(
+        SubprocessDiedError
+    )
+
+    def setup(suppressed_imports):
+        return suppressed_imports
+
+    def original(binaries, import_packages, symlink_suppression_patterns):
+        calls.append((binaries, import_packages, symlink_suppression_patterns))
+        _run_fake_scanner_child(isolated, setup, import_library, import_packages)
+        return ["expanded"]
+
+    def import_library(package):
+        return package
+
+    build_main = types.SimpleNamespace(find_binary_dependencies=original)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setenv("METROLIZA_PYINSTALLER_SCANNER_PROBE", "1")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: ("6.22.3", "1.30.0", build_main, isolated),
+    )
+    binaries, packages, patterns = ["binary"], ["cv2", "onnxruntime"], {"pattern"}
+
+    with module.onedir_binary_scanner_probe():
+        installed = build_main.find_binary_dependencies
+        assert installed is not original
+        assert installed(binaries, packages, patterns) == ["expanded"]
+
+    assert build_main.find_binary_dependencies is original
+    assert isolated.Python is original_python
+    assert calls == [
+        ([], ["onnxruntime"], set()),
+        ([], ["PyQt6", "onnxruntime"], set()),
+        ([], ["PyQt6", "onnxruntime"], set()),
+        (binaries, packages, patterns),
+    ]
+    assert isolated_imports == [
+        ["onnxruntime"],
+        ["PyQt6"],
+        ["onnxruntime", "PyQt6"],
+        ["onnxruntime", "cv2"],
+    ]
+    output = capsys.readouterr().out
+    assert "outer scanner failure" not in output
+    payloads = [json.loads(line) for line in output.splitlines()]
+    assert payloads == [
+        {
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "onnxruntime_direct",
+            "schema_version": 1,
+            "status": "started",
+        },
+        {
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "onnxruntime_direct",
+            "schema_version": 1,
+            "status": "passed",
+        },
+        {
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "onnxruntime_scanner",
+            "schema_version": 1,
+            "status": "started",
+        },
+        {
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "onnxruntime_scanner",
+            "schema_version": 1,
+            "status": "passed",
+        },
+        {
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "pyqt6_then_onnxruntime",
+            "schema_version": 1,
+            "status": "started",
+        },
+        {
+            "child_exit_code": 3221225477,
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "pyqt6_then_onnxruntime",
+            "schema_version": 1,
+            "status": "scanner_child_died_during_onnxruntime_after_pyqt6",
+        },
+        {
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "onnxruntime_before_pyqt6",
+            "schema_version": 1,
+            "status": "started",
+        },
+        {
+            "kind": "pyinstaller_scanner_probe",
+            "scenario": "onnxruntime_before_pyqt6",
+            "schema_version": 1,
+            "status": "passed",
+        },
+    ]
+
+
+def test_windows_onedir_scanner_probe_runs_both_cases_and_closes_failures(
+    monkeypatch,
+    capsys,
+):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_probe_failure_test")
+    calls = []
+
+    class SubprocessDiedError(RuntimeError):
+        pass
+
+    class _Child:
+        def call(self, function, *args, **kwargs):
+            if function.__name__ == "import_library" and args == ("onnxruntime",):
+                raise SubprocessDiedError("raw corrected native details")
+            if function.__name__ == "_verify_loaded_module":
+                return True
+            return function(*args, **kwargs)
+
+    class _Python:
+        def __enter__(self):
+            return _Child()
+
+        def __exit__(self, *_args):
+            return False
+
+    isolated = types.SimpleNamespace(Python=_Python, call=lambda *_args, **_kwargs: True)
+
+    def setup(suppressed_imports):
+        return suppressed_imports
+
+    def import_library(package):
+        return package
+
+    def original(binaries, import_packages, symlink_suppression_patterns):
+        calls.append(import_packages)
+        failure = {
+            1: SubprocessDiedError("raw native details"),
+            2: ValueError("raw python details"),
+        }.get(len(calls))
+        if failure is not None:
+            raise failure
+        with isolated.Python() as child:
+            child.call(setup, [])
+            child.call(import_library, "PyQt6")
+        return []
+
+    isolated.SubprocessDiedError = SubprocessDiedError
+    build_main = types.SimpleNamespace(find_binary_dependencies=original)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setenv("METROLIZA_PYINSTALLER_SCANNER_PROBE", "1")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: ("6.22.3", "1.30.0", build_main, isolated),
+    )
+
+    with pytest.raises(RuntimeError, match="Windows onedir scanner probe failed"):
+        with module.onedir_binary_scanner_probe():
+            build_main.find_binary_dependencies(["binary"], ["actual"], {"pattern"})
+
+    assert build_main.find_binary_dependencies is original
+    assert isolated.Python is _Python
+    assert calls == [
+        ["onnxruntime"],
+        ["PyQt6", "onnxruntime"],
+        ["PyQt6", "onnxruntime"],
+    ]
+    output = capsys.readouterr().out
+    assert "raw native details" not in output
+    assert "raw python details" not in output
+    assert "raw corrected native details" not in output
+    payloads = [json.loads(line) for line in output.splitlines()]
+    assert [payload["status"] for payload in payloads] == [
+        "started",
+        "passed",
+        "started",
+        "scanner_child_died",
+        "started",
+        "python_failed",
+        "started",
+        "scanner_child_died",
+    ]
+
+
+def test_windows_onedir_scanner_probe_preserves_full_scan_failure(monkeypatch):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_probe_full_failure_test")
+    full_failure = LookupError("full scanner failed")
+    call_count = 0
+
+    class SubprocessDiedError(RuntimeError):
+        pass
+
+    isolated, _imports, original_python = _fake_scanner_isolated(SubprocessDiedError)
+
+    def setup(suppressed_imports):
+        return suppressed_imports
+
+    def import_library(package):
+        return package
+
+    def original(binaries, import_packages, symlink_suppression_patterns):
+        nonlocal call_count
+        call_count += 1
+        with isolated.Python() as child:
+            child.call(setup, [])
+            for package in import_packages:
+                child.call(import_library, package)
+        if call_count == 4:
+            raise full_failure
+        return []
+
+    build_main = types.SimpleNamespace(find_binary_dependencies=original)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setenv("METROLIZA_PYINSTALLER_SCANNER_PROBE", "1")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: ("6.22.3", "1.30.0", build_main, isolated),
+    )
+
+    with pytest.raises(LookupError) as exc_info:
+        with module.onedir_binary_scanner_probe():
+            build_main.find_binary_dependencies(["binary"], ["actual"], {"pattern"})
+
+    assert exc_info.value is full_failure
+    assert build_main.find_binary_dependencies is original
+    assert isolated.Python is original_python
+
+
+@pytest.mark.parametrize(
+    ("version", "scanner"),
+    [
+        ("6.22.4", lambda binaries, import_packages, symlink_suppression_patterns: []),
+        ("6.22.3", lambda binaries, import_packages: []),
+    ],
+)
+def test_windows_onedir_scanner_probe_fails_closed_on_pyinstaller_drift(
+    monkeypatch,
+    version,
+    scanner,
+):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_probe_drift_test")
+    build_main = types.SimpleNamespace(find_binary_dependencies=scanner)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setenv("METROLIZA_PYINSTALLER_SCANNER_PROBE", "1")
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: (
+            version,
+            "1.30.0",
+            build_main,
+            types.SimpleNamespace(
+                Python=object,
+                SubprocessDiedError=RuntimeError,
+                call=lambda *_args, **_kwargs: True,
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="PyInstaller 6.22.3"):
+        with module.onedir_binary_scanner_probe():
+            pass
+
+    assert build_main.find_binary_dependencies is scanner
+
+
+def test_onedir_binary_scanner_probe_skips_non_windows(monkeypatch):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_probe_opt_in_test")
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.delenv("METROLIZA_PYINSTALLER_SCANNER_PROBE", raising=False)
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: (_ for _ in ()).throw(AssertionError("must not load PyInstaller")),
+    )
+
+    with module.onedir_binary_scanner_probe():
+        pass
+
+
+def test_windows_onedir_scanner_preload_is_default_without_controls(
+    monkeypatch,
+    capsys,
+):
+    module = _load_pyinstaller_common("_metroliza_pyinstaller_preload_default_test")
+
+    class SubprocessDiedError(RuntimeError):
+        pass
+
+    isolated, imports, original_python = _fake_scanner_isolated(SubprocessDiedError)
+
+    def setup(suppressed_imports):
+        return suppressed_imports
+
+    def import_library(package):
+        return package
+
+    def original(binaries, import_packages, symlink_suppression_patterns):
+        with isolated.Python() as child:
+            child.call(setup, [])
+            for package in import_packages:
+                child.call(import_library, package)
+        return binaries, symlink_suppression_patterns
+
+    build_main = types.SimpleNamespace(find_binary_dependencies=original)
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.delenv("METROLIZA_PYINSTALLER_SCANNER_PROBE", raising=False)
+    monkeypatch.setattr(
+        module,
+        "_load_pyinstaller_binary_scanner",
+        lambda: ("6.22.3", "1.30.0", build_main, isolated),
+    )
+
+    with module.onedir_binary_scanner_probe():
+        assert build_main.find_binary_dependencies(["binary"], ["PyQt6"], set()) == (
+            ["binary"],
+            set(),
+        )
+
+    assert imports == [["onnxruntime", "PyQt6"]]
+    assert capsys.readouterr().out == ""
+    assert build_main.find_binary_dependencies is original
+    assert isolated.Python is original_python
+
+
+def test_onedir_binary_scanner_probe_is_targeted_application_analysis_only():
+    onedir = Path("packaging/metroliza_onedir.spec").read_text(encoding="utf-8")
+    onefile = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    build_requirements = Path("requirements-build.txt").read_text(encoding="utf-8")
+    application_analysis, launcher_analysis = onedir.split("launcher_analysis = Analysis(", maxsplit=1)
+    build_step = workflow.split(
+        "- name: Build actual Windows onedir and minimal incident launcher",
+        maxsplit=1,
+    )[1].split("- name: Qualify actual packaged incident flow", maxsplit=1)[0]
+
+    assert application_analysis.count("with onedir_binary_scanner_probe():") == 1
+    assert "a = Analysis(" in application_analysis
+    assert "with onedir_binary_scanner_probe():" not in launcher_analysis
+    assert "onedir_binary_scanner_probe" not in onefile
+    assert 'METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"' in build_step
+    assert "pyinstaller==6.22.3" in build_requirements.splitlines()
 
 
 def test_vendored_plotly_dashboard_asset_is_checked_in():

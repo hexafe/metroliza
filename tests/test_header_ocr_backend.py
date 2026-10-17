@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import sys
 import types
 from enum import Enum
@@ -55,7 +56,16 @@ def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path, 
     image_path = tmp_path / "header.png"
     image_path.write_bytes(b"not-a-real-image")
 
-    run = backend.recognize(image_path)
+    stages = []
+    with backend_module.observe_ocr_qualification_stages(stages.append):
+        run = backend.recognize(image_path)
+    assert stages == [
+        "ocr_onnxruntime_import", "ocr_rapidocr_import",
+        "ocr_engine_construction", "ocr_engine_inference",
+        "ocr_result_normalization",
+    ]
+    backend.recognize(image_path)
+    assert len(stages) == 5
 
     assert calls["init_kwargs"]["params"]["Det.model_path"] == "det.onnx"
     assert calls["init_kwargs"]["params"]["Cls.model_path"] == "cls.onnx"
@@ -71,6 +81,22 @@ def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path, 
     assert record.box == ((1.0, 2.0), (3.0, 2.0), (3.0, 4.0), (1.0, 4.0))
     assert run.diagnostics["backend"] == "rapidocr_latin"
     assert run.diagnostics["raw_result_type"] == "SimpleNamespace"
+
+
+def test_ocr_stage_observer_restores_previous_scope_after_error():
+    backend_module = importlib.import_module("modules.header_ocr_backend")
+    outer = []
+    inner = []
+    with backend_module.observe_ocr_qualification_stages(outer.append):
+        backend_module._mark_qualification_stage("ocr_parser_execution")
+        with pytest.raises(RuntimeError, match="synthetic"):
+            with backend_module.observe_ocr_qualification_stages(inner.append):
+                backend_module._mark_qualification_stage("ocr_onnxruntime_import")
+                raise RuntimeError("synthetic")
+        backend_module._mark_qualification_stage("ocr_result_validation")
+    backend_module._mark_qualification_stage("ocr_engine_inference")
+    assert outer == ["ocr_parser_execution", "ocr_result_validation"]
+    assert inner == ["ocr_onnxruntime_import"]
 
 
 def test_rapidocr_backend_coerces_string_defaults_to_rapidocr_enums(tmp_path, monkeypatch):
@@ -324,3 +350,93 @@ def test_non_onnxruntime_runtime_does_not_preload_onnxruntime(tmp_path, monkeypa
         backend.recognize(image_path)
     finally:
         sys.meta_path.remove(guard)
+
+
+def test_rapidocr_engine_unavailable_reason_reports_missing_openvino(monkeypatch):
+    backend_module = importlib.import_module("metroliza.parsing.header_ocr_backend")
+    real_find_spec = importlib.util.find_spec
+
+    monkeypatch.setattr(
+        backend_module.importlib.util,
+        "find_spec",
+        lambda name, *args, **kwargs: None if name == "openvino" else real_find_spec(name, *args, **kwargs),
+    )
+
+    assert backend_module.rapidocr_engine_unavailable_reason("openvino") == (
+        "header_ocr_engine_unavailable:openvino"
+    )
+    assert backend_module.rapidocr_engine_unavailable_reason("onnxruntime") is None
+
+
+def test_rapidocr_engine_unavailable_reason_accepts_installed_openvino(monkeypatch):
+    backend_module = importlib.import_module("metroliza.parsing.header_ocr_backend")
+    monkeypatch.setattr(
+        backend_module.importlib.util, "find_spec", lambda name, *args, **kwargs: object()
+    )
+
+    assert backend_module.rapidocr_engine_unavailable_reason("openvino") is None
+
+
+def test_header_ocr_openvino_engine_missing_from_build_is_reported_not_raised(monkeypatch):
+    from metroliza.parsing import cmm_report_parser as parser_module
+
+    class _Pixmap:
+        width = 10
+        height = 10
+
+    class _Page:
+        def get_pixmap(self, **_kwargs):
+            return _Pixmap()
+
+    class _PdfBackend:
+        @staticmethod
+        def Matrix(*_args):
+            return object()
+
+        @staticmethod
+        def Rect(*_args):
+            return object()
+
+    def _fail_if_backend_built(_config):
+        raise AssertionError("OCR backend must not be built for an unavailable engine")
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setenv("METROLIZA_HEADER_OCR_ENGINE", "openvino")
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *args, **kwargs: None if name == "openvino" else real_find_spec(name, *args, **kwargs),
+    )
+    monkeypatch.setattr(parser_module, "get_cached_rapidocr_latin_backend", _fail_if_backend_built)
+
+    items, error = parser_module.CMMReportParser._ocr_header_items_from_pixmap(
+        _Page(), (0.0, 0.0, 10.0, 10.0), _PdfBackend()
+    )
+
+    assert items == []
+    assert error == "header_ocr_engine_unavailable:openvino"
+
+
+def test_rapidocr_model_root_dir_points_at_the_explicit_model_directory(tmp_path):
+    # RapidOCR 3.8.1 raises FileNotFoundError when Global.model_root_dir (default: the package's
+    # own `models/` directory) is missing, even with explicit model paths. User builds do not ship
+    # `rapidocr/models/*`, so the backend must root RapidOCR in the vendored model directory.
+    from metroliza.parsing import header_ocr_backend as backend_module
+
+    model_dir = tmp_path / "ocr_models" / "rapidocr"
+    config = backend_module.RapidOcrLatinBackendConfig(
+        model_paths=backend_module.default_rapidocr_latin_model_paths(model_dir)
+    )
+
+    params = backend_module.RapidOcrLatinBackend(config)._build_params()
+
+    assert params["Global.model_root_dir"] == str(model_dir)
+    assert params["Det.model_path"] == str(model_dir / "ch_PP-OCRv4_det_mobile.onnx")
+
+    overridden = backend_module.RapidOcrLatinBackendConfig(
+        model_paths=config.model_paths,
+        params={"Global.model_root_dir": str(tmp_path)},
+    )
+    assert backend_module.RapidOcrLatinBackend(overridden)._build_params()[
+        "Global.model_root_dir"
+    ] == str(tmp_path)

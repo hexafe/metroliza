@@ -18,10 +18,19 @@ The following checks must pass on every PR and branch push.
 | Lint and static validation | `static-checks` | Python compile check, declarative parser profile self-service smoke, Ruff lint, strict mypy checking for new typed boundary modules, release metadata consistency, tracked-file secret scanning, and Bandit enforcement against the reviewed expiring baseline. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
 | Full pytest suite + coverage gate | `unit-tests` | Runs the full Python test suite with coverage, then re-runs selected real-Qt UI shards in isolated pytest processes with `--cov-append` before enforcing `coverage report --fail-under=80` and writing `coverage.xml`. Qt runtime libraries are installed and `QT_QPA_PLATFORM=offscreen` is set for the lane. |
-| Windows core smoke | `windows-core-smoke` | Runs cross-platform SQLite, build-helper, packaging-contract, release-metadata, and OAuth-template tests on Python 3.11 under `windows-latest`. The separate `Run native Windows startup diagnostics tests` step selects the complete bootstrap-startup, diagnostic-event, managed-logging, and build-provenance test files, including real safe-sink and typed startup identity assertions. Also runs real industrial Qt lifecycle tests with `QT_QPA_PLATFORM=windows`; the tests require the actual Windows platform plugin and exercise delayed progress, grouping reopen, cancellation, and C++ teardown. The separate `Run native Windows report planner tests` step exercises real review/selection/import against scratch SQLite, keyboard/focus and compact/large layout at scale factors 1, 1.25, 1.5 and 2 with the Windows Qt plugin. This step sets a 1920x1080 display on the disposable hosted VM and the actual Qt screen geometry/DPR verifies that physical size at each scale, so the 720x480 logical window fits. The blocking `Run native Windows cache publication tests` step exercises real SQLite backup/flush and atomic no-replace publication, including source preservation on failure. `Run native Windows cache lifecycle tests` retains the archive adversarial suite and the real MainWindow save-before-rebind, cancel and active-database protection cases. These source tests do not qualify a packaged EXE or clean-machine deployment. |
+| Windows core smoke | `windows-core-smoke` | Runs cross-platform SQLite, build-helper, packaging-contract, release-metadata, and OAuth-template tests on Python 3.11 under `windows-latest`. The separate `Run native Windows startup diagnostics tests` step selects the complete bootstrap-startup, diagnostic-event, managed-logging, and build-provenance test files, including real safe-sink and typed startup identity assertions. The blocking `Run native Windows supervised incident tests` step also covers the full safe wire/ring/store/transport, real workflow, viewer and qualification-driver test files. These native source tests do not establish packaged EXE qualification. Also runs real industrial Qt lifecycle tests with `QT_QPA_PLATFORM=windows`; the tests require the actual Windows platform plugin and exercise delayed progress, grouping reopen, cancellation, and C++ teardown. The separate `Run native Windows report planner tests` step exercises real review/selection/import against scratch SQLite, keyboard/focus and compact/large layout at scale factors 1, 1.25, 1.5 and 2 with the Windows Qt plugin. This step sets a 1920x1080 display on the disposable hosted VM and the actual Qt screen geometry/DPR verifies that physical size at each scale, so the 720x480 logical window fits. The additive `Run native Windows realtime dashboard scheduling tests` step runs the complete realtime dialog selection with an asserted Windows Qt plugin. It covers the controlled deferred-dispatch fake-worker oracle, a blocked-start negative control, coalescing and shutdown ownership, and real QThread/SQLite/HTML execution. The explicit 3000 ms positive observation bound is test-only; production debounce and runtime deadlines are unchanged. The blocking `Run native Windows grouping-preview lifecycle tests` step runs the complete `tests/test_tabular_analytics_grouping_dialog.py` file with the actual Windows Qt platform plugin. It exercises asynchronous SQLite selector preview, latest-request ownership, close/cancel, and legitimate worker completion before the independent OCR/PowerShell contract step. The blocking `Run native Windows cache publication tests` step exercises real SQLite backup/flush and atomic no-replace publication, including source preservation on failure. `Run native Windows cache lifecycle tests` retains the archive adversarial suite and the real MainWindow save-before-rebind, cancel and active-database protection cases. The named `Run native Windows specialist geometry tests` step configures the disposable VM to 1920x1080, requires the Windows Qt plugin, and records real Qt screen, client-frame, keyboard, and scroll-reachability evidence for Industrial Data, production-source profiles, and industrial sync at DPR 1, 1.25, 1.5, and 2. It validates source Qt widgets only; packaged-EXE and clean-machine acceptance remain separate release evidence. These source tests do not qualify a packaged EXE or clean-machine deployment. |
 | Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, runs the cross-platform tests of the native launcher crate (`packaging/launcher`, `cargo test --locked`), installs the wheels, runs import/smoke checks for each native module plus explicit fallback checks, executes native chart planner/parity smoke checks, runs an export-runtime fast-path contract smoke for extended summary charts, and runs native parser parity tests. |
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
+
+The additive `Run native Windows report workspace tests` step in `windows-core-smoke`
+checks the main Home/Reports/Tools composition: one real report owner, scratch-SQLite
+subset import across navigation, accepted/rejected context changes, cancellation and
+main-window close, and lazy diagnostic-menu availability/failure handling. Its native
+geometry matrix verifies the actual Windows Qt plugin, physical 1920x1080 display and
+scale factors 1, 1.25, 1.5 and 2, including compact client/frame fit and keyboard use.
+Existing planner, industrial lifecycle and OCR steps remain independent. These source
+checks do not qualify a packaged EXE or the separately owned diagnostic preview/export.
 
 ### Coverage Reporting Semantics
 
@@ -48,6 +57,31 @@ Coverage threshold enforcement is blocking for the full test lane:
 4. **Canonical source signal:** the CI summary includes `src/metroliza` line coverage alongside aggregate coverage.
 
 The coverage threshold is blocking; do not lower it without recording the reason in the PR description or release evidence.
+
+The complete realtime selection also checks Windows owner/DACL/effective access on the
+owned temporary dashboard directory and its generated HTML. The native lane retains the
+observed Python 3.11.9 and asserts that version. POSIX retains its original `0700` oracle.
+A deliberately permissive inherited descriptor must fail the native oracle. The receipt
+labels this as `restricted_current_user`: actual access checks and file operations with
+Administrators disabled and no enabled privilege except traversal. It does not claim an
+actual separate ordinary-user account, a linked token, or protection from a privileged
+administrator. Only safe classifications/counts are printed; short tracebacks suppress fixture identity dumps.
+Real token access checks and impersonated file operations are required; mock access checks,
+DACL-presence-only checks, and an omitted whole-file test are not acceptance.
+The product atomically creates the owned Windows directory and receives its handle using
+`NtCreateFile` with a protected allowlist, validates the native handle before output, and retains it through worker
+completion to refuse directory replacement. Native failure controls cover real creation,
+collision preservation, denied/nonfinal creation, untrusted child-delete ACEs,
+secondary identity-query/security failures and handle-directed cleanup of the atomically
+created object; UI tests retain ownership
+and refuse false shutdown completion when cleanup fails. An unavailable private session
+blocks default output with a fixed explanation while an explicitly chosen output file
+keeps its existing operator-directed behavior. Real MainWindow close tests distinguish the
+private-storage retry reason from the preserved unsaved-source cancellation reason.
+The deferred parent-close case uses a real held writer and real SQLite-to-HTML output:
+after cleanup fails, an explicit failure notification clears pending automatic-close
+intent and leaves the parent/storage available for manual retry. Stale-owner signals and
+an earlier queued child-close retry cannot close the parent after that failure.
 
 ## Optional/manual checks (non-blocking)
 
@@ -164,3 +198,43 @@ When a PR touches parser plugin contracts/registry/plugins, also complete the go
 
 - [`docs/release_checks/parser_plugin_rollout_runbook.md`](./release_checks/parser_plugin_rollout_runbook.md)
 - [`docs/parser_plugins/README.md`](./parser_plugins/README.md)
+
+### Windows incident feature qualification
+
+The explicit `diagnostic_mode=startup` discriminator runs the existing feature
+journey with fixed empty startup-phase markers enabled only for synthetic normal
+starts. Failed pre-readiness receipts may include a closed `startup_phases` list;
+an empty list is unknown, not proof of a bootloader or import failure. Exclusive
+marker creation adds filesystem work and can affect timing. This mode cannot
+upload a qualified development package. Default `full` mode leaves the probe
+disabled and remains the package qualification path; containment, cleanup,
+identity, privacy and all positive/negative controls remain mandatory.
+
+The owner-only public Windows lane `windows-diagnostic-qualification` is selected explicitly by `run_windows_diagnostic_qualification=1` (default 0), capped at 45 minutes, and isolated from ordinary CI cancellation. It builds the actual onedir with `build_windows_exe.ps1 -Mode onedir`, then runs a bounded driver with hash-pinned public synthetic input and a restricted ordinary-user child token. The driver checks useful startup/import/export history after child loss, local preview/export, no-development-Python/no-console operation, repeat and concurrent starts, normal main-window startup, observed process roles, missing components and matched performance measurements. The complete tested tree, canonical manifest and exact `qualified-windows-development-package.zip` are bound by SHA-256; that ZIP is the uploaded development package. Only validated fixed-schema receipts and the successful development ZIP are uploaded; scratch databases and business outputs are excluded. This feature-specific proof does not grant release or real-data acceptance.
+
+The restricted qualification token has a private default DACL for newly created
+kernel objects: its TokenUser SID and LocalSystem only. Administrator deny-only
+membership, removed privileges, medium integrity, Job containment and process
+identity checks remain in force. The qualifier verifies the exact non-NULL ACL
+readback before launch. This avoids inheriting an elevated build runner's object
+permissions that its restricted child cannot use. Native controls compare an
+unmodified token's default pipe permissions with an explicit private descriptor,
+then verify the corrected token; only closed synthetic outcomes are printed.
+This host qualification correction does not grant product users extra rights.
+
+The required native incident cohort includes `tests/test_windows_runtime_audit.py`.
+Each synthetic packaged application start also installs an earliest app-only
+audit hook with a unique private journal. Before each Popen it records only a
+fixed command-purpose enum and bounded callsite category; raw arguments, paths
+and frames are never persisted. Journal failures terminate that synthetic run
+with exit97, never silently becoming a zero-event result. The launcher does not
+install the hook, and ordinary product starts do not enable it.
+
+The qualifier retains physical Job counts and accepts the specific Windows
+version-query suffix only when the same run proves one exact system cmd/ver
+call through both required CPython platform frames and the exact contained
+app-to-system-cmd-to-system-conhost relationship. Unknown members, commands,
+parents, late calls, missing samples, mismatched counts and incomplete cleanup
+still fail. Every concurrent Job owns its own probe and journal; no receipt is
+transferred between runs. Synchronous journal writes, native handle/snapshot
+queries and5ms sampling perturb timing and remain part of the measured journey.

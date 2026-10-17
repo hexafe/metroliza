@@ -41,7 +41,9 @@ Dependency files:
 - `requirements.txt` - runtime
 - `requirements-dev.txt` - development/testing
 - `requirements-build.txt` - packaging
-- `requirements-ocr.txt` - packaged header OCR runtime
+- `requirements-ocr.txt` - packaged header OCR runtime (ONNX Runtime; user builds)
+- `requirements-ocr-benchmark.txt` - adds OpenVINO for OCR benchmarks and the explicit
+  `METROLIZA_BUILD_FLAVOR=benchmark` build; user builds never ship OpenVINO
 
 ## Windows Runtime Setup And OCR Diagnostics
 
@@ -290,12 +292,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.06 RC2 (build 260711)`): Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates.
+Current release highlight (`2026.09 RC1 (build 260927)`): A refreshed Windows workspace for reviewing and importing reports, analyzing measurements, exporting workbooks, and reviewing private diagnostic reports.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.06 RC2 (build 260711)`)
+### Changelog highlights (release `2026.09 RC1 (build 260927)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

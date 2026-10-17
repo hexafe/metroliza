@@ -361,6 +361,9 @@ try {
 
         Invoke-CheckedPythonCommand -Arguments @('-m', 'pip', 'install', '-r', 'requirements-build.txt') -FailureMessage 'Failed to install requirements-build.txt into the active build environment.'
         Invoke-CheckedPythonCommand -Arguments @('-m', 'pip', 'install', '-r', 'requirements-ocr.txt') -FailureMessage 'Failed to install requirements-ocr.txt into the active build environment.'
+        if ($env:METROLIZA_BUILD_FLAVOR -and $env:METROLIZA_BUILD_FLAVOR.Trim().ToLowerInvariant() -eq 'benchmark') {
+            Invoke-CheckedPythonCommand -Arguments @('-m', 'pip', 'install', '-r', 'requirements-ocr-benchmark.txt') -FailureMessage 'Failed to install requirements-ocr-benchmark.txt for the benchmark build flavor.'
+        }
     }
 
     Write-Host '[3/6] Building native extensions in release mode'
