@@ -416,3 +416,27 @@ def test_header_ocr_openvino_engine_missing_from_build_is_reported_not_raised(mo
     assert items == []
     assert error == "header_ocr_engine_unavailable:openvino"
 
+
+def test_rapidocr_model_root_dir_points_at_the_explicit_model_directory(tmp_path):
+    # RapidOCR 3.8.1 raises FileNotFoundError when Global.model_root_dir (default: the package's
+    # own `models/` directory) is missing, even with explicit model paths. User builds do not ship
+    # `rapidocr/models/*`, so the backend must root RapidOCR in the vendored model directory.
+    from metroliza.parsing import header_ocr_backend as backend_module
+
+    model_dir = tmp_path / "ocr_models" / "rapidocr"
+    config = backend_module.RapidOcrLatinBackendConfig(
+        model_paths=backend_module.default_rapidocr_latin_model_paths(model_dir)
+    )
+
+    params = backend_module.RapidOcrLatinBackend(config)._build_params()
+
+    assert params["Global.model_root_dir"] == str(model_dir)
+    assert params["Det.model_path"] == str(model_dir / "ch_PP-OCRv4_det_mobile.onnx")
+
+    overridden = backend_module.RapidOcrLatinBackendConfig(
+        model_paths=config.model_paths,
+        params={"Global.model_root_dir": str(tmp_path)},
+    )
+    assert backend_module.RapidOcrLatinBackend(overridden)._build_params()[
+        "Global.model_root_dir"
+    ] == str(tmp_path)

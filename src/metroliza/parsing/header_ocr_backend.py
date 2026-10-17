@@ -579,6 +579,11 @@ class RapidOcrLatinBackend:
         params = dict(DEFAULT_LATIN_PARAMS)
         params.update(
             {
+                # RapidOCR 3.8.1 requires ``Global.model_root_dir`` to exist even when every
+                # model path is explicit, and defaults it to ``rapidocr/models`` inside its own
+                # package. User builds do not ship that directory, so point it at the directory
+                # that holds the vendored models (it always exists when the models do).
+                "Global.model_root_dir": str(Path(self.config.model_paths.det_model_path).parent),
                 "Det.model_path": str(self.config.model_paths.det_model_path),
                 "Cls.model_path": str(self.config.model_paths.cls_model_path),
                 "Rec.model_path": str(self.config.model_paths.rec_model_path),

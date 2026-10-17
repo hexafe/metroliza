@@ -58,7 +58,9 @@ USER_BUILD_EXCLUDED_PAYLOAD_GLOBS = (
     # OpenCV video IO (ffmpeg) and cascade data; header OCR only uses the cv2 core.
     "*opencv_videoio_ffmpeg*.dll",
     "cv2/data/*.xml",
-    # RapidOCR's bundled default models; Metroliza passes its own models explicitly.
+    # RapidOCR's bundled default models. Metroliza passes its vendored models explicitly and roots
+    # RapidOCR in that directory (Global.model_root_dir); the recognizer's character list is
+    # embedded in the vendored model, so nothing under rapidocr/models/ is read at runtime.
     "rapidocr/models/*",
     # Software OpenGL fallback; the Qt UI is widgets-only (no QtQuick/QtOpenGL/WebEngine shipped).
     "*opengl32sw.dll",
