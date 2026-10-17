@@ -12,6 +12,8 @@ param(
     [switch]$AllowBrokenPdfParserBuild,
     [switch]$AllowMissingHeaderOcrBuild,
     [switch]$AllowMissingOznakBuild,
+    [ValidateSet('user', 'benchmark')]
+    [string]$BuildFlavor,
     [ValidateSet('auto', 'gcc', 'clang')]
     [string]$CompilerStrategy = 'auto',
     [switch]$AutoInstallCompiler,
@@ -28,6 +30,16 @@ if ([string]::IsNullOrWhiteSpace($env:PYTHONPATH)) {
 } elseif (-not ($env:PYTHONPATH -split [regex]::Escape($pathSeparator) | Where-Object { $_ -eq $srcRoot })) {
     $env:PYTHONPATH = "$srcRoot$pathSeparator$repoRoot$pathSeparator$env:PYTHONPATH"
 }
+# Build flavor: 'user' (default) never ships OpenVINO or other unused payload; 'benchmark' is the
+# explicitly named dev/benchmark build that keeps OpenVINO. Child Python validators read the env var.
+if ($PSBoundParameters.ContainsKey('BuildFlavor')) {
+    $env:METROLIZA_BUILD_FLAVOR = $BuildFlavor
+}
+$resolvedBuildFlavor = if ([string]::IsNullOrWhiteSpace($env:METROLIZA_BUILD_FLAVOR)) { 'user' } else { $env:METROLIZA_BUILD_FLAVOR.Trim().ToLowerInvariant() }
+if ($resolvedBuildFlavor -notin @('user', 'benchmark')) {
+    throw "Unsupported METROLIZA_BUILD_FLAVOR '$resolvedBuildFlavor'; expected 'user' or 'benchmark'."
+}
+$env:METROLIZA_BUILD_FLAVOR = $resolvedBuildFlavor
 $credentialsPathWasBound = $PSBoundParameters.ContainsKey('CredentialsPath')
 $modeWasBound = $PSBoundParameters.ContainsKey('Mode')
 
@@ -718,20 +730,33 @@ if ($headerOcrPackageAvailable -or -not $AllowMissingHeaderOcrBuild) {
     $headerOcrNuitkaArgs = @(
         '--include-package=rapidocr',
         '--include-package=onnxruntime',
-        '--include-package=openvino',
         '--include-package=cv2',
         '--include-package=numpy',
         '--include-package-data=rapidocr',
         '--include-package-data=onnxruntime',
-        '--include-package-data=openvino',
         '--include-package-data=cv2',
         '--include-package-data=numpy',
         '--include-distribution-metadata=rapidocr',
         '--include-distribution-metadata=onnxruntime',
-        '--include-distribution-metadata=openvino',
         '--include-distribution-metadata=opencv-python',
         '--include-distribution-metadata=numpy'
     )
+    if ($resolvedBuildFlavor -eq 'benchmark') {
+        $headerOcrNuitkaArgs += @(
+            '--include-package=openvino',
+            '--include-package-data=openvino',
+            '--include-distribution-metadata=openvino'
+        )
+    } else {
+        # User builds: OpenVINO is dev/benchmark only, and the payload below is unused by the product.
+        $headerOcrNuitkaArgs += @(
+            '--nofollow-import-to=openvino',
+            '--noinclude-dlls=*opencv_videoio_ffmpeg*.dll',
+            '--noinclude-dlls=opengl32sw.dll',
+            '--noinclude-data-files=cv2/data/*.xml',
+            '--noinclude-data-files=rapidocr/models/*'
+        )
+    }
     $commonArgs += $headerOcrNuitkaArgs
 }
 

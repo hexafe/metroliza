@@ -161,6 +161,17 @@ try {
                     $ocrRequirements
                 )
             }
+
+            # OpenVINO is dev/benchmark only; install it solely for the explicit benchmark flavor.
+            if ($env:METROLIZA_BUILD_FLAVOR -and $env:METROLIZA_BUILD_FLAVOR.Trim().ToLowerInvariant() -eq 'benchmark') {
+                Invoke-Checked -Executable $venvPython -Arguments @(
+                    '-m',
+                    'pip',
+                    'install',
+                    '-r',
+                    (Join-Path $repoRoot 'requirements-ocr-benchmark.txt')
+                )
+            }
         }
     }
 

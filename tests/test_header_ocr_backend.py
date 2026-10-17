@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import sys
 import types
 from enum import Enum
@@ -324,3 +325,68 @@ def test_non_onnxruntime_runtime_does_not_preload_onnxruntime(tmp_path, monkeypa
         backend.recognize(image_path)
     finally:
         sys.meta_path.remove(guard)
+
+
+def test_rapidocr_engine_unavailable_reason_reports_missing_openvino(monkeypatch):
+    backend_module = importlib.import_module("metroliza.parsing.header_ocr_backend")
+    real_find_spec = importlib.util.find_spec
+
+    monkeypatch.setattr(
+        backend_module.importlib.util,
+        "find_spec",
+        lambda name, *args, **kwargs: None if name == "openvino" else real_find_spec(name, *args, **kwargs),
+    )
+
+    assert backend_module.rapidocr_engine_unavailable_reason("openvino") == (
+        "header_ocr_engine_unavailable:openvino"
+    )
+    assert backend_module.rapidocr_engine_unavailable_reason("onnxruntime") is None
+
+
+def test_rapidocr_engine_unavailable_reason_accepts_installed_openvino(monkeypatch):
+    backend_module = importlib.import_module("metroliza.parsing.header_ocr_backend")
+    monkeypatch.setattr(
+        backend_module.importlib.util, "find_spec", lambda name, *args, **kwargs: object()
+    )
+
+    assert backend_module.rapidocr_engine_unavailable_reason("openvino") is None
+
+
+def test_header_ocr_openvino_engine_missing_from_build_is_reported_not_raised(monkeypatch):
+    from metroliza.parsing import cmm_report_parser as parser_module
+
+    class _Pixmap:
+        width = 10
+        height = 10
+
+    class _Page:
+        def get_pixmap(self, **_kwargs):
+            return _Pixmap()
+
+    class _PdfBackend:
+        @staticmethod
+        def Matrix(*_args):
+            return object()
+
+        @staticmethod
+        def Rect(*_args):
+            return object()
+
+    def _fail_if_backend_built(_config):
+        raise AssertionError("OCR backend must not be built for an unavailable engine")
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setenv("METROLIZA_HEADER_OCR_ENGINE", "openvino")
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *args, **kwargs: None if name == "openvino" else real_find_spec(name, *args, **kwargs),
+    )
+    monkeypatch.setattr(parser_module, "get_cached_rapidocr_latin_backend", _fail_if_backend_built)
+
+    items, error = parser_module.CMMReportParser._ocr_header_items_from_pixmap(
+        _Page(), (0.0, 0.0, 10.0, 10.0), _PdfBackend()
+    )
+
+    assert items == []
+    assert error == "header_ocr_engine_unavailable:openvino"

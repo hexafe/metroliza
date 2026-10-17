@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
+import importlib.util
 import sys
 import threading
 from pathlib import Path
@@ -36,6 +37,10 @@ RAPIDOCR_ENGINE_ALIASES = {
     "ov": "openvino",
     "tensorrt": "tensorrt",
     "trt": "tensorrt",
+}
+# Engines whose runtime package is optional and not shipped in user builds.
+RAPIDOCR_ENGINE_MODULES = {
+    "openvino": "openvino",
 }
 RAPIDOCR_ACCELERATOR_ALIASES = {
     "": "cpu",
@@ -200,6 +205,19 @@ def _normalize_rapidocr_engine(value: str | None) -> str:
         allowed = ", ".join(sorted(set(RAPIDOCR_ENGINE_ALIASES.values())))
         raise ValueError(f"Unsupported header OCR engine {value!r}; expected one of: {allowed}.")
     return engine
+
+
+def rapidocr_engine_unavailable_reason(engine: str) -> str | None:
+    """Return a stable ``header_ocr_error`` value when the engine package is not in this build."""
+
+    module_name = RAPIDOCR_ENGINE_MODULES.get(engine)
+    if module_name is None:
+        return None
+    try:
+        available = importlib.util.find_spec(module_name) is not None
+    except (ImportError, ValueError):
+        available = False
+    return None if available else f"header_ocr_engine_unavailable:{engine}"
 
 
 def _normalize_rapidocr_accelerator(value: str | None) -> str:

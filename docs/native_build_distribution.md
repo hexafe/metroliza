@@ -186,6 +186,14 @@ Distribution audit status:
   `requirements-ocr.txt`, and runs the packaged-dependency validator with
   `--require-header-ocr` before building, so missing build dependencies, RapidOCR
   dependencies, or model files fail before a broken EXE is produced.
+- User builds (default, `METROLIZA_BUILD_FLAVOR` unset or `user`) exclude payload the
+  product does not use: OpenVINO, `cv2/opencv_videoio_ffmpeg*.dll`, `cv2/data/*`,
+  RapidOCR's bundled `rapidocr/models/*`, and `opengl32sw.dll`. Header OCR uses the
+  ONNX Runtime models vendored under `src/metroliza/resources/ocr_models/rapidocr`.
+  The rules live in `packaging/pyinstaller_common.py` (`filter_payload_toc`) and are
+  mirrored in `packaging/build_nuitka.ps1`. Set `METROLIZA_BUILD_FLAVOR=benchmark`
+  (and install `requirements-ocr-benchmark.txt`) only for a dev/benchmark build that keeps
+  OpenVINO and the unfiltered payload.
 - Commercial or external distributions must keep `THIRD_PARTY_NOTICES.md` with the
   packaged artifact and retain the bundled package license/metadata files where the
   packager preserves them.

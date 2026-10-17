@@ -44,6 +44,7 @@ class RequirementsHygieneTests(unittest.TestCase):
             pathlib.Path('requirements-dev.txt'),
             pathlib.Path('requirements-build.txt'),
             pathlib.Path('requirements-ocr.txt'),
+            pathlib.Path('requirements-ocr-benchmark.txt'),
         ]:
             content = path.read_text(encoding='utf-8')
             self.assertNotIn('\r\n', content, f'{path} must use LF newlines')
@@ -61,7 +62,8 @@ class RequirementsHygieneTests(unittest.TestCase):
         self.assertIn('pyinstaller', build.lower())
         self.assertIn('rapidocr', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
         self.assertIn('onnxruntime', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
-        self.assertIn('openvino', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
+        self.assertNotIn('openvino>=', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
+        self.assertIn('openvino>=', pathlib.Path('requirements-ocr-benchmark.txt').read_text(encoding='utf-8').lower())
         self.assertIn('opencv-python', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
 
     def test_runtime_requirements_pin_pyqt_wrapper_and_qt_payload_together(self):

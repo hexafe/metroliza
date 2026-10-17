@@ -41,7 +41,9 @@ Dependency files:
 - `requirements.txt` - runtime
 - `requirements-dev.txt` - development/testing
 - `requirements-build.txt` - packaging
-- `requirements-ocr.txt` - packaged header OCR runtime
+- `requirements-ocr.txt` - packaged header OCR runtime (ONNX Runtime; user builds)
+- `requirements-ocr-benchmark.txt` - adds OpenVINO for OCR benchmarks and the explicit
+  `METROLIZA_BUILD_FLAVOR=benchmark` build; user builds never ship OpenVINO
 
 ## Windows Runtime Setup And OCR Diagnostics
 
