@@ -128,6 +128,18 @@ class TestDbUtils(unittest.TestCase):
 
         self.assertEqual(rows, [("alpha",), ("beta",)])
 
+    def test_immutable_snapshot_scope_preserves_bytes_closes_and_creates_no_sidecars(self):
+        before = Path(self.db_path).read_bytes()
+        with sqlite_readonly_connection_scope(self.db_path, immutable=True) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone(), (2,))
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute("DELETE FROM sample")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+        self.assertEqual(Path(self.db_path).read_bytes(), before)
+        for suffix in ("-wal", "-shm", "-journal"):
+            self.assertFalse(Path(self.db_path + suffix).exists())
+
     def test_sqlite_query_only_connection_scope_blocks_writes_and_closes(self):
         original = Path(self.db_path).read_bytes()
         with sqlite_query_only_connection_scope(self.db_path) as connection:

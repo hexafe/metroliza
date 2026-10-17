@@ -25,6 +25,7 @@ REQUIREMENT_FILES = (
     "requirements-ocr.txt",
     "requirements-build.txt",
     "requirements-dev.txt",
+    "requirements-windows-candidate-host.txt",
 )
 IMPORT_SCAN_DIRS = ("src/metroliza", "modules", "scripts", "tests")
 BANDIT_SCAN_DIRS = ("src/metroliza", "modules", "scripts")
@@ -150,6 +151,8 @@ INTERNAL_GIT_PACKAGES = {
     "oznak": "oznak",
 }
 IMPORT_TO_PACKAGE = {
+    "_distutils_hack": "setuptools",
+    "setuptools": "setuptools",
     "PIL": "Pillow",
     "PyQt6": "PyQt6",
     "cryptography": "cryptography",
@@ -167,6 +170,7 @@ IMPORT_TO_PACKAGE = {
     "oznak": "oznak",
     "packaging": "packaging",
     "pandas": "pandas",
+    "playwright": "playwright",
     "pymupdf": "PyMuPDF",
     "pyi_splash": "pyinstaller",
     "pytest": "pytest",
