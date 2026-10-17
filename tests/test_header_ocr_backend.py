@@ -55,7 +55,16 @@ def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path, 
     image_path = tmp_path / "header.png"
     image_path.write_bytes(b"not-a-real-image")
 
-    run = backend.recognize(image_path)
+    stages = []
+    with backend_module.observe_ocr_qualification_stages(stages.append):
+        run = backend.recognize(image_path)
+    assert stages == [
+        "ocr_onnxruntime_import", "ocr_rapidocr_import",
+        "ocr_engine_construction", "ocr_engine_inference",
+        "ocr_result_normalization",
+    ]
+    backend.recognize(image_path)
+    assert len(stages) == 5
 
     assert calls["init_kwargs"]["params"]["Det.model_path"] == "det.onnx"
     assert calls["init_kwargs"]["params"]["Cls.model_path"] == "cls.onnx"
@@ -71,6 +80,22 @@ def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path, 
     assert record.box == ((1.0, 2.0), (3.0, 2.0), (3.0, 4.0), (1.0, 4.0))
     assert run.diagnostics["backend"] == "rapidocr_latin"
     assert run.diagnostics["raw_result_type"] == "SimpleNamespace"
+
+
+def test_ocr_stage_observer_restores_previous_scope_after_error():
+    backend_module = importlib.import_module("modules.header_ocr_backend")
+    outer = []
+    inner = []
+    with backend_module.observe_ocr_qualification_stages(outer.append):
+        backend_module._mark_qualification_stage("ocr_parser_execution")
+        with pytest.raises(RuntimeError, match="synthetic"):
+            with backend_module.observe_ocr_qualification_stages(inner.append):
+                backend_module._mark_qualification_stage("ocr_onnxruntime_import")
+                raise RuntimeError("synthetic")
+        backend_module._mark_qualification_stage("ocr_result_validation")
+    backend_module._mark_qualification_stage("ocr_engine_inference")
+    assert outer == ["ocr_parser_execution", "ocr_result_validation"]
+    assert inner == ["ocr_onnxruntime_import"]
 
 
 def test_rapidocr_backend_coerces_string_defaults_to_rapidocr_enums(tmp_path, monkeypatch):

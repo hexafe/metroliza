@@ -10,6 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_STYLE_OVERRIDE", "Fusion")
 
 try:
+    from PyQt6.QtCore import QPoint, QRect, Qt
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication
 
     from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
@@ -38,7 +40,7 @@ from metroliza.reports.characteristic_alias_service import (
     upsert_characteristic_alias,
 )
 
-from tests.ui_geometry_audit import assert_dialog_geometry_clean
+from tests.ui_geometry_audit import assert_dialog_geometry_clean, collect_sibling_overlaps
 
 
 pytestmark = pytest.mark.skipif(
@@ -148,6 +150,57 @@ def test_sync_dialog_and_sql_editor_geometry_handle_dense_profiles(tmp_path) -> 
     _audit_and_close(sql_dialog)
     parent_dialog.close()
     parent_dialog.deleteLater()
+
+
+def test_sync_source_actions_do_not_overlap_and_remain_keyboard_reachable(tmp_path) -> None:
+    db_path = tmp_path / "industrial.sqlite"
+    ensure_report_schema(str(db_path))
+    IndustrialDataRepository(str(db_path)).upsert_source_profile(
+        profile_key="assembly_mes",
+        profile_name="Assembly MES",
+        source_db_alias="assembly_mes",
+        database_type="mssql",
+        source_object_name="production_events",
+    )
+    dialog = IndustrialSyncDialog(db_file=str(db_path), config_path=tmp_path / "missing.yaml")
+    app = _app()
+    dialog.show()
+    QTest.qWait(5)
+    app.processEvents()
+    try:
+        dialog.resize(760, 520)
+        app.processEvents()
+        assert dialog.height() == 520
+        assert dialog.content_scroll.verticalScrollBar().maximum() > 0
+
+        first = dialog.select_all_sources_button.geometry()
+        second = dialog.current_source_only_button.geometry()
+        assert first.intersected(second).isEmpty()
+        assert dialog.source_check_list.height() >= max(first.height(), second.height())
+        assert collect_sibling_overlaps(dialog) == []
+
+        for action in (
+            dialog.close_button,
+            dialog.test_connection_button,
+            dialog.sync_now_button,
+            dialog.fetch_csv_summary_button,
+            dialog.cancel_sync_button,
+        ):
+            assert action.isVisibleTo(dialog)
+            rectangle = QRect(action.mapTo(dialog, QPoint(0, 0)), action.size())
+            assert dialog.rect().contains(rectangle)
+
+        dialog.current_source_only_button.setFocus()
+        QTest.keyClick(dialog.current_source_only_button, Qt.Key.Key_Tab)
+        focused = QApplication.focusWidget()
+        assert focused is not None
+        assert focused.isVisibleTo(dialog)
+        assert focused.isEnabled()
+    finally:
+        dialog.hide()
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
 
 
 def test_tabular_analytics_dialog_geometry_handles_long_artifact_paths(tmp_path) -> None:

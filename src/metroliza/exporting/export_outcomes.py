@@ -225,6 +225,11 @@ def _diagnostic_lines(metadata, *, terminal_failure: str) -> tuple[str, ...]:
             metadata.get("html_dashboard_warnings", ()),
         ),
         (
+            "group_analysis",
+            metadata.get("group_analysis_warning_details", ()),
+            metadata.get("group_analysis_warnings", ()),
+        ),
+        (
             "google_conversion",
             metadata.get("conversion_warning_details", ()),
             metadata.get("conversion_warnings", ()),
@@ -292,6 +297,7 @@ def _cancelled_export_result(
     workbook_path: str,
     workbook_requested: bool,
     summary_requested: bool,
+    group_analysis_requested: bool,
     dashboard_requested: bool,
     google_requested: bool,
     terminal_failure: str,
@@ -337,6 +343,8 @@ def _cancelled_export_result(
                 stage_label="Summary chart generation",
                 required=False,
             )
+    if group_analysis_requested:
+        _append_cancelled_group_analysis_outcome(artifacts, stages, metadata)
     if dashboard_requested:
         dashboard_path = _display_path(metadata.get("html_dashboard_path"))
         dashboard_warnings = _text_values(metadata.get("html_dashboard_warnings", ()))
@@ -494,6 +502,57 @@ def _append_summary_outcome(artifacts, stages, warnings: tuple[str, ...]) -> Non
             diagnostic_ids=diagnostic_ids,
         )
     )
+
+
+def _append_group_analysis_outcome(
+    artifacts, stages, warnings: tuple[str, ...], *, completed: bool, terminal_failure: bool = False,
+) -> None:
+    if completed:
+        status = ExportArtifactStatus.PARTIAL if warnings else ExportArtifactStatus.COMPLETE
+        message = (
+            'Some grouped comparisons need two groups within one reference or '
+            'completed reference metadata; review Group Analysis warnings.'
+            if warnings else ''
+        )
+    else:
+        status = ExportArtifactStatus.FAILED if terminal_failure else ExportArtifactStatus.OMITTED
+        message = 'Group Analysis did not complete.'
+    diagnostic_ids = tuple(f'group_analysis-{index}' for index in range(1, len(warnings) + 1))
+    artifacts.append(ExportArtifactResult(
+        artifact_id='group_analysis',
+        label='Group Analysis',
+        status=status,
+        required=False,
+        public_message=message,
+        diagnostic_ids=diagnostic_ids,
+    ))
+    stages.append(ExportStageResult(
+        stage_id='group_analysis',
+        label='Grouped comparison',
+        status=status,
+        public_message=message,
+        diagnostic_ids=diagnostic_ids,
+    ))
+
+
+def _append_cancelled_group_analysis_outcome(artifacts, stages, metadata) -> None:
+    if metadata.get('group_analysis_completed') is True:
+        _append_group_analysis_outcome(
+            artifacts,
+            stages,
+            _text_values(metadata.get('group_analysis_warnings', ())),
+            completed=True,
+        )
+    else:
+        _append_cancelled_outcome(
+            artifacts,
+            stages,
+            artifact_id='group_analysis',
+            artifact_label='Group Analysis',
+            stage_id='group_analysis',
+            stage_label='Grouped comparison',
+            required=False,
+        )
 
 
 def _dashboard_status(path: str, warnings: tuple[str, ...], *, required: bool):
@@ -664,6 +723,9 @@ def derive_export_run_result(
     summary_requested = bool(
         metadata.get("summary_sheet_requested") or metadata.get("summary_sheet_warnings")
     )
+    group_analysis_requested = bool(
+        metadata.get('group_analysis_requested') or metadata.get('group_analysis_warnings')
+    )
     if cancelled:
         return _cancelled_export_result(
             metadata,
@@ -671,6 +733,7 @@ def derive_export_run_result(
             workbook_path=_display_path(metadata.get("local_xlsx_path") or excel_file),
             workbook_requested=workbook_requested,
             summary_requested=summary_requested,
+            group_analysis_requested=group_analysis_requested,
             dashboard_requested=dashboard_requested,
             google_requested=google_requested,
             terminal_failure=terminal_failure,
@@ -692,6 +755,14 @@ def derive_export_run_result(
             artifacts,
             stages,
             _text_values(metadata.get("summary_sheet_warnings", ())),
+        )
+    if group_analysis_requested:
+        _append_group_analysis_outcome(
+            artifacts,
+            stages,
+            _text_values(metadata.get('group_analysis_warnings', ())),
+            completed=metadata.get('group_analysis_completed') is True,
+            terminal_failure=bool(terminal_failure),
         )
     if dashboard_requested:
         _append_dashboard_outcome(
