@@ -4,7 +4,9 @@ from metroliza.parsing import report_parser_factory
 
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
+from metroliza.parsing.metadata_review import MetadataReviewReader
 from metroliza.parsing.preflight import ImportPlan, ParsePreflightStatus
+from metroliza.reports.report_metadata_review import ReviewRow, build_overrides
 try:
     from metroliza.ui.parser_preflight_worker import ParsePreflightThread
 except ImportError:  # pragma: no cover - lightweight Qt test stubs.
@@ -20,6 +22,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
 )
+import copy
 import logging
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 try:
@@ -40,6 +43,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         close = getattr(dialog, "close", None)
         if callable(close):
             close()
+from metroliza.ui.metadata_review_dialog import MetadataReviewDialog, summarize_rows
 from metroliza.ui.report_planner import PLANNER_ACTION_STYLE, ReportPlanner
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
@@ -325,6 +329,8 @@ class ParsingDialog(QDialog):
         self._approval_cache_key = None
         self._approval_cache = (False, False, "")
         self._close_requested = False
+        # Reviewed metadata rows keyed by the plan's occurrence id (#1100).
+        self._metadata_rows = {}
 
         # Initialize the widgets
         self.source_section_label = section_label("Source")
@@ -376,6 +382,14 @@ class ParsingDialog(QDialog):
         self.scan_button.setEnabled(False)
         self.scan_button.setToolTip(
             "Inspect report contents and parser evidence without writing to the database."
+        )
+
+        self.metadata_button = QPushButton("Review metadata...")
+        self.metadata_button.clicked.connect(self._open_metadata_review)
+        self.metadata_button.setEnabled(False)
+        self.metadata_button.setToolTip(
+            "Check and correct reference, part, sample and date before importing. "
+            "Nothing is written to the database."
         )
 
         self.review_scan_button = QPushButton("Report details")
@@ -444,6 +458,7 @@ class ParsingDialog(QDialog):
         self.report_planner = ReportPlanner(self)
         self.layout.addWidget(self.report_planner, 4, 0, 1, 4)
         self.layout.setRowStretch(4, 1)
+        self.layout.addWidget(self.metadata_button, 5, 1, Qt.AlignmentFlag.AlignRight)
         self.layout.addWidget(self.scan_button, 5, 2)
         self.layout.addWidget(self.parse_button, 5, 3)
         self.report_planner.selection_changed.connect(self._sync_readiness_state)
@@ -457,6 +472,7 @@ class ParsingDialog(QDialog):
         configure_accessibility(self.database_button, name="Browse parse database")
         configure_accessibility(self.metadata_mode_combo, name="Metadata detail")
         configure_accessibility(self.scan_button, name="Review reports")
+        configure_accessibility(self.metadata_button, name="Review metadata before import")
         configure_accessibility(self.review_scan_button, name="Report details")
         configure_accessibility(self.parse_button, name="Import selected reports")
         self.readiness_label.setAccessibleName("Report review status")
@@ -465,13 +481,14 @@ class ParsingDialog(QDialog):
             self.metadata_mode_combo, self.scan_button, self.report_planner.search,
             self.report_planner.status_filter, self.report_planner.parser_filter,
             self.report_planner.attention_filter, self.report_planner.select_ready,
-            self.report_planner.clear, self.report_planner.table, self.parse_button,
+            self.report_planner.clear, self.report_planner.table, self.metadata_button,
+            self.parse_button,
         )
         for first, second in zip(focus_order, focus_order[1:]):
             self.setTabOrder(first, second)
         apply_metroliza_theme(self)
         for button in (self.directory_button, self.archive_button, self.database_button,
-                       self.scan_button, self.parse_button):
+                       self.scan_button, self.parse_button, self.metadata_button):
             button.setStyleSheet(PLANNER_ACTION_STYLE)
 
     def _selected_metadata_request_fields(self):
@@ -530,6 +547,7 @@ class ParsingDialog(QDialog):
         self.parse_button.setText(caption)
         self.parse_button.setAccessibleName(caption)
         self.parse_button.setEnabled(bool(approved and not busy))
+        self.metadata_button.setEnabled(bool(approved and not busy))
         self.scan_button.setText("Refresh review" if self._preflight_result else "Review reports")
         self.scan_button.setAccessibleName(self.scan_button.text())
         self.scan_button.setEnabled(inputs_ready and not busy)
@@ -545,6 +563,8 @@ class ParsingDialog(QDialog):
             message = f"Review complete: {ready} ready. No database changes were made."
             if not count:
                 message += " Select ready reports to enable import."
+            elif self._metadata_rows:
+                message += " Metadata: " + self._metadata_summary_text() + "."
         elif self._review_status:
             message = self._review_status
         elif inputs_ready:
@@ -626,6 +646,7 @@ class ParsingDialog(QDialog):
         self._preflight_result = None
         self._approval_cache_key = None
         self._preflight_error_detail = ""
+        self._metadata_rows = {}
         self._review_status = reason
         self.report_planner.invalidate()
 
@@ -831,6 +852,36 @@ class ParsingDialog(QDialog):
         self.report_planner.details_button.setChecked(True)
         self.report_planner.table.setFocus()
 
+    def _selected_metadata_rows(self):
+        selected = set(self.report_planner.model.selected_ids)
+        return [row for occurrence, row in self._metadata_rows.items() if occurrence in selected]
+
+    def _metadata_summary_text(self):
+        return summarize_rows(self._selected_metadata_rows())
+
+    @pyqtSlot()
+    def _open_metadata_review(self):
+        """Metadata step: read fast, edit, optionally OCR. Never writes to the database."""
+        self._sync_readiness_state(refresh_registry=True)
+        if not self.metadata_button.isEnabled():
+            return
+        reviewed = {item.stable_occurrence_id: item for item in self._preflight_result.files}
+        rows = []
+        for occurrence in self.report_planner.model.selected_ids:
+            item = reviewed[occurrence]
+            previous = self._metadata_rows.get(occurrence)
+            if previous is not None and previous.fingerprint == item.fingerprint:
+                rows.append(copy.deepcopy(previous))  # cancel must discard this session's edits
+            else:
+                rows.append(ReviewRow(occurrence, item.fingerprint, item.display_name, item.parser_id))
+        preferences = getattr(self.parent(), "ui_preferences", None) if self.parent() else None
+        dialog = MetadataReviewDialog(
+            MetadataReviewReader(self._preflight_result), rows, self, ui_preferences=preferences,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._metadata_rows.update({row.occurrence_id: row for row in dialog.rows()})
+        self._sync_readiness_state()
+
     @pyqtSlot()
     def _import_reviewed_reports(self):
         """Dispatch the exact global selection through the accepted import contract."""
@@ -846,6 +897,7 @@ class ParsingDialog(QDialog):
             plan = ImportPlan.from_preflight(
                 request, self._preflight_result,
                 selected_occurrence_ids=self.report_planner.model.selected_ids,
+                metadata_overrides=build_overrides(self._selected_metadata_rows()),
             )
         except ValueError:
             self._invalidate_preflight("Changed since review. Review reports again before importing.")

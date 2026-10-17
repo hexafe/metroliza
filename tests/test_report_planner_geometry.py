@@ -330,6 +330,7 @@ def test_filtered_rows_do_not_change_global_selection_and_tab_order_is_determini
         planner.select_ready,
         planner.clear,
         planner.table,
+        dialog.metadata_button,
         dialog.parse_button,
     )
     focus_order[0].setFocus()

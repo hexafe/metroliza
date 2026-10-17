@@ -28,6 +28,7 @@ from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
 from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.reports.db import sqlite_readonly_connection_scope
+from metroliza.reports.report_metadata_review import ReportMetadataOverride
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 
@@ -562,6 +563,9 @@ class ImportPlan:
     preflight_version: str
     preflight_result_id: str
     selected_reports: tuple[SelectedReportIdentity, ...]
+    # Values confirmed in the pre-import metadata review (#1100). Each override
+    # is bound to a selected report by occurrence id and content fingerprint.
+    metadata_overrides: tuple[ReportMetadataOverride, ...] = ()
 
     @classmethod
     def from_preflight(
@@ -570,6 +574,7 @@ class ImportPlan:
         preflight_result: ParsePreflightResult,
         *,
         selected_occurrence_ids: Iterable[str],
+        metadata_overrides: Iterable[ReportMetadataOverride] = (),
     ) -> ImportPlan:
         """Build a plan from an explicit set of reviewed occurrence identities."""
 
@@ -625,6 +630,7 @@ class ImportPlan:
             preflight_version=preflight_result.version,
             preflight_result_id=preflight_result.result_id,
             selected_reports=tuple(selected_reports),
+            metadata_overrides=tuple(metadata_overrides),
         )
         return validate_import_plan(plan)
 
@@ -710,6 +716,7 @@ def validate_import_plan(plan: ImportPlan) -> ImportPlan:
         raise ValueError("Import plan must be provided as an ImportPlan instance.")
     _validate_import_plan_context(plan)
     _validate_selected_reports(plan)
+    _validate_metadata_overrides(plan)
     return plan
 
 
@@ -766,6 +773,30 @@ def _validate_selected_reports(plan: ImportPlan) -> None:
         if identity.occurrence_id not in eligible or identity != approved_identity:
             raise ValueError(
                 f"Selected report identity is not an exact atomic approval: {identity.occurrence_id}"
+            )
+
+
+def _validate_metadata_overrides(plan: ImportPlan) -> None:
+    """Overrides may only target selected reports, by exact identity."""
+
+    if not isinstance(plan.metadata_overrides, tuple):
+        raise ValueError("Import plan metadata_overrides must be an immutable tuple.")
+    selected = {identity.occurrence_id: identity for identity in plan.selected_reports}
+    seen: set[str] = set()
+    for override in plan.metadata_overrides:
+        if not isinstance(override, ReportMetadataOverride):
+            raise ValueError("Import plan contains an invalid metadata override.")
+        if override.occurrence_id in seen:
+            raise ValueError("Import plan contains duplicate metadata overrides.")
+        seen.add(override.occurrence_id)
+        identity = selected.get(override.occurrence_id)
+        if identity is None:
+            raise ValueError(
+                f"Metadata override targets an unselected report: {override.occurrence_id}"
+            )
+        if override.fingerprint != identity.fingerprint:
+            raise ValueError(
+                f"Metadata override does not match the reviewed content: {override.occurrence_id}"
             )
 
 
