@@ -1044,6 +1044,7 @@
       "include": [
         "build_windows_exe.bat",
         "build_windows_exe.ps1",
+        "build_windows_launcher_exe.ps1",
         "setup_windows_runtime.bat",
         "setup_windows_runtime.ps1"
       ],
@@ -2423,6 +2424,7 @@
         "scripts/generate_third_party_inventory.py",
         "scripts/measure_windows_startup.ps1",
         "scripts/ocr_diagnostic_contract.py",
+        "scripts/qualify_windows_launcher.py",
         "scripts/release_only_google_conversion_smoke.py",
         "scripts/stage_release_notices.py",
         "scripts/summarize_startup_profile.py",
