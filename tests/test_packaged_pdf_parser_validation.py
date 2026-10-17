@@ -176,6 +176,47 @@ def test_validate_nuitka_report_has_header_ocr_accepts_report(tmp_path):
     assert 'rapidocr' in validate_nuitka_report_has_header_ocr(report)
 
 
+def _nuitka_report_without_openvino(tmp_path):
+    report = tmp_path / 'nuitka-build-report.xml'
+    report.write_text(
+        textwrap.dedent(
+            '''
+            <nuitka-report>
+              <module name="metroliza.parsing.header_ocr_backend" />
+              <module name="metroliza.parsing.header_ocr_geometry" />
+              <module name="metroliza.reports.header_ocr_corrections" />
+              <module name="metroliza.parsing.header_ocr_corrections" />
+              <module name="rapidocr" />
+              <module name="onnxruntime" />
+              <module name="cv2" />
+              <module name="numpy" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/ch_ppocr_mobile_v2.0_cls_mobile.onnx" />
+              <data-file name="metroliza/resources/ocr_models/rapidocr/latin_PP-OCRv3_rec_mobile.onnx" />
+              <data-file name="THIRD_PARTY_NOTICES.md" />
+            </nuitka-report>
+            '''
+        ).strip(),
+        encoding='utf-8',
+    )
+    return report
+
+
+def test_user_build_flavor_does_not_require_openvino(tmp_path, monkeypatch):
+    monkeypatch.delenv('METROLIZA_BUILD_FLAVOR', raising=False)
+
+    assert 'openvino' not in validator.required_header_ocr_modules()
+    assert 'rapidocr' in validate_nuitka_report_has_header_ocr(_nuitka_report_without_openvino(tmp_path))
+
+
+def test_benchmark_build_flavor_requires_openvino(tmp_path, monkeypatch):
+    monkeypatch.setenv('METROLIZA_BUILD_FLAVOR', 'benchmark')
+
+    assert 'openvino' in validator.required_header_ocr_modules()
+    with pytest.raises(PackagingValidationError, match='openvino'):
+        validate_nuitka_report_has_header_ocr(_nuitka_report_without_openvino(tmp_path))
+
+
 def test_validate_nuitka_report_has_header_ocr_rejects_missing_model_data(tmp_path):
     report = tmp_path / 'nuitka-build-report.xml'
     report.write_text(
@@ -368,12 +409,13 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'collect_required_runtime_assets("oznak")' in common
     assert 'collect_required_runtime_assets(\n        "rapidocr"\n    )' in common
     assert 'collect_required_runtime_assets("onnxruntime")' in common
-    assert 'collect_required_runtime_assets(\n        "openvino"\n    )' in common
+    assert 'collect_required_runtime_assets(\n            "openvino"\n        )' in common
+    assert "flavor_includes_openvino(resolve_build_flavor())" in common
     assert 'collect_required_runtime_assets("cv2")' in common
     assert 'collect_required_runtime_assets("numpy")' in common
     assert 'collect_optional_distribution_metadata("rapidocr")' in common
     assert 'collect_optional_distribution_metadata("onnxruntime")' in common
-    assert 'collect_optional_distribution_metadata("openvino")' in common
+    assert 'openvino_metadata = collect_optional_distribution_metadata("openvino")' in common
     assert 'collect_optional_distribution_metadata("opencv-python")' in common
     assert 'collect_optional_distribution_metadata("numpy")' in common
     assert 'collect_optional_distribution_metadata("hexafe-plotstats")' in common
@@ -390,7 +432,7 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert '"modules.native_chart_compositor"' in common
     assert '"rapidocr"' in common
     assert '"onnxruntime"' in common
-    assert '"openvino"' in common
+    assert '*openvino_module_names' in common
     assert '"cv2"' in common
     assert '"numpy"' in common
     assert '"_metroliza_group_stats_native"' in common
@@ -561,7 +603,9 @@ def test_pyinstaller_onedir_collects_only_onnx_inference_runtime_graph():
     )
 
     assert 'filter_onedir_hiddenimports(COLLECTION["hiddenimports"])' in onedir
-    assert "excludes=list(ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES)" in onedir
+    assert (
+        'excludes=[*ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES, *COLLECTION["excludes"]]' in onedir
+    )
     assert 'collect_required_runtime_assets("onnxruntime")' in common
     assert "+ onnxruntime_binaries" in common
     assert "+ onnxruntime_datas" in common
