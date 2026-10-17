@@ -91,6 +91,14 @@ class _AdaptiveWindowEventFilter(QObject if QObject is not None else object):
 
 
 def _is_dark_widget_palette(widget):
+    # Once an application theme is applied, it is authoritative: a widget built
+    # before that (e.g. the main window restoring a persisted theme in its own
+    # constructor) still reports the previous palette here.
+    application = QApplication.instance()
+    if application is not None and widget is not application:
+        application_dark_mode = application.property("metrolizaDarkMode")
+        if isinstance(application_dark_mode, bool):
+            return application_dark_mode
     try:
         palette = widget.palette()
         if QPalette is not None:

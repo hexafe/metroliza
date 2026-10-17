@@ -306,3 +306,73 @@ def test_about_support_link_is_keyboard_accessible_and_dark_theme_safe():
     assert payload["inline_style"] == ""
     assert payload["link_color"] == payload["expected_color"]
     assert payload["opened_urls"] == [payload["expected_url"]]
+
+
+@pytest.mark.parametrize(
+    ("persisted_mode", "dark_system_palette", "expected_dark"),
+    [
+        ("dark", False, True),
+        ("light", False, False),
+        ("system", True, True),
+    ],
+)
+def test_persisted_theme_is_applied_to_main_window_at_launch(
+    tmp_path, persisted_mode, dark_system_palette, expected_dark
+):
+    # A fresh process mirrors launch: the window restores the persisted theme
+    # in its own constructor, before it is managed by the theme layer.
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import json
+                import sys
+                from PyQt6.QtCore import QSettings
+                from PyQt6.QtGui import QColor, QPalette
+                from PyQt6.QtWidgets import QApplication
+                from metroliza.ui.main_window import MainWindow
+                from metroliza.ui.ui_preferences import UiPreferences
+
+                settings_path, mode, dark_system = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+                app = QApplication([])
+                if dark_system:
+                    palette = QPalette(app.palette())
+                    palette.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+                    app.setPalette(palette)
+                preferences = UiPreferences(QSettings(settings_path, QSettings.Format.IniFormat))
+                preferences.set("theme/mode", mode)
+                window = MainWindow("test", None, ui_preferences=preferences)
+                window.show()
+                app.processEvents()
+
+                def state():
+                    return {
+                        "dark": window.property("metrolizaDarkMode"),
+                        "window": window.palette().color(QPalette.ColorRole.Window).name().upper(),
+                        "stylesheet": window.styleSheet(),
+                    }
+
+                at_launch = state()
+                window._set_theme_mode(mode)
+                app.processEvents()
+                print(json.dumps({"launch": at_launch, "reselected": state()}))
+                window.close()
+                """
+            ),
+            str(tmp_path / "ui.ini"),
+            persisted_mode,
+            "1" if dark_system_palette else "0",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(probe.stdout.strip().splitlines()[-1])
+    expected_window = ui_theme_tokens.theme_tokens(dark_mode=expected_dark)["WINDOW_BACKGROUND"]
+    assert payload["launch"]["dark"] is expected_dark
+    assert payload["launch"]["window"] == expected_window
+    assert payload["launch"] == payload["reselected"]
