@@ -2154,12 +2154,24 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(e)
         finally:
+            self._finish_import_resources(diagnostic)
+
+    def _finish_import_resources(self, diagnostic) -> None:
+        """Report teardown failures without releasing inputs still owned by workers."""
+
+        try:
             self._close_prepare_pool()
+        except Exception as exc:
+            diagnostic.fail(WorkflowError.PROCESSING_FAILED)
+            self.log_and_exit(exc)
+        finally:
             diagnostic.finish_import(self.last_parse_result, self.parsing_canceled)
-            if self._extracted_archive_dir is not None:
-                self._extracted_archive_dir.cleanup()
-                self._extracted_archive_dir = None
-            self._resolved_report_root = None
+        if self._prepare_pool is not None:
+            return  # Retain pool and archive ownership for a later cleanup retry.
+        if self._extracted_archive_dir is not None:
+            self._extracted_archive_dir.cleanup()
+            self._extracted_archive_dir = None
+        self._resolved_report_root = None
 
     def _open_prepare_pool(self, work_items) -> ImportPreparePool | None:
         """Start the bounded worker pool for CMM light-mode preparation, if it pays off."""
