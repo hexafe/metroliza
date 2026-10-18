@@ -509,3 +509,132 @@ def test_owner_retains_pool_if_bounded_shutdown_fails(tmp_path, monkeypatch):
         thread._close_prepare_pool()
     assert thread._prepare_pool is pool
     thread._prepare_pool = None
+
+
+def _partially_transmitted_prepare_worker(task):
+    """Write a real result frame header and prefix, then block mid-transmission."""
+    import multiprocessing.connection
+    import struct
+    import time
+
+    marker = Path(task[0]).with_suffix(".sending")
+
+    def partial_send(connection, buffer):
+        connection._send(struct.pack("!i", len(buffer)))
+        connection._send(buffer[:128])
+        marker.write_text("partial result sent")
+        while True:
+            time.sleep(60)
+
+    multiprocessing.connection.Connection._send_bytes = partial_send
+    return {"state": {"large": bytes(4 * 1024 * 1024)}}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX framed result-pipe regression")
+def test_run_cancel_during_partial_result_reaps_manager_and_cleans_inputs(tmp_path, monkeypatch):
+    from threading import Event
+    import time
+    from types import SimpleNamespace
+
+    _write_synthetic_reports(tmp_path / "reports", 2)
+    _pool_env(monkeypatch, "2")
+    thread = ParseReportsThread(_plan(tmp_path / "reports", tmp_path / "db.sqlite3"))
+    receiving = Event()
+    owned = {}
+    cleaned = []
+    errors = []
+    monkeypatch.setattr(thread, "log_and_exit", errors.append)
+    monkeypatch.setattr(
+        import_prepare_pool, "prepare_cmm_report_in_worker", _partially_transmitted_prepare_worker
+    )
+    original_executor = import_prepare_pool.ProcessPoolExecutor
+
+    def make_executor(**kwargs):
+        executor = original_executor(**kwargs)
+        reader = executor._result_queue._reader
+        original_recv = reader._recv
+
+        def receiving_body(size, *args):
+            if size > 1024 * 1024:
+                receiving.set()
+            return original_recv(size, *args)
+
+        reader._recv = receiving_body
+        owned["executor"] = executor
+        owned["result_writer"] = executor._result_queue._writer
+        return executor
+
+    monkeypatch.setattr(import_prepare_pool, "ProcessPoolExecutor", make_executor)
+    original_open = thread._open_prepare_pool
+
+    def open_and_cancel(items):
+        pool = original_open(items)
+        executor = pool._executor
+        owned["children"] = list(executor._processes.values())
+        owned["manager"] = executor._executor_manager_thread
+        assert receiving.wait(15), "manager must enter reception of the large frame body"
+        deadline = time.monotonic() + 5
+        while not list((tmp_path / "reports").glob("*.sending")) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert list((tmp_path / "reports").glob("*.sending")), "worker must send a partial body"
+        thread._extracted_archive_dir = SimpleNamespace(cleanup=lambda: cleaned.append(True))
+        thread.stop_parsing()
+        return pool
+
+    monkeypatch.setattr(thread, "_open_prepare_pool", open_and_cancel)
+    try:
+        thread.run()
+        assert not errors
+        assert not owned["manager"].is_alive()
+        assert all(not child.is_alive() and child.exitcode is not None for child in owned["children"])
+        assert thread._prepare_pool is None
+        assert thread._extracted_archive_dir is None and cleaned == [True]
+        assert thread._resolved_report_root is None
+        result = thread.last_parse_result
+        assert (result.imported_files, result.failed_files, result.cancelled_files) == (0, 0, 2)
+    finally:
+        # Rescue the pre-fix failure without leaving a blocked manager at interpreter exit.
+        for child in owned.get("children", ()):
+            if child.is_alive():
+                child.kill()
+            child.join(timeout=5)
+        executor = owned.get("executor")
+        if executor is not None:
+            owned["result_writer"].close()
+            executor.shutdown(wait=True, cancel_futures=True)
+        thread._prepare_pool = None
+
+
+def test_run_handles_shutdown_failure_and_retains_inputs_until_retry(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from metroliza.parsing import parse_reports_thread
+
+    _write_synthetic_reports(tmp_path / "reports", 2)
+    thread = ParseReportsThread(_plan(tmp_path / "reports", tmp_path / "db.sqlite3"))
+    errors, cleaned, finished, failed = [], [], [], []
+    diagnostic = SimpleNamespace(
+        stage=lambda *args, **kwargs: None,
+        fail=failed.append,
+        finish_import=lambda *args: finished.append(True),
+    )
+    monkeypatch.setattr(parse_reports_thread, "start_workflow_trace", lambda *args: diagnostic)
+    monkeypatch.setattr(thread, "log_and_exit", errors.append)
+
+    def failed_close(**kwargs):
+        raise RuntimeError("shutdown deadline")
+
+    pool = SimpleNamespace(close=failed_close)
+    archive = SimpleNamespace(cleanup=lambda: cleaned.append(True))
+    thread._prepare_pool = pool
+    thread._extracted_archive_dir = archive
+    thread.stop_parsing()
+    thread.run()
+
+    assert len(errors) == 1 and str(errors[0]) == "shutdown deadline"
+    assert failed and finished == [True]
+    assert thread._prepare_pool is pool and thread._extracted_archive_dir is archive
+    assert not cleaned
+    pool.close = lambda **kwargs: None
+    thread._finish_import_resources(diagnostic)
+    assert thread._prepare_pool is None and thread._extracted_archive_dir is None
+    assert cleaned == [True]
