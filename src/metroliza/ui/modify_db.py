@@ -244,6 +244,7 @@ class ModifyDB(QDialog):
         table.setSelectionMode(self._multi_selection_mode())
         table.setSelectionBehavior(self._select_rows_behavior())
         table.set_record_model(RecordTableModel())
+        configure_table(table, min_height=260)
         return table
 
     def _create_record_slot(self, kind, tab, table, filter_edit, banner):
