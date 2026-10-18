@@ -724,6 +724,9 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         class FakeThread:
             result = FakeResult()
 
+            def isRunning(self):  # noqa: N802 - Qt API
+                return False
+
         try:
             window.metadata_enrichment_thread = FakeThread()
             window.metadata_enrichment_error_message = None

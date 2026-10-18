@@ -624,6 +624,10 @@ class _ReportOperations:
     def can_change_workspace(self):
         return self.preflight_thread is None and self.parse_thread is None
 
+    def pdf_workers_idle(self):
+        """Include retired readers until their QThreads have actually stopped."""
+        return self.can_change_workspace() and not self._metadata_workers_running()
+
     def focus_primary_action(self):
         if not self.directory:
             control = self.directory_button
@@ -996,6 +1000,10 @@ class _ReportOperations:
     def _start_metadata_read(self, mode, occurrence_ids):
         ids = tuple(occurrence_ids)
         if not ids or self._preflight_result is None or self.metadata_thread is not None:
+            return False
+        if not self.can_change_workspace():
+            return False
+        if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return False
         if self._metadata_workers_running():
             # A retired worker is still inside a report: start after it has ended.

@@ -254,6 +254,11 @@ time (OCR is disabled while the fast read runs).
   never imported. A new fast read after a review likewise waits for a retired
   worker of the previous review.
 * **Import is disabled while OCR runs** (tooltip: Stop or wait).
+* The shell's shared PDF admission check coordinates review reads and standalone
+  metadata enrichment in both start directions, across database selections.
+  `pdf_workers_idle()` includes retired metadata readers until they have stopped;
+  a result/completion signal alone does not release a still-running QThread.
+  Source/database changes remain available during a background read.
 * Failure text from the worker/reader is a fixed vocabulary, never exception
   text (document content can leak through exceptions); OCR diagnostics are
   reduced to coarse notes.

@@ -1,11 +1,12 @@
 """The production MainWindow owns one real report workflow across navigation."""
 
 from contextlib import closing
+from dataclasses import replace
 import os
 import sqlite3
 import subprocess
 import sys
-from threading import Event
+from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -800,7 +801,7 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
                 writer.close()
 
 
-def test_enrichment_on_another_database_does_not_block_real_report_import(app, window, reports, monkeypatch):
+def test_enrichment_on_another_database_serializes_real_report_import(app, window, reports, monkeypatch):
     from metroliza.parsing import metadata_enrichment_thread
 
     source, database = reports
@@ -825,18 +826,127 @@ def test_enrichment_on_another_database_does_not_block_real_report_import(app, w
         assert window.set_db_file(str(database))
         host = window.launch_parsing_dialog()
         host.scan_button.click()
+        assert host.preflight_thread is None
+        assert not window._report_start_allowed()
+        assert worker.isRunning() and worker.db_file == str(other)
+        release.set()
+        wait_until(app, lambda: window.metadata_enrichment_thread is None)
+        host.scan_button.click()
         wait_until(app, workspace_idle(host))
         assert host.report_planner.model.counts["ready"] == 5
         host.parse_button.click()
         wait_until(app, workspace_idle(host))
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
-        assert worker.isRunning() and worker.db_file == str(other)
+        assert not worker.isRunning()
     finally:
         release.set()
         wait_until(app, lambda: window.metadata_enrichment_thread is None)
         assert worker.wait(20000)
         worker.deleteLater()
+
+
+def _install_pdf_probe_for_test(monkeypatch, reports):
+    """Hold real QThreads at open_report without entering PyMuPDF concurrently."""
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
+    from metroliza.parsing.metadata_enrichment_thread import MetadataEnrichmentThread
+    from tests.metadata_review_fakes import make_selection
+
+    entered = {owner: Event() for owner in ("review", "enrichment")}
+    release = {owner: Event() for owner in entered}
+    active, overlaps = set(), []
+    lock = Lock()
+
+    def open_report(parser):
+        owner = getattr(parser, "probe_owner", "review")
+        with lock:
+            if active:
+                overlaps.append((owner, tuple(active)))
+            active.add(owner)
+        entered[owner].set()
+        try:
+            if not release[owner].wait(20):
+                overlaps.append((owner, "probe timeout"))
+        finally:
+            with lock:
+                active.discard(owner)
+
+    def enrich(worker):
+        parser = CMMReportParser(str(next(reports[0].glob("*.pdf"))), worker.db_file)
+        parser.probe_owner = "enrichment"
+        parser.open_report()
+
+    monkeypatch.setattr(CMMReportParser, "open_report", open_report)
+    monkeypatch.setattr(CMMReportParser, "extract_metadata", lambda _: make_selection({"reference": "SYNTHETIC"}))
+    monkeypatch.setattr(MetadataEnrichmentThread, "run", enrich)
+    return SimpleNamespace(entered=entered, release=release, overlaps=overlaps)
+
+
+def _release_pdf_probe(app, window, probe):
+    for gate in probe.release.values():
+        gate.set()
+    wait_until(app, lambda: not window.reports_workspace._metadata_workers_running())
+    wait_until(app, lambda: window.metadata_enrichment_thread is None)
+
+
+def _request_review_read(host, mode, review):
+    if mode == "light":
+        host.on_preflight_completed(review)  # automatic fast read after Review
+    else:
+        host.start_metadata_ocr()  # the planner's Read with OCR action
+    return host.metadata_thread is not None
+
+
+@pytest.mark.parametrize("mode", ["light", "complete"])
+@pytest.mark.parametrize("retired", [False, True])
+def test_shell_enrichment_waits_for_review_pdf_work(app, window, reports, monkeypatch, mode, retired):
+    host, _source, _database = prepare_review(app, window, reports)
+    review = host._preflight_result
+    # Install only after preflight: its real PDF inspection is already complete.
+    probe = _install_pdf_probe_for_test(monkeypatch, reports)
+    try:
+        monkeypatch.setattr(host, "_ocr_unavailable_reason", lambda: "")
+        assert _request_review_read(host, mode, review)
+        wait_until(app, probe.entered["review"].is_set)
+        if retired:
+            host._invalidate_preflight()
+            assert host.metadata_thread is None and host._metadata_workers_running()
+        window.launch_metadata_enrichment()
+        assert window.metadata_enrichment_thread is None
+        assert not window.enrich_metadata_action.isEnabled()
+    finally:
+        _release_pdf_probe(app, window, probe)
+    window.launch_metadata_enrichment()
+    wait_until(app, probe.entered["enrichment"].is_set)
+    wait_until(app, lambda: window.metadata_enrichment_thread is None)
+    assert not probe.overlaps
+
+
+@pytest.mark.parametrize("mode", ["light", "complete"])
+def test_shell_review_waits_for_enrichment_pdf_work(app, window, reports, monkeypatch, mode):
+    host, _source, database = prepare_review(app, window, reports)
+    review = host._preflight_result
+    probe = _install_pdf_probe_for_test(monkeypatch, reports)
+    try:
+        monkeypatch.setattr(host, "_ocr_unavailable_reason", lambda: "")
+        # Enrichment keeps running even after the selected database changes.
+        window.launch_metadata_enrichment()
+        wait_until(app, probe.entered["enrichment"].is_set)
+        assert window.set_db_file(str(database.with_name("another.sqlite3")))
+        review = replace(review, database_path=host.db_file)
+        window.stop_metadata_enrichment()
+        window.metadata_enrichment_thread.enrichment_finished.emit()
+        assert not window.enrich_metadata_action.isEnabled()
+        # An accepted review completion must also use the shell admission guard.
+        host.on_preflight_completed(review)
+        assert not _request_review_read(host, mode, review)
+        assert host.metadata_thread is None
+    finally:
+        _release_pdf_probe(app, window, probe)
+    assert _request_review_read(host, mode, review)
+    wait_until(app, probe.entered["review"].is_set)
+    wait_until(app, lambda: not host._metadata_workers_running())
+    assert not probe.overlaps
 
 
 def test_tools_shortcuts_use_existing_primary_navigation(window):
