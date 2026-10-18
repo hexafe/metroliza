@@ -84,17 +84,48 @@ def _read_cells(path):
         book.close()
 
 
-@pytest.mark.parametrize('frame', list(_frame_cases())[:-1])
-def test_bulk_writer_matches_pandas_cells_types_formats_and_xml(frame, tmp_path):
-    expected, actual = tmp_path / 'expected.xlsx', tmp_path / 'actual.xlsx'
-    _workbook(frame, expected, lambda df, writer, sheet: df.to_excel(writer, sheet_name=sheet, index=False))
-    _workbook(frame, actual, write_tabular_dataframe)
+def _assert_workbooks_equal(expected, actual):
     assert _read_cells(expected) == _read_cells(actual)
     with zipfile.ZipFile(expected) as before, zipfile.ZipFile(actual) as after:
         assert before.namelist() == after.namelist()
         for name in before.namelist():
             if name != 'docProps/core.xml':
                 assert before.read(name) == after.read(name), name
+
+
+@pytest.mark.parametrize('frame', list(_frame_cases())[:-1])
+def test_bulk_writer_matches_pandas_cells_types_formats_and_xml(frame, tmp_path):
+    expected, actual = tmp_path / 'expected.xlsx', tmp_path / 'actual.xlsx'
+    _workbook(frame, expected, lambda df, writer, sheet: df.to_excel(writer, sheet_name=sheet, index=False))
+    _workbook(frame, actual, write_tabular_dataframe)
+    _assert_workbooks_equal(expected, actual)
+
+
+@pytest.mark.parametrize('dtype', ['object', 'string'])
+@pytest.mark.parametrize('text', ['x' * 32767, 'x' * 32768, '😀' * 32768],
+                         ids=['at-limit', 'over-limit', 'unicode-over-limit'])
+def test_bulk_writer_preserves_cells_after_oversized_text(dtype, text, tmp_path):
+    frame = pd.DataFrame({'text': pd.Series(
+        ['first', text, 'AFTER_LONG_TEXT', None, 'last'], dtype=dtype,
+    )})
+    expected, actual = tmp_path / 'expected.xlsx', tmp_path / 'actual.xlsx'
+    _workbook(frame, expected, lambda df, writer, sheet: df.to_excel(writer, sheet_name=sheet, index=False))
+    cells = _read_cells(expected)
+    assert cells[2][0][0] == text[:32767]
+    assert cells[3][0][0] == 'AFTER_LONG_TEXT'
+    assert cells[5][0][0] == 'last'
+    _workbook(frame, actual, write_tabular_dataframe)
+    _assert_workbooks_equal(expected, actual)
+
+
+@pytest.mark.parametrize('code', [-1, -2])
+def test_bulk_writer_propagates_column_write_errors(code, tmp_path, monkeypatch):
+    from xlsxwriter.worksheet import Worksheet
+
+    monkeypatch.setattr(Worksheet, 'write_column', lambda *args: code)
+    with pytest.raises(ValueError, match=f'XLSX column 0 write failed with code {code}'):
+        _workbook(pd.DataFrame({'text': ['first', 'last']}), tmp_path / 'error.xlsx',
+                  write_tabular_dataframe)
 
 
 def test_bulk_writer_preserves_pandas_rejection_of_multiindex_columns(tmp_path):

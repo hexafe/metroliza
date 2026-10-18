@@ -14,6 +14,19 @@ def _column_kind(series):
     return "object-datetime" if kind == "datetime" else kind
 
 
+def _column_values(series, kind):
+    values = series.to_numpy(dtype=object, na_value="")
+    if kind == "string":
+        # write_column stops on truncation (-2); truncate first, like pandas'
+        # individual cell writes, so subsequent rows are still exported.
+        return [value[:32767] if isinstance(value, str) else value for value in values]
+    if kind in {"floating", "mixed-integer-float"}:
+        values = values.copy()
+        values[series.eq(np.inf).fillna(False).to_numpy(dtype=bool)] = "inf"
+        values[series.eq(-np.inf).fillna(False).to_numpy(dtype=bool)] = "-inf"
+    return values
+
+
 def write_tabular_dataframe(dataframe, writer, sheet_name):
     """Write ordinary scalar columns in bulk, retaining pandas for complex types.
 
@@ -48,9 +61,6 @@ def write_tabular_dataframe(dataframe, writer, sheet_name):
                 if not pd.isna(value):
                     worksheet.write_datetime(row, index, value, datetime_format)
         else:
-            values = series.to_numpy(dtype=object, na_value="")
-            if kind in {"floating", "mixed-integer-float"}:
-                values = values.copy()
-                values[series.eq(np.inf).fillna(False).to_numpy(dtype=bool)] = "inf"
-                values[series.eq(-np.inf).fillna(False).to_numpy(dtype=bool)] = "-inf"
-            worksheet.write_column(1, index, values)
+            result = worksheet.write_column(1, index, _column_values(series, kind))
+            if result != 0:
+                raise ValueError(f"XLSX column {index} write failed with code {result}")

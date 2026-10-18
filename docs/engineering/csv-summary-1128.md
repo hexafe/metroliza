@@ -286,3 +286,39 @@ chart range/cached-value semantics. There is no claim of a 100k memory reduction
 Final local status: implementation, required focused checks, representative
 measurements and equivalence evidence complete. Independent review and the
 unverified platform/CI gates listed above remain external responsibilities.
+
+## PR #1133 independent-review corrections
+
+Authority: the external orchestrator's review-correction packet supplied in the
+current session; starting HEAD `4c564a2e`. Whole-PR routing remains BOUNDED
+INTEGRATION, coordinator only; runtime model/reasoning not visible. Current branch
+and the PR comparison base `origin/integrate/2026.09-rc1-into-develop` are retained.
+The earlier local-complete verdict above is historical and superseded for the
+two reviewed defects. The correction packet, exact source identity, red/green
+receipts and new measurements live under `scratchpad/codex/1133-review/` beside
+the original `1128/` evidence directory.
+
+MUST: reproduce each defect before its fix, preserve complete artifact semantics
+and performance, rerun all original related/required checks, and commit each
+finding separately. SHOULD: keep bulk writes and bounded per-column allocations.
+DEFERRED: Windows/frozen-build/manual Excel and hosted CI evidence remains owned
+by the external orchestrator; remote writes are forbidden.
+
+### P1: oversized text stops bulk column writing
+
+`p1-red.log`: four oversized ASCII/Unicode object/string cases fail because the
+sentinels after the long cell disappear; both 32,767-character boundary cases
+pass. Each test creates the pandas reference workbook before calling the bulk
+writer. The reference truncates only the long cell and retains both sentinels.
+
+`_column_values` now truncates string values to 32,767 characters before the bulk
+write, matching XlsxWriter's per-cell behavior and retaining shared-string order.
+Unexpected bulk-write return codes raise an error rather than publish a partial
+success. Existing infinity conversion moved unchanged into the helper to keep
+complexity bounded. No workbook options or literal formula/URL policy changed.
+
+`p1-green.log`: **15 passed, 14 deselected**, including all prior bulk-writer
+cases, all six text cases and both injected return-code failures. Cells, types,
+formats, styles and every XLSX package member except core timestamps match pandas.
+Focused Ruff and whitespace checks pass. Complete validation and fresh benchmark
+results will be recorded after both finding commits.
