@@ -4,6 +4,8 @@ import sys
 import tempfile
 import types
 import unittest
+
+import pytest
 from unittest.mock import patch
 
 try:
@@ -1486,3 +1488,145 @@ class TestMainWindowMetadataUi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _wait_for_filter_shutdown(predicate):
+    import time
+    from PyQt6.QtTest import QTest
+
+    deadline = time.monotonic() + 5
+    while not predicate() and time.monotonic() < deadline:
+        QTest.qWait(5)
+    assert predicate(), "Filter shutdown did not finish"
+
+
+@pytest.mark.parametrize("blocked_in", ["schema", "sqlite_lock"])
+@pytest.mark.parametrize("cancel_dialog", [False, True])
+def test_main_close_drains_cancelled_and_replaced_filter_loaders(tmp_path, monkeypatch, blocked_in, cancel_dialog):
+    import sqlite3
+    import threading
+
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtTest import QTest
+    from metroliza.reports import filter_values
+    from metroliza.ui.filter_dialog import FilterDialog
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    app = QApplication.instance() or QApplication([])
+    qt_errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *error: qt_errors.append(error))
+    preferences = UiPreferences(QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat))
+    window = MainWindow(version_label="test", days_until_expiration=None, ui_preferences=preferences)
+    database = str(tmp_path / "shutdown.sqlite")
+    original_ensure = filter_values.ensure_report_schema
+    original_ensure(database)
+    release = threading.Event()
+    started = []
+    writer = sqlite3.connect(database)
+    if blocked_in == "sqlite_lock":
+        writer.execute("BEGIN IMMEDIATE")
+
+    def blocked_ensure(*args, **kwargs):
+        started.append(threading.get_ident())
+        if blocked_in == "schema":
+            assert release.wait(5)
+        return original_ensure(*args, **kwargs)
+
+    monkeypatch.setattr(filter_values, "ensure_report_schema", blocked_ensure)
+    dialog = None
+    try:
+        window.show()
+        dialog = FilterDialog(window, db_file=database)
+        dialog.show()
+        _wait_for_filter_shutdown(lambda: len(started) == 1)
+        first = dialog._value_loader
+        dialog.populate_list_widgets()  # First loader remains retained after replacement.
+        _wait_for_filter_shutdown(lambda: len(started) == 2)
+        second = dialog._value_loader
+        if cancel_dialog:
+            dialog.reject()  # Neither worker remains reachable through the dialog now.
+            assert dialog._value_loader is None
+        else:
+            dialog.hide()
+            assert not second.isInterruptionRequested()
+        assert {first, second}.issubset(_RUNNING_LOADERS)
+        assert first.isRunning() and second.isRunning()
+
+        assert window.close() is False
+        assert window.isVisible()
+        assert first.isInterruptionRequested() and second.isInterruptionRequested()
+        assert "filter" in window.workspace_notice_label.text().lower()
+        # The close waits asynchronously: other GUI events run while SQLite is blocked.
+        heartbeats = []
+        QTimer.singleShot(0, lambda: heartbeats.append(True))
+        QTest.qWait(30)
+        assert heartbeats == [True]
+        assert window.isVisible()
+
+        def unblock():
+            writer.rollback()
+            release.set()
+
+        QTimer.singleShot(0, unblock)
+        _wait_for_filter_shutdown(lambda: not window.isVisible())
+        # This assertion precedes any test-owned cleanup: closure itself must drain.
+        assert not _RUNNING_LOADERS
+    finally:
+        writer.rollback()
+        release.set()
+        if dialog is not None:
+            dialog.close()
+        _wait_for_filter_shutdown(lambda: not _RUNNING_LOADERS)
+        writer.close()
+        window.close()
+        app.processEvents()
+        assert not qt_errors, "Unhandled exception in Qt callback"
+
+
+def test_filter_load_can_retry_if_another_shutdown_guard_keeps_main_open(tmp_path, monkeypatch):
+    import threading
+
+    from PyQt6.QtCore import Qt
+    from metroliza.ui import filter_values_loader
+    from metroliza.ui.filter_dialog import FilterDialog
+
+    app = QApplication.instance() or QApplication([])
+    qt_errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *error: qt_errors.append(error))
+    preferences = UiPreferences(QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat))
+    window = MainWindow(version_label="test", days_until_expiration=None, ui_preferences=preferences)
+    started = threading.Event()
+    release = threading.Event()
+
+    def gated_load(*_args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return {attribute: ("X", "Y") for attribute, _, _ in kwargs["specs"]}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", gated_load)
+    monkeypatch.setattr(window, "_resolve_realtime_session_before_discard", lambda **_kwargs: (False, None))
+    dialog = None
+    try:
+        window.show()
+        dialog = FilterDialog(window, db_file="synthetic.sqlite")
+        _wait_for_filter_shutdown(started.is_set)
+        assert window.close() is False
+        release.set()
+        _wait_for_filter_shutdown(lambda: "Temporary realtime data was kept" in window.workspace_notice_label.text())
+        assert window.isVisible()
+        assert not filter_values_loader._RUNNING_LOADERS
+        assert not dialog._values_loading
+        assert not dialog.apply_button.isEnabled()
+        dialog.show()
+        _wait_for_filter_shutdown(lambda: not dialog._values_loading)
+        assert dialog.apply_button.isEnabled()
+        assert dialog.ax_list.findItems("Y", Qt.MatchFlag.MatchExactly)
+    finally:
+        release.set()
+        if dialog is not None:
+            dialog.close()
+        _wait_for_filter_shutdown(lambda: not filter_values_loader._RUNNING_LOADERS)
+        monkeypatch.setattr(window, "_resolve_realtime_session_before_discard", lambda **_kwargs: (True, None))
+        window.close()
+        app.processEvents()
+        assert not qt_errors, "Unhandled exception in Qt callback"

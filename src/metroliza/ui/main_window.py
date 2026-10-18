@@ -812,15 +812,7 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def closeEvent(self, event):
-        if self._reports_workspace is not None and not self._reports_workspace.request_shutdown():
-            self._close_deferred_for_reports = True
-            self.workspace_notice_label.setText("Waiting for the report operation to stop before closing Metroliza.")
-            self.workspace_notice_label.show()
-            event.ignore()
-            return
-        self._close_deferred_for_reports = False
-        if self.is_metadata_enrichment_active():
-            self.stop_metadata_enrichment()
+        if not self._background_shutdown_allows_close():
             event.ignore()
             return
         realtime_dialog = self.realtime_monitoring_dialog
@@ -897,6 +889,43 @@ class MainWindow(QMainWindow):
         self.ui_preferences.set("windows/main/geometry", self.saveGeometry())
         self._persist_navigation_index(self.navigation_list.currentRow())
         super().closeEvent(event)
+
+    def _background_shutdown_allows_close(self):
+        if self._defer_close_for_filter_loaders():
+            return False
+        if not self._reports_shutdown_allows_close():
+            return False
+        if self.is_metadata_enrichment_active():
+            self.stop_metadata_enrichment()
+            return False
+        return True
+
+    def _reports_shutdown_allows_close(self):
+        if self._reports_workspace is None or self._reports_workspace.request_shutdown():
+            self._close_deferred_for_reports = False
+            return True
+        self._close_deferred_for_reports = True
+        self.workspace_notice_label.setText("Waiting for the report operation to stop before closing Metroliza.")
+        self.workspace_notice_label.show()
+        return False
+
+    def _defer_close_for_filter_loaders(self):
+        from metroliza.ui.filter_values_loader import cancel_filter_loaders
+
+        if cancel_filter_loaders():
+            return False
+        if not getattr(self, "_filter_close_retry_scheduled", False):
+            self._filter_close_retry_scheduled = True
+            QTimer.singleShot(10, self._retry_close_after_filter_loaders)
+        self.workspace_notice_label.setText(
+            "Waiting for filter values to stop safely before closing Metroliza."
+        )
+        self.workspace_notice_label.show()
+        return True
+
+    def _retry_close_after_filter_loaders(self):
+        self._filter_close_retry_scheduled = False
+        self.close()
 
     def _on_reports_shutdown_ready(self):
         if self._close_deferred_for_reports:

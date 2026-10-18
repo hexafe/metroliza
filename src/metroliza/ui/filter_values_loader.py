@@ -10,6 +10,18 @@ from metroliza.reports.filter_values import load_filter_values
 _RUNNING_LOADERS = set()
 
 
+def cancel_filter_loaders():
+    """Request application shutdown; report ready only after native cleanup.
+
+    Include replaced and cancelled requests: a dialog may no longer own them
+    while schema initialization or a SQLite lock wait is still in progress.
+    The GUI must keep processing events until _retire_loader drains this set.
+    """
+    for loader in tuple(_RUNNING_LOADERS):
+        loader.requestInterruption()
+    return not _RUNNING_LOADERS
+
+
 def _retire_loader(loader):
     # finished may precede native/thread-local cleanup. Poll without GUI waits.
     if not loader.wait(0):

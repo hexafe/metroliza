@@ -156,6 +156,7 @@ class FilterDialog(QDialog):
             self.filter_query = self.parent().get_filter_query()
         else:
             self.filter_query = ""
+        self._choice_scope_query = self.filter_query
 
         self._list_selection_utils = ListSelectionUtils()
         self._discard_gate_active = False
@@ -893,7 +894,7 @@ class FilterDialog(QDialog):
     def populate_list_widgets(self):
         from metroliza.reports.filter_values import FILTER_VALUE_SPECS
 
-        self._start_value_load(FILTER_VALUE_SPECS, self.filter_query)
+        self._start_value_load(FILTER_VALUE_SPECS, self._choice_scope_query)
 
     def _stop_value_load(self):
         self._values_closed = True
@@ -919,7 +920,15 @@ class FilterDialog(QDialog):
         self._value_loader = loader
         loader.values_ready.connect(self._receive_filter_values)
         loader.load_failed.connect(self._filter_values_failed)
+        loader.finished.connect(self._value_load_finished)
         loader.start()
+
+    def _value_load_finished(self):
+        # Interrupted requests emit no result. Drop their wrapper before the
+        # registry deletes it, including during application shutdown.
+        if self.sender() is self._value_loader:
+            self._values_error = True
+            self._finish_value_load()
 
     def _finish_value_load(self):
         self._value_loader = None
@@ -937,7 +946,13 @@ class FilterDialog(QDialog):
             blocked = widget.blockSignals(True)
             widget.clear()
             widget.addItem("SELECT ALL")
-            for value in items:
+            # A database refresh changes available choices, not the user's
+            # conditions. Keep missing selections as ordinary selectable items
+            # until the user explicitly clears them.
+            choices = tuple(items)
+            available = set(choices) | {"SELECT ALL"}
+            choices += tuple(value for value in selected if value not in available)
+            for value in choices:
                 widget.addItem(QListWidgetItem(value))
             self._set_selected_values(widget, selected)
             widget.blockSignals(blocked)
