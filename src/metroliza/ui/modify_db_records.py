@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QAbstractTableModel, QCoreApplication, QModelIndex, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QTableView, QWidget
 
 from metroliza.reports.db import iter_sql_query_batches
@@ -352,14 +352,7 @@ class RecordLoadThread(QThread):
 
 
 _ACTIVE_LOAD_THREADS: set[RecordLoadThread] = set()
-
-
-def start_load_thread(thread: RecordLoadThread) -> None:
-    """Start ``thread`` and keep it alive until it has finished, whatever happens to its dialog."""
-
-    _ACTIVE_LOAD_THREADS.add(thread)
-    thread.finished.connect(lambda: _ACTIVE_LOAD_THREADS.discard(thread))
-    thread.start()
+_QUIT_HOOK_APPS: list[Any] = []
 
 
 def cancel_load_thread(thread: RecordLoadThread | None, *, wait_ms: int = 3000) -> None:
@@ -369,6 +362,25 @@ def cancel_load_thread(thread: RecordLoadThread | None, *, wait_ms: int = 3000) 
         return
     thread.requestInterruption()
     thread.wait(wait_ms)
+
+
+def shutdown_load_threads() -> None:
+    """Stop every running record fetch (application exit must not destroy a running QThread)."""
+
+    for thread in list(_ACTIVE_LOAD_THREADS):
+        cancel_load_thread(thread)
+
+
+def start_load_thread(thread: RecordLoadThread) -> None:
+    """Start ``thread`` and keep it alive until it has finished, whatever happens to its dialog."""
+
+    app = QCoreApplication.instance()
+    if app is not None and not any(app is hooked for hooked in _QUIT_HOOK_APPS):
+        _QUIT_HOOK_APPS.append(app)
+        app.aboutToQuit.connect(shutdown_load_threads)
+    _ACTIVE_LOAD_THREADS.add(thread)
+    thread.finished.connect(lambda: _ACTIVE_LOAD_THREADS.discard(thread))
+    thread.start()
 
 
 @dataclass
