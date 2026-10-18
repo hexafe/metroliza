@@ -1029,7 +1029,7 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
                 updated_fields.append(field_name)
             continue
 
-        if current_value not in (None, ""):
+        if current_value not in (None, "") or _field_has_manual_override(current_metadata_json, field_name):
             merged_map[field_name] = current_value
             if current_value != enriched_value:
                 preserved_fields.append(field_name)
