@@ -34,7 +34,9 @@ def test_scope_reuses_connection_and_closes_it_even_after_failure(tmp_path):
             raise RuntimeError("synthetic cancellation after commits")
     assert profile.calls["connection_open"] == profile.calls["checkpoint_close"] == 1
     assert profile.calls["commit"] == 2
-    assert profile.calls["checkpoint"] == 2
+    # Two quick commits stay below the checkpoint cadence; the final checkpoint happens
+    # when the scope closes the connection, also after this cancellation.
+    assert profile.calls.get("checkpoint", 0) == 0
     assert all(busy == 0 and frames == written for busy, frames, written in profile.checkpoint_results)
     with pytest.raises(sqlite3.ProgrammingError):
         connection.execute("SELECT 1")
@@ -267,3 +269,25 @@ def test_qualification_rejects_nonzero_remainder(tmp_path):
     run["profile"]["attribution"]["unattributed_s"] = 0.1
     with pytest.raises(RuntimeError, match="persist_time_unattributed"):
         benchmark._qualify_profile(run, 1, "batch_connection")
+
+
+def test_import_checkpoint_cadence_is_bounded_by_commits_and_time(tmp_path):
+    from metroliza.reports import db as db_module
+
+    now = [0.0]
+    connection = db_module._LazySQLiteConnection(str(tmp_path / "cadence.sqlite3"), clock=lambda: now[0])
+    checkpoints = []
+    connection._connection = type("Conn", (), {
+        "execute": lambda self, sql: checkpoints.append(sql) or type(
+            "Cursor", (), {"fetchone": lambda self: (0, 0, 0)})(),
+    })()
+    for _ in range(db_module.IMPORT_CHECKPOINT_COMMITS - 1):
+        connection.checkpoint_after_commit()
+    assert checkpoints == []
+    connection.checkpoint_after_commit()
+    assert checkpoints == ["PRAGMA wal_checkpoint(PASSIVE)"]
+    connection.checkpoint_after_commit()
+    assert len(checkpoints) == 1
+    now[0] += db_module.IMPORT_CHECKPOINT_SECONDS
+    connection.checkpoint_after_commit()
+    assert len(checkpoints) == 2

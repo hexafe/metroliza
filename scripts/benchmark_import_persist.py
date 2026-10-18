@@ -85,6 +85,23 @@ def _run(source, database, lifecycle):
     }, database_snapshot(database)
 
 
+def _check_checkpoint_cadence(run, calls):
+    """Bounded checkpoint cadence (#1136, PO decision 2026-10-18).
+
+    At most one passive checkpoint per IMPORT_CHECKPOINT_COMMITS commits or
+    IMPORT_CHECKPOINT_SECONDS, plus exactly one final checkpoint when the import
+    connection closes.
+    """
+    from metroliza.reports.db import IMPORT_CHECKPOINT_COMMITS, IMPORT_CHECKPOINT_SECONDS
+
+    allowed = (calls["commit"] // IMPORT_CHECKPOINT_COMMITS
+               + int(run["import_s"] / IMPORT_CHECKPOINT_SECONDS) + 1)
+    if calls.get("checkpoint", 0) > allowed:
+        raise RuntimeError("checkpoint_cadence_exceeded")
+    if calls.get("checkpoint_close") != 1:
+        raise RuntimeError("final_checkpoint_missing")
+
+
 def _qualify_profile(run, count, lifecycle=None):
     calls = run["profile"]["calls"]
     for stage in ("schema_probe", "hash", "row_building", "executemany", "commit", "checkpoint_close"):
@@ -96,8 +113,8 @@ def _qualify_profile(run, count, lifecycle=None):
     # had to create or migrate the schema.
     if calls.get("pre_schema_hash", 0) > 1:
         raise RuntimeError("pre_schema_hash_count_exceeded")
-    if lifecycle == "batch_connection" and calls.get("checkpoint") != calls["commit"]:
-        raise RuntimeError("per_commit_checkpoint_missing")
+    if lifecycle == "batch_connection":
+        _check_checkpoint_cadence(run, calls)
     attribution = run["profile"]["attribution"]
     if abs(attribution["unattributed_s"]) > 1e-6:
         raise RuntimeError("persist_time_unattributed")
