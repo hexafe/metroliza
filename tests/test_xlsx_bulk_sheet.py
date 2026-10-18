@@ -267,6 +267,24 @@ class TestFastPathEquivalence(unittest.TestCase):
         for name in parts['stock']:
             self.assertEqual(parts['stock'][name], parts['fast'][name], name)
 
+    def test_sparse_unaligned_blocks_share_spans_with_cells_and_other_blocks(self):
+        def build(book):
+            sheet = book.add_worksheet('S')
+            sheet.write_number(0, 5, 2)
+            sheet.write_number(66, 7, 3)
+            for first_row, height in ((7, 41), (49, 5), (56, 3), (64, 2)):
+                rows = [(None, None, None)] * height
+                rows[0] = ('=literal', None, None)
+                rows[-1] = (None, None, 1.25)
+                if isinstance(sheet, BulkRowsWorksheet):
+                    self.assertTrue(sheet.write_bulk_block(first_row, plan_bulk_rows(['a', 'b', 'c'], rows)))
+                else:
+                    for offset, row in enumerate(rows, start=first_row):
+                        for col, value in enumerate(row):
+                            write_untrusted_xlsx_cell(sheet, offset, col, value)
+
+        self.assert_same_book(build)
+
     def test_plain_columns_match_write_column(self):
         long_text = 'x' * 40000
 
