@@ -68,6 +68,39 @@ def test_minimal_entry_precedes_application_imports():
                    env=dict(os.environ, PYTHONPATH=str(root / "src")))
 
 
+@pytest.mark.parametrize(("smoke", "harness_imported"), [(None, False), ("1", True)],
+                         ids=["user-clean-exit", "qualification-gate"])
+def test_clean_exit_imports_qualification_harness_only_behind_its_gate(smoke, harness_imported):
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import runpy,sys,types\n"
+        "fake = types.ModuleType('metroliza.app.bootstrap'); fake.run_application = lambda: 0\n"
+        "sys.modules['metroliza.app.bootstrap'] = fake\n"
+        "try:\n"
+        "    runpy.run_path(sys.argv[1], run_name='__main__')\n"
+        "except SystemExit as exit_:\n"
+        "    assert exit_.code == 0, exit_.code\n"
+        "harness = {'metroliza.app.diagnostic_qualification',\n"
+        "           'metroliza.app.windows_candidate_qualification'} & set(sys.modules)\n"
+        "print(sorted(harness))\n"
+    )
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("METROLIZA_")}
+    env["PYTHONPATH"] = str(root / "src")
+    if smoke is not None:
+        env["METROLIZA_STARTUP_SMOKE"] = smoke
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(root / "packaging/metroliza_package_entry.py")],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    imported = result.stdout.strip().splitlines()[-1] != "[]"
+    assert imported is harness_imported, result.stdout
+
+
 @pytest.mark.parametrize("entry", [
     "metroliza_supervisor_entry.py", "metroliza_package_entry.py",
     "metroliza_ocr_worker_entry.py",
