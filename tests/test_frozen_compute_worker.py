@@ -141,7 +141,8 @@ def test_both_pool_policies_require_supported_validated_frozen_compute(
     monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '1')
     supported = platform == 'win32' and reason == 'verified'
     assert compute_worker.compute_workers_available() is supported
-    expected = (2 if configured == 'auto' else int(configured)) if supported else 0
+    # Packaged Windows import workers are opt-in (#1136 evidence): 'auto' resolves to 0.
+    expected = (0 if configured == 'auto' else int(configured)) if supported else 0
     assert prepare.resolve_prepare_worker_count(5000) == expected
     assert render._pool_policy(_owner(), 40) == (
         'spawn' if supported else 'serial_frozen_multiprocessing_unavailable'
