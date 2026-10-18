@@ -643,24 +643,14 @@ def build_measurement_filter_query(
 
 
 def build_distinct_value_query(column_name, *, source_view=_MEASUREMENT_EXPORT_VIEW, filter_query=None):
-    normalized_filter_query = _normalize_sql_query(filter_query)
+    normalized_filter_query = _distinct_filter_scope(column_name, source_view, filter_query)
     if normalized_filter_query:
         if source_view == _MEASUREMENT_EXPORT_VIEW and not _is_export_scoped_query(normalized_filter_query):
             source = f"({build_measurement_export_query(normalized_filter_query)}) AS filtered_data"
         else:
             source = f"({normalized_filter_query}) AS filtered_data"
     else:
-        source = source_view
-
-    unfiltered = not normalized_filter_query or normalized_filter_query == _normalize_sql_query(build_measurement_export_query())
-    if unfiltered and source_view == _MEASUREMENT_EXPORT_VIEW and column_name.upper() in {"AX", "HEADER", "STATUS_CODE"}:
-        # The omitted LEFT JOINs cannot change DISTINCT measurement values.
-        # Keep the view's inner-join exclusions even for legacy orphan rows.
-        source = (
-            "report_measurements AS meas "
-            "JOIN parsed_reports AS pr ON pr.id = meas.report_id "
-            "JOIN source_files AS sf ON sf.id = pr.source_file_id"
-        )
+        source = _unfiltered_distinct_source(column_name, source_view)
 
     return (
         f'SELECT DISTINCT "{column_name}" AS value '
@@ -668,3 +658,24 @@ def build_distinct_value_query(column_name, *, source_view=_MEASUREMENT_EXPORT_V
         f'WHERE "{column_name}" IS NOT NULL AND TRIM(CAST("{column_name}" AS TEXT)) <> \'\' '
         f'ORDER BY value'
     )
+
+
+def _distinct_filter_scope(column_name, source_view, filter_query):
+    normalized = _normalize_sql_query(filter_query)
+    # ExportDialog supplies this canonical unfiltered export even on first open.
+    if source_view == _MEASUREMENT_EXPORT_VIEW and column_name.upper() in {"AX", "HEADER", "STATUS_CODE"}:
+        if normalized == _normalize_sql_query(build_measurement_export_query()):
+            return None
+    return normalized
+
+
+def _unfiltered_distinct_source(column_name, source_view):
+    if source_view == _MEASUREMENT_EXPORT_VIEW and column_name.upper() in {"AX", "HEADER", "STATUS_CODE"}:
+        # LEFT JOINs cannot change DISTINCT measurement values. Keep both inner
+        # joins so old orphan measurements/reports remain excluded.
+        return (
+            "report_measurements AS meas "
+            "JOIN parsed_reports AS pr ON pr.id = meas.report_id "
+            "JOIN source_files AS sf ON sf.id = pr.source_file_id"
+        )
+    return source_view

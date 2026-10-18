@@ -426,3 +426,88 @@ def test_replaced_background_request_ignores_old_results(monkeypatch):
         release.set()
         dialog.close()
         _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+def test_real_database_load_refreshes_retained_dialog_after_commit(tmp_path, monkeypatch):
+    from contextlib import closing
+    import sqlite3
+    import threading
+
+    from metroliza.reports import filter_values
+    from metroliza.reports.report_schema import ensure_report_schema
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    _app()
+    database = str(tmp_path / "synthetic.sqlite")
+    ensure_report_schema(database)
+    with closing(sqlite3.connect(database)) as writer, writer:
+        writer.executescript("""
+            INSERT INTO source_files(id,sha256,source_format,discovered_at)
+            VALUES (1,'synthetic','pdf','2026');
+            INSERT INTO parsed_reports(id,source_file_id,parser_id,template_family,parse_status,created_at,updated_at)
+            VALUES (1,1,'synthetic','synthetic','parsed','2026','2026');
+            INSERT INTO report_measurements(report_id,row_order,header,ax,status_code)
+            VALUES (1,1,'H','X','ok');
+        """)
+    original = filter_values.ensure_report_schema
+    gui_thread = threading.get_ident()
+    workers = []
+
+    def ensure_in_worker(*args, **kwargs):
+        workers.append(threading.get_ident())
+        assert threading.get_ident() != gui_thread
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(filter_values, "ensure_report_schema", ensure_in_worker)
+    dialog = filter_dialog.FilterDialog(db_file=database)
+    try:
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert dialog.ax_list.item(1).text() == "X"
+        assert dialog.header_list.item(1).text() == "H"
+        dialog.hide()  # Apply also retains the dialog by hiding it.
+        with closing(sqlite3.connect(database)) as writer, writer:
+            writer.execute("UPDATE report_measurements SET ax = 'Y'")
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert dialog.ax_list.item(1).text() == "Y"
+        assert len(workers) == 2
+    finally:
+        dialog.close()
+        _wait_for_filter(lambda: not _RUNNING_LOADERS)
+
+
+def test_cleared_reference_cancels_pending_header_scope(monkeypatch):
+    import threading
+    from metroliza.ui import filter_values_loader
+
+    _app()
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def load(*_args, **kwargs):
+        calls.append(kwargs["specs"])
+        if len(calls) == 1:
+            return {attribute: ("A", "Z") for attribute, _, _ in kwargs["specs"]}
+        started.set()
+        assert release.wait(5)
+        return {"header_list": ("stale-scope",)}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog.reference_list.item(1).setSelected(True)
+        _wait_for_filter(started.is_set)
+        assert dialog._values_loading
+        # A controller can clear selection even while user input is disabled.
+        dialog.reference_list.clearSelection()
+        assert not dialog._values_loading
+        release.set()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+        assert [dialog.header_list.item(i).text() for i in range(dialog.header_list.count())] == ["SELECT ALL", "A", "Z"]
+    finally:
+        release.set()
+        dialog.close()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)

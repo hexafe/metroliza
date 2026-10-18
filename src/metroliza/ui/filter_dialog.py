@@ -971,6 +971,10 @@ class FilterDialog(QDialog):
                 filter_query = build_measurement_filter_query(reference_values=selected_references)
                 self._populate_distinct_values(self.header_list, "HEADER", filter_query=filter_query)
             else:
+                if getattr(self, "_value_loader", None) is not None:
+                    self._stop_value_load()
+                    self._values_closed = False
+                    self._finish_value_load()
                 for row in range(self.all_headers_list.count()):
                     item = self.all_headers_list.item(row)
                     self.header_list.addItem(item.text())
