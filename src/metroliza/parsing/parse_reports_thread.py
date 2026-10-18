@@ -1547,6 +1547,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 changed_files += 1
                 selected_changed_files += 1
                 continue
+            finally:
+                # A probe-cache miss extracts the whole PDF text into the inspection. Keep only
+                # the reviewed digest on the work item; holding every selected file's text until
+                # it is processed is unbounded for large or archive imports.
+                inspection.release_extracted_text()
             selected_parser_id = (
                 diagnostics.selected.plugin_id if diagnostics.selected is not None else None
             )
