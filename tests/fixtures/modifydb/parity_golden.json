@@ -1,0 +1,1823 @@
+{
+ "schema": 1,
+ "captured_from": "82f8f576 (QTableWidget record tables, before #1118): each scenario's ops were replayed through tests/test_modifydb_parity.py::run_scenario with a driver that used QTableWidget item()/setText()/_filter_table_rows(); 'expected' is that implementation's output. Synthetic data only.",
+ "scenarios": {
+  "current": {
+   "flavor": "current",
+   "ops": [
+    {
+     "op": "checkpoint",
+     "name": "initial"
+    },
+    {
+     "op": "set_cell",
+     "table": "reference",
+     "row": 0,
+     "column": "New value",
+     "text": "REF-A2"
+    },
+    {
+     "op": "set_cell",
+     "table": "part_number",
+     "row": 0,
+     "column": "New value",
+     "text": "001"
+    },
+    {
+     "op": "set_cell",
+     "table": "part_number",
+     "row": 1,
+     "column": "New value",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "header",
+     "row": 0,
+     "column": "New value",
+     "text": "DIAM-2"
+    },
+    {
+     "op": "bulk_rename",
+     "table": "header",
+     "anchor": 1,
+     "target": 2,
+     "text": "H-BULK"
+    },
+    {
+     "op": "bulk_rename",
+     "table": "reference",
+     "anchor": 1,
+     "target": 2,
+     "text": "REF-BULK"
+    },
+    {
+     "op": "select_range",
+     "table": "measurement_records",
+     "anchor": 2,
+     "target": 5
+    },
+    {
+     "op": "select_range",
+     "table": "report_records",
+     "anchor": 3,
+     "target": 1
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 0,
+     "column": "REFERENCE",
+     "text": "REF-A3"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 0,
+     "column": "COMMENT",
+     "text": "note"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 1,
+     "column": "COMMENT",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 1,
+     "column": "REFERENCE",
+     "text": "REF-A"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 1,
+     "column": "TIME",
+     "text": "07:45"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 2,
+     "column": "PART_NAME",
+     "text": "PART-9"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 2,
+     "column": "OPERATOR_NAME",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 3,
+     "column": "DATE",
+     "text": "2025-01-01"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 3,
+     "column": "TIME",
+     "text": "12:30"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 3,
+     "column": "SAMPLE_NUMBER",
+     "text": "004x"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 3,
+     "column": "SAMPLE_NUMBER",
+     "text": "004"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 3,
+     "column": "OPERATOR_NAME",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 0,
+     "column": "NOM",
+     "text": "10.25"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 0,
+     "column": "OUTTOL",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 1,
+     "column": "MEAS",
+     "text": "20.5"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 2,
+     "column": "HEADER",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 2,
+     "column": "STATUS_CODE",
+     "text": "nok"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 3,
+     "column": "NOM",
+     "text": "10"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 4,
+     "column": "NOM",
+     "text": "20.0"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 5,
+     "column": "+TOL",
+     "text": "0.15"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 6,
+     "column": "NOM",
+     "text": "7.5"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 6,
+     "column": "DESCRIPTION",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 6,
+     "column": "HEADER",
+     "text": "FLAT"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 7,
+     "column": "MEAS",
+     "text": "5.0"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 8,
+     "column": "DEV",
+     "text": "-0.15"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 8,
+     "column": "DEV",
+     "text": "-0.150"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 9,
+     "column": "SECTION_NAME",
+     "text": "x"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 9,
+     "column": "SECTION_NAME",
+     "text": "Sec é ü"
+    },
+    {
+     "op": "checkpoint",
+     "name": "dirty"
+    },
+    {
+     "op": "filter",
+     "table": "measurement_records",
+     "text": "nok"
+    },
+    {
+     "op": "filter",
+     "table": "measurement_records",
+     "text": "ZZ"
+    },
+    {
+     "op": "filter",
+     "table": "measurement_records",
+     "text": "SEC É"
+    },
+    {
+     "op": "filter",
+     "table": "measurement_records",
+     "text": ""
+    },
+    {
+     "op": "filter",
+     "table": "report_records",
+     "text": "ref-a3"
+    },
+    {
+     "op": "filter",
+     "table": "report_records",
+     "text": "NOTE"
+    },
+    {
+     "op": "filter",
+     "table": "report_records",
+     "text": ""
+    },
+    {
+     "op": "checkpoint",
+     "name": "end"
+    }
+   ],
+   "expected": {
+    "selections": [
+     {
+      "table": "header",
+      "rows": [
+       1
+      ]
+     },
+     {
+      "table": "reference",
+      "rows": [
+       1
+      ]
+     },
+     {
+      "table": "measurement_records",
+      "rows": [
+       2,
+       3,
+       4
+      ]
+     },
+     {
+      "table": "report_records",
+      "rows": [
+       2,
+       3
+      ]
+     }
+    ],
+    "filters": [
+     {
+      "table": "measurement_records",
+      "text": "nok",
+      "visible_keys": [
+       "103",
+       "104",
+       "109"
+      ]
+     },
+     {
+      "table": "measurement_records",
+      "text": "ZZ",
+      "visible_keys": []
+     },
+     {
+      "table": "measurement_records",
+      "text": "SEC É",
+      "visible_keys": [
+       "110"
+      ]
+     },
+     {
+      "table": "measurement_records",
+      "text": "",
+      "visible_keys": [
+       "101",
+       "102",
+       "103",
+       "104",
+       "105",
+       "106",
+       "107",
+       "108",
+       "109",
+       "110"
+      ]
+     },
+     {
+      "table": "report_records",
+      "text": "ref-a3",
+      "visible_keys": [
+       "1"
+      ]
+     },
+     {
+      "table": "report_records",
+      "text": "NOTE",
+      "visible_keys": [
+       "1"
+      ]
+     },
+     {
+      "table": "report_records",
+      "text": "",
+      "visible_keys": [
+       "1",
+       "2",
+       "3",
+       "4"
+      ]
+     }
+    ],
+    "checkpoints": {
+     "initial": false,
+     "dirty": true,
+     "end": true
+    },
+    "pending": true,
+    "summary": "References: \"REF-A\" -> \"REF-A2\" (occurrences: 2)\nReferences: \"REF-B\" -> \"REF-BULK\" (occurrences: 1)\nPart numbers: \"002\" -> \"\" (occurrences: 2)\nHeaders: \"DIAM\" -> \"DIAM-2\" (occurrences: 2)\nHeaders: \"HEIGHT\" -> \"H-BULK\" (occurrences: 3)\nReport records.REFERENCE: \"REF-A\" -> \"REF-A3\" (REPORT_ID=1)\nReport records.COMMENT: \"first\" -> \"note\" (REPORT_ID=1)\nReport records.TIME: NULL -> \"07:45\" (REPORT_ID=2)\nReport records.PART_NAME: \"PART-2\" -> \"PART-9\" (REPORT_ID=3)\nReport records.DATE: \"2024-03-05\" -> \"2025-01-01\" (REPORT_ID=4)\nReport records.TIME: NULL -> \"12:30\" (REPORT_ID=4)\nReport records.OPERATOR_NAME: \"OP1\" -> NULL (REPORT_ID=4)\nMeasurement rows.NOM: \"10.0\" -> \"10.25\" (MEASUREMENT_ID=101)\nMeasurement rows.OUTTOL: \"0.0\" -> NULL (MEASUREMENT_ID=101)\nMeasurement rows.MEAS: \"20.05\" -> \"20.5\" (MEASUREMENT_ID=102)\nMeasurement rows.HEADER: \"DIAM\" -> NULL (MEASUREMENT_ID=103)\nMeasurement rows.STATUS_CODE: \"ok\" -> \"nok\" (MEASUREMENT_ID=103)\nMeasurement rows.NOM: \"10.0\" -> \"10.0\" (MEASUREMENT_ID=104)\nMeasurement rows.+TOL: \"0.1\" -> \"0.15\" (MEASUREMENT_ID=106)\nMeasurement rows.HEADER: NULL -> \"FLAT\" (MEASUREMENT_ID=107)\nMeasurement rows.NOM: NULL -> \"7.5\" (MEASUREMENT_ID=107)\nMeasurement rows.DEV: \"-0.15\" -> \"-0.15\" (MEASUREMENT_ID=109)\nMeasurement rows.SECTION_NAME: \"SEC1\" -> \"Sec é ü\" (MEASUREMENT_ID=110)",
+    "confirmation_text": "The following modifications will be applied:\n\nReferences: \"REF-A\" -> \"REF-A2\" (occurrences: 2)\nReferences: \"REF-B\" -> \"REF-BULK\" (occurrences: 1)\nPart numbers: \"002\" -> \"\" (occurrences: 2)\nHeaders: \"DIAM\" -> \"DIAM-2\" (occurrences: 2)\nHeaders: \"HEIGHT\" -> \"H-BULK\" (occurrences: 3)\nReport records.REFERENCE: \"REF-A\" -> \"REF-A3\" (REPORT_ID=1)\nReport records.COMMENT: \"first\" -> \"note\" (REPORT_ID=1)\nReport records.TIME: NULL -> \"07:45\" (REPORT_ID=2)\nReport records.PART_NAME: \"PART-2\" -> \"PART-9\" (REPORT_ID=3)\nReport records.DATE: \"2024-03-05\" -> \"2025-01-01\" (REPORT_ID=4)\nReport records.TIME: NULL -> \"12:30\" (REPORT_ID=4)\nReport records.OPERATOR_NAME: \"OP1\" -> NULL (REPORT_ID=4)\nMeasurement rows.NOM: \"10.0\" -> \"10.25\" (MEASUREMENT_ID=101)\nMeasurement rows.OUTTOL: \"0.0\" -> NULL (MEASUREMENT_ID=101)\nMeasurement rows.MEAS: \"20.05\" -> \"20.5\" (MEASUREMENT_ID=102)\nMeasurement rows.HEADER: \"DIAM\" -> NULL (MEASUREMENT_ID=103)\nMeasurement rows.STATUS_CODE: \"ok\" -> \"nok\" (MEASUREMENT_ID=103)\nMeasurement rows.NOM: \"10.0\" -> \"10.0\" (MEASUREMENT_ID=104)\nMeasurement rows.+TOL: \"0.1\" -> \"0.15\" (MEASUREMENT_ID=106)\nMeasurement rows.HEADER: NULL -> \"FLAT\" (MEASUREMENT_ID=107)\nMeasurement rows.NOM: NULL -> \"7.5\" (MEASUREMENT_ID=107)\nMeasurement rows.DEV: \"-0.15\" -> \"-0.15\" (MEASUREMENT_ID=109)\nMeasurement rows.SECTION_NAME: \"SEC1\" -> \"Sec é ü\" (MEASUREMENT_ID=110)",
+    "normalization_changes": {
+     "reference": [
+      [
+       "REF-A2",
+       "REF-A"
+      ],
+      [
+       "REF-BULK",
+       "REF-B"
+      ]
+     ],
+     "sample_number": [
+      [
+       "",
+       "002"
+      ]
+     ],
+     "header": [
+      [
+       "DIAM-2",
+       "DIAM"
+      ],
+      [
+       "H-BULK",
+       "HEIGHT"
+      ]
+     ]
+    },
+    "report_updates": [
+     [
+      1,
+      {
+       "reference": "REF-A3",
+       "comment": "note"
+      }
+     ],
+     [
+      2,
+      {
+       "report_time": "07:45"
+      }
+     ],
+     [
+      3,
+      {
+       "part_name": "PART-9"
+      }
+     ],
+     [
+      4,
+      {
+       "report_date": "2025-01-01",
+       "report_time": "12:30",
+       "operator_name": null
+      }
+     ]
+    ],
+    "measurement_updates": [
+     [
+      101,
+      {
+       "nominal": 10.25,
+       "outtol": null
+      }
+     ],
+     [
+      102,
+      {
+       "meas": 20.5
+      }
+     ],
+     [
+      103,
+      {
+       "header": null,
+       "status_code": "nok"
+      }
+     ],
+     [
+      104,
+      {
+       "nominal": 10.0
+      }
+     ],
+     [
+      106,
+      {
+       "tol_plus": 0.15
+      }
+     ],
+     [
+      107,
+      {
+       "header": "FLAT",
+       "nominal": 7.5
+      }
+     ],
+     [
+      109,
+      {
+       "dev": -0.15
+      }
+     ],
+     [
+      110,
+      {
+       "section_name": "Sec é ü"
+      }
+     ]
+    ],
+    "statements": [
+     [
+      "UPDATE \"report_metadata\" SET \"reference\" = ? WHERE \"reference\" = ?",
+      [
+       "REF-A2",
+       "REF-A"
+      ]
+     ],
+     [
+      "UPDATE \"report_metadata\" SET \"reference\" = ? WHERE \"reference\" = ?",
+      [
+       "REF-BULK",
+       "REF-B"
+      ]
+     ],
+     [
+      "UPDATE \"report_metadata\" SET \"sample_number\" = ? WHERE \"sample_number\" = ?",
+      [
+       "",
+       "002"
+      ]
+     ],
+     [
+      "UPDATE \"report_measurements\" SET \"header\" = ? WHERE \"header\" = ?",
+      [
+       "DIAM-2",
+       "DIAM"
+      ]
+     ],
+     [
+      "UPDATE \"report_measurements\" SET \"header\" = ? WHERE \"header\" = ?",
+      [
+       "H-BULK",
+       "HEIGHT"
+      ]
+     ]
+    ],
+    "apply_payload": [
+     {
+      "storage_flavor": "current",
+      "normalization_changes": {
+       "reference": [
+        [
+         "REF-A2",
+         "REF-A"
+        ],
+        [
+         "REF-BULK",
+         "REF-B"
+        ]
+       ],
+       "sample_number": [
+        [
+         "",
+         "002"
+        ]
+       ],
+       "header": [
+        [
+         "DIAM-2",
+         "DIAM"
+        ],
+        [
+         "H-BULK",
+         "HEIGHT"
+        ]
+       ]
+      },
+      "report_updates": [
+       [
+        1,
+        {
+         "reference": "REF-A3",
+         "comment": "note"
+        }
+       ],
+       [
+        2,
+        {
+         "report_time": "07:45"
+        }
+       ],
+       [
+        3,
+        {
+         "part_name": "PART-9"
+        }
+       ],
+       [
+        4,
+        {
+         "report_date": "2025-01-01",
+         "report_time": "12:30",
+         "operator_name": null
+        }
+       ]
+      ],
+      "measurement_updates": [
+       [
+        101,
+        {
+         "nominal": 10.25,
+         "outtol": null
+        }
+       ],
+       [
+        102,
+        {
+         "meas": 20.5
+        }
+       ],
+       [
+        103,
+        {
+         "header": null,
+         "status_code": "nok"
+        }
+       ],
+       [
+        104,
+        {
+         "nominal": 10.0
+        }
+       ],
+       [
+        106,
+        {
+         "tol_plus": 0.15
+        }
+       ],
+       [
+        107,
+        {
+         "header": "FLAT",
+         "nominal": 7.5
+        }
+       ],
+       [
+        109,
+        {
+         "dev": -0.15
+        }
+       ],
+       [
+        110,
+        {
+         "section_name": "Sec é ü"
+        }
+       ]
+      ]
+     }
+    ],
+    "database_after_apply": {
+     "report_metadata": [
+      [
+       1,
+       "REF-A3",
+       "2024-01-01",
+       "08:00",
+       "PART-1",
+       "A",
+       "001",
+       "OP1",
+       "note"
+      ],
+      [
+       2,
+       "REF-A2",
+       "2024-01-02",
+       "07:45",
+       "PART-1",
+       "A",
+       "",
+       "OP2",
+       null
+      ],
+      [
+       3,
+       "REF-BULK",
+       "2024-02-01",
+       "09:15",
+       "PART-9",
+       "B",
+       "",
+       null,
+       "review"
+      ],
+      [
+       4,
+       "REF-C",
+       "2025-01-01",
+       "12:30",
+       null,
+       null,
+       "004",
+       null,
+       null
+      ]
+     ],
+     "report_measurements": [
+      [
+       101,
+       1,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.25,
+       0.1,
+       -0.1,
+       0.0,
+       10.05,
+       0.05,
+       null,
+       "ok"
+      ],
+      [
+       102,
+       1,
+       "H-BULK",
+       "SEC1",
+       "F2",
+       "Height",
+       "CH_A",
+       "Slot height",
+       "Y",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       20.5,
+       0.05,
+       0.0,
+       "ok"
+      ],
+      [
+       103,
+       1,
+       null,
+       "SEC2",
+       "F3",
+       "Diameter",
+       "CH_B",
+       "Hole",
+       "Z",
+       5.0,
+       0.05,
+       -0.05,
+       0.0,
+       5.07,
+       0.02,
+       0.02,
+       "nok"
+      ],
+      [
+       104,
+       2,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.0,
+       0.1,
+       -0.1,
+       0.0,
+       10.2,
+       0.2,
+       0.1,
+       "nok"
+      ],
+      [
+       105,
+       2,
+       "H-BULK",
+       "SEC1",
+       "F2",
+       "Height",
+       "CH_A",
+       "Slot height",
+       "Y",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       19.9,
+       -0.1,
+       0.0,
+       "ok"
+      ],
+      [
+       106,
+       3,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.0,
+       0.15,
+       -0.1,
+       0.0,
+       10.01,
+       0.01,
+       0.0,
+       "ok"
+      ],
+      [
+       107,
+       3,
+       "FLAT",
+       "SEC3",
+       "F4",
+       "Flatness",
+       "CH_C",
+       "FLAT",
+       "Z",
+       7.5,
+       0.05,
+       0.0,
+       0.0,
+       0.03,
+       0.03,
+       0.0,
+       "ok"
+      ],
+      [
+       108,
+       3,
+       "DIAM-2",
+       "SEC2",
+       "F3",
+       "Diameter",
+       "CH_B",
+       "Hole",
+       "Z",
+       5.0,
+       0.05,
+       -0.05,
+       0.0,
+       5.0,
+       0.0,
+       0.0,
+       "ok"
+      ],
+      [
+       109,
+       4,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.0,
+       0.1,
+       -0.1,
+       0.0,
+       9.85,
+       -0.15,
+       0.05,
+       "nok"
+      ],
+      [
+       110,
+       4,
+       "H-BULK",
+       "Sec é ü",
+       "F2",
+       "Height",
+       "CH_A",
+       "Slot height",
+       "Y",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       20.0,
+       0.0,
+       0.0,
+       "ok"
+      ]
+     ]
+    }
+   }
+  },
+  "current_reverted": {
+   "flavor": "current",
+   "ops": [
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 0,
+     "column": "REFERENCE",
+     "text": "REF-X"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 0,
+     "column": "REFERENCE",
+     "text": "REF-A"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 1,
+     "column": "MEAS",
+     "text": "1"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 1,
+     "column": "MEAS",
+     "text": "20.05"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 6,
+     "column": "NOM",
+     "text": "3"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 6,
+     "column": "NOM",
+     "text": ""
+    },
+    {
+     "op": "checkpoint",
+     "name": "reverted"
+    }
+   ],
+   "expected": {
+    "selections": [],
+    "filters": [],
+    "checkpoints": {
+     "reverted": false
+    },
+    "pending": false,
+    "summary": "",
+    "confirmation_text": "The following modifications will be applied:\n\n",
+    "normalization_changes": {
+     "reference": [],
+     "sample_number": [],
+     "header": []
+    },
+    "report_updates": [],
+    "measurement_updates": [],
+    "statements": [],
+    "apply_payload": [],
+    "database_after_apply": {
+     "report_metadata": [
+      [
+       1,
+       "REF-A",
+       "2024-01-01",
+       "08:00",
+       "PART-1",
+       "A",
+       "001",
+       "OP1",
+       "first"
+      ],
+      [
+       2,
+       "REF-A",
+       "2024-01-02",
+       null,
+       "PART-1",
+       "A",
+       "002",
+       "OP2",
+       null
+      ],
+      [
+       3,
+       "REF-B",
+       "2024-02-01",
+       "09:15",
+       "PART-2",
+       "B",
+       "002",
+       null,
+       "review"
+      ],
+      [
+       4,
+       "REF-C",
+       "2024-03-05",
+       null,
+       null,
+       null,
+       "004",
+       "OP1",
+       null
+      ]
+     ],
+     "report_measurements": [
+      [
+       101,
+       1,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.0,
+       0.1,
+       -0.1,
+       0.0,
+       10.05,
+       0.05,
+       0.0,
+       "ok"
+      ],
+      [
+       102,
+       1,
+       "HEIGHT",
+       "SEC1",
+       "F2",
+       "Height",
+       "CH_A",
+       "Slot height",
+       "Y",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       20.05,
+       0.05,
+       0.0,
+       "ok"
+      ],
+      [
+       103,
+       1,
+       "DIAM",
+       "SEC2",
+       "F3",
+       "Diameter",
+       "CH_B",
+       "Hole",
+       "Z",
+       5.0,
+       0.05,
+       -0.05,
+       0.0,
+       5.07,
+       0.02,
+       0.02,
+       "ok"
+      ],
+      [
+       104,
+       2,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.0,
+       0.1,
+       -0.1,
+       0.0,
+       10.2,
+       0.2,
+       0.1,
+       "nok"
+      ],
+      [
+       105,
+       2,
+       "HEIGHT",
+       "SEC1",
+       "F2",
+       "Height",
+       "CH_A",
+       "Slot height",
+       "Y",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       19.9,
+       -0.1,
+       0.0,
+       "ok"
+      ],
+      [
+       106,
+       3,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.0,
+       0.1,
+       -0.1,
+       0.0,
+       10.01,
+       0.01,
+       0.0,
+       "ok"
+      ],
+      [
+       107,
+       3,
+       null,
+       "SEC3",
+       "F4",
+       "Flatness",
+       "CH_C",
+       null,
+       "Z",
+       null,
+       0.05,
+       0.0,
+       0.0,
+       0.03,
+       0.03,
+       0.0,
+       "ok"
+      ],
+      [
+       108,
+       3,
+       "DIAM",
+       "SEC2",
+       "F3",
+       "Diameter",
+       "CH_B",
+       "Hole",
+       "Z",
+       5.0,
+       0.05,
+       -0.05,
+       0.0,
+       5.0,
+       0.0,
+       0.0,
+       "ok"
+      ],
+      [
+       109,
+       4,
+       "WIDTH",
+       "SEC1",
+       "F1",
+       "Width",
+       "CH_A",
+       "Slot width",
+       "X",
+       10.0,
+       0.1,
+       -0.1,
+       0.0,
+       9.85,
+       -0.15,
+       0.05,
+       "nok"
+      ],
+      [
+       110,
+       4,
+       "HEIGHT",
+       "SEC1",
+       "F2",
+       "Height",
+       "CH_A",
+       "Slot height",
+       "Y",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       20.0,
+       0.0,
+       0.0,
+       "ok"
+      ]
+     ]
+    }
+   }
+  },
+  "legacy": {
+   "flavor": "legacy",
+   "ops": [
+    {
+     "op": "checkpoint",
+     "name": "initial"
+    },
+    {
+     "op": "set_cell",
+     "table": "reference",
+     "row": 0,
+     "column": "New value",
+     "text": "REF-A9"
+    },
+    {
+     "op": "bulk_rename",
+     "table": "reference",
+     "anchor": 1,
+     "target": 2,
+     "text": "REF-L"
+    },
+    {
+     "op": "set_cell",
+     "table": "header",
+     "row": 2,
+     "column": "New value",
+     "text": "WIDTH2"
+    },
+    {
+     "op": "select_range",
+     "table": "report_records",
+     "anchor": 0,
+     "target": 3
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 0,
+     "column": "REFERENCE",
+     "text": "REF-Z"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 1,
+     "column": "DATE",
+     "text": "2025-02-02"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 3,
+     "column": "DATE",
+     "text": "2025-03-03"
+    },
+    {
+     "op": "set_cell",
+     "table": "report_records",
+     "row": 2,
+     "column": "SAMPLE_NUMBER",
+     "text": "003"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 0,
+     "column": "NOM",
+     "text": "10.5"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 0,
+     "column": "HEADER",
+     "text": "W2"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 1,
+     "column": "AX",
+     "text": "Q"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 2,
+     "column": "NOM",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 2,
+     "column": "+TOL",
+     "text": "0.06"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 3,
+     "column": "MEAS",
+     "text": "bad"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 3,
+     "column": "-TOL",
+     "text": ""
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 4,
+     "column": "HEADER",
+     "text": "H"
+    },
+    {
+     "op": "set_cell",
+     "table": "measurement_records",
+     "row": 4,
+     "column": "OUTTOL",
+     "text": "1e-3"
+    },
+    {
+     "op": "select_range",
+     "table": "measurement_records",
+     "anchor": 4,
+     "target": 1
+    },
+    {
+     "op": "checkpoint",
+     "name": "dirty"
+    },
+    {
+     "op": "filter",
+     "table": "measurement_records",
+     "text": "w2"
+    },
+    {
+     "op": "filter",
+     "table": "measurement_records",
+     "text": "BAD"
+    },
+    {
+     "op": "filter",
+     "table": "measurement_records",
+     "text": ""
+    },
+    {
+     "op": "filter",
+     "table": "report_records",
+     "text": "ref-z"
+    },
+    {
+     "op": "filter",
+     "table": "report_records",
+     "text": ""
+    },
+    {
+     "op": "checkpoint",
+     "name": "end"
+    }
+   ],
+   "expected": {
+    "selections": [
+     {
+      "table": "reference",
+      "rows": [
+       1
+      ]
+     },
+     {
+      "table": "report_records",
+      "rows": [
+       0,
+       1,
+       2
+      ]
+     },
+     {
+      "table": "measurement_records",
+      "rows": [
+       2,
+       3,
+       4
+      ]
+     }
+    ],
+    "filters": [
+     {
+      "table": "measurement_records",
+      "text": "w2",
+      "visible_keys": [
+       "10"
+      ]
+     },
+     {
+      "table": "measurement_records",
+      "text": "BAD",
+      "visible_keys": [
+       "13"
+      ]
+     },
+     {
+      "table": "measurement_records",
+      "text": "",
+      "visible_keys": [
+       "10",
+       "11",
+       "12",
+       "13",
+       "14"
+      ]
+     },
+     {
+      "table": "report_records",
+      "text": "ref-z",
+      "visible_keys": [
+       "1"
+      ]
+     },
+     {
+      "table": "report_records",
+      "text": "",
+      "visible_keys": [
+       "1",
+       "2",
+       "3",
+       "4"
+      ]
+     }
+    ],
+    "checkpoints": {
+     "initial": false,
+     "dirty": true,
+     "end": true
+    },
+    "pending": true,
+    "summary": "References: \"REF-A\" -> \"REF-A9\" (occurrences: 1)\nReferences: \"REF-B\" -> \"REF-L\" (occurrences: 2)\nHeaders: \"WIDTH\" -> \"WIDTH2\" (occurrences: 2)\nReport records.REFERENCE: \"REF-A\" -> \"REF-Z\" (REPORT_ID=1)\nReport records.DATE: \"2024-01-02\" -> \"2025-02-02\" (REPORT_ID=2)\nReport records.SAMPLE_NUMBER: \"002\" -> \"003\" (REPORT_ID=3)\nReport records.DATE: NULL -> \"2025-03-03\" (REPORT_ID=4)\nMeasurement rows.HEADER: \"WIDTH\" -> \"W2\" (MEASUREMENT_ID=10)\nMeasurement rows.NOM: \"10.0\" -> \"10.5\" (MEASUREMENT_ID=10)\nMeasurement rows.AX: \"Y\" -> \"Q\" (MEASUREMENT_ID=11)\nMeasurement rows.+TOL: \"0.05\" -> \"0.06\" (MEASUREMENT_ID=12)\nMeasurement rows.-TOL: \"-0.1\" -> NULL (MEASUREMENT_ID=13)\nMeasurement rows.MEAS: \"10.2\" -> \"bad\" (MEASUREMENT_ID=13)\nMeasurement rows.HEADER: NULL -> \"H\" (MEASUREMENT_ID=14)\nMeasurement rows.OUTTOL: \"0.0\" -> \"0.001\" (MEASUREMENT_ID=14)",
+    "confirmation_text": "The following modifications will be applied:\n\nReferences: \"REF-A\" -> \"REF-A9\" (occurrences: 1)\nReferences: \"REF-B\" -> \"REF-L\" (occurrences: 2)\nHeaders: \"WIDTH\" -> \"WIDTH2\" (occurrences: 2)\nReport records.REFERENCE: \"REF-A\" -> \"REF-Z\" (REPORT_ID=1)\nReport records.DATE: \"2024-01-02\" -> \"2025-02-02\" (REPORT_ID=2)\nReport records.SAMPLE_NUMBER: \"002\" -> \"003\" (REPORT_ID=3)\nReport records.DATE: NULL -> \"2025-03-03\" (REPORT_ID=4)\nMeasurement rows.HEADER: \"WIDTH\" -> \"W2\" (MEASUREMENT_ID=10)\nMeasurement rows.NOM: \"10.0\" -> \"10.5\" (MEASUREMENT_ID=10)\nMeasurement rows.AX: \"Y\" -> \"Q\" (MEASUREMENT_ID=11)\nMeasurement rows.+TOL: \"0.05\" -> \"0.06\" (MEASUREMENT_ID=12)\nMeasurement rows.-TOL: \"-0.1\" -> NULL (MEASUREMENT_ID=13)\nMeasurement rows.MEAS: \"10.2\" -> \"bad\" (MEASUREMENT_ID=13)\nMeasurement rows.HEADER: NULL -> \"H\" (MEASUREMENT_ID=14)\nMeasurement rows.OUTTOL: \"0.0\" -> \"0.001\" (MEASUREMENT_ID=14)",
+    "normalization_changes": {
+     "reference": [
+      [
+       "REF-A9",
+       "REF-A"
+      ],
+      [
+       "REF-L",
+       "REF-B"
+      ]
+     ],
+     "sample_number": [],
+     "header": [
+      [
+       "WIDTH2",
+       "WIDTH"
+      ]
+     ]
+    },
+    "report_updates": [
+     [
+      1,
+      {
+       "reference": "REF-Z"
+      }
+     ],
+     [
+      2,
+      {
+       "report_date": "2025-02-02"
+      }
+     ],
+     [
+      3,
+      {
+       "sample_number": "003"
+      }
+     ],
+     [
+      4,
+      {
+       "report_date": "2025-03-03"
+      }
+     ]
+    ],
+    "measurement_updates": [
+     [
+      10,
+      {
+       "header": "W2",
+       "nominal": 10.5
+      }
+     ],
+     [
+      11,
+      {
+       "ax": "Q"
+      }
+     ],
+     [
+      12,
+      {
+       "tol_plus": 0.06
+      }
+     ],
+     [
+      13,
+      {
+       "tol_minus": null,
+       "meas": "bad"
+      }
+     ],
+     [
+      14,
+      {
+       "header": "H",
+       "outtol": 0.001
+      }
+     ]
+    ],
+    "statements": [
+     [
+      "UPDATE \"REPORTS\" SET \"REFERENCE\" = ? WHERE \"REFERENCE\" = ?",
+      [
+       "REF-A9",
+       "REF-A"
+      ]
+     ],
+     [
+      "UPDATE \"REPORTS\" SET \"REFERENCE\" = ? WHERE \"REFERENCE\" = ?",
+      [
+       "REF-L",
+       "REF-B"
+      ]
+     ],
+     [
+      "UPDATE \"MEASUREMENTS\" SET \"HEADER\" = ? WHERE \"HEADER\" = ?",
+      [
+       "WIDTH2",
+       "WIDTH"
+      ]
+     ],
+     [
+      "UPDATE \"REPORTS\" SET \"REFERENCE\" = ? WHERE \"ID\" = ?",
+      [
+       "REF-Z",
+       1
+      ]
+     ],
+     [
+      "UPDATE \"REPORTS\" SET \"DATE\" = ? WHERE \"ID\" = ?",
+      [
+       "2025-02-02",
+       2
+      ]
+     ],
+     [
+      "UPDATE \"REPORTS\" SET \"SAMPLE_NUMBER\" = ? WHERE \"ID\" = ?",
+      [
+       "003",
+       3
+      ]
+     ],
+     [
+      "UPDATE \"REPORTS\" SET \"DATE\" = ? WHERE \"ID\" = ?",
+      [
+       "2025-03-03",
+       4
+      ]
+     ],
+     [
+      "UPDATE \"MEASUREMENTS\" SET \"HEADER\" = ?, \"NOM\" = ? WHERE \"ID\" = ?",
+      [
+       "W2",
+       10.5,
+       10
+      ]
+     ],
+     [
+      "UPDATE \"MEASUREMENTS\" SET \"AX\" = ? WHERE \"ID\" = ?",
+      [
+       "Q",
+       11
+      ]
+     ],
+     [
+      "UPDATE \"MEASUREMENTS\" SET \"+TOL\" = ? WHERE \"ID\" = ?",
+      [
+       0.06,
+       12
+      ]
+     ],
+     [
+      "UPDATE \"MEASUREMENTS\" SET \"-TOL\" = ?, \"MEAS\" = ? WHERE \"ID\" = ?",
+      [
+       null,
+       "bad",
+       13
+      ]
+     ],
+     [
+      "UPDATE \"MEASUREMENTS\" SET \"HEADER\" = ?, \"OUTTOL\" = ? WHERE \"ID\" = ?",
+      [
+       "H",
+       0.001,
+       14
+      ]
+     ]
+    ],
+    "apply_payload": [
+     {
+      "storage_flavor": "legacy",
+      "normalization_changes": {
+       "reference": [
+        [
+         "REF-A9",
+         "REF-A"
+        ],
+        [
+         "REF-L",
+         "REF-B"
+        ]
+       ],
+       "sample_number": [],
+       "header": [
+        [
+         "WIDTH2",
+         "WIDTH"
+        ]
+       ]
+      },
+      "report_updates": [
+       [
+        1,
+        {
+         "reference": "REF-Z"
+        }
+       ],
+       [
+        2,
+        {
+         "report_date": "2025-02-02"
+        }
+       ],
+       [
+        3,
+        {
+         "sample_number": "003"
+        }
+       ],
+       [
+        4,
+        {
+         "report_date": "2025-03-03"
+        }
+       ]
+      ],
+      "measurement_updates": [
+       [
+        10,
+        {
+         "header": "W2",
+         "nominal": 10.5
+        }
+       ],
+       [
+        11,
+        {
+         "ax": "Q"
+        }
+       ],
+       [
+        12,
+        {
+         "tol_plus": 0.06
+        }
+       ],
+       [
+        13,
+        {
+         "tol_minus": null,
+         "meas": "bad"
+        }
+       ],
+       [
+        14,
+        {
+         "header": "H",
+         "outtol": 0.001
+        }
+       ]
+      ]
+     }
+    ],
+    "database_after_apply": {
+     "REPORTS": [
+      [
+       1,
+       "REF-Z",
+       "/reports",
+       "a.pdf",
+       "2024-01-01",
+       "001"
+      ],
+      [
+       2,
+       "REF-L",
+       "/reports",
+       "b.pdf",
+       "2025-02-02",
+       "002"
+      ],
+      [
+       3,
+       "REF-L",
+       "/reports",
+       "c.pdf",
+       "2024-01-03",
+       "003"
+      ],
+      [
+       4,
+       "REF-C",
+       "/archive",
+       "d.pdf",
+       "2025-03-03",
+       "004"
+      ]
+     ],
+     "MEASUREMENTS": [
+      [
+       10,
+       1,
+       "X",
+       10.5,
+       0.1,
+       -0.1,
+       0.0,
+       10.05,
+       0.05,
+       0.0,
+       "W2"
+      ],
+      [
+       11,
+       2,
+       "Q",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       20.05,
+       0.05,
+       0.0,
+       "HEIGHT"
+      ],
+      [
+       12,
+       2,
+       "Z",
+       null,
+       0.06,
+       -0.05,
+       0.0,
+       5.07,
+       0.02,
+       0.02,
+       "DIAM"
+      ],
+      [
+       13,
+       3,
+       "X",
+       10.0,
+       0.1,
+       null,
+       0.0,
+       "bad",
+       0.2,
+       0.1,
+       "WIDTH2"
+      ],
+      [
+       14,
+       4,
+       "Y",
+       20.0,
+       0.2,
+       -0.2,
+       0.0,
+       19.9,
+       -0.1,
+       0.001,
+       "H"
+      ]
+     ]
+    }
+   }
+  }
+ }
+}

@@ -110,11 +110,14 @@ def test_modifydb_loads_legacy_database_without_report_metadata(tmp_path):
         dialog = ModifyDB(parent=None, db_file={json.dumps(str(db_path))})
         try:
             app.processEvents()
+            rows_before_tab_shown = dialog.measurement_records_table.rowCount()
+            dialog.ensure_record_tables_loaded()
             print(json.dumps({{
                 "storage_flavor": dialog._storage_flavor,
                 "reference_rows": dialog.reference_table.rowCount(),
                 "sample_rows": dialog.part_number_table.rowCount(),
                 "header_rows": dialog.header_table.rowCount(),
+                "rows_before_tab_shown": rows_before_tab_shown,
                 "report_rows": dialog.report_records_table.rowCount(),
                 "measurement_rows": dialog.measurement_records_table.rowCount(),
                 "first_reference": dialog.reference_table.item(0, 0).text(),
@@ -131,6 +134,7 @@ def test_modifydb_loads_legacy_database_without_report_metadata(tmp_path):
         "reference_rows": 2,
         "sample_rows": 2,
         "header_rows": 2,
+        "rows_before_tab_shown": 0,
         "report_rows": 2,
         "measurement_rows": 2,
         "first_reference": "REF-A",
@@ -190,6 +194,7 @@ def test_modifydb_loads_current_database_after_schema_bootstrap(tmp_path):
         dialog = ModifyDB(parent=None, db_file={json.dumps(str(db_path))})
         try:
             app.processEvents()
+            dialog.ensure_record_tables_loaded()
             print(json.dumps({{
                 "storage_flavor": dialog._storage_flavor,
                 "reference_rows": dialog.reference_table.rowCount(),
