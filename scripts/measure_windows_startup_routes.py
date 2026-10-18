@@ -7,8 +7,8 @@ The same non-interactive startup smoke is run through each route:
   whole supervised onedir to ``%TEMP%`` on every launch;
 * ``launcher_cold``: the native launcher EXE (``metroliza_<label>_launcher.exe``) with an empty
   runtime cache (a fresh ``METROLIZA_RUNTIME_ROOT`` for every run);
-* ``launcher_warm``: the same launcher EXE again on an already populated cache. The first warm
-  sample is the second launch of that cache, the next the third, and so on.
+* ``launcher_verified``: the second launch of each cold cache: SHA-256 verification and flush;
+* ``launcher_warm``: launches 3 onward on one completed cache (existence and size checks).
 
 The smoke is ``METROLIZA_STARTUP_UI_SMOKE=1`` (see ``metroliza.app.bootstrap.launch_ui``): the
 application constructs and shows the real main window and exits after the first Qt event-loop
@@ -113,7 +113,7 @@ def profile_metrics(events: list[dict[str, Any]], launched_epoch_ms: float) -> d
 
 
 def launcher_cache_outcome(log_path: Path) -> str | None:
-    """Last ``cache=...`` value the launcher logged (``cold``, ``warm`` or ``repair``)."""
+    """Last ``cache=...`` value the launcher logged (``cold``, ``verified``, ``warm`` or ``repair``)."""
     outcome = None
     if log_path.is_file():
         for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -328,21 +328,33 @@ def measure_portable(bench: Benchmark, exe: Path, runs: int) -> dict[str, Any]:
 
 def measure_launcher_cold(
     bench: Benchmark, exe: Path, runs: int, sizes: dict[str, int]
-) -> tuple[dict[str, Any], Path | None]:
-    """Cold runs, each on a fresh cache; the first valid cache is kept for the warm runs."""
+) -> tuple[dict[str, Any], list[Path | None]]:
+    """Cold runs on fresh caches, each kept for its one-time verification measurement."""
     print("launcher cold", flush=True)
     roots = bench.work / "roots"
-    warm_root = None
+    pending_roots = []
     samples = []
     for i in range(1, runs + 1):
         root = roots / f"cold-{i}"
         samples.append(bench.run("launcher_cold", i, exe, root=root, expect_cache="cold"))
-        if i == 1 and samples[0]["status"] == "ok":
-            warm_root = root
+        pending_roots.append(root if samples[-1]["status"] == "ok" else None)
+        if i == 1 and samples[-1]["status"] == "ok":
             sizes["launcher_runtime_cache_bytes"] = directory_bytes(root)
+    return {"label": "Launcher, cold cache (first launch)", "runs": samples}, pending_roots
+
+
+def measure_launcher_verified(bench: Benchmark, exe: Path, roots: list[Path | None]) -> dict[str, Any]:
+    """Measure the second launch once per independent pending cache."""
+    samples = []
+    for i, root in enumerate(roots, 1):
+        if root is None:
+            samples.append({"scenario": "launcher_verified", "index": i, "status": "failed",
+                            "error": "no valid cold run to verify"})
         else:
-            shutil.rmtree(root, ignore_errors=True)
-    return {"label": "Launcher, cold cache (first launch)", "runs": samples}, warm_root
+            run = bench.run("launcher_verified", i, exe, root=root, expect_cache="verified")
+            run["launch_number_in_cache"] = 2
+            samples.append(run)
+    return {"label": "Launcher, verification (second launch)", "runs": samples}
 
 
 def measure_launcher_warm(
@@ -358,9 +370,9 @@ def measure_launcher_warm(
             })
             continue
         run = bench.run("launcher_warm", i, exe, root=warm_root, expect_cache="warm")
-        run["launch_number_in_cache"] = i + 1
+        run["launch_number_in_cache"] = i + 2
         samples.append(run)
-    return {"label": "Launcher, warm cache (launches 2..N of one cache)", "runs": samples}
+    return {"label": "Launcher, warm cache (launches 3..N of one cache)", "runs": samples}
 
 
 def compare_with_envelope(scenarios: dict[str, dict[str, Any]]) -> dict[str, float]:
@@ -371,7 +383,7 @@ def compare_with_envelope(scenarios: dict[str, dict[str, Any]]) -> dict[str, flo
 
     base = median("portable_envelope")
     comparison: dict[str, float] = {}
-    for name in ("launcher_cold", "launcher_warm"):
+    for name in ("launcher_cold", "launcher_verified", "launcher_warm"):
         value = median(name)
         if base and value:
             comparison[scenarios[name]["label"]] = value / base
@@ -392,9 +404,12 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         if args.launcher:
             exe = Path(args.launcher).resolve()
             sizes["launcher_exe"] = exe.stat().st_size
-            scenarios["launcher_cold"], warm_root = measure_launcher_cold(
+            scenarios["launcher_cold"], pending_roots = measure_launcher_cold(
                 bench, exe, args.runs, sizes
             )
+            verified = measure_launcher_verified(bench, exe, pending_roots)
+            scenarios["launcher_verified"] = verified
+            warm_root = pending_roots[0] if verified["runs"][0]["status"] == "ok" else None
             scenarios["launcher_warm"] = measure_launcher_warm(bench, exe, args.runs, warm_root)
     finally:
         bench.close()

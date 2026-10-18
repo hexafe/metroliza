@@ -6,8 +6,8 @@ Two delivery routes carry the same supervised onedir and are qualified with the 
 * ``--kind envelope`` (default): the PyInstaller envelope, ``metroliza_<label>.exe``.
 * ``--kind launcher``: the native launcher, ``metroliza_<label>_launcher.exe``. The runtime cache
   is the production default (``%LOCALAPPDATA%\\Metroliza\\runtime`` below the private state
-  directory), so the first launch must be ``cache=cold`` and every later one ``cache=warm``, and
-  exactly one complete runtime directory must exist at the end.
+  directory), so the first launch must be ``cache=cold``, the reopen ``cache=verified`` and
+  later ones ``cache=warm``. Exactly one complete runtime directory must exist at the end.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ RUNTIME_DIR_PATTERN = re.compile(
 
 
 def _expect_cache(log: Path, expected: str) -> None:
-    """The launcher logs ``cache=cold|warm|repair``; the last such line must equal ``expected``."""
+    """The launcher logs ``cache=cold|verified|warm|repair``; the last such line must equal ``expected``."""
     outcomes = []
     if log.is_file():
         outcomes = [
@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         _run(exe, root / "normal-first", state, temp, "normal", 0, first)
         if not (root / "normal-first/scratch.sqlite").is_file() or not (root / "normal-first/scratch.xlsx").is_file():
             raise RuntimeError("portable_core_outputs_missing")
-        _run(exe, root / "normal-reopen", state, temp, "normal", 0, later)
+        _run(exe, root / "normal-reopen", state, temp, "normal", 0, "verified" if is_launcher else None)
         _run(exe, root / "hard-exit", state, temp, "hard_exit", 9, later)
         _run(exe, root / "preview", state, temp, "preview", 0, later)
         if not (root / "preview/selected.zip").is_file():

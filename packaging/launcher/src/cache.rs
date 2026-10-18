@@ -1,38 +1,24 @@
 //! Persistent, versioned runtime cache: root resolution, state machine, extraction, cleanup.
 //!
-//! Layout below the cache root:
+//! Extraction commits a flushed `.pending` marker and runs immediately. The next launch hashes
+//! and flushes every manifest file with bounded workers, then writes a durable `.complete` and
+//! removes `.pending`. Completed warm caches keep the cheap existence/size check. Both markers
+//! contain the manifest hash; if both survive an interrupted promotion, pending takes precedence.
+//! A mismatch repairs from the payload before starting the entry, even if its EXE is damaged.
 //!
-//! ```text
-//! <root>/
-//!   <version>_<sha8>/              unpacked onedir; valid only with a matching `.complete`
-//!     .complete                    marker: hex manifest hash, written last
-//!   <version>_<sha8>.staging-<pid> extraction in progress (never used, removed when stale)
-//!   <version>_<sha8>.use           lock file: shared lock held while that version runs
-//!   .extract.lock                  exclusive lock serialising cold extractions and cleanup
-//! ```
-//!
-//! # State machine for one start
-//!
-//! 1. Take the shared `.use` lock of this version (a concurrent cleanup will skip it).
-//! 2. **Warm**: marker equals the manifest hash and every manifest file exists with the expected
-//!    size. No hashing, nothing is written. Done.
-//! 3. Otherwise **cold** (no directory) or **repair** (directory present but invalid): show
-//!    progress, take `.extract.lock` (waiting if another process extracts), re-check warm (the
-//!    other process may have finished), remove stale staging directories (safe: they can only
-//!    exist while someone holds the lock), remove the invalid directory, extract into
-//!    `<dir>.staging-<pid>` with SHA-256 verification of every file, rename into place, and only
-//!    then write the marker. A process killed at any point leaves either nothing usable (no
-//!    marker) or a staging directory that the next run deletes.
-//! 4. Cleanup (best effort, never fatal) keeps the current and the most recently completed other
-//!    version and removes the rest, skipping any version whose `.use` lock is held.
+//! Shared `<version>_<sha8>.use` leases protect active launchers. `.extract.lock` serializes
+//! extraction, promotion and cleanup. Cleanup keeps current and previous versions and probes OS
+//! resource users before any deletion, protecting applications orphaned by their supervisor.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime};
+
+use sha2::{Digest, Sha256};
 
 use crate::archive::{decode_file, Payload};
 use crate::error::{LauncherError, Result};
@@ -40,6 +26,7 @@ use crate::fsutil::is_link_or_reparse;
 use crate::manifest::{validate_version, FileEntry};
 
 pub const MARKER: &str = ".complete";
+pub const PENDING_MARKER: &str = ".pending";
 pub const EXTRACT_LOCK: &str = ".extract.lock";
 const STAGING_INFIX: &str = ".staging-";
 const USE_SUFFIX: &str = ".use";
@@ -196,12 +183,17 @@ impl UseGuard {
 
 // ---------------------------------------------------------------- warm check
 
-/// Cheap validity check: marker matches the payload, every file exists with its expected size.
-/// Deliberately size-only (no hashing); content was verified when the files were extracted.
+fn marker_matches(dir: &Path, marker: &str, payload: &Payload) -> bool {
+    fs::read_to_string(dir.join(marker)).is_ok_and(|text| text.trim() == payload.manifest_hash())
+}
+
+/// Completed marker matches; no pending marker; every file has its expected size. No hashing.
 pub fn is_warm(dir: &Path, payload: &Payload) -> bool {
-    match fs::read_to_string(dir.join(MARKER)) {
-        Ok(text) if text.trim() == payload.manifest_hash() => {}
-        _ => return false,
+    // A pending marker takes precedence, including an interrupted promotion with both markers.
+    if !matches!(fs::symlink_metadata(dir.join(PENDING_MARKER)), Err(e) if e.kind() == io::ErrorKind::NotFound)
+        || !marker_matches(dir, MARKER, payload)
+    {
+        return false;
     }
     payload.manifest.files.iter().all(|entry| {
         fs::symlink_metadata(dir.join(&entry.path))
@@ -215,14 +207,10 @@ pub fn is_warm(dir: &Path, payload: &Payload) -> bool {
 pub struct Options {
     /// Worker threads decoding and writing files (bounded).
     pub threads: usize,
-    /// `fsync` every extracted file so a power loss cannot leave a marker next to unwritten data.
-    ///
-    /// Off by default. One `FlushFileBuffers` per file (~2,000 files in the supervised onedir)
-    /// made the first launch on Windows slower than PyInstaller's own extraction, which never
-    /// flushes. Without it, a power loss in the seconds after the first extraction is still
-    /// covered: the warm check (`is_warm`) catches missing or truncated files, the supervisor
-    /// hashes its fixed components and asks for a repair (exit 75), and the marker itself is
-    /// always flushed. `METROLIZA_LAUNCHER_SYNC_FILES=1` turns the per-file flush back on.
+    /// Flush each file during extraction (opt-in only). The default first launch writes a
+    /// durable pending marker without per-file flushes. The next launch hashes AND flushes
+    /// every file before completing the cache; verification alone could read dirty OS pages.
+    /// `METROLIZA_LAUNCHER_SYNC_FILES=1` also flushes files during the first launch.
     pub sync_files: bool,
 }
 
@@ -240,6 +228,8 @@ impl Default for Options {
 pub enum Outcome {
     /// Existing cache was valid; nothing was written.
     Warm,
+    /// A pending cache passed full SHA-256 verification and was made durable.
+    Verified,
     /// No cache for this version existed; extracted.
     Cold,
     /// A cache directory existed but was invalid (corrupt, partial, other payload); re-extracted.
@@ -250,6 +240,7 @@ impl Outcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Outcome::Warm => "warm",
+            Outcome::Verified => "verified",
             Outcome::Cold => "cold",
             Outcome::Repaired => "repair",
         }
@@ -299,6 +290,17 @@ fn extract_all(
     fs::create_dir(staging)
         .map_err(|e| LauncherError::extraction(format!("create staging: {e}")))?;
 
+    process_files(payload, options, &|entry| {
+        extract_one(payload, staging, entry, progress, options.sync_files)
+    })
+}
+
+/// Bounded workers shared by extraction and second-launch verification. Largest files first.
+fn process_files(
+    payload: &Payload,
+    options: &Options,
+    process: &(dyn Fn(&FileEntry) -> Result<()> + Sync),
+) -> Result<()> {
     // Largest files first so the long poles start early.
     let mut order: Vec<&FileEntry> = payload.manifest.files.iter().collect();
     order.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
@@ -315,9 +317,7 @@ fn extract_all(
                 if index >= order.len() || failed.load(Ordering::Relaxed) {
                     return;
                 }
-                if let Err(e) =
-                    extract_one(payload, staging, order[index], progress, options.sync_files)
-                {
+                if let Err(e) = process(order[index]) {
                     failed.store(true, Ordering::Relaxed);
                     first_error
                         .lock()
@@ -333,6 +333,93 @@ fn extract_all(
         Some(e) => Err(e),
         None => Ok(()),
     }
+}
+
+/// Verify and flush a pending file before trusting it. Write access is needed for
+/// FlushFileBuffers on Windows. Memory stays bounded to 1 MiB per worker.
+fn verify_and_flush(dir: &Path, entry: &FileEntry) -> Result<()> {
+    let fail = |e: io::Error| LauncherError::cache(format!("verify {}: {e}", entry.path));
+    let path = dir.join(&entry.path);
+    let meta = fs::symlink_metadata(&path).map_err(fail)?;
+    if !meta.is_file() || is_link_or_reparse(&meta) || meta.len() != entry.size {
+        return Err(LauncherError::cache("pending file metadata mismatch"));
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(fail)?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0; 1024 * 1024];
+    let mut remaining = entry.size;
+    while remaining > 0 {
+        let limit = remaining.min(buffer.len() as u64) as usize;
+        let read = file.read(&mut buffer[..limit]).map_err(fail)?;
+        if read == 0 {
+            return Err(LauncherError::cache("pending file truncated"));
+        }
+        digest.update(&buffer[..read]);
+        remaining -= read as u64;
+    }
+    if crate::to_hex(&digest.finalize()) != entry.sha256
+        || file.metadata().map_err(fail)?.len() != entry.size
+    {
+        return Err(LauncherError::cache("pending file SHA-256 mismatch"));
+    }
+    file.sync_all().map_err(fail)
+}
+
+/// Persist directory entries too on Unix. Windows uses the flushed file handles above.
+fn sync_payload_dirs(dir: &Path, payload: &Payload) -> io::Result<()> {
+    let mut dirs = std::collections::BTreeSet::new();
+    for entry in &payload.manifest.files {
+        let path = dir.join(&entry.path);
+        for parent in path.ancestors().skip(1) {
+            dirs.insert(parent.to_path_buf());
+            if parent == dir {
+                break;
+            }
+        }
+    }
+    for path in dirs.iter().rev() {
+        sync_dir(path)?;
+    }
+    sync_dir(dir.parent().unwrap_or(dir))
+}
+
+fn write_marker(dir: &Path, marker: &str, payload: &Payload) -> Result<()> {
+    // Flush through the writing handle: Windows refuses FlushFileBuffers on read-only handles.
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(dir.join(marker))
+        .and_then(|mut file| {
+            io::Write::write_all(
+                &mut file,
+                format!("{}\n", payload.manifest_hash()).as_bytes(),
+            )?;
+            file.sync_all()?;
+            sync_dir(dir)
+        })
+        .map_err(|e| LauncherError::extraction(format!("marker: {e}")))
+}
+
+fn promote_pending(dir: &Path, payload: &Payload, options: &Options) -> Result<bool> {
+    if !marker_matches(dir, PENDING_MARKER, payload) {
+        return Ok(false);
+    }
+    if process_files(payload, options, &|entry| verify_and_flush(dir, entry)).is_err() {
+        return Ok(false);
+    }
+    sync_payload_dirs(dir, payload)
+        .map_err(|e| LauncherError::cache(format!("persist pending directories: {e}")))?;
+    // Keep pending until complete is durable. If interrupted with both markers, verify again.
+    write_marker(dir, MARKER, payload)?;
+    fs::remove_file(dir.join(PENDING_MARKER))
+        .and_then(|()| sync_dir(dir))
+        .map_err(|e| LauncherError::cache(format!("promote pending: {e}")))?;
+    Ok(true)
 }
 
 /// Remove a directory tree, retrying briefly: on Windows a scanner may hold a file open for a
@@ -363,14 +450,14 @@ fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn sync_dir(dir: &Path) {
-    if let Ok(handle) = File::open(dir) {
-        let _ = handle.sync_all();
-    }
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) {}
+fn sync_dir(_dir: &Path) -> io::Result<()> {
+    Ok(())
+}
 
 fn is_hex8(s: &str) -> bool {
     s.len() == 8
@@ -456,10 +543,17 @@ pub fn repair_runtime(
     options: &Options,
 ) -> Result<Runtime> {
     let dir = runtime.dir.clone();
+    if crate::platform::runtime_in_use(&dir)
+        .map_err(|e| LauncherError::cache(format!("runtime resource query: {e}")))?
+    {
+        return Err(LauncherError::cache("cannot repair a runtime still in use"));
+    }
     drop(runtime);
-    if fs::remove_file(dir.join(MARKER)).is_err() && is_warm(&dir, payload) {
-        // The marker could not be removed; remove the whole tree instead of trusting it.
-        remove_tree(&dir).map_err(|e| LauncherError::cache(format!("invalidate runtime: {e}")))?;
+    for marker in [MARKER, PENDING_MARKER] {
+        if fs::remove_file(dir.join(marker)).is_err() && marker_matches(&dir, marker, payload) {
+            remove_tree(&dir)
+                .map_err(|e| LauncherError::cache(format!("invalidate runtime: {e}")))?;
+        }
     }
     ensure_runtime(root, payload, progress, options)
 }
@@ -480,11 +574,23 @@ fn extract_locked(
         return Ok(Outcome::Warm);
     }
 
+    if promote_pending(dir, payload, options)? {
+        return Ok(Outcome::Verified);
+    }
+
     remove_stale_staging(root);
     let existed = fs::symlink_metadata(dir).is_ok();
     if existed {
+        if crate::platform::runtime_in_use(dir)
+            .map_err(|e| LauncherError::cache(format!("runtime resource query: {e}")))?
+        {
+            return Err(LauncherError::cache(
+                "cannot replace a runtime still in use",
+            ));
+        }
         // Remove the marker first so a half-deleted directory can never look valid.
         let _ = fs::remove_file(dir.join(MARKER));
+        let _ = fs::remove_file(dir.join(PENDING_MARKER));
         remove_tree(dir).map_err(|e| LauncherError::cache(format!("remove invalid cache: {e}")))?;
     }
 
@@ -497,24 +603,11 @@ fn extract_locked(
         let _ = remove_tree(&staging);
         return Err(LauncherError::extraction(format!("commit: {e}")));
     }
-    sync_dir(root);
+    sync_dir(root).map_err(|e| LauncherError::extraction(format!("persist runtime: {e}")))?;
 
-    // The marker is the commit record: written (and flushed) only after everything else.
-    let marker = dir.join(MARKER);
-    // Flush through the writing handle: Windows refuses FlushFileBuffers on a read-only handle.
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&marker)
-        .and_then(|mut file| {
-            io::Write::write_all(
-                &mut file,
-                format!("{}\n", payload.manifest_hash()).as_bytes(),
-            )?;
-            file.sync_all()
-        })
-        .map_err(|e| LauncherError::extraction(format!("marker: {e}")))?;
+    // Only pending is committed on first launch. Its durable presence requires a full
+    // integrity/durability pass on the next launch, even if the entry cannot start at all.
+    write_marker(dir, PENDING_MARKER, payload)?;
     Ok(if existed {
         Outcome::Repaired
     } else {
@@ -583,6 +676,7 @@ pub fn cleanup_old_versions(root: &Path, current: &str) -> CleanupReport {
         } else if name != current && is_version_dir_name(&name) && is_plain_directory(&entry.path())
         {
             let completed = fs::metadata(entry.path().join(MARKER))
+                .or_else(|_| fs::metadata(entry.path().join(PENDING_MARKER)))
                 .and_then(|m| m.modified())
                 .ok();
             other_versions.push((completed, name));
@@ -688,6 +782,70 @@ mod tests {
     }
 
     #[test]
+    fn first_launch_leaves_pending_and_second_checks_same_size_corruption() {
+        for victim in ["app.exe", "lib/deep/b.bin"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join("root");
+            fs::create_dir(&root).unwrap();
+            let payload = make_payload(tmp.path(), "1.0", "aaaaaaaa", &sample_files());
+            let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+            let dir = runtime.dir.clone();
+            drop(runtime);
+            let expected = fs::read(dir.join(victim)).unwrap();
+            fs::write(dir.join(victim), vec![0; expected.len()]).unwrap();
+            let repaired = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+            assert_eq!(repaired.outcome, Outcome::Repaired, "same-size {victim}");
+            assert_eq!(fs::read(dir.join(victim)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn cold_cache_is_pending_until_the_next_launch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = make_payload(tmp.path(), "1.0", "aaaaaaaa", &sample_files());
+        let runtime = ensure_runtime(tmp.path(), &payload, &NoProgress, &quick()).unwrap();
+        assert!(runtime.dir.join(".pending").is_file());
+        assert!(!runtime.dir.join(MARKER).exists());
+        assert!(!is_warm(&runtime.dir, &payload));
+    }
+
+    #[test]
+    fn interrupted_promotion_cannot_hide_pending_corruption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = make_payload(tmp.path(), "1.0", "aaaaaaaa", &sample_files());
+        let runtime = ensure_runtime(tmp.path(), &payload, &NoProgress, &quick()).unwrap();
+        let dir = runtime.dir.clone();
+        drop(runtime);
+        write_marker(&dir, MARKER, &payload).unwrap(); // complete written, pending not removed
+        fs::write(dir.join("empty.txt"), b"corrupt").unwrap();
+        assert!(!is_warm(&dir, &payload));
+        assert_eq!(
+            ensure_runtime(tmp.path(), &payload, &NoProgress, &quick())
+                .unwrap()
+                .outcome,
+            Outcome::Repaired
+        );
+        assert!(!dir.join(MARKER).exists());
+        assert!(dir.join(PENDING_MARKER).exists());
+        assert!(fs::read(dir.join("empty.txt")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn foreign_pending_marker_requires_reextraction() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = make_payload(tmp.path(), "1.0", "aaaaaaaa", &sample_files());
+        let runtime = ensure_runtime(tmp.path(), &payload, &NoProgress, &quick()).unwrap();
+        fs::write(runtime.dir.join(PENDING_MARKER), b"wrong payload").unwrap();
+        drop(runtime);
+        assert_eq!(
+            ensure_runtime(tmp.path(), &payload, &NoProgress, &quick())
+                .unwrap()
+                .outcome,
+            Outcome::Repaired
+        );
+    }
+
+    #[test]
     fn cold_then_warm_does_not_extract_again() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
@@ -707,10 +865,27 @@ mod tests {
             vec![1u8; 70_000]
         );
         assert_eq!(
-            fs::read_to_string(first.dir.join(MARKER)).unwrap().trim(),
+            fs::read_to_string(first.dir.join(PENDING_MARKER))
+                .unwrap()
+                .trim(),
             payload.manifest_hash()
         );
+        let original = fs::metadata(first.dir.join("lib/a.dll"))
+            .unwrap()
+            .modified()
+            .unwrap();
         drop(first);
+        let verified = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+        assert_eq!(verified.outcome, Outcome::Verified);
+        assert!(!verified.dir.join(PENDING_MARKER).exists());
+        assert_eq!(
+            fs::metadata(verified.dir.join("lib/a.dll"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            original
+        );
+        drop(verified);
 
         let marker = root.join("1.0_aaaaaaaa").join(MARKER);
         let before = fs::metadata(&marker).unwrap().modified().unwrap();
@@ -733,6 +908,7 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let payload = make_payload(tmp.path(), "1.0", "aaaaaaaa", &sample_files());
         let dir = root.join("1.0_aaaaaaaa");
+        drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
         drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
 
         type Damage = Box<dyn Fn(&Path)>;
@@ -766,7 +942,14 @@ mod tests {
             assert!(!is_warm(&dir, &payload), "{label}: must not look warm");
             let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
             assert_eq!(runtime.outcome, Outcome::Repaired, "{label}");
-            assert!(is_warm(&dir, &payload), "{label}: repaired");
+            assert!(!is_warm(&dir, &payload), "{label}: repair remains pending");
+            assert_eq!(
+                ensure_runtime(&root, &payload, &NoProgress, &quick())
+                    .unwrap()
+                    .outcome,
+                Outcome::Verified
+            );
+            assert!(is_warm(&dir, &payload), "{label}: repaired and verified");
             assert_eq!(
                 fs::read(dir.join("lib/a.dll")).unwrap(),
                 vec![1u8; 70_000],
@@ -795,6 +978,13 @@ mod tests {
         let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
         assert_eq!(runtime.outcome, Outcome::Repaired);
         assert!(!stale.exists(), "stale staging removed");
+        assert!(dir.join(PENDING_MARKER).is_file());
+        assert_eq!(
+            ensure_runtime(&root, &payload, &NoProgress, &quick())
+                .unwrap()
+                .outcome,
+            Outcome::Verified
+        );
         assert!(is_warm(&dir, &payload));
     }
 
@@ -858,8 +1048,12 @@ mod tests {
         );
         assert_eq!(
             outcomes.iter().filter(|o| **o == Outcome::Warm).count(),
-            3,
+            2,
             "{outcomes:?}"
+        );
+        assert_eq!(
+            outcomes.iter().filter(|o| **o == Outcome::Verified).count(),
+            1
         );
         assert_eq!(
             progress.bytes.load(Ordering::SeqCst),
@@ -878,6 +1072,7 @@ mod tests {
 
     fn install(tmp: &Path, root: &Path, version: &str, sha: &str, age_secs: u64) -> String {
         let payload = make_payload(tmp, version, sha, &sample_files());
+        drop(ensure_runtime(root, &payload, &NoProgress, &quick()).unwrap());
         let runtime = ensure_runtime(root, &payload, &NoProgress, &quick()).unwrap();
         // Make completion order independent of filesystem timestamp resolution.
         let marker = OpenOptions::new()
