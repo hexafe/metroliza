@@ -363,3 +363,46 @@ def test_complete_mode_and_small_batches_never_start_a_pool(tmp_path, monkeypatc
     thread.metadata_parsing_mode = "complete"
     assert thread._open_prepare_pool([]) is None
     assert started == []
+
+
+def test_only_reports_approved_for_the_builtin_cmm_parser_are_sent_to_workers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from metroliza.parsing import parse_reports_thread
+
+    captured = {}
+
+    class RecordingPool:
+        def __init__(self, paths, **kwargs):
+            captured["paths"] = list(paths)
+            captured["workers"] = kwargs["workers"]
+
+    monkeypatch.setattr(parse_reports_thread, "ImportPreparePool", RecordingPool)
+    _pool_env(monkeypatch, "2")
+    _write_synthetic_reports(tmp_path / "reports", 3)
+    thread = ParseReportsThread(_plan(tmp_path / "reports", tmp_path / "db.sqlite3"))
+    plugin_id = CMMReportParser.manifest.plugin_id
+    items = [
+        SimpleNamespace(report_path="a.pdf", selected_identity=SimpleNamespace(parser_id=plugin_id)),
+        SimpleNamespace(report_path="b.pdf", selected_identity=SimpleNamespace(parser_id="external_plugin")),
+        SimpleNamespace(report_path="c.pdf", selected_identity=None),
+        SimpleNamespace(report_path="d.pdf", selected_identity=SimpleNamespace(parser_id=plugin_id)),
+    ]
+
+    assert thread._open_prepare_pool(items) is not None
+    assert captured == {"paths": ["a.pdf", "d.pdf"], "workers": 2}
+    thread._prepare_pool = None
+
+
+def test_worker_state_is_never_applied_to_a_parser_that_is_not_the_builtin_cmm_parser(tmp_path):
+    from types import SimpleNamespace
+
+    class OtherParser:
+        metadata_parsing_mode = "light"
+
+    pool = SimpleNamespace(_parser_plugin_id=CMMReportParser.manifest.plugin_id, _mode="light")
+    prepared = SimpleNamespace(
+        parser=OtherParser(),
+        resolution_evidence=SimpleNamespace(plugin_id=CMMReportParser.manifest.plugin_id),
+    )
+    assert ImportPreparePool._eligible(pool, prepared) is False
