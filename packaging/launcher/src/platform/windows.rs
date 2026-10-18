@@ -292,11 +292,9 @@ unsafe fn paint(hwnd: HWND) {
     };
     let (done, total) = (DONE.load(Ordering::Relaxed), TOTAL.load(Ordering::Relaxed));
     let inner_width = u64::from((frame.right - frame.left - 2) as u32);
-    let filled = if total == 0 {
-        0
-    } else {
-        (done.min(total) * inner_width / total) as i32
-    };
+    let filled = (done.min(total) * inner_width)
+        .checked_div(total)
+        .unwrap_or(0) as i32;
     let fill_brush: HBRUSH = CreateSolidBrush(rgb(0, 120, 215));
     let border_brush: HBRUSH = CreateSolidBrush(rgb(120, 120, 120));
     let fill = RECT {

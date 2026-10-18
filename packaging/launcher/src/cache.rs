@@ -434,6 +434,29 @@ pub fn ensure_runtime(
     })
 }
 
+/// Declare `runtime` invalid and rebuild it: the entry reported that it cannot trust its own
+/// files even though the cheap warm check passed (for example a same-size modification).
+///
+/// The marker is removed first, so from then on the directory can never look valid, and the
+/// normal repair path re-extracts and re-verifies every file. The old handle is released before
+/// the rebuild; the per-version single-instance guard held by the caller keeps other launchers
+/// of this version out meanwhile.
+pub fn repair_runtime(
+    root: &Path,
+    payload: &Payload,
+    runtime: Runtime,
+    progress: &dyn Progress,
+    options: &Options,
+) -> Result<Runtime> {
+    let dir = runtime.dir.clone();
+    drop(runtime);
+    if fs::remove_file(dir.join(MARKER)).is_err() && is_warm(&dir, payload) {
+        // The marker could not be removed; remove the whole tree instead of trusting it.
+        remove_tree(&dir).map_err(|e| LauncherError::cache(format!("invalidate runtime: {e}")))?;
+    }
+    ensure_runtime(root, payload, progress, options)
+}
+
 fn extract_locked(
     root: &Path,
     dir: &Path,
@@ -478,7 +501,10 @@ fn extract_locked(
         .truncate(true)
         .open(&marker)
         .and_then(|mut file| {
-            io::Write::write_all(&mut file, format!("{}\n", payload.manifest_hash()).as_bytes())?;
+            io::Write::write_all(
+                &mut file,
+                format!("{}\n", payload.manifest_hash()).as_bytes(),
+            )?;
             file.sync_all()
         })
         .map_err(|e| LauncherError::extraction(format!("marker: {e}")))?;
@@ -605,6 +631,7 @@ mod tests {
             input_dir: input,
             entry: files[0].0.into(),
             version: version.into(),
+            content_key: false,
             git_sha: sha.into(),
             stub: tmp.join("stub.bin"),
             output: output.clone(),

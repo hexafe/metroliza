@@ -7,7 +7,8 @@ use std::time::{Duration, SystemTime};
 
 use metroliza_launcher::archive::Payload;
 use metroliza_launcher::cache::{
-    cleanup_old_versions, ensure_runtime, is_warm, NoProgress, Options, Outcome, MARKER,
+    cleanup_old_versions, ensure_runtime, is_warm, repair_runtime, NoProgress, Options, Outcome,
+    MARKER,
 };
 use metroliza_launcher::pack::{pack, PackOptions};
 
@@ -49,6 +50,7 @@ fn build(
         input_dir: input,
         entry: "entry.exe".into(),
         version: version.into(),
+        content_key: false,
         git_sha: sha.into(),
         stub: stub.to_path_buf(),
         output: output.clone(),
@@ -300,4 +302,186 @@ fn launcher_binary_does_not_use_temp_dir() {
         0,
         "launcher must not write to TEMP"
     );
+}
+
+/// Number of times the test entry started, and the repair variable it saw at each start.
+fn starts(record: &Path) -> Vec<String> {
+    fs::read_to_string(record)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with("started "))
+        .map(|line| line.rsplit("repair_available=").next().unwrap().to_string())
+        .collect()
+}
+
+fn repair_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let log = tmp.path().join("launcher.log");
+    let record = tmp.path().join("record.txt");
+    let exe = build(
+        tmp.path(),
+        "repair",
+        "1.0",
+        "abcdef01",
+        Path::new(LAUNCHER),
+        Path::new(TEST_ENTRY),
+    );
+    (tmp, exe, root, log, record)
+}
+
+#[test]
+fn exit_75_repairs_the_runtime_and_restarts_once_without_the_repair_variable() {
+    let (_tmp, exe, root, log, record) = repair_fixture();
+    let record_arg = record.to_str().unwrap();
+    let runtime_dir = root.join("1.0_abcdef01");
+    let data = runtime_dir.join("lib/data.bin");
+    let args = [
+        "--record",
+        record_arg,
+        "--record-file",
+        "lib/data.bin",
+        "--request-repair",
+        "--exit-code",
+        "0",
+    ];
+
+    // Cold start: the entry sees the repair variable and asks for a repair on a runtime that
+    // was just extracted, so the restart is the second and final start.
+    let first = run_launcher(&exe, &root, &log, &args);
+    assert_eq!(first.code, Some(0), "exit code of the restarted entry");
+    assert_eq!(starts(&record), ["1", "unset"], "{}", first.log);
+    assert!(first.log.contains("repair=requested"), "{}", first.log);
+    assert!(first.log.contains("cache=cold"), "{}", first.log);
+    assert!(first.log.contains("cache=repair"), "{}", first.log);
+    assert!(first.log.contains("exit=0"), "{}", first.log);
+    let original = fs::read(&data).unwrap();
+
+    // Warm cache with a same-size modification the size-only warm check cannot see: the entry
+    // sees the damaged file on the first start and the restored file on the second.
+    let mut damaged = original.clone();
+    damaged[0] ^= 0xFF;
+    fs::write(&data, &damaged).unwrap();
+    let _ = fs::remove_file(&record);
+    let second = run_launcher(&exe, &root, &log, &args);
+    assert_eq!(second.code, Some(0));
+    assert!(second.log.contains("cache=warm"), "{}", second.log);
+    assert!(second.log.contains("cache=repair"), "{}", second.log);
+    assert_eq!(starts(&record), ["1", "unset"], "{}", second.log);
+    let seen: Vec<String> = fs::read_to_string(&record)
+        .unwrap()
+        .lines()
+        .filter(|l| l.starts_with("file "))
+        .map(String::from)
+        .collect();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert_ne!(
+        seen[0], seen[1],
+        "first start saw the damage, second did not"
+    );
+    assert_eq!(
+        fs::read(&data).unwrap(),
+        original,
+        "runtime was re-extracted"
+    );
+    assert!(runtime_dir.join(MARKER).is_file());
+}
+
+#[test]
+fn a_second_exit_75_is_final_and_does_not_loop() {
+    let (_tmp, exe, root, log, record) = repair_fixture();
+    let record_arg = record.to_str().unwrap();
+    // Without --request-repair the entry exits 75 on both starts, whatever the variable says.
+    let run = run_launcher(
+        &exe,
+        &root,
+        &log,
+        &["--record", record_arg, "--exit-code", "75"],
+    );
+    assert_eq!(run.code, Some(75), "the second run's exit code is returned");
+    assert_eq!(
+        starts(&record),
+        ["1", "unset"],
+        "exactly two starts: {}",
+        run.log
+    );
+    assert_eq!(
+        run.log.matches("repair=requested").count(),
+        1,
+        "{}",
+        run.log
+    );
+    assert_eq!(run.log.matches("entry=started").count(), 2, "{}", run.log);
+    assert!(run.log.contains("exit=75"), "{}", run.log);
+}
+
+#[test]
+fn other_exit_codes_pass_through_without_a_repair_or_restart() {
+    let (_tmp, exe, root, log, record) = repair_fixture();
+    let record_arg = record.to_str().unwrap();
+    for code in ["0", "1", "74", "76", "255"] {
+        let _ = fs::remove_file(&record);
+        let run = run_launcher(
+            &exe,
+            &root,
+            &log,
+            &["--record", record_arg, "--exit-code", code],
+        );
+        assert_eq!(run.code, Some(code.parse().unwrap()), "exit code {code}");
+        assert_eq!(
+            starts(&record),
+            ["1"],
+            "single start for {code}: {}",
+            run.log
+        );
+        assert!(!run.log.contains("repair="), "{}", run.log);
+        assert_eq!(run.log.matches("entry=started").count(), 1, "{}", run.log);
+    }
+}
+
+#[test]
+fn a_repair_variable_inherited_from_the_parent_never_reaches_the_restart() {
+    let (_tmp, exe, root, log, record) = repair_fixture();
+    let record_arg = record.to_str().unwrap();
+    let _ = fs::remove_file(&log);
+    let status = Command::new(&exe)
+        .args([
+            "--record",
+            record_arg,
+            "--request-repair",
+            "--exit-code",
+            "3",
+        ])
+        .env("METROLIZA_RUNTIME_ROOT", &root)
+        .env("METROLIZA_LAUNCHER_LOG", &log)
+        .env("METROLIZA_LAUNCHER_NO_UI", "1")
+        .env("METROLIZA_RUNTIME_REPAIR_AVAILABLE", "0")
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(3));
+    assert_eq!(starts(&record), ["1", "unset"]);
+}
+
+#[test]
+fn library_repair_runtime_rebuilds_a_warm_runtime() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let stub = tmp.path().join("stub.bin");
+    fs::write(&stub, b"launcher stub").unwrap();
+    let payload = Payload::open(&build(tmp.path(), "v1", "1.0", "11111111", &stub, &stub)).unwrap();
+
+    let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+    assert_eq!(runtime.outcome, Outcome::Cold);
+    let dir = runtime.dir.clone();
+    let mut bytes = fs::read(dir.join("lib/data.bin")).unwrap();
+    bytes[10] ^= 0xFF; // same size: the warm check cannot see it
+    fs::write(dir.join("lib/data.bin"), &bytes).unwrap();
+    assert!(is_warm(&dir, &payload));
+
+    let repaired = repair_runtime(&root, &payload, runtime, &NoProgress, &quick()).unwrap();
+    assert_eq!(repaired.outcome, Outcome::Repaired);
+    assert_eq!(repaired.dir, dir);
+    assert_ne!(fs::read(dir.join("lib/data.bin")).unwrap(), bytes);
+    assert!(is_warm(&dir, &payload));
 }

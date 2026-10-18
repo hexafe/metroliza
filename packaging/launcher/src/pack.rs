@@ -27,6 +27,11 @@ pub struct PackOptions {
     pub entry: String,
     /// Version label, `[A-Za-z0-9._-]` only.
     pub version: String,
+    /// Append the first [`CONTENT_KEY_LEN`] hex digits of the onedir content hash to the stored
+    /// version label (`<version>-<hash>`). The cache directory and the single-instance name are
+    /// derived from the stored label, so they then change whenever any packed file changes,
+    /// not only when the label or the commit changes.
+    pub content_key: bool,
     /// Lowercase hex commit id, 8-40 characters.
     pub git_sha: String,
     /// Unsigned launcher executable to prepend.
@@ -35,8 +40,15 @@ pub struct PackOptions {
     pub output: PathBuf,
 }
 
+/// Length of the content hash prefix appended to the version by [`PackOptions::content_key`].
+pub const CONTENT_KEY_LEN: usize = 12;
+
 #[derive(Debug)]
 pub struct PackSummary {
+    /// Version label as stored in the manifest (with the content key when requested).
+    pub version: String,
+    /// Content hash of the packed files, see [`Manifest::content_sha256`].
+    pub content_sha256: String,
     pub manifest_sha256: String,
     pub dir_name: String,
     pub file_count: usize,
@@ -187,7 +199,7 @@ fn write_packed(
         blob_len += encoded.compressed_size;
     }
 
-    let manifest = Manifest {
+    let mut manifest = Manifest {
         format: FORMAT,
         version: options.version.clone(),
         git_sha: options.git_sha.clone(),
@@ -195,6 +207,11 @@ fn write_packed(
         chunk_size: CHUNK_SIZE,
         files: entries,
     };
+    let content_sha256 = manifest.content_sha256();
+    if options.content_key {
+        manifest.version = format!("{}-{}", options.version, &content_sha256[..CONTENT_KEY_LEN]);
+        validate_version(&manifest.version)?;
+    }
     let manifest_bytes = manifest.to_bytes();
     out.write_all(&manifest_bytes).map_err(write_err)?;
 
@@ -221,6 +238,8 @@ fn write_packed(
         .map_err(write_err)?;
 
     Ok(PackSummary {
+        version: manifest.version.clone(),
+        content_sha256,
         manifest_sha256: crate::to_hex(&manifest_sha256),
         dir_name: manifest.dir_name(),
         file_count: manifest.files.len(),
@@ -246,6 +265,7 @@ mod tests {
             input_dir: input.to_path_buf(),
             entry: "app.exe".into(),
             version: "1.0".into(),
+            content_key: false,
             git_sha: "abcdef0123456789".into(),
             stub: tmp.join("stub.exe"),
             output: tmp.join("out/final.exe"),
@@ -278,6 +298,46 @@ mod tests {
             .map(|f| f.path.as_str())
             .collect();
         assert_eq!(paths, ["app.exe", "lib/data.bin", "lib/empty"]);
+    }
+
+    #[test]
+    fn content_key_follows_the_packed_files_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("in");
+        write(&input, "app.exe", b"entry");
+        write(&input, "lib/data.bin", b"payload one");
+        let mut opts = options(tmp.path(), &input);
+
+        let plain = pack(&opts).unwrap();
+        assert_eq!(plain.version, "1.0");
+        assert_eq!(plain.dir_name, "1.0_abcdef01");
+
+        opts.content_key = true;
+        let first = pack(&opts).unwrap();
+        assert_eq!(first.content_sha256, plain.content_sha256);
+        assert_eq!(first.content_sha256.len(), 64);
+        let key = &first.content_sha256[..CONTENT_KEY_LEN];
+        assert_eq!(first.version, format!("1.0-{key}"));
+        assert_eq!(first.dir_name, format!("1.0-{key}_abcdef01"));
+        assert_eq!(
+            Payload::open(&opts.output).unwrap().manifest.version,
+            first.version
+        );
+
+        // Same files, other commit and other label: same content hash.
+        opts.git_sha = "11111111".into();
+        opts.version = "2.0".into();
+        assert_eq!(pack(&opts).unwrap().content_sha256, first.content_sha256);
+
+        // One changed byte: another key, therefore another cache directory.
+        write(&input, "lib/data.bin", b"payload two");
+        let changed = pack(&opts).unwrap();
+        assert_ne!(changed.content_sha256, first.content_sha256);
+        assert_ne!(changed.dir_name, first.dir_name);
+
+        // A label that no longer fits the version limit is refused, not truncated.
+        opts.version = "x".repeat(60);
+        assert!(pack(&opts).is_err());
     }
 
     #[test]

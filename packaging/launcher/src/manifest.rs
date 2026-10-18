@@ -52,6 +52,22 @@ impl Manifest {
         format!("{}_{}", self.version, &self.git_sha[..8])
     }
 
+    /// Content hash of the packed onedir: SHA-256 over the entry path and, for every file in
+    /// path order, its path, size and content hash. It is independent of compression, offsets,
+    /// the version label and the commit, so two builds with the same files share it and any
+    /// changed, added or removed file (or another entry executable) changes it.
+    pub fn content_sha256(&self) -> String {
+        let mut files: Vec<&FileEntry> = self.files.iter().collect();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut hasher = Sha256::new();
+        hasher.update(b"metroliza-onedir-content-v1\n");
+        hasher.update(format!("entry\0{}\n", self.entry).as_bytes());
+        for file in files {
+            hasher.update(format!("{}\0{}\0{}\n", file.path, file.size, file.sha256).as_bytes());
+        }
+        to_hex(&hasher.finalize())
+    }
+
     /// Total uncompressed size of all files.
     pub fn total_size(&self) -> u64 {
         self.files.iter().map(|f| f.size).sum()
@@ -221,6 +237,37 @@ mod tests {
         assert_eq!(parsed, manifest);
         assert_eq!(parsed.dir_name(), "2026.09rc1_260927_01234567");
         assert_eq!(parsed.total_size(), 20);
+    }
+
+    #[test]
+    fn content_hash_ignores_layout_and_metadata_but_tracks_files_and_entry() {
+        let base = sample();
+        let hash = base.content_sha256();
+        assert_eq!(hash.len(), 64);
+
+        let mut relabelled = base.clone();
+        relabelled.version = "other".into();
+        relabelled.git_sha = "f".repeat(40);
+        relabelled.files[0].offset = 99;
+        relabelled.files[0].compressed_size = 3;
+        relabelled.files.reverse(); // order in the manifest does not matter
+        assert_eq!(relabelled.content_sha256(), hash);
+
+        let mut changed = base.clone();
+        changed.files[1].sha256 = sha256_hex(b"y");
+        assert_ne!(changed.content_sha256(), hash, "file content");
+        let mut resized = base.clone();
+        resized.files[1].size += 1;
+        assert_ne!(resized.content_sha256(), hash, "file size");
+        let mut renamed = base.clone();
+        renamed.files[1].path = "lib/b.dll".into();
+        assert_ne!(renamed.content_sha256(), hash, "file path");
+        let mut other_entry = base.clone();
+        other_entry.entry = "lib/a.dll".into();
+        assert_ne!(other_entry.content_sha256(), hash, "entry executable");
+        let mut extra = base.clone();
+        extra.files.push(entry("lib/c.dll", 20, 10));
+        assert_ne!(extra.content_sha256(), hash, "added file");
     }
 
     #[test]
