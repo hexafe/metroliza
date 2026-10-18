@@ -217,12 +217,15 @@ Draft can honestly carry incomplete/red local results. A bounded synthetic engin
 can obtain missing evidence under its explicit authority without declaring unrelated failed gates
 green. A Draft badge is not a security sandbox or release permission.
 
-**Merge:** only external orchestration squash-merges under standing PO authorization after its own
+**Merge:** only external orchestration merges under standing PO authorization after its own
 independent exact-head verdict READY FOR MERGE, unchanged reviewed head, terminal-success required
 checks for the current integration result/base, every applicable project-specific gate, adjudicated
 and resolved review threads, no later blocker and actual mergeability. Refresh integration evidence
 when base movement invalidates it. The review can reuse bound unchanged evidence and inspect the
 new delta; it is not an automatic third full audit. No author self-merge or force/direct-base shortcut.
+Prefer squash merge for normal Issue slices. Release/history reconciliation uses the
+evidence-preserving method explicitly stated in the release decision, as required by the
+[branching strategy](../release_checks/branching_strategy.md#6-pull-requests-and-merge-safety).
 
 **Release/package:** merge alone does not qualify an EXE, clean machine, live-service operation,
 legal approval or real-data workflow. Bind the complete candidate, artifact identity and actual

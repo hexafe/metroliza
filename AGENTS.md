@@ -82,7 +82,9 @@ routine in-scope corrections without per-file/per-commit PO approvals. Use the [
 and [PR report](docs/engineering/pr-routing-report-template.md). GitHub is durable;
 a remote archive pathname is not recovered code.
 
-Only external orchestration squash-merges under the playbook's exact-head/current-base predicate:
-all applicable gates, adjudicated/resolved threads, no later blocker and mergeability. Publication
-for CI, merge and release are distinct. No author self-merge, force rewrite, release/tag/deploy,
+Only external orchestration merges under the playbook's exact-head/current-base predicate:
+all applicable gates, adjudicated/resolved threads, no later blocker and mergeability. Prefer squash
+merge for normal Issue slices; release/history reconciliation uses the evidence-preserving method
+explicitly stated in the release decision, as required by the [branching strategy](docs/release_checks/branching_strategy.md).
+Publication for CI, merge and release are distinct. No author self-merge, force rewrite, release/tag/deploy,
 live-data migration, secrets, billing or destructive authority follows from a model choice.
