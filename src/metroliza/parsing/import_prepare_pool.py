@@ -17,13 +17,12 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from concurrent.futures.process import BrokenProcessPool
 import logging
-from multiprocessing import get_context
 import os
-import sys
 from time import monotonic
 from typing import Callable, Sequence
 
 from metroliza.shared.env_utils import env_int, env_value
+from metroliza.shared.compute_worker import compute_workers_available, frozen_windows, spawn_context
 
 logger = logging.getLogger(__name__)
 
@@ -41,26 +40,25 @@ class ImportPreparationCancelled(Exception):
     """The owner cancelled preparation; serial fallback must not run."""
 
 
-def _is_frozen() -> bool:
-    return bool(getattr(sys, "frozen", False))
-
-
 def resolve_prepare_worker_count(report_count: int) -> int:
     """Return the worker-process count for a batch; 0 means prepare in-process.
 
     ``METROLIZA_IMPORT_PREPARE_WORKERS`` is ``auto`` (default), ``0`` (disabled) or an
     explicit count. Small batches stay serial because process start-up would dominate.
-    Frozen builds always stay serial until a supported worker executable has
-    supervised packaged-startup qualification evidence (#1134).
+    Frozen builds stay serial, even with an explicit count, unless the supported
+    compute executable passes package identity validation. The packaged Windows
+    defaults are separate from the source policy and are
+    measured by the built-package CI qualification (see Issue #1134).
     """
 
-    if _is_frozen():
+    if not compute_workers_available():
         return 0
     configured = (env_value(WORKERS_ENV) or "auto").lower()
+    default_minimum = 200 if frozen_windows() else DEFAULT_MIN_REPORTS
     try:
-        minimum = max(2, env_int(MIN_REPORTS_ENV, default=DEFAULT_MIN_REPORTS) or DEFAULT_MIN_REPORTS)
+        minimum = max(2, env_int(MIN_REPORTS_ENV, default=default_minimum) or default_minimum)
     except ValueError:
-        minimum = DEFAULT_MIN_REPORTS
+        minimum = default_minimum
     if report_count < minimum:
         return 0
     if configured != "auto":
@@ -68,6 +66,12 @@ def resolve_prepare_worker_count(report_count: int) -> int:
             return max(0, min(int(configured), MAX_EXPLICIT_WORKERS, report_count))
         except ValueError:
             return 0
+    if frozen_windows():
+        # Off by default in the packaged Windows app. Windows CI run 39151254630 measured the
+        # import 2 of 3 times SLOWER with workers (82-86 s vs 33-58 s serial, 200 reports):
+        # the parent's persist stage dominates and is not understood yet (#1136).
+        # METROLIZA_IMPORT_PREPARE_WORKERS=N still enables them explicitly.
+        return 0
     workers = min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1)
     return workers if workers >= 2 else 0
 
@@ -93,6 +97,8 @@ def _worker_parser_class():
 def initialize_prepare_worker() -> None:
     """Quiet, low-priority, core-dump-free worker start-up (the owner logs failures)."""
 
+    from metroliza.shared.compute_worker import initialize_compute_runtime
+    initialize_compute_runtime()
     logging.disable(logging.CRITICAL)
     try:
         os.nice(5)
@@ -220,7 +226,7 @@ class ImportPreparePool:
         self._broken = False
         self._executor = ProcessPoolExecutor(
             max_workers=int(workers),
-            mp_context=get_context("spawn"),
+            mp_context=spawn_context(),
             initializer=initialize_prepare_worker,
         )
         self._refill(0)

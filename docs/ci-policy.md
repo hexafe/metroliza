@@ -262,3 +262,20 @@ parents, late calls, missing samples, mismatched counts and incomplete cleanup
 still fail. Every concurrent Job owns its own probe and journal; no receipt is
 transferred between runs. Synchronous journal writes, native handle/snapshot
 queries and5ms sampling perturb timing and remain part of the measured journey.
+
+### Frozen compute worker qualification (#1134)
+
+The owner-only `windows-portable-onefile` job additionally runs
+`scripts/qualify_windows_compute_workers.py` against the same built supervised
+onedir through `metroliza.exe`. It runs Extended plots (40 synthetic groups)
+and a 200-PDF synthetic import with workers forced off/on, three samples each,
+asserts actual worker use and identical DB rows/workbook parts (only declared
+persistence clocks and document timestamps excluded), and verifies exact owned
+compute images and Job drain. `windows-compute-worker-receipt` is uploaded even
+on failure. Existing envelope/launcher first-launch, reopen, incident and cleanup
+gates remain required. Windows candidates use 2 workers, minimum 40 groups / 200
+reports, independently overrideable by `METROLIZA_EXPORT_GROUP_WORKERS`,
+`METROLIZA_EXPORT_GROUP_MIN_GROUPS`, `METROLIZA_IMPORT_PREPARE_WORKERS` and
+`METROLIZA_IMPORT_PREPARE_MIN_REPORTS`; `METROLIZA_EXPORT_GROUP_MP=0` disables
+render pooling. These are proposed Windows defaults until the exact-build
+Windows receipt is inspected; Linux/source measurements do not calibrate them.

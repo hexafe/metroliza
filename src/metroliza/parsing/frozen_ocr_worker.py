@@ -244,29 +244,13 @@ def recognize_in_frozen_worker(config, image_path: Path):
 
 
 def _use_native_windows_version() -> None:
-    """Keep the isolated worker's version fallback inside the owned process."""
-    if os.name != "nt" or not getattr(sys, "frozen", False):
-        return
-    import platform
+    """Keep OCR's fixed failure code while sharing the neutral Windows fallback."""
+    from metroliza.shared.compute_worker import use_native_windows_version
 
-    native = sys.getwindowsversion().platform_version
-    if (type(native) is not tuple or len(native) != 3
-            or any(type(part) is not int or part < 0 for part in native)
-            or native[0] == 0):
-        raise OcrWorkerFailure("ocr_windows_version_unavailable")
-    native_version = ".".join(str(part) for part in native)
-
-    def from_native(system="", release="", version="", supported_platforms=("win32", "win16", "dos")):
-        if sys.platform not in supported_platforms:
-            return system, release, version
-        return system, release, native_version
-
-    # CPython's win32_ver() uses this private fallback after WMI fails. Its
-    # stock implementation shells out, although it falls back to the same
-    # platform_version tuple when that command cannot provide a version.
-    if not callable(getattr(platform, "_syscmd_ver", None)):
-        raise OcrWorkerFailure("ocr_windows_version_unavailable")
-    platform._syscmd_ver = from_native
+    try:
+        use_native_windows_version(runtime_sys=sys, runtime_os=os)
+    except RuntimeError:
+        raise OcrWorkerFailure("ocr_windows_version_unavailable") from None
 
 
 def worker_main(argv: list[str] | None = None) -> int:

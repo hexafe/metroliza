@@ -201,6 +201,23 @@ jobs:
           $sha = (Get-FileHash -LiteralPath $launcher[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "Launcher EXE: $($launcher[0].Name) SHA-256 $sha"
 
+      - name: Qualify frozen compute workers against serial synthetic outputs (#1134)
+        shell: pwsh
+        run: |
+          $onedir = @(Get-ChildItem -LiteralPath dist -Directory -Filter 'metroliza_P_*_onedir')
+          if ($onedir.Count -ne 1) { throw 'Expected exactly one supervised onedir' }
+          $receipt = Join-Path $env:RUNNER_TEMP 'compute-worker-receipt/compute-workers.json'
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_compute_workers.py --artifact-dir $onedir[0].FullName --receipt $receipt
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen compute workers qualification failed' }
+
+      - name: Retain frozen compute worker equivalence and timing receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-compute-worker-receipt
+          path: ${{ runner.temp }}/compute-worker-receipt/compute-workers.json
+          if-no-files-found: warn
+
       - name: Compare synthetic import persist substages in the build venv
         if: inputs.run_windows_import_persist_benchmark == '1'
         shell: pwsh

@@ -10,7 +10,7 @@ delivery is the existing PyInstaller onefile/onedir.
 
 For the 2026.09 RC1 line the payload is the **supervised onedir**
 (`dist/metroliza_P_<label>_onedir`: the supervisor `metroliza.exe`, `metroliza_application.exe`,
-`metroliza_ocr_worker.exe`, `supervision_manifest.json` and the rest of the onedir) and the entry is
+`metroliza_ocr_worker.exe`, `metroliza_compute_worker.exe`, `supervision_manifest.json` and the rest of the onedir) and the entry is
 `metroliza.exe`. The PyInstaller portable envelope (`metroliza_<label>.exe`, built by
 `build_windows_portable_exe.ps1`) carries the same onedir but extracts all of it to `%TEMP%` on every
 launch; it stays in the tree as the comparison and fallback delivery. See

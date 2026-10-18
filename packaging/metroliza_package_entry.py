@@ -18,6 +18,12 @@ if not getattr(sys, "frozen", False):
         sys.path.remove(src_text)
     sys.path.insert(0, src_text)
 
+from metroliza.shared.compute_worker import use_native_windows_version  # noqa: E402
+
+# Install the same native fallback for ordinary and qualified packaged parents
+# before bootstrap or lazy NumPy/platform users can invoke cmd /c ver.
+use_native_windows_version()
+
 from metroliza.shared.diagnostic_startup_probe import mark  # noqa: E402
 
 QUALIFICATION_GATE_ENV = "METROLIZA_STARTUP_SMOKE"
@@ -61,7 +67,11 @@ if __name__ == "__main__":
                     run_qualification as run_candidate_qualification,
                 )
 
-                if requested_candidate_scenario() is not None:
+                if os.environ.get("METROLIZA_COMPUTE_QUALIFICATION_ROOT"):
+                    from metroliza.app.compute_worker_qualification import run_qualification as run_compute_qualification
+
+                    code = run_compute_qualification()
+                elif requested_candidate_scenario() is not None:
                     code = run_candidate_qualification()
         raise SystemExit(code)
     finally:

@@ -511,6 +511,41 @@ def test_owner_retains_pool_if_bounded_shutdown_fails(tmp_path, monkeypatch):
     thread._prepare_pool = None
 
 
+def test_packaged_windows_build_uses_separate_defaults_and_explicit_override(monkeypatch):
+    monkeypatch.setattr(import_prepare_pool, "compute_workers_available", lambda: True)
+    monkeypatch.delenv(WORKERS_ENV, raising=False)
+    monkeypatch.delenv(MIN_REPORTS_ENV, raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    # Import workers are opt-in in the packaged Windows app (#1136 evidence, run 39151254630).
+    assert resolve_prepare_worker_count(199) == 0
+    assert resolve_prepare_worker_count(200) == 0
+    assert resolve_prepare_worker_count(5000) == 0
+    monkeypatch.setenv(WORKERS_ENV, "3")
+    assert resolve_prepare_worker_count(199) == 0
+    assert resolve_prepare_worker_count(5000) == 3
+
+
+def test_prepare_executor_uses_shared_compute_context(monkeypatch):
+    context, calls = object(), []
+    monkeypatch.setattr(import_prepare_pool, 'spawn_context', lambda: context)
+
+    class Executor:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def shutdown(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(import_prepare_pool, 'ProcessPoolExecutor', Executor)
+    pool = ImportPreparePool([], database_path='unused', metadata_parsing_mode='light',
+                             workers=2, parser_plugin_id='builtin')
+    pool.close()
+    assert calls[0]['mp_context'] is context
+
+
 def _partially_transmitted_prepare_worker(task):
     """Write a real result frame header and prefix, then block mid-transmission."""
     import multiprocessing.connection

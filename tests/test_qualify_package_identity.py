@@ -158,7 +158,7 @@ def test_scenarios_run_on_isolated_copies_and_record_without_launching(onedir, t
     before = {path: path.read_bytes() for path in onedir.rglob("*") if path.is_file()}
     results = discriminator.run_scenarios(context)
     by_key = {item.key: item for item in results}
-    assert [item.number for item in results] == list(range(1, 7))
+    assert [item.number for item in results] == list(range(1, 8))
     assert by_key["baseline"].identity["valid"] is True
     for key in ("modified_component", "missing_component", "missing_manifest",
                 "provenance_mismatch"):
@@ -259,3 +259,11 @@ def test_real_lstat_facts_on_windows(tmp_path):
     target.write_bytes(b"x")
     facts = discriminator.path_facts(target)
     assert facts["kind"] == "file" and facts["reparse_point"] is False and facts["nlink"] == 1
+
+
+def test_missing_compute_worker_receipt_uses_fixed_component_identity(onedir, tmp_path):
+    results = discriminator.run_scenarios(_context(onedir, tmp_path, skip_smoke=True), selected={'missing_compute'})
+    (result,) = results
+    assert result.status == 'recorded'
+    assert result.identity['reason'] == 'component_missing'
+    assert result.identity['component'] == 'metroliza_compute_worker.exe'
