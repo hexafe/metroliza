@@ -1,0 +1,136 @@
+from concurrent.futures import Future, ProcessPoolExecutor
+import multiprocessing
+from types import SimpleNamespace
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from metroliza.exporting.contracts import ExportOptions
+from metroliza.exporting import export_summary_render_pool as pool
+from test_export_plot_equivalence import assert_equivalent_pngs
+
+
+def _task():
+    values = 10 + np.random.default_rng(1126).normal(0, 0.08, 18)
+    frame = pd.DataFrame({
+        'REFERENCE': ['SYNTHETIC'] * 18, 'HEADER': ['Diameter'] * 18,
+        'AX': ['X'] * 18, 'NOM': [10.] * 18, '+TOL': [0.2] * 18,
+        '-TOL': [-0.2] * 18, 'MEAS': values,
+        'SAMPLE_NUMBER': [str(x) for x in range(18)],
+        'DATE': ['2026-01-01'] * 18,
+    })
+    return dict(
+        options=ExportOptions(generate_summary_sheet=True),
+        grouping_df=None, sql_summary=None, header='Diameter - X', group=frame, col=5,
+        toggles=dict(chart_density_mode='reduced', defer_non_essential_charts=True,
+                     summary_sheet_minimum_charts={'distribution', 'iqr', 'histogram', 'trend'},
+                     enable_chart_multiprocessing=False),
+    )
+
+
+def test_spawn_worker_matches_serial_pngs_and_worksheet_commands():
+    task = _task()
+    expected = pool.render_summary_group(task)
+    with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context('spawn'),
+                             initializer=pool._initialize_render_worker) as executor:
+        actual = executor.submit(pool.render_summary_group, task).result(timeout=90)
+    assert not expected['failed'] and not actual['failed']
+    assert len(actual['commands']) == len(expected['commands']) == 6
+    for (op, left), (other_op, right) in zip(expected['commands'], actual['commands']):
+        assert op == other_op
+        if op == 'image':
+            assert left[:3] == right[:3]
+            assert_equivalent_pngs(left[3], right[3])
+        else:
+            assert left == right
+
+
+def _owner():
+    return SimpleNamespace(
+        generate_summary_sheet=True, generate_html_dashboard=False,
+        chart_worker_count=2, chart_worker_queue_size=2, completion_metadata={},
+        _optimization_toggles={'chart_density_mode': 'reduced'},
+        _check_canceled=lambda: False,
+    )
+
+
+@pytest.mark.parametrize('count,workers,frozen,mode', [
+    (4, 2, False, 'serial_small_export'), (40, 1, False, 'serial_small_export'),
+    (40, 2, True, 'serial_frozen_multiprocessing_unavailable'),
+])
+def test_serial_policy_never_starts_pool(monkeypatch, count, workers, frozen, mode):
+    owner = _owner()
+    owner.chart_worker_count = workers
+    monkeypatch.setattr(pool.sys, 'frozen', frozen, raising=False)
+    monkeypatch.setattr(pool, 'ProcessPoolExecutor', lambda **kw: pytest.fail('Unexpected pool'))
+    entries = list(range(count))
+    assert list(pool.iter_summary_render_results(owner, entries)) == [(x, None) for x in entries]
+    assert owner.completion_metadata['summary_render_pool']['mode'] == mode
+
+
+class _Executor:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.submitted = []
+        self.closed = False
+
+    def submit(self, _func, task):
+        future = Future()
+        future.set_result(task['value'])
+        self.submitted.append(future)
+        return future
+
+    def shutdown(self, **kwargs):
+        self.closed = kwargs == dict(wait=True, cancel_futures=True)
+
+
+def _fake_tasks(monkeypatch, owner, executor):
+    monkeypatch.setattr(pool, 'ProcessPoolExecutor', lambda **kw: executor)
+    monkeypatch.setattr(pool, '_render_task', lambda o, e: dict(value=e, toggles=dict(o._optimization_toggles)))
+    return pool.iter_summary_render_results(owner, list(range(8)))
+
+
+def test_queue_is_bounded_ordered_and_shutdown_on_early_close(monkeypatch):
+    owner, executor = _owner(), _Executor()
+    results = _fake_tasks(monkeypatch, owner, executor)
+    assert next(results) == (0, None)
+    assert next(results) == (1, 1)
+    assert len(executor.submitted) == 2
+    results.close()
+    assert executor.closed
+    assert owner.completion_metadata['summary_render_pool']['max_pending'] == 2
+
+
+@pytest.mark.parametrize('failure', ['startup', 'task', 'submit', 'result'])
+def test_pool_failure_replays_every_remaining_group_serially(monkeypatch, failure):
+    owner, executor = _owner(), _Executor()
+    results = _fake_tasks(monkeypatch, owner, executor)
+    def fail(*args, **kwargs):
+        raise RuntimeError('synthetic pool failure')
+    if failure == 'startup':
+        monkeypatch.setattr(pool, 'ProcessPoolExecutor', fail)
+    elif failure == 'task':
+        monkeypatch.setattr(pool, '_render_task', fail)
+    elif failure == 'submit':
+        executor.submit = fail
+    else:
+        def failed_future(*args):
+            future = Future()
+            future.set_exception(RuntimeError('synthetic worker failure'))
+            return future
+        executor.submit = failed_future
+    assert list(results) == [(x, None) for x in range(8)]
+    assert owner.completion_metadata['summary_render_pool']['mode'] == 'serial_pool_failure'
+
+
+def test_policy_change_discards_queued_render_and_cancellation_cleans_up(monkeypatch):
+    owner, executor = _owner(), _Executor()
+    results = _fake_tasks(monkeypatch, owner, executor)
+    assert next(results) == (0, None)
+    assert next(results) == (1, 1)
+    owner._optimization_toggles['chart_density_mode'] = 'full'
+    assert next(results) == (2, None)
+    owner._check_canceled = lambda: True
+    assert list(results) == []
+    assert executor.closed

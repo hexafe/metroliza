@@ -61,6 +61,37 @@ def test_png_equivalence_rejects_one_pixel_annotation_shift():
     assert_equivalent_pngs(left.getvalue(), left.getvalue())
 
 
+def test_annotation_candidates_draw_only_once_and_tables_never_draw(monkeypatch):
+    import matplotlib.pyplot as plt
+    from metroliza.exporting.export_data_thread import (
+        render_histogram_annotations, render_panel_table_in_panel_axes,
+    )
+
+    fig, ax = plt.subplots(figsize=(5, 3))
+    try:
+        ax.set_xlim(0, 10)
+        calls = []
+        original_draw = fig.canvas.draw
+        def draw():
+            calls.append(1)
+            return original_draw()
+        monkeypatch.setattr(fig.canvas, 'draw', draw)
+        annotations = [dict(x=5., text='Overlapping specification label', color='black',
+                            kind='usl', priority=i, text_y_axes=1.02) for i in range(3)]
+        rendered = render_histogram_annotations(
+            ax, annotations, annotation_fontsize=8,
+            annotation_box=dict(boxstyle='round,pad=0.2', fc='white'),
+        )
+        assert len(calls) == 1
+        assert rendered
+        render_panel_table_in_panel_axes(
+            ax=ax, title='Parameter', rows=[('Average', '10.123'), ('NOK', '0%')],
+        )
+        assert len(calls) == 1
+    finally:
+        plt.close(fig)
+
+
 @pytest.mark.skipif(not os.environ.get('METROLIZA_PLOT_BASE'), reason='Needs captured synthetic exports')
 def test_captured_prechange_export_equivalence():
     assert_equivalent_workbooks(
