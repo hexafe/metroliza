@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import hashlib
+import os
 from pathlib import Path
 from threading import Lock
 
@@ -93,11 +94,23 @@ def _extract_pdf_embedded_text(path: Path, max_chars: int) -> str:
             close()
 
 
+def source_stat_signature(path: str | Path) -> tuple[int, int] | None:
+    """Return the cheap ``(size, mtime_ns)`` change signal, or None when unavailable."""
+
+    try:
+        stat_result = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return stat_result.st_size, stat_result.st_mtime_ns
+
+
 @dataclass
 class _SourceInspectionCache:
     lock: Lock = field(default_factory=Lock)
     sha256: object = _UNSET
     extracted_text: dict[str, str] = field(default_factory=dict)
+    # ``(sha256, stat signature)`` recorded by the last successful verified_sha256().
+    verified: tuple[str | None, tuple[int, int] | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +150,32 @@ class SourceInspectionContext:
             is_file=is_file,
         )
 
+    def adopt_reviewed_sha256(
+        self,
+        reviewed_sha256: str | None,
+        reviewed_stat: tuple[int, int] | None,
+    ) -> bool:
+        """Carry an earlier review's digest forward instead of rehashing the file.
+
+        The reviewed digest becomes this context's *provisional* digest only while the file's
+        ``(size, mtime_ns)`` still equals ``reviewed_stat`` and no digest was computed yet.
+        It is never trusted for persistence: ``verified_sha256()`` always rehashes and
+        compares against it, so a same-size/same-mtime content change is still rejected.
+        """
+
+        if (
+            not reviewed_sha256
+            or reviewed_stat is None
+            or not self.is_file
+            or (self.file_size_bytes, self.file_modified_ns) != tuple(reviewed_stat)
+        ):
+            return False
+        with self._cache.lock:
+            if self._cache.sha256 is not _UNSET:
+                return False
+            self._cache.sha256 = reviewed_sha256
+        return True
+
     def _compute_sha256(self) -> str | None:
         if not self.is_file:
             return None
@@ -160,17 +199,40 @@ class SourceInspectionContext:
         return value if isinstance(value, str) else None
 
     def verified_sha256(self) -> str | None:
-        """Rehash the source and reject persistence when it changed after inspection."""
+        """Rehash the source and reject persistence when it changed after inspection.
+
+        This is the single content verification before persistence. A file whose
+        ``(size, mtime_ns)`` moved while it was being hashed is rejected as changed.
+        """
 
         inspected_sha256 = self.sha256
+        stat_before = source_stat_signature(self.source_path)
         current_sha256 = self._compute_sha256()
-        if inspected_sha256 != current_sha256:
+        stat_after = source_stat_signature(self.source_path)
+        if inspected_sha256 != current_sha256 or stat_before != stat_after:
             raise SourceChangedAfterInspectionError(
                 self.source_path,
                 inspected_sha256=inspected_sha256,
                 current_sha256=current_sha256,
             )
+        with self._cache.lock:
+            self._cache.verified = (current_sha256, stat_after)
         return current_sha256
+
+    def confirmed_sha256(self) -> str | None:
+        """Return the digest verified by ``verified_sha256()`` without a second content read.
+
+        Valid only while the cheap ``(size, mtime_ns)`` signature still equals the one
+        recorded at verification; any difference, or no prior verification, falls back
+        to a full ``verified_sha256()`` rehash.
+        """
+
+        with self._cache.lock:
+            verified = self._cache.verified
+        if verified is not None and verified[1] is not None:
+            if source_stat_signature(self.source_path) == verified[1]:
+                return verified[0]
+        return self.verified_sha256()
 
     @property
     def cache_identity(self) -> tuple[object, ...]:

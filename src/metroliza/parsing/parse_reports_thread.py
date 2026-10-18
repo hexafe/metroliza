@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
@@ -87,6 +87,9 @@ class ParseBatchResult:
 class _SelectedReportWorkItem:
     report_path: str | Path
     selected_identity: SelectedReportIdentity | None = None
+    # Inspection created while approving the plan; its digest is only provisional until the
+    # single pre-persistence verification (see SourceInspectionContext.verified_sha256()).
+    source_inspection: SourceInspectionContext | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,13 @@ def _selected_report_fingerprint(sha256_value: str | None) -> str | None:
     return f"sha256:{sha256_value}" if sha256_value else None
 
 
+def _sha256_from_fingerprint(fingerprint: str | None) -> str | None:
+    prefix = "sha256:"
+    if fingerprint and fingerprint.startswith(prefix):
+        return fingerprint[len(prefix):] or None
+    return None
+
+
 def _require_selected_source_approval(
     work_item: _SelectedReportWorkItem,
     source_inspection: SourceInspectionContext,
@@ -173,7 +183,11 @@ def _require_selected_source_approval(
 
 def _require_prepared_report_approval(
     prepared: _PreparedReportWorkItem,
+    *,
+    verify_current: bool = True,
 ) -> None:
+    """Check parser and source approval; ``verify_current`` is the one content rehash."""
+
     identity = prepared.selected_identity
     if identity is None:
         return
@@ -198,7 +212,7 @@ def _require_prepared_report_approval(
     _require_selected_source_approval(
         _SelectedReportWorkItem(prepared.report_path, identity),
         prepared.source_inspection,
-        verify_current=True,
+        verify_current=verify_current,
     )
 
 
@@ -536,7 +550,7 @@ def parse_new_reports(
 
     def _inspect_work_item(work_item):
         report = work_item.report_path
-        source_inspection = SourceInspectionContext.from_path(
+        source_inspection = work_item.source_inspection or SourceInspectionContext.from_path(
             report,
             source_format=infer_source_format(report),
         )
@@ -575,7 +589,9 @@ def parse_new_reports(
             ),
         )
         if identity is not None:
-            _require_prepared_report_approval(prepared)
+            # Parser/registry evidence now; the single content rehash happens right before
+            # persistence so that it also covers the time spent parsing.
+            _require_prepared_report_approval(prepared, verify_current=False)
         return prepared
 
     def _is_selected_approval_drift(work_item, exception):
@@ -1429,6 +1445,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 report,
                 source_format=infer_source_format(report),
             )
+            inspection.adopt_reviewed_sha256(
+                _sha256_from_fingerprint(selected_identity.fingerprint),
+                reviewed_item.stat_signature,
+            )
             sha256_value = inspection.sha256
             fingerprint = f"sha256:{sha256_value}" if sha256_value else None
             if fingerprint != selected_identity.fingerprint:
@@ -1464,6 +1484,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 _SelectedReportWorkItem(
                     report_path=report,
                     selected_identity=selected_identity,
+                    source_inspection=inspection,
                 )
             )
 

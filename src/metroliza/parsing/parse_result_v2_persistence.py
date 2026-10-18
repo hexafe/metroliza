@@ -58,8 +58,14 @@ def _resolve_source_digest_binding(
     source_path: str | Path,
     source_sha256: str | None,
     source_inspection: SourceInspectionContext | None,
+    reuse_confirmed_digest: bool = False,
 ) -> tuple[str | None, Callable[[], str | None] | None]:
-    """Bind an explicit digest to the exact inspected source, if provided."""
+    """Bind an explicit digest to the exact inspected source, if provided.
+
+    ``reuse_confirmed_digest`` lets the atomic import path accept the digest already
+    verified for this source (valid while its size/mtime signature is unchanged) instead
+    of rehashing the file a second time.
+    """
 
     if source_inspection is None:
         return source_sha256, None
@@ -71,6 +77,8 @@ def _resolve_source_digest_binding(
         raise ValueError(
             f"Explicit source digest does not match the inspected source digest: {source_path}"
         )
+    if reuse_confirmed_digest:
+        return inspected_sha256, source_inspection.confirmed_sha256
     return inspected_sha256, source_inspection.verified_sha256
 
 
@@ -577,6 +585,7 @@ def import_parse_result_v2_payload_if_absent(
         source_path=source_path,
         source_sha256=source_sha256,
         source_inspection=source_inspection,
+        reuse_confirmed_digest=True,
     )
 
     repository = ReportRepository(database, connection=connection)

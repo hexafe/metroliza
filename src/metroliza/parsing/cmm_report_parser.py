@@ -1293,7 +1293,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             if import_if_absent:
                 persistence_arguments.update(
                     source_digest_verifier=(
-                        source_inspection.verified_sha256
+                        source_inspection.confirmed_sha256
                         if source_inspection is not None
                         else None
                     ),
