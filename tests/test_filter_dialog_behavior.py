@@ -511,3 +511,75 @@ def test_cleared_reference_cancels_pending_header_scope(monkeypatch):
         release.set()
         dialog.close()
         _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+@pytest.fixture
+def applied_choices_db(tmp_path):
+    from contextlib import closing
+    import sqlite3
+
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    database = str(tmp_path / "applied-choices.sqlite")
+    ensure_report_schema(database)
+    with closing(sqlite3.connect(database)) as writer, writer:
+        writer.executescript("""
+            INSERT INTO source_files(id,sha256,source_format,discovered_at)
+            VALUES (1,'synthetic-review','pdf','2026');
+            INSERT INTO parsed_reports(id,source_file_id,parser_id,template_family,parse_status,created_at,updated_at)
+            VALUES (1,1,'synthetic','synthetic','parsed','2026','2026');
+            INSERT INTO report_metadata(report_id,report_date,metadata_version)
+            VALUES (1,'2026-01-01','v1');
+            INSERT INTO report_measurements(report_id,row_order,header,ax,status_code)
+            VALUES (1,1,'H','X','ok'),(1,2,'H','Y','ok');
+        """)
+    return database
+
+
+def _selected_ax_rows(database, query):
+    from contextlib import closing
+    import sqlite3
+
+    with closing(sqlite3.connect(database)) as reader:
+        return [row[0] for row in reader.execute(f'SELECT AX FROM ({query}) ORDER BY AX')]
+
+
+@pytest.mark.parametrize("change", ["replace", "delete"])
+def test_refresh_preserves_unavailable_applied_value_until_explicit_clear(applied_choices_db, change):
+    from contextlib import closing
+    import sqlite3
+
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    _app()
+    dialog = filter_dialog.FilterDialog(db_file=applied_choices_db)
+    try:
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog.ax_list.findItems("X", Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+        dialog.apply_filters()
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == ["X"]
+        applied_query = dialog.filter_query
+        with closing(sqlite3.connect(applied_choices_db)) as writer, writer:
+            if change == "replace":
+                writer.execute("UPDATE report_measurements SET ax = 'Z' WHERE ax = 'X'")
+            else:
+                writer.execute("DELETE FROM report_measurements WHERE ax = 'X'")
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert [item.text() for item in dialog.ax_list.selectedItems()] == ["X"]
+        assert "No active filters" not in dialog.filter_summary_label.text()
+        dialog.apply_filters()
+        assert dialog.filter_query == applied_query
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == []
+        # It remains a normal selectable condition, including explicit clearing.
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog.ax_list.clearSelection()
+        dialog.apply_filters()
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == (["Y", "Z"] if change == "replace" else ["Y"])
+    finally:
+        dialog._confirm_discard = lambda **_kwargs: True
+        dialog.close()
+        _wait_for_filter(lambda: not _RUNNING_LOADERS)
+
