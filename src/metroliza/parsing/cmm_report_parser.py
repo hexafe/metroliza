@@ -1309,7 +1309,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             if import_if_absent:
                 persistence_arguments.update(
                     source_digest_verifier=(
-                        source_inspection.verified_sha256
+                        source_inspection.confirmed_sha256
                         if source_inspection is not None
                         else None
                     ),
@@ -1352,6 +1352,38 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self._prepared_measurement_rows = self.parse_measurements()
         self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
         self.stage_timings_s["prepare_pipeline_runtime"] = perf_counter() - prepare_start
+
+    _PREPARED_STATE_ATTRIBUTES = (
+        "_blocks_text",
+        "_prepared_measurement_rows",
+        "_metadata_selection_result",
+        "_canonical_metadata",
+        "_metadata_identity_hash",
+        "_page_count",
+        "_first_page_width",
+        "_first_page_height",
+        "_first_page_header_items",
+        "_header_extraction_diagnostics",
+        "parse_backend_used",
+        "stage_timings_s",
+    )
+
+    def export_prepared_state(self) -> dict[str, object]:
+        """Return the picklable result of ``prepare_for_two_stage_pipeline()``.
+
+        It carries exactly what ``to_sqlite()`` consumes, so a worker process can run the
+        CPU-bound preparation and the owning process can persist it unchanged.
+        """
+
+        return {name: getattr(self, name) for name in self._PREPARED_STATE_ATTRIBUTES}
+
+    def apply_prepared_state(self, state: dict[str, object]) -> None:
+        """Adopt ``export_prepared_state()`` output instead of preparing in this process."""
+
+        if set(state) != set(self._PREPARED_STATE_ATTRIBUTES):
+            raise ValueError("Prepared CMM report state does not match the parser contract")
+        for name in self._PREPARED_STATE_ATTRIBUTES:
+            setattr(self, name, state[name])
 
     def persist_prepared_report(self):
         """Persist report data prepared during stage 1 of the two-stage pipeline.

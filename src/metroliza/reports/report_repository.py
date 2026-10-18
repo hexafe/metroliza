@@ -207,6 +207,16 @@ def compute_sha256(file_path: str | Path, *, chunk_size: int = 1024 * 1024) -> s
     return digest.hexdigest()
 
 
+def _source_stat_signature(path: str | Path) -> tuple[int, int] | None:
+    """Return the cheap ``(size, mtime_ns)`` change signal without reading content."""
+
+    try:
+        stat_result = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return stat_result.st_size, stat_result.st_mtime_ns
+
+
 def infer_source_format(file_path: str | Path) -> str:
     """Infer a neutral source format from a file suffix."""
 
@@ -1579,11 +1589,20 @@ class ReportRepository:
 
         del measurement_count, has_nok, nok_count
         policy = import_policy or ReportImportPolicy()
+        # Exactly one content verification, outside the write transaction. Inside it only
+        # the cheap (size, mtime_ns) signature is compared, so no hashing holds the lock.
+        stat_before = _source_stat_signature(source_path)
         prechecked_digest = self._verify_import_source_digest(
             source_path,
             expected_sha256=source_sha256,
             source_digest_verifier=source_digest_verifier,
         )
+        verified_stat = _source_stat_signature(source_path)
+        if verified_stat != stat_before:
+            raise ValueError(
+                "Source changed while its digest was verified; stale final source digest: "
+                f"{source_path}"
+            )
         self._ensure_import_schema()
         now = utc_timestamp()
         measurement_values = tuple(measurements)
@@ -1592,11 +1611,12 @@ class ReportRepository:
 
         def _import(cursor) -> ReportImportDisposition:
             cursor.execute("BEGIN IMMEDIATE")
-            verified_digest = self._verify_import_source_digest(
-                source_path,
-                expected_sha256=prechecked_digest,
-                source_digest_verifier=source_digest_verifier,
-            )
+            if _source_stat_signature(source_path) != verified_stat:
+                raise ValueError(
+                    "Source changed after its digest was verified; stale final source digest: "
+                    f"{source_path}"
+                )
+            verified_digest = prechecked_digest
             if self._accepted_report_id(cursor, verified_digest, policy) is not None:
                 return ReportImportDisposition.ALREADY_PRESENT
 

@@ -26,7 +26,7 @@ import zipfile
 from metroliza.parsing import report_parser_factory
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
-from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.source_inspection import SourceInspectionContext, source_stat_signature
 from metroliza.reports.db import sqlite_readonly_connection_scope
 from metroliza.reports.report_metadata_review import ReportMetadataOverride
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
@@ -392,6 +392,18 @@ class ParseFilePreflight:
     registry_generation_id: int | None = None
     diagnostic_detail: str = ""
     occurrence_id: str = ""
+    # Cheap change signal observed around the fingerprint hash (not part of result_id).
+    # The import may carry the fingerprint forward only while this signal is unchanged.
+    file_size_bytes: int | None = None
+    file_modified_ns: int | None = None
+
+    @property
+    def stat_signature(self) -> tuple[int, int] | None:
+        """Return ``(size, mtime_ns)`` as recorded with the fingerprint, if consistent."""
+
+        if self.file_size_bytes is None or self.file_modified_ns is None:
+            return None
+        return self.file_size_bytes, self.file_modified_ns
 
     @property
     def is_importable(self) -> bool:
@@ -928,6 +940,15 @@ def _unreadable_entry(display_name: str, source_path: Path, detail: str) -> Pars
     )
 
 
+def _consistent_stat_evidence(inspection: SourceInspectionContext) -> dict[str, int]:
+    """Return size/mtime evidence only if the file did not move while it was hashed."""
+
+    observed = (inspection.file_size_bytes, inspection.file_modified_ns)
+    if None in observed or source_stat_signature(inspection.source_path) != observed:
+        return {}
+    return {"file_size_bytes": observed[0], "file_modified_ns": observed[1]}
+
+
 class ParsePreflightService:
     """Discover and classify reports without writing to the destination database."""
 
@@ -1066,6 +1087,7 @@ class ParsePreflightService:
         if not sha256_value:
             return _unreadable_entry(display_name, path, "Could not read source content")
         fingerprint = f"sha256:{sha256_value}"
+        stat_evidence = _consistent_stat_evidence(inspection)
 
         try:
             diagnostics = report_parser_factory.resolve_parser_with_diagnostics(
@@ -1080,6 +1102,7 @@ class ParsePreflightService:
                 status=ParsePreflightStatus.AMBIGUOUS,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=_reason_codes(diagnostics),
                 candidates=_candidate_evidence(diagnostics),
                 competing_parser_ids=tuple(exc.plugin_ids),
@@ -1094,6 +1117,7 @@ class ParsePreflightService:
                 status=ParsePreflightStatus.UNREADABLE,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=("parser_inspection_exception",),
                 diagnostic_detail=f"{type(exc).__name__}: {exc}",
                 occurrence_id=_normalize_occurrence_id(display_name),
@@ -1113,6 +1137,7 @@ class ParsePreflightService:
                 status=status,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=reason_codes,
                 candidates=evidence,
                 competing_parser_ids=tuple(diagnostics.ambiguous_plugin_ids),
@@ -1132,6 +1157,7 @@ class ParsePreflightService:
             status=status,
             source_format=source_format,
             fingerprint=fingerprint,
+            **stat_evidence,
             parser_id=str(selected.plugin_id),
             confidence=int(selected.confidence or 0),
             reason_codes=reason_codes,
