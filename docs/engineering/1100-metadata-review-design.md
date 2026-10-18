@@ -217,6 +217,10 @@ A user-cleared field imports as empty with no selected candidate. No warning
 row is added (an info warning would flip `parse_status` to
 `parsed_with_warnings`). Schema is unchanged; `sample_number_kind` stays within
 the existing CHECK values (`unknown` for typed values).
+Enrichment preserves explicitly overridden values even when they are empty;
+the nonempty-light-value rule applies only to fields without a manual override.
+Detected candidates for manually cleared fields remain as unselected evidence
+after enrichment, so they cannot contradict the stored empty value.
 
 ## Threading and lifecycle
 

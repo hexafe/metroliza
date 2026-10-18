@@ -531,8 +531,9 @@ def test_user_cleared_value_survives_fast_import_and_enrichment(tmp_path, fake_o
     assert imported == [None]
     assert worker.last_parse_result.imported_files == 1
     assert worker.last_enrichment_result.enriched_files == 1
-    metadata, _candidates, _report = _single_report(database)
+    metadata, candidates, _report = _single_report(database)
     assert metadata[field] is None
+    assert not [c for c in candidates if c["field_name"] == field and c["is_selected"]]
     provenance = json.loads(metadata["metadata_json"])
     assert provenance["manual_overrides"][field]["value"] is None
     assert provenance["field_sources"][field] == "user_manual"
