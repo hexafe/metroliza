@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.10 RC2 (build 261018) — current version
+## 2026.09 RC1 (build 261018) — current version
 - Much faster start on Windows: the app unpacks once per version into the local app data folder; later starts open the main window in about a second.
 - Smaller download: unused OCR acceleration (OpenVINO), video and software-OpenGL components are no longer bundled.
 - Fast report import is about 2.5 times faster.
@@ -16,7 +16,7 @@
 - Extended plots export uses several processor cores in the Windows app.
 - Metadata you clear before import stays empty, also after background metadata enrichment.
 
-## 2026.09 RC1 (build 260927)
+Also in this release candidate (first published as build 260927):
 - A refreshed Windows workspace brings report review, selected PDF import, analysis, and export together.
 - Completed imports remain in SQLite and can be reopened without duplicating saved measurements.
 - Numeric filters and grouping agree between the table, analysis, and workbook output.

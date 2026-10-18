@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.10 RC2 (build 261018)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261018)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -61,6 +61,14 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 '- Excel exports are about twice as fast and use much less memory; Extended plots export uses several processor cores and CSV Summary export is faster too<br>',
                 '- Importing reports on Windows saves them to the database much faster<br>',
                 '- The filter window opens instantly and loads its choices in the background<br>',
+                '- A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>',
+                '- Choose PDF reports before import and reopen saved measurements without repeating completed work<br>',
+                '- Filters and grouping keep numeric results consistent between the table and analysis views<br>',
+                '- Excel exports preserve chart titles and series names as literal text<br>',
+                '- Reports follow the selected app theme, including after a theme change<br>',
+                '- Reports without a reference remain exportable, while group comparisons identify missing references<br>',
+                '- The Help menu opens private incident reports for preview and export when a supervised run fails<br>',
+                '- Canceling active work protects completed database and workbook output<br>',
             ],
         )
         self.assertIn("Version 2026.06rc2 (build 260711)", VersionDate.release_notes)
@@ -89,7 +97,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("RC2", updated)
+            self.assertIn("RC1", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

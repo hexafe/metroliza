@@ -296,12 +296,12 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.10 RC2 (build 261018)`): Faster start-up and report import, and report metadata you can review and correct before import.
+Current release highlight (`2026.09 RC1 (build 261018)`): A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.10 RC2 (build 261018)`)
+### Changelog highlights (release `2026.09 RC1 (build 261018)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

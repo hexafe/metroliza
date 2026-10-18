@@ -1,8 +1,8 @@
-RELEASE_VERSION = "2026.10rc2"
+RELEASE_VERSION = "2026.09rc1"
 VERSION_DATE = "261018"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Faster start-up and report import, and report metadata you can review and correct before import."
-PUBLIC_VERSION_LABEL = "2026.10 RC2 (build 261018)"
+CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import."
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261018)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
@@ -17,9 +17,6 @@ release_notes = f"""
     - Excel exports are about twice as fast and use much less memory; Extended plots export uses several processor cores and CSV Summary export is faster too<br>
     - Importing reports on Windows saves them to the database much faster<br>
     - The filter window opens instantly and loads its choices in the background<br>
-
-    <br><b>Archive:</b><br>
-    <br><b>Version 2026.09rc1 (build 260927):</b><br>
     - A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>
     - Choose PDF reports before import and reopen saved measurements without repeating completed work<br>
     - Filters and grouping keep numeric results consistent between the table and analysis views<br>
@@ -29,6 +26,7 @@ release_notes = f"""
     - The Help menu opens private incident reports for preview and export when a supervised run fails<br>
     - Canceling active work protects completed database and workbook output<br>
 
+    <br><b>Archive:</b><br>
     <br><b>Version 2026.06rc2 (build 260711):</b><br>
     - Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result<br>
     - Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state<br>
