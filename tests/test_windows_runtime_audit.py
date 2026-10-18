@@ -695,6 +695,85 @@ def test_runtime_cleanup_refuses_replaced_root_or_unknown_content(tmp_path, defe
     assert evidence.root.is_dir() and protected.read_bytes() == b"synthetic preserved"
 
 
+def _observe_held_other_command(api, process, root):
+    """Query helper identities only inside the fixture's held interval."""
+    if (root / "control-helper-finish").exists():
+        return
+    if not (root / "control-helper-ready").exists():
+        return
+    if api._job_accounting(process._job)[0] != 3:
+        return
+    process.observe()
+    assert len(process._observations) == 3
+    (root / "control-helper-finish").touch()
+
+
+def test_other_command_observation_is_confined_to_held_interval(tmp_path):
+    observed = []
+    process = SimpleNamespace(
+        _job=object(), _observations={1: None, 2: None, 3: None},
+        observe=lambda: observed.append("identities"),
+    )
+    active = [1]
+    api = SimpleNamespace(_job_accounting=lambda _job: (active[0], 3))
+    _observe_held_other_command(api, process, tmp_path)
+    (tmp_path / "control-helper-ready").touch()
+    _observe_held_other_command(api, process, tmp_path)
+    assert observed == []
+    active[0] = 3
+    _observe_held_other_command(api, process, tmp_path)
+    assert observed == ["identities"]
+    assert (tmp_path / "control-helper-finish").exists()
+    _observe_held_other_command(api, process, tmp_path)
+    assert observed == ["identities"]
+
+
+@pytest.mark.parametrize("host_releases", [False, True])
+def test_other_command_fixture_holds_until_identity_ack_and_closes_stdin(
+    tmp_path, monkeypatch, host_releases
+):
+    spec = importlib.util.spec_from_file_location(
+        "runtime_audit_control", ROOT / "tests/fixtures/windows_runtime_audit_control.py",
+    )
+    control = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(control)
+    monkeypatch.chdir(tmp_path)
+    sequence = []
+
+    class Process:
+        stdout = SimpleNamespace(readline=lambda: b"synthetic\r\n")
+
+        def __enter__(self):
+            return self
+
+        def communicate(self, value):
+            assert value == b"\n"
+            sequence.append("stdin_closed")
+
+        def __exit__(self, *_args):
+            sequence.append("process_closed")
+
+    def launch(command, **kwargs):
+        assert command == "echo synthetic&set /p synthetic="
+        assert kwargs == {"shell": True, "stdin": subprocess.PIPE, "stdout": subprocess.PIPE}
+        return Process()
+
+    def acknowledge(name):
+        assert name == "control-helper-finish"
+        assert (tmp_path / "control-helper-ready").is_file()
+        sequence.append("host_observation")
+        return host_releases
+
+    monkeypatch.setattr(control.subprocess, "Popen", launch)
+    monkeypatch.setattr(control, "_wait_for_marker", acknowledge)
+    if host_releases:
+        control._held_other_command()
+    else:
+        with pytest.raises(RuntimeError, match="synthetic helper observation watchdog"):
+            control._held_other_command()
+    assert sequence == ["host_observation", "stdin_closed", "process_closed"]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows owned process and audit control")
 @pytest.mark.parametrize(
     "mode", ["none", "ver", "deep_ver", "late_numpy", "late_ver", "late_other", "hard", "other", "write_failure", "blocked_install", "outer", "concurrent"]
@@ -816,6 +895,8 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                     if process.poll() is not None and api._job_accounting(process._job)[0] == 0:
                         # Hard-exit controls need no finish marker.
                         single_released = True
+                    elif mode in {"other", "late_other"}:
+                        _observe_held_other_command(api, process, tmp_path / "0")
                     else:
                         # Identity-bearing observation belongs to the held
                         # phase; an exit-phase image query races with teardown.
@@ -853,6 +934,17 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             else:
                 proof = evidence.proof()
                 proofs.append(proof)
+                if mode in {"other", "late_other"}:
+                    assert proof["events"] == [{
+                        "kind": "other_command", "caller": "other",
+                        "phase": "after_ready" if mode == "late_other" else "startup",
+                    }]
+                    assert proof["owned"]["unobserved"] == 0
+                    assert proof["owned"]["observation_unavailable"] is False
+                    assert proof["owned"]["job_empty"] is True
+                    assert [member["role"] for member in proof["owned"]["members"]] == [
+                        "package_application", "system_cmd", "system_conhost",
+                    ]
                 if mode in {"other", "late_ver", "late_other"}:
                     with pytest.raises(ValueError):
                         verified_runtime_order(proof, supervised=False)
