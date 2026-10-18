@@ -104,3 +104,146 @@ fingerprints change from `63e7da8a6a1b...` / `b42ab68583b2...` to
 drift before a full security-baseline gate can pass. The existing low-severity
 B112 also moves from 2536 to 2543. No SQL or exception-handling policy was
 changed by this work.
+
+## Measured evidence
+
+Serial timing source: `fa557916`. Final parallel timing source: `14ca50cd`,
+which restores the serial missing-identity guard in pool task preparation;
+the serial renderer is unchanged between those commits. Baseline source:
+`82f8f57653964dd344fac7c01a84d9ab303cdaac`. Baseline exports were captured in the
+current worktree before production edits; no second worktree was created.
+
+All numbers below are medians of three full `ExportDataThread.run()` audit
+exports, using `full_report`. Times include workbook close and process startup/
+shutdown. The audit script prints wall time to one decimal place.
+
+| Synthetic fixture | Before, 1 worker | After, 1 worker | After, 2 workers |
+| --- | ---: | ---: | ---: |
+| tiny, 4 groups / 320 measurements | 7.6 s | 5.0 s | serial policy tested |
+| groups40, 40 groups / 3,200 measurements | 77.6 s | 51.9 s | 30.7 s |
+
+Recorded repetitions: tiny before `[7.0, 7.6, 7.9]`, after `[5.4, 5.0, 5.0]`;
+groups40 before `[77.7, 74.0, 77.6]`, after serial `[48.0, 51.9, 61.2]`, after
+parallel `[30.7, 30.2, 34.0]`. Median starting load averages (1/5/15 minutes):
+
+| Run set | Load average |
+| --- | --- |
+| tiny before | 2.58 / 2.23 / 1.50 |
+| tiny after | 3.79 / 4.52 / 3.27 |
+| groups40 before | 4.10 / 2.80 / 1.79 |
+| groups40 after serial | 6.26 / 5.03 / 3.53 |
+| groups40 after parallel | 6.33 / 6.70 / 5.42 |
+
+These are shared-machine observations, not a quiet-machine extrapolation. The
+40-group histogram median fell from 1.201 to 0.491 seconds in the serial runs.
+All three parallel runs recorded two workers, at most four pending groups and
+39 completed worker jobs. The first group was serial. Sampled process-tree peak
+RSS was 807–810 MB with two workers, versus roughly 300 MB serial. Worker
+chart-time sums represent CPU work, not export wall time.
+
+The 40-group fixture copies `perf_audit/data/sub_50.sqlite` and retains the first
+40 distinct `(header, ax)` pairs ordered by `header, ax` in `report_measurements`.
+This yields one reference partition with 40 groups. Every export uses a fresh
+copy; original audit databases/tools remain unchanged.
+
+All nine measured candidate XLSX packages match the reference package member
+order and every member except `docProps/core.xml` (document timestamps).
+**1,008 PNGs are byte-identical**, stronger than the declared pixel tolerance.
+All six serial annotation/table trace sets match, including text, positions,
+alignment, table bounds, fonts, rows and fallback metadata. The guarded spawn
+probe also passed a decoded-pixel comparison of all 160 PNGs with zero error.
+The collision/edge harness separately compares layout decisions and pixels
+against the captured base module on three synthetic adversarial scenes.
+
+The preliminary `probe` benchmark is excluded: its wrapper temporarily used
+`runpy` with `__main__`, causing children to re-run the audit entry point. The
+corrected wrapper runs that unmodified script as `audit_benchmark`, preserving
+the guarded wrapper as the spawn entry point. Both receipts are retained.
+The earlier valid pre-guard parallel series `[40.3, 38.6, 40.1]` is also retained;
+the table uses the final pool source. Differences between those series reflect
+shared-machine variability, not a speed claim for the identity guard.
+
+## Reproduction commands and remaining gates
+
+All scripts, raw logs, DB copies, workbook references, layout traces and
+`results.json` are under this task's scratch directory:
+
+```bash
+S=/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1126
+P=/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python
+bash "$S/baseline.sh"   # executed before production edits
+bash "$S/candidate.sh"  # three tiny, three serial40, three parallel40 runs
+bash "$S/guard-benchmark.sh"  # repeat parallel40 three times on final source
+"$P" "$S/report.py"
+```
+
+The wrapper executes the read-only audit `bench_export.py` with
+`<copied-db> <out.xlsx> --preset full_report --workers 1` (or `2` for parallel).
+Each shell script uses `ulimit -c 0`, offscreen Qt, removes
+`QT_QPA_PLATFORMTHEME`, and sets `PYTHONPATH=src:.`.
+
+Final regression command (also saved verbatim in `verification.sh`):
+
+```bash
+ulimit -c 0
+export METROLIZA_PLOT_REFERENCE_MODULE="$S/base_export_data_thread.py"
+export METROLIZA_PLOT_BASE="$S/base1-groups40.xlsx"
+export METROLIZA_PLOT_CANDIDATE="$S/guard1-groups40.xlsx"
+env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" tests/test_export*.py tests/test_thread_flow_helpers.py tests/test_chart_renderer.py tests/test_chart_render_service.py tests/test_summary_plot_palette_accessibility.py tests/test_analytics_exporting_boundary.py tests/test_contracts.py tests/test_complexity_ratchet.py tests/test_bug_sweep_coverage.py tests/test_security_audit.py
+"$P" -m ruff check .
+git diff --check
+```
+
+Earlier integrated validation exposed an unclassified test-helper import
+(`902 passed, 1 failed, 2 skipped`); the import was corrected to `tests.*`.
+The affected tests plus complexity, coverage and security then passed
+(`132 passed, 1 skipped`). The adverse log is retained as
+`integration-tests.log`. The first complete gate passed `910 passed, 1 skipped,
+35 subtests passed` (`final-tests.log`); the post-guard focused gate passed all
+141 tests (`guard-tests.log`). The final-source integrated gate is saved
+separately as `final-head-tests.log`: **914 passed, 1 skipped, 35 subtests passed**
+in 143.42 seconds, with six expected deprecation/native-rollout warnings.
+`python -m ruff check .` and `git diff --check` both passed. No complexity budget
+or coverage ownership rule was weakened. The final gate exercised production
+source `14ca50cdebe7cb8dd9bc1b38abff862920343a0f`; subsequent changes are this
+evidence record only.
+
+Not verified here: actual Windows source execution, frozen/clean-machine
+exports, CI, independent exact-head review and remote integration. Frozen
+fallback policy and POSIX spawn rendering are automated evidence only. Dashboard
+exports intentionally retain the serial path. Parallelism is within each
+reference partition, with an eight-group threshold. The Windows packaged gate
+and the reviewed Bandit fingerprint drift remain external acceptance work.
+No remote operations were performed. No PR was opened or merged.
+
+## Internal readiness audit
+
+| Requirement | Observed evidence | Remaining boundary |
+| --- | --- | --- |
+| Same charts/layout/workbook | Strict PNG/package harness, serial traces, base-source collision scenes | Same-machine synthetic proof |
+| Before/after performance | Three repetitions per fixture/mode, raw logs and load averages | Shared-machine timings only |
+| Bounded deterministic pool | Real spawn exports; bounded queue, order, partial failure, cancellation and worker-cap tests | Real Windows/frozen execution unverified |
+| Required local checks | Related export files plus complexity/coverage/security tests and Ruff | Full Bandit baseline drift requires review |
+
+The final diff is confined to the exporter rendering seam, its helper, two test
+files and this record. Internal negative-path review found and corrected a
+missing-identity discrepancy: task preparation must skip SQL statistics for a
+missing/blank reference or missing header/axis, exactly like the serial path.
+Four regression cases now enforce that guard. Workers retain Python statistics
+for those groups. No migration, output publication, native rollout or external
+service boundary changed.
+
+Representative falsifiers include rejection of a one-pixel label shift, a
+changed worksheet/drawing member, unexpected pool startup in frozen/small mode,
+unbounded submission, and lost/duplicated entries after partial failure. Core
+dumps were disabled for every test/benchmark; no crash was intentionally induced.
+Primary tradeoff: bounded extra process memory and spawn startup cost. Rollback:
+disable `METROLIZA_EXPORT_GROUP_MP`, or revert the implementation commits for
+the original serial layout path.
+
+Correction cycles after readiness: zero (no readiness declaration preceded
+these corrections). Actual model/reasoning remains not visible. The same
+concurrency/lifecycle acceptance burden merits CRITICAL / MILESTONE capability
+coordination on a similar task. Independent exact-head review, CI and merge
+readiness belong to the external orchestrator and remain pending; this local
+handoff does not assert READY FOR MERGE.
