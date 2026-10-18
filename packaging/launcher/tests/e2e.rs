@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use metroliza_launcher::archive::Payload;
 use metroliza_launcher::cache::{
     cleanup_old_versions, ensure_runtime, is_warm, repair_runtime, NoProgress, Options, Outcome,
-    MARKER,
+    MARKER, PENDING_MARKER,
 };
 use metroliza_launcher::pack::{pack, PackOptions};
 
@@ -62,7 +62,14 @@ fn build(
 fn set_completed(root: &Path, dir_name: &str, age_secs: u64) {
     let marker = fs::OpenOptions::new()
         .write(true)
-        .open(root.join(dir_name).join(MARKER))
+        .open(
+            root.join(dir_name)
+                .join(if root.join(dir_name).join(MARKER).exists() {
+                    MARKER
+                } else {
+                    PENDING_MARKER
+                }),
+        )
         .unwrap();
     marker
         .set_modified(SystemTime::now() - Duration::from_secs(age_secs))
@@ -82,6 +89,12 @@ fn library_lifecycle_cold_warm_corrupt_repair_upgrade() {
     assert_eq!(r.outcome, Outcome::Cold);
     let dir1 = r.dir.clone();
     drop(r);
+    assert_eq!(
+        ensure_runtime(&root, &v1, &NoProgress, &quick())
+            .unwrap()
+            .outcome,
+        Outcome::Verified
+    );
     set_completed(&root, "1.0_11111111", 300);
     assert_eq!(
         fs::read(dir1.join("lib/nested/notes.txt")).unwrap(),
@@ -105,6 +118,12 @@ fn library_lifecycle_cold_warm_corrupt_repair_upgrade() {
     let r = ensure_runtime(&root, &v1, &NoProgress, &quick()).unwrap();
     assert_eq!(r.outcome, Outcome::Repaired);
     drop(r);
+    assert_eq!(
+        ensure_runtime(&root, &v1, &NoProgress, &quick())
+            .unwrap()
+            .outcome,
+        Outcome::Verified
+    );
     assert!(is_warm(&dir1, &v1));
     set_completed(&root, "1.0_11111111", 300);
 
@@ -239,6 +258,11 @@ fn launcher_binary_runs_entry_passes_args_and_exit_code_and_reuses_cache() {
         fs::canonicalize(&runtime_dir).unwrap()
     );
 
+    assert!(runtime_dir.join(PENDING_MARKER).is_file());
+    let verified = run_launcher(&exe, &root, &log, &args);
+    assert_eq!(verified.code, Some(7));
+    assert!(verified.log.contains("cache=verified"), "{}", verified.log);
+    assert!(!runtime_dir.join(PENDING_MARKER).exists());
     let marker_time = fs::metadata(runtime_dir.join(MARKER))
         .unwrap()
         .modified()
@@ -376,6 +400,8 @@ fn exit_75_repairs_the_runtime_and_restarts_once_without_the_repair_variable() {
     assert!(first.log.contains("cache=repair"), "{}", first.log);
     assert!(first.log.contains("exit=0"), "{}", first.log);
     let original = fs::read(&data).unwrap();
+    let verified = run_launcher(&exe, &root, &log, &["--exit-code", "0"]);
+    assert!(verified.log.contains("cache=verified"));
 
     // Warm cache with a same-size modification the size-only warm check cannot see: the entry
     // sees the damaged file on the first start and the restored file on the second.
@@ -404,7 +430,7 @@ fn exit_75_repairs_the_runtime_and_restarts_once_without_the_repair_variable() {
         original,
         "runtime was re-extracted"
     );
-    assert!(runtime_dir.join(MARKER).is_file());
+    assert!(runtime_dir.join(PENDING_MARKER).is_file());
 }
 
 #[test]
@@ -494,6 +520,12 @@ fn library_repair_runtime_rebuilds_a_warm_runtime() {
     let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
     assert_eq!(runtime.outcome, Outcome::Cold);
     let dir = runtime.dir.clone();
+    assert_eq!(
+        ensure_runtime(&root, &payload, &NoProgress, &quick())
+            .unwrap()
+            .outcome,
+        Outcome::Verified
+    );
     let mut bytes = fs::read(dir.join("lib/data.bin")).unwrap();
     bytes[10] ^= 0xFF; // same size: the warm check cannot see it
     fs::write(dir.join("lib/data.bin"), &bytes).unwrap();
@@ -503,5 +535,135 @@ fn library_repair_runtime_rebuilds_a_warm_runtime() {
     assert_eq!(repaired.outcome, Outcome::Repaired);
     assert_eq!(repaired.dir, dir);
     assert_ne!(fs::read(dir.join("lib/data.bin")).unwrap(), bytes);
+    assert_eq!(
+        ensure_runtime(&root, &payload, &NoProgress, &quick())
+            .unwrap()
+            .outcome,
+        Outcome::Verified
+    );
     assert!(is_warm(&dir, &payload));
+}
+
+fn wait_for_record(record: &Path, text: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !fs::read_to_string(record)
+        .unwrap_or_default()
+        .contains(text)
+    {
+        assert!(std::time::Instant::now() < deadline, "missing {text}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+struct StopOrphan(PathBuf);
+impl Drop for StopOrphan {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, b"stop");
+    }
+}
+
+#[test]
+fn cleanup_preserves_orphan_after_supervisor_and_launcher_exit() {
+    let (tmp, exe, root, log, record) = repair_fixture("orphan");
+    let stop = tmp.path().join("stop-orphan");
+    let _stop_on_failure = StopOrphan(stop.clone());
+    let run = run_launcher(
+        &exe,
+        &root,
+        &log,
+        &[
+            "--spawn-orphan",
+            "--record",
+            record.to_str().unwrap(),
+            "--stop-file",
+            stop.to_str().unwrap(),
+            "--sleep-ms",
+            "15000",
+        ],
+    );
+    assert_eq!(run.code, Some(0)); // both supervisor and launcher are gone
+    wait_for_record(&record, "started");
+    let orphan_name = "1.0-orphan_abcdef01";
+    let orphan_dir = root.join(orphan_name);
+    let original_marker = fs::read(orphan_dir.join(PENDING_MARKER)).unwrap();
+    let original_data = fs::read(orphan_dir.join("lib/data.bin")).unwrap();
+    set_completed(&root, orphan_name, 300);
+    let mut current = String::new();
+    for (name, version, sha, age) in [
+        ("new2", "2.0", "22222222", 200),
+        ("new3", "3.0", "33333333", 100),
+    ] {
+        let payload = Payload::open(&build(
+            tmp.path(),
+            name,
+            version,
+            sha,
+            Path::new(LAUNCHER),
+            Path::new(TEST_ENTRY),
+        ))
+        .unwrap();
+        let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+        current = runtime.dir_name.clone();
+        drop(runtime);
+        set_completed(&root, &current, age);
+    }
+    let report = cleanup_old_versions(&root, &current);
+    assert_eq!(report.skipped_in_use, vec![orphan_name]);
+    assert_eq!(
+        fs::read(orphan_dir.join(PENDING_MARKER)).unwrap(),
+        original_marker
+    );
+    assert_eq!(
+        fs::read(orphan_dir.join("lib/data.bin")).unwrap(),
+        original_data
+    );
+    assert!(!fs::read_to_string(&record).unwrap().contains("stopped"));
+    // A second launch of an orphan's pending cache must also avoid destructive repair if
+    // verification cannot trust it. This exercises the shared pre-deletion protection.
+    let payload = Payload::open(&exe).unwrap();
+    fs::write(orphan_dir.join("lib/data.bin"), b"damaged").unwrap();
+    assert!(ensure_runtime(&root, &payload, &NoProgress, &quick()).is_err());
+    assert_eq!(
+        fs::read(orphan_dir.join(PENDING_MARKER)).unwrap(),
+        original_marker
+    );
+    fs::write(&stop, b"stop").unwrap();
+    wait_for_record(&record, "stopped");
+    // The process may still be returning from main after writing the record.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while orphan_dir.exists() {
+        cleanup_old_versions(&root, &current);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "orphan not reclaimed after exit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn pending_corrupt_entry_is_repaired_before_it_can_start() {
+    for victim in ["entry.exe", "lib/nested/notes.txt"] {
+        let (_tmp, exe, root, log, _record) = repair_fixture(if victim == "entry.exe" {
+            "pending-entry"
+        } else {
+            "pending-resource"
+        });
+        assert_eq!(run_launcher(&exe, &root, &log, &[]).code, Some(0));
+        let dir = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .find(|e| e.path().is_dir())
+            .unwrap()
+            .path();
+        let original = fs::read(dir.join(victim)).unwrap();
+        fs::write(dir.join(victim), vec![0; original.len()]).unwrap();
+        let run = run_launcher(&exe, &root, &log, &[]);
+        assert_eq!(run.code, Some(0), "{}", run.log);
+        assert!(run.log.contains("cache=repair"), "{}", run.log);
+        assert!(!run.log.contains("repair=requested")); // damaged EXE cannot request anything
+        assert_eq!(fs::read(dir.join(victim)).unwrap(), original);
+        assert!(dir.join(PENDING_MARKER).exists());
+        assert!(!dir.join(MARKER).exists());
+    }
 }

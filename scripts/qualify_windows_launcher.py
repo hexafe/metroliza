@@ -33,6 +33,7 @@ import time
 IS_WINDOWS = os.name == "nt"
 EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
 MARKER = ".complete"
+PENDING_MARKER = ".pending"
 ENTRY_NAME = f"launcher-test-entry{EXE_SUFFIX}"
 SHA_A, SHA_B, SHA_C, SHA_D = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
 
@@ -59,7 +60,7 @@ def tree_hashes(root: Path) -> dict[str, str]:
     return {
         path.relative_to(root).as_posix(): file_sha256(path)
         for path in sorted(root.rglob("*"))
-        if path.is_file() and path.name != MARKER
+        if path.is_file() and path.name not in {MARKER, PENDING_MARKER}
     }
 
 
@@ -204,11 +205,26 @@ def scenario_first_run(h: Harness, exe: Path, summary: dict, onedir: Path | None
     check(result["returncode"] == args_exit_code(args), f"exit code {result['returncode']}")
     check("cache=cold" in result["log"], f"expected cache=cold, log: {result['log']}")
     check(target.is_dir(), "version directory was not created")
-    marker = (target / MARKER).read_text(encoding="utf-8").strip()
+    check(not (target / MARKER).exists(), "cold cache was completed without verification")
+    marker = (target / PENDING_MARKER).read_text(encoding="utf-8").strip()
     check(marker == summary["manifest_sha256"], "marker does not hold the manifest hash")
     check(not h.staging_dirs(), "staging directory left behind")
     if onedir is not None:
         check(tree_hashes(target) == tree_hashes(onedir), "extracted tree differs from source")
+    return {"seconds": round(result["seconds"], 3)}
+
+
+def scenario_verify_pending(h: Harness, exe: Path, summary: dict, args) -> dict:
+    target = h.root / summary["dir_name"]
+    check((target / PENDING_MARKER).is_file(), "pending marker missing")
+    before = {k: v for k, v in snapshot_mtimes(target).items() if k != PENDING_MARKER}
+    result = h.run(exe, *args)
+    check(result["returncode"] == args_exit_code(args), f"exit code {result['returncode']}")
+    check("cache=verified" in result["log"], f"expected verification: {result['log']}")
+    check(not (target / PENDING_MARKER).exists(), "pending marker survived promotion")
+    check((target / MARKER).read_text().strip() == summary["manifest_sha256"], "complete marker mismatch")
+    after = {k: v for k, v in snapshot_mtimes(target).items() if k != MARKER}
+    check(before == after, "verification rewrote payload files")
     return {"seconds": round(result["seconds"], 3)}
 
 
@@ -341,6 +357,9 @@ def scenario_self_repair(h: Harness, exe: Path, summary: dict) -> dict:
     target = h.root / summary["dir_name"]
     victim = target / "data" / "file_000.txt"
     original = victim.read_bytes()
+    # The preceding repair left pending: complete it before testing the size-only warm path.
+    verified = h.run(exe, "--exit-code", "0")
+    check("cache=verified" in verified["log"], "repaired runtime was not verified")
     # Same size, different content: the size-only warm check cannot see this.
     victim.write_bytes(bytes([original[0] ^ 0xFF]) + original[1:])
     record = h.work / "record-self-repair.txt"
@@ -431,6 +450,7 @@ def qualify_synthetic(args, work: Path, report: Report) -> None:
     run_args = ("--exit-code", "5")
     cold = report.run("first_run_cold", scenario_first_run, h, exe1, sum1, onedir, run_args)
     cold_seconds = cold.get("seconds", 0.0)
+    report.run("pending_verified", scenario_verify_pending, h, exe1, sum1, run_args)
     report.run("warm_run", scenario_warm_run, h, exe1, sum1, cold_seconds, run_args, onedir)
     if IS_WINDOWS:
         report.run("second_instance", scenario_second_instance, h, exe1, sum1)
@@ -463,9 +483,17 @@ def qualify_real_app(args, work: Path, report: Report) -> None:
         check("cache=cold" in result["log"], f"expected cache=cold, log: {result['log']}")
         dirs = h.version_dirs()
         check(len(dirs) == 1, f"expected one version directory, found {dirs}")
-        check((h.root / dirs[0] / MARKER).is_file(), "marker missing")
+        check((h.root / dirs[0] / PENDING_MARKER).is_file(), "pending marker missing")
         state.update(dir=h.root / dirs[0], cold=result["seconds"])
         return {"seconds": round(result["seconds"], 3), "dir": dirs[0]}
+
+    def verify_pending() -> dict:
+        result = h.run(exe)
+        check(result["returncode"] == 0, f"smoke exit code {result['returncode']}")
+        check("cache=verified" in result["log"], f"expected cache=verified: {result['log']}")
+        check((state["dir"] / MARKER).is_file(), "completion marker missing")
+        check(not (state["dir"] / PENDING_MARKER).exists(), "pending marker remained")
+        return {"seconds": round(result["seconds"], 3)}
 
     def warm_run() -> dict:
         before = snapshot_mtimes(state["dir"])
@@ -498,6 +526,7 @@ def qualify_real_app(args, work: Path, report: Report) -> None:
 
     if report.run("first_run_cold", first_run)["status"] != "passed":
         return
+    report.run("pending_verified", verify_pending)
     report.run("warm_run", warm_run)
     report.skip("second_instance", "startup smoke exits immediately; use --synthetic")
     report.run("corrupted_cache_repaired", corrupted)

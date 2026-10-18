@@ -164,11 +164,14 @@ try {
                 throw 'The release label does not match the build provenance'
             }
             # The same check the portable envelope runs: complete package identity plus the exact
-            # supervisor executable sidecar.
+            # supervisor executable sidecar, bound to the commit recorded in the launcher.
             $verify = "import sys; sys.path[:0] = ['packaging', 'src']; from pathlib import Path; " +
                 "from metroliza_portable_entry import _verified_launcher; " +
-                "sys.exit(0 if _verified_launcher(Path(sys.argv[1])) is not None else 1)"
-            & $venvPython -c $verify $OnedirPath
+                "from metroliza.shared.diagnostic_package import inspect_package; " +
+                "root = Path(sys.argv[1]); identity = inspect_package(root); " +
+                "sys.exit(0 if identity.valid and identity.git_sha == sys.argv[2] " +
+                "and _verified_launcher(root) is not None else 1)"
+            & $venvPython -c $verify $OnedirPath $gitSha
             if ($LASTEXITCODE -ne 0) {
                 throw 'The supervised onedir identity is not verified'
             }

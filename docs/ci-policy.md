@@ -132,9 +132,10 @@ These checks are explicitly non-blocking for normal PR CI:
 - `scripts/measure_windows_startup_routes.py` runs the same non-interactive smoke
   through each route, 3 runs each: (a) the portable envelope (extracts the whole
   onedir to `%TEMP%` on every launch), (b) the launcher cold (a fresh
-  `METROLIZA_RUNTIME_ROOT` for every run) and (c) the launcher warm (launches 2 to
-  4 of one populated cache). Each launcher run must log the expected
-  `cache=cold|warm`, otherwise the run fails.
+  `METROLIZA_RUNTIME_ROOT` for every run), (c) the launcher second launch (parallel
+  SHA-256 verification and flush on each of the three pending caches) and (d) the
+  launcher warm (launches 3 to 5 of one completed cache). Each launcher run must
+  log the expected `cache=cold|verified|warm`, otherwise the run fails.
 - The smoke is `METROLIZA_STARTUP_UI_SMOKE=1`: the application builds and shows
   the real main window and exits after the first Qt event-loop tick.
   `METROLIZA_LICENSE_VERIFICATION=0` and `METROLIZA_LAUNCHER_NO_UI=1` keep every

@@ -92,3 +92,21 @@ def test_portable_entry_does_not_import_gui_before_supervisor():
                             capture_output=True, text=True, check=False,
                             env=dict(os.environ, PYTHONPATH=str(ENTRY.parents[1] / "src")))
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("head,expected", [("a" * 40, 0), ("b" * 40, 1)])
+def test_launcher_build_binds_valid_supplied_onedir_to_head(payload, head, expected):
+    """Execute the build script's real Python gate against an internally valid old package."""
+    import re
+
+    script = (ENTRY.parents[1] / "build_windows_launcher_exe.ps1").read_text()
+    block = script.split('$verify = ', 1)[1].split('& $venvPython', 1)[0]
+    code = "".join(re.findall(r'"([^"\n]*)"', block))
+    assert portable._verified_launcher(payload) is not None, "fixture must be internally valid"
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(payload), head],
+        capture_output=True, text=True, check=False,
+        env=dict(os.environ, PYTHONPATH="src:packaging"),
+    )
+    assert result.returncode == expected, result.stderr
+    assert '& $venvPython -c $verify $OnedirPath $gitSha' in script
