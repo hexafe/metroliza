@@ -15,6 +15,8 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
 - [`engineering/codex-model-routing.md`](engineering/codex-model-routing.md) — universal coordinator/worker routing, exact-head evidence, review feedback, merge authority, and Metroliza adaptation.
+- [`engineering/chatgpt-project-instructions.md`](engineering/chatgpt-project-instructions.md) — concise project-instruction mirror for ChatGPT/Codex orchestration and current branch lifecycle guidance.
+- [`engineering/model-routing-research-2026-09-23.md`](engineering/model-routing-research-2026-09-23.md) — GPT-6 routing research/evidence supporting the current orchestration playbook.
 - [`engineering/codex-task-packet-template.md`](engineering/codex-task-packet-template.md) — reusable pre-dispatch and post-execution packet with MUST/SHOULD/DEFERRED scope.
 - [`engineering/pr-routing-report-template.md`](engineering/pr-routing-report-template.md) — PR-ready routing, MUST-to-evidence, validation, review, and remote-operation report.
 - `project/branch_audit.md` — durable branch archaeology and cleanup-closeout record with historical recovery evidence, executed Gates 1–4, the observed pre-Gate-5 state, and the final branch target.
