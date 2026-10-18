@@ -307,3 +307,5 @@ parents, late calls, missing samples, mismatched counts and incomplete cleanup
 still fail. Every concurrent Job owns its own probe and journal; no receipt is
 transferred between runs. Synchronous journal writes, native handle/snapshot
 queries and5ms sampling perturb timing and remain part of the measured journey.
+
+<!-- CI validation for #1139 (mixed case); closed without merging. -->

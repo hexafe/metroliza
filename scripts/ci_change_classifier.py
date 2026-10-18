@@ -105,3 +105,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# CI validation for #1139 (mixed case); closed without merging.
