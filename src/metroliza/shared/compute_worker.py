@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 from pathlib import Path
 import sys
 
@@ -40,6 +41,30 @@ def spawn_context():
 
 def initialize_compute_runtime():
     if is_compute_worker():
-        from metroliza.parsing.frozen_ocr_worker import _use_native_windows_version
+        use_native_windows_version()
 
-        _use_native_windows_version()
+
+def use_native_windows_version() -> None:
+    """Keep the isolated worker's version fallback inside the owned process."""
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return
+    import platform
+
+    native = sys.getwindowsversion().platform_version
+    if (type(native) is not tuple or len(native) != 3
+            or any(type(part) is not int or part < 0 for part in native)
+            or native[0] == 0):
+        raise RuntimeError("windows_version_unavailable")
+    native_version = ".".join(str(part) for part in native)
+
+    def from_native(system="", release="", version="", supported_platforms=("win32", "win16", "dos")):
+        if sys.platform not in supported_platforms:
+            return system, release, version
+        return system, release, native_version
+
+    # CPython's win32_ver() uses this private fallback after WMI fails. Its
+    # stock implementation shells out, although it falls back to the same
+    # platform_version tuple when that command cannot provide a version.
+    if not callable(getattr(platform, "_syscmd_ver", None)):
+        raise RuntimeError("windows_version_unavailable")
+    platform._syscmd_ver = from_native
