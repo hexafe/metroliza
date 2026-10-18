@@ -47,7 +47,9 @@ cargo check --locked --manifest-path packaging/launcher/Cargo.toml --target x86_
 `metroliza.exe`, the supervisor, application, OCR worker and `supervision_manifest.json` must be
 present, the build provenance must be the clean, exact `HEAD` with the same release label, and the
 onedir must pass the identity check the portable envelope runs (`_verified_launcher`: complete
-package identity plus the supervisor's provenance sidecar). Without `-Supervised` the script packs
+package identity plus the supervisor's provenance sidecar). The supplied onedir's verified
+identity, embedded provenance and supervisor sidecar must all identify `HEAD`; a valid package
+from another commit is rejected even when its release label matches. Without `-Supervised` the script packs
 any onedir (the CI synthetic payload uses that).
 
 * **Name:** `dist/metroliza_<label>_launcher.exe`, e.g. `metroliza_2026.09rc1_260927_launcher.exe`.
