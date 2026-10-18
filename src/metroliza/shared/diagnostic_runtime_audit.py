@@ -147,8 +147,24 @@ def install() -> None:
 
 def _observed_call(event, arguments, frame, expected_cmd, expected_worker, expected_compute):
     if event == "_winapi.CreateProcess":
-        return classify_compute_call(arguments, frame, expected_compute)
+        return _classify_native_compute_call(arguments, frame, expected_compute)
     return classify_call(arguments, frame, expected_cmd, expected_worker)
+
+
+def _classify_native_compute_call(arguments, frame, expected_compute):
+    # CPython 3.11 _winapi.c audits command_line (a PyObject*) with "uuu",
+    # treating it as wchar_t*, so the event's command string is unusable.
+    # Read the actual argument at the immediate synchronous Python call site,
+    # never a matching outer frame. Keep the native image/cwd and exact frozen
+    # command checks; owned native identity/ancestry/drain are verified separately.
+    if (len(arguments) != 3
+            or frame.f_globals.get("__name__") != "multiprocessing.popen_spawn_win32"
+            or frame.f_code.co_name != "__init__"):
+        return "other_frames", "other"
+    values = frame.f_locals
+    if values.get("python_exe") != arguments[0] or type(values.get("cmd")) is not str:
+        return "other_arguments", "other"
+    return classify_compute_call((arguments[0], values["cmd"], arguments[2]), frame, expected_compute)
 
 
 def _already_observed(event, frame):
