@@ -88,16 +88,24 @@ def _run(source, database, lifecycle):
 def _check_checkpoint_cadence(run, calls):
     """Bounded checkpoint cadence (#1136, PO decision 2026-10-18).
 
-    At most one passive checkpoint per IMPORT_CHECKPOINT_COMMITS commits or
-    IMPORT_CHECKPOINT_SECONDS, plus exactly one final checkpoint when the import
-    connection closes.
+    At least one passive checkpoint per IMPORT_CHECKPOINT_COMMITS commits and at most one
+    per IMPORT_CHECKPOINT_COMMITS commits or IMPORT_CHECKPOINT_SECONDS, plus the checkpoint
+    at the persistence boundary; one close of the import connection. In this single-writer
+    benchmark every checkpoint must complete (not busy, all WAL frames checkpointed).
     """
     from metroliza.reports.db import IMPORT_CHECKPOINT_COMMITS, IMPORT_CHECKPOINT_SECONDS
 
+    checkpoints = calls.get("checkpoint", 0)
     allowed = (calls["commit"] // IMPORT_CHECKPOINT_COMMITS
                + int(run["import_s"] / IMPORT_CHECKPOINT_SECONDS) + 1)
-    if calls.get("checkpoint", 0) > allowed:
+    if checkpoints > allowed:
         raise RuntimeError("checkpoint_cadence_exceeded")
+    if checkpoints < max(1, calls["commit"] // IMPORT_CHECKPOINT_COMMITS):
+        raise RuntimeError("checkpoint_cadence_missing")
+    results = run["profile"]["passive_checkpoints"]
+    if sum(item["calls"] for item in results) != checkpoints or any(
+            item["busy"] or item["checkpointed_frames"] != item["wal_frames"] for item in results):
+        raise RuntimeError("checkpoint_incomplete")
     if calls.get("checkpoint_close") != 1:
         raise RuntimeError("final_checkpoint_missing")
 

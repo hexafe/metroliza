@@ -5,7 +5,12 @@ import sqlite3
 
 import pytest
 
-from metroliza.reports.db import lazy_sqlite_connection_scope, run_transaction_with_retry
+from metroliza.reports import db as db_module
+from metroliza.reports.db import (
+    checkpoint_pending_import_commits,
+    lazy_sqlite_connection_scope,
+    run_transaction_with_retry,
+)
 from metroliza.reports.import_persist_profile import ImportPersistProfile
 from scripts import benchmark_import_persist as benchmark
 from tests.test_import_single_verification import _write_reports
@@ -34,10 +39,11 @@ def test_scope_reuses_connection_and_closes_it_even_after_failure(tmp_path):
             raise RuntimeError("synthetic cancellation after commits")
     assert profile.calls["connection_open"] == profile.calls["checkpoint_close"] == 1
     assert profile.calls["commit"] == 2
-    # Two quick commits stay below the checkpoint cadence; the final checkpoint happens
-    # when the scope closes the connection, also after this cancellation.
-    assert profile.calls.get("checkpoint", 0) == 0
-    assert all(busy == 0 and frames == written for busy, frames, written in profile.checkpoint_results)
+    # Two quick commits stay below the periodic cadence; closing the scope checkpoints them
+    # explicitly, also after this cancellation.
+    assert profile.calls["checkpoint"] == 1
+    ((busy, frames, written), count), = profile.checkpoint_results.items()
+    assert (busy, count) == (0, 1) and frames == written > 0
     with pytest.raises(sqlite3.ProgrammingError):
         connection.execute("SELECT 1")
     with closing(sqlite3.connect(database)) as reader:
@@ -101,6 +107,70 @@ def test_post_commit_checkpoint_failure_never_retries_the_write(tmp_path, monkey
             run_transaction_with_retry(database, write, connection=connection)
         assert len(attempts) == 1
         assert connection.execute("SELECT * FROM sample").fetchall() == [(1,)]
+
+
+def test_import_connection_checkpoints_periodically_while_committing(tmp_path):
+    database = str(tmp_path / "reports.sqlite3")
+    profile = ImportPersistProfile()
+    with profile.activate(), lazy_sqlite_connection_scope(database) as connection:
+        connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        connection.commit()
+        for value in range(db_module.IMPORT_CHECKPOINT_COMMITS):
+            run_transaction_with_retry(database, lambda cursor, value=value: cursor.execute(
+                "INSERT INTO sample VALUES (?)", (value,)
+            ), connection=connection)
+        # A real PASSIVE checkpoint ran before the scope closed and synced every frame.
+        assert profile.calls["checkpoint"] >= 1
+        assert all(busy == 0 and frames == written > 0
+                   for busy, frames, written in profile.checkpoint_results)
+
+
+def test_persistence_boundary_checkpoints_pending_commits_with_a_reader_open(tmp_path):
+    database = str(tmp_path / "reports.sqlite3")
+    profile = ImportPersistProfile()
+    with profile.activate(), lazy_sqlite_connection_scope(database) as connection:
+        connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        connection.commit()
+        run_transaction_with_retry(database, lambda cursor: cursor.execute(
+            "INSERT INTO sample VALUES (1)"), connection=connection)
+        with closing(sqlite3.connect(database)) as reader:
+            reader.execute("SELECT 1").fetchall()  # keeps the database open, no snapshot
+            checkpoint_pending_import_commits(connection)
+            assert profile.calls["checkpoint"] == 1
+            checkpoint_pending_import_commits(connection)  # nothing new to sync
+            assert profile.calls["checkpoint"] == 1
+    checkpoint_pending_import_commits(object())  # non-import connections are ignored
+
+
+def test_checkpoint_error_after_commit_keeps_the_committed_report(tmp_path, caplog):
+    database = str(tmp_path / "reports.sqlite3")
+    attempts = []
+    with lazy_sqlite_connection_scope(database) as connection:
+        connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        connection.commit()
+        real = connection._connection
+
+        class FailingCheckpoint:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def execute(self, sql, *args):
+                if sql.startswith("PRAGMA wal_checkpoint"):
+                    raise sqlite3.OperationalError("disk I/O error")
+                return real.execute(sql, *args)
+
+        connection._connection = FailingCheckpoint()
+        connection._commits_since_checkpoint = db_module.IMPORT_CHECKPOINT_COMMITS - 1
+
+        def write(cursor):
+            attempts.append(1)
+            cursor.execute("INSERT INTO sample VALUES (1)")
+            return "imported"
+
+        assert run_transaction_with_retry(database, write, connection=connection) == "imported"
+        assert len(attempts) == 1
+        assert "checkpoint failed" in caplog.text
+        assert real.execute("SELECT * FROM sample").fetchall() == [(1,)]
 
 
 def test_real_pdf_qualification_compares_every_persisted_row(tmp_path):
@@ -269,6 +339,23 @@ def test_qualification_rejects_nonzero_remainder(tmp_path):
     run["profile"]["attribution"]["unattributed_s"] = 0.1
     with pytest.raises(RuntimeError, match="persist_time_unattributed"):
         benchmark._qualify_profile(run, 1, "batch_connection")
+
+
+@pytest.mark.parametrize(("checkpoints", "results", "error"), [
+    (0, [], "checkpoint_cadence_missing"),
+    (8, [dict(busy=0, wal_frames=40, checkpointed_frames=40, calls=8)], None),
+    (8, [dict(busy=1, wal_frames=40, checkpointed_frames=12, calls=8)], "checkpoint_incomplete"),
+    (8, [dict(busy=0, wal_frames=40, checkpointed_frames=40, calls=7)], "checkpoint_incomplete"),
+    (40, [dict(busy=0, wal_frames=40, checkpointed_frames=40, calls=40)], "checkpoint_cadence_exceeded"),
+])
+def test_checkpoint_cadence_qualification_has_both_bounds(checkpoints, results, error):
+    calls = {"commit": 202, "checkpoint": checkpoints, "checkpoint_close": 1}
+    run = {"import_s": 5.0, "profile": {"passive_checkpoints": results}}
+    if error is None:
+        benchmark._check_checkpoint_cadence(run, calls)
+    else:
+        with pytest.raises(RuntimeError, match=error):
+            benchmark._check_checkpoint_cadence(run, calls)
 
 
 def test_import_checkpoint_cadence_is_bounded_by_commits_and_time(tmp_path):

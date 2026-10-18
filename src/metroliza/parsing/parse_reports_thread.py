@@ -15,7 +15,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
-from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
+from metroliza.reports.db import (
+    checkpoint_pending_import_commits,
+    execute_with_retry,
+    lazy_sqlite_connection_scope,
+)
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
 from metroliza.shared.diagnostic_events import WorkflowError, WorkflowOperation, WorkflowStage
@@ -2125,6 +2129,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     ),
                 )
                 self.last_parse_result = result
+                # Enrichment can run for minutes without committing; sync the import first.
+                checkpoint_pending_import_commits(connection)
                 diagnostic.stage(WorkflowStage.PERSISTENCE_COMPLETE)
 
                 self._complete_requested_enrichment(list(accepted_reports.values()), connection)

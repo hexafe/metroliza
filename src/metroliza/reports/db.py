@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import time
 from contextlib import closing, contextmanager
@@ -22,6 +23,7 @@ TRANSIENT_SQLITE_ERRORS = (
 )
 
 T = TypeVar('T')
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -164,10 +166,11 @@ def sqlite_connection_scope(
 
 # Import checkpoint cadence (PO decision 2026-10-18, #1136). A WAL checkpoint syncs the
 # database file; doing it after every report cost ~125 ms per report on Windows (about
-# 90 % of import persist time). Checkpointing at most every IMPORT_CHECKPOINT_SECONDS or
-# IMPORT_CHECKPOINT_COMMITS commits, plus the final checkpoint when the import connection
-# closes (also on cancellation), keeps the database consistent. On a sudden power loss only
-# the reports committed since the last checkpoint (a few seconds) can be lost, and
+# 90 % of import persist time). A passive checkpoint runs after a commit once
+# IMPORT_CHECKPOINT_COMMITS commits or IMPORT_CHECKPOINT_SECONDS have passed since the last
+# one, when import persistence completes, and when the import connection closes (also on
+# cancellation). The cadence is commit-triggered: on a sudden power loss only the reports
+# committed since the last checkpoint can be lost, the database stays consistent, and
 # re-running the import adds them because present reports are skipped. An application
 # crash loses nothing that was committed.
 IMPORT_CHECKPOINT_SECONDS = 2.0
@@ -191,22 +194,40 @@ class _LazySQLiteConnection:
 
     def close(self):
         if self._connection is not None:
+            # SQLite checkpoints on close only for the last connection to the database, so
+            # sync the tail explicitly while a reader or another instance keeps it open.
+            self.checkpoint_pending()
             close_persist_connection(self._connection)
 
     def checkpoint_after_commit(self):
         # NORMAL commits do not sync the WAL; a checkpoint does. Bounded cadence, see
-        # IMPORT_CHECKPOINT_SECONDS / IMPORT_CHECKPOINT_COMMITS above. PASSIVE respects
-        # readers/writers; SQLite's returned busy/frame counts remain diagnostic rather
-        # than a new retry or transaction boundary.
+        # IMPORT_CHECKPOINT_SECONDS / IMPORT_CHECKPOINT_COMMITS above.
         self._commits_since_checkpoint += 1
-        now = self._clock()
         if (self._commits_since_checkpoint < IMPORT_CHECKPOINT_COMMITS
-                and now - self._last_checkpoint < IMPORT_CHECKPOINT_SECONDS):
+                and self._clock() - self._last_checkpoint < IMPORT_CHECKPOINT_SECONDS):
             return
+        self._checkpoint()
+
+    def checkpoint_pending(self):
+        """Checkpoint now when commits have not been checkpointed yet."""
+        if self._connection is not None and self._commits_since_checkpoint:
+            self._checkpoint()
+
+    def _checkpoint(self):
+        # PASSIVE respects readers/writers; SQLite's busy/frame counts stay diagnostic. The
+        # commit before it already succeeded, so a checkpoint error (for example a full disk
+        # while the database file grows) is logged and never turns that report into a failure.
         self._commits_since_checkpoint = 0
-        self._last_checkpoint = now
-        with measure_persist_stage("checkpoint"):
-            result = self._connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        self._last_checkpoint = self._clock()
+        try:
+            with measure_persist_stage("checkpoint"):
+                result = self._connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        except sqlite3.Error as exc:
+            logger.warning("Import WAL checkpoint failed; committed reports are kept: %s", exc)
+            return
+        if result and (result[0] or result[2] < result[1]):
+            logger.debug("Import WAL checkpoint incomplete: busy=%s frames=%s checkpointed=%s",
+                         *result)
         observe_persist_checkpoint(result)
 
 
@@ -223,6 +244,12 @@ def lazy_sqlite_connection_scope(db_path: str):
 def _checkpoint_import_connection(connection):
     if isinstance(connection, _LazySQLiteConnection):
         connection.checkpoint_after_commit()
+
+
+def checkpoint_pending_import_commits(connection):
+    """Sync committed import reports before a long phase that may not commit (enrichment)."""
+    if isinstance(connection, _LazySQLiteConnection):
+        connection.checkpoint_pending()
 
 
 @contextmanager
