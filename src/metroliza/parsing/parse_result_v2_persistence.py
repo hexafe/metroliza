@@ -71,6 +71,7 @@ def _resolve_source_digest_binding(
         raise ValueError(
             f"Explicit source digest does not match the inspected source digest: {source_path}"
         )
+    source_inspection.require_unchanged_size()
     return inspected_sha256, source_inspection.verified_sha256
 
 

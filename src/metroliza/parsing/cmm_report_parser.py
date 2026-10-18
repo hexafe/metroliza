@@ -1310,8 +1310,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             self.stage_timings_s["db_write_runtime"] = perf_counter() - db_write_start
             logger.info("Report '%s' measurements inserted into the database.", self.file_name)
             return outcome
-        except SourceChangedAfterInspectionError:
-            # Expected approval drift is reported by the owning import workflow.
+        except SourceChangedAfterInspectionError as e:
+            # Atomic import reports expected drift through its owning workflow.
+            # Preserve the legacy replacement API's error-reporting contract.
+            if not import_if_absent:
+                self.log_and_exit(e)
             raise
         except Exception as e:
             self.log_and_exit(e)

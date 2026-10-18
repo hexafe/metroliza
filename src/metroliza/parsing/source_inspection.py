@@ -196,6 +196,17 @@ class SourceInspectionContext:
             value = self._cache.sha256
         return value if isinstance(value, str) else None
 
+    def require_unchanged_size(self) -> None:
+        """Reject definite content drift without a read; mtime alone is inconclusive."""
+
+        current_stat = source_stat_signature(self.source_path)
+        if current_stat is None or current_stat[0] != self.file_size_bytes:
+            raise SourceChangedAfterInspectionError(
+                self.source_path,
+                inspected_sha256=self.sha256,
+                current_sha256=None,
+            )
+
     def verified_sha256(self) -> str | None:
         """Rehash the source and reject persistence when it changed after inspection.
 

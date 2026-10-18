@@ -153,7 +153,12 @@ def test_final_verification_always_rehashes_even_when_stat_is_unchanged(tmp_path
     assert len(reads) == 3
 
 
-def test_import_hashes_each_file_twice_with_final_read_inside_the_write_transaction(tmp_path, monkeypatch):
+@pytest.mark.parametrize("workers", ["0", "2"])
+def test_import_hashes_each_file_twice_with_final_read_inside_the_write_transaction(
+    tmp_path, monkeypatch, workers
+):
+    monkeypatch.setenv("METROLIZA_IMPORT_PREPARE_WORKERS", workers)
+    monkeypatch.setenv("METROLIZA_IMPORT_PREPARE_MIN_REPORTS", "2")
     source = tmp_path / "reports"
     reports = _write_reports(source, 4)
     database = tmp_path / "db.sqlite3"

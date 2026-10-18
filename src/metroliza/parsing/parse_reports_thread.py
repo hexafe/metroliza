@@ -177,6 +177,8 @@ def _require_selected_source_approval(
     identity = work_item.selected_identity
     if identity is None:
         return
+    if not verify_current:
+        source_inspection.require_unchanged_size()
     sha256_value = (
         source_inspection.verified_sha256() if verify_current else source_inspection.sha256
     )
@@ -733,7 +735,9 @@ def parse_new_reports(
 
                 if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
                     try:
-                        _require_prepared_report_approval(prepared, verify_current=False)
+                        _require_prepared_report_approval(
+                            prepared, verify_current=not require_typed_persistence_outcome
+                        )
                         if should_cancel():
                             cancel_requested = True
                             break
@@ -816,7 +820,9 @@ def parse_new_reports(
             try:
                 if require_typed_persistence_outcome:
                     _prepare_report(work_item, prepared)
-                _require_prepared_report_approval(prepared, verify_current=False)
+                _require_prepared_report_approval(
+                    prepared, verify_current=not require_typed_persistence_outcome
+                )
                 if should_cancel():
                     break
                 outcome = persist_report(parser)
