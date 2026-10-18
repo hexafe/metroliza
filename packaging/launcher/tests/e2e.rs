@@ -15,6 +15,23 @@ use metroliza_launcher::pack::{pack, PackOptions};
 const LAUNCHER: &str = env!("CARGO_BIN_EXE_metroliza-launcher");
 const TEST_ENTRY: &str = env!("CARGO_BIN_EXE_launcher-test-entry");
 
+/// Run `command`, retrying while the freshly packed executable is still "busy".
+///
+/// On Linux, a parallel test thread that forks between this test writing the EXE and executing
+/// it briefly holds the write descriptor (until its child execs), so `execve` fails with
+/// ETXTBSY ("Text file busy"). That is a test-harness race, not launcher behaviour.
+fn status_retrying_busy(command: &mut Command) -> std::process::ExitStatus {
+    for _ in 0..100 {
+        match command.status() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            result => return result.unwrap(),
+        }
+    }
+    command.status().unwrap()
+}
+
 fn quick() -> Options {
     Options {
         threads: 4,
@@ -200,14 +217,14 @@ fn run_launcher(exe: &Path, root: &Path, log: &Path, args: &[&str]) -> Run {
     let _ = fs::remove_file(log);
     // The launcher runs in the directory that holds the EXE; the entry must inherit that
     // directory (see the cwd assertion in the first binary test), not the runtime cache.
-    let status = Command::new(exe)
-        .args(args)
-        .current_dir(exe.parent().unwrap())
-        .env("METROLIZA_RUNTIME_ROOT", root)
-        .env("METROLIZA_LAUNCHER_LOG", log)
-        .env("METROLIZA_LAUNCHER_NO_UI", "1")
-        .status()
-        .unwrap();
+    let status = status_retrying_busy(
+        Command::new(exe)
+            .args(args)
+            .current_dir(exe.parent().unwrap())
+            .env("METROLIZA_RUNTIME_ROOT", root)
+            .env("METROLIZA_LAUNCHER_LOG", log)
+            .env("METROLIZA_LAUNCHER_NO_UI", "1"),
+    );
     Run {
         code: status.code(),
         log: fs::read_to_string(log).unwrap_or_default(),
@@ -326,14 +343,14 @@ fn launcher_binary_does_not_use_temp_dir() {
         Path::new(LAUNCHER),
         Path::new(TEST_ENTRY),
     );
-    let status = Command::new(&exe)
-        .env("METROLIZA_RUNTIME_ROOT", &root)
-        .env("METROLIZA_LAUNCHER_NO_UI", "1")
-        .env("TMPDIR", &scratch)
-        .env("TEMP", &scratch)
-        .env("TMP", &scratch)
-        .status()
-        .unwrap();
+    let status = status_retrying_busy(
+        Command::new(&exe)
+            .env("METROLIZA_RUNTIME_ROOT", &root)
+            .env("METROLIZA_LAUNCHER_NO_UI", "1")
+            .env("TMPDIR", &scratch)
+            .env("TEMP", &scratch)
+            .env("TMP", &scratch),
+    );
     assert!(status.success());
     assert_eq!(
         fs::read_dir(&scratch).unwrap().count(),
@@ -490,20 +507,20 @@ fn a_repair_variable_inherited_from_the_parent_never_reaches_the_restart() {
     let (_tmp, exe, root, log, record) = repair_fixture("inherited");
     let record_arg = record.to_str().unwrap();
     let _ = fs::remove_file(&log);
-    let status = Command::new(&exe)
-        .args([
-            "--record",
-            record_arg,
-            "--request-repair",
-            "--exit-code",
-            "3",
-        ])
-        .env("METROLIZA_RUNTIME_ROOT", &root)
-        .env("METROLIZA_LAUNCHER_LOG", &log)
-        .env("METROLIZA_LAUNCHER_NO_UI", "1")
-        .env("METROLIZA_RUNTIME_REPAIR_AVAILABLE", "0")
-        .status()
-        .unwrap();
+    let status = status_retrying_busy(
+        Command::new(&exe)
+            .args([
+                "--record",
+                record_arg,
+                "--request-repair",
+                "--exit-code",
+                "3",
+            ])
+            .env("METROLIZA_RUNTIME_ROOT", &root)
+            .env("METROLIZA_LAUNCHER_LOG", &log)
+            .env("METROLIZA_LAUNCHER_NO_UI", "1")
+            .env("METROLIZA_RUNTIME_REPAIR_AVAILABLE", "0"),
+    );
     assert_eq!(status.code(), Some(3));
     assert_eq!(starts(&record), ["1", "unset"]);
 }

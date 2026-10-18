@@ -27,6 +27,8 @@ fn main() {
     let original: Vec<String> = std::env::args().skip(1).collect();
     if original.iter().any(|a| a == "--spawn-orphan") {
         let exe = std::env::current_exe().unwrap();
+        // Deliberately orphaned: the e2e test needs a live child after the entry exits.
+        #[allow(clippy::zombie_processes)]
         std::process::Command::new(exe)
             .args(original.iter().filter(|a| *a != "--spawn-orphan"))
             .stdin(std::process::Stdio::null())
