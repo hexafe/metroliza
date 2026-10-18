@@ -58,7 +58,7 @@ def initialize_compute_runtime():
 
 
 def use_native_windows_version(*, runtime_sys=sys, runtime_os=os) -> None:
-    """Keep the isolated worker's version fallback inside the owned process."""
+    """Use the native version fallback in frozen Windows parents and workers."""
     if runtime_os.name != "nt" or not getattr(runtime_sys, "frozen", False):
         return
     import platform
