@@ -17,7 +17,9 @@ from typing import Any, Protocol
 import xlsxwriter
 
 from metroliza.exporting.xlsx_bulk_sheet import (
+    BulkPlanBuilder,
     BulkRowsWorksheet,
+    bulk_block_fits,
     enable_bulk_rows,
     plan_bulk_rows,
 )
@@ -627,6 +629,36 @@ class ExcelExportBackend:
         if plan is not None and worksheet.write_bulk_block(1, plan):
             return
         _write_rows_cell_by_cell(worksheet, rows)
+
+    def write_streamed_rows(
+        self,
+        writer: XlsxWorkbookWriter,
+        sheet_name: str,
+        columns: list[str],
+        row_chunks: Any,
+    ) -> int | None:
+        """Write streamed row chunks as `sheet_name` through the bulk worksheet path.
+
+        Returns the number of data rows written, or ``None`` -- with nothing
+        written -- when the rows cannot be reproduced exactly by the bulk path
+        (the caller then falls back to `write_dataframe`).
+        """
+        if not _bulk_sheet_available(writer):
+            return None
+        builder = BulkPlanBuilder(columns)
+        for chunk in row_chunks:
+            if not builder.add_rows(chunk):
+                return None
+        plan = builder.build()
+        if plan is None or not bulk_block_fits(plan):
+            return None
+        worksheet = writer.book.add_worksheet(str(sheet_name))
+        writer.sheets[str(sheet_name)] = worksheet
+        for column_index, column_name in enumerate(plan.column_names):
+            write_untrusted_xlsx_cell(worksheet, 0, column_index, column_name)
+        if not worksheet.write_bulk_block(1, plan):
+            raise RuntimeError(f"Bulk worksheet refused rows for new sheet {sheet_name!r}.")
+        return plan.n_rows
 
     def list_sheet_names(self, writer: XlsxWorkbookWriter) -> set[str]:
         """Return names of worksheets currently attached to `writer`."""

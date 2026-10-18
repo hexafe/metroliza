@@ -33,6 +33,8 @@ _SUPPORTED_XLSXWRITER_SERIES = ((3, 2),)
 _RENDER_CHUNK_ROWS = 4096
 _ROW_SPAN_GROUP = 16
 _STRING_CELL_LIMIT = 32767
+_XLS_ROW_MAX = 1048576
+_XLS_COL_MAX = 16384
 _NUMERIC_TYPES = frozenset({int, float})
 _REQUIRED_WORKSHEET_ATTRIBUTES = (
     "_write_rows",
@@ -84,57 +86,127 @@ class BulkPlan:
     columns: list
 
 
-def _numeric_column(values: tuple) -> Any:
-    try:
-        numbers = np.array(values, dtype=np.float64)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return None if np.isinf(numbers).any() else numbers
+class _ColumnAccumulator:
+    """Build one bulk column incrementally from row chunks."""
+
+    def __init__(self, col: int) -> None:
+        self.col = col
+        self.kind: str | None = None  # None until a value is seen, then "num" or "text"
+        self.rows_seen = 0
+        self.parts: list = []  # ndarray chunk, or an int for an all-missing chunk
+        self.index: dict = {None: -1}
+        self.uniques: list = []
+        self.first_rows: list = []
+
+    def add(self, values: tuple) -> bool:
+        """Append one chunk of column values; ``False`` if unsupported."""
+        kinds = set(map(type, values))
+        kinds.discard(type(None))
+        if not kinds:
+            part: Any = len(values)
+        elif kinds == {str}:
+            part = self._text_part(values) if self._claim("text") else None
+        elif kinds <= _NUMERIC_TYPES:
+            part = self._numeric_part(values) if self._claim("num") else None
+        else:
+            part = None
+        if part is None:
+            return False
+        self.parts.append(part)
+        self.rows_seen += len(values)
+        return True
+
+    def _claim(self, kind: str) -> bool:
+        if self.kind not in (None, kind):
+            return False
+        self.kind = kind
+        return True
+
+    @staticmethod
+    def _numeric_part(values: tuple) -> Any:
+        try:
+            numbers = np.array(values, dtype=np.float64)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return None if np.isinf(numbers).any() else numbers
+
+    def _text_part(self, values: tuple) -> Any:
+        """Factorise text; ``None`` becomes code -1 (no cell)."""
+        before = len(self.uniques)
+        for value in [value for value in dict.fromkeys(values) if value not in self.index]:
+            self.index[value] = len(self.uniques)
+            self.uniques.append(value)
+        codes = np.fromiter(map(self.index.__getitem__, values), dtype=np.int32, count=len(values))
+        if len(self.uniques) > before:
+            new_positions = np.flatnonzero(codes >= before)
+            _, first = np.unique(codes[new_positions], return_index=True)
+            self.first_rows.append(self.rows_seen + new_positions[first])
+        return codes
+
+    def build(self) -> BulkColumn:
+        """Return the finished :class:`BulkColumn`."""
+        if self.kind == "text":
+            codes = self._concatenate(-1, np.int32)
+            texts = tuple(
+                text if len(text) <= _STRING_CELL_LIMIT else text[:_STRING_CELL_LIMIT] for text in self.uniques
+            )
+            first_rows = np.concatenate(self.first_rows) if self.first_rows else np.empty(0, dtype=np.int64)
+            return BulkColumn(col=self.col, codes=codes, texts=texts, first_rows=first_rows)
+        return BulkColumn(col=self.col, numbers=self._concatenate(np.nan, np.float64))
+
+    def _concatenate(self, missing: Any, dtype: Any) -> Any:
+        chunks = [np.full(part, missing, dtype=dtype) if isinstance(part, int) else part for part in self.parts]
+        return np.concatenate(chunks) if chunks else np.empty(0, dtype=dtype)
 
 
-def _text_column(values: tuple) -> tuple:
-    """Factorise a text column; ``None`` becomes code -1 (no cell)."""
-    uniques = [value for value in dict.fromkeys(values) if value is not None]
-    index = {value: code for code, value in enumerate(uniques)}
-    index[None] = -1
-    codes = np.fromiter(map(index.__getitem__, values), dtype=np.int32, count=len(values))
-    valid = np.flatnonzero(codes >= 0)
-    _, first = np.unique(codes[valid], return_index=True)
-    texts = tuple(text if len(text) <= _STRING_CELL_LIMIT else text[:_STRING_CELL_LIMIT] for text in uniques)
-    return codes, texts, valid[first]
+class BulkPlanBuilder:
+    """Collect row chunks of Python scalars into a :class:`BulkPlan`.
+
+    Only exact ``str``/``int``/``float``/``None`` values are accepted (``None``
+    and NaN mean "no cell"; infinities need XlsxWriter's error-formula
+    handling).  Any other value makes :meth:`add_rows` return ``False`` and the
+    caller uses the per-cell path instead.
+    """
+
+    def __init__(self, column_names: list) -> None:
+        self.column_names = [str(name) for name in column_names]
+        self.n_rows = 0
+        self.supported = bool(self.column_names)
+        self._accumulators = [_ColumnAccumulator(col) for col in range(len(self.column_names))]
+
+    def add_rows(self, rows: list) -> bool:
+        """Append a chunk of row tuples; ``False`` once the table is unsupported."""
+        if not self.supported:
+            return False
+        if not rows:
+            return True
+        if set(map(len, rows)) != {len(self._accumulators)}:
+            self.supported = False
+            return False
+        for accumulator, values in zip(self._accumulators, zip(*rows)):
+            if not accumulator.add(values):
+                self.supported = False
+                return False
+        self.n_rows += len(rows)
+        return True
+
+    def build(self) -> BulkPlan | None:
+        """Return the plan, or ``None`` when empty or unsupported."""
+        if not self.supported or not self.n_rows:
+            return None
+        columns = [accumulator.build() for accumulator in self._accumulators]
+        return BulkPlan(column_names=self.column_names, n_rows=self.n_rows, columns=columns)
 
 
-def _plan_column(values: tuple, col: int) -> BulkColumn | None:
-    kinds = set(map(type, values))
-    kinds.discard(type(None))
-    if not kinds:
-        return BulkColumn(col=col, numbers=np.full(len(values), np.nan))
-    if kinds == {str}:
-        codes, texts, first_rows = _text_column(values)
-        return BulkColumn(col=col, codes=codes, texts=texts, first_rows=first_rows)
-    if kinds <= _NUMERIC_TYPES:
-        numbers = _numeric_column(values)
-        return None if numbers is None else BulkColumn(col=col, numbers=numbers)
-    return None
+def bulk_block_fits(plan: BulkPlan, *, first_row: int = 1) -> bool:
+    """Return whether ``plan`` fits a worksheet starting at ``first_row``."""
+    return first_row + plan.n_rows <= _XLS_ROW_MAX and len(plan.columns) <= _XLS_COL_MAX
 
 
 def plan_bulk_rows(columns: list, rows: list) -> BulkPlan | None:
-    """Return a bulk plan for ``rows`` of Python scalars, or ``None`` if unsupported.
-
-    Only exact ``str``/``int``/``float``/``None`` values are accepted (``None``
-    and NaN mean "no cell", infinities need XlsxWriter's error-formula
-    handling); any other value type makes the caller use the per-cell path.
-    """
-    width = len(columns)
-    if not rows or not width or set(map(len, rows)) != {width}:
-        return None
-    planned = []
-    for col, values in enumerate(zip(*rows)):
-        column = _plan_column(values, col)
-        if column is None:
-            return None
-        planned.append(column)
-    return BulkPlan(column_names=[str(name) for name in columns], n_rows=len(rows), columns=planned)
+    """Return a bulk plan for ``rows`` of Python scalars, or ``None`` if unsupported."""
+    builder = BulkPlanBuilder(columns)
+    return builder.build() if builder.add_rows(rows) else None
 
 
 @dataclass
@@ -398,7 +470,9 @@ def enable_bulk_rows(book: Any) -> bool:
 __all__ = [
     "BULK_WRITE_ENV",
     "BulkPlan",
+    "BulkPlanBuilder",
     "BulkRowsWorksheet",
+    "bulk_block_fits",
     "bulk_write_enabled",
     "enable_bulk_rows",
     "plan_bulk_rows",

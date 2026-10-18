@@ -208,14 +208,23 @@ def build_equivalence_db(db_path, work_dir, *, references=('REF-A', 'REF-B', 'RE
     return report_id
 
 
-def export_workbook(db_path, out_path, *, bulk, export_thread_type, options=None):
-    """Run the real export backend against ``db_path`` and return ``out_path``."""
+def export_workbook(db_path, out_path, *, bulk, export_thread_type, options=None, full_run=False):
+    """Run the real export against ``db_path`` and return ``out_path``.
+
+    ``full_run=True`` goes through ``ExportDataThread.run()`` (export snapshot,
+    streamed MEASUREMENTS sheet); otherwise only the backend pipeline runs and
+    the table is read through the non-snapshot query path.
+    """
     options = options if options is not None else ExportOptions(generate_summary_sheet=False)
     request = ExportRequest(paths=AppPaths(db_file=str(db_path), excel_file=str(out_path)), options=options)
     env_value = '1' if bulk else '0'
     with patch.dict('os.environ', {BULK_WRITE_ENV: env_value}):
         thread = export_thread_type(request)
-        if not thread.get_export_backend().run(thread):
+        if full_run:
+            thread.run()
+            if thread.completion_metadata.get('local_export_outcome') != 'completed':
+                raise AssertionError('export did not complete')
+        elif not thread.get_export_backend().run(thread):
             raise AssertionError('export did not complete')
     return Path(out_path)
 
@@ -328,23 +337,41 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
         tmp = Path(cls._tmp.name)
         cls.db_path = tmp / 'metroliza.sqlite'
         cls.total_reports = build_equivalence_db(cls.db_path, tmp)
-        cls.bulk_calls = {'reference': [], 'candidate': []}
+        cls.bulk_calls = {'reference': [], 'candidate': [], 'streamed': []}
+        cls.stream_calls = {'reference': [], 'candidate': [], 'streamed': []}
         cls.reference_path = cls._export(tmp / 'reference.xlsx', bulk=False, label='reference')
         cls.candidate_path = cls._export(tmp / 'candidate.xlsx', bulk=True, label='candidate')
+        cls.streamed_path = cls._export(tmp / 'streamed.xlsx', bulk=True, label='streamed', full_run=True)
+        cls.classic_full_run_path = cls._export(
+            tmp / 'classic_full_run.xlsx', bulk=False, label='reference', full_run=True
+        )
 
     @classmethod
-    def _export(cls, out_path, *, bulk, label):
-        from metroliza.exporting.xlsx_bulk_sheet import BulkRowsWorksheet
+    def _export(cls, out_path, *, bulk, label, full_run=False):
+        # The thread module is loaded in isolation (see `_load_export_thread_type`), so
+        # patch the exact classes it uses rather than a separately imported copy.
+        ExcelExportBackend = cls.export_thread_type.get_export_backend.__globals__['ExcelExportBackend']
+        BulkRowsWorksheet = ExcelExportBackend.write_dataframe.__globals__['BulkRowsWorksheet']
 
         original = BulkRowsWorksheet.write_bulk_block
+        original_stream = ExcelExportBackend.write_streamed_rows
+
+        def recording_stream(backend, writer, sheet_name, columns, row_chunks):
+            row_count = original_stream(backend, writer, sheet_name, columns, row_chunks)
+            cls.stream_calls[label].append((sheet_name, row_count))
+            return row_count
 
         def recording(worksheet, first_row, plan):
             accepted = original(worksheet, first_row, plan)
             cls.bulk_calls[label].append((worksheet.name, plan.n_rows, accepted))
             return accepted
 
-        with patch.object(BulkRowsWorksheet, 'write_bulk_block', recording):
-            return export_workbook(cls.db_path, out_path, bulk=bulk, export_thread_type=cls.export_thread_type)
+        with patch.object(BulkRowsWorksheet, 'write_bulk_block', recording), patch.object(
+            ExcelExportBackend, 'write_streamed_rows', recording_stream
+        ):
+            return export_workbook(
+                cls.db_path, out_path, bulk=bulk, export_thread_type=cls.export_thread_type, full_run=full_run
+            )
 
     @classmethod
     def tearDownClass(cls):
@@ -352,10 +379,21 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
 
     def test_optimised_run_used_the_bulk_path_and_reference_run_did_not(self):
         self.assertEqual(self.bulk_calls['reference'], [])
-        self.assertEqual(self.bulk_calls['candidate'], [('MEASUREMENTS', self.total_reports * 6, True)])
+        expected = [('MEASUREMENTS', self.total_reports * 6, True)]
+        self.assertEqual(self.bulk_calls['candidate'], expected)
+        self.assertEqual(self.bulk_calls['streamed'], expected)
+        # Only the full run has an export snapshot, so only it streams the raw sheet.
+        self.assertEqual(self.stream_calls['candidate'], [])
+        self.assertEqual(self.stream_calls['streamed'], [('MEASUREMENTS', self.total_reports * 6)])
 
     def test_default_export_workbooks_are_identical(self):
         assert_workbooks_equivalent(self, self.reference_path, self.candidate_path)
+
+    def test_streamed_snapshot_export_workbook_is_identical(self):
+        assert_workbooks_equivalent(self, self.reference_path, self.streamed_path)
+
+    def test_full_run_with_and_without_the_bulk_path_is_identical(self):
+        assert_workbooks_equivalent(self, self.classic_full_run_path, self.streamed_path)
 
     def test_workbook_structure_is_the_expected_default_export(self):
         view = describe_workbook(self.candidate_path)
