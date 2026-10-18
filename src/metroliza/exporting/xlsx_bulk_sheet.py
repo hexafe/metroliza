@@ -22,9 +22,12 @@ from typing import Any
 import numpy as np
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name
-from xlsxwriter.worksheet import CellNumberTuple, CellStringTuple, Worksheet
+from xlsxwriter.worksheet import Worksheet
 
 from metroliza.exporting.xlsx_fast_paths import (
+    INTERNALS_AVAILABLE,
+    CellNumberTuple,
+    CellStringTuple,
     accelerate_chart,
     fast_cell_markup,
     write_plain_column,
@@ -55,7 +58,7 @@ _REQUIRED_WORKSHEET_ATTRIBUTES = (
 
 def bulk_write_enabled() -> bool:
     """Return whether the bulk worksheet path may be used in this process."""
-    if not env_bool(BULK_WRITE_ENV, default=True):
+    if not INTERNALS_AVAILABLE or not env_bool(BULK_WRITE_ENV, default=True):
         return False
     try:
         series = tuple(int(part) for part in xlsxwriter.__version__.split(".")[:2])

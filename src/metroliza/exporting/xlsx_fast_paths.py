@@ -13,7 +13,12 @@ import math
 import types
 from typing import Any
 
-from xlsxwriter.worksheet import CellNumberTuple, CellStringTuple, xl_rowcol_to_cell_fast
+try:
+    from xlsxwriter.worksheet import CellNumberTuple, CellStringTuple, xl_rowcol_to_cell_fast
+except ImportError:  # pragma: no cover - other XlsxWriter layouts keep using the stock writers
+    CellNumberTuple = CellStringTuple = xl_rowcol_to_cell_fast = None  # type: ignore[assignment,misc]
+
+INTERNALS_AVAILABLE = xl_rowcol_to_cell_fast is not None
 
 _STRING_CELL_LIMIT = 32767
 _XLS_ROW_MAX = 1048576
