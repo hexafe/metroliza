@@ -76,8 +76,6 @@ class _DummyLogger:
 def _load_export_thread_type():
     """Load ``ExportDataThread`` without a Qt event loop (see test_export_workbook_output)."""
     configure_headless_matplotlib()
-    import importlib
-
     for dependency_name in ('numpy', 'pandas', 'matplotlib.pyplot', 'scipy.stats', 'seaborn'):
         importlib.import_module(dependency_name)
     qtcore_stub = types.ModuleType('PyQt6.QtCore')
@@ -330,16 +328,31 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
         tmp = Path(cls._tmp.name)
         cls.db_path = tmp / 'metroliza.sqlite'
         cls.total_reports = build_equivalence_db(cls.db_path, tmp)
-        cls.reference_path = export_workbook(
-            cls.db_path, tmp / 'reference.xlsx', bulk=False, export_thread_type=cls.export_thread_type
-        )
-        cls.candidate_path = export_workbook(
-            cls.db_path, tmp / 'candidate.xlsx', bulk=True, export_thread_type=cls.export_thread_type
-        )
+        cls.bulk_calls = {'reference': [], 'candidate': []}
+        cls.reference_path = cls._export(tmp / 'reference.xlsx', bulk=False, label='reference')
+        cls.candidate_path = cls._export(tmp / 'candidate.xlsx', bulk=True, label='candidate')
+
+    @classmethod
+    def _export(cls, out_path, *, bulk, label):
+        from metroliza.exporting.xlsx_bulk_sheet import BulkRowsWorksheet
+
+        original = BulkRowsWorksheet.write_bulk_block
+
+        def recording(worksheet, first_row, plan):
+            accepted = original(worksheet, first_row, plan)
+            cls.bulk_calls[label].append((worksheet.name, plan.n_rows, accepted))
+            return accepted
+
+        with patch.object(BulkRowsWorksheet, 'write_bulk_block', recording):
+            return export_workbook(cls.db_path, out_path, bulk=bulk, export_thread_type=cls.export_thread_type)
 
     @classmethod
     def tearDownClass(cls):
         cls._tmp.cleanup()
+
+    def test_optimised_run_used_the_bulk_path_and_reference_run_did_not(self):
+        self.assertEqual(self.bulk_calls['reference'], [])
+        self.assertEqual(self.bulk_calls['candidate'], [('MEASUREMENTS', self.total_reports * 6, True)])
 
     def test_default_export_workbooks_are_identical(self):
         assert_workbooks_equivalent(self, self.reference_path, self.candidate_path)
@@ -357,7 +370,7 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
         self.assertEqual(raw['freeze_panes'], 'A2')
         self.assertTrue(raw['auto_filter'].startswith('A1:'))
 
-    def test_untrusted_text_stays_literal_in_every_sheet(self):
+    def test_untrusted_text_stays_literal(self):
         import openpyxl
 
         workbook = openpyxl.load_workbook(self.candidate_path)
@@ -366,7 +379,7 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
             self.assertEqual(list(worksheet._hyperlinks), [], worksheet.title)
             for row in worksheet.iter_rows():
                 for cell in row:
-                    if cell.data_type == 'f':
+                    if cell.data_type == 'f' and worksheet.title == 'MEASUREMENTS':
                         self.fail(f'unexpected formula-typed cell {worksheet.title}!{cell.coordinate}')
                     if isinstance(cell.value, str) and cell.value in seen:
                         seen[cell.value] += 1

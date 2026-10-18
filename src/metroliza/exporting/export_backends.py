@@ -16,6 +16,11 @@ from typing import Any, Protocol
 
 import xlsxwriter
 
+from metroliza.exporting.xlsx_bulk_sheet import (
+    BulkRowsWorksheet,
+    enable_bulk_rows,
+    plan_bulk_rows,
+)
 from metroliza.exporting.xlsx_writer_policy import (
     write_untrusted_xlsx_cell,
     xlsxwriter_workbook_options,
@@ -574,6 +579,21 @@ def _extract_table_columns_and_rows(table: Any) -> tuple[list[str], list[tuple[A
     return columns, []
 
 
+def _bulk_sheet_available(writer: XlsxWorkbookWriter) -> bool:
+    return getattr(writer.book, "worksheet_class", None) is BulkRowsWorksheet
+
+
+def _write_rows_cell_by_cell(worksheet: Any, rows: list[tuple[Any, ...]]) -> None:
+    for row_index, row in enumerate(rows, start=1):
+        for column_index, value in enumerate(row):
+            write_untrusted_xlsx_cell(
+                worksheet,
+                row_index,
+                column_index,
+                None if _is_blank_cell(value) else value,
+            )
+
+
 class ExcelExportBackend:
     """Excel backend that persists exports directly through xlsxwriter."""
 
@@ -581,33 +601,32 @@ class ExcelExportBackend:
 
     def create_writer(self, excel_file: str) -> XlsxWorkbookWriter:
         """Create a direct xlsxwriter workbook session for `excel_file`."""
-        return XlsxWorkbookWriter(
-            path=excel_file,
-            book=xlsxwriter.Workbook(excel_file, xlsxwriter_workbook_options()),
-            sheets={},
-        )
+        book = xlsxwriter.Workbook(excel_file, xlsxwriter_workbook_options())
+        enable_bulk_rows(book)
+        return XlsxWorkbookWriter(path=excel_file, book=book, sheets={})
 
     def close_writer(self, writer: XlsxWorkbookWriter) -> None:
         """Close the active writer and flush workbook contents to disk."""
         writer.book.close()
 
     def write_dataframe(self, writer: XlsxWorkbookWriter, table: Any, sheet_name: str) -> None:
-        """Write `table` to `sheet_name` without index columns."""
+        """Write `table` to `sheet_name` without index columns.
+
+        Large row tables are written through the bulk worksheet path when it
+        can reproduce the cell-by-cell output exactly; everything else uses
+        ``write_untrusted_xlsx_cell`` per cell.
+        """
         columns, rows = _extract_table_columns_and_rows(table)
+        plan = plan_bulk_rows(columns, rows) if _bulk_sheet_available(writer) else None
         worksheet = writer.book.add_worksheet(str(sheet_name))
         writer.sheets[str(sheet_name)] = worksheet
 
         for column_index, column_name in enumerate(columns):
             write_untrusted_xlsx_cell(worksheet, 0, column_index, column_name)
 
-        for row_index, row in enumerate(rows, start=1):
-            for column_index, value in enumerate(row):
-                write_untrusted_xlsx_cell(
-                    worksheet,
-                    row_index,
-                    column_index,
-                    None if _is_blank_cell(value) else value,
-                )
+        if plan is not None and worksheet.write_bulk_block(1, plan):
+            return
+        _write_rows_cell_by_cell(worksheet, rows)
 
     def list_sheet_names(self, writer: XlsxWorkbookWriter) -> set[str]:
         """Return names of worksheets currently attached to `writer`."""
