@@ -1,4 +1,4 @@
-"""Import integrity (#1125): one preflight hash plus one full verification inside the write lock."""
+"""Two import hashes (#1125), plus one pre-schema guard only for schema work."""
 
 from __future__ import annotations
 
@@ -43,30 +43,37 @@ def _plan(source: Path, database: Path):
 def _count_hash_reads(monkeypatch):
     """Count full-content reads and flag any that happen while a write transaction is open."""
 
-    state = {"reads": [], "in_transaction": False, "reads_in_transaction": 0}
+    state = {"reads": [], "cursor": None, "reads_in_transaction": 0}
     original_context_hash = SourceInspectionContext._compute_sha256
     original_repo_hash = report_repository.compute_sha256
     original_transaction = report_repository.run_transaction_with_retry
 
+    def record_read(path):
+        state["reads"].append(Path(path).name)
+        cursor = state["cursor"]
+        if cursor is not None:
+            # The callback starts before BEGIN IMMEDIATE: prove the hash follows
+            # successful lock acquisition, rather than just callback entry.
+            assert cursor.connection.in_transaction
+            state["reads_in_transaction"] += 1
+
     def counted_context_hash(self):
-        state["reads"].append(Path(self.source_path).name)
-        state["reads_in_transaction"] += int(state["in_transaction"])
+        record_read(self.source_path)
         return original_context_hash(self)
 
     def counted_repo_hash(path, **kwargs):
-        state["reads"].append(Path(path).name)
-        state["reads_in_transaction"] += int(state["in_transaction"])
+        record_read(path)
         return original_repo_hash(path, **kwargs)
 
     def tracked_transaction(*args, **kwargs):
         callback = args[1]
 
         def wrapped(cursor):
-            state["in_transaction"] = True
+            state["cursor"] = cursor
             try:
                 return callback(cursor)
             finally:
-                state["in_transaction"] = False
+                state["cursor"] = None
 
         return original_transaction(args[0], wrapped, *args[2:], **kwargs)
 
@@ -154,14 +161,16 @@ def test_final_verification_always_rehashes_even_when_stat_is_unchanged(tmp_path
 
 
 @pytest.mark.parametrize("workers", ["0", "2"])
-def test_import_hashes_each_file_twice_with_final_read_inside_the_write_transaction(
-    tmp_path, monkeypatch, workers
+@pytest.mark.parametrize("schema_state", ["ready", "absent", "outdated"])
+def test_import_hashes_twice_plus_one_guard_only_for_required_schema_work(
+    tmp_path, monkeypatch, workers, schema_state
 ):
     monkeypatch.setenv("METROLIZA_IMPORT_PREPARE_WORKERS", workers)
     monkeypatch.setenv("METROLIZA_IMPORT_PREPARE_MIN_REPORTS", "2")
     source = tmp_path / "reports"
     reports = _write_reports(source, 4)
     database = tmp_path / "db.sqlite3"
+    _prepare_schema(database, schema_state)
     state = _count_hash_reads(monkeypatch)
     _preflight, plan = _plan(source, database)
 
@@ -170,7 +179,10 @@ def test_import_hashes_each_file_twice_with_final_read_inside_the_write_transact
 
     result = thread.last_parse_result
     assert (result.imported_files, result.failed_files, result.preflight_changed_files) == (4, 0, 0)
-    assert sorted(state["reads"]) == sorted(report.name for report in reports for _ in range(2))
+    expected_reads = [report.name for report in reports for _ in range(2)]
+    if schema_state != "ready":
+        expected_reads.append(reports[0].name)
+    assert sorted(state["reads"]) == sorted(expected_reads)
     assert state["reads_in_transaction"] == 4
 
 
@@ -240,6 +252,77 @@ def test_uninspected_repository_import_inspects_then_verifies_inside_the_transac
     assert outcome is report_repository.ReportImportDisposition.IMPORTED
     assert state["reads"] == ["synthetic.report", "synthetic.report"]
     assert state["reads_in_transaction"] == 1
+
+
+def _prepare_schema(database, schema_state):
+    repository = report_repository.ReportRepository(str(database))
+    if schema_state != "absent":
+        repository.ensure_schema()
+    if schema_state == "outdated":
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
+            connection.commit()
+    return repository
+
+
+@pytest.mark.parametrize("schema_state, expected_reads", [("ready", 2), ("absent", 3), ("outdated", 3)])
+def test_inspected_import_adds_a_pre_schema_guard_only_when_schema_work_is_required(
+    tmp_path, monkeypatch, schema_state, expected_reads
+):
+    from tests.test_atomic_report_import import _payload
+
+    source = tmp_path / "synthetic.report"
+    source.write_bytes(b"reviewed")
+    database = tmp_path / "reports.sqlite3"
+    repository = _prepare_schema(database, schema_state)
+    state = _count_hash_reads(monkeypatch)
+    inspection = SourceInspectionContext.from_path(source)
+    digest = inspection.sha256
+
+    outcome = repository.import_report_if_absent(
+        source_path=source,
+        source_sha256=digest,
+        source_digest_verifier=inspection.verified_sha256,
+        **_payload("inspected"),
+    )
+
+    assert outcome is report_repository.ReportImportDisposition.IMPORTED
+    assert state["reads"] == [source.name] * expected_reads
+    assert state["reads_in_transaction"] == 1
+    assert repository._import_schema_is_ready()
+
+
+@pytest.mark.parametrize("schema_state", ["absent", "outdated"])
+def test_pre_schema_guard_does_not_replace_final_content_verification(
+    tmp_path, monkeypatch, schema_state
+):
+    from tests.test_atomic_report_import import _payload
+
+    source = tmp_path / "synthetic.report"
+    source.write_bytes(b"reviewed")
+    before = source.stat()
+    inspection = SourceInspectionContext.from_path(source)
+    digest = inspection.sha256
+    database = tmp_path / "reports.sqlite3"
+    repository = _prepare_schema(database, schema_state)
+    ensure_schema = repository._ensure_import_schema
+
+    def migrate_then_replace_source():
+        ensure_schema()
+        source.write_bytes(b"tampered")
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    monkeypatch.setattr(repository, "_ensure_import_schema", migrate_then_replace_source)
+
+    with pytest.raises(SourceChangedAfterInspectionError):
+        repository.import_report_if_absent(
+            source_path=source,
+            source_sha256=digest,
+            source_digest_verifier=inspection.verified_sha256,
+            **_payload("stale"),
+        )
+
+    assert _imported_hashes(database) == set()
 
 
 @pytest.mark.parametrize("already_present", [False, True])

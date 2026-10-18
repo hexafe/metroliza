@@ -456,13 +456,14 @@ def test_parse_result_v2_import_propagates_typed_dispositions(tmp_path):
     assert second is ReportImportDisposition.ALREADY_PRESENT
 
 
-def test_parse_result_v2_source_drift_fails_before_creating_database(tmp_path):
+@pytest.mark.parametrize("replacement", ["changed", "tampered"])
+def test_parse_result_v2_source_drift_fails_before_creating_database(tmp_path, replacement):
     source = tmp_path / "sample.csv"
     source.write_text("reviewed", encoding="utf-8")
     database = tmp_path / "reports.sqlite3"
     source_inspection = SourceInspectionContext.from_path(source, source_format="csv")
     assert source_inspection.sha256 is not None
-    source.write_text("changed", encoding="utf-8")
+    source.write_text(replacement, encoding="utf-8")
 
     with pytest.raises(SourceChangedAfterInspectionError):
         import_parse_result_v2_if_absent(
@@ -473,6 +474,44 @@ def test_parse_result_v2_source_drift_fails_before_creating_database(tmp_path):
         )
 
     assert not database.exists()
+
+
+@pytest.mark.parametrize("shared_connection", [False, True])
+def test_inspected_equal_length_drift_does_not_migrate_outdated_destination(
+    tmp_path, shared_connection
+):
+    import os
+    from metroliza.reports.report_schema import ensure_report_schema, is_report_schema_ready
+
+    source = tmp_path / "sample.csv"
+    source.write_bytes(b"reviewed")
+    before_stat = source.stat()
+    inspection = SourceInspectionContext.from_path(source, source_format="csv")
+    assert inspection.sha256
+    database = tmp_path / "outdated.sqlite3"
+    ensure_report_schema(str(database))
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
+        connection.execute("DROP INDEX idx_source_file_locations_active_path_unique")
+        connection.commit()
+        assert not is_report_schema_ready(connection)
+        before = list(connection.iterdump())
+        before_bytes = database.read_bytes()
+        source.write_bytes(b"tampered")
+        os.utime(source, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+
+        with pytest.raises(SourceChangedAfterInspectionError):
+            import_parse_result_v2_if_absent(
+                _persistable_parse_result(),
+                source_path=source,
+                database=str(database),
+                connection=connection if shared_connection else None,
+                source_inspection=inspection,
+            )
+
+        assert list(connection.iterdump()) == before
+        assert database.read_bytes() == before_bytes
+        assert not is_report_schema_ready(connection)
 
 
 def test_atomic_import_rejects_explicit_digest_from_older_source_before_repository(

@@ -1592,14 +1592,14 @@ class ReportRepository:
         # The stat check is only an early-out. Content must be verified after the
         # write lock is acquired, including when BEGIN IMMEDIATE had to wait.
         reviewed_stat = _source_stat_signature(source_path)
-        if source_digest_verifier is None:
-            # Uninspected repository callers still need an initial digest before
-            # schema creation (#1019). Selected imports carry the preflight digest
-            # and its verifier, so they do not perform this extra inspection.
+        if source_digest_verifier is None or not self._import_schema_is_ready():
+            # Reject stale content before schema creation/migration can commit.
+            # An inspected import into a ready schema needs only the verification
+            # under the write lock below; schema work requires this extra guard.
             source_sha256 = self._verify_import_source_digest(
                 source_path,
                 expected_sha256=source_sha256,
-                source_digest_verifier=None,
+                source_digest_verifier=source_digest_verifier,
             )
         self._ensure_import_schema()
         now = utc_timestamp()
