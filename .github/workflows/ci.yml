@@ -4,8 +4,9 @@ on:
   pull_request:
   push:
     # Topic branches are qualified by pull_request, avoiding duplicate heavy runs.
-    # Keep direct integration/release pushes covered, including nested names.
-    branches: [master, main, develop, rc2, 'integrate/**', 'release/**', 'hotfix/**']
+    # Keep direct integration/release/build pushes covered, including nested names.
+    # RC artifacts are cut from build/** branches. Pushes always run the full lane.
+    branches: [master, main, develop, rc2, 'integrate/**', 'release/**', 'hotfix/**', 'build/**']
   workflow_dispatch:
     inputs:
       run_packaging_smoke:

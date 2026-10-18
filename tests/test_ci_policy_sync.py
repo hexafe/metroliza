@@ -1111,9 +1111,11 @@ def test_topic_push_deduplication_preserves_integration_and_dispatch_qualificati
     assert not triggers['pull_request']  # No path/base filter can strand a required check.
     assert set(triggers['push']) == {'branches'}
     branches = triggers['push']['branches']
-    assert branches == ['master', 'main', 'develop', 'rc2', 'integrate/**', 'release/**', 'hotfix/**']
+    assert branches == ['master', 'main', 'develop', 'rc2', 'integrate/**', 'release/**', 'hotfix/**',
+                        'build/**']
     for branch in ('master', 'develop', 'rc2', 'integrate/2026.09-rc1-into-develop',
-                   'integrate/nested/branch', 'release/2026.09-rc1', 'hotfix/urgent'):
+                   'integrate/nested/branch', 'release/2026.09-rc1', 'hotfix/urgent',
+                   'build/onefile-20260927'):
         assert any(fnmatchcase(branch, pattern) for pattern in branches)
     for branch in ('ci/1061-docs-only-path', 'docs/example', 'feature/code', 'fix/mixed'):
         assert not any(fnmatchcase(branch, pattern) for pattern in branches)
@@ -1124,5 +1126,6 @@ def test_topic_push_deduplication_preserves_integration_and_dispatch_qualificati
         assert 'needs' not in workflow['jobs'][job_id]
     policy = CI_POLICY_PATH.read_text()
     for text in ('docs-only', 'README.md', 'CHANGELOG.md', 'tests/fixtures/',
-                 'workflow_dispatch', 'classify-changes', 'neutral', '#1061', '#976'):
+                 'workflow_dispatch', 'classify-changes', 'neutral', '#1061', '#976',
+                 'build/**', 'Pushes always run the full lane', 'EXECUTABLE_INPUT_DOCS'):
         assert text in policy

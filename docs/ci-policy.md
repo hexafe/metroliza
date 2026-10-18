@@ -7,14 +7,18 @@ This policy defines the **required CI checks** and Tier-0 selection implemented 
 
 - CI is triggered on:
   - every `pull_request`, without path or target-branch filtering;
-  - direct `push` to `master`, `main`, `develop`, `rc2`, `integrate/**`, `release/**`
-    and `hotfix/**`, including nested integration/release names;
+  - direct `push` to `master`, `main`, `develop`, `rc2`, `integrate/**`, `release/**`,
+    `hotfix/**` and `build/**` (RC artifacts are cut from build branches), including
+    nested names;
   - `workflow_dispatch`, with the existing opt-in qualification inputs.
 - Topic branches use PR CI only. A topic push without an open PR has no automatic CI;
   open a PR or dispatch CI to qualify it. This removes duplicate topic push + PR workloads
   without querying PR state, changing concurrency keys, or losing integration-push CI.
-  Integration/release/hotfix branches intentionally retain push coverage even when they
-  are also PR sources; that exceptional pair can still run both integration and PR CI.
+  Integration/release/hotfix/build branches intentionally retain push coverage even when
+  they are also PR sources; that exceptional pair can still run both integration and PR CI.
+- Pushes always run the full lane. Only `pull_request` events can select Tier 0, so a
+  push run and a PR run on the same SHA never disagree about which checks ran, and the
+  integration-branch push remains a backstop for the PR classification.
 - For PR merge readiness, the required checks are the blocking jobs listed below.
 
 ## Tier 0: docs-only classification
@@ -22,7 +26,7 @@ This policy defines the **required CI checks** and Tier-0 selection implemented 
 `classify-changes` runs `scripts/ci_change_classifier.py` against complete local Git
 history (`fetch-depth: 0`). A PR compares its merge base with the event's head SHA,
 covering all commits in the PR rather than just the latest push or an API file page.
-A push compares the complete event `before..after` range. Renames are expanded into
+Pushes and `workflow_dispatch` never take Tier 0. Renames are expanded into
 delete/add pairs so **both paths** count; deletions use the old path and mode.
 
 Only regular, non-executable Markdown in these human-facing prose locations qualifies:
@@ -36,6 +40,11 @@ Directories named `assets`, `fixtures`, `generated`, `templates`, `prompts`, or
 `contracts` are excluded even inside those prose roots. Human task/report templates
 in `docs/engineering/` remain prose. A new code-consumed Markdown input must stay
 outside the allowlist or gain an explicit exclusion with classifier tests before use.
+Markdown inside the prose roots that code or non-Tier-0 tests read (for example the
+feature catalog, the bug-sweep templates and the supervised diagnostics contract) is listed
+in `EXECUTABLE_INPUT_DOCS` and runs full CI. A structural test scans `tests/`, `scripts/`,
+`src/` and `packaging/` for Markdown references and fails when a new consumer of prose
+appears, and another test keeps its Tier-0 list in sync with the workflow step.
 
 The following require **full CI**, regardless of file extension:
 

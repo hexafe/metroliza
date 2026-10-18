@@ -16,6 +16,17 @@ PROSE_ROOTS = (
     "docs/roadmaps/", "docs/quality/", "docs/archive/",
 )
 PROSE_FILES = {"AGENTS.md", "CONTRIBUTING.md", ".github/pull_request_template.md"}
+# Markdown under the prose roots that code or non-Tier-0 tests read as input. Editing it must
+# run the full lane. tests/test_ci_change_classifier.py::test_markdown_read_by_code_is_never_docs_only
+# scans tests/, scripts/, src/ and packaging/ and fails when a new consumer appears here.
+EXECUTABLE_INPUT_DOCS = frozenset({
+    "docs/engineering/supervised-diagnostics-v1.md",
+    "docs/project/feature_catalog.md",
+    "docs/quality/bug_sweep/README.md",
+    "docs/quality/bug_sweep/finding_template.md",
+    "docs/quality/bug_sweep/residual_risk_template.md",
+    "docs/roadmaps/OZNAK_METROLIZA_INTEGRATION_AUDIT_PLAN.md",
+})
 INPUT_DIRECTORIES = {"assets", "fixtures", "generated", "templates", "prompts", "contracts"}
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 RAW_HEADER = re.compile(rb":([0-7]{6}) ([0-7]{6}) [0-9a-f]+ [0-9a-f]+ ([AMD])")
@@ -26,7 +37,9 @@ def is_prose(path: str) -> bool:
     parts = PurePosixPath(path).parts
     if not parts or path != PurePosixPath(path).as_posix() or ".." in parts:
         return False
-    if parts[0] == "/" or "\\" in path or set(parts) & INPUT_DIRECTORIES:
+    if parts[0] == "/" or "\\" in path or {part.lower() for part in parts} & INPUT_DIRECTORIES:
+        return False
+    if path in EXECUTABLE_INPUT_DOCS:
         return False
     if path in PROSE_FILES:
         return True
@@ -54,14 +67,17 @@ def docs_only_from_raw(raw: bytes) -> bool:
 
 
 def event_range(event_name: str, event: dict) -> tuple[str, str, bool] | None:
-    """PRs use the merge base; pushes use the entire before..after interval."""
-    if event_name == "pull_request":
-        pr = event["pull_request"]
-        base, head, merge_base = pr["base"]["sha"], pr["head"]["sha"], True
-    elif event_name == "push":
-        base, head, merge_base = event["before"], event["after"], False
-    else:
-        return None  # Dispatch always qualifies the full lane, including packaging dependencies.
+    """Only pull requests can take the docs-only lane, using their full merge-base range.
+
+    Pushes (integration/release/hotfix/build branches) always run the full lane: their
+    before..after range covers only the latest push, so a docs-only push run could otherwise
+    report skipped checks with the same names on the same SHA as a full PR run, and it is
+    also the backstop for anything a PR classification missed. Dispatch is always full.
+    """
+    if event_name != "pull_request":
+        return None
+    pr = event["pull_request"]
+    base, head, merge_base = pr["base"]["sha"], pr["head"]["sha"], True
     if not all(isinstance(sha, str) and SHA_PATTERN.fullmatch(sha) and int(sha, 16)
                for sha in (base, head)):
         return None  # Includes branch creation/deletion; never guess a partial diff.
