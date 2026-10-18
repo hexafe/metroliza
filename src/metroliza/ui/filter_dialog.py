@@ -920,7 +920,15 @@ class FilterDialog(QDialog):
         self._value_loader = loader
         loader.values_ready.connect(self._receive_filter_values)
         loader.load_failed.connect(self._filter_values_failed)
+        loader.finished.connect(self._value_load_finished)
         loader.start()
+
+    def _value_load_finished(self):
+        # Interrupted requests emit no result. Drop their wrapper before the
+        # registry deletes it, including during application shutdown.
+        if self.sender() is self._value_loader:
+            self._values_error = True
+            self._finish_value_load()
 
     def _finish_value_load(self):
         self._value_loader = None
