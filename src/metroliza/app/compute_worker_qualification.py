@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -36,33 +37,77 @@ def write_reports(source: Path) -> None:
             document.close()
 
 
-def run_import(source: Path, database: Path) -> dict:
+def _timed_stage(timings, stage, function):
+    def timed(*args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return function(*args, **kwargs)
+        finally:
+            timings[stage] += time.perf_counter() - started
+    return timed
+
+
+@contextmanager
+def _observe_import(timings, hydrated):
+    """Measure parent-stage wall time only inside the synthetic smoke workflow."""
     from metroliza.parsing.cmm_report_parser import CMMReportParser
+    from metroliza.parsing.import_prepare_pool import ImportPreparePool
+    from metroliza.parsing import parse_reports_thread as pipeline
+
+    original_apply = CMMReportParser.apply_prepared_state
+    original_parse = pipeline.parse_new_reports
+
+    def apply(parser, state):
+        result = original_apply(parser, state)
+        hydrated.append(True)
+        return result
+
+    def parse(*args, **kwargs):
+        kwargs['parser_factory'] = _timed_stage(timings, 'prepare', kwargs['parser_factory'])
+        kwargs['persist_report'] = _timed_stage(timings, 'persist', kwargs['persist_report'])
+        return original_parse(*args, **kwargs)
+
+    replacements = (
+        (CMMReportParser, 'apply_prepared_state', apply),
+        (CMMReportParser, 'prepare_for_two_stage_pipeline',
+         _timed_stage(timings, 'prepare', CMMReportParser.prepare_for_two_stage_pipeline)),
+        (ImportPreparePool, 'apply_to', _timed_stage(timings, 'prepare', ImportPreparePool.apply_to)),
+        (pipeline, 'parse_new_reports', parse),
+    )
+    originals = [(owner, name, getattr(owner, name)) for owner, name, _ in replacements]
+    try:
+        for owner, name, replacement in replacements:
+            setattr(owner, name, replacement)
+        yield
+    finally:
+        for owner, name, original in reversed(originals):
+            setattr(owner, name, original)
+
+
+def run_import(source: Path, database: Path) -> dict:
     from metroliza.parsing.parse_reports_thread import ParseReportsThread
     from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
     from metroliza.shared.parse_contracts import ParseRequest
 
     request = ParseRequest(str(source), str(database), 'light')
+    total_started = time.perf_counter()
+    started = time.perf_counter()
     preflight = ParsePreflightService().scan_source(
         source_path=source, database_path=database, metadata_parsing_mode='light')
+    timings = {'preflight': time.perf_counter() - started, 'prepare': 0.0, 'persist': 0.0}
     thread = ParseReportsThread(ImportPlan.all_ready(request, preflight))
-    original = CMMReportParser.apply_prepared_state
     hydrated = []
-
-    def apply(parser, state):
-        result = original(parser, state)
-        hydrated.append(True)
-        return result
-
-    CMMReportParser.apply_prepared_state = apply
     started = time.perf_counter()
-    try:
+    with _observe_import(timings, hydrated):
         thread.run()
-    finally:
-        CMMReportParser.apply_prepared_state = original
+    seconds = time.perf_counter() - started
+    timings['other_pipeline'] = max(0.0, seconds - timings['prepare'] - timings['persist'])
     if thread.last_parse_result.imported_files != REPORTS:
         raise ValueError('compute_import_incomplete')
-    return {'seconds': time.perf_counter() - started, 'imported': REPORTS, 'hydrated': len(hydrated)}
+    return {'seconds': seconds, 'total_seconds': time.perf_counter() - total_started,
+            'stage_seconds': timings, 'imported': REPORTS, 'hydrated': len(hydrated),
+            'timing_scope': 'parent_wall_time_prepare_includes_resolution_and_worker_wait;'
+                            'other_pipeline_includes_setup_approval_cleanup;seconds_excludes_preflight'}
 
 
 def run_export(database: Path, workbook: Path) -> dict:
@@ -86,6 +131,13 @@ def run_export(database: Path, workbook: Path) -> dict:
 def run_qualification() -> int:
     if os.environ.get('METROLIZA_STARTUP_SMOKE') != '1' or not os.environ.get(GATE):
         raise ValueError('compute_qualification_gate_required')
+    from metroliza.shared.compute_worker import use_native_windows_version
+
+    # NumPy is imported lazily between the import and export pools. Its parent
+    # version probe otherwise inserts a cmd/conhost pair between worker launches,
+    # violating the existing strict topology order. Reuse the OCR/compute native
+    # fallback before workload imports; do not relax that order or its allowlist.
+    use_native_windows_version()
     from PyQt6.QtWidgets import QApplication
     from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
 

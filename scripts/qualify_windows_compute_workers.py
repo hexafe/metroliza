@@ -88,10 +88,34 @@ def validate_usage(payload: dict, enabled: bool) -> None:
             raise ValueError('compute_timing_invalid')
 
 
-def launch_trial(artifact: Path, trial: Path, state: Path, temp: Path, enabled: bool) -> dict:
+def _wait_for_trial(process, trial: Path, deadline: float) -> None:
+    while time.monotonic() < deadline:
+        process.observe()
+        if (trial / 'compute-ready').is_file():
+            process.mark_runtime_ready()
+        if process.poll() is not None and process.active_processes() == 0:
+            return
+        time.sleep(0.01)
+    raise ValueError('compute_timeout')
+
+
+def _retain_runtime_evidence(evidence, result: dict) -> None:
+    try:
+        proof = evidence.proof()
+    except Exception:
+        result.setdefault('runtime_audit', {'status': 'unavailable'})
+    else:
+        result['runtime_audit'] = {'status': 'observed', 'events': proof['events']}
+        result['runtime_evidence'] = proof
+
+
+def launch_trial(artifact: Path, trial: Path, state: Path, temp: Path, enabled: bool,
+                 *, result: dict | None = None) -> dict:
     from scripts.qualify_windows_diagnostics import _WindowsApi, QualificationFailure, _topology_record
     from scripts.windows_owned_process_probe import RuntimeEvidence
 
+    result = {} if result is None else result
+    result['stage'] = 'trial_setup'
     trial.mkdir()
     environment = build_environment(state, temp, trial / 'unused-profile', offscreen=True)
     environment.pop('METROLIZA_STARTUP_UI_SMOKE', None)
@@ -112,25 +136,28 @@ def launch_trial(artifact: Path, trial: Path, state: Path, temp: Path, enabled: 
     process = None
     started = time.monotonic()
     try:
+        result['stage'] = 'launch'
         process = api.launch(images[0], environment, trial, expected_images=images, runtime_evidence=evidence)
-        deadline = started + 900
-        while time.monotonic() < deadline:
-            process.observe()
-            if (trial / 'compute-ready').is_file():
-                process.mark_runtime_ready()
-            if process.poll() is not None and process.active_processes() == 0:
-                break
-            time.sleep(0.01)
-        else:
-            raise ValueError('compute_timeout')
+        result['stage'] = 'workload'
+        _wait_for_trial(process, trial, started + 900)
+        result['stage'] = 'application_exit'
         if process.poll() != 0:
             raise ValueError('compute_application_failed')
-        topology = _topology_record(process.topology(artifact, all_exited=True))
+        result['stage'] = 'workload_receipt'
         payload = json.loads((trial / 'compute.json').read_text(encoding='utf-8'))
+        result.update(payload)
+        result['stage'] = 'usage_validation'
         validate_usage(payload, enabled)
-        payload.update(topology=topology, wall_seconds=time.monotonic() - started)
-        return payload
+        result['stage'] = 'topology'
+        _retain_runtime_evidence(evidence, result)
+        result['topology'] = _topology_record(process.topology(artifact, all_exited=True))
+        result['stage'] = 'complete'
+        return result
     finally:
+        # Snapshot before close destroys the private journal, also when
+        # topology/observation rejects the run. Never replace the primary error.
+        _retain_runtime_evidence(evidence, result)
+        result['wall_seconds'] = time.monotonic() - started
         if process is not None:
             process.close(terminate=True)
         else:
@@ -143,6 +170,7 @@ def launch_trial(artifact: Path, trial: Path, state: Path, temp: Path, enabled: 
 def qualify(artifact: Path, receipt: dict) -> None:
     from metroliza.shared.diagnostic_package import inspect_package
 
+    receipt['stage'] = 'package_identity'
     identity = inspect_package(artifact)
     if not identity.valid:
         raise ValueError('compute_package_identity_invalid')
@@ -155,21 +183,29 @@ def qualify(artifact: Path, receipt: dict) -> None:
         state, temp = root / 'state', root / 'temp'
         (state / 'Roaming').mkdir(parents=True)
         temp.mkdir()
+        receipt['stage'] = 'fixture'
         write_reports(root / 'reports')
         expected_rows = expected_parts = None
         for index in range(3):
             for enabled in ((False, True) if index % 2 == 0 else (True, False)):
                 trial = root / f'{index}-{int(enabled)}'
-                payload = launch_trial(artifact, trial, state, temp, enabled)
-                receipt['runs'].append(dict(index=index, enabled=enabled, **payload))
+                run = dict(index=index, enabled=enabled, stage='trial_setup')
+                receipt['runs'].append(run)
+                receipt['stage'] = 'trial'
+                launch_trial(artifact, trial, state, temp, enabled, result=run)
+                run['stage'] = 'database_comparison'
                 rows = database_rows(trial / 'result.sqlite3')
+                run['stage'] = 'workbook_comparison'
                 parts = workbook_parts(trial / 'result.xlsx')
                 if expected_rows is None:
                     expected_rows, expected_parts = rows, parts
                 if rows != expected_rows or parts != expected_parts:
                     raise ValueError('compute_outputs_differ')
+                run['stage'] = 'extraction_cleanup'
                 if any(path.name.startswith('_MEI') for path in temp.iterdir()):
                     raise ValueError('compute_extraction_remained')
+                run['stage'] = 'complete'
+    receipt['stage'] = 'summary'
     receipt['comparison'] = 'all_database_rows_and_workbook_parts_equal_except_persistence_and_document_clocks'
     receipt['medians_seconds'] = {
         mode: {stage: statistics.median(run[stage]['seconds'] for run in receipt['runs'] if run['enabled'] == enabled)
@@ -180,6 +216,23 @@ def qualify(artifact: Path, receipt: dict) -> None:
     receipt['windows_default_measurement'] = {'groups': GROUPS, 'reports': REPORTS, 'workers': 2,
                                              'scope': 'hosted_runner_boundary_workloads_only'}
     receipt['passed'] = True
+    receipt['stage'] = 'complete'
+
+
+def _record_failure(receipt: dict, error: Exception) -> None:
+    from scripts.qualify_windows_diagnostics import QualificationFailure
+
+    failure = type(error).__name__
+    if isinstance(error, QualificationFailure):
+        failure += ':' + error.failure_id
+    elif isinstance(error, ValueError) and re.fullmatch(r'(compute_[a-z_]+|native_windows_required)', str(error)):
+        failure += ':' + str(error)
+    receipt['failure'] = failure
+    run = receipt['runs'][-1] if receipt['stage'] == 'trial' and receipt['runs'] else None
+    receipt['failure_stage'] = run['stage'] if run is not None else receipt['stage']
+    if run is not None:
+        run['failure'] = failure
+        receipt['failure_run'] = {'index': run['index'], 'enabled': run['enabled']}
 
 
 def main(argv=None) -> int:
@@ -187,7 +240,7 @@ def main(argv=None) -> int:
     parser.add_argument('--artifact-dir', required=True, type=Path)
     parser.add_argument('--receipt', required=True, type=Path)
     args = parser.parse_args(argv)
-    receipt = {'schema_version': 1, 'passed': False, 'runs': [],
+    receipt = {'schema_version': 1, 'passed': False, 'runs': [], 'stage': 'platform',
                'load_average': list(os.getloadavg()) if hasattr(os, 'getloadavg') else 'unavailable_on_windows',
                'processor_count': os.cpu_count()}
     try:
@@ -195,10 +248,11 @@ def main(argv=None) -> int:
             raise ValueError('native_windows_required')
         qualify(args.artifact_dir.resolve(), receipt)
     except Exception as error:
-        receipt['failure'] = type(error).__name__ + ':' + str(error) if isinstance(error, ValueError) else type(error).__name__
+        _record_failure(receipt, error)
     finally:
         args.receipt.parent.mkdir(parents=True, exist_ok=True)
         args.receipt.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+        print('qualification_compute_receipt=' + json.dumps(receipt, sort_keys=True), flush=True)
     return 0 if receipt['passed'] else 1
 
 
