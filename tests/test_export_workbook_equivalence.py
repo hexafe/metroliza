@@ -337,8 +337,9 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
         tmp = Path(cls._tmp.name)
         cls.db_path = tmp / 'metroliza.sqlite'
         cls.total_reports = build_equivalence_db(cls.db_path, tmp)
-        cls.bulk_calls = {'reference': [], 'candidate': [], 'streamed': []}
-        cls.stream_calls = {'reference': [], 'candidate': [], 'streamed': []}
+        keys = ('reference', 'candidate', 'streamed', 'group', 'group_classic')
+        cls.bulk_calls = {key: [] for key in keys}
+        cls.stream_calls = {key: [] for key in keys}
         cls.reference_path = cls._export(tmp / 'reference.xlsx', bulk=False, label='reference')
         cls.candidate_path = cls._export(tmp / 'candidate.xlsx', bulk=True, label='candidate')
         cls.streamed_path = cls._export(tmp / 'streamed.xlsx', bulk=True, label='streamed', full_run=True)
@@ -347,7 +348,7 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
         )
 
     @classmethod
-    def _export(cls, out_path, *, bulk, label, full_run=False):
+    def _export(cls, out_path, *, bulk, label, full_run=False, options=None):
         # The thread module is loaded in isolation (see `_load_export_thread_type`), so
         # patch the exact classes it uses rather than a separately imported copy.
         ExcelExportBackend = cls.export_thread_type.get_export_backend.__globals__['ExcelExportBackend']
@@ -370,7 +371,12 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
             ExcelExportBackend, 'write_streamed_rows', recording_stream
         ):
             return export_workbook(
-                cls.db_path, out_path, bulk=bulk, export_thread_type=cls.export_thread_type, full_run=full_run
+                cls.db_path,
+                out_path,
+                bulk=bulk,
+                export_thread_type=cls.export_thread_type,
+                full_run=full_run,
+                options=options,
             )
 
     @classmethod
@@ -391,6 +397,18 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
 
     def test_streamed_snapshot_export_workbook_is_identical(self):
         assert_workbooks_equivalent(self, self.reference_path, self.streamed_path)
+
+    def test_group_analysis_run_keeps_the_in_memory_table_path_and_is_identical(self):
+        tmp = Path(self._tmp.name)
+        options = ExportOptions(generate_summary_sheet=False, group_analysis_level='light')
+        classic = self._export(
+            tmp / 'group_classic.xlsx', bulk=False, label='group_classic', full_run=True, options=options
+        )
+        optimised = self._export(tmp / 'group_bulk.xlsx', bulk=True, label='group', full_run=True, options=options)
+        # Group Analysis needs the whole table later, so the raw sheet is not streamed.
+        self.assertEqual(self.stream_calls['group'], [])
+        self.assertEqual(self.bulk_calls['group'], [('MEASUREMENTS', self.total_reports * 6, True)])
+        assert_workbooks_equivalent(self, classic, optimised)
 
     def test_full_run_with_and_without_the_bulk_path_is_identical(self):
         assert_workbooks_equivalent(self, self.classic_full_run_path, self.streamed_path)
