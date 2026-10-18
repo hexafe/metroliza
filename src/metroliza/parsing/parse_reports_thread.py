@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
@@ -1029,7 +1029,7 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
                 updated_fields.append(field_name)
             continue
 
-        if current_value not in (None, ""):
+        if current_value not in (None, "") or _field_has_manual_override(current_metadata_json, field_name):
             merged_map[field_name] = current_value
             if current_value != enriched_value:
                 preserved_fields.append(field_name)
@@ -1151,6 +1151,19 @@ def selection_result_for_complete_metadata_parser(parser):
     return selection_result
 
 
+def _enriched_candidates_after_manual_clears(candidates, metadata):
+    """Keep detected evidence without selecting values explicitly cleared by a user."""
+    cleared = {
+        name for name in _METADATA_VALUE_FIELDS
+        if _field_has_manual_override(metadata.metadata_json, name)
+        and _metadata_value(metadata, name) in (None, "")
+    }
+    return tuple(
+        replace(candidate, selected=False) if candidate.field_name in cleared else candidate
+        for candidate in candidates
+    )
+
+
 def persist_complete_metadata_enrichment(
     db_file, report_id, selection_result, *, connection=None,
     approval: ReportEnrichmentApproval | None = None,
@@ -1174,7 +1187,7 @@ def persist_complete_metadata_enrichment(
     repository.replace_report_metadata_enrichment(
         report_id,
         merged_metadata,
-        candidates=selection_result.candidates,
+        candidates=_enriched_candidates_after_manual_clears(selection_result.candidates, merged_metadata),
         warnings=merged_metadata.warnings,
         metadata_version="report_metadata_v1",
         metadata_profile_id=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.template_family,
@@ -1963,6 +1976,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         return parser.import_prepared_report_if_absent()
                     return parser.import_report_if_absent()
 
+                metadata_overrides = {
+                    override.occurrence_id: override for override in plan.metadata_overrides
+                }
+
                 def _parser_factory(
                     report,
                     *,
@@ -1979,6 +1996,15 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         expected_plugin_id=expected_plugin_id,
                         expected_registry_generation_id=(expected_registry_generation_id),
                     )
+                    review_override = metadata_overrides.get(
+                        self._occurrence_id_for_report(Path(report))
+                    )
+                    if review_override is not None:
+                        if not getattr(parser, "supports_metadata_review_override", False):
+                            raise ValueError(
+                                "Parser does not support reviewed metadata overrides."
+                            )
+                        parser.metadata_review_override = review_override
                     import_policy = ReportImportPolicy(
                         metadata_parsing_mode=self.metadata_parsing_mode,
                         refreshable_parser_id=_CURRENT_CMM_METADATA_PARSER_ID,

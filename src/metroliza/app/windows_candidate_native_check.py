@@ -28,7 +28,9 @@ def close_report_owner(window, app) -> None:
     """Cancel and join actual report workers before unwinding the native scope."""
     workspace = getattr(window, "_reports_workspace", None)
     workers = () if workspace is None else tuple(
-        worker for worker in (workspace.preflight_thread, workspace.parse_thread) if worker is not None
+        worker
+        for worker in (workspace.preflight_thread, workspace.parse_thread, *getattr(workspace, "_metadata_threads", ()))
+        if worker is not None
     )
     if workspace is not None:
         workspace._request_active_worker_cancellation()
