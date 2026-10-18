@@ -37,7 +37,11 @@ from metroliza.reports.report_repository import (
 )
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
-from metroliza.parsing.import_prepare_pool import ImportPreparePool, resolve_prepare_worker_count
+from metroliza.parsing.import_prepare_pool import (
+    ImportPreparationCancelled,
+    ImportPreparePool,
+    resolve_prepare_worker_count,
+)
 from metroliza.parsing.parse_result_v2_persistence import (
     build_persistence_payload,
     import_parse_result_v2_payload_if_absent,
@@ -610,8 +614,12 @@ def parse_new_reports(
     def _prepare_report(work_item, prepared):
         """Prepare in a worker process when it produced this report's state, else in-process."""
 
+        if should_cancel():
+            raise ImportPreparationCancelled()
         if prepare_pool is not None and prepare_pool.apply_to(work_item, prepared):
             return
+        if should_cancel():
+            raise ImportPreparationCancelled()
         prepared.parser.prepare_for_two_stage_pipeline()
 
     if enable_two_stage_pipeline:
@@ -813,6 +821,8 @@ def parse_new_reports(
                     break
                 outcome = persist_report(parser)
                 _record_persistence_outcome(outcome)
+            except ImportPreparationCancelled:
+                break
             except Exception as exc:
                 if _is_selected_approval_drift(work_item, exc):
                     _record_approval_drift(report, exc)

@@ -34,6 +34,10 @@ INFLIGHT_PER_WORKER = 3
 _RESULT_POLL_SECONDS = 0.2
 
 
+class ImportPreparationCancelled(Exception):
+    """The owner cancelled preparation; serial fallback must not run."""
+
+
 def _is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
@@ -188,11 +192,12 @@ class ImportPreparePool:
 
     def _result(self, future):
         while True:
+            if self._should_cancel():
+                raise ImportPreparationCancelled()
             try:
                 return future.result(timeout=_RESULT_POLL_SECONDS)
             except FutureTimeoutError:
-                if self._should_cancel():
-                    return None
+                continue
             except Exception as exc:
                 self._broken = self._broken or isinstance(exc, BrokenProcessPool)
                 logger.debug("Import prepare worker failed: %s", type(exc).__name__)

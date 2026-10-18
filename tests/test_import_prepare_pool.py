@@ -410,3 +410,36 @@ def test_worker_state_is_never_applied_to_a_parser_that_is_not_the_builtin_cmm_p
         resolution_evidence=SimpleNamespace(plugin_id=CMMReportParser.manifest.plugin_id),
     )
     assert ImportPreparePool._eligible(pool, prepared) is False
+
+
+def test_cancel_during_unresolved_future_never_prepares_serially(tmp_path, monkeypatch):
+    from concurrent.futures import Future
+
+    _write_synthetic_reports(tmp_path / "reports", 2)
+    _pool_env(monkeypatch, "2")
+    thread = ParseReportsThread(_plan(tmp_path / "reports", tmp_path / "db.sqlite3"))
+    counts = _count_in_process_work(monkeypatch)
+    shutdown = []
+
+    class CancellingFuture(Future):
+        def result(self, timeout=None):
+            thread.stop_parsing()
+            return super().result(timeout=0.001)
+
+    class UnresolvedExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        def submit(self, *args):
+            return CancellingFuture()
+
+        def shutdown(self, **kwargs):
+            shutdown.append(kwargs)
+
+    monkeypatch.setattr(import_prepare_pool, "ProcessPoolExecutor", UnresolvedExecutor)
+    thread.run()
+
+    assert counts == {"hydrated": 0, "prepared_in_process": 0}
+    result = thread.last_parse_result
+    assert (result.imported_files, result.failed_files, result.cancelled_files) == (0, 0, 2)
+    assert shutdown and shutdown[0]["cancel_futures"] is True
