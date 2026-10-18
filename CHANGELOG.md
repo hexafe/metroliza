@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261018) — current version
+## 2026.09 RC1 (build 261019) — current version
 - Much faster start on Windows: the app unpacks once per version into the local app data folder; later starts open the main window in about a second.
 - Smaller download: unused OCR acceleration (OpenVINO), video and software-OpenGL components are no longer bundled.
 - Fast report import is about 2.5 times faster.

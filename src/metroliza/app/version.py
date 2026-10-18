@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "261018"
+VERSION_DATE = "261019"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import."
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261018)"
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261019)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
