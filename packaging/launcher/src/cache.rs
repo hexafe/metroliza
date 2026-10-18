@@ -216,6 +216,13 @@ pub struct Options {
     /// Worker threads decoding and writing files (bounded).
     pub threads: usize,
     /// `fsync` every extracted file so a power loss cannot leave a marker next to unwritten data.
+    ///
+    /// Off by default. One `FlushFileBuffers` per file (~2,000 files in the supervised onedir)
+    /// made the first launch on Windows slower than PyInstaller's own extraction, which never
+    /// flushes. Without it, a power loss in the seconds after the first extraction is still
+    /// covered: the warm check (`is_warm`) catches missing or truncated files, the supervisor
+    /// hashes its fixed components and asks for a repair (exit 75), and the marker itself is
+    /// always flushed. `METROLIZA_LAUNCHER_SYNC_FILES=1` turns the per-file flush back on.
     pub sync_files: bool,
 }
 
@@ -224,7 +231,7 @@ impl Default for Options {
         let cpus = thread::available_parallelism().map_or(2, |n| n.get());
         Self {
             threads: cpus.clamp(2, 8),
-            sync_files: true,
+            sync_files: std::env::var_os("METROLIZA_LAUNCHER_SYNC_FILES").is_some_and(|v| v == "1"),
         }
     }
 }

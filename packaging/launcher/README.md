@@ -148,8 +148,11 @@ written to `%TEMP%`.
 5. **Cold** (no directory) or **repair** (directory present but invalid): show the progress window,
    take `.extract.lock` (waiting if another process extracts, then re-check warm), delete stale
    staging directories, delete the invalid directory, extract with a bounded thread pool into
-   `<dir>.staging-<pid>`, verify the SHA-256 of every file while writing, `fsync` each file,
-   rename into place, then write and flush the marker.
+   `<dir>.staging-<pid>`, verify the SHA-256 of every file while writing, rename into place, then write and flush the
+   marker. Files are not flushed one by one: per-file `FlushFileBuffers` made the first launch
+   slower than PyInstaller's extraction (Windows CI, #1105). A power loss right after extraction
+   is caught by the warm check (missing or truncated files) and by the supervisor's component
+   hashes (exit 75 repair). Set `METROLIZA_LAUNCHER_SYNC_FILES=1` to flush every file anyway.
 6. Start the entry executable with `CreateProcessW`: no inherited handles, the **launcher's own
    working directory** (where the user started it, as with the portable envelope; the runtime
    directory is a disposable cache and must never become the default folder of a file dialog or of
