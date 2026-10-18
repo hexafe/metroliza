@@ -180,6 +180,10 @@ def _seed_report_database(app, child: Path, reports: Path) -> Path:
         _require(model.valid and model.counts["ready"] == 5, "seed_review_mismatch")
         _select_names(model, {"REF001_2024-01-01_1.pdf", "REF001_2024-01-01_3.pdf"})
         workspace.parse_button.click()
+        # A fast metadata reader can still own a PDF after preflight finishes.
+        # Import queues behind its cancellation; observe that handoff first.
+        _wait(app, lambda: workspace.parse_thread is not None, seconds=30.0,
+              code="seed_import_start_deadline")
         worker = workspace.parse_thread
         _require(worker is not None, "seed_import_worker_missing")
         _wait(app, lambda: workspace.parse_thread is None, seconds=45.0,
