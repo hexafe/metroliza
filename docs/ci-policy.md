@@ -92,8 +92,9 @@ These checks are explicitly non-blocking for normal PR CI:
 | Performance benchmark trend check | `perf-benchmarks` | Automatic on PRs and branch pushes after static checks and unit tests pass | **Non-blocking** advisory signal; compares medians with a 12% threshold and 0.100s absolute slowdown floor, reports export stage medians for review, and keeps the PR check green while artifacts preserve the advisory failure details |
 | Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
 | Google conversion smoke (release-only) | Local secure workstation command documented in `docs/google_conversion_smoke_runbook.md` | Explicit local opt-in with sandbox `credentials.json` and `token.json` | Not a hosted CI job; **release-blocking** evidence for promoted RC artifacts |
-| Windows startup benchmark (release-only) | `windows-startup-benchmark` | Manual `workflow_dispatch` with `run_windows_startup_benchmark=1` | **Non-blocking** for regular PRs and pushes |
-| Native launcher qualification (opt-in) | `windows-launcher-qualification` | Owner-only manual `workflow_dispatch` with `run_windows_launcher_qualification=1` on a public repository | **Non-blocking**; builds the launcher, runs its tests on Windows, qualifies a synthetic payload (cold/warm/second instance/corruption/upgrade/kill) and uploads the EXE and JSON report. Does not qualify the real application payload or signing. |
+| Windows startup benchmark (release-only) | `windows-startup-benchmark` | Manual `workflow_dispatch` with `run_windows_startup_benchmark=1` | **Non-blocking** for regular PRs and pushes; builds the shipped supervised onedir, the portable envelope EXE and the native launcher EXE (user flavor) and measures the same startup smoke through each route (see below) |
+| Supervised portable onefile + native launcher qualification (opt-in) | `windows-portable-onefile` | Owner-only manual `workflow_dispatch` with `run_windows_portable_onefile=1` on a public repository | **Non-blocking**; builds the supervised onedir and the portable envelope, then packs the same onedir into the native launcher EXE. Both EXEs run the same first-launch, reopen, hard-exit and incident scenarios (`scripts/qualify_windows_portable_onefile.py`, `--kind envelope\|launcher`); the launcher run also asserts `cache=cold` then `cache=warm` and one complete content-keyed runtime directory. Uploads `windows-supervised-portable-onefile` (envelope) and `windows-supervised-launcher-exe` (launcher, for testers). |
+| Native launcher qualification (opt-in) | `windows-launcher-qualification` | Owner-only manual `workflow_dispatch` with `run_windows_launcher_qualification=1` on a public repository | **Non-blocking**; builds the launcher, runs its tests on Windows, qualifies a synthetic payload (cold/warm/second instance/corruption/self-repair on exit 75/upgrade/kill) and uploads the EXE and JSON report. Does not qualify the real application payload or signing. |
 
 ### Packaging smoke parser semantics
 
@@ -118,23 +119,43 @@ These checks are explicitly non-blocking for normal PR CI:
 
 ### Windows startup benchmark semantics
 
-- The `windows-startup-benchmark` job builds PyInstaller onefile and onedir
-  artifacts through `build_windows_exe.ps1 -Mode both`.
-- It launches both artifacts with `METROLIZA_STARTUP_PROFILE=1` and
-  `METROLIZA_STARTUP_UI_SMOKE=1`, so the app records startup timing JSONL and
-  exits after the first Qt event-loop tick.
-- Each sample must exit with code 0, write a non-empty startup profile, and
-  include the `first_event_loop_tick` profile event before evidence is accepted.
+- The `windows-startup-benchmark` job builds the route users actually get, in the
+  `user` build flavor: `build_windows_portable_exe.ps1` (the supervised onedir
+  plus the PyInstaller portable envelope) and then
+  `build_windows_launcher_exe.ps1 -Supervised` (the same onedir packed into the
+  native launcher EXE `metroliza_<label>_launcher.exe`). The legacy single-process
+  `metroliza_onefile.spec` is no longer built or measured here; it remains in use
+  by `packaging-smoke` and `build_windows_exe.ps1 -Mode both`, and
+  `scripts/measure_windows_startup.ps1` stays available for local comparisons.
+- `scripts/measure_windows_startup_routes.py` runs the same non-interactive smoke
+  through each route, 3 runs each: (a) the portable envelope (extracts the whole
+  onedir to `%TEMP%` on every launch), (b) the launcher cold (a fresh
+  `METROLIZA_RUNTIME_ROOT` for every run) and (c) the launcher warm (launches 2 to
+  4 of one populated cache). Each launcher run must log the expected
+  `cache=cold|warm`, otherwise the run fails.
+- The smoke is `METROLIZA_STARTUP_UI_SMOKE=1`: the application builds and shows
+  the real main window and exits after the first Qt event-loop tick.
+  `METROLIZA_LICENSE_VERIFICATION=0` and `METROLIZA_LAUNCHER_NO_UI=1` keep every
+  dialog away, and each launch has a timeout after which its process tree is
+  killed. The supervisor passes its environment on to the application, so the
+  same variables reach the real window code through the supervised chain.
+  `METROLIZA_STARTUP_PROFILE=1` records the profile events, which carry a
+  wall-clock `epoch_ms` since this change, so the script reports the time from
+  process creation to `main_window_show_called` and to `first_event_loop_tick`
+  (the first moment the event loop could deliver the initial paint; reported as
+  `first paint`), including bootloader, extraction, launcher and supervisor time.
+- Each sample must exit with code 0, write a startup profile with the
+  `first_event_loop_tick` event and `epoch_ms`, and (launcher) the expected cache
+  state before evidence is accepted. A failing run is kept in the report and
+  fails the job.
 - Visual startup splash is disabled by default for offscreen/UI-smoke launches.
   Normal GUI launches use `METROLIZA_STARTUP_SPLASH=auto`; set
   `METROLIZA_STARTUP_SPLASH=1` only when manually validating splash rendering.
   In normal GUI mode, the splash remains visible until feature warmup completes.
-- Windows PyInstaller onefile artifacts also include a bootloader splash for the
-  pre-Python extraction window. It is separate from the Qt splash and is closed
-  by startup bootstrap when UI smoke exits or when the Qt splash takes over.
-- The job uploads `startup-artifacts/`, including raw profile JSONL files and
-  `startup-summary.json`, as release evidence for onefile-vs-onedir startup
-  comparisons.
+- The job prints the table, appends it to the step summary and uploads
+  `startup-artifacts/` as `windows-startup-artifacts`: `startup-benchmark.json`,
+  `startup-benchmark.md`, the raw profile JSONL files and the launcher logs.
+  Hosted-runner numbers are advisory; they are not clean-machine evidence.
 
 ### Performance benchmark trend semantics
 

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 
 def _drop_leaked_qt_stubs() -> None:
@@ -94,6 +95,8 @@ record_event("test_event", detail="ok")
     assert events[-1]["name"] == "test_event"
     assert events[-1]["detail"] == "ok"
     assert events[-1]["elapsed_ms"] >= 0
+    # Wall-clock stamp used by the Windows startup route benchmark.
+    assert abs(events[-1]["epoch_ms"] - time.time() * 1000) < 120_000
 
 
 def test_windows_startup_benchmark_fails_on_crash_or_missing_profile_evidence():
