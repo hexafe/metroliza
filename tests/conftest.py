@@ -35,6 +35,8 @@ if str(PROJECT_ROOT) not in sys.path:
 # (SIGSEGV in ``QObject::property``, see issue #1119). The product creates exactly
 # one QApplication (``metroliza.app.bootstrap``), so only the test process is
 # affected. Keep the first QApplication alive until the interpreter exits.
+# Tests that first create an application inside their body must request
+# qapplication_session: the post-call hook cannot retain a dead local variable.
 _RETAINED_QT_APPLICATIONS: list = []
 
 
@@ -49,6 +51,15 @@ def retain_qapplication() -> None:
         application is kept for kept in _RETAINED_QT_APPLICATIONS
     ):
         _RETAINED_QT_APPLICATIONS.append(application)
+
+
+@pytest.fixture(scope="session")
+def qapplication_session():
+    """Own the application before tests with only test-local Qt references run."""
+    widgets = pytest.importorskip("PyQt6.QtWidgets")
+    application = widgets.QApplication.instance() or widgets.QApplication([])
+    retain_qapplication()
+    return application
 
 
 @pytest.hookimpl(hookwrapper=True)
