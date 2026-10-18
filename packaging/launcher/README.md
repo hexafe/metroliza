@@ -164,7 +164,11 @@ written to `%TEMP%`.
 7. Alongside the app, a best-effort cleanup keeps the current version and the most recently
    completed other version and removes the rest. It only touches directories named
    `<version>_<sha8>`, skips versions whose `.use` lock is held, and yields to a running
-   extraction. It never fails the launch.
+   extraction. Before deleting any file (including the marker), Windows Restart Manager checks
+   every runtime resource for live users. This preserves a complete runtime when an application
+   outlives its supervisor and launcher, even without a `.use` lock; query failures also preserve
+   the directory. Only resource queries are used, never process shutdown or restart. Linux tests
+   use `/proc` executable mappings as the stand-in. It never fails the launch.
 
 A process killed at any point leaves either no marker (so the directory is never used) or a staging
 directory that the next extraction deletes. Corruption or a partial cache is repaired by

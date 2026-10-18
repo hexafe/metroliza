@@ -80,3 +80,30 @@ pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: Option<&Path>) -> Result<
         .map(Child)
         .map_err(|e| LauncherError::launch(format!("spawn: {e}")))
 }
+
+/// Linux qualification stand-in: executable mappings survive their launcher and supervisor.
+#[cfg(target_os = "linux")]
+pub fn runtime_in_use(dir: &Path) -> std::io::Result<bool> {
+    let dir = std::fs::canonicalize(dir)?;
+    for process in std::fs::read_dir("/proc")? {
+        let process = process?;
+        if !process
+            .file_name()
+            .as_encoded_bytes()
+            .iter()
+            .all(u8::is_ascii_digit)
+        {
+            continue;
+        }
+        if std::fs::read_link(process.path().join("exe")).is_ok_and(|p| p.starts_with(&dir)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// No reliable resource-use probe is implemented on other development platforms.
+#[cfg(not(target_os = "linux"))]
+pub fn runtime_in_use(_dir: &Path) -> std::io::Result<bool> {
+    Ok(true)
+}

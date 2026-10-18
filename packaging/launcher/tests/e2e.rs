@@ -505,3 +505,88 @@ fn library_repair_runtime_rebuilds_a_warm_runtime() {
     assert_ne!(fs::read(dir.join("lib/data.bin")).unwrap(), bytes);
     assert!(is_warm(&dir, &payload));
 }
+
+fn wait_for_record(record: &Path, text: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !fs::read_to_string(record)
+        .unwrap_or_default()
+        .contains(text)
+    {
+        assert!(std::time::Instant::now() < deadline, "missing {text}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+struct StopOrphan(PathBuf);
+impl Drop for StopOrphan {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, b"stop");
+    }
+}
+
+#[test]
+fn cleanup_preserves_orphan_after_supervisor_and_launcher_exit() {
+    let (tmp, exe, root, log, record) = repair_fixture("orphan");
+    let stop = tmp.path().join("stop-orphan");
+    let _stop_on_failure = StopOrphan(stop.clone());
+    let run = run_launcher(
+        &exe,
+        &root,
+        &log,
+        &[
+            "--spawn-orphan",
+            "--record",
+            record.to_str().unwrap(),
+            "--stop-file",
+            stop.to_str().unwrap(),
+            "--sleep-ms",
+            "15000",
+        ],
+    );
+    assert_eq!(run.code, Some(0)); // both supervisor and launcher are gone
+    wait_for_record(&record, "started");
+    let orphan_name = "1.0-orphan_abcdef01";
+    let orphan_dir = root.join(orphan_name);
+    let original_marker = fs::read(orphan_dir.join(MARKER)).unwrap();
+    let original_data = fs::read(orphan_dir.join("lib/data.bin")).unwrap();
+    set_completed(&root, orphan_name, 300);
+    let mut current = String::new();
+    for (name, version, sha, age) in [
+        ("new2", "2.0", "22222222", 200),
+        ("new3", "3.0", "33333333", 100),
+    ] {
+        let payload = Payload::open(&build(
+            tmp.path(),
+            name,
+            version,
+            sha,
+            Path::new(LAUNCHER),
+            Path::new(TEST_ENTRY),
+        ))
+        .unwrap();
+        let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+        current = runtime.dir_name.clone();
+        drop(runtime);
+        set_completed(&root, &current, age);
+    }
+    let report = cleanup_old_versions(&root, &current);
+    assert_eq!(report.skipped_in_use, vec![orphan_name]);
+    assert_eq!(fs::read(orphan_dir.join(MARKER)).unwrap(), original_marker);
+    assert_eq!(
+        fs::read(orphan_dir.join("lib/data.bin")).unwrap(),
+        original_data
+    );
+    assert!(!fs::read_to_string(&record).unwrap().contains("stopped"));
+    fs::write(&stop, b"stop").unwrap();
+    wait_for_record(&record, "stopped");
+    // The process may still be returning from main after writing the record.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while orphan_dir.exists() {
+        cleanup_old_versions(&root, &current);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "orphan not reclaimed after exit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

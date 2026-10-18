@@ -530,3 +530,73 @@ pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: Option<&Path>) -> Result<
         })
     }
 }
+
+/// Ask Windows about processes using any runtime file, including orphaned application images.
+/// Restart Manager observes kernel resource use without requiring application cooperation or
+/// trusting a stale PID. No shutdown/restart API is called. Errors fail closed in cleanup.
+pub fn runtime_in_use(dir: &Path) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
+    use windows_sys::Win32::System::RestartManager::{
+        RmEndSession, RmGetList, RmRegisterResources, RmStartSession, CCH_RM_SESSION_KEY,
+    };
+
+    let mut directories = vec![dir.to_path_buf()];
+    let mut names = Vec::new();
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let meta = std::fs::symlink_metadata(entry.path())?;
+            if crate::fsutil::is_link_or_reparse(&meta) {
+                return Err(std::io::Error::other("redirected runtime resource"));
+            }
+            if meta.is_dir() {
+                directories.push(entry.path());
+            } else if meta.is_file() {
+                let path = std::fs::canonicalize(entry.path())?;
+                names.push(
+                    path.as_os_str()
+                        .encode_wide()
+                        .chain(Some(0))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+    }
+    let pointers: Vec<_> = names.iter().map(|name| name.as_ptr()).collect();
+    let mut session = 0;
+    let mut key = [0; CCH_RM_SESSION_KEY as usize + 1];
+    // SAFETY: all output pointers refer to live initialized storage.
+    let status = unsafe { RmStartSession(&mut session, 0, key.as_mut_ptr()) };
+    if status != 0 {
+        return Err(std::io::Error::from_raw_os_error(status as i32));
+    }
+    let result = (|| {
+        // SAFETY: paths and pointer array live through registration; there are no apps/services.
+        let status = unsafe {
+            RmRegisterResources(
+                session,
+                pointers.len() as u32,
+                pointers.as_ptr(),
+                0,
+                null(),
+                0,
+                null(),
+            )
+        };
+        if status != 0 {
+            return Err(std::io::Error::from_raw_os_error(status as i32));
+        }
+        let (mut needed, mut count, mut reasons) = (0, 0, 0);
+        // SAFETY: a zero-capacity query uses a null buffer and reports the required count.
+        let status =
+            unsafe { RmGetList(session, &mut needed, &mut count, null_mut(), &mut reasons) };
+        match status {
+            0 => Ok(needed != 0 || reasons != 0),
+            ERROR_MORE_DATA => Ok(true),
+            _ => Err(std::io::Error::from_raw_os_error(status as i32)),
+        }
+    })();
+    // SAFETY: this function owns the session and always ends it, even on a failed query.
+    unsafe { RmEndSession(session) };
+    result
+}

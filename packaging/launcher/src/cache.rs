@@ -544,6 +544,11 @@ fn remove_version_dir(root: &Path, name: &str) -> io::Result<bool> {
         Err(TryLockError::Error(e)) => return Err(e),
     }
     let dir = root.join(name);
+    // The supervisor/launcher can die before the application. Consult the OS while holding
+    // the exclusive lease, before removing even the marker. A failed query preserves the tree.
+    if crate::platform::runtime_in_use(&dir)? {
+        return Ok(false);
+    }
     let _ = fs::remove_file(dir.join(MARKER));
     let removed = remove_tree(&dir);
     drop(lock);
