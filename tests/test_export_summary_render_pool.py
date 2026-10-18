@@ -8,7 +8,7 @@ import pytest
 
 from metroliza.exporting.contracts import ExportOptions
 from metroliza.exporting import export_summary_render_pool as pool
-from test_export_plot_equivalence import assert_equivalent_pngs
+from tests.test_export_plot_equivalence import assert_equivalent_pngs
 
 
 def _task():
@@ -86,7 +86,10 @@ class _Executor:
 
 
 def _fake_tasks(monkeypatch, owner, executor):
-    monkeypatch.setattr(pool, 'ProcessPoolExecutor', lambda **kw: executor)
+    def create(**kwargs):
+        executor.kwargs = kwargs
+        return executor
+    monkeypatch.setattr(pool, 'ProcessPoolExecutor', create)
     monkeypatch.setattr(pool, '_render_task', lambda o, e: dict(value=e, toggles=dict(o._optimization_toggles)))
     return pool.iter_summary_render_results(owner, list(range(8)))
 
@@ -100,6 +103,36 @@ def test_queue_is_bounded_ordered_and_shutdown_on_early_close(monkeypatch):
     results.close()
     assert executor.closed
     assert owner.completion_metadata['summary_render_pool']['max_pending'] == 2
+
+
+def test_complete_pool_collection_preserves_order(monkeypatch):
+    owner, executor = _owner(), _Executor()
+    assert list(_fake_tasks(monkeypatch, owner, executor)) == [(0, None)] + [(x, x) for x in range(1, 8)]
+    assert executor.closed
+    assert owner.completion_metadata['summary_render_pool']['completed'] == 7
+
+
+def test_worker_count_is_capped_and_spawn_is_explicit(monkeypatch):
+    owner, executor = _owner(), _Executor()
+    owner.chart_worker_count = 99
+    owner.chart_worker_queue_size = 99
+    assert len(list(_fake_tasks(monkeypatch, owner, executor))) == 8
+    assert executor.kwargs['max_workers'] == pool.MAX_RENDER_WORKERS
+    assert executor.kwargs['mp_context'].get_start_method() == 'spawn'
+    assert executor.kwargs['initializer'] is pool._initialize_render_worker
+    assert owner.completion_metadata['summary_render_pool']['max_pending'] <= 8
+
+
+def test_partial_pool_failure_does_not_duplicate_already_collected_group(monkeypatch):
+    owner, executor = _owner(), _Executor()
+    results = _fake_tasks(monkeypatch, owner, executor)
+    assert next(results) == (0, None)
+    assert next(results) == (1, 1)
+    def fail(*args):
+        raise RuntimeError('late submission failure')
+    executor.submit = fail
+    assert list(results) == [(x, None) for x in range(2, 8)]
+    assert executor.closed
 
 
 @pytest.mark.parametrize('failure', ['startup', 'task', 'submit', 'result'])
