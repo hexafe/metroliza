@@ -140,3 +140,34 @@ def test_password_protected_pdf_is_an_inspection_error(monkeypatch, tmp_path):
         inspection.get_pdf_text(max_chars=100)
 
     assert document.closed is True
+
+
+def test_page_cache_preserves_boundaries_and_release_keeps_digest(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    report = tmp_path / "report.pdf"
+    report.write_bytes(b"synthetic container")
+    opened = []
+
+    def open_document(_path):
+        opened.append(1)
+        return _Document(_Page(""), _Page("title\n"), _Page(""), _Page("\nbody\n"))
+
+    monkeypatch.setattr(
+        source_inspection, "require_pdf_backend", lambda: SimpleNamespace(open=open_document)
+    )
+    inspection = SourceInspectionContext.from_path(report)
+    digest = inspection.sha256
+    assert inspection.get_pdf_text(max_chars=100) == "title\n\n\nbody\n"
+    assert inspection.get_cached_pdf_page_texts(max_chars=100) == ("title\n", "\nbody\n")
+    with pytest.raises(SourceInspectionLimitError):
+        inspection.get_cached_pdf_page_texts(max_chars=5)
+    inspection.get_extracted_text(cache_key="custom", max_chars=100, loader=lambda *_: "other")
+    inspection.release_extracted_text()
+    assert inspection.get_cached_pdf_text(max_chars=100) is None
+    assert inspection.get_cached_pdf_page_texts(max_chars=100) is None
+    assert inspection.get_cached_extracted_text(cache_key="custom", max_chars=100) is None
+    monkeypatch.setattr(SourceInspectionContext, "_compute_sha256", lambda _: pytest.fail("rehash"))
+    assert inspection.sha256 == digest
+    assert inspection.get_pdf_text(max_chars=100) == "title\n\n\nbody\n"
+    assert opened == [1, 1]

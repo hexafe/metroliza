@@ -1594,9 +1594,8 @@ class ReportRepository:
 
         del measurement_count, has_nok, nok_count
         policy = import_policy or ReportImportPolicy()
-        # The stat check is only an early-out. Content must be verified after the
-        # write lock is acquired, including when BEGIN IMMEDIATE had to wait.
-        reviewed_stat = _source_stat_signature(source_path)
+        # Content is authoritative after the write lock is acquired, including
+        # when BEGIN IMMEDIATE waited and an unchanged file's mtime moved.
         if source_digest_verifier is None or not self._import_schema_is_ready():
             # Reject stale content before schema creation/migration can commit.
             # An inspected import into a ready schema needs only the verification
@@ -1617,11 +1616,6 @@ class ReportRepository:
 
         def _import(cursor) -> ReportImportDisposition:
             cursor.execute("BEGIN IMMEDIATE")
-            if _source_stat_signature(source_path) != reviewed_stat:
-                raise ValueError(
-                    "Source changed after its digest was verified; stale final source digest: "
-                    f"{source_path}"
-                )
             verified_digest = self._verify_import_source_digest(
                 source_path,
                 expected_sha256=source_sha256,

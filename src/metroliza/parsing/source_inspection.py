@@ -58,7 +58,13 @@ def _page_embedded_text(page: object) -> str:
         return str(get_text("text") or "")
 
 
-def _extract_pdf_embedded_text(path: Path, max_chars: int) -> str:
+@dataclass(frozen=True)
+class _PdfEmbeddedText:
+    joined_text: str
+    page_texts: tuple[str, ...]
+
+
+def _extract_pdf_embedded_text(path: Path, max_chars: int) -> _PdfEmbeddedText:
     """Decode bounded embedded text from every page through the canonical backend."""
 
     document = None
@@ -81,7 +87,7 @@ def _extract_pdf_embedded_text(path: Path, max_chars: int) -> str:
                     f"{path}"
                 )
             page_texts.append(page_text)
-        return "\n".join(page_texts)
+        return _PdfEmbeddedText("\n".join(page_texts), tuple(page_texts))
     except (PdfSourceInspectionError, SourceInspectionLimitError):
         raise
     except Exception as exc:
@@ -109,6 +115,7 @@ class _SourceInspectionCache:
     lock: Lock = field(default_factory=Lock)
     sha256: object = _UNSET
     extracted_text: dict[str, str] = field(default_factory=dict)
+    pdf_page_texts: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -243,7 +250,7 @@ class SourceInspectionContext:
         *,
         cache_key: str,
         max_chars: int,
-        loader: Callable[[Path, int], str],
+        loader: Callable[[Path, int], str | _PdfEmbeddedText],
     ) -> str:
         """Load and cache one bounded text representation of the source."""
 
@@ -252,12 +259,16 @@ class SourceInspectionContext:
             cached = self._cache.extracted_text.get(key, _UNSET)
             if cached is _UNSET:
                 text = loader(Path(self.source_path), max_chars)
+                pdf_text = text if isinstance(text, _PdfEmbeddedText) else None
+                text = pdf_text.joined_text if pdf_text is not None else text
                 if len(text) > max_chars:
                     raise SourceInspectionLimitError(
                         f"{self.source_path} extracted more than {max_chars} characters"
                     )
                 cached = str(text)
                 self._cache.extracted_text[key] = cached
+                if key == PDF_EMBEDDED_TEXT_CACHE_KEY and pdf_text is not None:
+                    self._cache.pdf_page_texts = pdf_text.page_texts
             elif len(cached) > max_chars:
                 raise SourceInspectionLimitError(
                     f"{self.source_path} extracted more than {max_chars} characters"
@@ -280,6 +291,24 @@ class SourceInspectionContext:
             cache_key=PDF_EMBEDDED_TEXT_CACHE_KEY,
             max_chars=max_chars,
         )
+
+    def get_cached_pdf_page_texts(self, *, max_chars: int) -> tuple[str, ...] | None:
+        """Return canonical page texts; a custom joined-text loader has no page evidence."""
+
+        with self._cache.lock:
+            cached = self._cache.extracted_text.get(PDF_EMBEDDED_TEXT_CACHE_KEY)
+            if cached is not None and len(cached) > max_chars:
+                raise SourceInspectionLimitError(
+                    f"{self.source_path} extracted more than {max_chars} characters"
+                )
+            return self._cache.pdf_page_texts
+
+    def release_extracted_text(self) -> None:
+        """Drop text representations while retaining the inspected digest and stat facts."""
+
+        with self._cache.lock:
+            self._cache.extracted_text.clear()
+            self._cache.pdf_page_texts = None
 
     def get_cached_extracted_text(
         self,
