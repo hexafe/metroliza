@@ -594,8 +594,11 @@ fn cleanup_preserves_orphan_after_supervisor_and_launcher_exit() {
             record.to_str().unwrap(),
             "--stop-file",
             stop.to_str().unwrap(),
+            // The test ends the orphan through --stop-file; this bound only caps a failed
+            // run. 15 s was shorter than packing two payloads on a slow CI runner, so the orphan
+            // could exit before cleanup and the in-use assertion failed (run 39164218530).
             "--sleep-ms",
-            "15000",
+            "120000",
         ],
     );
     assert_eq!(run.code, Some(0)); // both supervisor and launcher are gone
