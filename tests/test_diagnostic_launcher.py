@@ -816,7 +816,7 @@ def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(
     assert publisher.start()
     try:
         assert publisher.submit(observed)
-        assert entered.wait(1)
+        assert entered.wait(10)  # Readiness watchdog, outside close's budget.
         assert publisher.submit(observed)
         assert not publisher.submit(observed)
         assert publisher.close(observed) is StoreStatus.PUBLISH_INCOMPLETE
@@ -867,7 +867,7 @@ def test_final_incident_skips_unnecessary_marker_retries(
     assert store.list_unclean_sessions().sessions == ()
 
 
-def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, monkeypatch):
+def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, monkeypatch, request):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
 
     _completion_scheduler(monkeypatch)
@@ -896,8 +896,15 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     monkeypatch.setattr(store, "publish", recorded_publish)
     publisher = _OperationPublisher(store, "unknown", observed.session_id)
     assert publisher.start()
+
+    def cleanup():
+        release_begin.set()
+        publisher.worker.join(10)
+        assert not publisher.worker.is_alive()
+
+    request.addfinalizer(cleanup)
     assert publisher.begin()
-    assert begin_entered.wait(1)
+    assert begin_entered.wait(10)  # Establish the ordering precondition first.
     statuses = []
     close_observation = []
     close_wait_entered = threading.Event()
@@ -924,12 +931,12 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     closer = threading.Thread(target=close_and_observe)
     closer.start()
     try:
-        assert close_wait_entered.wait(1)
+        assert close_wait_entered.wait(10)
         release_begin.set()
-        closer.join(2)
+        closer.join(10)
     finally:
         release_begin.set()
-        closer.join(2)
+        closer.join(10)
 
     assert statuses == [StoreStatus.SAVED], {
         "sequence": sequence, "at_close": close_observation,
