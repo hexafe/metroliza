@@ -85,6 +85,23 @@ def _run(source, database, lifecycle):
     }, database_snapshot(database)
 
 
+def _check_checkpoint_cadence(run, calls):
+    """Bounded checkpoint cadence (#1136, PO decision 2026-10-18).
+
+    At most one passive checkpoint per IMPORT_CHECKPOINT_COMMITS commits or
+    IMPORT_CHECKPOINT_SECONDS, plus exactly one final checkpoint when the import
+    connection closes.
+    """
+    from metroliza.reports.db import IMPORT_CHECKPOINT_COMMITS, IMPORT_CHECKPOINT_SECONDS
+
+    allowed = (calls["commit"] // IMPORT_CHECKPOINT_COMMITS
+               + int(run["import_s"] / IMPORT_CHECKPOINT_SECONDS) + 1)
+    if calls.get("checkpoint", 0) > allowed:
+        raise RuntimeError("checkpoint_cadence_exceeded")
+    if calls.get("checkpoint_close") != 1:
+        raise RuntimeError("final_checkpoint_missing")
+
+
 def _qualify_profile(run, count, lifecycle=None):
     calls = run["profile"]["calls"]
     for stage in ("schema_probe", "hash", "row_building", "executemany", "commit", "checkpoint_close"):
@@ -96,8 +113,13 @@ def _qualify_profile(run, count, lifecycle=None):
     # had to create or migrate the schema.
     if calls.get("pre_schema_hash", 0) > 1:
         raise RuntimeError("pre_schema_hash_count_exceeded")
-    if lifecycle == "batch_connection" and calls.get("checkpoint") != calls["commit"]:
-        raise RuntimeError("per_commit_checkpoint_missing")
+    if lifecycle == "batch_connection":
+        _check_checkpoint_cadence(run, calls)
+    attribution = run["profile"]["attribution"]
+    if abs(attribution["unattributed_s"]) > 1e-6:
+        raise RuntimeError("persist_time_unattributed")
+    if not run["profile"]["sql"]:
+        raise RuntimeError("missing_sql_timings")
     settings = run["profile"]["sqlite_settings"]
     if not settings or any((s["journal_mode"], s["synchronous"], s["wal_autocheckpoint"]) != (
         "wal", 1, 1000,
@@ -123,7 +145,7 @@ def compare(source, root, count, iterations):
                     raise RuntimeError("persisted_rows_differ")
                 runs[lifecycle].append(run)
     return {
-        "schema_version": 1, "runtime": "build-venv/source", "platform": platform.system(),
+        "schema_version": 2, "runtime": "build-venv/source", "platform": platform.system(),
         "python": platform.python_version(), "sqlite": sqlite3.sqlite_version,
         "source_sha": os.environ.get("GITHUB_SHA", "not visible"), "cpu_count": os.cpu_count(),
         "reports": count, "iterations": iterations, "all_rows_equal": True,
@@ -134,6 +156,7 @@ def compare(source, root, count, iterations):
         "medians": {
             mode: {
                 "import_s": median(run["import_s"] for run in samples),
+                "attribution_s": _median_attribution(samples),
                 "stages_s": {
                     stage: median(run["profile"]["seconds"].get(stage, 0) for run in samples)
                     for stage in samples[0]["profile"]["seconds"]
@@ -141,6 +164,20 @@ def compare(source, root, count, iterations):
             }
             for mode, samples in runs.items()
         },
+    }
+
+
+def _median_attribution(samples):
+    categories = ("sql", "begin_immediate", "sqlite", "filesystem", "sleep", "python")
+    return {
+        **{
+            category: median(sum(
+                item["seconds"] for item in run["profile"]["attribution"]["activities"]
+                if item["category"] == category
+            ) for run in samples)
+            for category in categories
+        },
+        "unattributed": median(run["profile"]["attribution"]["unattributed_s"] for run in samples),
     }
 
 

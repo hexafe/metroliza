@@ -34,7 +34,9 @@ def test_scope_reuses_connection_and_closes_it_even_after_failure(tmp_path):
             raise RuntimeError("synthetic cancellation after commits")
     assert profile.calls["connection_open"] == profile.calls["checkpoint_close"] == 1
     assert profile.calls["commit"] == 2
-    assert profile.calls["checkpoint"] == 2
+    # Two quick commits stay below the checkpoint cadence; the final checkpoint happens
+    # when the scope closes the connection, also after this cancellation.
+    assert profile.calls.get("checkpoint", 0) == 0
     assert all(busy == 0 and frames == written for busy, frames, written in profile.checkpoint_results)
     with pytest.raises(sqlite3.ProgrammingError):
         connection.execute("SELECT 1")
@@ -131,6 +133,8 @@ def test_qualification_rejects_incomplete_or_changed_measurements(failure):
     profile = {"calls": dict.fromkeys((
         "schema_probe", "hash", "row_building", "executemany", "commit", "checkpoint_close"
     ), 1), "sqlite_settings": [{"journal_mode": "wal", "synchronous": 1, "wal_autocheckpoint": 1000}]}
+    profile["attribution"] = {"unattributed_s": 0.0}
+    profile["sql"] = [{"calls": 1}]
     if failure == "stage":
         del profile["calls"]["schema_probe"]
     elif failure == "settings":
@@ -139,3 +143,151 @@ def test_qualification_rejects_incomplete_or_changed_measurements(failure):
         profile["calls"]["hash"] = 2
     with pytest.raises(RuntimeError):
         benchmark._qualify_profile({"profile": profile}, 1)
+
+
+def _assert_partition(profile):
+    receipt = profile.receipt()
+    attribution = receipt["attribution"]
+    assert attribution["persist_s"] > 0
+    assert sum(item["seconds"] for item in attribution["activities"]) == pytest.approx(
+        attribution["persist_s"], abs=1e-9
+    )
+    assert abs(attribution["unattributed_s"]) < 1e-9
+    return receipt
+
+
+def test_sql_templates_cover_shortcuts_cursors_scripts_and_failed_calls(tmp_path):
+    from metroliza.reports.db import connect_sqlite
+
+    profile = ImportPersistProfile()
+    with profile.activate(), profile.measure("persist"), closing(connect_sqlite(str(tmp_path / "sql.db"))) as conn:
+        conn.executescript("CREATE TABLE sample(value TEXT); INSERT INTO sample VALUES ('private-one');")
+        conn.execute("INSERT INTO sample VALUES ('private-two') -- hidden-comment")
+        cursor = conn.cursor()
+        assert cursor.execute("SELECT value FROM sample") is cursor
+        assert cursor.fetchone() == ("private-one",)
+        assert cursor.fetchmany(1) == [("private-two",)]
+        assert cursor.fetchall() == []
+        conn.executemany("INSERT INTO sample VALUES (?)", [("private-three",)])
+        cursor.execute("SELECT value FROM sample")
+        assert len(list(cursor)) == 3
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("INSERT INTO absent VALUES ('private-four')")
+        conn.rollback()
+        cursor.close()
+    receipt = _assert_partition(profile)
+    assert {item["method"] for item in receipt["sql"]} == {"execute", "executemany", "executescript"}
+    assert sum(item["errors"] for item in receipt["sql"]) == 1
+    assert receipt["sqlite_errors"] == {"SQLITE_ERROR": 1}
+    assert "private-" not in str(receipt)
+    assert "hidden-comment" not in str(receipt)
+    assert str(tmp_path) not in str(receipt)
+
+
+def test_native_filesystem_python_gaps_and_sleep_are_exclusive(tmp_path):
+    import hashlib
+    import json
+    import os
+    import time
+
+    path = tmp_path / "private-path"
+    path.write_bytes(b"private-content")
+    profile = ImportPersistProfile()
+    with profile.activate(), profile.measure("persist"):
+        path.resolve()
+        os.stat(path)
+        with profile.measure("hash"), path.open("rb") as stream:
+            assert hashlib.sha256(stream.read()).hexdigest()
+        json.dumps({"synthetic": [1, 2, 3]})
+        time.sleep(0.001)
+    receipt = _assert_partition(profile)
+    activities = {(item["category"], item["operation"]): item for item in receipt["attribution"]["activities"]}
+    for key in (("filesystem", "stat"), ("filesystem", "open"), ("filesystem", "file.read"),
+                ("filesystem", "Path.resolve"), ("sleep", "time.sleep"), ("python", "json.dumps"),
+                ("python", "between_operations")):
+        assert activities[key]["calls"] > 0
+        assert activities[key]["seconds"] > 0
+    assert "private-" not in str(receipt)
+
+
+def test_begin_wait_retry_sleep_and_rollback_are_attributed(tmp_path, monkeypatch):
+    from metroliza.reports import db
+
+    database = str(tmp_path / "locked.db")
+    with closing(db.connect_sqlite(database)) as blocker:
+        blocker.execute("CREATE TABLE sample(value INTEGER)")
+        blocker.execute("BEGIN IMMEDIATE")
+        profile = ImportPersistProfile()
+        original_sleep = db.time.sleep
+
+        def release_and_sleep(_delay):
+            blocker.rollback()
+            original_sleep(0.001)
+
+        monkeypatch.setattr(db.time, "sleep", release_and_sleep)
+        with profile.activate(), profile.measure("persist"), closing(db.connect_sqlite(database, timeout_s=0.01)) as writer:
+            def write(cursor):
+                cursor.execute("BEGIN IMMEDIATE")
+                cursor.execute("INSERT INTO sample VALUES (?)", (1,))
+
+            db.run_transaction_with_retry(database, write, connection=writer, retries=1)
+            assert writer.execute("SELECT * FROM sample").fetchall() == [(1,)]
+    receipt = _assert_partition(profile)
+    begin = next(item for item in receipt["sql"] if item["template"] == "BEGIN IMMEDIATE")
+    assert (begin["calls"], begin["errors"]) == (2, 1)
+    assert begin["seconds"] >= 0.005
+    assert receipt["sqlite_errors"] == {"SQLITE_BUSY": 1}
+    assert any(item["category"] == "begin_immediate" and item["calls"] == 2
+               for item in receipt["attribution"]["activities"])
+    assert any(item["category"] == "sleep" for item in receipt["attribution"]["activities"])
+    assert any(item["operation"] == "rollback" for item in receipt["attribution"]["activities"])
+
+
+def test_detailed_observer_restores_existing_sys_profiler_on_error():
+    import sys
+
+    previous = sys.getprofile()
+    try:
+        def observer(*_args):
+            pass
+
+        sys.setprofile(observer)
+        profile = ImportPersistProfile()
+        with pytest.raises(ValueError), profile.activate(), profile.measure("persist"):
+            raise ValueError("synthetic")
+        assert sys.getprofile() is observer
+        _assert_partition(profile)
+    finally:
+        sys.setprofile(previous)
+
+
+def test_qualification_rejects_nonzero_remainder(tmp_path):
+    source = tmp_path / "synthetic"
+    _write_reports(source, 1)
+    run, _snapshot = benchmark._run(source, tmp_path / "reports.db", "batch_connection")
+    benchmark._qualify_profile(run, 1, "batch_connection")
+    run["profile"]["attribution"]["unattributed_s"] = 0.1
+    with pytest.raises(RuntimeError, match="persist_time_unattributed"):
+        benchmark._qualify_profile(run, 1, "batch_connection")
+
+
+def test_import_checkpoint_cadence_is_bounded_by_commits_and_time(tmp_path):
+    from metroliza.reports import db as db_module
+
+    now = [0.0]
+    connection = db_module._LazySQLiteConnection(str(tmp_path / "cadence.sqlite3"), clock=lambda: now[0])
+    checkpoints = []
+    connection._connection = type("Conn", (), {
+        "execute": lambda self, sql: checkpoints.append(sql) or type(
+            "Cursor", (), {"fetchone": lambda self: (0, 0, 0)})(),
+    })()
+    for _ in range(db_module.IMPORT_CHECKPOINT_COMMITS - 1):
+        connection.checkpoint_after_commit()
+    assert checkpoints == []
+    connection.checkpoint_after_commit()
+    assert checkpoints == ["PRAGMA wal_checkpoint(PASSIVE)"]
+    connection.checkpoint_after_commit()
+    assert len(checkpoints) == 1
+    now[0] += db_module.IMPORT_CHECKPOINT_SECONDS
+    connection.checkpoint_after_commit()
+    assert len(checkpoints) == 2
