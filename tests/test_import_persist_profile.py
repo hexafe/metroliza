@@ -173,6 +173,50 @@ def test_checkpoint_error_after_commit_keeps_the_committed_report(tmp_path, capl
         assert real.execute("SELECT * FROM sample").fetchall() == [(1,)]
 
 
+def test_failed_checkpoint_stays_pending_and_close_retries_it(tmp_path, caplog):
+    database = str(tmp_path / "reports.sqlite3")
+    profile = ImportPersistProfile()
+    with profile.activate():
+        with lazy_sqlite_connection_scope(database) as connection:
+            connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+            connection.commit()
+            real = connection._connection
+            failures = [sqlite3.OperationalError("disk I/O error")]
+
+            class FailOnce:
+                def __getattr__(self, name):
+                    return getattr(real, name)
+
+                def execute(self, sql, *args):
+                    if sql.startswith("PRAGMA wal_checkpoint") and failures:
+                        raise failures.pop()
+                    return real.execute(sql, *args)
+
+            connection._connection = FailOnce()
+            connection._commits_since_checkpoint = db_module.IMPORT_CHECKPOINT_COMMITS - 1
+            run_transaction_with_retry(database, lambda cursor: cursor.execute(
+                "INSERT INTO sample VALUES (1)"), connection=connection)
+            assert "checkpoint failed" in caplog.text and not failures
+        # The failed cadence checkpoint stayed pending; closing the scope retried and completed it.
+        assert profile.calls["checkpoint"] == 2
+        ((busy, frames, written), count), = profile.checkpoint_results.items()
+        assert (busy, count) == (0, 1) and frames == written > 0
+
+
+def test_close_still_closes_the_connection_when_its_checkpoint_raises(tmp_path, monkeypatch):
+    connection = db_module._LazySQLiteConnection(str(tmp_path / "reports.sqlite3"))
+    connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+
+    def fail():
+        raise RuntimeError("synthetic profiler failure")
+
+    monkeypatch.setattr(connection, "checkpoint_pending", fail)
+    with pytest.raises(RuntimeError, match="synthetic profiler failure"):
+        connection.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection._connection.execute("SELECT 1")
+
+
 def test_real_pdf_qualification_compares_every_persisted_row(tmp_path):
     source = tmp_path / "synthetic"
     _write_reports(source, 3)
