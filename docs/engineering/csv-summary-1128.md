@@ -322,3 +322,18 @@ cases, all six text cases and both injected return-code failures. Cells, types,
 formats, styles and every XLSX package member except core timestamps match pandas.
 Focused Ruff and whitespace checks pass. Complete validation and fresh benchmark
 results will be recorded after both finding commits.
+
+### P2: object-dtype NumPy booleans become Excel numbers
+
+`p2-red.log`: **3 failed, 1 passed**. NumPy booleans mixed with `None`, `pd.NA`
+or `NaN` are written as numeric cells (`1`/`0`, type `n`) instead of pandas'
+boolean cells (`TRUE`/`FALSE`, type `b`). The `pd.NaT` case already selects the
+complex-type pandas fallback and passes. All reference workbooks were produced
+before changing this boolean conversion.
+
+Boolean columns now convert nonmissing values to Python `bool` and missing values
+to empty strings before bulk writing. This covers object, NumPy and nullable
+boolean columns without changing the frame. `p2-green.log`: **19 passed,
+14 deselected**, with exact cells/types/styles and XLSX-part equality against
+pandas for all four new cases and the previous bulk-writer fixtures. Focused Ruff
+and whitespace checks pass. No baseline, budget, package, native or policy change.

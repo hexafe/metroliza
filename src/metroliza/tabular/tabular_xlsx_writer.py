@@ -15,6 +15,12 @@ def _column_kind(series):
 
 
 def _column_values(series, kind):
+    if kind == "boolean":
+        from pandas import isna
+
+        # Object arrays retain NumPy bool scalars, which XlsxWriter treats as
+        # numbers. Match pandas' Python-bool conversion without filling blanks.
+        return ["" if isna(value) else bool(value) for value in series]
     values = series.to_numpy(dtype=object, na_value="")
     if kind == "string":
         # write_column stops on truncation (-2); truncate first, like pandas'

@@ -128,6 +128,23 @@ def test_bulk_writer_propagates_column_write_errors(code, tmp_path, monkeypatch)
                   write_tabular_dataframe)
 
 
+@pytest.mark.parametrize('missing', [None, pd.NA, np.nan, pd.NaT],
+                         ids=['none', 'pd-na', 'nan', 'nat'])
+def test_bulk_writer_preserves_object_numpy_boolean_cell_types(missing, tmp_path):
+    frame = pd.DataFrame({'boolean': pd.Series(
+        [np.bool_(True), missing, np.bool_(False), True, False], dtype=object,
+    )})
+    expected, actual = tmp_path / 'expected.xlsx', tmp_path / 'actual.xlsx'
+    _workbook(frame, expected, lambda df, writer, sheet: df.to_excel(writer, sheet_name=sheet, index=False))
+    cells = _read_cells(expected)
+    assert [cells[row][0][:2] for row in (1, 3, 4, 5)] == [
+        (True, 'b'), (False, 'b'), (True, 'b'), (False, 'b'),
+    ]
+    assert cells[2][0][0] is None
+    _workbook(frame, actual, write_tabular_dataframe)
+    _assert_workbooks_equal(expected, actual)
+
+
 def test_bulk_writer_preserves_pandas_rejection_of_multiindex_columns(tmp_path):
     frame = list(_frame_cases())[-1]
     for writer_function in (write_tabular_dataframe, lambda df, writer, sheet: df.to_excel(writer, sheet_name=sheet, index=False)):
