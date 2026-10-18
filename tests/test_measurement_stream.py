@@ -10,7 +10,7 @@ from metroliza.exporting.measurement_stream import (
     iter_row_chunks,
 )
 from metroliza.exporting.xlsx_bulk_sheet import BulkPlanBuilder, plan_bulk_rows
-from test_export_workbook_equivalence import _load_export_thread_type
+from tests.test_export_workbook_equivalence import _load_export_thread_type
 
 SAMPLE_LIMIT = 2048
 
