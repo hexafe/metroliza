@@ -28,8 +28,12 @@ integration/acceptance branches are explicit exceptions, not a permanent layer.
 
 Branches are disposable work refs. PRs, commit/tree SHAs, CI runs, artifacts and tags preserve
 history/evidence; keeping an old branch name does not add evidence. Merge closeout marks the source
-branch `DELETE_CANDIDATE` unless a named live dependency still needs that exact ref. Physical
-ref deletion is a separate PO-approved exact-ref/full-SHA cleanup batch.
+branch `DELETE_CANDIDATE` unless a named live consumer per the
+[cleanup gate](../release_checks/branching_strategy.md#cleanup-gate) still needs that exact ref;
+record the consumer and retirement trigger. Physical deletion follows that gate: complete
+live-consumer checks and clean-repository recovery fetch of the exact commit/tree for every branch,
+including merged and squashed branches, then a PO-approved finite exact-ref/full-SHA manifest
+and expected-old-value guards.
 
 ### Normal development
 

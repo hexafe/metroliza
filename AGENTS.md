@@ -24,7 +24,7 @@ keeps its actual identity. No client configuration is installed here.
 - Normal branches start from and target `develop`; never assume GitHub's default base.
 - Remote branches are disposable execution refs, not evidence archives. Steady state is `master` + `develop` + an active `release/*` when needed + current PR heads.
 - Do not create a remote branch per agent, reviewer, test attempt or checkpoint. Reuse the Issue branch for in-scope corrections.
-- After merge, mark the source branch for retirement in the same closeout unless a named live PR/release/integration dependency still requires that exact ref. Actual deletion is a separate destructive step using a Product-Owner-approved finite manifest of exact refs/full SHAs and expected-old-value guards.
+- After merge, mark the source branch for retirement unless a named live consumer per the [cleanup gate](docs/release_checks/branching_strategy.md#cleanup-gate) requires that exact ref; record the consumer and retirement trigger. Physical deletion follows that gate: complete live-consumer checks and clean-repository recovery fetch of the exact commit/tree for every branch, including merged and squashed branches, then a Product-Owner-approved finite exact-ref/full-SHA manifest and expected-old-value guards.
 - Canonical package: `src/metroliza` / `metroliza.*`; `modules.*` is compatibility-only.
 - Preserve local-first, SQLite atomicity, bounded processing, offline dashboards, deterministic
   cleanup, last-complete-output safety and deterministic Python fallbacks.
@@ -55,8 +55,9 @@ need explicit disposition. Never relabel FAIL, skipped or unknown as PASS.
 ## Routing and helpers
 
 Separate risk, model, reasoning, delegation, speed and effective permissions. Use the highest of
-packet risk, path floor and semantic risk. MICRO uses `economy_worker`; BOUNDED/FEATURE/CRITICAL use
-`implementer`. Select independent review by class and observed provider mode in the playbook;
+packet risk, path floor and semantic risk. With OpenAI available, MICRO uses `economy_worker`;
+BOUNDED/FEATURE/CRITICAL use `implementer`. Select implementation and independent review by class
+and observed provider mode in the playbook, including its CLAUDE_ONLY implementation roles;
 CRITICAL alone does not automatically add `escalation_reviewer`. Resolve exact IDs/effort at dispatch
 from shared map v1.0 and record overrides. Standard speed; no silent downgrade or default Ultra.
 

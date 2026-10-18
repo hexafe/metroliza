@@ -127,6 +127,10 @@ parallel/second-provider work while allowing already-authorized useful bounded p
 | NEITHER | preserve/recover checkpoint; no inference launches | wait for capacity; INCOMPLETE |
 | UNKNOWN | known adequate available route, bounded packet | no optional escalation or reserve claim; record missing required review |
 
+If OpenAI is observed available and Claude is unobserved, implementation may proceed on OpenAI
+and the required class review may be attempted as useful work, not as a quota probe. A quota
+refusal supplies evidence for the applicable fallback; UNKNOWN alone does not prove unavailability.
+
 These modes replace only generic role selection. A specifically assigned model/cross-provider gate,
 GitHub Codex Review, independent exact-head review, CI, thread resolution and every applicable
 SQLite/native/Windows/release/acceptance gate stay required. For CRITICAL delivery or milestone
