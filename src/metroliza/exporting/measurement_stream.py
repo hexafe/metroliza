@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from typing import Any
 
-STREAM_CHUNK_ROWS = 20000
+STREAM_CHUNK_ROWS = 4000
 _MIN_COLUMN_WIDTH = 12
 _MAX_COLUMN_WIDTH = 40
 

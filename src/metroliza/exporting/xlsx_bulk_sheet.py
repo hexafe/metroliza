@@ -24,6 +24,11 @@ import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name
 from xlsxwriter.worksheet import CellNumberTuple, CellStringTuple, Worksheet
 
+from metroliza.exporting.xlsx_fast_paths import (
+    accelerate_chart,
+    fast_cell_markup,
+    write_plain_column,
+)
 from metroliza.shared.env_utils import env_bool
 
 BULK_WRITE_ENV = "METROLIZA_EXPORT_BULK_WRITE"
@@ -42,7 +47,9 @@ _REQUIRED_WORKSHEET_ATTRIBUTES = (
     "_get_range_data",
     "autofit",
     "_write_row",
+    "_write_cell",
     "_check_dimensions",
+    "write_column",
 )
 
 
@@ -345,6 +352,25 @@ class BulkRowsWorksheet(Worksheet):
                 self._materialise_block(block)
 
     # -- XlsxWriter hooks -------------------------------------------------
+    def _write_cell(self, row, col, cell):
+        markup = fast_cell_markup(self, row, col, cell)
+        if markup is None:
+            super()._write_cell(row, col, cell)
+        else:
+            self.fh.write(markup)
+
+    def write_column(self, *args, **kwargs):
+        """Write a column of data; plain numbers/strings take a faster route."""
+        if len(args) != 3 or kwargs or type(args[0]) is not int or type(args[1]) is not int:
+            return super().write_column(*args, **kwargs)
+        row, col, values = args[0], args[1], list(args[2])
+        if not self._overlaps_bulk_block(row, row + len(values) - 1) and write_plain_column(self, row, col, values):
+            return 0
+        return super().write_column(row, col, values)
+
+    def _overlaps_bulk_block(self, first_row: int, last_row: int) -> bool:
+        return any(block.first_row <= last_row and first_row <= block.last_row for block in self._bulk_blocks)
+
     def _get_range_data(self, row_start, col_start, row_end, col_end):
         self._settle_blocks()
         return super()._get_range_data(row_start, col_start, row_end, col_end)
@@ -464,6 +490,12 @@ def enable_bulk_rows(book: Any) -> bool:
     if not bulk_write_enabled():
         return False
     book.worksheet_class = BulkRowsWorksheet
+    add_chart = book.add_chart
+
+    def add_accelerated_chart(*args, **kwargs):
+        return accelerate_chart(add_chart(*args, **kwargs))
+
+    book.add_chart = add_accelerated_chart
     return True
 
 

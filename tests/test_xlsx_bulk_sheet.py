@@ -204,6 +204,106 @@ class TestBulkWorksheetEquivalence(BulkEquivalenceCase):
         self.assert_same(['a', 'b'], rows, extra=extra)
 
 
+class TestFastPathEquivalence(unittest.TestCase):
+    """Cell, column and chart-cache fast paths versus stock XlsxWriter."""
+
+    def assert_same_book(self, build):
+        with tempfile.TemporaryDirectory() as tmp:
+            parts = {}
+            for label, fast in (('stock', False), ('fast', True)):
+                path = Path(tmp) / f'{label}.xlsx'
+                book = xlsxwriter.Workbook(str(path), xlsxwriter_workbook_options())
+                if fast:
+                    self.assertTrue(enable_bulk_rows(book))
+                build(book)
+                book.close()
+                parts[label] = _read_parts(path)
+        self.assertEqual(sorted(parts['stock']), sorted(parts['fast']))
+        for name in parts['stock']:
+            self.assertEqual(parts['stock'][name], parts['fast'][name], name)
+
+    def test_plain_columns_match_write_column(self):
+        long_text = 'x' * 40000
+
+        def build(book):
+            sheet = book.add_worksheet('S')
+            sheet.write_column(0, 0, [1.5, 2.25, -0.0, 1e-9, 12345678.123456789])
+            sheet.write_column(0, 1, [1, 2, 3, 10**15])
+            sheet.write_column(0, 2, ['a', 'b', 'a', 'ünï', 'a&b<c>', '_x0041_', ' lead '])
+            sheet.write_column(0, 3, ['x', '', 'y'])  # empty text is a blank cell
+            sheet.write_column(0, 4, ['{=A1}', 'ok', '{=SUM(A1)}'])  # `{=...}` is a formula for write()
+            sheet.write_column(0, 5, [1.0, float('nan'), 3.0])
+            sheet.write_column(0, 6, [1.0, float('inf'), 3.0])
+            sheet.write_column(0, 7, [True, False])
+            sheet.write_column(0, 8, [1.0, 'mixed', None])
+            sheet.write_column(0, 9, [long_text, 'short'])  # truncated
+            sheet.write_column('K1', [4.0, 5.0])  # A1 notation
+            sheet.write_column(0, 11, (value for value in [7.0, 8.0]))  # generator input
+            sheet.write_column(0, 12, [6.0, 7.0], book.add_format({'bold': True}))
+            sheet.write_column(3, 13, [])
+            sheet.write_column(2, 14, [9.0])
+
+        self.assert_same_book(build)
+
+    def test_numpy_scalars_use_the_stock_path(self):
+        import numpy as np
+
+        def build(book):
+            sheet = book.add_worksheet('S')
+            sheet.write_column(0, 0, [np.float64(1.5), np.float64(2.5)])
+            sheet.write_column(0, 1, list(np.array([1, 2, 3])))
+            sheet.write_column(0, 2, np.array([0.5, 0.25]))
+
+        self.assert_same_book(build)
+
+    def test_cell_markup_with_formats_row_formats_and_column_formats(self):
+        def build(book):
+            sheet = book.add_worksheet('S')
+            bold = book.add_format({'bold': True})
+            wrap = book.add_format({'text_wrap': True})
+            sheet.write_number(0, 0, 1.5, bold)
+            sheet.write_string(0, 1, 'a', wrap)
+            sheet.write_number(1, 0, 2.5)
+            sheet.write_string(1, 1, 'b')
+            sheet.write_number(2, 0, 3)
+            sheet.set_column(0, 0, 12, bold)
+            sheet.set_column(1, 1, 20)
+            sheet.set_row(1, 22, wrap)
+            sheet.write(3, 0, True)
+            sheet.write_blank(3, 1, None, bold)
+            sheet.write_formula(4, 0, '=A1+A2', None, 4)
+            sheet.write_datetime(4, 1, __import__('datetime').datetime(2024, 1, 2, 3, 4, 5), book.add_format({'num_format': 'yyyy-mm-dd'}))
+            sheet.write_rich_string(5, 0, bold, 'rich ', 'text')
+            sheet.write_url(5, 1, 'https://example.test/', string='link')
+            sheet.write_column(6, 0, [1.0, 2.0, 3.0])
+            sheet.write_column(6, 1, ['p', 'q', 'p'])
+
+        self.assert_same_book(build)
+
+    def test_chart_caches_match_stock_for_numeric_text_and_odd_tokens(self):
+        def build(book):
+            sheet = book.add_worksheet('S')
+            sheet.write_column(0, 0, [1.0, 2.5, 1e-7, 30.0, 4.0])
+            sheet.write_column(0, 1, ['2024-01-01', 'a&b', '<x>', '_x0041_', 'ünï'])
+            sheet.write_column(0, 2, [1, 2, 3, 4, 5])
+            sheet.write(2, 3, 'text-in-numeric-range')
+            sheet.write(1, 3, 9.5)
+            sheet.write_formula(3, 3, '=A1', None, 7)
+            for categories in ('=S!$B$1:$B$5', '=S!$C$1:$C$5', None):
+                chart = book.add_chart({'type': 'line'})
+                series = {'values': '=S!$A$1:$A$5'}
+                if categories:
+                    series['categories'] = categories
+                chart.add_series(series)
+                chart.add_series({'values': '=S!$D$1:$D$5', 'categories': '=S!$B$1:$B$5'})
+                sheet.insert_chart('F2', chart)
+            scatter = book.add_chart({'type': 'scatter'})
+            scatter.add_series({'categories': '=S!$A$1:$A$5', 'values': '=S!$C$1:$C$5'})
+            sheet.insert_chart('F20', scatter)
+
+        self.assert_same_book(build)
+
+
 class TestBulkPlanning(unittest.TestCase):
     def test_unsupported_values_use_the_per_cell_path(self):
         class Marker(float):
