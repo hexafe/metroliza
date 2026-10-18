@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -26,6 +28,9 @@ def raw_change(path, status="M", old="100644", new="100644"):
     (["src/metroliza/templates/prompt.md"], False),
     (["templates/prompt.md"], False),
     (["docs/project/templates/input.md"], False),
+    (["docs/project/Templates/input.md"], False),
+    (["docs/project/feature_catalog.md"], False),  # read by tests/test_feature_catalog.py
+    (["docs/quality/bug_sweep/README.md"], False),  # required by the bug-sweep validator
     (["docs/generated/report.md"], False),
     (["docs/project/generated/report.md"], False),
     (["docs/assets/diagram.svg"], False),
@@ -88,8 +93,7 @@ def event(name, base="a" * 40, head="b" * 40):
     return {"before": base, "after": head}
 
 
-@pytest.mark.parametrize("name", ["push", "pull_request"])
-def test_complete_diff_range_and_local_git_flags(monkeypatch, name):
+def test_pull_request_uses_the_complete_merge_base_range_and_local_git_flags(monkeypatch):
     calls = []
 
     def git(*args):
@@ -97,14 +101,17 @@ def test_complete_diff_range_and_local_git_flags(monkeypatch, name):
         return b"c" * 40 + b"\n" if args[0] == "merge-base" else raw_change("docs/ci-policy.md")
 
     monkeypatch.setattr(classifier, "git_output", git)
-    assert classifier.classify_event(name, event(name))
-    assert calls[-1] == ("diff", "--raw", "-z", "--no-renames", "--no-ext-diff",
-                         "--no-textconv", ("c" if name == "pull_request" else "a") * 40, "b" * 40, "--")
-    assert (len(calls) == 2) is (name == "pull_request")
+    assert classifier.classify_event("pull_request", event("pull_request"))
+    assert calls == [("merge-base", "a" * 40, "b" * 40),
+                     ("diff", "--raw", "-z", "--no-renames", "--no-ext-diff",
+                      "--no-textconv", "c" * 40, "b" * 40, "--")]
 
 
 @pytest.mark.parametrize(("name", "payload"), [
     ("workflow_dispatch", {}), ("merge_group", {}), ("push", {}),
+    # A docs-only push still runs the full lane: same-SHA push and PR runs must not
+    # disagree, and integration pushes back up the PR classification.
+    ("push", event("push")),
     ("pull_request", {"pull_request": None}), ("push", None),
     ("push", event("push", base="0" * 40)),  # new branch
     ("push", event("push", head="0" * 40)),  # deleted branch
@@ -129,18 +136,52 @@ def test_missing_history_or_git_failure_runs_full(monkeypatch, error):
 def test_large_diff_is_not_truncated_to_a_docs_only_page(monkeypatch):
     raw = raw_change("docs/ci-policy.md") * 500 + raw_change("src/last.py")
     monkeypatch.setattr(classifier, "git_output", lambda *_: raw)
-    assert not classifier.classify_event("push", event("push"))
+    assert not classifier.classify_event("pull_request", event("pull_request"))
 
 
 @pytest.mark.parametrize(("payload", "expected"), [("{}", "false"), ("not-json", "false"),
-                                                  (json.dumps(event("push")), "true")])
+                                                  (json.dumps(event("pull_request")), "true")])
 def test_cli_writes_only_boolean_output(tmp_path, monkeypatch, capsys, payload, expected):
     event_path, output = tmp_path / "event.json", tmp_path / "output"
     event_path.write_text(payload)
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    monkeypatch.setattr(classifier, "git_output", lambda *_: raw_change("docs/ci-policy.md"))
+    monkeypatch.setattr(classifier, "git_output",
+                        lambda *args: b"c" * 40 + b"\n" if args[0] == "merge-base"
+                        else raw_change("docs/ci-policy.md"))
     classifier.main()
     assert output.read_text() == f"docs_only={expected}\n"
     assert f"docs_only={expected}" in capsys.readouterr().out
+
+
+# Tests that the docs-only lane itself runs may read prose; everything else must not.
+TIER0_TESTS = {
+    "tests/test_docs_markdown_links.py", "tests/test_docs_policy_repo_metrics_hygiene.py",
+    "tests/test_ci_policy_sync.py", "tests/test_ci_change_classifier.py",
+    "tests/test_release_metadata_sync.py", "tests/test_release_hygiene.py",
+}
+MARKDOWN_REFERENCE = re.compile(
+    r"docs/[\w./ -]*?\.md|AGENTS\.md|CONTRIBUTING\.md|\.github/pull_request_template\.md")
+SCANNED_SUFFIXES = {".py", ".rs", ".ps1", ".sh", ".toml", ".yml", ".yaml", ".json", ".txt", ".cfg"}
+
+
+def test_markdown_read_by_code_is_never_docs_only():
+    root = Path(__file__).resolve().parents[1]
+    consumed = {}
+    for top in ("tests", "scripts", "src", "packaging"):
+        for path in (root / top).rglob("*"):
+            relative = path.relative_to(root).as_posix()
+            if (path.suffix not in SCANNED_SUFFIXES or not path.is_file()
+                    or relative in TIER0_TESTS or relative == "scripts/ci_change_classifier.py"):
+                continue
+            for reference in MARKDOWN_REFERENCE.findall(path.read_text(encoding="utf-8", errors="ignore")):
+                if (root / reference).is_file() and classifier.is_prose(reference):
+                    consumed.setdefault(reference, []).append(relative)
+    assert consumed == {}, "add these to EXECUTABLE_INPUT_DOCS (or move the reader into Tier 0)"
+
+
+def test_ci_tier0_test_list_matches_the_workflow():
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+    step = workflow.split("Focused documentation and policy checks", 1)[1].split("- name:", 1)[0]
+    assert set(re.findall(r"tests/test_\w+\.py", step)) == TIER0_TESTS
