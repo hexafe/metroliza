@@ -314,3 +314,88 @@ Two intermediate test runs were interrupted because test teardown tried to
 notify a multiprocessing Event after killing its waiters. The trace identified
 the test's release event, not production cleanup. A filesystem release marker
 removed that harness deadlock; no crash was induced.
+
+### Correction validation and measurements
+
+Validated production/test source: `d86abfa9d7cc01f1b243190a5aa64a794d2be665`.
+Subsequent changes are this evidence record only. All scripts, raw logs, copied
+synthetic DBs, captured sources, traces and XLSX files are retained under:
+
+```bash
+S=/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1130-cancel
+P=/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python
+bash "$S/before.sh"  # six captures, executed before production edits
+bash "$S/after.sh"   # nine captures on the correction commit
+ulimit -c 0
+env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper "$P" "$S/report.py"
+bash "$S/verification.sh"
+```
+
+Both capture scripts use the guarded, unmodified audit entry point and fresh
+copies of the same synthetic tiny/40-group DBs as the original PR. No new
+worktree was created. Medians of three full exports, including pool startup
+and shutdown; load columns are median starting 1/5/15-minute load averages:
+
+| Synthetic fixture / mode | Review base | Corrected | Base load | Corrected load |
+| --- | ---: | ---: | --- | --- |
+| tiny, 4 groups, 1 worker | 5.7 s | 6.1 s | 9.88 / 9.15 / 7.20 | 7.67 / 6.42 / 6.51 |
+| 40 groups, 2 workers | 32.9 s | 34.6 s | 10.11 / 9.03 / 7.17 | 7.54 / 6.43 / 6.50 |
+| 40 groups, 1 worker control | not repeated | 58.3 s | not applicable | 7.33 / 6.39 / 6.50 |
+
+Repetitions: review tiny `[7.7, 5.7, 5.1]`, corrected tiny `[5.8, 7.1, 6.1]`;
+review parallel40 `[42.7, 31.2, 32.9]`, corrected parallel40
+`[36.9, 34.6, 31.3]`, corrected serial40 `[58.5, 58.3, 57.9]`.
+The parallel median is 5.2% higher than the review base, and 40.7% below the
+current serial control. These shared-machine samples do not establish an
+unchanged wall time or a causal attribution for that difference. Tiny/serial
+rendering uses the unchanged serial implementation. All parallel captures
+recorded two workers, four pending groups maximum and 39 completed worker jobs.
+
+All nine corrected XLSX exports match **both** the review-base capture and
+the original PR baseline. **1,008 PNGs are byte-identical** to both baselines;
+the PR's decoded-pixel harness also passes every image. Package member order,
+worksheet/drawing XML and all other contents match. In addition to the existing
+harness, the report verifies `docProps/core.xml` after normalizing only created/
+modified timestamp values. All six serial annotation/table traces match their
+reference traces. `results.json` records every workbook and timing receipt.
+
+The test prefix used throughout (from the current worktree) is:
+
+```bash
+ulimit -c 0
+env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" <files-and-options-below>
+```
+
+| Test files/options | Observed result |
+| --- | --- |
+| `tests/test_export_summary_render_pool.py -k cancel_active` on review base, before fix | 2 failed, 17 deselected; `reproduction.log` |
+| `tests/test_export_summary_render_pool.py tests/test_complexity_ratchet.py tests/test_bug_sweep_coverage.py tests/test_security_audit.py` | 139 passed in 69.76 s; `focused.log` |
+| Final PR regression command below | 918 passed, 1 skipped, 35 subtests passed, 6 warnings in 128.88 s; `verification.log` |
+| `-rs tests/test_chart_renderer.py::test_native_histogram_renderer_uses_real_extension_when_available` | 1 skipped in 1.81 s: native histogram renderer unavailable; `skip-reason.log` |
+
+`verification.sh` sets the original pre-PR source for collision/edge scenes and
+the review-base/new XLSX pair, then runs exactly:
+
+```bash
+export METROLIZA_PLOT_REFERENCE_MODULE=/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1126/base_export_data_thread.py
+export METROLIZA_PLOT_BASE="$S/before1-groups40.xlsx"
+export METROLIZA_PLOT_CANDIDATE="$S/after1-groups40.xlsx"
+ulimit -c 0
+env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" tests/test_export*.py tests/test_thread_flow_helpers.py tests/test_chart_renderer.py tests/test_chart_render_service.py tests/test_summary_plot_palette_accessibility.py tests/test_analytics_exporting_boundary.py tests/test_contracts.py tests/test_complexity_ratchet.py tests/test_bug_sweep_coverage.py tests/test_security_audit.py
+/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m ruff check .
+git diff --check
+```
+
+Ruff and diff whitespace checks passed. No complexity budget or coverage
+ownership changed. This correction changes neither the security baseline nor
+`export_data_thread.py`; the review base already includes the orchestrator's
+`22547dee` fingerprint relocation, subsequent to the original drift receipt
+above. No additional Bandit finding-line shift was introduced here.
+
+Remaining limits: actual Windows, frozen/clean-machine exports, a quiet-machine
+performance comparison, CI, external exact-head review and integration are not
+verified by this correction. The real native histogram extension is unavailable
+in this environment and its test is skipped; Matplotlib rendering is covered.
+The full suite was not run. Open compatibility risk: the Python 3.11 private
+executor references used only for bounded cleanup. No remote operations, new
+worktrees, stash, rebase, reset or release/product mutations were performed.
