@@ -721,7 +721,17 @@ class MainWindow(QMainWindow):
             button.setEnabled(bool(self.db_file) and not busy)
         for button in self._database_workflow_buttons:
             button.setEnabled(not busy)
-        self.enrich_metadata_action.setEnabled(not busy and not self.is_metadata_enrichment_active())
+        self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
+
+    def _pdf_execution_available(self, *, from_reports=False):
+        """GUI-thread admission for shell PDF work, across all databases.
+
+        Reports serializes its own workers, including cooperative reader stops.
+        Shell enrichment must also wait for every one of those workers to exit.
+        """
+        if self.is_metadata_enrichment_active():
+            return False
+        return from_reports or self._reports_workspace is None or self._reports_workspace.pdf_workers_idle()
 
     def is_metadata_enrichment_active(self):
         return (
@@ -732,6 +742,11 @@ class MainWindow(QMainWindow):
     def launch_metadata_enrichment(self):
         """Start modeless OCR metadata enrichment for the selected database."""
         if not self._report_database_action_allowed():
+            return
+        if not self._pdf_execution_available():
+            self.metadata_enrichment_status_label.setText("Wait for the active PDF operation to finish")
+            self.metadata_enrichment_status_label.setVisible(True)
+            set_status_variant(self.metadata_enrichment_status_label, "warning")
             return
         try:
             from metroliza.parsing.metadata_enrichment_thread import MetadataEnrichmentThread
@@ -788,9 +803,7 @@ class MainWindow(QMainWindow):
 
     def on_metadata_enrichment_finished(self):
         try:
-            self.enrich_metadata_action.setEnabled(
-                self._reports_workspace is None or self._reports_workspace.can_change_workspace()
-            )
+            self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
             self.cancel_metadata_enrichment_button.setEnabled(False)
             self.cancel_metadata_enrichment_button.setVisible(False)
             if self.metadata_enrichment_error_message:
@@ -1608,14 +1621,11 @@ class MainWindow(QMainWindow):
                 "Report start was blocked during Export database selection.", 5000
             )
             return False
-        if not self.db_file:
-            return True
         blockers = []
-        if self.is_metadata_enrichment_active():
-            enrichment_database = getattr(self.metadata_enrichment_thread, "db_file", None)
-            if not enrichment_database or Path(enrichment_database).resolve() == Path(self.db_file).resolve():
-                blockers.append("metadata enrichment")
-        blockers.extend(self._same_database_workflow_labels())
+        if not self._pdf_execution_available(from_reports=True):
+            blockers.append("metadata enrichment")
+        if self.db_file:
+            blockers.extend(self._same_database_workflow_labels())
         if not blockers:
             return True
         self.workspace_notice_label.setText(
