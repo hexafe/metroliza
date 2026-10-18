@@ -38,6 +38,7 @@ from metroliza.parsing.header_ocr_geometry import convert_ocr_records_to_header_
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_extractor import extract_report_metadata
 from metroliza.reports.report_metadata_models import MetadataExtractionContext
+from metroliza.reports.report_metadata_review import apply_metadata_override
 from metroliza.reports.report_metadata_normalizers import (
     normalize_reference,
     normalize_report_date,
@@ -132,6 +133,10 @@ class EmptyCMMReportError(RuntimeError):
 
 class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     """Class to parse and convert PDF CMM report."""
+
+    # Parsers that expose ``metadata_review_override`` honor values confirmed in
+    # the pre-import metadata review step; others are shown read-only there.
+    supports_metadata_review_override = True
 
     manifest = PluginManifest(
         plugin_id="cmm",
@@ -349,6 +354,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self.stage_timings_s: dict[str, float] = {}
         self._prepared_measurement_rows = None
         self._metadata_selection_result = None
+        self.metadata_review_override = None
         self._metadata_identity_hash = None
         self._page_count = None
         self._first_page_width = None
@@ -1043,6 +1049,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         )
         self._metadata_selection_result = self._apply_legacy_metadata_fallbacks(self._metadata_selection_result)
         self._metadata_selection_result = self._apply_header_extraction_diagnostics(self._metadata_selection_result)
+        if self.metadata_review_override is not None:
+            # Values confirmed in the pre-import metadata review (#1100).
+            self._metadata_selection_result = apply_metadata_override(
+                self._metadata_selection_result,
+                self.metadata_review_override,
+            )
         self.canonical_metadata = self._metadata_selection_result.metadata
         self._metadata_identity_hash = build_report_identity_hash(self.canonical_metadata)
         return self._metadata_selection_result

@@ -1963,6 +1963,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         return parser.import_prepared_report_if_absent()
                     return parser.import_report_if_absent()
 
+                metadata_overrides = {
+                    override.occurrence_id: override for override in plan.metadata_overrides
+                }
+
                 def _parser_factory(
                     report,
                     *,
@@ -1979,6 +1983,15 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         expected_plugin_id=expected_plugin_id,
                         expected_registry_generation_id=(expected_registry_generation_id),
                     )
+                    review_override = metadata_overrides.get(
+                        self._occurrence_id_for_report(Path(report))
+                    )
+                    if review_override is not None:
+                        if not getattr(parser, "supports_metadata_review_override", False):
+                            raise ValueError(
+                                "Parser does not support reviewed metadata overrides."
+                            )
+                        parser.metadata_review_override = review_override
                     import_policy = ReportImportPolicy(
                         metadata_parsing_mode=self.metadata_parsing_mode,
                         refreshable_parser_id=_CURRENT_CMM_METADATA_PARSER_ID,
