@@ -16,12 +16,11 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from concurrent.futures.process import BrokenProcessPool
 import logging
-from multiprocessing import get_context
 import os
-import sys
 from typing import Callable, Sequence
 
 from metroliza.shared.env_utils import env_int, env_value
+from metroliza.shared.compute_worker import frozen_windows, spawn_context
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ _RESULT_POLL_SECONDS = 0.2
 
 
 def _is_frozen_windows() -> bool:
-    return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+    return frozen_windows()
 
 
 def resolve_prepare_worker_count(report_count: int) -> int:
@@ -43,13 +42,14 @@ def resolve_prepare_worker_count(report_count: int) -> int:
 
     ``METROLIZA_IMPORT_PREPARE_WORKERS`` is ``auto`` (default), ``0`` (disabled) or an
     explicit count. Small batches stay serial because process start-up would dominate.
-    The packaged Windows build stays serial unless the count is set explicitly, until the
-    spawn path has packaged qualification evidence.
+    The packaged Windows defaults are separate from the source policy and are
+    measured by the built-package CI qualification (see Issue #1134).
     """
 
     configured = (env_value(WORKERS_ENV) or "auto").lower()
     try:
-        minimum = max(2, env_int(MIN_REPORTS_ENV, default=DEFAULT_MIN_REPORTS) or DEFAULT_MIN_REPORTS)
+        default_minimum = 200 if _is_frozen_windows() else DEFAULT_MIN_REPORTS
+        minimum = max(2, env_int(MIN_REPORTS_ENV, default=default_minimum) or default_minimum)
     except ValueError:
         minimum = DEFAULT_MIN_REPORTS
     if report_count < minimum:
@@ -60,7 +60,7 @@ def resolve_prepare_worker_count(report_count: int) -> int:
         except ValueError:
             return 0
     if _is_frozen_windows():
-        return 0
+        return min(2, report_count) if (os.cpu_count() or 1) >= 2 else 0
     workers = min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1)
     return workers if workers >= 2 else 0
 
@@ -86,6 +86,8 @@ def _worker_parser_class():
 def initialize_prepare_worker() -> None:
     """Quiet, low-priority, core-dump-free worker start-up (the owner logs failures)."""
 
+    from metroliza.shared.compute_worker import initialize_compute_runtime
+    initialize_compute_runtime()
     logging.disable(logging.CRITICAL)
     try:
         os.nice(5)
@@ -160,7 +162,7 @@ class ImportPreparePool:
         self._broken = False
         self._executor = ProcessPoolExecutor(
             max_workers=int(workers),
-            mp_context=get_context("spawn"),
+            mp_context=spawn_context(),
             initializer=initialize_prepare_worker,
         )
         self._refill(0)

@@ -36,7 +36,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter
 from matplotlib.text import Text
-from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
+from metroliza.exporting.export_thread_runtime import QCoreApplication, QThread, pyqtSignal
 
 from metroliza.exporting.contracts import ExportRequest, validate_export_request
 from metroliza.exporting.export_summary_render_pool import (

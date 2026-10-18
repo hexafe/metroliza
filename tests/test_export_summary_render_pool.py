@@ -182,3 +182,31 @@ def test_policy_change_discards_queued_render_and_cancellation_cleans_up(monkeyp
     owner._check_canceled = lambda: True
     assert list(results) == []
     assert executor.closed
+
+
+def test_frozen_windows_policy_uses_windows_threshold_and_environment(monkeypatch):
+    monkeypatch.setattr(pool.sys, 'platform', 'win32')
+    monkeypatch.setattr(pool.sys, 'frozen', True, raising=False)
+    monkeypatch.delenv('METROLIZA_EXPORT_GROUP_MIN_GROUPS', raising=False)
+    monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '1')
+    owner = _owner()
+    assert pool._pool_policy(owner, 39) == 'serial_small_export'
+    assert pool._pool_policy(owner, 40) == 'spawn'
+    monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '0')
+    assert pool._pool_policy(owner, 40) == 'serial_disabled'
+    monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MIN_GROUPS', '50')
+    assert pool._pool_policy(owner, 40) == 'serial_small_export'
+
+
+def test_frozen_executor_uses_shared_compute_context_and_worker_cap(monkeypatch):
+    monkeypatch.setattr(pool.sys, 'platform', 'win32')
+    monkeypatch.setattr(pool.sys, 'frozen', True, raising=False)
+    monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MIN_GROUPS', '2')
+    monkeypatch.setenv('METROLIZA_EXPORT_GROUP_WORKERS', '2')
+    context = object()
+    monkeypatch.setattr(pool, 'spawn_context', lambda: context)
+    owner, executor = _owner(), _Executor()
+    owner.chart_worker_count = 4
+    assert len(list(_fake_tasks(monkeypatch, owner, executor))) == 8
+    assert executor.kwargs['mp_context'] is context
+    assert executor.kwargs['max_workers'] == 2

@@ -18,7 +18,7 @@ UNAVAILABLE_SOURCES = frozenset({
     "system_directory", "parent_snapshot_open", "parent_snapshot_missing",
     "native_process_image", "probe_callback",
     "expected_file_package_launcher", "expected_file_package_application",
-    "expected_file_package_ocr_worker", "expected_file_system_cmd",
+    "expected_file_package_ocr_worker", "expected_file_package_compute_worker", "expected_file_system_cmd",
     "expected_file_system_conhost", "expected_file_system_werfault",
     "expected_file_system_wermgr", "expected_file_system_openconsole",
     "expected_file_system_powershell",
@@ -29,12 +29,13 @@ class RuntimeEvidence:
     """One application launch/Job, one private journal, one owned probe."""
 
     def __init__(self, api, artifact: Path, cwd: Path, environment, failure_factory,
-                 *, allow_ocr_worker: bool = False):
+                 *, allow_ocr_worker: bool = False, compute_workers: int = 0):
+        self.compute_workers = compute_workers
         self.root = cwd / ("runtime-audit-" + uuid.uuid4().hex)
         self.nonce = uuid.uuid4().hex
         self.failure_factory = failure_factory
         self.probe = OwnedProcessProbe(
-            api, artifact, failure_factory, allow_ocr_worker=allow_ocr_worker,
+            api, artifact, failure_factory, allow_ocr_worker=allow_ocr_worker, compute_workers=compute_workers,
         )
         self.probe.phase = "startup"
         self._create_root()
@@ -131,7 +132,7 @@ class RuntimeEvidence:
         self.root.rmdir()
 
 
-def _expected_runtime_roles(supervised, platform_event, allow_ocr_worker):
+def _expected_runtime_roles(supervised, platform_event, allow_ocr_worker, compute_workers=0):
     roles = (["package_launcher", "package_launcher"] if supervised else []) + ["package_application"]
     order = (["launcher_bootloader", "launcher_supervisor"] if supervised else []) + ["application"]
     if platform_event:
@@ -140,20 +141,26 @@ def _expected_runtime_roles(supervised, platform_event, allow_ocr_worker):
     if allow_ocr_worker:
         roles += ["package_ocr_worker"]
         order += ["ocr_worker"]
+    roles += ["package_compute_worker"] * compute_workers
+    order += ["compute_worker"] * compute_workers
     return roles, order
 
 
-def _verified_audit_events(events, allow_ocr_worker):
+def _verified_audit_events(events, allow_ocr_worker, compute_workers=0):
     def reject():
         raise ValueError("runtime_evidence_invalid")
 
-    if type(events) is not list or len(events) > 2:
+    if type(events) is not list or len(events) > 2 + compute_workers:
         reject()
     platform_events = [event for event in events if type(event) is dict and event.get("kind") == "platform_ver"]
     worker_events = [event for event in events if type(event) is dict and event.get("kind") == "ocr_worker_launch"]
+    compute_events = [event for event in events if type(event) is dict and event.get("kind") == "compute_worker_launch"]
+    if (len(compute_events) != compute_workers
+            or any(event != {"kind": "compute_worker_launch", "caller": "metroliza", "phase": "after_ready"} for event in compute_events)):
+        reject()
     if (len(platform_events) > 1 or len(worker_events) != int(allow_ocr_worker)
-            or len(events) != len(platform_events) + len(worker_events)
-            or events != platform_events + worker_events):
+            or len(events) != len(platform_events) + len(worker_events) + len(compute_events)
+            or events != platform_events + worker_events + compute_events):
         reject()
     helper_phase = "startup"
     if platform_events:
@@ -177,7 +184,7 @@ def _verified_audit_events(events, allow_ocr_worker):
 
 
 def verified_runtime_order(
-    proof, *, supervised: bool, allow_ocr_worker: bool = False,
+    proof, *, supervised: bool, allow_ocr_worker: bool = False, compute_workers: int = 0,
 ) -> tuple[str, ...]:
     """Pair an audited attempt and exact native ancestry; neither suffices alone."""
     def reject():
@@ -187,10 +194,12 @@ def verified_runtime_order(
             or proof["installed"] is not True
             or proof["probe_effect"] != "synchronous_private_prelaunch_journal_and_owned_handle_sampling"):
         reject()
-    platform_events, helper_phase = _verified_audit_events(proof["events"], allow_ocr_worker)
+    if type(compute_workers) is not int or not 0 <= compute_workers <= 8:
+        reject()
+    platform_events, helper_phase = _verified_audit_events(proof["events"], allow_ocr_worker, compute_workers)
     owned = proof["owned"]
     expected_roles, expected_order = _expected_runtime_roles(
-        supervised, platform_events, allow_ocr_worker,
+        supervised, platform_events, allow_ocr_worker, compute_workers,
     )
     if (type(owned) is not dict
             or set(owned) != {"schema_version", "members", "assigned", "unobserved", "job_empty", "overflow", "observation_unavailable", "probe_effect"}
@@ -225,7 +234,7 @@ def _verify_members(members, expected_roles, helper_phase):
             or member["parent_ordinal_advisory"] != index - 1
         ):
             reject()
-        if role == "package_ocr_worker" and (
+        if role in {"package_ocr_worker", "package_compute_worker"} and (
             member["first_phase"] not in {"running", "drain"}
             or member["last_phase"] not in {"running", "drain"}
             or parent not in {"unknown", expected_roles.index("package_application")}
@@ -234,7 +243,7 @@ def _verify_members(members, expected_roles, helper_phase):
 
 
 class OwnedProcessProbe:
-    def __init__(self, api, artifact: Path, failure_factory, *, allow_ocr_worker=False):
+    def __init__(self, api, artifact: Path, failure_factory, *, allow_ocr_worker=False, compute_workers=0):
         self.api = api
         self.failure_factory = failure_factory
         self.unavailable = False
@@ -246,6 +255,8 @@ class OwnedProcessProbe:
             (("package_ocr_worker", artifact / "metroliza_ocr_worker.exe"),)
             if allow_ocr_worker else ()
         )
+        if compute_workers:
+            self.images += (("package_compute_worker", artifact / "metroliza_compute_worker.exe"),)
         self.phase = "suspended"
         self.records = {}
         self.active = None

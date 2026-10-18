@@ -22,7 +22,7 @@ FAILURE_EXIT = 97
 CALLERS = frozenset({"setuptools", "numpy", "matplotlib", "platformdirs", "metroliza", "other"})
 PLATFORM_CALLERS = CALLERS - {"metroliza", "other"}
 KINDS = frozenset({
-    "platform_ver", "ocr_worker_launch", "other", "other_arguments", "other_executable",
+    "platform_ver", "ocr_worker_launch", "compute_worker_launch", "other", "other_arguments", "other_executable",
     "other_command", "other_frames", "other_depth",
 })
 
@@ -106,6 +106,28 @@ def _classify_platform_call(arguments, frame, expected_cmd: str) -> tuple[str, s
     return ("platform_ver" if required == {"_syscmd_ver", "win32_ver"} else "other_frames"), caller
 
 
+def classify_compute_call(arguments, frame, expected_worker: str | None) -> tuple[str, str]:
+    """Windows multiprocessing uses CreateProcess directly, not subprocess.Popen."""
+    import re
+    if expected_worker is None or len(arguments) != 3:
+        return "other_arguments", "other"
+    executable, command, cwd = arguments
+    prefix = f'"{expected_worker}" "--multiprocessing-fork" '
+    if (executable != expected_worker or type(command) is not str
+            or cwd is not None
+            or not command.startswith(prefix)
+            or re.fullmatch(r'"parent_pid=[1-9][0-9]{0,9}" "pipe_handle=[0-9]{1,20}"', command[len(prefix):]) is None):
+        return "other_command", "other"
+    for _ in range(64):
+        if frame is None:
+            break
+        if (frame.f_globals.get("__name__") == "multiprocessing.popen_spawn_win32"
+                and frame.f_code.co_name == "__init__"):
+            return "compute_worker_launch", "metroliza"
+        frame = frame.f_back
+    return "other_frames", "other"
+
+
 def install() -> None:
     # Ordinary product execution performs only this fixed opt-in check.
     if os.environ.get(GATE) != "1":
@@ -116,6 +138,24 @@ def install() -> None:
         # Optional upstream hooks can catch Exception. A failed journal must
         # never be mistaken for zero calls, even if the fixture uses os._exit.
         os._exit(FAILURE_EXIT)
+
+
+def _observed_call(event, arguments, frame, expected_cmd, expected_worker, expected_compute):
+    if event == "_winapi.CreateProcess":
+        return classify_compute_call(arguments, frame, expected_compute)
+    return classify_call(arguments, frame, expected_cmd, expected_worker)
+
+
+def _already_observed(event, frame):
+    # subprocess.Popen is journalled before its internal native CreateProcess.
+    return (event == "_winapi.CreateProcess" and frame.f_globals.get("__name__") == "subprocess"
+            and frame.f_code.co_name == "_execute_child")
+
+
+def _expected_compute(application):
+    if application.name.lower() == "metroliza_application.exe":
+        return str(application.with_name("metroliza_compute_worker.exe"))
+    return None
 
 
 def _install() -> None:
@@ -142,6 +182,7 @@ def _install() -> None:
         str(application.with_name("metroliza_ocr_worker.exe"))
         if application.name.lower() == "metroliza_application.exe" else None
     )
+    expected_compute = _expected_compute(application)
     lock = _thread.allocate_lock()
     count = 0
     installed_seen = False
@@ -151,7 +192,10 @@ def _install() -> None:
         if event == "metroliza.qualifier.audit_installed" and arguments == (nonce,):
             installed_seen = True
             return
-        if event != "subprocess.Popen":
+        if event not in {"subprocess.Popen", "_winapi.CreateProcess"}:
+            return
+        frame = sys._getframe(1)
+        if _already_observed(event, frame):
             return
         acquired = False
         try:
@@ -159,7 +203,7 @@ def _install() -> None:
             if not acquired or count >= MAX_EVENTS:
                 raise ValueError("runtime_audit_invalid")
             count += 1
-            kind, caller = classify_call(arguments, sys._getframe(1), expected_cmd, expected_worker)
+            kind, caller = _observed_call(event, arguments, frame, expected_cmd, expected_worker, expected_compute)
             phase = "after_ready" if (root / "ready").exists() else "startup"
             _write(
                 root,

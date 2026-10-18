@@ -8,11 +8,11 @@ boundary. They never open the database, workbook, or dashboard output paths.
 from collections import deque
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
-import multiprocessing
 import sys
 
 from metroliza.exporting.contracts import AppPaths, ExportRequest
-from metroliza.shared.env_utils import env_bool
+from metroliza.shared.env_utils import env_bool, env_int
+from metroliza.shared.compute_worker import frozen_windows, spawn_context
 
 
 MIN_PARALLEL_GROUPS = 8
@@ -44,6 +44,8 @@ def _initialize_render_worker():
 
 def render_summary_group(task):
     """Spawn-importable entry point. No QApplication or Qt event loop is needed."""
+    from metroliza.shared.compute_worker import initialize_compute_runtime
+    initialize_compute_runtime()
     from metroliza.exporting.export_data_thread import ExportDataThread
 
     request = ExportRequest(
@@ -98,15 +100,23 @@ def _render_task(owner, entry):
 def _pool_policy(owner, group_count):
     if not owner.generate_summary_sheet or owner.generate_html_dashboard:
         return 'serial_output_mode'
-    if owner.chart_worker_count <= 1 or group_count < MIN_PARALLEL_GROUPS:
+    minimum = _minimum_groups()
+    if owner.chart_worker_count <= 1 or group_count < max(2, minimum or 40):
         return 'serial_small_export'
-    if getattr(sys, 'frozen', False):
-        # Current frozen entry points do not dispatch multiprocessing workers.
-        # Do not relaunch the desktop application as a spawn worker.
+    if getattr(sys, 'frozen', False) and not frozen_windows():
         return 'serial_frozen_multiprocessing_unavailable'
     if not env_bool('METROLIZA_EXPORT_GROUP_MP', default=True):
         return 'serial_disabled'
     return 'spawn'
+
+
+def _minimum_groups():
+    if not frozen_windows():
+        return MIN_PARALLEL_GROUPS
+    try:
+        return env_int('METROLIZA_EXPORT_GROUP_MIN_GROUPS', default=40)
+    except ValueError:
+        return 40
 
 
 def iter_summary_render_results(owner, entries):
@@ -127,13 +137,14 @@ def iter_summary_render_results(owner, entries):
 
     yield entries[0], None
     workers = min(MAX_RENDER_WORKERS, owner.chart_worker_count, len(entries) - 1)
+    workers = _windows_worker_limit(workers)
     bound = max(1, min(owner.chart_worker_queue_size, workers * 2))
     pending = deque()
     remaining = iter(entries[1:])
     executor = None
     try:
         executor = ProcessPoolExecutor(
-            max_workers=workers, mp_context=multiprocessing.get_context('spawn'),
+            max_workers=workers, mp_context=spawn_context(),
             initializer=_initialize_render_worker,
         )
         telemetry['workers'] = workers
@@ -152,6 +163,16 @@ def iter_summary_render_results(owner, entries):
                 future.cancel()
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _windows_worker_limit(workers):
+    if not frozen_windows():
+        return workers
+    try:
+        configured = env_int('METROLIZA_EXPORT_GROUP_WORKERS', default=2)
+    except ValueError:
+        configured = 2
+    return min(workers, max(1, configured or 2))
 
 
 def _collect_ordered(owner, remaining, pending, executor, bound, telemetry):

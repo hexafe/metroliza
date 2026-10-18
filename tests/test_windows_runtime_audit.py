@@ -1104,3 +1104,34 @@ def test_runtime_ready_missing_environment_is_closed(tmp_path, monkeypatch, miss
     monkeypatch.delenv(missing, raising=False)
     with pytest.raises(ValueError, match="^runtime_audit_invalid$"):
         audit.wait_for_host_ready()
+
+
+def test_compute_roles_require_exact_attempt_count_native_identity_and_job_drain():
+    from copy import deepcopy
+
+    proof = _proof(supervised=True, helpers=False)
+    members = proof['owned']['members']
+    for _ in range(4):
+        members.append({'role': 'package_compute_worker', 'identity': 'fixed_file_verified',
+                        'first_phase': 'running', 'last_phase': 'running',
+                        'parent_ordinal_advisory': 2, 'lifecycle': 'job_empty'})
+    proof['owned']['assigned'] = len(members)
+    proof['events'] += [{'kind': 'compute_worker_launch', 'caller': 'metroliza', 'phase': 'after_ready'}] * 4
+    assert verified_runtime_order(proof, supervised=True, compute_workers=4)[-4:] == ('compute_worker',) * 4
+    with pytest.raises(ValueError):
+        verified_runtime_order(proof, supervised=True)
+    for alter in ('unknown_image', 'unowned', 'startup', 'missing_event', 'not_drained'):
+        broken = deepcopy(proof)
+        member = broken['owned']['members'][-1]
+        if alter == 'unknown_image':
+            member['identity'] = 'unknown'
+        elif alter == 'unowned':
+            member['parent_ordinal_advisory'] = 1
+        elif alter == 'startup':
+            member['first_phase'] = 'startup'
+        elif alter == 'missing_event':
+            broken['events'].pop()
+        else:
+            broken['owned']['job_empty'] = False
+        with pytest.raises(ValueError):
+            verified_runtime_order(broken, supervised=True, compute_workers=4)

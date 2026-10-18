@@ -983,3 +983,19 @@ def test_windows_primary_thread_receipt_publishes_only_known_node_status(outcome
         'primary_thread_identity': expected, 'interrupted_creation': 'unobserved',
     }
     assert "if result == 0 and set(controls.values()) != {'passed'}:" in code
+
+
+def test_portable_job_requires_frozen_compute_equivalence_receipt():
+    import yaml
+
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text())
+    job = workflow['jobs']['windows-portable-onefile']
+    steps = job['steps']
+    trial = next(step for step in steps if 'qualify_windows_compute_workers.py' in step.get('run', ''))
+    assert '--artifact-dir $onedir[0].FullName --receipt $receipt' in trial['run']
+    assert "if ($LASTEXITCODE -ne 0) { throw" in trial['run']
+    assert 'continue-on-error' not in trial
+    assert steps.index(trial) > next(i for i, step in enumerate(steps) if '--kind launcher' in step.get('run', ''))
+    receipt = next(step for step in steps if step.get('with', {}).get('name') == 'windows-compute-worker-receipt')
+    assert receipt['if'] == 'always()'
+    assert receipt['with']['path'].endswith('/compute-worker-receipt/compute-workers.json')

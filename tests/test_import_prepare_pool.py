@@ -334,14 +334,16 @@ def test_worker_count_policy(monkeypatch):
     assert resolve_prepare_worker_count(500) == 0
 
 
-def test_packaged_windows_build_stays_serial_unless_explicitly_enabled(monkeypatch):
+def test_packaged_windows_build_uses_separate_defaults_and_explicit_override(monkeypatch):
     monkeypatch.delenv(WORKERS_ENV, raising=False)
     monkeypatch.delenv(MIN_REPORTS_ENV, raising=False)
     monkeypatch.setattr(os, "cpu_count", lambda: 12)
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
-    assert resolve_prepare_worker_count(5000) == 0
+    assert resolve_prepare_worker_count(199) == 0
+    assert resolve_prepare_worker_count(200) == 2
+    assert resolve_prepare_worker_count(5000) == 2
     monkeypatch.setenv(WORKERS_ENV, "3")
     assert resolve_prepare_worker_count(5000) == 3
 
@@ -406,3 +408,21 @@ def test_worker_state_is_never_applied_to_a_parser_that_is_not_the_builtin_cmm_p
         resolution_evidence=SimpleNamespace(plugin_id=CMMReportParser.manifest.plugin_id),
     )
     assert ImportPreparePool._eligible(pool, prepared) is False
+
+
+def test_prepare_executor_uses_shared_compute_context(monkeypatch):
+    context, calls = object(), []
+    monkeypatch.setattr(import_prepare_pool, 'spawn_context', lambda: context)
+
+    class Executor:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def shutdown(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(import_prepare_pool, 'ProcessPoolExecutor', Executor)
+    pool = ImportPreparePool([], database_path='unused', metadata_parsing_mode='light',
+                             workers=2, parser_plugin_id='builtin')
+    pool.close()
+    assert calls[0]['mp_context'] is context

@@ -54,6 +54,7 @@ MIXED_GIT_SHA = "f" * 40
 APPLICATION = "metroliza_application.exe"
 LAUNCHER = "metroliza.exe"
 OCR_WORKER = "metroliza_ocr_worker.exe"
+COMPUTE_WORKER = "metroliza_compute_worker.exe"
 PYTHON_DLL = "_internal/python311.dll"
 
 
@@ -292,6 +293,14 @@ def scenario_missing_manifest(ctx: Context, result: ScenarioResult) -> ScenarioR
     return _finish(result, ctx, root, manifest)
 
 
+def scenario_missing_compute(ctx: Context, result: ScenarioResult) -> ScenarioResult:
+    root = ctx.clone(ctx.work / "pkg")
+    component = root / COMPUTE_WORKER
+    component.unlink()
+    result.extras["component_name"] = COMPUTE_WORKER
+    return _finish(result, ctx, root, component)
+
+
 def scenario_provenance_mismatch(ctx: Context, result: ScenarioResult) -> ScenarioResult:
     """Two-version mix: a provenance file of another build whose hash the manifest lists."""
     root = ctx.clone(ctx.work / "pkg")
@@ -398,6 +407,7 @@ SCENARIOS: tuple[tuple[int, str, str, Callable[[Context, ScenarioResult], Scenar
      scenario_provenance_mismatch),
     (6, "supervised_smoke", "Supervised startup smoke from an untouched full copy",
      scenario_supervised_smoke),
+    (7, "missing_compute", "Compute worker missing", scenario_missing_compute),
 )
 
 

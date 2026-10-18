@@ -61,7 +61,11 @@ if __name__ == "__main__":
                     run_qualification as run_candidate_qualification,
                 )
 
-                if requested_candidate_scenario() is not None:
+                if os.environ.get("METROLIZA_COMPUTE_QUALIFICATION_ROOT"):
+                    from metroliza.app.compute_worker_qualification import run_qualification as run_compute_qualification
+
+                    code = run_compute_qualification()
+                elif requested_candidate_scenario() is not None:
                     code = run_candidate_qualification()
         raise SystemExit(code)
     finally:

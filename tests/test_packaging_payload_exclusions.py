@@ -479,6 +479,7 @@ def _exec_onedir_spec(monkeypatch, tmp_path, flavor: str | None):
     assert set(analyses) == {
         "metroliza_package_entry",
         "metroliza_ocr_worker_entry",
+        "metroliza_compute_worker_entry",
         "metroliza_supervisor_entry",
     }
     (collect,) = collects
@@ -515,3 +516,12 @@ def test_executed_onedir_spec_keeps_full_payload_and_openvino_in_benchmark_flavo
     worker_imports = analyses["metroliza_ocr_worker_entry"].kwargs["hiddenimports"]
     assert "openvino" in worker_imports and "openvino.runtime" in worker_imports
     assert len(manifest_calls) == 1
+
+
+def test_compute_spec_has_spawn_hook_and_no_qt_payload(monkeypatch, tmp_path):
+    analyses, _collected, _manifest = _exec_onedir_spec(monkeypatch, tmp_path, 'user')
+    compute = analyses['metroliza_compute_worker_entry'].kwargs
+    assert compute['runtime_hooks'] == []
+    assert {'PyQt6', 'metroliza.ui', 'metroliza.app.bootstrap'} <= set(compute['excludes'])
+    assert 'metroliza.exporting.export_data_thread' in compute['hiddenimports']
+    assert 'metroliza.parsing.import_prepare_pool' in compute['hiddenimports']

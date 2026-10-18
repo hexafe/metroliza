@@ -126,15 +126,46 @@ if SUPERVISED_WINDOWS:
         icon=[str(ICON_PATH)],
     )
 
+    compute_analysis = Analysis(
+        [str(SPEC_DIR / "metroliza_compute_worker_entry.py")],
+        pathex=[str(ROOT_DIR / "src"), str(ROOT_DIR)],
+        binaries=[], datas=[],
+        hiddenimports=["metroliza.exporting.export_summary_render_pool",
+                       "metroliza.exporting.export_data_thread",
+                       "metroliza.parsing.import_prepare_pool"],
+        hookspath=[str(WINDOWS_HOOKS)], hooksconfig={}, runtime_hooks=[],
+        excludes=["PyQt6", "metroliza.ui", "metroliza.app.bootstrap",
+                  "rapidocr", "onnxruntime", "openvino", "cv2",
+                  *COLLECTION["excludes"]], noarchive=False,
+    )
+    if any(
+        name == prefix or name.startswith(prefix + ".")
+        for name, _, _ in compute_analysis.pure
+        for prefix in forbidden_ocr_modules
+    ) or any("pyqt" in Path(source).name.lower() for _, source, _ in compute_analysis.scripts):
+        raise RuntimeError("Compute worker must not bundle Qt runtime hooks or UI modules")
+    compute_analysis.binaries = filter_payload_toc(compute_analysis.binaries)
+    compute_analysis.datas = filter_payload_toc(compute_analysis.datas)
+    compute_pyz = PYZ(compute_analysis.pure, compute_analysis.zipped_data, cipher=block_cipher)
+    compute_exe = EXE(
+        compute_pyz, compute_analysis.scripts, [], exclude_binaries=True,
+        name="metroliza_compute_worker", debug=False, bootloader_ignore_signals=False,
+        strip=False, upx=True, console=False, disable_windowed_traceback=True,
+        icon=[str(ICON_PATH)],
+    )
+
 coll = COLLECT(
     exe,
-    *([ocr_exe] if SUPERVISED_WINDOWS else []),
+    *([ocr_exe, compute_exe] if SUPERVISED_WINDOWS else []),
     a.binaries,
     *([ocr_analysis.binaries] if SUPERVISED_WINDOWS else []),
+    *([compute_analysis.binaries] if SUPERVISED_WINDOWS else []),
     a.zipfiles,
     *([ocr_analysis.zipfiles] if SUPERVISED_WINDOWS else []),
+    *([compute_analysis.zipfiles] if SUPERVISED_WINDOWS else []),
     a.datas,
     *([ocr_analysis.datas] if SUPERVISED_WINDOWS else []),
+    *([compute_analysis.datas] if SUPERVISED_WINDOWS else []),
     strip=False,
     upx=True,
     upx_exclude=[],
