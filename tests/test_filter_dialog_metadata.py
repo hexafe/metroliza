@@ -161,6 +161,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
             dialog = module.FilterDialog.__new__(module.FilterDialog)
             dialog.db_file = "memory.db"
             dialog.filter_query = "SELECT * FROM vw_measurement_export WHERE 1=1"
+            dialog._choice_scope_query = dialog.filter_query
             dialog.ax_list = object()
             dialog.header_list = object()
             dialog.all_headers_list = object()

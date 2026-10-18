@@ -156,6 +156,7 @@ class FilterDialog(QDialog):
             self.filter_query = self.parent().get_filter_query()
         else:
             self.filter_query = ""
+        self._choice_scope_query = self.filter_query
 
         self._list_selection_utils = ListSelectionUtils()
         self._discard_gate_active = False
@@ -893,7 +894,7 @@ class FilterDialog(QDialog):
     def populate_list_widgets(self):
         from metroliza.reports.filter_values import FILTER_VALUE_SPECS
 
-        self._start_value_load(FILTER_VALUE_SPECS, self.filter_query)
+        self._start_value_load(FILTER_VALUE_SPECS, self._choice_scope_query)
 
     def _stop_value_load(self):
         self._values_closed = True
