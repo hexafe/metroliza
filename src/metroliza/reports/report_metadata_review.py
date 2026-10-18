@@ -385,6 +385,9 @@ class ReviewRow:
     ocr_state: str = OCR_NONE
     ocr_note: str = ""
     ocr_candidates: tuple[MetadataCandidate, ...] = ()
+    # Every candidate of the fast reading, kept so the details pane can list the
+    # alternatives to the selected value.  Never persisted by ``to_override``.
+    fast_candidates: tuple[MetadataCandidate, ...] = ()
 
     # -- state -------------------------------------------------------------
 
@@ -443,6 +446,7 @@ class ReviewRow:
 
         self.state = ROW_READY
         self.note = ""
+        self.fast_candidates = tuple(selection.candidates)
         for name, (value, source, confidence) in selection_cell_values(selection).items():
             cell = self.cells[name]
             if cell.auto_origin == ORIGIN_OCR:

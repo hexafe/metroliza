@@ -4,15 +4,20 @@ from metroliza.parsing import report_parser_factory
 
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
-from metroliza.parsing.metadata_review import MetadataReviewReader
+from metroliza.parsing.metadata_review import (
+    MODE_FAST,
+    MODE_OCR,
+    MetadataReviewReader,
+    ocr_unavailable_reason,
+)
 from metroliza.parsing.preflight import ImportPlan, ParsePreflightStatus
-from metroliza.reports.report_metadata_review import ReviewRow, build_overrides
+from metroliza.reports.report_metadata_review import ROW_PENDING, build_overrides
 try:
     from metroliza.ui.parser_preflight_worker import ParsePreflightThread
 except ImportError:  # pragma: no cover - lightweight Qt test stubs.
     ParsePreflightThread = None
 from metroliza.shared.custom_logger import CustomLogger
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -23,7 +28,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QWidget,
 )
-import copy
 import logging
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 try:
@@ -44,8 +48,9 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         close = getattr(dialog, "close", None)
         if callable(close):
             close()
-from metroliza.ui.metadata_review_dialog import MetadataReviewDialog, summarize_rows
+from metroliza.ui.metadata_review_worker import MetadataReviewThread
 from metroliza.ui.report_planner import PLANNER_ACTION_STYLE, ReportPlanner
+from metroliza.ui.report_planner_metadata import summarize_rows
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -319,8 +324,17 @@ class _ReportOperations:
         self._approval_cache_key = None
         self._approval_cache = (False, False, "")
         self._close_requested = False
-        # Reviewed metadata rows keyed by the plan's occurrence id (#1100).
-        self._metadata_rows = {}
+        # Background metadata read (#1100). ``metadata_thread`` is the worker whose
+        # results are shown; every live worker stays in ``_metadata_threads`` until
+        # its finished signal so no running QThread is ever destroyed.
+        self.metadata_thread = None
+        self._metadata_threads = []
+        self._metadata_carryover = {}
+        self._metadata_ocr_notes = set()
+        # PyMuPDF must not run in two threads at once, so a scan, an import or a new
+        # metadata read queues behind any metadata worker that is still stopping.
+        self._after_metadata_idle = []
+        self._start_pending = False
 
         # Initialize the widgets
         self.source_section_label = section_label("Source")
@@ -372,14 +386,6 @@ class _ReportOperations:
         self.scan_button.setEnabled(False)
         self.scan_button.setToolTip(
             "Inspect report contents and parser evidence without writing to the database."
-        )
-
-        self.metadata_button = QPushButton("Review metadata...")
-        self.metadata_button.clicked.connect(self._open_metadata_review)
-        self.metadata_button.setEnabled(False)
-        self.metadata_button.setToolTip(
-            "Check and correct reference, part, sample and date before importing. "
-            "Nothing is written to the database."
         )
 
         self.review_scan_button = QPushButton("Report details")
@@ -448,10 +454,12 @@ class _ReportOperations:
         self.report_planner = ReportPlanner(self)
         self.layout.addWidget(self.report_planner, 4, 0, 1, 4)
         self.layout.setRowStretch(4, 1)
-        self.layout.addWidget(self.metadata_button, 5, 1, Qt.AlignmentFlag.AlignRight)
         self.layout.addWidget(self.scan_button, 5, 2)
         self.layout.addWidget(self.parse_button, 5, 3)
         self.report_planner.selection_changed.connect(self._sync_readiness_state)
+        self.report_planner.ocr_requested.connect(self.start_metadata_ocr)
+        self.report_planner.stop_requested.connect(self.stop_metadata_read)
+        self.report_planner.model.metadata_changed.connect(self._on_metadata_model_changed)
         # Retain the public details action for compatibility without a second UI.
         self.review_scan_button.hide()
 
@@ -462,7 +470,10 @@ class _ReportOperations:
         configure_accessibility(self.database_button, name="Browse parse database")
         configure_accessibility(self.metadata_mode_combo, name="Metadata detail")
         configure_accessibility(self.scan_button, name="Review reports")
-        configure_accessibility(self.metadata_button, name="Review metadata before import")
+        configure_accessibility(self.report_planner.copy_to_checked, name="Copy value to checked reports")
+        configure_accessibility(self.report_planner.reset_to_detected, name="Reset report to detected values")
+        configure_accessibility(self.report_planner.ocr_button, name="Read checked reports with OCR")
+        configure_accessibility(self.report_planner.stop_button, name="Stop metadata reading")
         configure_accessibility(self.review_scan_button, name="Report details")
         configure_accessibility(self.parse_button, name="Import selected reports")
         self.readiness_label.setAccessibleName("Report review status")
@@ -471,8 +482,9 @@ class _ReportOperations:
             self.metadata_mode_combo, self.scan_button, self.report_planner.search,
             self.report_planner.status_filter, self.report_planner.parser_filter,
             self.report_planner.attention_filter, self.report_planner.select_ready,
-            self.report_planner.clear, self.report_planner.table, self.metadata_button,
-            self.parse_button,
+            self.report_planner.clear, self.report_planner.table,
+            self.report_planner.copy_to_checked, self.report_planner.reset_to_detected,
+            self.report_planner.ocr_button, self.report_planner.stop_button, self.parse_button,
         )
         for first, second in zip(focus_order, focus_order[1:]):
             self.setTabOrder(first, second)
@@ -482,7 +494,7 @@ class _ReportOperations:
         if not external_context:
             apply_metroliza_theme(self)
         for button in (self.directory_button, self.archive_button, self.database_button,
-                       self.scan_button, self.parse_button, self.metadata_button):
+                       self.scan_button, self.parse_button):
             button.setStyleSheet(PLANNER_ACTION_STYLE)
 
     def _selected_metadata_request_fields(self):
@@ -537,42 +549,33 @@ class _ReportOperations:
             self._invalidate_preflight("Changed since review. Review reports again before importing.")
             return self._sync_readiness_state()
         approved = current and bool(count) and selectable_approved
+        ocr_running = self._metadata_mode() == MODE_OCR
+        stopping = self._start_pending
         caption = f"Import {count} selected report{'s' if count != 1 else ''}"
         self.parse_button.setText(caption)
         self.parse_button.setAccessibleName(caption)
-        self.parse_button.setEnabled(bool(approved and not busy))
-        self.metadata_button.setEnabled(bool(approved and not busy))
+        self.parse_button.setEnabled(bool(approved and not busy and not ocr_running and not stopping))
         self.scan_button.setText("Refresh review" if self._preflight_result else "Review reports")
         self.scan_button.setAccessibleName(self.scan_button.text())
-        self.scan_button.setEnabled(inputs_ready and not busy)
+        self.scan_button.setEnabled(inputs_ready and not busy and not stopping)
         self.report_planner.set_busy(busy)
+        self.report_planner.set_metadata_worker(
+            self._metadata_mode(), ocr_reason=self._ocr_unavailable_reason()
+        )
         for control in (self.directory_button, self.archive_button, self.metadata_mode_combo):
             control.setEnabled(not busy)
         self.database_button.setEnabled(bool(self.directory) and not busy)
         self.review_scan_button.setEnabled(bool(self._preflight_result))
-        if busy:
-            message = "Report operation in progress. Use Cancel in the progress window."
-        elif current:
-            ready = self.report_planner.model.counts["ready"]
-            message = f"Review complete: {ready} ready. No database changes were made."
-            if not count:
-                message += " Select ready reports to enable import."
-            elif self._metadata_rows:
-                message += " Metadata: " + self._metadata_summary_text() + "."
-        elif self._review_status:
-            message = self._review_status
-        elif inputs_ready:
-            message = "Ready to review. No database changes are made until you import."
-        elif self.directory:
-            message = "Select or create a database before reviewing reports."
-        else:
-            message = "Select a source and database to review reports."
+        message = self._readiness_message(
+            busy=busy, current=current, count=count, inputs_ready=inputs_ready,
+            ocr_running=ocr_running, stopping=stopping,
+        )
         self.readiness_label.setText(message)
         self.readiness_label.setAccessibleDescription(message)
         self.readiness_label.setToolTip(summary if current else message)
         self.parse_button.setToolTip(
             f"Import exactly {count} selected reports, including selected rows hidden by filters."
-            if approved and not busy else message
+            if approved and not busy and not ocr_running and not stopping else message
         )
         set_status_variant(self.readiness_label, "success" if approved else "warning")
         configure_dialog_button_roles(
@@ -582,6 +585,32 @@ class _ReportOperations:
             quiet=(self.review_scan_button,),
         )
         self.state_changed.emit()
+
+    def _readiness_message(self, *, busy, current, count, inputs_ready, ocr_running, stopping):
+        if busy:
+            return "Report operation in progress. Use Cancel in the progress window."
+        if current:
+            return self._review_message(count, ocr_running=ocr_running, stopping=stopping)
+        if self._review_status:
+            return self._review_status
+        if inputs_ready:
+            return "Ready to review. No database changes are made until you import."
+        if self.directory:
+            return "Select or create a database before reviewing reports."
+        return "Select a source and database to review reports."
+
+    def _review_message(self, count, *, ocr_running, stopping):
+        ready = self.report_planner.model.counts["ready"]
+        message = f"Review complete: {ready} ready. No database changes were made."
+        if not count:
+            return message + " Select ready reports to enable import."
+        if ocr_running:
+            return "Reading checked reports with OCR. Import is available when it finishes or after Stop."
+        if stopping:
+            return "Stopping the metadata read. The requested operation starts right after."
+        if self._metadata_review_complete():
+            message += " Metadata: " + self._metadata_summary_text() + "."
+        return message
 
     def apply_workspace_snapshot(self, snapshot):
         """Apply accepted context without creating an independent selection owner."""
@@ -614,7 +643,7 @@ class _ReportOperations:
         control.setFocus()
 
     def request_shutdown(self):
-        if self.can_change_workspace():
+        if self.can_change_workspace() and not self._metadata_workers_running():
             return True
         self._close_requested = True
         self._request_active_worker_cancellation()
@@ -674,16 +703,24 @@ class _ReportOperations:
             f"{counts[ParsePreflightStatus.UNREADABLE]} unreadable."
         )
 
-    def _invalidate_preflight(self, reason=None):
+    def _invalidate_preflight(self, reason=None, *, keep_metadata=False):
+        """Drop the review; ``keep_metadata`` offers its metadata rows to the next review."""
         if reason is None:
             reason = (
                 "Review invalidated. Review reports again before importing."
                 if self._preflight_result is not None else ""
             )
+        carried = (
+            self.report_planner.model.metadata_rows
+            if keep_metadata and self._preflight_result is not None else {}
+        )
+        self._retire_metadata_worker()
+        self._after_metadata_idle = []
+        self._start_pending = False
+        self._metadata_carryover = carried
         self._preflight_result = None
         self._approval_cache_key = None
         self._preflight_error_detail = ""
-        self._metadata_rows = {}
         self._review_status = reason
         self.report_planner.invalidate()
 
@@ -786,6 +823,8 @@ class _ReportOperations:
             return
         if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return
+        if self._defer_until_metadata_idle(self.scan_reports, user_started=True):
+            return
         self._operation_progress = 0
         try:
             metadata_parsing_mode, _background, _modeless = self._build_parse_request_fields()
@@ -799,7 +838,7 @@ class _ReportOperations:
             if ParsePreflightThread is None:
                 raise RuntimeError("Parser scan worker is unavailable in this runtime.")
 
-            self._invalidate_preflight()
+            self._invalidate_preflight(keep_metadata=True)
             (
                 self.scan_loading_dialog,
                 self.scan_loading_label,
@@ -886,7 +925,9 @@ class _ReportOperations:
             self._preflight_result = result
             self._preflight_error_detail = ""
             self._review_status = ""
-            self.report_planner.set_review(result)
+            carried, self._metadata_carryover = self._metadata_carryover, {}
+            self.report_planner.set_review(result, carry=carried)
+            self._start_metadata_fast_read()
         self._sync_readiness_state()
 
     @pyqtSlot(str)
@@ -901,35 +942,186 @@ class _ReportOperations:
         self.report_planner.details_button.setChecked(True)
         self.report_planner.table.setFocus()
 
-    def _selected_metadata_rows(self):
-        selected = set(self.report_planner.model.selected_ids)
-        return [row for occurrence, row in self._metadata_rows.items() if occurrence in selected]
+    # -- inline metadata review (#1100) ------------------------------------------
+    #
+    # The review table itself carries the metadata: after a successful review a
+    # background fast read fills the cells, the user corrects them in place and may
+    # run OCR on the checked reports.  Nothing here touches the database; the
+    # overrides of the checked reports travel in the ImportPlan.
+
+    def _create_metadata_reader(self):
+        return MetadataReviewReader(self._preflight_result)
+
+    @staticmethod
+    def _ocr_unavailable_reason():
+        return ocr_unavailable_reason()
+
+    def _metadata_mode(self):
+        thread = self.metadata_thread
+        return thread.mode if thread is not None else None
+
+    def _metadata_workers_running(self):
+        return any(self._thread_is_running(thread) for thread in self._metadata_threads)
 
     def _metadata_summary_text(self):
-        return summarize_rows(self._selected_metadata_rows())
+        return summarize_rows(self.report_planner.model.selected_metadata_rows())
+
+    def _metadata_review_complete(self):
+        rows = self.report_planner.model.selected_metadata_rows()
+        return bool(rows) and all(row.state != ROW_PENDING for row in rows)
+
+    def _on_metadata_model_changed(self):
+        # Reads report their own progress; an edit (or a new review) refreshes the summary.
+        if self.metadata_thread is None and self._preflight_result is not None:
+            self._sync_readiness_state()
+
+    def _start_metadata_fast_read(self):
+        if self._defer_until_metadata_idle(self._start_metadata_fast_read):
+            return True  # starts after a retired worker has ended
+        model = self.report_planner.model
+        ordered = self.report_planner.metadata_read_order(model.pending_metadata_ids())
+        return self._start_metadata_read(MODE_FAST, ordered)
 
     @pyqtSlot()
-    def _open_metadata_review(self):
-        """Metadata step: read fast, edit, optionally OCR. Never writes to the database."""
-        self._sync_readiness_state(refresh_registry=True)
-        if not self.metadata_button.isEnabled():
-            return
-        reviewed = {item.stable_occurrence_id: item for item in self._preflight_result.files}
-        rows = []
-        for occurrence in self.report_planner.model.selected_ids:
-            item = reviewed[occurrence]
-            previous = self._metadata_rows.get(occurrence)
-            if previous is not None and previous.fingerprint == item.fingerprint:
-                rows.append(copy.deepcopy(previous))  # cancel must discard this session's edits
-            else:
-                rows.append(ReviewRow(occurrence, item.fingerprint, item.display_name, item.parser_id))
-        preferences = getattr(self.parent(), "ui_preferences", None) if self.parent() else None
-        dialog = MetadataReviewDialog(
-            MetadataReviewReader(self._preflight_result), rows, self, ui_preferences=preferences,
-        )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._metadata_rows.update({row.occurrence_id: row for row in dialog.rows()})
+    def start_metadata_ocr(self):
+        """Read the header of the checked, editable reports with OCR."""
+        reason = self._ocr_unavailable_reason()
+        if reason:
+            self.report_planner.set_metadata_status(reason, "warning")
+            return False
+        rows = [row for row in self.report_planner.model.selected_metadata_rows() if row.editable]
+        ordered = self.report_planner.metadata_read_order([row.occurrence_id for row in rows])
+        if not ordered:
+            self.report_planner.set_metadata_status(
+                "Check at least one editable ready report to read it with OCR.", "warning"
+            )
+            return False
+        return self._start_metadata_read(MODE_OCR, ordered)
+
+    def _start_metadata_read(self, mode, occurrence_ids):
+        ids = tuple(occurrence_ids)
+        if not ids or self._preflight_result is None or self.metadata_thread is not None:
+            return False
+        if self._metadata_workers_running():
+            # A retired worker is still inside a report: start after it has ended.
+            return self._defer_until_metadata_idle(lambda: self._start_metadata_read(mode, ids))
+        try:
+            thread = MetadataReviewThread(self._create_metadata_reader(), ids, mode=mode)
+        except Exception:  # noqa: BLE001 - the review stays usable without the metadata read
+            # Exception text can carry report content, so only the fact is logged.
+            logger.warning("Metadata reader could not be created.")
+            self.report_planner.set_metadata_status("Metadata could not be read.", "warning")
+            return False
+        self._metadata_ocr_notes = set()
+        self.metadata_thread = thread
+        self._metadata_threads.append(thread)
+        thread.reading_ready.connect(lambda reading, t=thread: self._on_metadata_reading(t, reading))
+        thread.update_counts.connect(lambda done, total, t=thread: self._on_metadata_progress(t, done, total))
+        thread.completed.connect(lambda summary, t=thread: self._on_metadata_completed(t, summary))
+        thread.failed.connect(lambda text, t=thread: self._on_metadata_failed(t, text))
+        thread.finished.connect(lambda t=thread: self._on_metadata_thread_stopped(t))
+        self.report_planner.set_metadata_status(self._metadata_progress_text(mode, 0, len(ids)))
+        thread.start()
         self._sync_readiness_state()
+        return True
+
+    @staticmethod
+    def _metadata_progress_text(mode, done, total):
+        action = "Reading with OCR" if mode == MODE_OCR else "Reading metadata"
+        return f"{action} {done}/{total}\u2026"
+
+    def _on_metadata_progress(self, thread, done, total):
+        if thread is self.metadata_thread and not thread.cancel_requested:
+            self.report_planner.set_metadata_status(self._metadata_progress_text(thread.mode, done, total))
+
+    def _on_metadata_reading(self, thread, reading):
+        if thread is not self.metadata_thread:
+            return  # a retired worker's late result must not touch the next review
+        self.report_planner.model.apply_reading(reading)
+        note = getattr(reading, "ocr_note", "")
+        if reading.mode == MODE_OCR and note and "not needed" not in note and note != "Header read with OCR.":
+            self._metadata_ocr_notes.add(note)
+
+    def _on_metadata_completed(self, thread, summary):
+        if thread is not self.metadata_thread:
+            return
+        verb = "OCR" if thread.mode == MODE_OCR else "Metadata read"
+        if summary.cancelled:
+            text = f"{verb} stopped: {summary.read} of {summary.total} done; the rest was not read."
+        else:
+            text = f"{verb} finished for {summary.read} of {summary.total} report{'s' if summary.total != 1 else ''}."
+        if summary.failed:
+            text += f" {summary.failed} could not be read."
+        if self._metadata_ocr_notes:
+            text += " " + " ".join(sorted(self._metadata_ocr_notes))
+        attention = bool(summary.failed or self._metadata_ocr_notes)
+        if thread.mode == MODE_FAST and not summary.cancelled and not attention:
+            self.report_planner.clear_metadata_status()  # the filled cells are the feedback
+            return
+        self.report_planner.set_metadata_status(text, "warning" if attention else "neutral")
+
+    def _on_metadata_failed(self, thread, text):
+        if thread is self.metadata_thread:
+            self.report_planner.set_metadata_status(text, "warning")
+
+    def _on_metadata_thread_stopped(self, stopped_thread):
+        self._release_metadata_thread(stopped_thread)
+        queued = []
+        if not self._metadata_workers_running() and not self._close_requested:
+            queued, self._after_metadata_idle = self._after_metadata_idle, []
+            self._start_pending = False
+        self._sync_readiness_state()
+        for callback in queued:
+            callback()
+        self._complete_deferred_close_if_idle()
+
+    def _release_metadata_thread(self, thread):
+        if thread in self._metadata_threads:
+            self._metadata_threads.remove(thread)
+            thread.deleteLater()
+        if thread is self.metadata_thread:
+            self.metadata_thread = None
+
+    def _defer_until_metadata_idle(self, callback, *, user_started=False):
+        """Queue ``callback`` behind running metadata workers (True when it was queued).
+
+        PyMuPDF must not run in two threads at once, and the GUI thread must not
+        block: the workers are asked to stop and ``callback`` starts from the
+        finished signal of the last one.
+        """
+        if not self._metadata_workers_running():
+            return False
+        self._after_metadata_idle.append(callback)
+        self._start_pending = self._start_pending or user_started
+        self._cancel_metadata_workers()
+        self._sync_readiness_state()
+        return True
+
+    @pyqtSlot()
+    def stop_metadata_read(self):
+        """Ask the running metadata read to stop after its current report."""
+        thread = self.metadata_thread
+        if thread is not None and self._thread_is_running(thread):
+            thread.stop_reading()
+            self.report_planner.set_metadata_status("Stopping after the current report\u2026")
+
+    def _retire_metadata_worker(self):
+        """Stop showing the active worker's results; it ends on its own (cooperative cancel)."""
+        thread = self.metadata_thread
+        if thread is None:
+            return
+        self.metadata_thread = None
+        if self._thread_is_running(thread):
+            thread.stop_reading()
+        else:
+            self._release_metadata_thread(thread)
+        self.report_planner.set_metadata_worker(None, ocr_reason=self._ocr_unavailable_reason())
+        self.report_planner.clear_metadata_status()
+
+    def _cancel_metadata_workers(self):
+        for thread in self._metadata_threads:
+            if self._thread_is_running(thread):
+                thread.stop_reading()
 
     @pyqtSlot()
     def _import_reviewed_reports(self):
@@ -937,6 +1129,8 @@ class _ReportOperations:
         self._sync_readiness_state(refresh_registry=True)
         if not self.parse_button.isEnabled():
             return
+        # A still-running fast read is stopped by show_loading_screen (cooperative
+        # cancel, never awaited): the import does not depend on it.
         metadata, enrich, _modeless = self._build_parse_request_fields()
         request = ParseRequest(
             source_directory=self.directory, db_file=self.db_file,
@@ -946,7 +1140,8 @@ class _ReportOperations:
             plan = ImportPlan.from_preflight(
                 request, self._preflight_result,
                 selected_occurrence_ids=self.report_planner.model.selected_ids,
-                metadata_overrides=build_overrides(self._selected_metadata_rows()),
+                # Only the checked reports: edits on unchecked rows are never imported.
+                metadata_overrides=build_overrides(self.report_planner.model.selected_metadata_rows()),
             )
         except ValueError:
             self._invalidate_preflight("Changed since review. Review reports again before importing.")
@@ -961,7 +1156,13 @@ class _ReportOperations:
             return
         if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return
+        if self._defer_until_metadata_idle(
+            lambda: self.show_loading_screen(import_plan=import_plan), user_started=True
+        ):
+            return
         self._operation_progress = 0
+        self._retire_metadata_worker()
+        self.report_planner.clear_metadata_status()
         try:
             (
                 metadata_parsing_mode,
@@ -1178,7 +1379,7 @@ class _ReportOperations:
     def _workers_running(self):
         return any(
             self._thread_is_running(thread)
-            for thread in (self.preflight_thread, self.parse_thread)
+            for thread in (self.preflight_thread, self.parse_thread, *self._metadata_threads)
         )
 
     def _request_active_worker_cancellation(self):
@@ -1186,6 +1387,7 @@ class _ReportOperations:
             self.stop_scanning()
         if self._thread_is_running(self.parse_thread):
             self.stop_parsing()
+        self._cancel_metadata_workers()
 
     def _defer_close_for_active_workers(self):
         if not self._workers_running():
@@ -1207,6 +1409,14 @@ class _ReportOperations:
 
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        planner = getattr(self, "report_planner", None)
+        if planner is not None and event.type() in (
+            QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange,
+        ):
+            planner.refresh_theme()  # cell colours come from the live theme tokens
 
 
 class ReportsWorkspace(_ReportOperations, QWidget):

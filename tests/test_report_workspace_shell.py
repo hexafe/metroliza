@@ -41,6 +41,8 @@ def window(app, tmp_path, monkeypatch):
     host._request_active_worker_cancellation()
     for worker in workers:
         assert worker.wait(20000)
+    for worker in tuple(host._metadata_threads):  # the automatic metadata read (#1100)
+        assert worker.wait(20000)
     app.processEvents()
     window.industrial_data_dialog = None
     window.close()
@@ -51,13 +53,19 @@ def window(app, tmp_path, monkeypatch):
     assert sip.isdeleted(window)
 
 
+def workspace_idle(host):
+    """No report worker is active, including the automatic metadata read of a review (#1100)."""
+
+    return lambda: host.can_change_workspace() and host.metadata_thread is None
+
+
 def prepare_review(app, window, reports):
     source, database = reports
     assert window.set_directory(str(source))
     assert window.set_db_file(str(database))
     host = window.launch_parsing_dialog()
     host.scan_button.click()
-    wait_until(app, host.can_change_workspace)
+    wait_until(app, workspace_idle(host))
     assert host.report_planner.model.counts["ready"] == 5
     assert not database.exists()
     return host, source, database
@@ -260,7 +268,7 @@ def test_real_selected_import_survives_navigation_and_preserves_outcome(app, win
     host.parse_button.click()
     worker = host.parse_thread
     window._show_workspace_page("home")
-    wait_until(app, host.can_change_workspace)
+    wait_until(app, workspace_idle(host))
     assert worker.last_parse_result.imported_files == 2
     with closing(sqlite3.connect(database)) as connection:
         assert set(connection.execute("SELECT file_name FROM source_file_locations")) == {
@@ -390,7 +398,7 @@ def test_existing_database_window_blocks_report_start_without_losing_its_work(ap
         assert "Finish or close Export" in window.workspace_notice_label.text()
         writer.close()
         host.parse_button.click()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
     finally:
@@ -427,7 +435,7 @@ def test_preserved_window_cannot_switch_onto_active_report_database(app, window,
     host = window.launch_parsing_dialog()
     if stage == "import":
         host.scan_button.click()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         assert host.report_planner.model.counts["ready"] == 5
     target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
                     else (ParsePreflightService, "scan_source"))
@@ -465,17 +473,17 @@ def test_preserved_window_cannot_switch_onto_active_report_database(app, window,
             assert writer._update_database_context(str(database)) is False
             assert writer.filter_query == "WHERE 1 = 0"
         release.set()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         if stage == "review":
             host.parse_button.click()
-            wait_until(app, host.can_change_workspace)
+            wait_until(app, workspace_idle(host))
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
         writer.select_db_file()
         assert writer.db_file == str(database)
     finally:
         release.set()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         writer.close()
 
 
@@ -502,7 +510,7 @@ def test_temporary_industrial_cache_cannot_rebind_to_active_report_database(app,
     host = window.launch_parsing_dialog()
     if stage == "import":
         host.scan_button.click()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         assert host.report_planner.model.counts["ready"] == 5
     target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
                     else (ParsePreflightService, "scan_source"))
@@ -530,17 +538,17 @@ def test_temporary_industrial_cache_cannot_rebind_to_active_report_database(app,
         assert window.workspace_context.snapshot is snapshot
         assert len(repository.list_source_profiles(include_disabled=True)) == 1
         release.set()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         if stage == "review":
             host.parse_button.click()
-            wait_until(app, host.can_change_workspace)
+            wait_until(app, workspace_idle(host))
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
         industrial.select_database_file()
         assert industrial.db_file == str(database) and industrial.report_db_file == str(database)
     finally:
         release.set()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         industrial.close()
 
 
@@ -583,7 +591,7 @@ def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, wind
     host = window.launch_parsing_dialog()
     if stage == "import":
         host.scan_button.click()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         assert host.report_planner.model.counts["ready"] == 5
     target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"
                     else (ParsePreflightService, "scan_source"))
@@ -665,10 +673,10 @@ def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, wind
             assert writer.db_file == previous_db
         assert window.workspace_context.snapshot is snapshot
         release.set()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         if stage == "review":
             host.parse_button.click()
-            wait_until(app, host.can_change_workspace)
+            wait_until(app, workspace_idle(host))
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
         monkeypatch.setattr("PyQt6.QtWidgets.QFileDialog.getOpenFileName", lambda *_args: (str(database), ""))
@@ -680,7 +688,7 @@ def test_database_picker_rechecks_reports_started_in_nested_event_loop(app, wind
         assert writer.db_file == str(database)
     finally:
         release.set()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
         if not sip.isdeleted(writer):
             writer.close()
@@ -706,7 +714,7 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
     host = window.launch_parsing_dialog()
     if stage == "import":
         host.scan_button.click()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
     getattr(writer, f"open_{child_kind}_window")()
     child = getattr(writer, f"{child_kind}_window")
     assert child.isVisible()
@@ -762,7 +770,7 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
         release.set()
         (host.parse_button if stage == "import" else host.scan_button).click()
         try:
-            wait_until(app, host.can_change_workspace)
+            wait_until(app, workspace_idle(host))
         except AssertionError as error:
             worker = host.parse_thread if stage == "import" else host.preflight_thread
             raise AssertionError(
@@ -775,14 +783,14 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
             ) from error
         if stage == "review":
             host.parse_button.click()
-            wait_until(app, host.can_change_workspace)
+            wait_until(app, workspace_idle(host))
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
     finally:
         active_failure = sys.exc_info()[0] is not None
         release.set()
         try:
-            wait_until(app, host.can_change_workspace)
+            wait_until(app, workspace_idle(host))
         except AssertionError:
             if not active_failure:
                 raise
@@ -817,10 +825,10 @@ def test_enrichment_on_another_database_does_not_block_real_report_import(app, w
         assert window.set_db_file(str(database))
         host = window.launch_parsing_dialog()
         host.scan_button.click()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         assert host.report_planner.model.counts["ready"] == 5
         host.parse_button.click()
-        wait_until(app, host.can_change_workspace)
+        wait_until(app, workspace_idle(host))
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM source_file_locations").fetchone()[0] == 5
         assert worker.isRunning() and worker.db_file == str(other)

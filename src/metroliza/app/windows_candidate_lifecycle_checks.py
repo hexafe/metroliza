@@ -92,7 +92,9 @@ def _join_report_workers(window, app) -> None:
     workspace = getattr(window, "_reports_workspace", None)
     if workspace is None:
         return
-    workers = tuple(worker for worker in (workspace.preflight_thread, workspace.parse_thread)
+    workers = tuple(worker
+                    for worker in (workspace.preflight_thread, workspace.parse_thread,
+                                   *getattr(workspace, "_metadata_threads", ()))
                     if worker is not None)
     workspace._request_active_worker_cancellation()
     if any(not worker.wait(20000) for worker in workers):

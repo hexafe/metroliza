@@ -17,10 +17,16 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+import os
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from metroliza.parsing import report_parser_factory
+from metroliza.parsing.header_ocr_backend import (
+    DEFAULT_HEADER_OCR_BACKEND,
+    default_rapidocr_latin_model_paths,
+    missing_rapidocr_latin_model_paths,
+)
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
 from metroliza.parsing.preflight import (
     ParseFilePreflight,
@@ -87,6 +93,26 @@ def _safe_ocr_note(metadata_json: dict | None) -> str:
     if diagnostics.get("header_extraction_mode") == "ocr":
         return "Header read with OCR."
     return "Header text was already readable; OCR was not needed."
+
+
+def ocr_unavailable_reason() -> str:
+    """Why header OCR cannot run here, or ``""`` when it looks usable.
+
+    Mirrors the checks the OCR extraction makes before it imports the engine
+    (backend setting and model files).  The engine import itself is not probed:
+    packaged builds run it in a private worker process, so a missing module is
+    reported after a run through the coarse OCR note instead.
+    """
+
+    backend = os.environ.get("METROLIZA_HEADER_OCR_BACKEND", DEFAULT_HEADER_OCR_BACKEND).strip().lower()
+    if backend in {"", "none", "off", "disabled"}:
+        return "OCR is disabled in this installation."
+    if backend != DEFAULT_HEADER_OCR_BACKEND:
+        return "The configured OCR backend is not supported."
+    model_paths = default_rapidocr_latin_model_paths(os.environ.get("METROLIZA_HEADER_OCR_MODEL_DIR") or None)
+    if missing_rapidocr_latin_model_paths(model_paths):
+        return "OCR is unavailable: the OCR models are not installed."
+    return ""
 
 
 class MetadataReviewReader:
@@ -230,4 +256,5 @@ __all__ = [
     "MetadataReadSummary",
     "MetadataReading",
     "MetadataReviewReader",
+    "ocr_unavailable_reason",
 ]

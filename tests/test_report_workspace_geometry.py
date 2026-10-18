@@ -11,7 +11,13 @@ from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
-from tests.test_report_planner_geometry import _assert_contained, _assert_geometry, _review
+from tests.test_report_planner_geometry import (
+    _assert_contained,
+    _assert_geometry,
+    _review,
+    fake_metadata_reader as fake_metadata_reader,
+    settle_metadata,
+)
 from tests.test_report_workspace_shell import app as app, window as window
 
 
@@ -20,6 +26,7 @@ def _show_review(window, app):
     window.set_db_file("/synthetic/reports.sqlite3")
     host = window.launch_parsing_dialog()
     host.on_preflight_completed(_review())
+    settle_metadata(app, host)
     window.activateWindow()
     QTest.qWait(5)
     app.processEvents()

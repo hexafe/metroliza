@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -114,6 +115,30 @@ def _review() -> ParsePreflightResult:
     )
 
 
+@pytest.fixture(autouse=True)
+def fake_metadata_reader(monkeypatch):
+    """Metadata is read by a deterministic fake: the synthetic reports have no files."""
+
+    from tests.metadata_review_fakes import install_fake_reader
+
+    registry = install_fake_reader(monkeypatch)
+    filled = {
+        "reference": "REF-0123456", "part_name": "Synthetic part name", "sample_number": "12",
+        "report_date": "2024-05-06",
+    }
+    registry.options = {"fast": {"nested/ready-a.pdf": filled, "nested/ready-c.pdf": dict(filled, reference=None)}}
+    yield registry
+    registry.release_all()
+
+
+def settle_metadata(app, host):
+    deadline = time.monotonic() + 20
+    while (host.metadata_thread is not None or host._metadata_workers_running()) and time.monotonic() < deadline:
+        app.processEvents()
+        QTest.qWait(2)
+    assert host.metadata_thread is None, "the automatic metadata read did not finish"
+
+
 @pytest.fixture
 def dialog(app):
     value = ParsingDialog(
@@ -122,6 +147,7 @@ def dialog(app):
         db_file="/synthetic/reports.sqlite3",
     )
     value.on_preflight_completed(_review())
+    settle_metadata(app, value)
     value.show()
     # Let the adaptive initial-size timer finish before exercising a user resize.
     QTest.qWait(5)
@@ -205,9 +231,12 @@ def _assert_geometry(dialog: ParsingDialog, app, *, pane: str | None = None) -> 
         _assert_contained(dialog, control)
     rectangles = [QRect(control.mapTo(dialog, QPoint(0, 0)), control.size()) for control in controls]
     for offset, first in enumerate(rectangles):
-        assert all(not first.intersects(second) for second in rectangles[offset + 1:]), (
-            "Planner controls overlap"
-        )
+        for other, second in enumerate(rectangles[offset + 1:], start=offset + 1):
+            assert not first.intersects(second), (
+                "Planner controls overlap: "
+                f"{controls[offset].accessibleName() or controls[offset].objectName()} {first.getRect()} / "
+                f"{controls[other].accessibleName() or controls[other].objectName()} {second.getRect()}"
+            )
     assert planner.table.height() >= 60
 
 
@@ -246,15 +275,24 @@ def test_report_planner_controls_fit_compact_and_large_dialogs(dialog, app, size
     app.processEvents()
     _assert_requested_size(dialog, size)
     _assert_geometry(dialog, app, pane=pane)
+    planner = dialog.report_planner
+    model = planner.model
+    # Metadata stays visible in every layout; optional fields are opt-in.
+    for field in ("reference", "part_name", "sample_number", "report_date"):
+        assert not planner.table.isColumnHidden(model.column_for_field(field))
+    for field in ("report_time", "revision", "operator_name", "comment"):
+        assert planner.table.isColumnHidden(model.column_for_field(field))
+    if size[0] < 850:
+        assert planner.table.isColumnHidden(model.PARSER_COLUMN)
+        assert planner.table.isColumnHidden(model.DETAIL_COLUMN)
     if size[0] >= 850:
-        assert not dialog.report_planner.table.isColumnHidden(3)
-        assert dialog.report_planner.table.columnWidth(2) >= 150
-        assert dialog.report_planner.table.columnWidth(5) >= 150
-        planner = dialog.report_planner
-        planner.table.setColumnWidth(2, 185)
+        assert not planner.table.isColumnHidden(model.PARSER_COLUMN)
+        assert planner.table.columnWidth(model.STATUS_COLUMN) >= 150
+        assert planner.table.columnWidth(model.DETAIL_COLUMN) >= 150
+        planner.table.setColumnWidth(model.STATUS_COLUMN, 185)
         planner.invalidate()
         planner.set_review(_review())
-        assert planner.table.columnWidth(2) == 185
+        assert planner.table.columnWidth(model.STATUS_COLUMN) == 185
 
 
 def test_compact_dialog_preserves_table_while_switching_details_and_outcome(dialog, app):
@@ -330,7 +368,9 @@ def test_filtered_rows_do_not_change_global_selection_and_tab_order_is_determini
         planner.select_ready,
         planner.clear,
         planner.table,
-        dialog.metadata_button,
+        # Copy/Reset are disabled without an editable cell or manual edits and Stop is
+        # hidden while idle, so Tab skips them; OCR is available for the checked reports.
+        planner.ocr_button,
         dialog.parse_button,
     )
     focus_order[0].setFocus()
@@ -355,6 +395,7 @@ def test_windows_scale_inner_geometry(app):
     )
     try:
         dialog.on_preflight_completed(_review())
+        settle_metadata(app, dialog)
         dialog.show()
         QTest.qWait(5)
         app.processEvents()
