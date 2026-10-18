@@ -8,6 +8,7 @@
 - The dark theme is applied correctly at start-up.
 - The splash screen closes as soon as the main window is visible.
 - A missing or damaged program file is repaired automatically, or the message names the affected file and what to do.
+- Modify Database opens instantly and filters quickly on large databases, and uses far less memory.
 
 ## 2026.09 RC1 (build 260927)
 - A refreshed Windows workspace brings report review, selected PDF import, analysis, and export together.
