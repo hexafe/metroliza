@@ -119,6 +119,21 @@ bundles `THIRD_PARTY_NOTICES.md`, and prints the generated `dist\*.exe` path. Us
 remove previous `build`/`dist` output first, or `.\build_windows_exe.ps1 -WithNative` to
 use the native-module packaging helper.
 
+For a single-file delivery that starts fast after the first run, pack the onedir with the
+native launcher instead of using the PyInstaller onefile. It unpacks the application once per
+version into `%LOCALAPPDATA%\Metroliza\runtime` and reuses it on every later start:
+
+```powershell
+.\build_windows_portable_exe.ps1              # supervised onedir + portable envelope
+.\build_windows_launcher_exe.ps1 -Supervised  # the same onedir -> native launcher EXE
+```
+
+The result is `dist\metroliza_<version>_<yymmdd>_launcher.exe` (the portable envelope is
+`dist\metroliza_<version>_<yymmdd>.exe`). See `packaging/launcher/README.md` for the format, cache
+layout, self-repair contract, benchmark and fallbacks; `scripts/qualify_windows_launcher.py`
+qualifies the launcher with a synthetic payload and `scripts/qualify_windows_portable_onefile.py
+--kind launcher` the real packaged application.
+
 If the OCR model files are missing, refresh them before building:
 
 ```powershell

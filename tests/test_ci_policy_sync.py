@@ -408,6 +408,73 @@ def test_supervised_portable_onefile_requires_owner_opt_in_and_native_smoke() ->
     assert job['steps'][-1]['if'] == 'success()'
 
 
+def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-portable-onefile']
+    steps = job['steps']
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    assert '.\\build_windows_launcher_exe.ps1 -Supervised' in commands
+    assert commands.index('build_windows_portable_exe.ps1') < commands.index('build_windows_launcher_exe.ps1')
+    # The same qualification script, once per delivery, each against its own EXE name.
+    assert commands.count('qualify_windows_portable_onefile.py') == 2
+    assert '--kind launcher' in commands
+    assert "_launcher\\.exe$" in commands
+    uploads = {
+        step['with']['name']: step['with']['path']
+        for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')
+    }
+    envelope = uploads['windows-supervised-portable-onefile']
+    launcher = uploads['windows-supervised-launcher-exe']
+    # The envelope upload must never pick up the launcher EXE (and vice versa).
+    assert envelope.endswith('_[0-9][0-9][0-9][0-9][0-9][0-9].exe')
+    assert '_launcher.exe' in launcher
+    assert all(step['if'] == 'success()' for step in steps if step.get('uses', '').startswith('actions/upload-artifact@'))
+    assert steps[-1]['with']['name'] == 'windows-supervised-launcher-exe'
+    assert steps[-1]['if'] == 'success()'
+    verify = next(i for i, step in enumerate(steps) if 'remains at the exact clean head' in step['name'])
+    assert verify > max(i for i, step in enumerate(steps) if 'qualify' in step['name'].lower())
+
+
+def test_startup_benchmark_measures_the_shipped_route_not_the_legacy_onefile_spec() -> None:
+    import yaml
+
+    text = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    workflow = yaml.load(text, Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-startup-benchmark']
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_startup_benchmark'][
+        'default'
+    ] == '0'
+    assert "inputs.run_windows_startup_benchmark == '1'" in job['if']
+    # An opt-in measurement must not be skipped because an unrelated required job failed (run
+    # 39084988780: "needs: unit-tests" turned a failed unit test into a skipped benchmark).
+    assert 'needs' not in job
+    commands = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'build_windows_portable_exe.ps1' in commands
+    assert 'build_windows_launcher_exe.ps1 -Supervised' in commands
+    assert 'scripts/measure_windows_startup_routes.py' in commands
+    for flag in ('--portable', '--launcher', '--runs 3', '--output-dir startup-artifacts'):
+        assert flag in commands
+    # The legacy single-process spec and its measurement are not part of this job any more.
+    assert 'build_windows_exe.ps1' not in commands
+    assert 'measure_windows_startup.ps1' not in commands
+    assert 'onefile.spec' not in commands
+    assert any(
+        step.get('env', {}).get('METROLIZA_BUILD_FLAVOR') == 'user' for step in job['steps']
+    )
+    upload = job['steps'][-1]
+    assert upload['with']['name'] == 'windows-startup-artifacts'
+    assert upload['with']['path'] == 'startup-artifacts'
+    # Packaging smoke still builds the legacy spec; only this job stopped using it.
+    assert 'pyinstaller packaging/metroliza_onefile.spec' in text
+
+
+def test_native_artifacts_runs_the_launcher_crate_tests() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    assert 'cargo test --locked --manifest-path packaging/launcher/Cargo.toml' in workflow
+
+
 def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')

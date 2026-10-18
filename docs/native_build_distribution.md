@@ -238,6 +238,33 @@ library paths, and VC++ Redistributable registry status. Do not release a Window
 artifact from an environment where the PyQt wrapper and bundled Qt payload are
 from different Qt major/minor lines.
 
+Native launcher (single EXE with a persistent runtime cache):
+
+`packaging/launcher` is a Rust launcher that replaces per-launch onefile extraction. For the RC1
+line it carries the supervised onedir: `build_windows_portable_exe.ps1` builds the onedir and the
+PyInstaller portable envelope, and `build_windows_launcher_exe.ps1 -Supervised` packs **the same
+onedir** (entry `metroliza.exe`, after the exact-head provenance and package identity checks) into
+`dist/metroliza_<version>_<yymmdd>_launcher.exe` with `cargo build --release --locked` and an LZ4
+payload. The `_launcher` suffix keeps it apart from the envelope. On first start the payload is
+unpacked once to `%LOCALAPPDATA%\Metroliza\runtime\<version>-<contenthash12>_<sha8>\`; the
+cache key therefore contains the release label, the onedir content hash and the commit. Later
+starts only check the cache and run the entry EXE recorded in the payload manifest.
+
+Self-repair: the launcher starts the supervisor with `METROLIZA_RUNTIME_REPAIR_AVAILABLE=1`. When
+the supervisor finds the package identity invalid it shows no notice and exits with code 75; the
+launcher then re-extracts the runtime and starts the supervisor once more without the variable and
+returns that run's exit code, so a second failure shows the user the precise notice and there is no
+loop. Other exit codes pass through unchanged. (The supervisor side is specified in #1111.)
+
+Optional Authenticode signing runs on the final EXE when `METROLIZA_SIGNING_*` variables are
+configured (see the script); without them the step is skipped. Format, cache states, the repair
+contract and security notes are in `packaging/launcher/README.md`. The launcher is a standalone Rust
+binary, not a Python extension: it has no Python fallback, and the PyInstaller portable envelope
+and onedir remain available as the fallback deliveries. To compare the deliveries on Windows, run
+the `windows-startup-benchmark` job (`scripts/measure_windows_startup_routes.py`): the same startup
+smoke through the envelope, the launcher cold, its one-time verification, and the launcher warm, with median wall time and
+time to the first main-window paint.
+
 PyInstaller onefile remains the closest turnkey single-file distribution for
 non-technical users because it bundles the Python runtime into one artifact.
 The older `packaging/metroliza_onefile.spec` starts the application directly and
@@ -281,6 +308,24 @@ the first Qt event-loop tick. Python-side events start at `process_entry`; they
 cannot include PyInstaller/Nuitka bootloader extraction time, so compare the
 helper's wall-clock time against the first profile event to understand onefile
 extraction and antivirus overhead.
+
+Startup profile events also carry a wall-clock `epoch_ms`. `scripts/measure_windows_startup_routes.py`
+uses it to time the shipped deliveries from process creation to the first main-window paint,
+bootloader, extraction, launcher and supervisor included:
+
+```powershell
+.\build_windows_portable_exe.ps1
+.\build_windows_launcher_exe.ps1 -Supervised
+.\.venv-build\Scripts\python.exe scripts\measure_windows_startup_routes.py `
+  --portable .\dist\metroliza_<version>_<yymmdd>.exe `
+  --launcher .\dist\metroliza_<version>_<yymmdd>_launcher.exe --runs 3
+```
+
+It runs the same `METROLIZA_STARTUP_UI_SMOKE=1` smoke through the portable envelope, the launcher
+with an empty cache (a fresh `METROLIZA_RUNTIME_ROOT` per run), its second-launch verification,
+and the launcher on a completed warm cache, and
+writes `startup-benchmark.json` and `startup-benchmark.md`. The CI job
+`windows-startup-benchmark` (`run_windows_startup_benchmark=1`) does exactly this.
 
 For local diagnosis, run `python scripts/summarize_startup_profile.py
 <profile.jsonl>` on a captured profile. The summary reports first feedback,

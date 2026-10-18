@@ -1,0 +1,51 @@
+[package]
+name = "metroliza-launcher"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+description = "Native Windows launcher with a persistent, versioned runtime cache"
+
+[lib]
+name = "metroliza_launcher"
+path = "src/lib.rs"
+
+[[bin]]
+name = "metroliza-launcher"
+path = "src/bin/launcher.rs"
+
+[[bin]]
+name = "metroliza-packer"
+path = "src/bin/packer.rs"
+
+# Tiny stand-in for metroliza.exe used by the qualification script and tests.
+[[bin]]
+name = "launcher-test-entry"
+path = "src/bin/launcher_test_entry.rs"
+
+[dependencies]
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_RestartManager",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
