@@ -745,14 +745,17 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             diagnostics["header_ocr_error"] = ocr_error
         return word_items, diagnostics
 
-    def _cached_embedded_text_for_open_report(self) -> str | None:
+    def _cached_embedded_lines_for_open_report(self) -> list[str] | None:
         source_inspection = getattr(self, "source_inspection_context", None)
         if source_inspection is None:
             return None
         try:
-            return source_inspection.get_cached_pdf_text(
+            page_texts = source_inspection.get_cached_pdf_page_texts(
                 max_chars=CMM_PROBE_MAX_EXTRACTED_CHARS,
             )
+            if page_texts is not None:
+                return [line for text in page_texts for line in text.splitlines()]
+            return None
         except Exception:
             return None
 
@@ -775,11 +778,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             """
             pdf_backend = self._require_pdf_backend()
             pdf_path = Path(self.file_path) / self.file_name
-            cached_embedded_text = self._cached_embedded_text_for_open_report()
+            cached_embedded_lines = self._cached_embedded_lines_for_open_report()
 
             with pdf_backend.open(str(pdf_path)) as pdf_report:
                 self._page_count = self._resolve_page_count(pdf_report)
-                if cached_embedded_text is not None:
+                if cached_embedded_lines is not None:
                     if self._page_count:
                         first_page = pdf_report[0]
                         self._first_page_width, self._first_page_height = self._page_size(
@@ -793,7 +796,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                             pdf_backend,
                             metadata_parsing_mode=self.metadata_parsing_mode,
                         )
-                    self.raw_text.extend(cached_embedded_text.splitlines())
+                    self.raw_text.extend(cached_embedded_lines)
                     return
 
                 page_counter = 0

@@ -25,6 +25,7 @@ from metroliza.parsing.import_prepare_pool import (
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
 from metroliza.parsing.pdf_backend import require_pdf_backend
 from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+from metroliza.parsing.source_inspection import PDF_EMBEDDED_TEXT_CACHE_KEY, SourceInspectionContext
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.shared.parse_contracts import ParseRequest
 
@@ -41,7 +42,9 @@ WALL_CLOCK_COLUMNS = {
 }
 
 
-def _write_synthetic_reports(source: Path, count: int, seed: int = 11) -> list[Path]:
+def _write_synthetic_reports(
+    source: Path, count: int, seed: int = 11, *, lines_per_page: int = 40
+) -> list[Path]:
     # The repo's own backend handle: other tests leave a stub module in sys.modules["pymupdf"].
     pymupdf = require_pdf_backend()
 
@@ -57,7 +60,7 @@ def _write_synthetic_reports(source: Path, count: int, seed: int = 11) -> list[P
             f"DATE: 2024-02-{1 + index % 27:02d}",
             f"SAMPLE: {index + 1:04d}",
         ]
-        for feature in range(1 + index % 3):
+        for feature in range(6 + index % 3):
             lines += [f"#FEATURE_{feature:02d}", "DIM"]
             for axis in "XYZD":
                 nominal, tol = rnd.uniform(5, 200), rnd.choice([0.1, 0.2, 0.3])
@@ -69,13 +72,121 @@ def _write_synthetic_reports(source: Path, count: int, seed: int = 11) -> list[P
         lines.append("#END")
         report = source / f"{ref}_{index:03d}.pdf"
         document = pymupdf.open()
-        for start in range(0, len(lines), 40):  # several pages for the longer ones
+        for start in range(0, len(lines), lines_per_page):
             page = document.new_page()
-            page.insert_text((40, 40), "\n".join(lines[start:start + 40]), fontsize=8)
+            page.insert_text((40, 40), "\n".join(lines[start:start + lines_per_page]), fontsize=8)
         document.save(str(report))
         document.close()
         reports.append(report)
     return reports
+
+
+@pytest.mark.parametrize("lines_per_page", [7, 9, 13, 40])
+@pytest.mark.parametrize("cache_mode", ["canonical", "joined_only"])
+def test_cached_page_text_preserves_raw_lines_and_blocks(tmp_path, lines_per_page, cache_mode):
+    report, = _write_synthetic_reports(tmp_path / "reports", 1, lines_per_page=lines_per_page)
+    # Empty pages must not introduce lines either (including at the ends).
+    backend = require_pdf_backend()
+    with backend.open(str(report)) as document:
+        document.new_page(pno=0)
+        document.new_page(pno=2)
+        document.new_page()
+        document.saveIncr()
+    results = []
+    for cold in (False, True):
+        inspection = SourceInspectionContext.from_path(report, source_format="pdf")
+        if cold:
+            if cache_mode == "canonical":
+                inspection.get_pdf_text(max_chars=16_000_000)
+            else:
+                joined = SourceInspectionContext.from_path(report).get_pdf_text(max_chars=16_000_000)
+                inspection.get_extracted_text(
+                    cache_key=PDF_EMBEDDED_TEXT_CACHE_KEY, max_chars=16_000_000,
+                    loader=lambda _path, _limit: joined,
+                )
+        parser = CMMReportParser(str(report), str(tmp_path / "unused.sqlite3"))
+        parser.source_inspection_context = inspection
+        parser.open_report()
+        parser.split_text_to_blocks()
+        results.append((list(parser.pdf_raw_text), list(parser.blocks_text)))
+    assert results[0][0] == results[1][0]
+    assert results[0][1] == results[1][1]
+    assert len(results[0][1]) == 6
+
+
+@pytest.mark.parametrize("workers", ["0", "2", "two_stage"])
+@pytest.mark.parametrize("cancel", [False, True])
+def test_import_releases_each_inspections_extracted_text(tmp_path, monkeypatch, workers, cancel):
+    from metroliza.parsing import report_parser_factory
+
+    source = tmp_path / "reports"
+    _write_synthetic_reports(source, 6)
+    _pool_env(monkeypatch, "0" if workers == "two_stage" else workers)
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", str(int(workers == "two_stage")))
+    thread = ParseReportsThread(_plan(source, tmp_path / "db.sqlite3"))
+    report_parser_factory.reset_probe_cache()
+    captured = []
+    original_filter = thread._filter_reports_for_import_plan
+    original_import = ReportRepository.import_report_if_absent
+
+    def capture_filter(*args):
+        result = original_filter(*args)
+        captured.extend(item.source_inspection for item in result.approved_reports)
+        assert all(item.get_cached_pdf_text(max_chars=16_000_000) for item in captured)
+        return result
+
+    def import_and_check_release(self, *args, **kwargs):
+        # Completed items must be released before the next persistence call.
+        completed = thread._test_completed
+        # The threaded path may persist in completion order.
+        if workers != "two_stage":
+            assert all(not item._cache.extracted_text for item in captured[:completed])
+        result = original_import(self, *args, **kwargs)
+        thread._test_completed += 1
+        if cancel:
+            thread.stop_parsing()
+        return result
+
+    thread._test_completed = 0
+    monkeypatch.setattr(thread, "_filter_reports_for_import_plan", capture_filter)
+    monkeypatch.setattr(ReportRepository, "import_report_if_absent", import_and_check_release)
+    # Surface assertion errors without the parser's error-dialog route.
+    monkeypatch.setattr(CMMReportParser, "log_and_exit", lambda _self, exc: (_ for _ in ()).throw(exc))
+    thread.run()
+    assert thread.last_parse_result.imported_files == (1 if cancel else 6)
+    assert captured and all(not item._cache.extracted_text for item in captured)
+    assert all(item.get_cached_pdf_page_texts(max_chars=16_000_000) is None for item in captured)
+    assert all(item.sha256 for item in captured)
+
+
+@pytest.mark.parametrize("two_stage", [False, True])
+@pytest.mark.parametrize("outcome", ["skipped", "failed", "cancelled"])
+def test_inspection_text_is_released_for_unpersisted_items(tmp_path, two_stage, outcome):
+    from metroliza.parsing import parse_reports_thread, report_parser_factory
+
+    report, = _write_synthetic_reports(tmp_path / "reports", 1)
+    inspection = SourceInspectionContext.from_path(report)
+    inspection.get_pdf_text(max_chars=16_000_000)
+    item = parse_reports_thread._SelectedReportWorkItem(report, source_inspection=inspection)
+
+    def parser_factory(*_args, **_kwargs):
+        # The batch must clear text even if resolution never returns a parser.
+        if outcome == "skipped":
+            raise report_parser_factory.UnsupportedReportFormatError(
+                report_parser_factory.ResolverDiagnostics(str(report), "pdf", (), None)
+            )
+        raise RuntimeError("synthetic parser failure")
+
+    result = parse_reports_thread.parse_new_reports(
+        [item], set(), parser_factory, lambda _parser: pytest.fail("must not persist"),
+        should_cancel=lambda: outcome == "cancelled", enable_two_stage_pipeline=two_stage,
+        worker_count=1, log_file_failures=False,
+    )
+    assert (result.skipped_files, result.failed_files, result.cancelled_files) == {
+        "skipped": (1, 0, 0), "failed": (0, 1, 0), "cancelled": (0, 0, 1),
+    }[outcome]
+    assert inspection.get_cached_pdf_text(max_chars=16_000_000) is None
+    assert inspection.get_cached_pdf_page_texts(max_chars=16_000_000) is None
 
 
 def _plan(source: Path, database: Path) -> ImportPlan:
@@ -166,7 +277,7 @@ def test_cold_probe_cache_serial_and_pooled_imports_match_the_warm_serial_databa
     from metroliza.parsing import report_parser_factory
 
     source = tmp_path / "reports"
-    _write_synthetic_reports(source, 12)
+    _write_synthetic_reports(source, 12, lines_per_page=9)
     dumps = {}
     for label, workers, cold in (("warm", "0", False), ("cold", "0", True), ("cold_pool", "2", True)):
         _pool_env(monkeypatch, workers)
