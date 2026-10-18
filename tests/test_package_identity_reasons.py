@@ -325,6 +325,9 @@ def supervisor(root, tmp_path, monkeypatch):
     from metroliza.app import diagnostic_launcher as launcher
     from metroliza.shared.diagnostic_store import IncidentStore
 
+    # These tests assert stderr notices on every host; native-dialog tests below
+    # explicitly select Windows and mock MessageBoxW before calling main().
+    monkeypatch.setattr(launcher, "os", SimpleNamespace(name="posix", getenv=os.getenv))
     for name in ("METROLIZA_RUNTIME_REPAIR_AVAILABLE", "METROLIZA_STARTUP_SMOKE",
                  "METROLIZA_DIAGNOSTIC_QUALIFICATION"):
         monkeypatch.delenv(name, raising=False)
@@ -382,7 +385,9 @@ def test_supervisor_exits_75_without_a_notice_when_native_repair_is_available(
     monkeypatch.setattr(launcher, "_persist_unstarted_bounded", record)
     assert launcher.main() == 1
     plain = list(persisted)
-    capsys.readouterr()
+    initial = capsys.readouterr()
+    assert "plik python311.dll jest zmieniony lub uszkodzony" in initial.err
+    assert initial.err.rstrip().endswith(ACTION) and initial.out == ""
     persisted.clear()
     monkeypatch.setenv("METROLIZA_RUNTIME_REPAIR_AVAILABLE", "1")
     assert launcher.main() == 75
