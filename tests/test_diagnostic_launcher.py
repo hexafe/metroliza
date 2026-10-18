@@ -7,6 +7,7 @@ import uuid
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,6 +30,60 @@ _FIXTURE_SETUP_MARKERS = (
     ("setup_parser_imports_ready", "parser_imports_ready"),
     ("setup_preflight_ready", "preflight_ready"),
 )
+
+
+def _completion_scheduler(monkeypatch):
+    """Functional persistence tests use event completion, not a disk-latency SLA.
+
+    The separate close-budget test exercises timeout accounting. Keep the
+    publisher's logical clock fixed here and let its real worker finish before
+    returning from the controlled wait; ten seconds is a deadlock watchdog.
+    """
+    from metroliza.app import diagnostic_launcher as launcher
+
+    monkeypatch.setattr(launcher, "time", SimpleNamespace(
+        monotonic=lambda: 0.0, time=time.time, sleep=time.sleep,
+    ))
+    close = launcher._OperationPublisher.close
+
+    def completed_close(publisher, observed):
+        if not publisher.started:
+            return close(publisher, observed)
+        wait = publisher.done.wait
+
+        def complete(timeout):
+            assert 0 <= timeout <= launcher._PUBLISH_CLOSE_SECONDS
+            assert wait(10), "publisher completion watchdog"
+            return True
+
+        monkeypatch.setattr(publisher.done, "wait", complete)
+        try:
+            return close(publisher, observed)
+        finally:
+            publisher.worker.join(10)
+            assert not publisher.worker.is_alive()
+
+    monkeypatch.setattr(launcher._OperationPublisher, "close", completed_close)
+
+
+@pytest.mark.parametrize("setup_elapsed", [0.0, 0.2, 1.0])
+def test_close_wait_uses_only_remaining_budget(monkeypatch, tmp_path, setup_elapsed):
+    from metroliza.app import diagnostic_launcher as launcher
+
+    clock = iter((10.0, 10.0 + setup_elapsed))
+    monkeypatch.setattr(launcher, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    observed = _live_observation()
+    publisher = launcher._OperationPublisher(IncidentStore(tmp_path), "unknown", observed.session_id)
+    publisher.started = True
+    publisher.worker = SimpleNamespace(is_alive=lambda: True)
+    waits = []
+    monkeypatch.setattr(publisher.done, "wait", lambda timeout: waits.append(timeout))
+
+    assert publisher.close(observed) is StoreStatus.PUBLISH_INCOMPLETE
+    assert waits == [pytest.approx(max(0, 0.75 - setup_elapsed))]
+    assert publisher.close_deadline == 10.75
+    assert publisher.final is observed and publisher.closing
+    assert publisher.wake.is_set()
 
 
 def _fixture_setup_failure(scratch, thread, deliveries):
@@ -163,6 +218,7 @@ def _authenticated_marker_child(tmp_path, monkeypatch, store, scenario):
 
 
 def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path, monkeypatch):
+    _completion_scheduler(monkeypatch)
     store = IncidentStore(tmp_path / "state")
     with _authenticated_marker_child(tmp_path, monkeypatch, store, "hard_exit_after_marker") as command:
         trace = _trace_publisher_calls(monkeypatch, store)
@@ -188,6 +244,7 @@ def test_real_exit_publishes_same_session_incident_and_selected_export(tmp_path,
 
 
 def test_normal_observed_exit_has_only_clean_marker_and_no_crash_report(tmp_path, monkeypatch):
+    _completion_scheduler(monkeypatch)
     store = IncidentStore(tmp_path / "state")
     with _authenticated_marker_child(tmp_path, monkeypatch, store, "normal_after_marker") as command:
         trace = _trace_publisher_calls(monkeypatch, store)
@@ -746,22 +803,26 @@ def test_stalled_disk_publisher_returns_unknown_completion_with_bounded_queue(
 
     entered, release = threading.Event(), threading.Event()
     store = IncidentStore(tmp_path / "state")
+    # Initialize marker state before testing the bounded live slot.
+    assert store.list_reports().status is StoreStatus.AVAILABLE
     def stalled(_incident):
         entered.set()
-        release.wait(3)
+        release.wait()
         return StoreResult(StoreStatus.IO_FAILED)
     monkeypatch.setattr(store, "publish", stalled)
     observed = _live_observation()
     publisher = _OperationPublisher(store, "unknown", observed.session_id)
+    assert publisher._ensure_authenticated() is StoreStatus.MARKER_AUTHENTICATED
     assert publisher.start()
     try:
         assert publisher.submit(observed)
-        assert entered.wait(1)
+        assert entered.wait(10)  # Readiness watchdog, outside close's budget.
         assert publisher.submit(observed)
         assert not publisher.submit(observed)
-        started = time.monotonic()
         assert publisher.close(observed) is StoreStatus.PUBLISH_INCOMPLETE
-        assert time.monotonic() - started < 1.5
+        assert not release.is_set() and not publisher.done.is_set()
+        assert publisher.worker.is_alive()
+        assert publisher.pending is None and publisher.final is observed
     finally:
         release.set()
         publisher.worker.join(2)
@@ -775,6 +836,8 @@ def test_final_incident_skips_unnecessary_marker_retries(
     caught_failure,
 ):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    _completion_scheduler(monkeypatch)
 
     store = IncidentStore(tmp_path / "state")
     assert store.list_reports().status is StoreStatus.AVAILABLE
@@ -797,17 +860,17 @@ def test_final_incident_skips_unnecessary_marker_retries(
     publisher = _OperationPublisher(store, "unknown", observed.session_id)
     assert publisher.start()
 
-    started = time.monotonic()
     assert publisher.close(observed) is StoreStatus.SAVED
-    assert time.monotonic() - started < 0.75
     reports = store.list_reports().reports
     assert len(reports) == 1
     assert store.load(reports[0].report_id).incident.session_id.hex == observed.session_id
     assert store.list_unclean_sessions().sessions == ()
 
 
-def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, monkeypatch):
+def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, monkeypatch, request):
     from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    _completion_scheduler(monkeypatch)
 
     store = IncidentStore(tmp_path / "state")
     observed = replace(_live_observation(), termination="observed_exit", exit_code=9)
@@ -821,7 +884,7 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
         result = original_begin(*args, **kwargs)
         assert result.status is StoreStatus.MARKER_STARTED
         begin_entered.set()
-        assert release_begin.wait(2)
+        release_begin.wait()
         sequence.append("begin_finished")
         return result
 
@@ -833,8 +896,15 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     monkeypatch.setattr(store, "publish", recorded_publish)
     publisher = _OperationPublisher(store, "unknown", observed.session_id)
     assert publisher.start()
+
+    def cleanup():
+        release_begin.set()
+        publisher.worker.join(10)
+        assert not publisher.worker.is_alive()
+
+    request.addfinalizer(cleanup)
     assert publisher.begin()
-    assert begin_entered.wait(1)
+    assert begin_entered.wait(10)  # Establish the ordering precondition first.
     statuses = []
     close_observation = []
     close_wait_entered = threading.Event()
@@ -861,17 +931,17 @@ def test_inflight_begin_finishes_before_final_incident_is_persisted(tmp_path, mo
     closer = threading.Thread(target=close_and_observe)
     closer.start()
     try:
-        assert close_wait_entered.wait(1)
+        assert close_wait_entered.wait(10)
         release_begin.set()
-        closer.join(2)
+        closer.join(10)
     finally:
         release_begin.set()
-        closer.join(2)
+        closer.join(10)
 
     assert statuses == [StoreStatus.SAVED], {
         "sequence": sequence, "at_close": close_observation,
     }
-    assert close_observation[0]["elapsed_ms"] < 750, close_observation
+    assert close_observation[0]["done"] and close_observation[0]["final_saved"], close_observation
     assert sequence == ["begin_entered", "begin_finished", "publish"]
     assert store.list_unclean_sessions().sessions == ()
 
@@ -889,7 +959,7 @@ def test_stalled_store_io_is_bounded_and_preserves_actual_child_exit(
 
     def stalled(*args, **kwargs):
         entered.set()
-        release.wait(3)
+        release.wait()
         return original(*args, **kwargs)
 
     monkeypatch.setattr(store, method, stalled)
@@ -900,16 +970,30 @@ def test_stalled_store_io_is_bounded_and_preserves_actual_child_exit(
         if method == "end_session" else nullcontext(command)
     )
     trace = _trace_publisher_calls(monkeypatch, store)
-    started = time.monotonic()
+    from metroliza.app.diagnostic_launcher import _OperationPublisher
+
+    publishers = []
+    start = _OperationPublisher.start
+
+    def tracked_start(publisher):
+        publishers.append(publisher)
+        return start(publisher)
+
+    monkeypatch.setattr(_OperationPublisher, "start", tracked_start)
     try:
         with child_context as selected_command:
             delivery = run_with_store(selected_command, store=store)
         assert entered.is_set(), json.dumps(trace(), sort_keys=True)
         assert delivery.observation.exit_code == expected_exit
         assert delivery.storage_status is StoreStatus.PUBLISH_INCOMPLETE
-        assert time.monotonic() - started < 2.5
+        assert not release.is_set()
+        assert publishers[0].worker.is_alive()
+        assert not publishers[0].done.is_set(), json.dumps(trace(), sort_keys=True)
     finally:
         release.set()
+        for publisher in publishers:
+            publisher.worker.join(10)
+            assert not publisher.worker.is_alive()
 
 
 def test_final_control_survives_three_failed_terminal_backlog(tmp_path, monkeypatch):
@@ -1028,6 +1112,7 @@ def test_real_child_final_preserves_recent_failure_after_saved_live_backlog(
 def test_diagnostic_thread_exhaustion_does_not_prevent_actual_app_start(
     tmp_path, monkeypatch, failed_thread
 ):
+    _completion_scheduler(monkeypatch)
     start = threading.Thread.start
     def exhausted(self):
         if self.name == failed_thread:

@@ -37,7 +37,23 @@ def _exercise_subprocess(mode):
 
         version_at_depth(80 if mode == "deep_ver" else 0)
     elif mode in {"other", "late_other"}:
-        subprocess.check_output("echo synthetic", shell=True)
+        _held_other_command()
+
+
+def _held_other_command():
+    # Keep cmd and its console alive until the host has observed both owned
+    # images. A short-lived `echo` races QueryFullProcessImageNameW on teardown.
+    with subprocess.Popen(
+        "echo synthetic&set /p synthetic=", shell=True,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    ) as process:
+        assert process.stdout.readline().strip() == b"synthetic"
+        (Path.cwd() / "control-helper-ready").touch()
+        try:
+            if not _wait_for_marker("control-helper-finish"):
+                raise RuntimeError("synthetic helper observation watchdog")
+        finally:
+            process.communicate(b"\n")
 
 
 def main():
