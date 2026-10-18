@@ -371,6 +371,11 @@ def apply_metroliza_theme(widget, *, dark_mode=None):
         return
     resolved_dark_mode = _is_dark_widget_palette(widget) if dark_mode is None else bool(dark_mode)
     semantic_palette = tokens.theme_tokens(dark_mode=resolved_dark_mode)
+    # Record the mode before restyling: StyleChange/PaletteChange handlers (e.g. the
+    # import review planner re-reading its window's theme) must see the new mode.
+    if hasattr(widget, "setProperty"):
+        widget.setProperty("metrolizaThemeManaged", True)
+        widget.setProperty("metrolizaDarkMode", resolved_dark_mode)
     # Replace QSS before resolving explicit palette roles; otherwise a previous
     # theme's style-sheet palette can overwrite link and placeholder roles.
     widget.setStyleSheet(metroliza_stylesheet(dark_mode=resolved_dark_mode))
@@ -380,9 +385,6 @@ def apply_metroliza_theme(widget, *, dark_mode=None):
         for link_label in widget.findChildren(QWidget) or ():
             if link_label.property("linkLabel") is True:
                 link_label.setPalette(_themed_palette(link_label.palette(), semantic_palette))
-    if hasattr(widget, "setProperty"):
-        widget.setProperty("metrolizaThemeManaged", True)
-        widget.setProperty("metrolizaDarkMode", resolved_dark_mode)
 
 
 def _restore_widget_system_theme(widget):
