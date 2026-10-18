@@ -2,10 +2,11 @@
 
 Only the parse work (PDF open, tokenising, tolerances, metadata selection, row
 normalisation) runs in worker processes. Parser resolution, source approval, the single
-content verification and all SQLite persistence stay on the importing thread, which still
+content verification (inside the write transaction) and all SQLite persistence stay on the
+importing thread, which still
 visits the reports in their original deterministic order. A worker that fails, times out
 or dies never decides anything: that report is simply prepared in-process by the existing
-code path, so error, cancellation and progress semantics are unchanged.
+code path, while cancellation stops preparation and reaps the owned processes.
 
 This module must stay Qt-free: workers are spawned (never forked) and import it fresh.
 """
@@ -19,6 +20,7 @@ import logging
 from multiprocessing import get_context
 import os
 import sys
+from time import monotonic
 from typing import Callable, Sequence
 
 from metroliza.shared.env_utils import env_int, env_value
@@ -32,10 +34,15 @@ MAX_AUTO_WORKERS = 3
 MAX_EXPLICIT_WORKERS = 16
 INFLIGHT_PER_WORKER = 3
 _RESULT_POLL_SECONDS = 0.2
+_SHUTDOWN_GRACE_SECONDS = 1.0
 
 
-def _is_frozen_windows() -> bool:
-    return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+class ImportPreparationCancelled(Exception):
+    """The owner cancelled preparation; serial fallback must not run."""
+
+
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
 
 
 def resolve_prepare_worker_count(report_count: int) -> int:
@@ -43,10 +50,12 @@ def resolve_prepare_worker_count(report_count: int) -> int:
 
     ``METROLIZA_IMPORT_PREPARE_WORKERS`` is ``auto`` (default), ``0`` (disabled) or an
     explicit count. Small batches stay serial because process start-up would dominate.
-    The packaged Windows build stays serial unless the count is set explicitly, until the
-    spawn path has packaged qualification evidence.
+    Frozen builds always stay serial until a supported worker executable has
+    supervised packaged-startup qualification evidence (#1134).
     """
 
+    if _is_frozen():
+        return 0
     configured = (env_value(WORKERS_ENV) or "auto").lower()
     try:
         minimum = max(2, env_int(MIN_REPORTS_ENV, default=DEFAULT_MIN_REPORTS) or DEFAULT_MIN_REPORTS)
@@ -59,8 +68,6 @@ def resolve_prepare_worker_count(report_count: int) -> int:
             return max(0, min(int(configured), MAX_EXPLICIT_WORKERS, report_count))
         except ValueError:
             return 0
-    if _is_frozen_windows():
-        return 0
     workers = min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1)
     return workers if workers >= 2 else 0
 
@@ -135,6 +142,46 @@ def accepted_worker_state(result, inspection) -> dict[str, object] | None:
     return result["state"]
 
 
+def _join_prepare_processes(processes, timeout: float) -> None:
+    """Join a set of processes against one shared deadline, not one per worker."""
+
+    deadline = monotonic() + timeout
+    for process in processes:
+        process.join(timeout=max(0.0, deadline - monotonic()))
+
+
+def _cancel_prepare_executor(executor) -> None:
+    """Stop and reap owned workers before returning their inputs to the caller.
+
+    Python 3.11 has no public ProcessPoolExecutor termination API. Keep access to
+    its process/manager/queue handles isolated here until that API is available.
+    Killing a worker breaks the pool; its manager then releases the IPC resources.
+    """
+
+    processes = tuple((getattr(executor, "_processes", None) or {}).values())
+    manager = getattr(executor, "_executor_manager_thread", None)
+    call_queue = getattr(executor, "_call_queue", None)
+    if call_queue is not None:
+        # A terminated reader must not leave the manager joining a blocked feeder.
+        call_queue.cancel_join_thread()
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    _join_prepare_processes(processes, _SHUTDOWN_GRACE_SECONDS)
+    survivors = [process for process in processes if process.is_alive()]
+    for process in survivors:
+        process.kill()
+    _join_prepare_processes(survivors, _SHUTDOWN_GRACE_SECONDS)
+    if manager is not None:
+        manager.join(timeout=_SHUTDOWN_GRACE_SECONDS)
+    if any(process.is_alive() for process in processes) or (
+        manager is not None and manager.is_alive()
+    ):
+        raise RuntimeError("Import prepare pool did not stop within its shutdown deadline")
+    # The manager is already joined, so shutdown cannot wait on unfinished tasks.
+    executor.shutdown(wait=True, cancel_futures=True)
+
+
 class ImportPreparePool:
     """Prefetch report preparation in worker processes, consumed in submission order."""
 
@@ -188,11 +235,12 @@ class ImportPreparePool:
 
     def _result(self, future):
         while True:
+            if self._should_cancel():
+                raise ImportPreparationCancelled()
             try:
                 return future.result(timeout=_RESULT_POLL_SECONDS)
             except FutureTimeoutError:
-                if self._should_cancel():
-                    return None
+                continue
             except Exception as exc:
                 self._broken = self._broken or isinstance(exc, BrokenProcessPool)
                 logger.debug("Import prepare worker failed: %s", type(exc).__name__)
@@ -239,4 +287,7 @@ class ImportPreparePool:
         for future in self._futures.values():
             future.cancel()
         self._futures.clear()
-        self._executor.shutdown(wait=not cancel, cancel_futures=True)
+        if cancel:
+            _cancel_prepare_executor(self._executor)
+        else:
+            self._executor.shutdown(wait=True, cancel_futures=True)

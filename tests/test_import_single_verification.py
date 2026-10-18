@@ -1,4 +1,4 @@
-"""Import integrity (#1125): one carried hash plus one pre-persist verification, none in the write lock."""
+"""Import integrity (#1125): one preflight hash plus one full verification inside the write lock."""
 
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ def test_adopted_digest_never_replaces_the_verification_hash(tmp_path):
         inspection.verified_sha256()
 
 
-def test_confirmed_digest_reuses_verification_until_the_stat_signature_moves(tmp_path, monkeypatch):
+def test_final_verification_always_rehashes_even_when_stat_is_unchanged(tmp_path, monkeypatch):
     report = tmp_path / "report.bin"
     report.write_bytes(b"reviewed bytes")
     inspection = SourceInspectionContext.from_path(report)
@@ -143,30 +143,35 @@ def test_confirmed_digest_reuses_verification_until_the_stat_signature_moves(tmp
         lambda self: reads.append(1) or original(self),
     )
 
-    assert inspection.confirmed_sha256() == inspection.sha256  # no prior verification: hashes
-    assert inspection.confirmed_sha256() == inspection.sha256  # reused while stat is unchanged
-    assert len(reads) == 1
+    assert inspection.verified_sha256() == inspection.sha256
+    assert inspection.verified_sha256() == inspection.sha256
+    assert len(reads) == 2
 
     report.write_bytes(b"reviewed bytes, now longer")
     with pytest.raises(SourceChangedAfterInspectionError):
-        inspection.confirmed_sha256()
-    assert len(reads) == 2
+        inspection.verified_sha256()
+    assert len(reads) == 3
 
 
-def test_import_hashes_each_file_once_and_never_inside_the_write_transaction(tmp_path, monkeypatch):
+@pytest.mark.parametrize("workers", ["0", "2"])
+def test_import_hashes_each_file_twice_with_final_read_inside_the_write_transaction(
+    tmp_path, monkeypatch, workers
+):
+    monkeypatch.setenv("METROLIZA_IMPORT_PREPARE_WORKERS", workers)
+    monkeypatch.setenv("METROLIZA_IMPORT_PREPARE_MIN_REPORTS", "2")
     source = tmp_path / "reports"
     reports = _write_reports(source, 4)
     database = tmp_path / "db.sqlite3"
-    _preflight, plan = _plan(source, database)
     state = _count_hash_reads(monkeypatch)
+    _preflight, plan = _plan(source, database)
 
     thread = ParseReportsThread(plan)
     thread.run()
 
     result = thread.last_parse_result
     assert (result.imported_files, result.failed_files, result.preflight_changed_files) == (4, 0, 0)
-    assert sorted(state["reads"]) == sorted(report.name for report in reports)
-    assert state["reads_in_transaction"] == 0
+    assert sorted(state["reads"]) == sorted(report.name for report in reports for _ in range(2))
+    assert state["reads_in_transaction"] == 4
 
 
 def test_same_size_same_mtime_change_after_review_is_rejected_and_not_persisted(tmp_path):
@@ -219,7 +224,7 @@ def test_touched_but_identical_file_is_still_imported(tmp_path):
     assert (result.imported_files, result.preflight_changed_files) == (2, 0)
 
 
-def test_repository_import_verifies_once_and_rechecks_only_the_stat_in_transaction(tmp_path, monkeypatch):
+def test_uninspected_repository_import_inspects_then_verifies_inside_the_transaction(tmp_path, monkeypatch):
     from tests.test_atomic_report_import import _payload
 
     source = tmp_path / "synthetic.report"
@@ -233,5 +238,59 @@ def test_repository_import_verifies_once_and_rechecks_only_the_stat_in_transacti
     )
 
     assert outcome is report_repository.ReportImportDisposition.IMPORTED
-    assert state["reads"] == ["synthetic.report"]
-    assert state["reads_in_transaction"] == 0
+    assert state["reads"] == ["synthetic.report", "synthetic.report"]
+    assert state["reads_in_transaction"] == 1
+
+
+@pytest.mark.parametrize("already_present", [False, True])
+def test_same_size_same_mtime_replacement_during_lock_wait_is_rejected(
+    tmp_path, already_present
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from tests.test_atomic_report_import import _payload
+
+    source = tmp_path / "synthetic.report"
+    source.write_bytes(b"reviewed")
+    before = source.stat()
+    inspection = SourceInspectionContext.from_path(source)
+    digest = inspection.sha256
+    database = tmp_path / "reports.sqlite3"
+    repository = report_repository.ReportRepository(str(database))
+    repository.ensure_schema()
+    if already_present:
+        repository.import_report_if_absent(source_path=source, **_payload("accepted"))
+    waiting = Event()
+
+    def import_contender():
+        with closing(sqlite3.connect(database, timeout=5)) as connection:
+            contender = report_repository.ReportRepository(str(database), connection=connection)
+            contender.ensure_schema = lambda: None
+            connection.set_trace_callback(
+                lambda statement: waiting.set() if statement == "BEGIN IMMEDIATE" else None
+            )
+            return contender.import_report_if_absent(
+                source_path=source,
+                source_sha256=digest,
+                source_digest_verifier=inspection.verified_sha256,
+                **_payload("stale"),
+            )
+
+    with closing(sqlite3.connect(database)) as lock, ThreadPoolExecutor(max_workers=1) as pool:
+        lock.execute("BEGIN IMMEDIATE")
+        future = pool.submit(import_contender)
+        try:
+            assert waiting.wait(5), "contender never reached BEGIN IMMEDIATE"
+            replacement = tmp_path / "replacement.report"
+            replacement.write_bytes(b"tampered")
+            os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+            replacement.replace(source)
+            assert (source.stat().st_size, source.stat().st_mtime_ns) == (
+                before.st_size, before.st_mtime_ns
+            )
+        finally:
+            lock.rollback()
+        with pytest.raises((ValueError, SourceChangedAfterInspectionError)):
+            future.result(timeout=10)
+    assert len(_imported_hashes(database)) == int(already_present)
