@@ -55,6 +55,21 @@ def _owner():
     )
 
 
+@pytest.mark.parametrize('column,value', [('REFERENCE', None), ('REFERENCE', ' '),
+                                         ('HEADER', None), ('AX', None)])
+def test_missing_group_identity_retains_python_statistics(column, value):
+    task = _task()
+    task['group'][column] = value
+    owner = _owner()
+    owner._ensure_sample_number_column = lambda group: group
+    owner._lookup_sql_measurement_summary = lambda **kw: pytest.fail('Unexpected SQL aggregate')
+    owner._summary_render_options = task['options']
+    owner.prepared_grouping_df = None
+    result = pool._render_task(owner, (task['header'], task['group'], {'measurement_plan': {'summary_column': 1}}))
+    assert result['sql_summary'] is None
+    assert result['col'] == task['col']
+
+
 @pytest.mark.parametrize('count,workers,frozen,mode', [
     (4, 2, False, 'serial_small_export'), (40, 1, False, 'serial_small_export'),
     (40, 2, True, 'serial_frozen_multiprocessing_unavailable'),

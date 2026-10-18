@@ -78,10 +78,15 @@ def _render_task(owner, entry):
     from metroliza.exporting.export_summary_utils import resolve_nominal_and_limits
 
     limits = resolve_nominal_and_limits(group)
-    summary = owner._lookup_sql_measurement_summary(
-        reference=first.get('REFERENCE'), header=first.get('HEADER'), ax=first.get('AX'),
-        usl=limits['usl'], lsl=limits['lsl'],
-    )
+    reference, header_value, axis = first.get('REFERENCE'), first.get('HEADER'), first.get('AX')
+    summary = None
+    # Match summary_sheet_fill's guard: missing identity uses Python statistics,
+    # never a broader SQL aggregate for an unknown-reference partition.
+    if reference is not None and str(reference).strip() and header_value is not None and axis is not None:
+        summary = owner._lookup_sql_measurement_summary(
+            reference=reference, header=header_value, ax=axis,
+            usl=limits['usl'], lsl=limits['lsl'],
+        )
     return {
         'header': header, 'group': group, 'col': bundle['measurement_plan']['summary_column'] + 4,
         'options': owner._summary_render_options,
