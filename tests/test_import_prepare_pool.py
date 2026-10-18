@@ -158,6 +158,27 @@ def test_pooled_import_database_is_identical_to_the_serial_database(tmp_path, mo
     assert serial_dump["report_metadata_candidates"] and serial_dump["report_parse_state"]
 
 
+def test_cold_probe_cache_serial_and_pooled_imports_match_the_warm_serial_database(tmp_path, monkeypatch):
+    """A probe-cache miss lets open_report reuse the inspected text; the result must not change."""
+
+    from metroliza.parsing import report_parser_factory
+
+    source = tmp_path / "reports"
+    _write_synthetic_reports(source, 12)
+    dumps = {}
+    for label, workers, cold in (("warm", "0", False), ("cold", "0", True), ("cold_pool", "2", True)):
+        _pool_env(monkeypatch, workers)
+        database = tmp_path / f"{label}.sqlite3"
+        plan = _plan(source, database)
+        if cold:
+            report_parser_factory.reset_probe_cache()
+        ParseReportsThread(plan).run()
+        dumps[label] = _dump_database(database)
+
+    assert dumps["warm"] == dumps["cold"] == dumps["cold_pool"]
+    assert len(dumps["warm"]["parsed_reports"]) == 12
+
+
 def test_only_declared_wall_clock_columns_are_excluded_from_the_comparison(tmp_path, monkeypatch):
     _write_synthetic_reports(tmp_path / "reports", 3)
     _pool_env(monkeypatch, "0")
