@@ -1,17 +1,97 @@
 # CI Policy for Pull Requests and Branch Pushes
 
-This policy defines the **required CI checks** for every pull request and every branch push, as implemented in `.github/workflows/ci.yml`.
+This policy defines the **required CI checks** and Tier-0 selection implemented in
+`.github/workflows/ci.yml` (Issue #1061, CI audit #976).
 
 ## Scope and enforcement
 
 - CI is triggered on:
-  - every `pull_request`
-  - every `push` to any branch (`'**'`)
+  - every `pull_request`, without path or target-branch filtering;
+  - direct `push` to `master`, `main`, `develop`, `rc2`, `integrate/**`, `release/**`,
+    `hotfix/**` and `build/**` (RC artifacts are cut from build branches), including
+    nested names;
+  - `workflow_dispatch`, with the existing opt-in qualification inputs.
+- Topic branches use PR CI only. A topic push without an open PR has no automatic CI;
+  open a PR or dispatch CI to qualify it. This removes duplicate topic push + PR workloads
+  without querying PR state, changing concurrency keys, or losing integration-push CI.
+  Integration/release/hotfix/build branches intentionally retain push coverage even when
+  they are also PR sources; that exceptional pair can still run both integration and PR CI.
+- Pushes always run the full lane. Only `pull_request` events can select Tier 0, so a
+  push run and a PR run on the same SHA never disagree about which checks ran, and the
+  integration-branch push remains a backstop for the PR classification.
 - For PR merge readiness, the required checks are the blocking jobs listed below.
+
+## Tier 0: docs-only classification
+
+`classify-changes` runs `scripts/ci_change_classifier.py` against complete local Git
+history (`fetch-depth: 0`). A PR compares its merge base with the event's head SHA,
+covering all commits in the PR rather than just the latest push or an API file page.
+Pushes and `workflow_dispatch` never take Tier 0. Only additions and modifications
+can qualify: a deletion, and therefore a rename (expanded into a delete/add pair), runs
+full CI because the bug-sweep ownership ledger names exact prose paths.
+
+Only regular, non-executable Markdown in these human-facing prose locations qualifies:
+
+- root `AGENTS.md`, `CONTRIBUTING.md`, and `.github/pull_request_template.md`;
+- Markdown directly under `docs/`;
+- Markdown under `docs/project/`, `docs/engineering/`, `docs/release_checks/`,
+  `docs/roadmaps/`, `docs/quality/`, and `docs/archive/`.
+
+Directories named `assets`, `fixtures`, `generated`, `templates`, `prompts`, or
+`contracts` are excluded even inside those prose roots. Human task/report templates
+in `docs/engineering/` remain prose. A new code-consumed Markdown input must stay
+outside the allowlist or gain an explicit exclusion with classifier tests before use.
+Markdown inside the prose roots that code or non-Tier-0 tests read (for example the
+feature catalog, the bug-sweep templates and the supervised diagnostics contract) is listed
+in `EXECUTABLE_INPUT_DOCS` and runs full CI. A structural test scans `tests/`, `scripts/`,
+`src/` and `packaging/` for Markdown references and fails when a new consumer of prose
+appears, and another test keeps its Tier-0 list in sync with the workflow step.
+
+The following require **full CI**, regardless of file extension:
+
+- application/source code, scripts, tests, `tests/fixtures/*.md` (and nested fixtures),
+  source templates and code-consumed prompts/contracts;
+- workflow and configuration changes, dependencies, build/packaging files;
+- generated assets, JSON/CSV/PDF/images and other non-Markdown files;
+- root `README.md` and `CHANGELOG.md` (release metadata checked/synced by scripts),
+  `THIRD_PARTY_NOTICES.md` (packaged notice input), and runtime help under `docs/user_manual/`;
+- unknown locations, symlinks, executable files, submodules and type changes.
+
+Mixed changes are full CI. Empty diffs, new branches with a zero `before` SHA,
+missing comparison objects/merge bases, malformed events/diffs and Git errors also
+select full CI. `workflow_dispatch` always selects full CI, so manual packaging and
+startup dependencies remain qualified. No API token, network lookup, or changed-file
+count limit is used by the classifier.
+
+For docs-only changes, `Static checks` runs focused docs/link/policy/classifier and
+release-hygiene tests with minimal Python dependencies, release metadata consistency,
+tracked-file secret scanning, release hygiene and `git diff --check`. It does not
+install application dependencies, build native wheels, run runtime smoke or benchmarks,
+or emit full-suite coverage evidence. Code, mixed and workflow-change PRs retain the
+complete existing checks below, including the blocking 80% coverage threshold.
+
+All existing job IDs and displayed required check names remain unchanged. The heavy
+jobs still exist and report a skipped success/neutral status on docs-only changes;
+the whole workflow is never path-ignored. `Static checks` always evaluates after the
+classifier (unless the workflow is cancelled) and fails if classification failed or
+its boolean output is absent/invalid. Thus a classifier failure cannot silently waive
+the existing required merge predicate. The CMM and advisory performance jobs still
+require successful static and unit jobs in the full lane. No required-check setting,
+review gate or merge authority is changed by this path selection.
+
+Classifier unit tests separately cover docs-only, code, mixed and workflow changes,
+renames in both directions, deletions, generated assets, release-synced Markdown,
+fixture/template Markdown, file modes and unavailable history. Policy synchronization
+tests guard the job names, failure behavior, dependencies and event filters. Local
+tests are source evidence only: the coordinator must validate real docs-only/code/
+mixed/workflow test PRs on GitHub and read back required statuses and branch protection
+before claiming hosted CI qualification. Existing workflow and per-job dispatch
+concurrency, cancellation exceptions and owner-only qualification predicates are preserved.
 
 ## Required checks (blocking)
 
-The following checks must pass on every PR and branch push.
+The following checks must pass in the full lane on every PR and eligible branch push.
+For docs-only changes the Tier-0 result and explicit heavy-job skips described above apply.
 
 | Requirement | Workflow job name (`ci.yml`) | What it validates |
 |---|---|---|
@@ -89,7 +169,7 @@ These checks are explicitly non-blocking for normal PR CI:
 
 | Check | Workflow job name (`ci.yml`) | Trigger model | Blocking status |
 |---|---|---|---|
-| Performance benchmark trend check | `perf-benchmarks` | Automatic on PRs and branch pushes after static checks and unit tests pass | **Non-blocking** advisory signal; compares medians with a 12% threshold and 0.100s absolute slowdown floor, reports export stage medians for review, and keeps the PR check green while artifacts preserve the advisory failure details |
+| Performance benchmark trend check | `perf-benchmarks` | Automatic in the full lane on PRs and eligible branch pushes after static checks and unit tests pass | **Non-blocking** advisory signal; compares medians with a 12% threshold and 0.100s absolute slowdown floor, reports export stage medians for review, and keeps the PR check green while artifacts preserve the advisory failure details |
 | Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
 | Google conversion smoke (release-only) | Local secure workstation command documented in `docs/google_conversion_smoke_runbook.md` | Explicit local opt-in with sandbox `credentials.json` and `token.json` | Not a hosted CI job; **release-blocking** evidence for promoted RC artifacts |
 | Windows startup benchmark (release-only) | `windows-startup-benchmark` | Manual `workflow_dispatch` with `run_windows_startup_benchmark=1` | **Non-blocking** for regular PRs and pushes |
