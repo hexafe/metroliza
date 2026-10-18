@@ -55,3 +55,52 @@ and table bounds/font/fallback/row metadata are also captured there.
 Stop/escalate if output diverges, the accepted base changes, or Windows support
 would require unrelated startup/packaging changes. Rollback is a local revert
 of this issue's implementation commits; no data migration is involved.
+
+## Design and lifecycle
+
+Histogram annotations draw once to resolve axes transforms, then measure each
+Text/Annotation candidate against the same renderer. Candidate ordering,
+collision/edge/title checks and leader-line bounds remain the original ones.
+Panel tables and note panels use renderer metrics without drawing the figure;
+standalone Text probes avoid adding/removing artists, with a bounded per-table
+extent cache. Final chart layout and PNG saving retain their existing passes.
+
+For workbook-only summaries with at least eight groups in one reference
+partition, the first group stays serial. The remaining groups use an explicit
+`spawn` context, at most four workers (also bounded by `chart_worker_count`), and
+at most `min(chart_worker_queue_size, 2 * workers)` pending jobs. The parent
+prepares SQL aggregates; children receive only options, the group, grouping
+assignments, aggregates and the active chart settings. Children render through
+the existing summary path against a recording worksheet. They open no database
+or output files. PNG bytes, worksheet commands, warnings and telemetry return
+to the parent, which replays them in input order. Progress remains in the
+original per-group parent loop.
+
+The first serial group establishes the existing adaptive density policy. If
+active settings change after submission, stale results are discarded and that
+group follows the original serial path. Startup/submission/task failures switch
+remaining groups to serial without duplicating writes. Cancellation and early
+exit cancel queued futures and shut down the executor in a `finally` block.
+Worker initialization disables core dumps on POSIX; no QApplication is created
+in workers.
+
+Single-worker, fewer-than-eight-group and dashboard exports stay serial.
+Current frozen entry points lack multiprocessing worker dispatch, so frozen
+exports explicitly stay serial and never relaunch the desktop app as a worker.
+`METROLIZA_EXPORT_GROUP_MP=0` disables the new pool. The existing opt-in fit/trend
+executor is unchanged.
+
+This remains one performance outcome: the additional test/evidence lines are
+required to prove pre-change image parity, spawn behavior and failure cleanup;
+they do not introduce another product feature.
+
+## Security baseline drift
+
+The baseline file was deliberately **not** regenerated. A focused Bandit scan
+finds the same two B608 SQL statements, now at lines 3967/3987 rather than
+3959/3979. Their code and security rationale are unchanged, but line-sensitive
+fingerprints change from `63e7da8a6a1b...` / `b42ab68583b2...` to
+`af5bfce05135...` / `bda540c8b3c6...`. The external orchestrator must review this
+drift before a full security-baseline gate can pass. The existing low-severity
+B112 also moves from 2536 to 2543. No SQL or exception-handling policy was
+changed by this work.

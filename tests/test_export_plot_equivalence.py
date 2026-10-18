@@ -6,6 +6,7 @@ No customer data or platform-specific golden bitmaps belong in the repository.
 """
 
 from io import BytesIO
+import importlib.util
 import os
 from pathlib import Path
 import zipfile
@@ -90,6 +91,47 @@ def test_annotation_candidates_draw_only_once_and_tables_never_draw(monkeypatch)
         assert len(calls) == 1
     finally:
         plt.close(fig)
+
+
+def _annotation_scene(module, positions):
+    import matplotlib.pyplot as plt
+
+    module.apply_summary_plot_theme()
+    fig, ax = plt.subplots(figsize=(6, 4))
+    try:
+        ax.set_xlim(0, 10)
+        ax.set_ylim(0, 1)
+        title = module.render_histogram_figure_title(fig, 'Synthetic collision / edge case')
+        specs = [dict(x=x, text=f'{kind.upper()} = {x:.3f}', color='black', kind=kind,
+                      priority=priority, text_y_axes=1.02)
+                 for x, kind, priority in zip(positions, ['mean', 'lsl', 'usl'], [300, 200, 100])]
+        artists = module.render_histogram_annotations(
+            ax, specs, annotation_fontsize=9,
+            annotation_box=dict(boxstyle='round,pad=0.2', fc='white', title_artist=title,
+                                plot_rect=dict(x=.125, y=.11, width=.775, height=.77)),
+        )
+        decisions = [(type(a).__name__, a.get_text(), a.get_position(), a.get_ha()) for a in artists]
+        png = BytesIO()
+        fig.savefig(png, format='png', dpi=100)
+        return decisions, png.getvalue()
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.skipif(not os.environ.get('METROLIZA_PLOT_REFERENCE_MODULE'), reason='Needs base source capture')
+@pytest.mark.parametrize('positions', [(5., 5.01, 5.02), (5., 0., 10.), (0.02, 0., 0.04)])
+def test_prechange_collision_and_edge_layout(positions):
+    from metroliza.exporting import export_data_thread as candidate
+
+    spec = importlib.util.spec_from_file_location(
+        '_1126_reference', os.environ['METROLIZA_PLOT_REFERENCE_MODULE'],
+    )
+    reference = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reference)
+    expected_decisions, expected_png = _annotation_scene(reference, positions)
+    actual_decisions, actual_png = _annotation_scene(candidate, positions)
+    assert actual_decisions == expected_decisions
+    assert_equivalent_pngs(expected_png, actual_png)
 
 
 @pytest.mark.skipif(not os.environ.get('METROLIZA_PLOT_BASE'), reason='Needs captured synthetic exports')
