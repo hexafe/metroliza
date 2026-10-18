@@ -742,7 +742,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c2310055342cfba52a3b2a395faf6b6c1efa54450e92a8d060ce39f406c14d43",
+      "fingerprint": "fa3f61c68d4c31b57855508304cdd9d7c46904bdc9a85a6374baf6565ddf6315",
       "test_id": "B608",
       "path": "src/metroliza/reports/db.py",
       "owner": "Security review",
