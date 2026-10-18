@@ -14,6 +14,12 @@ if expected_qt_platform:
 elif os.environ.get("QT_QPA_PLATFORM") not in {"offscreen", "minimal"}:
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
+# A developer desktop's platform theme or style override (e.g. QT_QPA_PLATFORMTHEME=gtk3
+# with a dark GTK theme) changes the default palette and makes colour and geometry
+# assertions depend on the host. CI runners set neither, so tests run without them.
+for _host_qt_appearance in ("QT_QPA_PLATFORMTHEME", "QT_STYLE_OVERRIDE"):
+    os.environ.pop(_host_qt_appearance, None)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
