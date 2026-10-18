@@ -47,11 +47,11 @@ def resolve_prepare_worker_count(report_count: int) -> int:
     """
 
     configured = (env_value(WORKERS_ENV) or "auto").lower()
+    default_minimum = 200 if _is_frozen_windows() else DEFAULT_MIN_REPORTS
     try:
-        default_minimum = 200 if _is_frozen_windows() else DEFAULT_MIN_REPORTS
         minimum = max(2, env_int(MIN_REPORTS_ENV, default=default_minimum) or default_minimum)
     except ValueError:
-        minimum = DEFAULT_MIN_REPORTS
+        minimum = default_minimum
     if report_count < minimum:
         return 0
     if configured != "auto":

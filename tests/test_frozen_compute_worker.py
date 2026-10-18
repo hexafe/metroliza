@@ -93,7 +93,13 @@ def _frame(module, name):
 def test_compute_audit_accepts_only_cpython_spawn_signature():
     worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
     frame = _frame('multiprocessing.popen_spawn_win32', '__init__')
-    command = f'"{worker}" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
+    import multiprocessing.spawn
+    from unittest.mock import patch
+
+    application = r'C:\Program Files\Metroliza\metroliza_application.exe'
+    with patch.object(sys, 'executable', application), patch.object(sys, 'frozen', True, create=True):
+        # Use CPython's real frozen command builder, not an invented argv shape.
+        command = ' '.join('"%s"' % value for value in multiprocessing.spawn.get_command_line(parent_pid=123, pipe_handle=456))
     args = (worker, command, None)
     assert audit.classify_compute_call(args, frame, worker) == ('compute_worker_launch', 'metroliza')
     for bad in ((worker, command + ' extra', None), ('other.exe', command, None),

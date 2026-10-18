@@ -1135,3 +1135,22 @@ def test_compute_roles_require_exact_attempt_count_native_identity_and_job_drain
             broken['owned']['job_empty'] = False
         with pytest.raises(ValueError):
             verified_runtime_order(broken, supervised=True, compute_workers=4)
+
+
+def test_native_spawn_observer_journals_compute_and_avoids_popen_double_count(monkeypatch, tmp_path):
+    worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
+    application = r'C:\Program Files\Metroliza\metroliza_application.exe'
+    command = f'"{application}" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
+    (tmp_path / 'ready').touch()
+    observe, installed = audit._make_observer(tmp_path, 'a' * 32, 'cmd.exe', None, worker)
+    observe('metroliza.qualifier.audit_installed', ('a' * 32,))
+    assert installed
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, '_getframe', lambda depth: _frame('multiprocessing.popen_spawn_win32', '__init__'))
+        observe('_winapi.CreateProcess', (worker, command, None))
+    event = json.loads((tmp_path / 'event-01.json').read_text())
+    assert event['kind'] == 'compute_worker_launch' and event['phase'] == 'after_ready'
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, '_getframe', lambda depth: _frame('subprocess', '_execute_child'))
+        observe('_winapi.CreateProcess', ('cmd.exe', 'already journalled', None))
+    assert not (tmp_path / 'event-02.json').exists()

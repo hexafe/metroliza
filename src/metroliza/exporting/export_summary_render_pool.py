@@ -35,6 +35,8 @@ class RecordingWorksheet:
 
 
 def _initialize_render_worker():
+    from metroliza.shared.compute_worker import initialize_compute_runtime
+    initialize_compute_runtime()
     # A failed native/scientific dependency must never generate desktop cores.
     if sys.platform != 'win32':
         import resource

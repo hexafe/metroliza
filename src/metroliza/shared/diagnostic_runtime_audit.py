@@ -108,11 +108,16 @@ def _classify_platform_call(arguments, frame, expected_cmd: str) -> tuple[str, s
 
 def classify_compute_call(arguments, frame, expected_worker: str | None) -> tuple[str, str]:
     """Windows multiprocessing uses CreateProcess directly, not subprocess.Popen."""
+    import ntpath
     import re
     if expected_worker is None or len(arguments) != 3:
         return "other_arguments", "other"
     executable, command, cwd = arguments
-    prefix = f'"{expected_worker}" "--multiprocessing-fork" '
+    # CPython 3.11 get_command_line uses the parent's sys.executable when
+    # frozen, even though Popen uses spawn.get_executable as application_name.
+    # Verify the actual compute image separately from this application argv[0].
+    application = ntpath.join(ntpath.dirname(expected_worker), "metroliza_application.exe")
+    prefix = f'"{application}" "--multiprocessing-fork" '
     if (executable != expected_worker or type(command) is not str
             or cwd is not None
             or not command.startswith(prefix)
@@ -159,7 +164,6 @@ def _expected_compute(application):
 
 
 def _install() -> None:
-    import _thread
     import ctypes
 
     root = Path(os.environ[ROOT])
@@ -183,14 +187,26 @@ def _install() -> None:
         if application.name.lower() == "metroliza_application.exe" else None
     )
     expected_compute = _expected_compute(application)
+    observe, installed_seen = _make_observer(root, nonce, expected_cmd, expected_worker, expected_compute)
+    sys.addaudithook(observe)
+    # CPython can silently decline registration if an earlier hook rejects it.
+    sys.audit("metroliza.qualifier.audit_installed", nonce)
+    if not installed_seen:
+        raise ValueError("runtime_audit_invalid")
+    _write(root, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+
+
+def _make_observer(root, nonce, expected_cmd, expected_worker, expected_compute):
+    import _thread
+
     lock = _thread.allocate_lock()
     count = 0
-    installed_seen = False
+    installed_seen = []
 
     def observe(event, arguments):
-        nonlocal count, installed_seen
+        nonlocal count
         if event == "metroliza.qualifier.audit_installed" and arguments == (nonce,):
-            installed_seen = True
+            installed_seen.append(True)
             return
         if event not in {"subprocess.Popen", "_winapi.CreateProcess"}:
             return
@@ -223,12 +239,7 @@ def _install() -> None:
             if acquired:
                 lock.release()
 
-    sys.addaudithook(observe)
-    # CPython can silently decline registration if an earlier hook rejects it.
-    sys.audit("metroliza.qualifier.audit_installed", nonce)
-    if not installed_seen:
-        raise ValueError("runtime_audit_invalid")
-    _write(root, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+    return observe, installed_seen
 
 
 def wait_for_host_ready(*, seconds: float = 5.0) -> None:

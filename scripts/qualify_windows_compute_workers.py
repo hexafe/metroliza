@@ -49,7 +49,10 @@ def database_rows(database: Path) -> dict:
             columns = [row[1] for row in connection.execute(f'PRAGMA table_info({quoted})')
                        if row[1] not in WALL_CLOCK_COLUMNS.get(table, set())]
             selected = ', '.join('"' + column.replace('"', '""') + '"' for column in columns)
-            result[table] = connection.execute(f'SELECT {selected} FROM {quoted} ORDER BY rowid').fetchall()
+            # Both identifiers come from SQLite's schema and are double-quote
+            # escaped above. Values never enter SQL; the database is read-only.
+            result[table] = connection.execute(
+                f'SELECT {selected} FROM {quoted} ORDER BY rowid').fetchall()  # nosec B608
         groups = connection.execute(
             'SELECT COUNT(*) FROM (SELECT header, ax FROM report_measurements GROUP BY header, ax)').fetchone()[0]
         if groups < GROUPS or len(result['parsed_reports']) != REPORTS:
@@ -143,6 +146,8 @@ def qualify(artifact: Path, receipt: dict) -> None:
     identity = inspect_package(artifact)
     if not identity.valid:
         raise ValueError('compute_package_identity_invalid')
+    if os.environ.get('GITHUB_SHA', identity.git_sha) != identity.git_sha:
+        raise ValueError('compute_package_source_mismatch')
     receipt.update(git_sha=identity.git_sha,
                    manifest_sha256=hashlib.sha256((artifact / 'supervision_manifest.json').read_bytes()).hexdigest())
     with tempfile.TemporaryDirectory(prefix='metroliza-compute-') as directory:

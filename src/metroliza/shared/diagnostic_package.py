@@ -22,9 +22,9 @@ MANIFEST_NAME = "supervision_manifest.json"
 COMPONENTS = (
     "metroliza_application.exe",
     "metroliza_ocr_worker.exe",
-    "metroliza_compute_worker.exe",
     "_internal/python311.dll",
     "_internal/base_library.zip",
+    "metroliza_compute_worker.exe",
     "_internal/metroliza/app/build_provenance.json",
 )
 MAX_COMPONENT_BYTES = 512 * 1024 * 1024

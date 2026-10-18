@@ -68,3 +68,22 @@ def test_workload_requires_explicit_smoke_gate(monkeypatch):
     monkeypatch.delenv('METROLIZA_STARTUP_SMOKE', raising=False)
     with pytest.raises(ValueError, match='gate_required'):
         workload.run_qualification()
+
+
+def test_read_only_database_oracle_quotes_schema_identifiers(tmp_path):
+    import sqlite3
+
+    database = tmp_path / 'synthetic.sqlite3'
+    hostile = 'x"; DROP TABLE parsed_reports; --'
+    with sqlite3.connect(database) as connection:
+        connection.execute('CREATE TABLE parsed_reports (id INTEGER PRIMARY KEY)')
+        connection.executemany('INSERT INTO parsed_reports VALUES (?)', [(index,) for index in range(200)])
+        connection.execute('CREATE TABLE report_measurements (header TEXT, ax TEXT)')
+        connection.executemany('INSERT INTO report_measurements VALUES (?, ?)', [(str(index), 'X') for index in range(40)])
+        # The name is a fixed adversarial fixture. The production oracle must
+        # read it as one quoted identifier rather than executing its SQL text.
+        connection.execute('CREATE TABLE "x""; DROP TABLE parsed_reports; --" (value TEXT)')
+        connection.execute('INSERT INTO "x""; DROP TABLE parsed_reports; --" VALUES (?)', ('synthetic',))
+    rows = host.database_rows(database)
+    assert len(rows['parsed_reports']) == 200
+    assert rows[hostile] == [('synthetic',)]
