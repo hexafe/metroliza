@@ -92,6 +92,10 @@ def _qualify_profile(run, count, lifecycle=None):
             raise RuntimeError(f"missing_persist_stage:{stage}")
     if calls["hash"] != count:
         raise RuntimeError("in_transaction_hash_count_changed")
+    # Contract (#1125): at most one extra full read, only for the file whose import
+    # had to create or migrate the schema.
+    if calls.get("pre_schema_hash", 0) > 1:
+        raise RuntimeError("pre_schema_hash_count_exceeded")
     if lifecycle == "batch_connection" and calls.get("checkpoint") != calls["commit"]:
         raise RuntimeError("per_commit_checkpoint_missing")
     settings = run["profile"]["sqlite_settings"]

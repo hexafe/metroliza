@@ -12,7 +12,7 @@ import os
 from typing import Any, Callable, Iterable
 
 from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
-from metroliza.reports.import_persist_profile import persist_stage
+from metroliza.reports.import_persist_profile import measure_persist_stage, persist_stage
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_schema import (
@@ -1601,11 +1601,14 @@ class ReportRepository:
             # Reject stale content before schema creation/migration can commit.
             # An inspected import into a ready schema needs only the verification
             # under the write lock below; schema work requires this extra guard.
-            source_sha256 = self._verify_import_source_digest(
-                source_path,
-                expected_sha256=source_sha256,
-                source_digest_verifier=source_digest_verifier,
-            )
+            # Profiled separately from the in-transaction "hash" stage, which must
+            # stay exactly one full read per imported file (#1125/#1136).
+            with measure_persist_stage("pre_schema_hash"):
+                source_sha256 = type(self)._verify_import_source_digest.__wrapped__(
+                    source_path,
+                    expected_sha256=source_sha256,
+                    source_digest_verifier=source_digest_verifier,
+                )
         self._ensure_import_schema()
         now = utc_timestamp()
         measurement_values = tuple(measurements)
