@@ -4,6 +4,8 @@ import types
 import unittest
 from unittest.mock import patch
 
+from metroliza.reports.filter_values import FILTER_VALUE_SPECS
+
 
 class _FakeSignal:
     def connect(self, *_args, **_kwargs):
@@ -159,6 +161,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
             dialog = module.FilterDialog.__new__(module.FilterDialog)
             dialog.db_file = "memory.db"
             dialog.filter_query = "SELECT * FROM vw_measurement_export WHERE 1=1"
+            dialog._choice_scope_query = dialog.filter_query
             dialog.ax_list = object()
             dialog.header_list = object()
             dialog.all_headers_list = object()
@@ -179,15 +182,19 @@ class TestFilterDialogMetadata(unittest.TestCase):
             def fake_populate(list_widget, column_name, *, source_view="vw_measurement_export", filter_query=None):
                 calls.append((list_widget, column_name, source_view, filter_query))
 
-            dialog._populate_distinct_values = fake_populate
+            def fake_start(specs, query):
+                for attribute, column, view in specs:
+                    fake_populate(getattr(dialog, attribute), column, source_view=view, filter_query=query)
+
+            dialog._start_value_load = fake_start
             dialog.populate_list_widgets()
 
-            self.assertIn((dialog.operator_name_list, "OPERATOR_NAME", "vw_report_overview", dialog.filter_query), calls)
-            self.assertIn((dialog.sample_number_kind_list, "SAMPLE_NUMBER_KIND", "vw_report_overview", dialog.filter_query), calls)
-            self.assertIn((dialog.status_code_list, "STATUS_CODE", "vw_measurement_export", dialog.filter_query), calls)
-            self.assertIn((dialog.filename_list, "FILENAME", "vw_report_overview", dialog.filter_query), calls)
-            self.assertIn((dialog.parser_id_list, "PARSER_ID", "vw_report_overview", dialog.filter_query), calls)
-            self.assertIn((dialog.template_family_list, "TEMPLATE_FAMILY", "vw_report_overview", dialog.filter_query), calls)
+            self.assertEqual(len(calls), 14)
+            self.assertEqual(
+                [(column, view) for _, column, view, _ in calls],
+                [(column, view) for _, column, view in FILTER_VALUE_SPECS],
+            )
+            self.assertTrue(all(query == dialog.filter_query for _, _, _, query in calls))
 
     def test_apply_filters_appends_metadata_clauses(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
