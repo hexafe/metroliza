@@ -11,7 +11,7 @@ from metroliza.reports.import_persist_profile import (
     measure_persist_stage,
     observe_persist_connection,
     observe_persist_checkpoint,
-    profile_persist_cursor,
+    persist_sqlite_options,
 )
 
 
@@ -137,7 +137,7 @@ def connect_sqlite(
 ) -> sqlite3.Connection:
     """Create a SQLite connection and apply deterministic PRAGMAs on open."""
     with measure_persist_stage("connection_open"):
-        connection = sqlite3.connect(db_path, timeout=timeout_s)
+        connection = sqlite3.connect(db_path, timeout=timeout_s, **persist_sqlite_options())
         _apply_sqlite_pragmas(connection, pragma_config)
     observe_persist_connection(connection)
     return connection
@@ -219,7 +219,7 @@ def sqlite_readonly_connection_scope(
     database_uri = f"file:{quote(str(resolved_path))}?mode=ro"
     if immutable:
         database_uri += "&immutable=1"
-    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+    with closing(sqlite3.connect(database_uri, uri=True, **persist_sqlite_options())) as connection:
         yield connection
 
 
@@ -364,7 +364,7 @@ def run_transaction_with_retry(
         try:
             if conn is None:
                 conn = connect_sqlite(db_path)
-            cursor = profile_persist_cursor(conn.cursor())
+            cursor = conn.cursor(**persist_sqlite_options(cursor=True))
             result = operation(cursor)
             with measure_persist_stage("commit"):
                 conn.commit()
@@ -608,7 +608,7 @@ def sqlite_query_only_connection_scope(db_path: str) -> Iterator[sqlite3.Connect
 
     resolved_path = Path(db_path).resolve(strict=False)
     database_uri = f"file:{quote(str(resolved_path))}?mode=rw"
-    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+    with closing(sqlite3.connect(database_uri, uri=True, **persist_sqlite_options())) as connection:
         with closing(connection.cursor()) as cursor:
             cursor.execute("PRAGMA query_only=ON")
         yield connection
