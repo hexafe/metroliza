@@ -30,7 +30,7 @@ def test_exact_component_manifest_verifies_without_path_lookup(package):
 def test_mixed_or_missing_child_runtime_fails_closed(package, component):
     path = package / component
     path.write_bytes(b"different-runtime")
-    assert inspect_package(package).reason == "component_mismatch"
+    assert inspect_package(package).reason == "component_modified"
     path.unlink()
     assert not inspect_package(package).valid
 

@@ -150,6 +150,27 @@ jobs:
           METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
         run: .\build_windows_portable_exe.ps1
 
+      - name: Record package identity behavior on the built onedir (#1111 discriminator)
+        shell: pwsh
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          $onedir = @(Get-ChildItem -LiteralPath dist -Directory -Filter 'metroliza_P_*_onedir')
+          if ($onedir.Count -ne 1) { throw 'Expected exactly one supervised onedir' }
+          $receiptDirectory = Join-Path $env:RUNNER_TEMP 'package-identity-receipt'
+          New-Item -ItemType Directory -Force -Path $receiptDirectory | Out-Null
+          $receipt = Join-Path $receiptDirectory 'package-identity-receipt.json'
+          & .\.venv-build\Scripts\python.exe scripts/qualify_package_identity.py $onedir[0].FullName --receipt $receipt
+          if ($LASTEXITCODE -ne 0) { throw 'Package identity discriminator failed: invalid baseline or script error' }
+
+      - name: Retain the package identity receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-package-identity-receipt
+          path: ${{ runner.temp }}/package-identity-receipt/package-identity-receipt.json
+          if-no-files-found: warn
+
       - name: Qualify first launch, reopen, core outputs, incident and extraction cleanup
         shell: pwsh
         run: |

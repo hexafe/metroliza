@@ -408,6 +408,29 @@ def test_supervised_portable_onefile_requires_owner_opt_in_and_native_smoke() ->
     assert job['steps'][-1]['if'] == 'success()'
 
 
+def test_portable_onefile_job_records_package_identity_discriminator_after_the_build() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-portable-onefile']
+    steps = job['steps']
+    build = next(i for i, step in enumerate(steps) if 'build_windows_portable_exe.ps1' in step.get('run', ''))
+    record = next(i for i, step in enumerate(steps)
+                  if 'scripts/qualify_package_identity.py' in step.get('run', ''))
+    upload = next(i for i, step in enumerate(steps)
+                  if step.get('with', {}).get('name') == 'windows-package-identity-receipt')
+    smoke = next(i for i, step in enumerate(steps)
+                 if 'qualify_windows_portable_onefile.py' in step.get('run', ''))
+    assert build < record < upload < smoke < len(steps) - 1
+    assert '--receipt' in steps[record]['run'] and 'RUNNER_TEMP' in steps[record]['run']
+    assert 'if ($LASTEXITCODE -ne 0) { throw' in steps[record]['run']
+    assert 'continue-on-error' not in steps[record]
+    assert steps[upload]['uses'].startswith('actions/upload-artifact@')
+    assert steps[upload]['if'] == 'always()'
+    assert steps[upload]['with']['path'].endswith('package-identity-receipt.json')
+
+
+
 def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -> None:
     import yaml
 
@@ -430,7 +453,12 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     # The envelope upload must never pick up the launcher EXE (and vice versa).
     assert envelope.endswith('_[0-9][0-9][0-9][0-9][0-9][0-9].exe')
     assert '_launcher.exe' in launcher
-    assert all(step['if'] == 'success()' for step in steps if step.get('uses', '').startswith('actions/upload-artifact@'))
+    # User-facing EXEs are retained only from a fully qualified run; diagnostic receipts
+    # (e.g. the #1111 package identity receipt) are uploaded with if: always().
+    exe_uploads = ('windows-supervised-portable-onefile', 'windows-supervised-launcher-exe')
+    assert all(step['if'] == 'success()' for step in steps
+               if step.get('uses', '').startswith('actions/upload-artifact@')
+               and step['with']['name'] in exe_uploads)
     assert steps[-1]['with']['name'] == 'windows-supervised-launcher-exe'
     assert steps[-1]['if'] == 'success()'
     verify = next(i for i, step in enumerate(steps) if 'remains at the exact clean head' in step['name'])

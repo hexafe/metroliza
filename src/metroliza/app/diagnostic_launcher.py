@@ -22,7 +22,7 @@ from metroliza.shared.diagnostic_incident import (
     TerminationState,
     build_incident,
 )
-from metroliza.shared.diagnostic_package import inspect_package
+from metroliza.shared.diagnostic_package import inspect_package, package_notice
 from metroliza.shared.diagnostic_ring import DiagnosticRing
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_startup_probe import mark, mark_error
@@ -30,6 +30,12 @@ from metroliza.shared.diagnostic_wire import decode_event
 
 
 _PUBLISH_CLOSE_SECONDS = 0.75
+# Self-repair contract with the native runtime launcher (#1105): when it sets this
+# variable to "1" and the package identity is invalid, the supervisor persists the
+# unstarted incident as usual, shows no notice and exits with this code so the
+# launcher can re-extract its cached runtime and start again without the variable.
+REPAIR_AVAILABLE_ENV = "METROLIZA_RUNTIME_REPAIR_AVAILABLE"
+EXIT_PACKAGE_REPAIR_REQUESTED = 75
 
 
 @dataclass(frozen=True)
@@ -341,7 +347,9 @@ def main() -> int:
                 False, 0, False, DiagnosticRing().snapshot(now=time.monotonic()), 0,
             )
             _persist_unstarted_bounded(store, observed, identity.git_sha)
-            _fixed_notice("Nie można uruchomić aplikacji: brak lub niezgodność składników pakietu.")
+            if os.getenv(REPAIR_AVAILABLE_ENV) == "1":
+                return EXIT_PACKAGE_REPAIR_REQUESTED
+            _fixed_notice(package_notice(identity))
             return 1
         mark("package_verified")
         argv = [str(root / "metroliza_application.exe"), *sys.argv[1:]]

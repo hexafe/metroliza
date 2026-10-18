@@ -140,12 +140,16 @@ def _validated_records(value: Any, source: str):
 
 
 def _worker_executable() -> Path:
-    from metroliza.shared.diagnostic_package import inspect_package
+    from metroliza.shared.diagnostic_package import identity_code, inspect_package
 
     app = Path(sys.executable)
     worker = app.with_name("metroliza_ocr_worker.exe")
-    if app.name.lower() != "metroliza_application.exe" or not inspect_package(app.parent).valid:
+    if app.name.lower() != "metroliza_application.exe":
         raise OcrWorkerFailure("ocr_package_identity_failed")
+    identity = inspect_package(app.parent)
+    if not identity.valid:
+        # The code is built from the fixed reason and file-name allowlists only.
+        raise OcrWorkerFailure(f"ocr_package_identity_failed:{identity_code(identity)}")
     return worker
 
 

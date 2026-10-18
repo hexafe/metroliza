@@ -2439,6 +2439,7 @@
         "scripts/build_diagnostic_manifest.py",
         "scripts/qualify_windows_diagnostics.py",
         "scripts/qualify_windows_portable_onefile.py",
+        "scripts/qualify_package_identity.py",
         "scripts/windows_native_identity_control.py",
         "scripts/qualify_windows_candidate_core.py",
         "scripts/finalize_windows_candidate_receipts.py",
