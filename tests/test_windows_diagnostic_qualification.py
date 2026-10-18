@@ -5151,6 +5151,11 @@ def test_failed_child_cleanup_survives_host_cleanup_and_public_receipt(
 
 def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    # This fake process has already exited. Disk setup and runner scheduling
+    # must not consume a real one-second deadline in a state/receipt unit test.
+    monkeypatch.setattr(qualification, "time", SimpleNamespace(
+        monotonic=lambda: 100.0, perf_counter=time.perf_counter,
+    ))
     api = _FakeApi(9, "ready")
     artifact = tmp_path / "artifact"
     work = tmp_path / "work"
@@ -5166,7 +5171,7 @@ def test_scenario_uses_fixed_receipt_and_closes_completed_job(tmp_path, monkeypa
         work,
         state,
         "hard_exit",
-        time.monotonic() + 1,
+        101.0,
         expected_exit=9,
         expected_stage="ready",
         on_ready=lambda process: called.append(process),
@@ -6377,7 +6382,9 @@ def test_native_gui_stdio_facts_distinguish_redirected_handles_from_console(tmp_
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             code = process.poll()
-            if code is not None and process.active_processes() == 0:
+            # This control tests stdio facts, not helper image attribution.
+            # AllocConsole's conhost can still be retiring after pythonw exits.
+            if code is not None and api._job_accounting(process._job)[0] == 0:
                 complete = True
                 break
             time.sleep(0.005)
