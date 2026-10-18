@@ -10,6 +10,8 @@ import random
 import sqlite3
 import sys
 
+import pytest
+
 
 from metroliza.parsing import import_prepare_pool
 from metroliza.parsing.cmm_report_parser import CMMReportParser
@@ -334,16 +336,18 @@ def test_worker_count_policy(monkeypatch):
     assert resolve_prepare_worker_count(500) == 0
 
 
-def test_packaged_windows_build_stays_serial_unless_explicitly_enabled(monkeypatch):
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+@pytest.mark.parametrize("configured", ["auto", "3", "16"])
+def test_frozen_build_stays_serial_even_with_explicit_workers(monkeypatch, platform, configured):
     monkeypatch.delenv(WORKERS_ENV, raising=False)
     monkeypatch.delenv(MIN_REPORTS_ENV, raising=False)
     monkeypatch.setattr(os, "cpu_count", lambda: 12)
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
     assert resolve_prepare_worker_count(5000) == 0
-    monkeypatch.setenv(WORKERS_ENV, "3")
-    assert resolve_prepare_worker_count(5000) == 3
+    monkeypatch.setenv(WORKERS_ENV, configured)
+    assert resolve_prepare_worker_count(5000) == 0
 
 
 def test_complete_mode_and_small_batches_never_start_a_pool(tmp_path, monkeypatch):

@@ -34,8 +34,8 @@ INFLIGHT_PER_WORKER = 3
 _RESULT_POLL_SECONDS = 0.2
 
 
-def _is_frozen_windows() -> bool:
-    return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
 
 
 def resolve_prepare_worker_count(report_count: int) -> int:
@@ -43,10 +43,12 @@ def resolve_prepare_worker_count(report_count: int) -> int:
 
     ``METROLIZA_IMPORT_PREPARE_WORKERS`` is ``auto`` (default), ``0`` (disabled) or an
     explicit count. Small batches stay serial because process start-up would dominate.
-    The packaged Windows build stays serial unless the count is set explicitly, until the
-    spawn path has packaged qualification evidence.
+    Frozen builds always stay serial until a supported worker executable has
+    supervised packaged-startup qualification evidence (#1134).
     """
 
+    if _is_frozen():
+        return 0
     configured = (env_value(WORKERS_ENV) or "auto").lower()
     try:
         minimum = max(2, env_int(MIN_REPORTS_ENV, default=DEFAULT_MIN_REPORTS) or DEFAULT_MIN_REPORTS)
@@ -59,8 +61,6 @@ def resolve_prepare_worker_count(report_count: int) -> int:
             return max(0, min(int(configured), MAX_EXPLICIT_WORKERS, report_count))
         except ValueError:
             return 0
-    if _is_frozen_windows():
-        return 0
     workers = min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1)
     return workers if workers >= 2 else 0
 
