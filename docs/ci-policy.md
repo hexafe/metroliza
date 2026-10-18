@@ -26,8 +26,9 @@ This policy defines the **required CI checks** and Tier-0 selection implemented 
 `classify-changes` runs `scripts/ci_change_classifier.py` against complete local Git
 history (`fetch-depth: 0`). A PR compares its merge base with the event's head SHA,
 covering all commits in the PR rather than just the latest push or an API file page.
-Pushes and `workflow_dispatch` never take Tier 0. Renames are expanded into
-delete/add pairs so **both paths** count; deletions use the old path and mode.
+Pushes and `workflow_dispatch` never take Tier 0. Only additions and modifications
+can qualify: a deletion, and therefore a rename (expanded into a delete/add pair), runs
+full CI because the bug-sweep ownership ledger names exact prose paths.
 
 Only regular, non-executable Markdown in these human-facing prose locations qualifies:
 

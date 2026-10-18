@@ -53,23 +53,30 @@ def test_change_classes(paths, expected):
     assert classifier.docs_only_from_raw(b"".join(map(raw_change, paths))) is expected
 
 
-@pytest.mark.parametrize(("old_path", "new_path", "expected"), [
-    ("docs/project/old.md", "docs/project/new.md", True),
-    ("tests/fixtures/input.md", "docs/project/new.md", False),
-    ("docs/project/old.md", "src/template.md", False),
-    ("README.md", "docs/project/new.md", False),
+@pytest.mark.parametrize(("old_path", "new_path"), [
+    ("docs/project/old.md", "docs/project/new.md"),
+    ("tests/fixtures/input.md", "docs/project/new.md"),
+    ("docs/project/old.md", "src/template.md"),
+    ("README.md", "docs/project/new.md"),
 ])
-def test_rename_checks_both_paths_without_similarity_detection(old_path, new_path, expected):
+def test_renames_run_full_without_similarity_detection(old_path, new_path):
+    # A rename is a delete plus an add; any deletion runs the full lane.
     raw = raw_change(old_path, "D", new="000000") + raw_change(new_path, "A", old="000000")
-    assert classifier.docs_only_from_raw(raw) is expected
+    assert classifier.docs_only_from_raw(raw) is False
 
 
-@pytest.mark.parametrize(("path", "expected"), [
-    ("docs/project/deleted.md", True), ("tests/fixtures/deleted.md", False),
-    ("src/deleted.py", False), ("CHANGELOG.md", False),
+def test_additions_of_prose_stay_docs_only():
+    assert classifier.docs_only_from_raw(raw_change("docs/project/new.md", "A", old="000000"))
+
+
+@pytest.mark.parametrize("path", [
+    # The bug-sweep ownership ledger names exact prose paths (archive READMEs, roadmaps);
+    # deleting them fails its full-lane validation, so deletions are never docs-only.
+    "docs/project/deleted.md", "docs/archive/README.md", "docs/roadmaps/old-plan.md",
+    "tests/fixtures/deleted.md", "src/deleted.py", "CHANGELOG.md",
 ])
-def test_deletions_use_the_old_path_and_mode(path, expected):
-    assert classifier.docs_only_from_raw(raw_change(path, "D", new="000000")) is expected
+def test_deletions_run_full(path):
+    assert classifier.docs_only_from_raw(raw_change(path, "D", new="000000")) is False
 
 
 @pytest.mark.parametrize(("status", "old", "new"), [

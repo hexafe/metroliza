@@ -51,15 +51,17 @@ def is_prose(path: str) -> bool:
 def docs_only_from_raw(raw: bytes) -> bool:
     """Read --raw -z --no-renames; both sides of renames appear as delete/add.
 
-    Only regular, non-executable files qualify. Deletions retain their old mode;
-    symlinks, submodules, type changes and malformed/empty diffs fail closed.
+    Only added or modified regular, non-executable files qualify. Deletions (and so
+    renames) run full CI: the bug-sweep ownership ledger names exact prose paths, and
+    removing them breaks its full-lane validation. Symlinks, submodules, type changes
+    and malformed/empty diffs fail closed.
     """
     fields = raw.split(b"\0")
     if fields[-1] != b"" or len(fields) < 3 or len(fields) % 2 != 1:
         return False
     for header, path in zip(fields[:-1:2], fields[1:-1:2]):
         match = RAW_HEADER.fullmatch(header)
-        if match is None or set(match.groups()[:2]) - {b"000000", b"100644"}:
+        if match is None or match.group(3) == b"D" or set(match.groups()[:2]) - {b"000000", b"100644"}:
             return False
         if not is_prose(os.fsdecode(path)):
             return False
