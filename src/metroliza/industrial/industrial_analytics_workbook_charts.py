@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import Any, Protocol
 
 import numpy as np
+from metroliza.charts.full_data_violin import full_data_violin
 
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
@@ -450,8 +451,8 @@ def _insert_matplotlib_distribution_image(
     try:
         positions = np.arange(1, len(values) + 1)
         if chart_type == "violin":
-            parts = ax.violinplot(
-                values,
+            parts = full_data_violin(
+                ax, values,
                 positions=positions,
                 showmeans=False,
                 showmedians=True,
