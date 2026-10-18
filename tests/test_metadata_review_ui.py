@@ -187,9 +187,9 @@ def test_review_starts_the_fast_read_automatically_and_fills_the_cells(app, make
     pending = cell(planner, "a.pdf", "reference")
     assert pending.data() == meta.PENDING_TEXT
     assert pending.data(planner.model.STYLE_ROLE) == meta.KIND_PENDING
-    assert planner.metadata_status.isVisibleTo(planner)
-    assert planner.metadata_status.text().startswith("Reading metadata ")
-    assert planner.stop_button.isVisibleTo(planner)
+    assert planner.metadata_status_text.startswith("Reading metadata ")
+    assert planner.metadata_status_text in planner.counts.text()  # progress leads the counts line
+    assert planner.stop_action.isEnabled()  # Stop stays reachable in the Metadata menu
     assert not planner.ocr_button.isEnabled()  # one worker at a time
 
     gate.set()
@@ -199,7 +199,7 @@ def test_review_starts_the_fast_read_automatically_and_fills_the_cells(app, make
     assert ids == ("a.pdf", "b.pdf", "c.pdf")  # the order the table shows them, not the review order
     assert cell(planner, "a.pdf", "reference").data() == "REF-A"
     assert cell(planner, "c.pdf", "report_date").data() == "2024-01-01"
-    assert not planner.stop_button.isVisibleTo(planner)
+    assert not planner.stop_action.isEnabled() and planner.metadata_status_text == ""
     assert planner.ocr_button.isEnabled()
     assert planner.model.metadata_counts["pending"] == 0
 
@@ -247,8 +247,8 @@ def test_inline_edit_sets_a_manual_value_and_rejects_a_bad_date(app, make_host, 
     date = cell(planner, "a.pdf", "report_date")
     assert not planner.proxy.setData(date, "not a date")
     assert date.data() == "2024-01-01"  # the old value stays
-    assert planner.metadata_status.isVisibleTo(planner)
-    assert "valid date" in planner.metadata_status.text()
+    assert "valid date" in planner.metadata_status_text
+    assert "valid date" in planner.counts.text()
     assert planner.proxy.setData(date, "2024-05-06")
     assert date.data() == "2024-05-06"
 
@@ -295,21 +295,44 @@ def test_copy_to_checked_and_reset_to_detected(app, make_host, readers, kind):
     planner.table.setCurrentIndex(cell(planner, "a.pdf", "reference"))
     assert planner.copy_to_checked.isEnabled()
 
-    planner.copy_to_checked.click()
+    planner.copy_to_checked.trigger()
     assert model.metadata_row("b.pdf").value("reference") == "COPIED"
     assert model.metadata_row("b.pdf").cells["reference"].user_set
     assert model.metadata_row("c.pdf").value("reference") == "REF-A"  # unchecked: untouched
     assert model.metadata_row("foreign.pdf").value("reference") is None  # read-only: untouched
-    assert "copied to 1 checked report" in planner.metadata_status.text()
+    assert "copied to 1 checked report" in planner.metadata_status_text
 
     assert planner.reset_to_detected.isEnabled()
-    planner.reset_to_detected.click()  # current row: a.pdf
+    planner.reset_to_detected.trigger()  # current row: a.pdf
     assert model.metadata_row("a.pdf").value("reference") == "REF-A"
     assert model.metadata_row("b.pdf").value("reference") == "COPIED"  # only the current row
 
     planner.proxy.setData(cell(planner, "a.pdf", "reference"), "")
     planner.table.setCurrentIndex(cell(planner, "a.pdf", "reference"))
     assert not planner.copy_to_checked.isEnabled()  # an empty cell has nothing to copy
+
+
+@pytest.mark.parametrize("kind", HOSTS)
+def test_metadata_actions_live_in_one_keyboard_reachable_menu_on_the_action_row(app, make_host, readers, kind):
+    gate = threading.Event()
+    host, _ = open_review(make_host, readers, kind, gate=gate)
+    planner = host.report_planner
+    button = planner.metadata_button
+    assert button.menu() is planner.metadata_menu and button.focusPolicy() != Qt.FocusPolicy.NoFocus
+    assert button.accessibleName() == "Metadata actions"
+    assert [a.text() for a in planner.metadata_menu.actions()] == [
+        "Copy to checked", "Reset to detected", "Stop metadata read",
+    ]
+    assert all(a.toolTip() for a in planner.metadata_menu.actions())
+    # No third toolbar row: OCR and the menu share the row of the selection buttons.
+    row_tops = {w.mapTo(planner, w.rect().topLeft()).y() for w in (planner.select_ready, planner.ocr_button, button)}
+    assert max(row_tops) - min(row_tops) <= 2
+    assert planner.stop_action.isEnabled()  # reachable while the fast read runs
+    planner.stop_action.trigger()
+    gate.set()
+    settle(app, host)
+    assert not planner.stop_action.isEnabled()
+    assert "stopped" in planner.metadata_status_text
 
 
 @pytest.mark.parametrize("kind", HOSTS)
@@ -363,7 +386,7 @@ def test_ocr_fills_unedited_fields_keeps_manual_values_and_exposes_the_conflict(
     assert model.metadata_row("c.pdf").value("reference") == "FAST"  # not checked: not read
     # The table can be corrected again after OCR.
     assert planner.proxy.setData(cell(planner, "b.pdf", "part_name"), "Fixed")
-    assert "stopped" not in planner.metadata_status.text()
+    assert "stopped" not in planner.metadata_status_text
 
 
 @pytest.mark.parametrize("kind", HOSTS)
@@ -523,10 +546,10 @@ def test_import_is_disabled_while_ocr_runs(app, make_host, readers, started, kin
     host._import_reviewed_reports()
     assert started == []
 
-    host.report_planner.stop_button.click()
+    host.report_planner.stop_action.trigger()
     settle(app, host)
     assert reader.cancelled_seen.is_set() and host.parse_button.isEnabled()
-    assert "stopped" in host.report_planner.metadata_status.text()
+    assert "stopped" in host.report_planner.metadata_status_text
 
 
 # --- lifecycle -----------------------------------------------------------------

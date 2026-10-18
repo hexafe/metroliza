@@ -470,10 +470,6 @@ class _ReportOperations:
         configure_accessibility(self.database_button, name="Browse parse database")
         configure_accessibility(self.metadata_mode_combo, name="Metadata detail")
         configure_accessibility(self.scan_button, name="Review reports")
-        configure_accessibility(self.report_planner.copy_to_checked, name="Copy value to checked reports")
-        configure_accessibility(self.report_planner.reset_to_detected, name="Reset report to detected values")
-        configure_accessibility(self.report_planner.ocr_button, name="Read checked reports with OCR")
-        configure_accessibility(self.report_planner.stop_button, name="Stop metadata reading")
         configure_accessibility(self.review_scan_button, name="Report details")
         configure_accessibility(self.parse_button, name="Import selected reports")
         self.readiness_label.setAccessibleName("Report review status")
@@ -483,8 +479,7 @@ class _ReportOperations:
             self.report_planner.status_filter, self.report_planner.parser_filter,
             self.report_planner.attention_filter, self.report_planner.select_ready,
             self.report_planner.clear, self.report_planner.table,
-            self.report_planner.copy_to_checked, self.report_planner.reset_to_detected,
-            self.report_planner.ocr_button, self.report_planner.stop_button, self.parse_button,
+            self.report_planner.ocr_button, self.report_planner.metadata_button, self.parse_button,
         )
         for first, second in zip(focus_order, focus_order[1:]):
             self.setTabOrder(first, second)

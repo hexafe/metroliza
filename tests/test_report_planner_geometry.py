@@ -216,6 +216,8 @@ def _assert_geometry(dialog: ParsingDialog, app, *, pane: str | None = None) -> 
         planner.select_ready,
         planner.clear,
         planner.details_button,
+        planner.ocr_button,
+        planner.metadata_button,
         planner.table,
         dialog.parse_button,
     )
@@ -368,9 +370,9 @@ def test_filtered_rows_do_not_change_global_selection_and_tab_order_is_determini
         planner.select_ready,
         planner.clear,
         planner.table,
-        # Copy/Reset are disabled without an editable cell or manual edits and Stop is
-        # hidden while idle, so Tab skips them; OCR is available for the checked reports.
+        # Copy, Reset and Stop live in the Metadata menu (one stop on the row).
         planner.ocr_button,
+        planner.metadata_button,
         dialog.parse_button,
     )
     focus_order[0].setFocus()
