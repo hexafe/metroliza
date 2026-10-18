@@ -16,6 +16,7 @@ release_notes = f"""
     - Modify Database opens instantly and searches quickly, even with hundreds of thousands of measurements<br>
     - Excel exports are about twice as fast and use much less memory; Extended plots export uses several processor cores and CSV Summary export is faster too<br>
     - Importing reports on Windows saves them to the database much faster<br>
+    - Multi-page reports imported from an archive or in a very large batch are read the same way as other imports, without extra measurement groups at page breaks<br>
     - The filter window opens instantly and loads its choices in the background<br>
     - A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>
     - Choose PDF reports before import and reopen saved measurements without repeating completed work<br>

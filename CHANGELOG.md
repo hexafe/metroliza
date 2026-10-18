@@ -13,6 +13,7 @@
 - The filter window opens instantly and loads its choices in the background.
 - Import reads each report file fewer times, which helps most with large reports.
 - Importing reports on Windows saves them to the database much faster: the database is written through to disk every few seconds instead of after every report. After a sudden power loss during an import, re-running the import adds any reports from those last seconds.
+- Multi-page reports imported from an archive or in a very large batch are read the same way as other imports, without extra measurement groups at page breaks
 - Extended plots export uses several processor cores in the Windows app.
 - Metadata you clear before import stays empty, also after background metadata enrichment.
 
