@@ -119,6 +119,8 @@ These checks are explicitly non-blocking for normal PR CI:
 
 ### Windows startup benchmark semantics
 
+- The job has no `needs:`: like the other opt-in Windows jobs it runs on its own, so a failing
+  unrelated blocking job cannot silently turn the requested measurement into a skipped job.
 - The `windows-startup-benchmark` job builds the route users actually get, in the
   `user` build flavor: `build_windows_portable_exe.ps1` (the supervised onedir
   plus the PyInstaller portable envelope) and then

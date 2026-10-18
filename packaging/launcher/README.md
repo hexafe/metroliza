@@ -150,9 +150,11 @@ written to `%TEMP%`.
    staging directories, delete the invalid directory, extract with a bounded thread pool into
    `<dir>.staging-<pid>`, verify the SHA-256 of every file while writing, `fsync` each file,
    rename into place, then write and flush the marker.
-6. Start the entry executable with `CreateProcessW`: no inherited handles, working directory = the
-   runtime directory, arguments passed through, `METROLIZA_RUNTIME_REPAIR_AVAILABLE=1` set. Wait for
-   it. If it exits with 75, repair the runtime and start it once more without the variable (see
+6. Start the entry executable with `CreateProcessW`: no inherited handles, the **launcher's own
+   working directory** (where the user started it, as with the portable envelope; the runtime
+   directory is a disposable cache and must never become the default folder of a file dialog or of
+   a relative export name), arguments passed through, `METROLIZA_RUNTIME_REPAIR_AVAILABLE=1` set.
+   Wait for it. If it exits with 75, repair the runtime and start it once more without the variable (see
    [Self-repair contract](#self-repair-contract)). Return the exit code of the last run.
 7. Alongside the app, a best-effort cleanup keeps the current version and the most recently
    completed other version and removes the rest. It only touches directories named

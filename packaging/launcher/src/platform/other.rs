@@ -62,7 +62,7 @@ impl Child {
     }
 }
 
-pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: &Path) -> Result<Child> {
+pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: Option<&Path>) -> Result<Child> {
     // The payload does not record POSIX modes (the product is Windows-only); make the entry
     // runnable so the stand-in can be exercised on Linux.
     #[cfg(unix)]
@@ -70,9 +70,12 @@ pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: &Path) -> Result<Child> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(exe, std::fs::Permissions::from_mode(0o755));
     }
-    Command::new(exe)
-        .args(args)
-        .current_dir(cwd)
+    let mut command = Command::new(exe);
+    command.args(args);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    command
         .spawn()
         .map(Child)
         .map_err(|e| LauncherError::launch(format!("spawn: {e}")))

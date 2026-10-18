@@ -1536,7 +1536,6 @@ jobs:
     name: Windows startup benchmark (manual/opt-in)
     runs-on: windows-latest
     timeout-minutes: 120
-    needs: [static-checks, unit-tests]
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_startup_benchmark == '1'
     env:
       METROLIZA_RUN_WINDOWS_STARTUP_BENCHMARK: ${{ inputs.run_windows_startup_benchmark }}

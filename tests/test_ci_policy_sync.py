@@ -447,6 +447,9 @@ def test_startup_benchmark_measures_the_shipped_route_not_the_legacy_onefile_spe
         'default'
     ] == '0'
     assert "inputs.run_windows_startup_benchmark == '1'" in job['if']
+    # An opt-in measurement must not be skipped because an unrelated required job failed (run
+    # 39084988780: "needs: unit-tests" turned a failed unit test into a skipped benchmark).
+    assert 'needs' not in job
     commands = '\n'.join(step.get('run', '') for step in job['steps'])
     assert 'build_windows_portable_exe.ps1' in commands
     assert 'build_windows_launcher_exe.ps1 -Supervised' in commands

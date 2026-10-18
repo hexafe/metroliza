@@ -179,8 +179,11 @@ struct Run {
 
 fn run_launcher(exe: &Path, root: &Path, log: &Path, args: &[&str]) -> Run {
     let _ = fs::remove_file(log);
+    // The launcher runs in the directory that holds the EXE; the entry must inherit that
+    // directory (see the cwd assertion in the first binary test), not the runtime cache.
     let status = Command::new(exe)
         .args(args)
+        .current_dir(exe.parent().unwrap())
         .env("METROLIZA_RUNTIME_ROOT", root)
         .env("METROLIZA_LAUNCHER_LOG", log)
         .env("METROLIZA_LAUNCHER_NO_UI", "1")
@@ -201,7 +204,7 @@ fn launcher_binary_runs_entry_passes_args_and_exit_code_and_reuses_cache() {
     let exe = build(
         tmp.path(),
         "bin",
-        "1.0",
+        "1.0-bin",
         "abcdef01",
         Path::new(LAUNCHER),
         Path::new(TEST_ENTRY),
@@ -219,10 +222,21 @@ fn launcher_binary_runs_entry_passes_args_and_exit_code_and_reuses_cache() {
     );
     let recorded = fs::read_to_string(&record).unwrap();
     assert!(recorded.contains("started pid="), "{recorded}");
-    let runtime_dir = root.join("1.0_abcdef01");
-    assert!(
-        recorded.contains(&format!("cwd={}", runtime_dir.display())),
+    let runtime_dir = root.join("1.0-bin_abcdef01");
+    // The entry inherits the launcher's working directory. The runtime directory is a disposable
+    // cache: a relative export name or a file dialog must never default into it.
+    let cwd = recorded
+        .lines()
+        .find_map(|line| line.strip_prefix("cwd="))
+        .expect("entry recorded its working directory");
+    assert_eq!(
+        fs::canonicalize(cwd).unwrap(),
+        fs::canonicalize(exe.parent().unwrap()).unwrap(),
         "{recorded}"
+    );
+    assert_ne!(
+        fs::canonicalize(cwd).unwrap(),
+        fs::canonicalize(&runtime_dir).unwrap()
     );
 
     let marker_time = fs::metadata(runtime_dir.join(MARKER))
@@ -255,7 +269,7 @@ fn launcher_binary_reports_damaged_payload_with_distinct_exit_code() {
     let exe = build(
         tmp.path(),
         "bad",
-        "1.0",
+        "1.0-bad",
         "abcdef01",
         Path::new(LAUNCHER),
         Path::new(TEST_ENTRY),
@@ -283,7 +297,7 @@ fn launcher_binary_does_not_use_temp_dir() {
     let exe = build(
         tmp.path(),
         "t",
-        "1.0",
+        "1.0-t",
         "abcdef01",
         Path::new(LAUNCHER),
         Path::new(TEST_ENTRY),
@@ -314,7 +328,13 @@ fn starts(record: &Path) -> Vec<String> {
         .collect()
 }
 
-fn repair_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+/// Fixture for the tests that run the real launcher binary.
+///
+/// Every such test packs its own version label (`1.0-<name>`): the single-instance guard is a
+/// machine-wide named mutex per version on Windows, and cargo runs tests in parallel. With a
+/// shared label the launchers of different tests see each other as "second instance" and exit 0
+/// without starting the entry.
+fn repair_fixture(name: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     let log = tmp.path().join("launcher.log");
@@ -322,7 +342,7 @@ fn repair_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
     let exe = build(
         tmp.path(),
         "repair",
-        "1.0",
+        &format!("1.0-{name}"),
         "abcdef01",
         Path::new(LAUNCHER),
         Path::new(TEST_ENTRY),
@@ -332,15 +352,15 @@ fn repair_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
 
 #[test]
 fn exit_75_repairs_the_runtime_and_restarts_once_without_the_repair_variable() {
-    let (_tmp, exe, root, log, record) = repair_fixture();
+    let (_tmp, exe, root, log, record) = repair_fixture("repair");
     let record_arg = record.to_str().unwrap();
-    let runtime_dir = root.join("1.0_abcdef01");
+    let runtime_dir = root.join("1.0-repair_abcdef01");
     let data = runtime_dir.join("lib/data.bin");
     let args = [
         "--record",
         record_arg,
         "--record-file",
-        "lib/data.bin",
+        data.to_str().unwrap(),
         "--request-repair",
         "--exit-code",
         "0",
@@ -389,7 +409,7 @@ fn exit_75_repairs_the_runtime_and_restarts_once_without_the_repair_variable() {
 
 #[test]
 fn a_second_exit_75_is_final_and_does_not_loop() {
-    let (_tmp, exe, root, log, record) = repair_fixture();
+    let (_tmp, exe, root, log, record) = repair_fixture("twice");
     let record_arg = record.to_str().unwrap();
     // Without --request-repair the entry exits 75 on both starts, whatever the variable says.
     let run = run_launcher(
@@ -417,7 +437,7 @@ fn a_second_exit_75_is_final_and_does_not_loop() {
 
 #[test]
 fn other_exit_codes_pass_through_without_a_repair_or_restart() {
-    let (_tmp, exe, root, log, record) = repair_fixture();
+    let (_tmp, exe, root, log, record) = repair_fixture("passthrough");
     let record_arg = record.to_str().unwrap();
     for code in ["0", "1", "74", "76", "255"] {
         let _ = fs::remove_file(&record);
@@ -441,7 +461,7 @@ fn other_exit_codes_pass_through_without_a_repair_or_restart() {
 
 #[test]
 fn a_repair_variable_inherited_from_the_parent_never_reaches_the_restart() {
-    let (_tmp, exe, root, log, record) = repair_fixture();
+    let (_tmp, exe, root, log, record) = repair_fixture("inherited");
     let record_arg = record.to_str().unwrap();
     let _ = fs::remove_file(&log);
     let status = Command::new(&exe)

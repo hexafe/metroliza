@@ -74,6 +74,28 @@ def _runtime_layout(runtime_root: Path) -> str:
     return versions[0]
 
 
+def _failure_detail(work: Path, launcher_log: Path | None = None) -> str:
+    """Bounded facts of a failed child for the CI log: the fixed-schema failure receipt
+    (stage, reason, cleanup) and, for the launcher, its cache/instance/repair/exit lines."""
+    detail = []
+    try:
+        with (work / "failure.json").open(encoding="ascii") as stream:
+            payload = json.loads(stream.read(513))
+        detail += [
+            f"{key}={payload[key]}" for key in ("stage", "reason", "cleanup")
+            if isinstance(payload.get(key), str) and re.fullmatch(r"[a-z_]{1,64}", payload[key])
+        ]
+    except (OSError, ValueError, UnicodeError):
+        detail.append("no_failure_receipt")
+    if launcher_log is not None and launcher_log.is_file():
+        lines = launcher_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        detail += [
+            line for line in lines[:50]
+            if re.fullmatch(r"(cache|repair|instance|entry|exit)=[a-z0-9_-]{1,16}", line)
+        ]
+    return ";".join(detail)
+
+
 def _extraction_clean(root: Path) -> None:
     if any(path.name.startswith("_MEI") for path in root.iterdir()):
         raise RuntimeError("portable_extraction_remained")
@@ -115,7 +137,8 @@ def _run(
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, timeout=240, check=False)
     if result.returncode != expected:
-        raise RuntimeError(f"portable_{scenario}_exit_{result.returncode}")
+        detail = _failure_detail(work, launcher_log if cache is not None else None)
+        raise RuntimeError(f"portable_{scenario}_exit_{result.returncode} [{detail}]")
     if scenario != "hard_exit":
         _receipt(work, scenario)
     else:

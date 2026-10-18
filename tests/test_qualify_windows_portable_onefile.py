@@ -60,3 +60,28 @@ def test_runtime_layout_rejects_a_leftover_staging_directory(tmp_path: Path) -> 
     (tmp_path / f"{RUNTIME}.staging-4242").mkdir()
     with pytest.raises(RuntimeError, match="staging_directory_remained"):
         qualify._runtime_layout(tmp_path)
+
+
+def test_failure_detail_reports_only_bounded_fixed_fields(tmp_path: Path) -> None:
+    (tmp_path / "failure.json").write_text(
+        '{"schema_version": 1, "stage": "preview", "reason": "qualification_export_unavailable", '
+        '"cleanup": "complete", "secret": "C:/Users/someone/x"}',
+        encoding="ascii",
+    )
+    log = tmp_path / "launcher.log"
+    log.write_text(
+        "cache=warm\nentry=started\nerror=Extraction C:/private/path\nexit=21\n",
+        encoding="utf-8",
+    )
+    detail = qualify._failure_detail(tmp_path, log)
+    assert detail == (
+        "stage=preview;reason=qualification_export_unavailable;cleanup=complete;"
+        "cache=warm;entry=started;exit=21"
+    )
+    assert "private" not in detail and "someone" not in detail
+
+
+def test_failure_detail_survives_a_missing_or_garbled_receipt(tmp_path: Path) -> None:
+    assert qualify._failure_detail(tmp_path) == "no_failure_receipt"
+    (tmp_path / "failure.json").write_text("{not json", encoding="ascii")
+    assert qualify._failure_detail(tmp_path) == "no_failure_receipt"

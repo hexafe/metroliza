@@ -483,18 +483,20 @@ impl Child {
     }
 }
 
-/// Start `exe` with `args`, working directory `cwd`, and no inherited handles.
-pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: &Path) -> Result<Child> {
+/// Start `exe` with `args` and no inherited handles. `cwd` is the working directory; `None`
+/// inherits the launcher's own, which is what the user's double-click or shortcut set.
+pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: Option<&Path>) -> Result<Child> {
     let program: Vec<u16> = exe.as_os_str().encode_wide().collect();
     let args: Vec<Vec<u16>> = args.iter().map(|a| a.encode_wide().collect()).collect();
     let mut command_line = build_command_line(&program, &args);
     command_line.push(0);
     let application: Vec<u16> = program.iter().copied().chain(std::iter::once(0)).collect();
-    let directory: Vec<u16> = cwd
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    let directory: Option<Vec<u16>> = cwd.map(|dir| {
+        dir.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    });
 
     // SAFETY: zeroed STARTUPINFOW/PROCESS_INFORMATION are valid initial values; all string
     // buffers are NUL-terminated and outlive the call; the command line buffer is mutable as
@@ -511,7 +513,7 @@ pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: &Path) -> Result<Child> {
             FALSE, // bInheritHandles: the entry process inherits nothing from the launcher
             0,
             null(),
-            directory.as_ptr(),
+            directory.as_ref().map_or(null(), |dir| dir.as_ptr()),
             &startup,
             &mut info,
         );

@@ -3,8 +3,9 @@
 //! 1. Read and validate the payload appended to this EXE.
 //! 2. Take the per-version single-instance guard; a second instance only activates the first.
 //! 3. Resolve the cache root and make sure a valid runtime exists (extracting if needed).
-//! 4. Start the entry executable from the runtime, clean up old versions in the background,
-//!    wait for the entry process and return its exit code.
+//! 4. Start the entry executable from the runtime (with the launcher's own working directory,
+//!    not the cache), clean up old versions in the background, wait for the entry process and
+//!    return its exit code.
 //! 5. Self-repair: the first start carries [`REPAIR_AVAILABLE_ENV`]. If the entry exits with
 //!    [`REPAIR_EXIT_CODE`] it found its own package invalid and showed no notice; the launcher
 //!    then re-extracts the runtime and starts the entry exactly once more, without the variable,
@@ -82,7 +83,7 @@ fn launch(log: &Log) -> Result<i32> {
 
     let entry = runtime.dir.join(&payload.manifest.entry);
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let child = start_entry(&entry, &args, &runtime.dir, true, &instance, log)?;
+    let child = start_entry(&entry, &args, true, &instance, log)?;
 
     // Housekeeping runs beside the application; it never affects the exit code. It is joined
     // before anything below changes the environment or touches the cache again.
@@ -108,7 +109,7 @@ fn launch(log: &Log) -> Result<i32> {
         runtime = repair_runtime(&root, &payload, runtime, &progress, &Options::default())?;
         log.line(&format!("cache={}", runtime.outcome.as_str()));
         let entry = runtime.dir.join(&payload.manifest.entry);
-        code = start_entry(&entry, &args, &runtime.dir, false, &instance, log)?.wait()?;
+        code = start_entry(&entry, &args, false, &instance, log)?.wait()?;
     }
 
     log.line(&format!("exit={code}"));
@@ -124,7 +125,6 @@ fn launch(log: &Log) -> Result<i32> {
 fn start_entry(
     entry: &Path,
     args: &[OsString],
-    cwd: &Path,
     repair_available: bool,
     instance: &platform::InstanceGuard,
     log: &Log,
@@ -134,7 +134,10 @@ fn start_entry(
     } else {
         std::env::remove_var(REPAIR_AVAILABLE_ENV);
     }
-    let child = platform::spawn_entry(entry, args, cwd)?;
+    // No explicit working directory: the entry runs where the user started the launcher, as the
+    // portable envelope does. The runtime directory is a disposable cache, so nothing (a
+    // relative export name, a file dialog's start folder) may default into it.
+    let child = platform::spawn_entry(entry, args, None)?;
     platform::publish_entry_pid(instance, child.id());
     log.line("entry=started");
     Ok(child)

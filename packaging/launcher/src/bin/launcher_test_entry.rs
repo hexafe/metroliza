@@ -6,8 +6,8 @@
 //!   --stop-file FILE   end the sleep early once FILE exists
 //!   --exit-code N      exit with code N (default 0)
 //!   --print-cwd        write the working directory to FILE given by --record as a second line
-//!   --record-file REL  also record the length and first byte of REL (relative to the working
-//!                      directory) so a test can see which version of a file this start saw
+//!   --record-file PATH also record the length and first byte of the file PATH so a test can
+//!                      see which version of a file this start saw
 //!   --request-repair   exit with 75 (the self-repair request) while
 //!                      METROLIZA_RUNTIME_REPAIR_AVAILABLE is "1"; otherwise exit with
 //!                      --exit-code. Behaves like a supervisor that rejected its package and

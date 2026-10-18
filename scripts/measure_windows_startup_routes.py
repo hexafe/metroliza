@@ -317,6 +317,67 @@ class Benchmark:
         return record
 
 
+def measure_portable(bench: Benchmark, exe: Path, runs: int) -> dict[str, Any]:
+    print("portable envelope", flush=True)
+    samples = [
+        bench.run("portable_envelope", i, exe, root=None, expect_cache=None)
+        for i in range(1, runs + 1)
+    ]
+    return {"label": "Portable envelope (extracts every launch)", "runs": samples}
+
+
+def measure_launcher_cold(
+    bench: Benchmark, exe: Path, runs: int, sizes: dict[str, int]
+) -> tuple[dict[str, Any], Path | None]:
+    """Cold runs, each on a fresh cache; the first valid cache is kept for the warm runs."""
+    print("launcher cold", flush=True)
+    roots = bench.work / "roots"
+    warm_root = None
+    samples = []
+    for i in range(1, runs + 1):
+        root = roots / f"cold-{i}"
+        samples.append(bench.run("launcher_cold", i, exe, root=root, expect_cache="cold"))
+        if i == 1 and samples[0]["status"] == "ok":
+            warm_root = root
+            sizes["launcher_runtime_cache_bytes"] = directory_bytes(root)
+        else:
+            shutil.rmtree(root, ignore_errors=True)
+    return {"label": "Launcher, cold cache (first launch)", "runs": samples}, warm_root
+
+
+def measure_launcher_warm(
+    bench: Benchmark, exe: Path, runs: int, warm_root: Path | None
+) -> dict[str, Any]:
+    print("launcher warm", flush=True)
+    samples = []
+    for i in range(1, runs + 1):
+        if warm_root is None:
+            samples.append({
+                "scenario": "launcher_warm", "index": i, "status": "failed",
+                "error": "no valid cold run to warm up",
+            })
+            continue
+        run = bench.run("launcher_warm", i, exe, root=warm_root, expect_cache="warm")
+        run["launch_number_in_cache"] = i + 1
+        samples.append(run)
+    return {"label": "Launcher, warm cache (launches 2..N of one cache)", "runs": samples}
+
+
+def compare_with_envelope(scenarios: dict[str, dict[str, Any]]) -> dict[str, float]:
+    """Median first paint of each launcher scenario relative to the portable envelope."""
+
+    def median(name: str) -> float | None:
+        return scenarios.get(name, {}).get("summary", {}).get("first_paint_ms", {}).get("median")
+
+    base = median("portable_envelope")
+    comparison: dict[str, float] = {}
+    for name in ("launcher_cold", "launcher_warm"):
+        value = median(name)
+        if base and value:
+            comparison[scenarios[name]["label"]] = value / base
+    return comparison
+
+
 def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     out = Path(args.output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -327,56 +388,20 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         if args.portable:
             exe = Path(args.portable).resolve()
             sizes["portable_envelope_exe"] = exe.stat().st_size
-            print("portable envelope", flush=True)
-            runs = [
-                bench.run("portable_envelope", i, exe, root=None, expect_cache=None)
-                for i in range(1, args.runs + 1)
-            ]
-            scenarios["portable_envelope"] = {"label": "Portable envelope (extracts every launch)", "runs": runs}
+            scenarios["portable_envelope"] = measure_portable(bench, exe, args.runs)
         if args.launcher:
             exe = Path(args.launcher).resolve()
             sizes["launcher_exe"] = exe.stat().st_size
-            print("launcher cold", flush=True)
-            roots = bench.work / "roots"
-            warm_root = None
-            cold_runs = []
-            for i in range(1, args.runs + 1):
-                root = roots / f"cold-{i}"
-                cold_runs.append(bench.run("launcher_cold", i, exe, root=root, expect_cache="cold"))
-                if i == 1 and cold_runs[0]["status"] == "ok":
-                    warm_root = root
-                    sizes["launcher_runtime_cache_bytes"] = directory_bytes(root)
-                else:
-                    shutil.rmtree(root, ignore_errors=True)
-            scenarios["launcher_cold"] = {"label": "Launcher, cold cache (first launch)", "runs": cold_runs}
-            print("launcher warm", flush=True)
-            warm_runs = []
-            for i in range(1, args.runs + 1):
-                if warm_root is None:
-                    warm_runs.append({
-                        "scenario": "launcher_warm", "index": i, "status": "failed",
-                        "error": "no valid cold run to warm up",
-                    })
-                    continue
-                run = bench.run("launcher_warm", i, exe, root=warm_root, expect_cache="warm")
-                run["launch_number_in_cache"] = i + 1
-                warm_runs.append(run)
-            scenarios["launcher_warm"] = {
-                "label": "Launcher, warm cache (launches 2..N of one cache)", "runs": warm_runs,
-            }
+            scenarios["launcher_cold"], warm_root = measure_launcher_cold(
+                bench, exe, args.runs, sizes
+            )
+            scenarios["launcher_warm"] = measure_launcher_warm(bench, exe, args.runs, warm_root)
     finally:
         bench.close()
 
     for scenario in scenarios.values():
         scenario["summary"] = summarize_scenario(scenario["runs"])
-    comparison = {}
-    base = scenarios.get("portable_envelope", {}).get("summary", {}).get("first_paint_ms", {}).get("median")
-    if base:
-        for name in ("launcher_cold", "launcher_warm"):
-            median = scenarios.get(name, {}).get("summary", {}).get("first_paint_ms", {}).get("median")
-            if median:
-                comparison[scenarios[name]["label"]] = median / base
-    report = {
+    return {
         "schema": SCHEMA,
         "runs_per_scenario": args.runs,
         "smoke": "METROLIZA_STARTUP_UI_SMOKE=1",
@@ -385,11 +410,10 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "git_sha": os.environ.get("GITHUB_SHA"),
         "sizes": sizes,
         "scenarios": scenarios,
-        "comparison": comparison,
-        "passed": all(run["status"] == "ok" for s in scenarios.values() for run in s["runs"])
-        and bool(scenarios),
+        "comparison": compare_with_envelope(scenarios),
+        "passed": bool(scenarios)
+        and all(run["status"] == "ok" for s in scenarios.values() for run in s["runs"]),
     }
-    return report
 
 
 def build_parser() -> argparse.ArgumentParser:
