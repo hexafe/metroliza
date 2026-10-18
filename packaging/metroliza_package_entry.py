@@ -18,6 +18,12 @@ if not getattr(sys, "frozen", False):
         sys.path.remove(src_text)
     sys.path.insert(0, src_text)
 
+from metroliza.shared.compute_worker import use_native_windows_version  # noqa: E402
+
+# Install the same native fallback for ordinary and qualified packaged parents
+# before bootstrap or lazy NumPy/platform users can invoke cmd /c ver.
+use_native_windows_version()
+
 from metroliza.shared.diagnostic_startup_probe import mark  # noqa: E402
 
 QUALIFICATION_GATE_ENV = "METROLIZA_STARTUP_SMOKE"

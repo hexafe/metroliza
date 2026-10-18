@@ -131,13 +131,6 @@ def run_export(database: Path, workbook: Path) -> dict:
 def run_qualification() -> int:
     if os.environ.get('METROLIZA_STARTUP_SMOKE') != '1' or not os.environ.get(GATE):
         raise ValueError('compute_qualification_gate_required')
-    from metroliza.shared.compute_worker import use_native_windows_version
-
-    # NumPy is imported lazily between the import and export pools. Its parent
-    # version probe otherwise inserts a cmd/conhost pair between worker launches,
-    # violating the existing strict topology order. Reuse the OCR/compute native
-    # fallback before workload imports; do not relax that order or its allowlist.
-    use_native_windows_version()
     from PyQt6.QtWidgets import QApplication
     from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
 

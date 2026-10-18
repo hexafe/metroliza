@@ -99,9 +99,13 @@ def _frame(module, name):
     return SimpleNamespace(f_globals={'__name__': module}, f_code=SimpleNamespace(co_name=name), f_back=None)
 
 
-def test_compute_audit_accepts_only_cpython_spawn_signature():
+def test_compute_audit_accepts_only_cpython_spawn_signature(monkeypatch):
     worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
-    frame = _frame('multiprocessing.popen_spawn_win32', '__init__')
+    from tests.test_windows_runtime_audit import _windows_spawn_module
+
+    module = _windows_spawn_module(monkeypatch)
+    frame = SimpleNamespace(f_code=module.Popen.__init__.__code__,
+                            f_globals=module.__dict__, f_back=None)
     import multiprocessing.spawn
     from unittest.mock import patch
 

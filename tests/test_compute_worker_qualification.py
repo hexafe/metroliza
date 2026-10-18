@@ -220,27 +220,27 @@ def test_qualify_registers_failed_trial_before_launch(tmp_path, monkeypatch):
     assert receipt['runs'][0]['runtime_audit']['status'] == 'unavailable'
 
 
-def test_packaged_qualification_installs_native_version_before_lazy_workloads(tmp_path, monkeypatch):
+def test_qualification_uses_parent_version_policy_without_harness_override(tmp_path, monkeypatch):
     from metroliza.shared import compute_worker, diagnostic_runtime_audit
 
     calls = []
     monkeypatch.setenv('METROLIZA_STARTUP_SMOKE', '1')
     monkeypatch.setenv(workload.GATE, str(tmp_path))
-    monkeypatch.setattr(compute_worker, 'use_native_windows_version', lambda: calls.append('native_version'))
+    monkeypatch.setattr(compute_worker, 'use_native_windows_version', lambda: pytest.fail('qualification must use the production parent policy'))
     monkeypatch.setattr(diagnostic_runtime_audit, 'wait_for_host_ready', lambda **kwargs: None)
 
     def imported(*args):
-        assert calls == ['native_version']
+        assert calls == []
         calls.append('import')
         return {'seconds': 1}
 
     def exported(*args):
-        assert calls == ['native_version', 'import']
+        assert calls == ['import']
         calls.append('export')
         return {'seconds': 2}
 
     monkeypatch.setattr(workload, 'run_import', imported)
     monkeypatch.setattr(workload, 'run_export', exported)
     assert workload.run_qualification() == 0
-    assert calls == ['native_version', 'import', 'export']
+    assert calls == ['import', 'export']
     assert json.loads((tmp_path / 'compute.json').read_text())['import']['seconds'] == 1

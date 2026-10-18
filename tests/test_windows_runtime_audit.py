@@ -1137,64 +1137,144 @@ def test_compute_roles_require_exact_attempt_count_native_identity_and_job_drain
             verified_runtime_order(broken, supervised=True, compute_workers=4)
 
 
-def test_native_spawn_observer_journals_compute_and_avoids_popen_double_count(monkeypatch, tmp_path):
+def _windows_spawn_module(monkeypatch):
+    """Load this interpreter's real Windows Popen with crash-safe OS stubs."""
+    import io
+    import multiprocessing
+    import types
+
+    winapi = types.ModuleType('_winapi')
+    winapi.CreatePipe = lambda *_args: (456, 789)
+    winapi.CloseHandle = lambda *_args: None
+    monkeypatch.setitem(sys.modules, '_winapi', winapi)
+    monkeypatch.setitem(sys.modules, 'msvcrt', SimpleNamespace(open_osfhandle=lambda *_args: 0))
+    monkeypatch.setattr(subprocess, 'STARTUPINFO', lambda **_kwargs: None, raising=False)
+    monkeypatch.setattr(subprocess, 'STARTF_FORCEOFFFEEDBACK', 0, raising=False)
+    name = 'multiprocessing.popen_spawn_win32'
+    spec = importlib.util.spec_from_file_location(
+        name, Path(multiprocessing.__file__).with_name('popen_spawn_win32.py'))
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, 'open', lambda *_args, **_kwargs: io.BytesIO(), raising=False)
+    monkeypatch.setattr(module, 'WINENV', False)
+    monkeypatch.setattr(module.spawn, 'get_preparation_data', lambda *_args: {})
+    return module
+
+
+def _run_windows_spawn(monkeypatch, native, command=None):
+    module = _windows_spawn_module(monkeypatch)
     worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
     application = r'C:\Program Files\Metroliza\metroliza_application.exe'
-    command = f'"{application}" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
+    monkeypatch.setattr(module.spawn, 'get_executable', lambda: worker)
+    monkeypatch.setattr(module.spawn, 'get_command_line', lambda **_kwargs: command or [
+        application, '--multiprocessing-fork', 'parent_pid=123', 'pipe_handle=456'])
+    module._winapi.CreateProcess = native
+    audit._adapt_create_process()
+    with pytest.raises(RuntimeError, match='^stop_before_launch$'):
+        module.Popen(SimpleNamespace(_name='synthetic'))
+    return module
+
+
+def test_native_spawn_observer_journals_compute_and_avoids_popen_double_count(monkeypatch, tmp_path):
+    worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
     (tmp_path / 'ready').touch()
     observe, installed = audit._make_observer(tmp_path, 'a' * 32, 'cmd.exe', None, worker)
     observe('metroliza.qualifier.audit_installed', ('a' * 32,))
     assert installed
-    with monkeypatch.context() as patch:
-        frame = _frame('multiprocessing.popen_spawn_win32', '__init__')
-        frame.f_locals = {'python_exe': worker, 'cmd': command}
-        patch.setattr(sys, '_getframe', lambda depth: frame)
-        # 3.11's C audit format corrupts only the command-line argument. The
-        # immediate Popen frame still holds the exact arguments being passed.
-        observe('_winapi.CreateProcess', (worker, 'unusable C audit command', None))
+    forwarded = []
+
+    def native(*args):
+        forwarded.append(args)
+        with monkeypatch.context() as patch:
+            frame = sys._getframe(1)
+            patch.setattr(sys, '_getframe', lambda depth: frame)
+            observe('_winapi.CreateProcess', (args[0], 'corrupted C audit command', args[7]))
+        raise RuntimeError('stop_before_launch')
+
+    module = _run_windows_spawn(monkeypatch, native)
+    assert len(forwarded) == 1 and len(forwarded[0]) == 9
+    assert forwarded[0][1].endswith('"parent_pid=123" "pipe_handle=456"')
     event = json.loads((tmp_path / 'event-01.json').read_text())
     assert event['kind'] == 'compute_worker_launch' and event['phase'] == 'after_ready'
     with monkeypatch.context() as patch:
-        patch.setattr(sys, '_getframe', lambda depth: _frame('subprocess', '_execute_child'))
+        frame = SimpleNamespace(f_code=audit._forward_create_process.__code__,
+                                f_globals=vars(audit), f_back=_frame('subprocess', '_execute_child'))
+        patch.setattr(sys, '_getframe', lambda depth: frame)
         observe('_winapi.CreateProcess', ('cmd.exe', 'already journalled', None))
     assert not (tmp_path / 'event-02.json').exists()
+    assert module.Popen.__init__.__code__.co_filename.endswith('popen_spawn_win32.py')
 
 
-@pytest.mark.parametrize('change', ['command', 'image', 'cwd', 'outer', 'missing', 'caller'])
-def test_native_compute_observation_cannot_bypass_exact_spawn_checks(change):
+@pytest.mark.parametrize('change', ['command', 'image', 'cwd', 'outer', 'caller', 'globals', 'helper'])
+def test_native_compute_observation_cannot_bypass_exact_spawn_checks(monkeypatch, change):
     worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
-    application = r'C:\Program Files\Metroliza\metroliza_application.exe'
-    command = f'"{application}" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
-    frame = _frame('multiprocessing.popen_spawn_win32', '__init__')
-    frame.f_locals = {'python_exe': worker, 'cmd': command}
-    arguments = (worker, 'unusable C audit command', None)
+    results = []
+
+    def native(*args):
+        frame = sys._getframe(1)
+        arguments = (args[0], 'corrupted C audit command', args[7])
+        if change == 'image':
+            arguments = ('other.exe', arguments[1], None)
+        elif change == 'cwd':
+            arguments = (worker, arguments[1], 'other')
+        elif change in {'outer', 'caller', 'globals'}:
+            parent = frame.f_back
+            caller = SimpleNamespace(f_code=parent.f_code, f_globals=parent.f_globals)
+            if change == 'caller':
+                caller.f_code = (lambda: None).__code__
+            elif change == 'globals':
+                caller.f_globals = dict(parent.f_globals)
+            else:
+                caller = _frame('unrelated', 'call', parent)
+            frame = SimpleNamespace(f_code=frame.f_code, f_globals=frame.f_globals,
+                                    f_locals=frame.f_locals, f_back=caller)
+        results.append(audit._observed_call('_winapi.CreateProcess', arguments, frame, 'cmd.exe', None, worker))
+        raise RuntimeError('stop_before_launch')
+
+    command = None
     if change == 'command':
-        frame.f_locals['cmd'] += ' extra'
-    elif change == 'image':
-        arguments = ('other.exe', arguments[1], None)
-    elif change == 'cwd':
-        arguments = (worker, arguments[1], 'other')
-    elif change == 'outer':
-        frame = _frame('unrelated', 'call', frame)
-    elif change == 'missing':
-        frame.f_locals.clear()
-    else:
-        frame.f_globals['__name__'] = 'unrelated'
-    kind, _ = audit._observed_call('_winapi.CreateProcess', arguments, frame, 'cmd.exe', None, worker)
-    assert kind != 'compute_worker_launch'
+        command = ['unrelated command']
+    elif change == 'helper':
+        command = [worker, '-c', 'print(123)']
+    _run_windows_spawn(monkeypatch, native, command)
+    assert results and results[0][0] != 'compute_worker_launch'
 
 
-def test_compute_native_command_source_is_the_live_cpython_call_frame():
-    # Exercise real f_locals at the same Python/C boundary rather than relying
-    # solely on an invented frame containing an invented command string.
+@pytest.mark.parametrize('actual', ['spawn', 'different', 'helper'])
+def test_compute_native_recovery_rejects_spoofed_caller_and_unrelated_command(actual):
+    # Names and a plausible local cmd cannot authenticate the C call's argument.
     namespace = {'__name__': 'multiprocessing.popen_spawn_win32', 'audit': audit, 'sys': sys}
     exec('''
-def __init__(worker, application):
+def __init__(worker, application, actual):
     python_exe = worker
     cmd = f'"{application}" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
-    return audit._observed_call('_winapi.CreateProcess', (python_exe, 'corrupted', None),
+    command = {'spawn': cmd, 'different': 'unrelated command',
+               'helper': f'"{worker}" -c "print(123)"'}[actual]
+    return audit._observed_call('_winapi.CreateProcess', (python_exe, command, None),
                                 sys._getframe(), 'cmd.exe', None, worker)
 ''', namespace)
     assert namespace['__init__'](
-        r'C:\Metroliza\metroliza_compute_worker.exe', r'C:\Metroliza\metroliza_application.exe'
-    ) == ('compute_worker_launch', 'metroliza')
+        r'C:\Metroliza\metroliza_compute_worker.exe', r'C:\Metroliza\metroliza_application.exe', actual,
+    )[0] != 'compute_worker_launch'
+
+
+def test_adapter_rejects_matching_names_with_different_code(monkeypatch):
+    module = _windows_spawn_module(monkeypatch)
+    worker = r'C:\Metroliza\metroliza_compute_worker.exe'
+    command = r'"C:\Metroliza\metroliza_application.exe" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
+    results = []
+
+    def native(*args):
+        results.append(audit._observed_call(
+            '_winapi.CreateProcess', (args[0], 'corrupted', args[7]), sys._getframe(1),
+            'cmd.exe', None, worker))
+
+    module._winapi.CreateProcess = native
+    audit._adapt_create_process()
+    # Even globals identical to the genuine module cannot replace code identity.
+    exec('def __init__(worker, cmd):\n'
+         '    return _winapi.CreateProcess(worker, cmd, None, None, False, 0, None, None, None)\n',
+         module.__dict__)
+    module.__init__(worker, command)
+    assert results == [('other_frames', 'other')]

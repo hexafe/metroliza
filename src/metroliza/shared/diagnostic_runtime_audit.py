@@ -123,14 +123,36 @@ def classify_compute_call(arguments, frame, expected_worker: str | None) -> tupl
             or not command.startswith(prefix)
             or re.fullmatch(r'"parent_pid=[1-9][0-9]{0,9}" "pipe_handle=[0-9]{1,20}"', command[len(prefix):]) is None):
         return "other_command", "other"
-    for _ in range(64):
-        if frame is None:
-            break
-        if (frame.f_globals.get("__name__") == "multiprocessing.popen_spawn_win32"
-                and frame.f_code.co_name == "__init__"):
-            return "compute_worker_launch", "metroliza"
-        frame = frame.f_back
+    if _is_spawn_caller(frame):
+        return "compute_worker_launch", "metroliza"
     return "other_frames", "other"
+
+
+def _is_spawn_caller(frame):
+    try:
+        from multiprocessing.popen_spawn_win32 import Popen
+    except ImportError:
+        return False
+    return (frame is not None and frame.f_code is Popen.__init__.__code__
+            and frame.f_globals is Popen.__init__.__globals__)
+
+
+def _forward_create_process(native, *arguments):
+    # Only the opt-in audit installs this adapter. The tuple in this frame is
+    # exactly what the native function receives, including its command line.
+    return native(*arguments)
+
+
+def _is_create_process_adapter(frame):
+    return (frame is not None and frame.f_code is _forward_create_process.__code__
+            and frame.f_globals is globals())
+
+
+def _adapt_create_process():
+    import _winapi
+    from functools import partial
+
+    _winapi.CreateProcess = partial(_forward_create_process, _winapi.CreateProcess)
 
 
 def install() -> None:
@@ -154,21 +176,23 @@ def _observed_call(event, arguments, frame, expected_cmd, expected_worker, expec
 def _classify_native_compute_call(arguments, frame, expected_compute):
     # CPython 3.11 _winapi.c audits command_line (a PyObject*) with "uuu",
     # treating it as wchar_t*, so the event's command string is unusable.
-    # Read the actual argument at the immediate synchronous Python call site,
-    # never a matching outer frame. Keep the native image/cwd and exact frozen
-    # command checks; owned native identity/ancestry/drain are verified separately.
-    if (len(arguments) != 3
-            or frame.f_globals.get("__name__") != "multiprocessing.popen_spawn_win32"
-            or frame.f_code.co_name != "__init__"):
+    # Recover only the exact forwarded argument tuple at our native boundary,
+    # with CPython's actual Popen constructor as its immediate caller. Never
+    # recover unrelated cmd locals or trust module/function names.
+    if (len(arguments) != 3 or not _is_create_process_adapter(frame)
+            or not _is_spawn_caller(frame.f_back)):
         return "other_frames", "other"
-    values = frame.f_locals
-    if values.get("python_exe") != arguments[0] or type(values.get("cmd")) is not str:
+    forwarded = frame.f_locals.get("arguments")
+    if (type(forwarded) is not tuple or len(forwarded) != 9
+            or forwarded[0] != arguments[0] or forwarded[7] != arguments[2]):
         return "other_arguments", "other"
-    return classify_compute_call((arguments[0], values["cmd"], arguments[2]), frame, expected_compute)
+    return classify_compute_call((forwarded[0], forwarded[1], forwarded[7]), frame.f_back, expected_compute)
 
 
 def _already_observed(event, frame):
     # subprocess.Popen is journalled before its internal native CreateProcess.
+    if _is_create_process_adapter(frame):
+        frame = frame.f_back
     return (event == "_winapi.CreateProcess" and frame.f_globals.get("__name__") == "subprocess"
             and frame.f_code.co_name == "_execute_child")
 
@@ -204,6 +228,7 @@ def _install() -> None:
     )
     expected_compute = _expected_compute(application)
     observe, installed_seen = _make_observer(root, nonce, expected_cmd, expected_worker, expected_compute)
+    _adapt_create_process()
     sys.addaudithook(observe)
     # CPython can silently decline registration if an earlier hook rejects it.
     sys.audit("metroliza.qualifier.audit_installed", nonce)
