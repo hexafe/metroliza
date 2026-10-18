@@ -44,13 +44,13 @@ def initialize_compute_runtime():
         use_native_windows_version()
 
 
-def use_native_windows_version() -> None:
+def use_native_windows_version(*, runtime_sys=sys, runtime_os=os) -> None:
     """Keep the isolated worker's version fallback inside the owned process."""
-    if os.name != "nt" or not getattr(sys, "frozen", False):
+    if runtime_os.name != "nt" or not getattr(runtime_sys, "frozen", False):
         return
     import platform
 
-    native = sys.getwindowsversion().platform_version
+    native = runtime_sys.getwindowsversion().platform_version
     if (type(native) is not tuple or len(native) != 3
             or any(type(part) is not int or part < 0 for part in native)
             or native[0] == 0):
@@ -58,7 +58,7 @@ def use_native_windows_version() -> None:
     native_version = ".".join(str(part) for part in native)
 
     def from_native(system="", release="", version="", supported_platforms=("win32", "win16", "dos")):
-        if sys.platform not in supported_platforms:
+        if runtime_sys.platform not in supported_platforms:
             return system, release, version
         return system, release, native_version
 

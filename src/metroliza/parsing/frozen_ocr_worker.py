@@ -248,7 +248,7 @@ def _use_native_windows_version() -> None:
     from metroliza.shared.compute_worker import use_native_windows_version
 
     try:
-        use_native_windows_version()
+        use_native_windows_version(runtime_sys=sys, runtime_os=os)
     except RuntimeError:
         raise OcrWorkerFailure("ocr_windows_version_unavailable") from None
 
