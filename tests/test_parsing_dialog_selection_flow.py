@@ -1071,7 +1071,7 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
     if os.environ.get("METROLIZA_ENRICHMENT_UI_TEST_CHILD") != "1":
         environment = dict(os.environ, METROLIZA_ENRICHMENT_UI_TEST_CHILD="1", QT_QPA_PLATFORM="offscreen")
         completed = subprocess.run(
-            [sys.executable, "-m", "pytest", "-p", "qt_app_keeper", "-q",
+            [sys.executable, "-m", "pytest", "-q",
              "-p", "no:cacheprovider", "-o", "addopts=", request.node.nodeid],
             cwd=Path(__file__).resolve().parents[1], env=environment,
             capture_output=True, text=True, timeout=60,

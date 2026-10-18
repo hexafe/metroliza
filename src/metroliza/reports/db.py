@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import quote
 
+from metroliza.reports.import_persist_profile import (
+    close_persist_connection,
+    measure_persist_stage,
+    observe_persist_connection,
+    observe_persist_checkpoint,
+    profile_persist_cursor,
+)
+
 
 TRANSIENT_SQLITE_ERRORS = (
     'database is locked',
@@ -128,8 +136,10 @@ def connect_sqlite(
     pragma_config: SQLitePragmaConfig = DEFAULT_PRAGMA_CONFIG,
 ) -> sqlite3.Connection:
     """Create a SQLite connection and apply deterministic PRAGMAs on open."""
-    connection = sqlite3.connect(db_path, timeout=timeout_s)
-    _apply_sqlite_pragmas(connection, pragma_config)
+    with measure_persist_stage("connection_open"):
+        connection = sqlite3.connect(db_path, timeout=timeout_s)
+        _apply_sqlite_pragmas(connection, pragma_config)
+    observe_persist_connection(connection)
     return connection
 
 
@@ -141,13 +151,57 @@ def sqlite_connection_scope(
     pragma_config: SQLitePragmaConfig = DEFAULT_PRAGMA_CONFIG,
 ) -> Iterator[sqlite3.Connection]:
     """Yield a managed SQLite connection suitable for multi-query workflows."""
-    if pragma_config == DEFAULT_PRAGMA_CONFIG:
-        with closing(connect_sqlite(db_path, timeout_s=timeout_s)) as conn:
-            yield conn
-        return
-
-    with closing(connect_sqlite(db_path, timeout_s=timeout_s, pragma_config=pragma_config)) as conn:
+    conn = (
+        connect_sqlite(db_path, timeout_s=timeout_s)
+        if pragma_config == DEFAULT_PRAGMA_CONFIG
+        else connect_sqlite(db_path, timeout_s=timeout_s, pragma_config=pragma_config)
+    )
+    try:
         yield conn
+    finally:
+        close_persist_connection(conn)
+
+
+class _LazySQLiteConnection:
+    """Owner-thread connection handle that creates no DB before first SQL use."""
+
+    def __init__(self, db_path):
+        self._db_path = db_path
+        self._connection = None
+
+    def __getattr__(self, name):
+        if self._connection is None:
+            self._connection = connect_sqlite(self._db_path)
+        return getattr(self._connection, name)
+
+    def close(self):
+        if self._connection is not None:
+            close_persist_connection(self._connection)
+
+    def checkpoint_after_commit(self):
+        # NORMAL commits do not sync the WAL. Previously each owned connection
+        # closed here, allowing a final-connection checkpoint/sync per report.
+        # Preserve that sync opportunity without closing/reopening the handle.
+        # PASSIVE respects readers/writers; SQLite's returned busy/frame counts
+        # remain diagnostic rather than a new retry or transaction boundary.
+        with measure_persist_stage("checkpoint"):
+            result = self._connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        observe_persist_checkpoint(result)
+
+
+@contextmanager
+def lazy_sqlite_connection_scope(db_path: str):
+    """Reuse one connection without creating a database for rejected imports."""
+    connection = _LazySQLiteConnection(db_path)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def _checkpoint_import_connection(connection):
+    if isinstance(connection, _LazySQLiteConnection):
+        connection.checkpoint_after_commit()
 
 
 @contextmanager
@@ -310,16 +364,17 @@ def run_transaction_with_retry(
         try:
             if conn is None:
                 conn = connect_sqlite(db_path)
-            cursor = conn.cursor()
+            cursor = profile_persist_cursor(conn.cursor())
             result = operation(cursor)
-            conn.commit()
-            return result
+            with measure_persist_stage("commit"):
+                conn.commit()
         except sqlite3.OperationalError as exc:
             if conn is not None:
                 conn.rollback()
             if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
+            continue
         except Exception:
             if conn is not None:
                 conn.rollback()
@@ -328,7 +383,12 @@ def run_transaction_with_retry(
             if cursor is not None:
                 cursor.close()
             if owns_connection and conn is not None:
-                conn.close()
+                close_persist_connection(conn)
+
+        # Maintenance runs with the statement finalized and outside the retry
+        # boundary: a checkpoint failure must never replay a committed write.
+        _checkpoint_import_connection(conn)
+        return result
 
     raise sqlite3.OperationalError('Failed to complete SQLite transaction after retries')
 

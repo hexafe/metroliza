@@ -152,20 +152,9 @@ def _join_prepare_processes(processes, timeout: float) -> None:
         process.join(timeout=max(0.0, deadline - monotonic()))
 
 
-def _cancel_prepare_executor(executor) -> None:
-    """Stop and reap owned workers before returning their inputs to the caller.
+def _stop_prepare_processes(processes) -> None:
+    """Terminate, escalate and reap workers against bounded shared deadlines."""
 
-    Python 3.11 has no public ProcessPoolExecutor termination API. Keep access to
-    its process/manager/queue handles isolated here until that API is available.
-    Killing a worker breaks the pool; its manager then releases the IPC resources.
-    """
-
-    processes = tuple((getattr(executor, "_processes", None) or {}).values())
-    manager = getattr(executor, "_executor_manager_thread", None)
-    call_queue = getattr(executor, "_call_queue", None)
-    if call_queue is not None:
-        # A terminated reader must not leave the manager joining a blocked feeder.
-        call_queue.cancel_join_thread()
     for process in processes:
         if process.is_alive():
             process.terminate()
@@ -174,6 +163,30 @@ def _cancel_prepare_executor(executor) -> None:
     for process in survivors:
         process.kill()
     _join_prepare_processes(survivors, _SHUTDOWN_GRACE_SECONDS)
+
+
+def _cancel_prepare_executor(executor) -> None:
+    """Stop and reap owned workers before returning their inputs to the caller.
+
+    Python 3.11 has no public ProcessPoolExecutor termination API. Keep access to
+    its process/manager/queue handles isolated here until that API is available.
+    Reap all writers before closing the parent's result writer. This delivers EOF
+    even when the manager is already receiving a frame interrupted by termination.
+    """
+
+    processes = tuple((getattr(executor, "_processes", None) or {}).values())
+    manager = getattr(executor, "_executor_manager_thread", None)
+    call_queue = getattr(executor, "_call_queue", None)
+    if call_queue is not None:
+        # A terminated reader must not leave the manager joining a blocked feeder.
+        call_queue.cancel_join_thread()
+    _stop_prepare_processes(processes)
+    workers_alive = any(process.is_alive() for process in processes)
+    result_queue = getattr(executor, "_result_queue", None)
+    if not workers_alive and result_queue is not None:
+        # Closing only the reader cannot interrupt a recv already blocked in the
+        # manager. With every worker reaped this is the last remaining writer.
+        result_queue._writer.close()
     if manager is not None:
         manager.join(timeout=_SHUTDOWN_GRACE_SECONDS)
     if any(process.is_alive() for process in processes) or (

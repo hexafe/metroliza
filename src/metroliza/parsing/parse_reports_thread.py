@@ -6,7 +6,6 @@ import logging
 import os
 import time
 import traceback
-from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
@@ -16,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
-from metroliza.reports.db import execute_with_retry
+from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
 from metroliza.shared.diagnostic_events import WorkflowError, WorkflowOperation, WorkflowStage
@@ -1913,7 +1912,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.parsing_finished.emit()
                 return
 
-            with nullcontext(None) as connection:
+            # Keep one owner-thread connection alive across per-report commits.
+            # Closing the last WAL connection after each report forces repeated
+            # checkpoint/sidecar cleanup. Preparation workers never borrow it.
+            with lazy_sqlite_connection_scope(self.db_file) as connection:
                 report_fingerprints = set()
                 self._emit_stage_progress('load_existing_reports', 1.0)
 
@@ -2178,12 +2180,24 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(e)
         finally:
+            self._finish_import_resources(diagnostic)
+
+    def _finish_import_resources(self, diagnostic) -> None:
+        """Report teardown failures without releasing inputs still owned by workers."""
+
+        try:
             self._close_prepare_pool()
+        except Exception as exc:
+            diagnostic.fail(WorkflowError.PROCESSING_FAILED)
+            self.log_and_exit(exc)
+        finally:
             diagnostic.finish_import(self.last_parse_result, self.parsing_canceled)
-            if self._extracted_archive_dir is not None:
-                self._extracted_archive_dir.cleanup()
-                self._extracted_archive_dir = None
-            self._resolved_report_root = None
+        if self._prepare_pool is not None:
+            return  # Retain pool and archive ownership for a later cleanup retry.
+        if self._extracted_archive_dir is not None:
+            self._extracted_archive_dir.cleanup()
+            self._extracted_archive_dir = None
+        self._resolved_report_root = None
 
     def _open_prepare_pool(self, work_items) -> ImportPreparePool | None:
         """Start the bounded worker pool for CMM light-mode preparation, if it pays off."""
