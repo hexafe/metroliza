@@ -7,6 +7,7 @@ can shadow the canonical ``metroliza`` package during hidden-import analysis.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -18,6 +19,8 @@ if not getattr(sys, "frozen", False):
     sys.path.insert(0, src_text)
 
 from metroliza.shared.diagnostic_startup_probe import mark  # noqa: E402
+
+QUALIFICATION_GATE_ENV = "METROLIZA_STARTUP_SMOKE"
 
 mark("child_entry")
 
@@ -43,7 +46,10 @@ mark("child_bootstrap_imported")
 if __name__ == "__main__":
     try:
         code = run_application()
-        if code == 0:
+        # Every qualification scenario is gated on METROLIZA_STARTUP_SMOKE=1. Check that
+        # gate before importing the harness, so an ordinary user's clean exit never
+        # imports test-only code (an import failure there would turn exit 0 into a crash).
+        if code == 0 and os.environ.get(QUALIFICATION_GATE_ENV) == "1":
             from metroliza.app.diagnostic_qualification import requested_scenario, run_qualification
 
             scenario = requested_scenario()
