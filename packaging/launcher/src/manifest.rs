@@ -177,6 +177,10 @@ const RESERVED_NAMES: [&str; 22] = [
 /// again before anything is created from a payload.
 pub fn validate_relative_path(path: &str) -> Result<()> {
     let bad = || LauncherError::payload("unsafe path in payload");
+    let first = path.split('/').next().unwrap_or("").to_ascii_lowercase();
+    if matches!(first.as_str(), ".complete" | ".pending") {
+        return Err(bad());
+    }
     if path.is_empty() || path.len() > 240 {
         return Err(bad());
     }
@@ -290,6 +294,10 @@ mod tests {
             "a/b/",
             "a\u{0}b",
             "x*y",
+            ".pending",
+            ".PENDING/child",
+            ".complete",
+            ".Complete/child",
         ] {
             assert!(
                 validate_relative_path(path).is_err(),

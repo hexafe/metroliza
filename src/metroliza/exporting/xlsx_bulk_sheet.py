@@ -392,12 +392,17 @@ class BulkRowsWorksheet(Worksheet):
 
     def _merge_block_spans(self, block: BulkBlock) -> None:
         lows, highs = self._row_column_extent(block)
-        has_cells = lows < 10**9
-        groups = (block.first_row + np.arange(block.n_rows)) // _ROW_SPAN_GROUP
-        for group in np.unique(groups[has_cells]).tolist():
-            selected = (groups == group) & has_cells
-            low = int(lows[selected].min()) + 1
-            high = int(highs[selected].max()) + 1
+        first_group = block.first_row // _ROW_SPAN_GROUP
+        last_group = block.last_row // _ROW_SPAN_GROUP
+        for group in range(first_group, last_group + 1):
+            # Each absolute 16-row group intersects a contiguous block slice.
+            start = max(0, group * _ROW_SPAN_GROUP - block.first_row)
+            stop = min(block.n_rows, (group + 1) * _ROW_SPAN_GROUP - block.first_row)
+            high = int(highs[start:stop].max())
+            if high < 0:  # All rows in this group are blank.
+                continue
+            low = int(lows[start:stop].min()) + 1
+            high += 1
             existing = self.row_spans.get(group)
             if existing:
                 old_low, old_high = (int(part) for part in existing.split(":"))

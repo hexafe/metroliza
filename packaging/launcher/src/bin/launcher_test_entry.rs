@@ -22,6 +22,20 @@ use std::time::{Duration, Instant};
 const REPAIR_AVAILABLE_ENV: &str = "METROLIZA_RUNTIME_REPAIR_AVAILABLE";
 
 fn main() {
+    // Model a supervisor that exits while its application keeps running. The orphan gets no
+    // launcher-side lock, exactly like an application started with close_fds=True.
+    let original: Vec<String> = std::env::args().skip(1).collect();
+    if original.iter().any(|a| a == "--spawn-orphan") {
+        let exe = std::env::current_exe().unwrap();
+        std::process::Command::new(exe)
+            .args(original.iter().filter(|a| *a != "--spawn-orphan"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        return;
+    }
     let mut args = std::env::args().skip(1);
     let (mut record, mut stop_file) = (None::<PathBuf>, None::<PathBuf>);
     let (mut sleep_ms, mut exit_code, mut print_cwd) = (0u64, 0i32, false);
@@ -74,6 +88,11 @@ fn main() {
     let deadline = Instant::now() + Duration::from_millis(sleep_ms);
     while Instant::now() < deadline && !stop_file.as_ref().is_some_and(|p| p.exists()) {
         std::thread::sleep(Duration::from_millis(20));
+    }
+    if let Some(path) = &record {
+        if let Ok(mut file) = OpenOptions::new().append(true).open(path) {
+            let _ = writeln!(file, "stopped");
+        }
     }
     std::process::exit(exit_code);
 }

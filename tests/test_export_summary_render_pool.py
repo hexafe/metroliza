@@ -1,5 +1,8 @@
 from concurrent.futures import Future, ProcessPoolExecutor
 import multiprocessing
+from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -97,7 +100,7 @@ class _Executor:
         return future
 
     def shutdown(self, **kwargs):
-        self.closed = kwargs == dict(wait=True, cancel_futures=True)
+        self.closed = kwargs == dict(wait=False, cancel_futures=True)
 
 
 def _fake_tasks(monkeypatch, owner, executor):
@@ -150,7 +153,7 @@ def test_partial_pool_failure_does_not_duplicate_already_collected_group(monkeyp
     assert executor.closed
 
 
-@pytest.mark.parametrize('failure', ['startup', 'task', 'submit', 'result'])
+@pytest.mark.parametrize('failure', ['startup', 'event', 'task', 'submit', 'result', 'timeout'])
 def test_pool_failure_replays_every_remaining_group_serially(monkeypatch, failure):
     owner, executor = _owner(), _Executor()
     results = _fake_tasks(monkeypatch, owner, executor)
@@ -158,6 +161,8 @@ def test_pool_failure_replays_every_remaining_group_serially(monkeypatch, failur
         raise RuntimeError('synthetic pool failure')
     if failure == 'startup':
         monkeypatch.setattr(pool, 'ProcessPoolExecutor', fail)
+    elif failure == 'event':
+        monkeypatch.setattr(pool, 'spawn_context', lambda: SimpleNamespace(Event=fail))
     elif failure == 'task':
         monkeypatch.setattr(pool, '_render_task', fail)
     elif failure == 'submit':
@@ -165,7 +170,8 @@ def test_pool_failure_replays_every_remaining_group_serially(monkeypatch, failur
     else:
         def failed_future(*args):
             future = Future()
-            future.set_exception(RuntimeError('synthetic worker failure'))
+            error = TimeoutError if failure == 'timeout' else RuntimeError
+            future.set_exception(error('synthetic worker failure'))
             return future
         executor.submit = failed_future
     assert list(results) == [(x, None) for x in range(8)]
@@ -184,8 +190,101 @@ def test_policy_change_discards_queued_render_and_cancellation_cleans_up(monkeyp
     assert executor.closed
 
 
+def _pause_chart_worker(initializer, initargs, started, release_path, trace_dir):
+    """Pause a real chart in a spawn child, without creating a QApplication."""
+    initializer(*initargs)
+    from metroliza.exporting.export_data_thread import ExportDataThread
+
+    save = ExportDataThread._save_summary_chart
+
+    def save_chart(self, *args, **kwargs):
+        result = save(self, *args, **kwargs)
+        import os
+
+        with (Path(trace_dir) / f'{os.getpid()}.charts').open('a') as trace:
+            trace.write(kwargs['chart_type'] + '\n')
+        started.set()
+        deadline = time.monotonic() + 30
+        while not Path(release_path).exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert Path(release_path).exists(), 'Test did not release the active chart'
+        return result
+
+    ExportDataThread._save_summary_chart = save_chart
+
+
+@pytest.mark.parametrize('release_chart', [True, False], ids=['chart-boundary', 'stuck-chart'])
+def test_cancel_active_spawn_render_stops_charts_and_reaps_workers(monkeypatch, tmp_path, release_chart):
+    context = multiprocessing.get_context('spawn')
+    started = context.Event()
+    release = tmp_path / 'release'
+    canceled = threading.Event()
+    owner = _owner()
+    owner._check_canceled = canceled.is_set
+    executors = []
+    processes = []
+    managers = []
+
+    def create(**kwargs):
+        initializer = kwargs.pop('initializer')
+        initargs = kwargs.pop('initargs', ())
+        executor = ProcessPoolExecutor(
+            **kwargs, initializer=_pause_chart_worker,
+            initargs=(initializer, initargs, started, str(release), str(tmp_path)),
+        )
+        executors.append(executor)
+        return executor
+
+    monkeypatch.setattr(pool, 'ProcessPoolExecutor', create)
+    monkeypatch.setattr(pool, '_render_task', lambda o, e: _task())
+    results = pool.iter_summary_render_results(owner, list(range(8)))
+    assert next(results) == (0, None)
+    collected, errors = [], []
+
+    def collect():
+        try:
+            collected.extend(results)
+        except BaseException as exc:
+            errors.append(exc)
+
+    collector = threading.Thread(target=collect)
+    collector.start()
+    try:
+        assert started.wait(30), 'Worker never reached active chart rendering'
+        processes.extend(executors[0]._processes.values())
+        managers.append(executors[0]._executor_manager_thread)
+        assert any(p.is_alive() for p in processes)
+        cancel_start = time.monotonic()
+        canceled.set()
+        # Let the parent poll before allowing the current chart to finish.
+        if release_chart:
+            time.sleep(0.3)
+            release.touch()
+        collector.join(timeout=5)
+        assert not collector.is_alive(), 'Cancellation blocked on an in-flight render'
+        assert time.monotonic() - cancel_start < 5
+        assert not errors
+        assert all(not p.is_alive() and p.exitcode is not None for p in processes)
+        assert all(not manager.is_alive() for manager in managers)
+        charts = [chart for trace in tmp_path.glob('*.charts') for chart in trace.read_text().splitlines()]
+        assert charts and set(charts) == {'distribution'}, 'Subsequent charts rendered after cancellation'
+        assert collected == [], 'Canceled render results escaped to workbook replay'
+        if release_chart:
+            assert all(p.exitcode == 0 for p in processes), 'Cooperative workers were forcibly stopped'
+    finally:
+        # The old implementation must also leave this deliberately failing test cleanly.
+        canceled.set()
+        release.touch()
+        collector.join(timeout=30)
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
+
+
 def test_frozen_windows_policy_uses_windows_threshold_and_environment(monkeypatch):
     monkeypatch.setattr(pool.sys, 'platform', 'win32')
+    monkeypatch.setattr(pool, 'compute_workers_available', lambda: True)
     monkeypatch.setattr(pool.sys, 'frozen', True, raising=False)
     monkeypatch.delenv('METROLIZA_EXPORT_GROUP_MIN_GROUPS', raising=False)
     monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '1')
@@ -200,10 +299,11 @@ def test_frozen_windows_policy_uses_windows_threshold_and_environment(monkeypatc
 
 def test_frozen_executor_uses_shared_compute_context_and_worker_cap(monkeypatch):
     monkeypatch.setattr(pool.sys, 'platform', 'win32')
+    monkeypatch.setattr(pool, 'compute_workers_available', lambda: True)
     monkeypatch.setattr(pool.sys, 'frozen', True, raising=False)
     monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MIN_GROUPS', '2')
     monkeypatch.setenv('METROLIZA_EXPORT_GROUP_WORKERS', '2')
-    context = object()
+    context = SimpleNamespace(Event=multiprocessing.get_context("spawn").Event)
     monkeypatch.setattr(pool, 'spawn_context', lambda: context)
     owner, executor = _owner(), _Executor()
     owner.chart_worker_count = 4

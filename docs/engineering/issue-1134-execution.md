@@ -369,3 +369,81 @@ closed and needs renewed review. Linux mocks/source checks do not replace the
 orchestrator's Windows CI rerun. No full suite, release acceptance, clean-machine
 proof or independent external review was claimed. The import slowdown remains
 undiagnosed pending the new Windows stage measurements, as requested.
+
+## Review-fix integration packet — 2026-10-18
+
+Authority: external orchestrator's current #1134 integration request. Merge the
+local remote-tracking ref `origin/build/rc2-candidate-20261018` at
+`ea72c9e9616eac1006c0b96412b969023c68f7dc` into this worktree's current branch,
+`feat/1134-frozen-compute-workers`, starting at
+`c1c292bbf0ea09d784c6ffa0b6c811cf67ec20f9`. A normal local merge commit is
+explicitly authorized; push, PR creation/merge, rebase and destructive Git
+operations are excluded. No second worktree or remote actions are needed.
+
+Whole PR remains FEATURE / CROSS-LAYER; this slice is BOUNDED INTEGRATION of
+accepted pool fixes, with concurrency/lifecycle checks retained. Coordinator
+only; no delegated writers. Runtime model/reasoning: `not visible`. Provider
+reserve: UNKNOWN; external Claude Code orchestrator owns independent exact-head
+review, push and Windows CI. The reported earlier CI run `39137432316` is supplied
+context, not evidence for this new integrated head.
+
+### MUST
+
+- Preserve #1130 render polling (100 ms), shared cancellation at chart boundaries,
+  cancellation-aware serial replay, and bounded cooperative/terminate/kill/reap.
+- Preserve #1132 import cancellation without serial re-preparation, bounded
+  terminate/kill/reap, and ownership retention if shutdown fails.
+- Use #1134's shared spawn selector and validated compute executable for supported
+  frozen Windows pools. Unsupported/unvalidated frozen packages stay serial,
+  including explicit import worker counts. Revalidate identity at launch.
+- Keep every test function from both parents, adapt combined-policy fixtures
+  explicitly, run affected pool/frozen/qualification/equivalence tests and gates,
+  and commit locally with the requested issue reference and co-author trailer.
+
+### SHOULD
+
+- Share the availability guard across both policies, retain separate packaged
+  thresholds, and add negative identity and selected-context cancellation tests.
+- Capture synthetic pre-merge outputs and median-of-three timing/load receipts
+  before edits, under session scratch `codex/1134-integration/`.
+
+### DEFERRED
+
+- Native Windows/frozen executable execution and exact-head Windows CI: external
+  orchestrator after push. Linux mocks/source workers do not establish these.
+- Review or redesign of unrelated upstream fixes: preserved by the normal merge;
+  this task owns the four pool conflicts, shared availability guard, frozen tests
+  and this evidence record. No new optimization or changed performance defaults.
+
+### Combined design and test adaptations
+
+`compute_workers_available()` accepts normal source execution, rejects unsupported
+frozen platforms, and requires `worker_executable()` package identity validation
+for frozen Windows. Both policies consult it before enabling pools. The spawn
+selector validates again immediately before process creation. The render event
+comes from that same selected context and travels through initializer `initargs`;
+compute runtime initialization and shared chart-boundary cancellation both run.
+The incoming import cancellation exception and both shutdown implementations are
+preserved, using executor-owned process/manager handles regardless of executable.
+
+All test function names from both parents were compared with Python AST sets:
+render retains the union (12 functions); import retains the union (18 functions).
+Adaptations are:
+
+- The incoming render event-creation failure fixture patches `spawn_context()`
+  instead of the replaced direct `multiprocessing.get_context()` call.
+- Existing #1134 Windows threshold/default tests explicitly establish validated
+  availability. The frozen render context fixture now exposes `Event`, and still
+  checks the selected context and packaged worker cap.
+- The incoming unsupported-frozen matrix remains intact, alongside the #1134
+  validated-Windows defaults and explicit override test.
+- The Qt-free compute renderer test retains the original successful-render case
+  and adds cancellation before rendering, using the combined initializer/event.
+
+New frozen-policy cases cover Windows/Linux, auto/3/16 counts, and verified,
+missing, modified or unavailable package identity. A launch-time identity-change
+case proves both pool constructors reject stale policy approval. Selected-context
+cancellation cases observe compute image selection, bounded future polling,
+shared render event and terminate/kill/join of owned handles; real source-spawn
+regressions separately exercise cooperative chart cancellation and stuck-process
+reaping. These are explicitly local evidence, not a frozen Windows execution.

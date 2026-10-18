@@ -79,8 +79,14 @@ original per-group parent loop.
 The first serial group establishes the existing adaptive density policy. If
 active settings change after submission, stale results are discarded and that
 group follows the original serial path. Startup/submission/task failures switch
-remaining groups to serial without duplicating writes. Cancellation and early
-exit cancel queued futures and shut down the executor in a `finally` block.
+remaining groups to serial without duplicating writes. A shared spawn event
+connects parent cancellation to the workers' existing chart-boundary checks.
+The parent polls futures every 100 ms and discards results after cancellation.
+Cancellation, early exit and failures signal workers and cancel queued futures.
+Cleanup allows two seconds for cooperative exit, then terminates remaining
+workers, waits another 500 ms, kills survivors and waits another 500 ms. The
+executor manager thread has a final 500 ms join. These deadlines are shared
+across all workers in each phase, rather than multiplied by the worker count.
 Worker initialization disables core dumps on POSIX; no QApplication is created
 in workers.
 
@@ -247,3 +253,149 @@ concurrency/lifecycle acceptance burden merits CRITICAL / MILESTONE capability
 coordination on a similar task. Independent exact-head review, CI and merge
 readiness belong to the external orchestrator and remain pending; this local
 handoff does not assert READY FOR MERGE.
+
+## PR #1130 review correction — cancellation (#1126)
+
+Authority: the supplied external-orchestrator finding and repair packet; current
+worktree only, branch `perf/1126-extended-plots`, review base
+`22547dee5938f08339bed8441874a6b4c24d5d05`. PR comparison base remains
+`origin/integrate/2026.09-rc1-into-develop`. No remote actions are authorized.
+Whole-change class remains CRITICAL / MILESTONE; coordinator-only execution,
+actual runtime model/reasoning: not visible. Owned files: the existing render
+pool, its existing test file and this record. No added repository files.
+
+### MUST
+
+Reproduce cancellation during an active spawn render before fixing production
+code; stop subsequent charts, discard canceled results and reap workers within
+a bounded shutdown. Preserve ordered, bounded submission, serial fallback and
+strict PNG/workbook equivalence. Repeat three-run synthetic benchmarks with
+load averages, related tests, complexity/coverage/security gates and Ruff.
+Commit locally; leave external review, CI and integration to the orchestrator.
+
+### SHOULD
+
+Use the existing chart-boundary cancellation checks and avoid a manager process
+or a new per-chart IPC protocol. Keep core dumps disabled.
+
+### DEFERRED
+
+Actual Windows/frozen-build execution remains the existing external acceptance
+gate. No packaging/entry-point, UI, database or native-renderer changes.
+
+The P2 finding is valid. Before production edits, real spawn tests failed in
+both cooperative chart-release and stuck-chart cases. The former yielded a
+canceled result and rendered distribution/IQR/histogram/trend in both workers;
+the latter remained blocked beyond five seconds. The old completed-future
+tests did not prove active cancellation; this receipt supersedes that part of
+the earlier readiness table. Baseline pool/exporter sources and six full
+synthetic exports were captured from the review base in
+`scratchpad/codex/1130-cancel/` before production edits, without another worktree.
+
+Worker initialization receives the shared event through spawn `initargs`.
+Workers observe it without emitting parent-owned Qt cancellation signals.
+Already-canceled jobs skip summary rendering. Pool errors stop workers before
+replaying remaining groups serially; cancellation prevents that replay.
+Worker-raised `TimeoutError` remains a failure eligible for serial fallback.
+
+Python 3.11 lacks public executor worker termination. Cleanup snapshots this
+executor's private process/manager references before nonblocking shutdown;
+joins and termination touch only those processes. This narrow compatibility
+dependency requires attention when changing supported Python versions. The
+current chart can finish cooperatively; an unresponsive chart can be forcibly
+stopped after the grace period. As with any process timeout, kernel scheduling
+and uninterruptible OS waits are outside a strict wall-clock guarantee.
+
+The real spawn regression checks both release-at-chart-boundary and a chart
+that stays blocked: no later chart types, no results replayed after cancel,
+collector return within five seconds, all child exit codes collected and the
+executor manager thread stopped. Cooperative workers must exit with code zero.
+Two intermediate test runs were interrupted because test teardown tried to
+notify a multiprocessing Event after killing its waiters. The trace identified
+the test's release event, not production cleanup. A filesystem release marker
+removed that harness deadlock; no crash was induced.
+
+### Correction validation and measurements
+
+Validated production/test source: `d86abfa9d7cc01f1b243190a5aa64a794d2be665`.
+Subsequent changes are this evidence record only. All scripts, raw logs, copied
+synthetic DBs, captured sources, traces and XLSX files are retained under:
+
+```bash
+S=/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1130-cancel
+P=/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python
+bash "$S/before.sh"  # six captures, executed before production edits
+bash "$S/after.sh"   # nine captures on the correction commit
+ulimit -c 0
+env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper "$P" "$S/report.py"
+bash "$S/verification.sh"
+```
+
+Both capture scripts use the guarded, unmodified audit entry point and fresh
+copies of the same synthetic tiny/40-group DBs as the original PR. No new
+worktree was created. Medians of three full exports, including pool startup
+and shutdown; load columns are median starting 1/5/15-minute load averages:
+
+| Synthetic fixture / mode | Review base | Corrected | Base load | Corrected load |
+| --- | ---: | ---: | --- | --- |
+| tiny, 4 groups, 1 worker | 5.7 s | 6.1 s | 9.88 / 9.15 / 7.20 | 7.67 / 6.42 / 6.51 |
+| 40 groups, 2 workers | 32.9 s | 34.6 s | 10.11 / 9.03 / 7.17 | 7.54 / 6.43 / 6.50 |
+| 40 groups, 1 worker control | not repeated | 58.3 s | not applicable | 7.33 / 6.39 / 6.50 |
+
+Repetitions: review tiny `[7.7, 5.7, 5.1]`, corrected tiny `[5.8, 7.1, 6.1]`;
+review parallel40 `[42.7, 31.2, 32.9]`, corrected parallel40
+`[36.9, 34.6, 31.3]`, corrected serial40 `[58.5, 58.3, 57.9]`.
+The parallel median is 5.2% higher than the review base, and 40.7% below the
+current serial control. These shared-machine samples do not establish an
+unchanged wall time or a causal attribution for that difference. Tiny/serial
+rendering uses the unchanged serial implementation. All parallel captures
+recorded two workers, four pending groups maximum and 39 completed worker jobs.
+
+All nine corrected XLSX exports match **both** the review-base capture and
+the original PR baseline. **1,008 PNGs are byte-identical** to both baselines;
+the PR's decoded-pixel harness also passes every image. Package member order,
+worksheet/drawing XML and all other contents match. In addition to the existing
+harness, the report verifies `docProps/core.xml` after normalizing only created/
+modified timestamp values. All six serial annotation/table traces match their
+reference traces. `results.json` records every workbook and timing receipt.
+
+The test prefix used throughout (from the current worktree) is:
+
+```bash
+ulimit -c 0
+env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" <files-and-options-below>
+```
+
+| Test files/options | Observed result |
+| --- | --- |
+| `tests/test_export_summary_render_pool.py -k cancel_active` on review base, before fix | 2 failed, 17 deselected; `reproduction.log` |
+| `tests/test_export_summary_render_pool.py tests/test_complexity_ratchet.py tests/test_bug_sweep_coverage.py tests/test_security_audit.py` | 139 passed in 69.76 s; `focused.log` |
+| Final PR regression command below | 918 passed, 1 skipped, 35 subtests passed, 6 warnings in 128.88 s; `verification.log` |
+| `-rs tests/test_chart_renderer.py::test_native_histogram_renderer_uses_real_extension_when_available` | 1 skipped in 1.81 s: native histogram renderer unavailable; `skip-reason.log` |
+
+`verification.sh` sets the original pre-PR source for collision/edge scenes and
+the review-base/new XLSX pair, then runs exactly:
+
+```bash
+export METROLIZA_PLOT_REFERENCE_MODULE=/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1126/base_export_data_thread.py
+export METROLIZA_PLOT_BASE="$S/before1-groups40.xlsx"
+export METROLIZA_PLOT_CANDIDATE="$S/after1-groups40.xlsx"
+ulimit -c 0
+env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" tests/test_export*.py tests/test_thread_flow_helpers.py tests/test_chart_renderer.py tests/test_chart_render_service.py tests/test_summary_plot_palette_accessibility.py tests/test_analytics_exporting_boundary.py tests/test_contracts.py tests/test_complexity_ratchet.py tests/test_bug_sweep_coverage.py tests/test_security_audit.py
+/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m ruff check .
+git diff --check
+```
+
+Ruff and diff whitespace checks passed. No complexity budget or coverage
+ownership changed. This correction changes neither the security baseline nor
+`export_data_thread.py`; the review base already includes the orchestrator's
+`22547dee` fingerprint relocation, subsequent to the original drift receipt
+above. No additional Bandit finding-line shift was introduced here.
+
+Remaining limits: actual Windows, frozen/clean-machine exports, a quiet-machine
+performance comparison, CI, external exact-head review and integration are not
+verified by this correction. The real native histogram extension is unavailable
+in this environment and its test is skipped; Matplotlib rendering is covered.
+The full suite was not run. Open compatibility risk: the Python 3.11 private
+executor references used only for bounded cleanup. No remote operations, new
+worktrees, stash, rebase, reset or release/product mutations were performed.

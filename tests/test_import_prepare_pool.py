@@ -10,6 +10,8 @@ import random
 import sqlite3
 import sys
 
+import pytest
+
 
 from metroliza.parsing import import_prepare_pool
 from metroliza.parsing.cmm_report_parser import CMMReportParser
@@ -334,18 +336,18 @@ def test_worker_count_policy(monkeypatch):
     assert resolve_prepare_worker_count(500) == 0
 
 
-def test_packaged_windows_build_uses_separate_defaults_and_explicit_override(monkeypatch):
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+@pytest.mark.parametrize("configured", ["auto", "3", "16"])
+def test_frozen_build_stays_serial_even_with_explicit_workers(monkeypatch, platform, configured):
     monkeypatch.delenv(WORKERS_ENV, raising=False)
     monkeypatch.delenv(MIN_REPORTS_ENV, raising=False)
     monkeypatch.setattr(os, "cpu_count", lambda: 12)
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
-    assert resolve_prepare_worker_count(199) == 0
-    assert resolve_prepare_worker_count(200) == 2
-    assert resolve_prepare_worker_count(5000) == 2
-    monkeypatch.setenv(WORKERS_ENV, "3")
-    assert resolve_prepare_worker_count(5000) == 3
+    assert resolve_prepare_worker_count(5000) == 0
+    monkeypatch.setenv(WORKERS_ENV, configured)
+    assert resolve_prepare_worker_count(5000) == 0
 
 
 def test_complete_mode_and_small_batches_never_start_a_pool(tmp_path, monkeypatch):
@@ -408,6 +410,120 @@ def test_worker_state_is_never_applied_to_a_parser_that_is_not_the_builtin_cmm_p
         resolution_evidence=SimpleNamespace(plugin_id=CMMReportParser.manifest.plugin_id),
     )
     assert ImportPreparePool._eligible(pool, prepared) is False
+
+
+def test_cancel_during_unresolved_future_never_prepares_serially(tmp_path, monkeypatch):
+    from concurrent.futures import Future
+
+    _write_synthetic_reports(tmp_path / "reports", 2)
+    _pool_env(monkeypatch, "2")
+    thread = ParseReportsThread(_plan(tmp_path / "reports", tmp_path / "db.sqlite3"))
+    counts = _count_in_process_work(monkeypatch)
+    shutdown = []
+
+    class CancellingFuture(Future):
+        def result(self, timeout=None):
+            thread.stop_parsing()
+            return super().result(timeout=0.001)
+
+    class UnresolvedExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        def submit(self, *args):
+            return CancellingFuture()
+
+        def shutdown(self, **kwargs):
+            shutdown.append(kwargs)
+
+    monkeypatch.setattr(import_prepare_pool, "ProcessPoolExecutor", UnresolvedExecutor)
+    thread.run()
+
+    assert counts == {"hydrated": 0, "prepared_in_process": 0}
+    result = thread.last_parse_result
+    assert (result.imported_files, result.failed_files, result.cancelled_files) == (0, 0, 2)
+    assert shutdown and shutdown[0]["cancel_futures"] is True
+
+
+def _blocked_prepare_worker(task):
+    """A deliberately stuck, core-dump-free worker for the shutdown regression."""
+    import signal
+    import time
+
+    marker, _database, mode = task
+    if mode == "ignore_terminate" and sys.platform != "win32":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    Path(marker).write_text(str(os.getpid()))
+    while True:
+        time.sleep(60)
+
+
+@pytest.mark.parametrize("mode", ["light", "ignore_terminate"])
+def test_cancel_reaps_blocked_workers_and_manager_with_bounded_shutdown(tmp_path, monkeypatch, mode):
+    import time
+
+    monkeypatch.setattr(import_prepare_pool, "prepare_cmm_report_in_worker", _blocked_prepare_worker)
+    for cycle in range(2):
+        markers = [tmp_path / f"{mode}-{cycle}-{index}.started" for index in range(2)]
+        pool = ImportPreparePool(
+            [str(marker) for marker in markers], database_path=str(tmp_path / "unused.sqlite3"),
+            metadata_parsing_mode=mode, workers=2,
+            parser_plugin_id=CMMReportParser.manifest.plugin_id,
+        )
+        executor = pool._executor
+        children = list(executor._processes.values())
+        manager = executor._executor_manager_thread
+        try:
+            deadline = time.monotonic() + 10
+            while not all(marker.exists() for marker in markers) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert all(marker.exists() for marker in markers), "both blocked workers must be running"
+            started = time.monotonic()
+            pool.close(cancel=True)
+            assert time.monotonic() - started < 5
+            assert all(not child.is_alive() and child.exitcode is not None for child in children)
+            assert not manager.is_alive()
+            assert not pool._futures
+        finally:
+            # Also reap on the deliberately failing pre-fix run; never leak test children.
+            for child in children:
+                if child.is_alive():
+                    child.kill()
+                child.join(timeout=5)
+            executor.shutdown(wait=True, cancel_futures=True)
+
+
+def test_owner_retains_pool_if_bounded_shutdown_fails(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    _write_synthetic_reports(tmp_path / "reports", 2)
+    thread = ParseReportsThread(_plan(tmp_path / "reports", tmp_path / "db.sqlite3"))
+
+    def failed_close(**kwargs):
+        raise RuntimeError("shutdown deadline")
+
+    pool = SimpleNamespace(close=failed_close)
+    thread._prepare_pool = pool
+    thread.stop_parsing()
+    with pytest.raises(RuntimeError, match="shutdown deadline"):
+        thread._close_prepare_pool()
+    assert thread._prepare_pool is pool
+    thread._prepare_pool = None
+
+
+def test_packaged_windows_build_uses_separate_defaults_and_explicit_override(monkeypatch):
+    monkeypatch.setattr(import_prepare_pool, "compute_workers_available", lambda: True)
+    monkeypatch.delenv(WORKERS_ENV, raising=False)
+    monkeypatch.delenv(MIN_REPORTS_ENV, raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    assert resolve_prepare_worker_count(199) == 0
+    assert resolve_prepare_worker_count(200) == 2
+    assert resolve_prepare_worker_count(5000) == 2
+    monkeypatch.setenv(WORKERS_ENV, "3")
+    assert resolve_prepare_worker_count(5000) == 3
 
 
 def test_prepare_executor_uses_shared_compute_context(monkeypatch):

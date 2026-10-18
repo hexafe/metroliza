@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
@@ -37,7 +37,11 @@ from metroliza.reports.report_repository import (
 )
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
-from metroliza.parsing.import_prepare_pool import ImportPreparePool, resolve_prepare_worker_count
+from metroliza.parsing.import_prepare_pool import (
+    ImportPreparationCancelled,
+    ImportPreparePool,
+    resolve_prepare_worker_count,
+)
 from metroliza.parsing.parse_result_v2_persistence import (
     build_persistence_payload,
     import_parse_result_v2_payload_if_absent,
@@ -89,7 +93,7 @@ class _SelectedReportWorkItem:
     report_path: str | Path
     selected_identity: SelectedReportIdentity | None = None
     # Inspection created while approving the plan; its digest is only provisional until the
-    # single pre-persistence verification (see SourceInspectionContext.verified_sha256()).
+    # final in-transaction verification (see SourceInspectionContext.verified_sha256()).
     source_inspection: SourceInspectionContext | None = field(default=None, compare=False)
 
 
@@ -173,6 +177,8 @@ def _require_selected_source_approval(
     identity = work_item.selected_identity
     if identity is None:
         return
+    if not verify_current:
+        source_inspection.require_unchanged_size()
     sha256_value = (
         source_inspection.verified_sha256() if verify_current else source_inspection.sha256
     )
@@ -591,8 +597,8 @@ def parse_new_reports(
             ),
         )
         if identity is not None:
-            # Parser/registry evidence now; the single content rehash happens right before
-            # persistence so that it also covers the time spent parsing.
+            # Parser/registry evidence now; the final content rehash happens inside
+            # the persistence transaction, after the write lock is acquired.
             _require_prepared_report_approval(prepared, verify_current=False)
         return prepared
 
@@ -610,8 +616,12 @@ def parse_new_reports(
     def _prepare_report(work_item, prepared):
         """Prepare in a worker process when it produced this report's state, else in-process."""
 
+        if should_cancel():
+            raise ImportPreparationCancelled()
         if prepare_pool is not None and prepare_pool.apply_to(work_item, prepared):
             return
+        if should_cancel():
+            raise ImportPreparationCancelled()
         prepared.parser.prepare_for_two_stage_pipeline()
 
     if enable_two_stage_pipeline:
@@ -725,7 +735,9 @@ def parse_new_reports(
 
                 if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
                     try:
-                        _require_prepared_report_approval(prepared)
+                        _require_prepared_report_approval(
+                            prepared, verify_current=not require_typed_persistence_outcome
+                        )
                         if should_cancel():
                             cancel_requested = True
                             break
@@ -808,11 +820,15 @@ def parse_new_reports(
             try:
                 if require_typed_persistence_outcome:
                     _prepare_report(work_item, prepared)
-                _require_prepared_report_approval(prepared)
+                _require_prepared_report_approval(
+                    prepared, verify_current=not require_typed_persistence_outcome
+                )
                 if should_cancel():
                     break
                 outcome = persist_report(parser)
                 _record_persistence_outcome(outcome)
+            except ImportPreparationCancelled:
+                break
             except Exception as exc:
                 if _is_selected_approval_drift(work_item, exc):
                     _record_approval_drift(report, exc)
@@ -1054,7 +1070,7 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
                 updated_fields.append(field_name)
             continue
 
-        if current_value not in (None, ""):
+        if current_value not in (None, "") or _field_has_manual_override(current_metadata_json, field_name):
             merged_map[field_name] = current_value
             if current_value != enriched_value:
                 preserved_fields.append(field_name)
@@ -1176,6 +1192,19 @@ def selection_result_for_complete_metadata_parser(parser):
     return selection_result
 
 
+def _enriched_candidates_after_manual_clears(candidates, metadata):
+    """Keep detected evidence without selecting values explicitly cleared by a user."""
+    cleared = {
+        name for name in _METADATA_VALUE_FIELDS
+        if _field_has_manual_override(metadata.metadata_json, name)
+        and _metadata_value(metadata, name) in (None, "")
+    }
+    return tuple(
+        replace(candidate, selected=False) if candidate.field_name in cleared else candidate
+        for candidate in candidates
+    )
+
+
 def persist_complete_metadata_enrichment(
     db_file, report_id, selection_result, *, connection=None,
     approval: ReportEnrichmentApproval | None = None,
@@ -1199,7 +1228,7 @@ def persist_complete_metadata_enrichment(
     repository.replace_report_metadata_enrichment(
         report_id,
         merged_metadata,
-        candidates=selection_result.candidates,
+        candidates=_enriched_candidates_after_manual_clears(selection_result.candidates, merged_metadata),
         warnings=merged_metadata.warnings,
         metadata_version="report_metadata_v1",
         metadata_profile_id=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.template_family,
@@ -2188,9 +2217,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         return self._prepare_pool
 
     def _close_prepare_pool(self) -> None:
-        pool, self._prepare_pool = self._prepare_pool, None
-        if pool is not None:
-            pool.close(cancel=self.parsing_canceled)
+        if self._prepare_pool is not None:
+            # Retain ownership if bounded shutdown fails; archive cleanup must wait.
+            self._prepare_pool.close(cancel=self.parsing_canceled)
+            self._prepare_pool = None
 
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function

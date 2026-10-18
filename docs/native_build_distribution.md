@@ -262,7 +262,7 @@ contract and security notes are in `packaging/launcher/README.md`. The launcher 
 binary, not a Python extension: it has no Python fallback, and the PyInstaller portable envelope
 and onedir remain available as the fallback deliveries. To compare the deliveries on Windows, run
 the `windows-startup-benchmark` job (`scripts/measure_windows_startup_routes.py`): the same startup
-smoke through the envelope, the launcher cold and the launcher warm, with median wall time and
+smoke through the envelope, the launcher cold, its one-time verification, and the launcher warm, with median wall time and
 time to the first main-window paint.
 
 PyInstaller onefile remains the closest turnkey single-file distribution for
@@ -322,7 +322,8 @@ bootloader, extraction, launcher and supervisor included:
 ```
 
 It runs the same `METROLIZA_STARTUP_UI_SMOKE=1` smoke through the portable envelope, the launcher
-with an empty cache (a fresh `METROLIZA_RUNTIME_ROOT` per run) and the launcher on a warm cache, and
+with an empty cache (a fresh `METROLIZA_RUNTIME_ROOT` per run), its second-launch verification,
+and the launcher on a completed warm cache, and
 writes `startup-benchmark.json` and `startup-benchmark.md`. The CI job
 `windows-startup-benchmark` (`run_windows_startup_benchmark=1`) does exactly this.
 

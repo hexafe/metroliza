@@ -269,6 +269,98 @@ def test_closing_while_a_load_runs_cancels_the_worker_and_keeps_no_thread_alive(
     assert slot.thread is None and slot.state == "idle"
 
 
+@pytest.mark.parametrize("blocked_by", ["execute", "lock"])
+def test_sqlite_load_cancels_before_the_first_batch(tmp_path, blocked_by):
+    _app()
+    database = tmp_path / "blocked.db"
+    _write_database(database, [(1, "R", 1.0)])
+    started = threading.Event()
+    cleanup_cancel = threading.Event()
+    connections = []
+    connect = sqlite3.connect
+
+    def observed_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connections.append(connection)
+        connection.set_progress_handler(cleanup_cancel.is_set, 1000)
+        connection.set_trace_callback(lambda sql: started.set() if "WITH RECURSIVE" in sql else None)
+        if blocked_by == "lock":
+            started.set()  # next step is the PRAGMA/SELECT blocked by the exclusive writer
+        return connection
+
+    query = """WITH RECURSIVE numbers(n) AS (
+        VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000
+    ) SELECT sum(n) AS report_id FROM numbers"""
+    if blocked_by == "lock":
+        query = "SELECT id AS report_id FROM t"
+    worker = records.RecordLoadThread("report", 1, str(database), query, SPECS)
+    loaded, failed = [], []
+    worker.loaded.connect(lambda *args: loaded.append(args))
+    worker.failed.connect(lambda *args: failed.append(args))
+    with closing(connect(database)) as locker:
+        if blocked_by == "lock":
+            locker.execute("BEGIN EXCLUSIVE")
+        with patch.object(sqlite3, "connect", observed_connect):
+            records.start_load_thread(worker)
+            try:
+                assert started.wait(5)
+                assert not worker.wait(100)  # the SQL/lock is still pending, before any batch
+                records.cancel_load_thread(worker, wait_ms=1000)
+                assert not worker.isRunning(), "cancellation returned with SQLite still executing"
+            finally:
+                # Always release real SQL and join, including when testing the broken code.
+                worker.requestInterruption()
+                cleanup_cancel.set()
+                for connection in connections:
+                    try:
+                        connection.interrupt()
+                    except sqlite3.ProgrammingError:  # already closed by the worker
+                        pass
+                locker.rollback()
+                worker.wait()
+                _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS)
+    assert not loaded and not failed
+
+
+def test_about_to_quit_joins_a_worker_that_exceeds_the_bounded_wait(tmp_path):
+    app = _app()
+    database = tmp_path / "blocked.db"
+    _write_database(database, [])
+    entered, release = threading.Event(), threading.Event()
+    connect = sqlite3.connect
+
+    def blocked_sql():
+        entered.set()
+        release.wait(5)  # a finite stand-in for an uninterruptible SQLite extension
+        return 1
+
+    def blocking_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.create_function("blocked_sql", 0, blocked_sql)
+        return connection
+
+    worker = records.RecordLoadThread("report", 1, str(database), "SELECT blocked_sql() AS report_id", SPECS)
+    cancel = records.cancel_load_thread
+    unblock = threading.Timer(0.2, release.set)
+    with patch.object(sqlite3, "connect", blocking_connect):
+        records.start_load_thread(worker)
+        try:
+            assert entered.wait(5)
+            unblock.start()
+            with patch.object(worker, "wait", wraps=worker.wait) as waits, patch.object(
+                records, "cancel_load_thread", lambda thread: cancel(thread, wait_ms=1)
+            ):
+                app.aboutToQuit.emit()
+                assert not worker.isRunning(), "application shutdown returned before the worker finished"
+                assert waits.call_count == 2  # bounded wait failed, so exit must wait for completion
+        finally:
+            release.set()
+            unblock.cancel()
+            worker.requestInterruption()
+            worker.wait()
+            _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS)
+
+
 def test_failed_load_is_logged_and_the_tab_can_retry(current_dialog):
     dialog = current_dialog
     slot = dialog._record_slots[1]
@@ -327,6 +419,44 @@ def test_in_cell_editor_commits_through_the_model_and_marks_the_dialog_dirty(cur
     view.closeEditor(editor, view.itemDelegate().EndEditHint.NoHint)
 
     assert _display(view.model(), 0, 2) == "WIDTH-2"
+    assert dialog.has_pending_changes()
+
+
+@pytest.mark.parametrize("filter_text", ["pending edit", "no matching row"])
+def test_pending_filter_waits_for_uncommitted_cell_editor(current_dialog, filter_text):
+    from PyQt6.QtWidgets import QLineEdit
+
+    dialog = current_dialog
+    dialog.ensure_record_tables_loaded()
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    slot = dialog._record_slots[1]
+    view = slot.view
+    model = view.model()
+    timeouts = []
+    slot.filter_timer.timeout.connect(lambda: timeouts.append(True))
+    slot.filter_edit.setText(filter_text)
+    assert slot.filter_timer.isActive()
+
+    index = model.index(0, 2)
+    view.setCurrentIndex(index)
+    view.edit(index)
+    editor = view.viewport().findChild(QLineEdit)
+    assert editor is not None
+    editor.setText("pending edit")
+
+    assert _pump(lambda: bool(timeouts))
+    assert model.filter_text == ""  # no reset while the delegate owns uncommitted text
+    assert view.state() == view.State.EditingState
+    assert editor.text() == "pending edit"
+    dialog.flush_record_filters()  # explicit flush must also preserve the editor
+    assert view.state() == view.State.EditingState
+
+    QTest.keyClick(editor, Qt.Key.Key_Return)
+    assert _pump(lambda: model.filter_text == filter_text)
+    assert model.text_at(0, 2) == "pending edit"
+    assert model.original_text(0, 2) == "WIDTH"
+    assert dialog.collect_measurement_record_updates() == [(101, {"header": "pending edit"})]
+    assert model.rowCount() == (1 if filter_text == "pending edit" else 0)
     assert dialog.has_pending_changes()
 
 

@@ -473,44 +473,34 @@ def iter_sql_query_batches(
     connection: sqlite3.Connection | None = None,
     retries: int = 2,
     retry_delay_s: float = 0.05,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> Iterator[RowBatch]:
-    """Stream SELECT rows in bounded batches without building a full result list."""
+    """Stream SELECT rows in bounded batches, optionally cancelling owned SQL execution.
 
+    Cancellation checks SQLite VM progress and lock waits, including connection PRAGMAs.
+    Caller-owned connections retain their handlers and cannot opt into cancellation here.
+    """
+
+    if connection is not None and should_cancel is not None:
+        raise ValueError("Cancellation requires an owned SQLite connection")
     normalized_params = _normalize_sql_params(params)
     safe_batch_size = max(1, int(batch_size))
     attempts = retries + 1
     yielded = False
 
-    def _batches(conn: sqlite3.Connection) -> Iterator[RowBatch]:
-        nonlocal yielded
-        with closing(conn.cursor()) as cursor:
-            cursor.execute(query, normalized_params)
-            columns = tuple(description[0] for description in (cursor.description or ()))
-            offset = 0
-            batch_index = 0
-            while True:
-                rows = tuple(cursor.fetchmany(safe_batch_size))
-                if not rows:
-                    return
-                yielded = True
-                yield RowBatch(
-                    columns=columns,
-                    rows=rows,
-                    batch_index=batch_index,
-                    offset=offset,
-                )
-                offset += len(rows)
-                batch_index += 1
-
     for attempt in range(attempts):
         try:
-            if connection is None:
-                with sqlite_connection_scope(db_path) as conn:
-                    yield from _batches(conn)
-            else:
-                yield from _batches(connection)
+            with (
+                _batch_connection_scope(db_path, should_cancel, connection) as conn,
+                closing(_iter_cursor_batches(conn, query, normalized_params, safe_batch_size, should_cancel)) as batches,
+            ):
+                for batch in batches:
+                    yielded = True
+                    yield batch
             return
         except sqlite3.OperationalError as exc:
+            if should_cancel is not None and should_cancel():
+                return
             if yielded or not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
@@ -552,3 +542,66 @@ def sqlite_query_only_connection_scope(db_path: str) -> Iterator[sqlite3.Connect
         with closing(connection.cursor()) as cursor:
             cursor.execute("PRAGMA query_only=ON")
         yield connection
+
+
+@contextmanager
+def _batch_connection_scope(
+    db_path: str,
+    should_cancel: Callable[[], bool] | None,
+    connection: sqlite3.Connection | None,
+) -> Iterator[sqlite3.Connection]:
+    """Keep normal connection defaults, with short busy waits for cancellable readers."""
+
+    if connection is not None:
+        yield connection
+        return
+    if should_cancel is None:
+        with sqlite_connection_scope(db_path) as connection:
+            yield connection
+        return
+    with closing(sqlite3.connect(db_path, timeout=0.05)) as connection:
+        connection.set_progress_handler(should_cancel, 1000)
+        _run_cancellable_sqlite(lambda: _apply_sqlite_pragmas(connection, DEFAULT_PRAGMA_CONFIG), should_cancel)
+        yield connection
+
+
+def _run_cancellable_sqlite(operation: Callable[[], T], should_cancel: Callable[[], bool] | None) -> T:
+    """Retain a five-second lock allowance, polling cancellation between short busy waits."""
+
+    if should_cancel is None:
+        return operation()
+    deadline = time.monotonic() + 5.0
+    while True:
+        if should_cancel():
+            raise sqlite3.OperationalError("interrupted")
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if not _is_transient_sqlite_error(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _iter_cursor_batches(
+    connection: sqlite3.Connection,
+    query: str,
+    params: tuple[Any, ...],
+    batch_size: int,
+    should_cancel: Callable[[], bool] | None,
+) -> Iterator[RowBatch]:
+    """Own one cursor and keep row offsets stable across each bounded fetch."""
+
+    with closing(connection.cursor()) as cursor:
+        _run_cancellable_sqlite(lambda: cursor.execute(query, params), should_cancel)
+        columns = tuple(description[0] for description in (cursor.description or ()))
+        offset = 0
+        batch_index = 0
+        while True:
+            if should_cancel is not None and should_cancel():
+                return
+            rows = tuple(cursor.fetchmany(batch_size))
+            if not rows:
+                return
+            yield RowBatch(columns=columns, rows=rows, batch_index=batch_index, offset=offset)
+            offset += len(rows)
+            batch_index += 1

@@ -26,9 +26,14 @@ ALWAYS = {always!r}
 root = os.environ.get("METROLIZA_RUNTIME_ROOT")
 if root:
     marker = Path(root) / "runtime" / ".complete"
-    outcome = ALWAYS or ("warm" if marker.exists() else "cold")
+    pending = marker.with_name(".pending")
+    outcome = ALWAYS or ("warm" if marker.exists() else "verified" if pending.exists() else "cold")
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("complete")
+    if outcome == "cold":
+        pending.write_text("pending")
+    elif outcome == "verified":
+        marker.write_text("complete")
+        pending.unlink()
     with open(os.environ["METROLIZA_LAUNCHER_LOG"], "a", encoding="utf-8") as handle:
         handle.write("cache=" + outcome + "\\n")
 time.sleep(SLEEP)
@@ -151,23 +156,27 @@ def test_all_routes_are_measured_with_fresh_cold_caches_and_one_warm_cache(tmp_p
     assert code == 0
     report = read_report(out)
     assert report["passed"] is True
-    assert list(report["scenarios"]) == ["portable_envelope", "launcher_cold", "launcher_warm"]
+    assert list(report["scenarios"]) == ["portable_envelope", "launcher_cold", "launcher_verified", "launcher_warm"]
     for scenario in report["scenarios"].values():
         assert len(scenario["runs"]) == 3
         assert scenario["summary"]["ok"] == 3
         assert scenario["summary"]["wall_ms"]["median"] > 0
     # Every cold run saw an empty cache, every warm run the cache the first cold run filled.
     assert [r["cache"] for r in report["scenarios"]["launcher_cold"]["runs"]] == ["cold"] * 3
+    verified = report["scenarios"]["launcher_verified"]["runs"]
+    assert [r["cache"] for r in verified] == ["verified"] * 3
+    assert [r["launch_number_in_cache"] for r in verified] == [2] * 3
     warm = report["scenarios"]["launcher_warm"]["runs"]
     assert [r["cache"] for r in warm] == ["warm"] * 3
-    assert [r["launch_number_in_cache"] for r in warm] == [2, 3, 4]
+    assert [r["launch_number_in_cache"] for r in warm] == [3, 4, 5]
     run = report["scenarios"]["portable_envelope"]["runs"][0]
     assert run["pre_python_ms"] >= 0
     assert run["first_paint_ms"] >= run["window_shown_ms"] >= run["pre_python_ms"]
     assert "cache" not in run
     assert set(report["comparison"]) == {
         "Launcher, cold cache (first launch)",
-        "Launcher, warm cache (launches 2..N of one cache)",
+        "Launcher, verification (second launch)",
+        "Launcher, warm cache (launches 3..N of one cache)",
     }
     assert report["sizes"]["launcher_runtime_cache_bytes"] > 0
     # Raw evidence is kept next to the summary.

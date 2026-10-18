@@ -99,7 +99,7 @@ def load_record_rows(
     """Fetch ``query`` in batches and build model rows; return ``None`` when cancelled."""
 
     builder = _RecordRowBuilder(specs)
-    batches = iter_sql_query_batches(db_file, query, batch_size=batch_size)
+    batches = iter_sql_query_batches(db_file, query, batch_size=batch_size, should_cancel=should_cancel)
     try:
         for batch in batches:
             if should_cancel is not None and should_cancel():
@@ -305,6 +305,16 @@ class RecordTableView(QTableView):
         if model is not None:
             self.setCurrentIndex(model.index(row, column))
 
+    def try_apply_filter(self, text: str) -> bool:
+        """Defer model resets until the user accepts or cancels the delegate's cell edit."""
+
+        if self.state() == self.State.EditingState:
+            return False
+        model = self.model()
+        if model is not None:
+            model.set_filter_text(text)
+        return True
+
 
 class RecordBusyBanner(QWidget):
     """Compact "loading" row with an indeterminate progress bar."""
@@ -356,18 +366,27 @@ _QUIT_HOOK_APPS: list[Any] = []
 
 
 def cancel_load_thread(thread: RecordLoadThread | None, *, wait_ms: int = 3000) -> None:
-    """Ask ``thread`` to stop and give it a bounded time to do so."""
+    """Cancel SQL and join the worker before its owner or the application can shut down.
+
+    Normal SQLite execution and lock waits cooperate promptly. A SQLite extension may be
+    uninterruptible: if it exceeds the normal wait, defer shutdown until it returns rather
+    than allowing interpreter teardown with a live QThread.
+    """
 
     if thread is None:
         return
     thread.requestInterruption()
-    thread.wait(wait_ms)
+    if not thread.wait(wait_ms):
+        thread.wait()
 
 
 def shutdown_load_threads() -> None:
     """Stop every running record fetch (application exit must not destroy a running QThread)."""
 
-    for thread in list(_ACTIVE_LOAD_THREADS):
+    threads = list(_ACTIVE_LOAD_THREADS)
+    for thread in threads:
+        thread.requestInterruption()
+    for thread in threads:
         cancel_load_thread(thread)
 
 

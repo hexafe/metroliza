@@ -286,3 +286,155 @@ chart range/cached-value semantics. There is no claim of a 100k memory reduction
 Final local status: implementation, required focused checks, representative
 measurements and equivalence evidence complete. Independent review and the
 unverified platform/CI gates listed above remain external responsibilities.
+
+## PR #1133 independent-review corrections
+
+Authority: the external orchestrator's review-correction packet supplied in the
+current session; starting HEAD `4c564a2e`. Whole-PR routing remains BOUNDED
+INTEGRATION, coordinator only; runtime model/reasoning not visible. Current branch
+and the PR comparison base `origin/integrate/2026.09-rc1-into-develop` are retained.
+The earlier local-complete verdict above is historical and superseded for the
+two reviewed defects. The correction packet, exact source identity, red/green
+receipts and new measurements live under `scratchpad/codex/1133-review/` beside
+the original `1128/` evidence directory.
+
+MUST: reproduce each defect before its fix, preserve complete artifact semantics
+and performance, rerun all original related/required checks, and commit each
+finding separately. SHOULD: keep bulk writes and bounded per-column allocations.
+DEFERRED: Windows/frozen-build/manual Excel and hosted CI evidence remains owned
+by the external orchestrator; remote writes are forbidden.
+
+### P1: oversized text stops bulk column writing
+
+`p1-red.log`: four oversized ASCII/Unicode object/string cases fail because the
+sentinels after the long cell disappear; both 32,767-character boundary cases
+pass. Each test creates the pandas reference workbook before calling the bulk
+writer. The reference truncates only the long cell and retains both sentinels.
+
+`_column_values` now truncates string values to 32,767 characters before the bulk
+write, matching XlsxWriter's per-cell behavior and retaining shared-string order.
+Unexpected bulk-write return codes raise an error rather than publish a partial
+success. Existing infinity conversion moved unchanged into the helper to keep
+complexity bounded. No workbook options or literal formula/URL policy changed.
+
+`p1-green.log`: **15 passed, 14 deselected**, including all prior bulk-writer
+cases, all six text cases and both injected return-code failures. Cells, types,
+formats, styles and every XLSX package member except core timestamps match pandas.
+Focused Ruff and whitespace checks pass. Complete validation and fresh benchmark
+results will be recorded after both finding commits.
+
+### P2: object-dtype NumPy booleans become Excel numbers
+
+`p2-red.log`: **3 failed, 1 passed**. NumPy booleans mixed with `None`, `pd.NA`
+or `NaN` are written as numeric cells (`1`/`0`, type `n`) instead of pandas'
+boolean cells (`TRUE`/`FALSE`, type `b`). The `pd.NaT` case already selects the
+complex-type pandas fallback and passes. All reference workbooks were produced
+before changing this boolean conversion.
+
+Boolean columns now convert nonmissing values to Python `bool` and missing values
+to empty strings before bulk writing. This covers object, NumPy and nullable
+boolean columns without changing the frame. `p2-green.log`: **19 passed,
+14 deselected**, with exact cells/types/styles and XLSX-part equality against
+pandas for all four new cases and the previous bulk-writer fixtures. Focused Ruff
+and whitespace checks pass. No baseline, budget, package, native or policy change.
+
+### Final correction evidence
+
+Finding commits: `39ed6554d8ac34c8c16d41a617c8e1780702266d` (P1), then
+`44519f0d6776f0a87a0cd95b20ff6f83dbca8856` (P2). The latter is the exact production,
+test and benchmark source used below. The final evidence-only commit preserves
+these source bytes. SHA-256 hashes and installed versions are in
+`after-identity.json` and were rechecked after all measurements. The read-only
+archive of starting HEAD `4c564a2e` was verified against all 1,093 tracked blobs
+before and after execution. No additional Git worktree was created.
+
+The original 13-file command in **Exact local validation** was rerun unchanged
+(including `qt_app_keeper`, offscreen Qt and disabled core dumps): **501 passed,
+4 warnings in 142.90 s**, exit 0. The warnings are pandas truncating the synthetic
+oversized-text reference cells. Repository-wide `python -m ruff check .` and
+`git diff 4c564a2e --check` both returned exit 0. Exact expanded commands and
+results are also preserved in `run_checks.sh` and `validation-commands.md` under
+`1133-review/`. No budget, ownership rule or security baseline changed; no changed
+file has a recorded Bandit finding whose line location could shift.
+
+Fresh final artifact captures at **10,000 and 100,000 rows × 8 columns** were
+compared both with starting HEAD and directly with the original PR's pandas
+baseline captures from `82f8f576`. Every comparison returned exit 0:
+
+- No different XLSX package parts after the original timestamp/temporary-SQLite
+  path normalization. All 20 chart/image members remain byte-identical.
+- Complete dashboard manifests, normalized HTML and offline assets match.
+- The new adversarial tests additionally prove oversized-cell truncation with
+  retained sentinels, boolean cell types, blanks, styles and shared-string XML.
+
+Receipts: `final-vs-before-{10000,100000}.log`,
+`final-vs-original-{10000,100000}.log` and `after-proof-N/comparison.json`.
+The comparison script is the PR's original `compare.py`, copied unchanged into
+the correction evidence directory. No additional normalization was introduced.
+
+### Correction benchmark results
+
+Each value is the median of **three fresh processes**, using the unchanged PR
+benchmark and requested shared interpreter. Each size also has a separate
+artifact capture, excluded from timing samples. Commands from the current
+worktree and the immutable starting-HEAD archive respectively:
+
+```bash
+bash "$TASK/run_measurements.sh" after
+# cwd: "$TASK/before-source"
+bash "$TASK/run_measurements.sh" before
+```
+
+Here `TASK` is the full `scratchpad/codex/1133-review` path beside the original
+`1128` directory. The expanded per-sample command is:
+
+```bash
+ulimit -c 0
+unset QT_QPA_PLATFORMTHEME
+export QT_QPA_PLATFORM=offscreen PYTHONPATH=src:. PYTHONDONTWRITEBYTECODE=1
+/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python "$TASK/timewrap.py" "$TASK/$VARIANT-$N-$R/resource.json" scripts/benchmark_paths.py --scenarios csv_summary_export_path --csv-rows "$N" --csv-columns 8 --output-dir "$TASK/$VARIANT-$N-$R"
+```
+
+`VARIANT=before/after`, `N=10000/100000`, `R=1/2/3`. The baseline batch ran first,
+then integrated validation, then the final batch. Short focused red/green tests
+overlapped the initial baseline batch; other agents continued to load the host.
+No cache clearing, dependency installation or native/backend change occurred.
+Raw JSON/CSV, peak-RSS/load receipts and the complete `summary.json` remain in
+scratch; no timing sample was discarded.
+
+| Rows | Metric | Before fixes (`4c564a2e`) | After fixes (`44519f0d`) |
+| ---: | --- | ---: | ---: |
+| 10,000 | total | 21.761 s | 22.497 s |
+| 10,000 | workbook write | 5.784 s | 5.922 s |
+| 10,000 | workbook sheet writes | 1.136 s | 1.211 s |
+| 10,000 | peak RSS | 293.9 MiB | 310.3 MiB |
+| 100,000 | total | 90.915 s | 83.643 s |
+| 100,000 | workbook write | 43.535 s | 41.151 s |
+| 100,000 | workbook sheet writes | 10.649 s | 10.628 s |
+| 100,000 | peak RSS | 1014.6 MiB | 1016.9 MiB |
+
+Median load averages (1/5/15 minutes), measured at process start and exit:
+
+| Rows | Variant | Start | Exit |
+| ---: | --- | --- | --- |
+| 10,000 | before | 5.61 / 3.42 / 2.88 | 6.60 / 3.81 / 3.02 |
+| 10,000 | after | 7.92 / 8.30 / 5.98 | 7.58 / 8.12 / 6.09 |
+| 100,000 | before | 9.54 / 6.52 / 4.24 | 9.98 / 7.35 / 4.77 |
+| 100,000 | after | 8.09 / 8.07 / 6.34 | 8.24 / 8.07 / 6.58 |
+
+The 10k total increased 3.4%; the 100k total decreased 8.0%. Shared-host load and
+per-column string normalization preclude attributing these differences to one
+cause. The bulk path remains, and the representative timings retain the PR's
+large improvement over its original historical pandas measurements; those older
+measurements are not a new controlled comparison. Workbook memory remains near
+1 GiB at 100k rows and is an open scaling risk.
+
+Local disposition: both supplied findings reproduced and corrected, all required
+local checks and artifact comparisons pass, and benchmark reruns are complete.
+Independent exact-head review remains with the external orchestrator. Hosted CI,
+Windows source/frozen builds, clean-machine execution and visual Excel/browser
+behavior were not verified. No merge/readiness/release verdict is implied.
+Rollback is a local revert of the two finding commits; no data migration is
+involved. Only the three declared existing files changed. Remote activity was
+limited to a read-only Issue #1128 fetch; no push, PR mutation, merge, rebase,
+hard reset, shared stash, deployment or publication occurred.

@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import xlsxwriter
+import numpy as np
 
 from metroliza.exporting import xlsx_bulk_sheet
 from metroliza.exporting.export_backends import _is_blank_cell
@@ -204,6 +205,50 @@ class TestBulkWorksheetEquivalence(BulkEquivalenceCase):
         self.assert_same(['a', 'b'], rows, extra=extra)
 
 
+class TestBulkSpans(unittest.TestCase):
+    def test_large_block_span_work_scales_linearly(self):
+        examined = []
+
+        class CountedArray(np.ndarray):
+            def __getitem__(self, key):
+                result = super().__getitem__(key)
+                # Boolean indexing must scan the entire mask, even for 16 hits.
+                examined.append(key.size if isinstance(key, np.ndarray) else result.size)
+                return result
+
+        work = []
+        for n_rows in (16_384, 65_536):
+            sheet = BulkRowsWorksheet()
+            block = xlsx_bulk_sheet.BulkBlock(first_row=7, n_rows=n_rows, columns=[])
+            lows = np.zeros(n_rows, dtype=np.int64).view(CountedArray)
+            highs = np.full(n_rows, 3, dtype=np.int64).view(CountedArray)
+            examined.clear()
+            with patch.object(sheet, '_row_column_extent', return_value=(lows, highs)):
+                sheet._merge_block_spans(block)
+            self.assertEqual(len(sheet.row_spans), block.last_row // 16 + 1)
+            self.assertEqual(set(sheet.row_spans.values()), {'1:4'})
+            work.append(sum(examined))
+        self.assertLessEqual(work[0], 2 * 16_384)
+        self.assertLessEqual(work[1], 4 * work[0])
+
+    def test_sparse_unaligned_blocks_merge_with_existing_spans_like_stock(self):
+        rows = [(None, None, None)] * 41
+        rows[0] = (1.25, None, None)
+        rows[40] = (None, None, 9.5)
+        plan = plan_bulk_rows(['a', 'b', 'c'], rows)
+        stock, bulk = xlsxwriter.worksheet.Worksheet(), BulkRowsWorksheet()
+        stock.write_number(0, 5, 2)
+        stock.write_number(50, 7, 1)
+        for offset, row in enumerate(rows, start=7):
+            for col, value in enumerate(row):
+                write_untrusted_xlsx_cell(stock, offset, col, value)
+        stock._calculate_spans()
+        bulk.row_spans = {0: '6:6', 3: '8:8'}
+        bulk._merge_block_spans(xlsx_bulk_sheet.BulkBlock(7, len(rows), plan.columns))
+        self.assertEqual(bulk.row_spans, stock.row_spans)
+        self.assertEqual(bulk.row_spans, {0: '1:6', 2: '3:3', 3: '8:8'})
+
+
 class TestFastPathEquivalence(unittest.TestCase):
     """Cell, column and chart-cache fast paths versus stock XlsxWriter."""
 
@@ -221,6 +266,24 @@ class TestFastPathEquivalence(unittest.TestCase):
         self.assertEqual(sorted(parts['stock']), sorted(parts['fast']))
         for name in parts['stock']:
             self.assertEqual(parts['stock'][name], parts['fast'][name], name)
+
+    def test_sparse_unaligned_blocks_share_spans_with_cells_and_other_blocks(self):
+        def build(book):
+            sheet = book.add_worksheet('S')
+            sheet.write_number(0, 5, 2)
+            sheet.write_number(66, 7, 3)
+            for first_row, height in ((7, 41), (49, 5), (56, 3), (64, 2)):
+                rows = [(None, None, None)] * height
+                rows[0] = ('=literal', None, None)
+                rows[-1] = (None, None, 1.25)
+                if isinstance(sheet, BulkRowsWorksheet):
+                    self.assertTrue(sheet.write_bulk_block(first_row, plan_bulk_rows(['a', 'b', 'c'], rows)))
+                else:
+                    for offset, row in enumerate(rows, start=first_row):
+                        for col, value in enumerate(row):
+                            write_untrusted_xlsx_cell(sheet, offset, col, value)
+
+        self.assert_same_book(build)
 
     def test_plain_columns_match_write_column(self):
         long_text = 'x' * 40000

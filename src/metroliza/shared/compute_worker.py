@@ -28,6 +28,19 @@ def worker_executable() -> Path:
     return application.with_name("metroliza_compute_worker.exe")
 
 
+def compute_workers_available() -> bool:
+    """Keep unsupported or damaged frozen packages serial, including explicit counts."""
+    if not getattr(sys, "frozen", False):
+        return True
+    if not frozen_windows():
+        return False
+    try:
+        worker_executable()
+    except (OSError, RuntimeError):
+        return False
+    return True
+
+
 def spawn_context():
     context = multiprocessing.get_context("spawn")
     if frozen_windows():

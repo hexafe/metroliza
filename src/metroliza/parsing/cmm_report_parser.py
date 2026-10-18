@@ -59,7 +59,10 @@ from metroliza.parsing.parser_plugin_contracts import (
     ProbeResult,
     ReportInfoV2,
 )
-from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.source_inspection import (
+    SourceChangedAfterInspectionError,
+    SourceInspectionContext,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1309,7 +1312,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             if import_if_absent:
                 persistence_arguments.update(
                     source_digest_verifier=(
-                        source_inspection.confirmed_sha256
+                        source_inspection.verified_sha256
                         if source_inspection is not None
                         else None
                     ),
@@ -1323,6 +1326,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             self.stage_timings_s["db_write_runtime"] = perf_counter() - db_write_start
             logger.info("Report '%s' measurements inserted into the database.", self.file_name)
             return outcome
+        except SourceChangedAfterInspectionError as e:
+            # Atomic import reports expected drift through its owning workflow.
+            # Preserve the legacy replacement API's error-reporting contract.
+            if not import_if_absent:
+                self.log_and_exit(e)
+            raise
         except Exception as e:
             self.log_and_exit(e)
             raise

@@ -506,6 +506,39 @@ def test_user_cleared_value_is_imported_as_empty(tmp_path):
     assert not [c for c in candidates if c["field_name"] == "part_name" and c["is_selected"]]
 
 
+@pytest.mark.parametrize("field", ["reference", "part_name", "sample_number", "report_date", "revision"])
+def test_user_cleared_value_survives_fast_import_and_enrichment(tmp_path, fake_ocr, monkeypatch, field):
+    source, database, review, rows, reader = _prefilled_rows(tmp_path, (NAME,))
+    _read(reader, rows, mode=MODE_OCR)
+    row = next(iter(rows.values()))
+    assert row.value(field)
+    row.set_user_value(field, "")
+    plan = replace(
+        _plan(source, database, review, build_overrides(rows.values())),
+        run_background_metadata_enrichment=True,
+    )
+    imported = []
+    complete = ParseReportsThread._complete_requested_enrichment
+
+    def capture_import(worker, paths, connection):
+        imported.append(_single_report(database)[0][field])
+        return complete(worker, paths, connection)
+
+    monkeypatch.setattr(ParseReportsThread, "_complete_requested_enrichment", capture_import)
+    worker = ParseReportsThread(plan)
+    worker.run()
+
+    assert imported == [None]
+    assert worker.last_parse_result.imported_files == 1
+    assert worker.last_enrichment_result.enriched_files == 1
+    metadata, candidates, _report = _single_report(database)
+    assert metadata[field] is None
+    assert not [c for c in candidates if c["field_name"] == field and c["is_selected"]]
+    provenance = json.loads(metadata["metadata_json"])
+    assert provenance["manual_overrides"][field]["value"] is None
+    assert provenance["field_sources"][field] == "user_manual"
+
+
 # --- cancel / invalidation: no database write ---------------------------------
 
 

@@ -699,7 +699,7 @@ class ModifyDB(QDialog):
         self.log_and_exit(error)
 
     def _cancel_record_load(self, slot, *, wait_ms=3000):
-        """Ignore any in-flight fetch for ``slot`` and give its worker a bounded time to stop."""
+        """Ignore any in-flight fetch for ``slot``, cancel its SQL and join the worker."""
         slot.generation += 1
         thread, slot.thread = slot.thread, None
         if slot.state == "loading":
@@ -737,10 +737,10 @@ class ModifyDB(QDialog):
     def _apply_record_filter(self, slot):
         try:
             slot.filter_timer.stop()
-            model = slot.view.model()
-            if model is not None:
-                model.set_filter_text(slot.filter_edit.text())
+            if slot.view.try_apply_filter(slot.filter_edit.text()):
                 self._last_clicked_row_by_table.pop(slot.view, None)
+            else:
+                slot.filter_timer.start()
         except Exception as e:
             self.log_and_exit(e)
 

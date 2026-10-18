@@ -47,7 +47,9 @@ cargo check --locked --manifest-path packaging/launcher/Cargo.toml --target x86_
 `metroliza.exe`, the supervisor, application, OCR worker and `supervision_manifest.json` must be
 present, the build provenance must be the clean, exact `HEAD` with the same release label, and the
 onedir must pass the identity check the portable envelope runs (`_verified_launcher`: complete
-package identity plus the supervisor's provenance sidecar). Without `-Supervised` the script packs
+package identity plus the supervisor's provenance sidecar). The supplied onedir's verified
+identity, embedded provenance and supervisor sidecar must all identify `HEAD`; a valid package
+from another commit is rejected even when its release label matches. Without `-Supervised` the script packs
 any onedir (the CI synthetic payload uses that).
 
 * **Name:** `dist/metroliza_<label>_launcher.exe`, e.g. `metroliza_2026.09rc1_260927_launcher.exe`.
@@ -68,16 +70,16 @@ any onedir (the CI synthetic payload uses that).
 
 ## Self-repair contract
 
-The warm check is size-only by design, so the launcher cannot see a same-size modification. The
-supervisor can (it verifies the package identity), and for that case the two sides agree on this:
+After the second-launch integrity/durability pass, the completed warm check is size-only.
+Later same-size modifications need the supervisor's package-identity check and this repair contract:
 
 1. The launcher sets `METROLIZA_RUNTIME_REPAIR_AVAILABLE=1` in the environment of the **first**
    start of the entry (any inherited value is overwritten).
 2. If the supervisor finds its package invalid and that variable is `1`, it shows **no notice** and
    exits with code **75** (`EX_TEMPFAIL`). Without the variable it keeps showing its precise notice.
 3. On exit code 75 the launcher logs `repair=requested`, releases the runtime, deletes the
-   completion marker (so the directory can never look valid again; the whole tree is removed if the
-   marker cannot be deleted), re-extracts and re-verifies every file through the normal repair path
+   pending and completion markers (so the directory can never look valid again; the whole tree is
+   removed if a matching marker cannot be deleted), re-extracts and re-verifies every file through the normal repair path
    (`cache=repair`) and starts the entry **once more, with the variable removed**.
 4. The exit code of that second run is returned unchanged, 75 included. There is never a second
    repair and never a loop; a second failure therefore reaches the user as the supervisor's precise
@@ -124,7 +126,8 @@ scenario of `scripts/qualify_windows_launcher.py`.
 ```
 <root>/<version>_<sha8>/              unpacked onedir; valid only with a matching marker
                                       (version = <label>-<hash12> for a --content-key payload)
-<root>/<version>_<sha8>/.complete     marker: hex manifest hash, written last
+<root>/<version>_<sha8>/.pending      flushed manifest hash; extraction finished, verification due
+<root>/<version>_<sha8>/.complete     flushed manifest hash; verified files are durable
 <root>/<version>_<sha8>.staging-<pid> extraction in progress
 <root>/<version>_<sha8>.use           lock file, shared lock held while that version runs
 <root>/.extract.lock                  exclusive lock: cold extractions and cleanup
@@ -143,16 +146,22 @@ written to `%TEMP%`.
    forward (the entry process id is published in a named section) or show a fixed message, then
    exit with code 0 without touching the cache.
 3. Take the shared `.use` lock of this version.
-4. **Warm**: marker equals the manifest hash and every manifest file exists with its expected size.
-   No hashing, nothing written. The entry is started.
+4. **Warm**: `.complete` equals the manifest hash, `.pending` is absent and every manifest file
+   exists with its expected size. No hashing, nothing written. The entry is started.
+   **Pending**: under `.extract.lock`, verify every manifest file's SHA-256 using 2–8 bounded
+   workers (1 MiB per worker), then flush each verified file. Verification alone can read dirty
+   OS pages, so flushing is required before promotion. Persist directory entries on Unix, write
+   and flush `.complete`, then remove `.pending`. Log `cache=verified` and start the entry.
+   If either marker is wrong, a file differs, or verification cannot read/flush it, re-extract
+   before starting the entry. If both markers survive an interrupted promotion, pending wins.
+   A resource-use check prevents replacement while an orphaned application is still running.
 5. **Cold** (no directory) or **repair** (directory present but invalid): show the progress window,
    take `.extract.lock` (waiting if another process extracts, then re-check warm), delete stale
    staging directories, delete the invalid directory, extract with a bounded thread pool into
-   `<dir>.staging-<pid>`, verify the SHA-256 of every file while writing, rename into place, then write and flush the
-   marker. Files are not flushed one by one: per-file `FlushFileBuffers` made the first launch
-   slower than PyInstaller's extraction (Windows CI, #1105). A power loss right after extraction
-   is caught by the warm check (missing or truncated files) and by the supervisor's component
-   hashes (exit 75 repair). Set `METROLIZA_LAUNCHER_SYNC_FILES=1` to flush every file anyway.
+   `<dir>.staging-<pid>`, verify each SHA-256 while writing, rename into place, then write and flush
+   `.pending`. Run immediately without per-file flushing. This preserves fast first launch; the
+   next launch must complete the pending pass even when the supervisor EXE cannot start.
+   Set `METROLIZA_LAUNCHER_SYNC_FILES=1` to also flush files during extraction.
 6. Start the entry executable with `CreateProcessW`: no inherited handles, the **launcher's own
    working directory** (where the user started it, as with the portable envelope; the runtime
    directory is a disposable cache and must never become the default folder of a file dialog or of
@@ -162,17 +171,21 @@ written to `%TEMP%`.
 7. Alongside the app, a best-effort cleanup keeps the current version and the most recently
    completed other version and removes the rest. It only touches directories named
    `<version>_<sha8>`, skips versions whose `.use` lock is held, and yields to a running
-   extraction. It never fails the launch.
+   extraction. Before deleting any file (including the marker), Windows Restart Manager checks
+   every runtime resource for live users. This preserves a complete runtime when an application
+   outlives its supervisor and launcher, even without a `.use` lock; query failures also preserve
+   the directory. Only resource queries are used, never process shutdown or restart. Linux tests
+   use `/proc` executable mappings as the stand-in. It never fails the launch.
 
-A process killed at any point leaves either no marker (so the directory is never used) or a staging
-directory that the next extraction deletes. Corruption or a partial cache is repaired by
-re-extracting; it never fails silently.
+Interrupted extraction leaves staging or an unmarked directory, which is re-extracted. A durable
+pending marker always requires full verification on the next launch; a completed cache has already
+passed verification and file flushing. A verification mismatch repairs without relying on exit 75.
 
 ## User-visible errors
 
 Only fixed English texts (`src/error.rs`): no exception text, paths or codes. Details go to the log
 file named by `METROLIZA_LAUNCHER_LOG` if set. The launcher's own failures use exit codes
-101-104; otherwise the exit code of the entry process is returned. Log lines: `cache=cold|warm|repair`,
+101-104; otherwise the exit code of the entry process is returned. Log lines: `cache=cold|verified|warm|repair`,
 `instance=second`, `entry=started` (twice after a repair), `repair=requested`, `exit=<code>`,
 `cleanup ...`, `error=...`. Setting `METROLIZA_LAUNCHER_NO_UI=1` suppresses message boxes (CI).
 
@@ -185,11 +198,11 @@ Both run on Windows only and are wired into the manual CI jobs; run them locally
 .\build_windows_launcher_exe.ps1 -Supervised      # launcher EXE from the same onedir
 
 # Qualification: first launch, reopen, hard exit, incident export, cleanup. For the launcher it
-# also asserts cache=cold then cache=warm and one complete content-keyed runtime directory.
+# also asserts cache=cold, then cache=verified, then cache=warm and one complete content-keyed runtime directory.
 .\.venv-build\Scripts\python.exe scripts\qualify_windows_portable_onefile.py --artifact dist\metroliza_<label>_launcher.exe --kind launcher
 .\.venv-build\Scripts\python.exe scripts\qualify_windows_portable_onefile.py --artifact dist\metroliza_<label>.exe
 
-# Startup benchmark: the same smoke through envelope, launcher cold and launcher warm, 3 runs each.
+# Startup benchmark: the same smoke through envelope, launcher cold, verification and warm, 3 runs each.
 .\.venv-build\Scripts\python.exe scripts\measure_windows_startup_routes.py `
   --portable dist\metroliza_<label>.exe --launcher dist\metroliza_<label>_launcher.exe --runs 3 --output-dir startup-artifacts
 ```
@@ -209,15 +222,35 @@ run itself (a run without the `first_event_loop_tick` profile event fails). The 
 a wall-clock `epoch_ms`, which lets the script report the time from process creation to
 `main_window_show_called` and to `first_event_loop_tick` ("first paint": the first event-loop tick
 after `show()`), including launcher, extraction and supervisor time. Cold launches use a fresh
-`METROLIZA_RUNTIME_ROOT` each; warm samples are launches 2 to 4 of one populated cache. Hosted
+`METROLIZA_RUNTIME_ROOT` each; second-launch verification uses each of those three pending caches;
+warm samples are launches 3 to 5 of one completed cache. Hosted
 runner numbers are indicative, not clean-machine evidence.
+
+
+The integrity/durability pass is a **one-time second-launch cost after each extraction or repair**.
+The #1105 correction measured a synthetic payload of 128 MiB incompressible filler, 168 files
+(134,982,097 bytes total), using 8 workers on Linux x86_64/tmpfs. Median of three launches:
+
+| Phase | Before | Two-phase cache |
+| --- | ---: | ---: |
+| First launch (extract) | 318.0 ms | 318.6 ms |
+| Second launch | 3.9 ms (size-only) | 215.3 ms (SHA-256 + flush + promote) |
+| Completed warm launch | 4.0 ms | 3.9 ms |
+
+The observed one-minute host load ranged from 8.90 to 10.46. These are memory-backed synthetic
+measurements, not Windows disk or packaged-application timings; in particular tmpfs does not
+measure physical flush latency. The real supervised payload has roughly 2,000 files, so its
+one-time NTFS flush cost remains to be measured. The Windows startup benchmark now reports this
+phase separately, once for each of three independently extracted caches, before measuring warm
+launches. Completed warm launches still perform only marker, existence and size checks.
 
 ## Security notes
 
 * The cache is per user and user-writable, like any per-user install. Anyone who can write to
   `%LOCALAPPDATA%` as that user can alter it; the launcher does not defend against that.
-* Integrity is verified at **extraction**: every file's SHA-256 is checked while it is written, and
-  the manifest is bound to the trailer by hash. A tampered payload fails extraction.
+* Integrity is verified at **extraction** and again before pending-cache promotion: every file's
+  SHA-256 is checked, and the manifest is bound to the trailer by hash. Files are flushed before
+  committing `.complete`. Cache marker paths are reserved and cannot occur in the payload.
 * The **warm check is size-based by design** (no hashing on the fast path). It detects deleted,
   truncated or replaced files but not same-size modification of an extracted file.
 * Signing: no certificate exists today. `build_windows_launcher_exe.ps1` signs the final EXE when
