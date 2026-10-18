@@ -89,7 +89,7 @@ class _SelectedReportWorkItem:
     report_path: str | Path
     selected_identity: SelectedReportIdentity | None = None
     # Inspection created while approving the plan; its digest is only provisional until the
-    # single pre-persistence verification (see SourceInspectionContext.verified_sha256()).
+    # final in-transaction verification (see SourceInspectionContext.verified_sha256()).
     source_inspection: SourceInspectionContext | None = field(default=None, compare=False)
 
 
@@ -591,8 +591,8 @@ def parse_new_reports(
             ),
         )
         if identity is not None:
-            # Parser/registry evidence now; the single content rehash happens right before
-            # persistence so that it also covers the time spent parsing.
+            # Parser/registry evidence now; the final content rehash happens inside
+            # the persistence transaction, after the write lock is acquired.
             _require_prepared_report_approval(prepared, verify_current=False)
         return prepared
 
@@ -725,7 +725,7 @@ def parse_new_reports(
 
                 if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
                     try:
-                        _require_prepared_report_approval(prepared)
+                        _require_prepared_report_approval(prepared, verify_current=False)
                         if should_cancel():
                             cancel_requested = True
                             break
@@ -808,7 +808,7 @@ def parse_new_reports(
             try:
                 if require_typed_persistence_outcome:
                     _prepare_report(work_item, prepared)
-                _require_prepared_report_approval(prepared)
+                _require_prepared_report_approval(prepared, verify_current=False)
                 if should_cancel():
                     break
                 outcome = persist_report(parser)

@@ -109,8 +109,6 @@ class _SourceInspectionCache:
     lock: Lock = field(default_factory=Lock)
     sha256: object = _UNSET
     extracted_text: dict[str, str] = field(default_factory=dict)
-    # ``(sha256, stat signature)`` recorded by the last successful verified_sha256().
-    verified: tuple[str | None, tuple[int, int] | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -201,7 +199,7 @@ class SourceInspectionContext:
     def verified_sha256(self) -> str | None:
         """Rehash the source and reject persistence when it changed after inspection.
 
-        This is the single content verification before persistence. A file whose
+        Atomic import calls this after acquiring the write lock. A file whose
         ``(size, mtime_ns)`` moved while it was being hashed is rejected as changed.
         """
 
@@ -215,24 +213,7 @@ class SourceInspectionContext:
                 inspected_sha256=inspected_sha256,
                 current_sha256=current_sha256,
             )
-        with self._cache.lock:
-            self._cache.verified = (current_sha256, stat_after)
         return current_sha256
-
-    def confirmed_sha256(self) -> str | None:
-        """Return the digest verified by ``verified_sha256()`` without a second content read.
-
-        Valid only while the cheap ``(size, mtime_ns)`` signature still equals the one
-        recorded at verification; any difference, or no prior verification, falls back
-        to a full ``verified_sha256()`` rehash.
-        """
-
-        with self._cache.lock:
-            verified = self._cache.verified
-        if verified is not None and verified[1] is not None:
-            if source_stat_signature(self.source_path) == verified[1]:
-                return verified[0]
-        return self.verified_sha256()
 
     @property
     def cache_identity(self) -> tuple[object, ...]:

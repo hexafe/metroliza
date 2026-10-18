@@ -1589,19 +1589,17 @@ class ReportRepository:
 
         del measurement_count, has_nok, nok_count
         policy = import_policy or ReportImportPolicy()
-        # Exactly one content verification, outside the write transaction. Inside it only
-        # the cheap (size, mtime_ns) signature is compared, so no hashing holds the lock.
-        stat_before = _source_stat_signature(source_path)
-        prechecked_digest = self._verify_import_source_digest(
-            source_path,
-            expected_sha256=source_sha256,
-            source_digest_verifier=source_digest_verifier,
-        )
-        verified_stat = _source_stat_signature(source_path)
-        if verified_stat != stat_before:
-            raise ValueError(
-                "Source changed while its digest was verified; stale final source digest: "
-                f"{source_path}"
+        # The stat check is only an early-out. Content must be verified after the
+        # write lock is acquired, including when BEGIN IMMEDIATE had to wait.
+        reviewed_stat = _source_stat_signature(source_path)
+        if source_digest_verifier is None:
+            # Uninspected repository callers still need an initial digest before
+            # schema creation (#1019). Selected imports carry the preflight digest
+            # and its verifier, so they do not perform this extra inspection.
+            source_sha256 = self._verify_import_source_digest(
+                source_path,
+                expected_sha256=source_sha256,
+                source_digest_verifier=None,
             )
         self._ensure_import_schema()
         now = utc_timestamp()
@@ -1611,12 +1609,16 @@ class ReportRepository:
 
         def _import(cursor) -> ReportImportDisposition:
             cursor.execute("BEGIN IMMEDIATE")
-            if _source_stat_signature(source_path) != verified_stat:
+            if _source_stat_signature(source_path) != reviewed_stat:
                 raise ValueError(
                     "Source changed after its digest was verified; stale final source digest: "
                     f"{source_path}"
                 )
-            verified_digest = prechecked_digest
+            verified_digest = self._verify_import_source_digest(
+                source_path,
+                expected_sha256=source_sha256,
+                source_digest_verifier=source_digest_verifier,
+            )
             if self._accepted_report_id(cursor, verified_digest, policy) is not None:
                 return ReportImportDisposition.ALREADY_PRESENT
 
