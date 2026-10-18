@@ -198,3 +198,47 @@ def test_bulk_writer_retains_non_dataframe_diagnostics_payload(tmp_path):
     _workbook(payload, expected, lambda data, writer, sheet: data.to_excel(writer, sheet_name=sheet, index=False))
     _workbook(payload, actual, write_tabular_dataframe)
     assert _read_cells(expected) == _read_cells(actual)
+
+
+def test_histogram_pool_keeps_at_most_three_jobs_pending():
+    from metroliza.charts.hexafe_plotstats_adapter import _bounded_histogram_tables
+
+    class Future:
+        def __init__(self, pool, job):
+            self.pool, self.job = pool, job
+
+        def result(self):
+            self.pool.pending -= 1
+            fn, *args = self.job
+            return fn(*args)
+
+    class Pool:
+        pending = 0
+        maximum = 0
+
+        def submit(self, *job):
+            self.pending += 1
+            self.maximum = max(self.pending, self.maximum)
+            assert self.pending <= 3
+            return Future(self, job)
+
+    pool = Pool()
+    groups = list(range(100))
+    assert _bounded_histogram_tables(pool, lambda group: group, groups) == groups
+    assert pool.maximum == 3
+    assert pool.pending == 0
+
+
+def test_histogram_worker_runtime_error_is_not_mistaken_for_thread_exhaustion(monkeypatch):
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    calls = []
+
+    def fail(values, **kwargs):
+        calls.append(1)
+        raise RuntimeError('synthetic computation failure')
+
+    monkeypatch.setattr(adapter, '_histogram_table_rows_from_plotstats', fail)
+    with pytest.raises(RuntimeError, match='synthetic computation failure'):
+        adapter.build_histogram_stats_tables([('a', np.arange(3000.0)), ('b', np.arange(3000.0))])
+    assert len(calls) == 2

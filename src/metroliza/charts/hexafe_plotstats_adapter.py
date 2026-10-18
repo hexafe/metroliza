@@ -699,10 +699,26 @@ def build_histogram_stats_table(
     return HistogramStatsTable(title=str(title or "Parameter"), rows=rows, backend=resolved_backend)
 
 
+class _HistogramThreadsUnavailable(Exception):
+    pass
+
+
+def _bounded_histogram_tables(pool, build, groups):
+    tables = []
+    for start in range(0, len(groups), 3):
+        batch = groups[start:start + 3]
+        try:
+            futures = [pool.submit(copy_context().run, build, group) for group in batch]
+        except (OSError, RuntimeError) as exc:
+            raise _HistogramThreadsUnavailable from exc
+        tables.extend(table for future in futures if (table := future.result()) is not None)
+    return tables
+
+
 def build_histogram_stats_tables(
     groups, *, backend="metroliza", lsl=None, usl=None,
 ) -> list[HistogramStatsTable]:
-    """Compute independent full-data tables with at most three joined threads.
+    """Compute full-data tables with at most three joined threads/pending jobs.
 
     Input and result order stay unchanged. Request-local cache state is copied
     explicitly; its byte/entry accounting is locked and released by the caller's
@@ -718,12 +734,10 @@ def build_histogram_stats_tables(
         return [table for table in tables if table is not None]
     with ThreadPoolExecutor(max_workers=min(3, len(groups)), thread_name_prefix="histogram-stats") as pool:
         try:
-            futures = [pool.submit(copy_context().run, build, group) for group in groups]
-        except (OSError, RuntimeError):
+            return _bounded_histogram_tables(pool, build, groups)
+        except _HistogramThreadsUnavailable:
             # Join any started workers before falling back on thread exhaustion.
-            futures = []
-        if futures:
-            return [table for future in futures if (table := future.result()) is not None]
+            pass
     return [table for group in groups if (table := build(group)) is not None]
 
 
