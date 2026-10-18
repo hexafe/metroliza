@@ -2185,9 +2185,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         return self._prepare_pool
 
     def _close_prepare_pool(self) -> None:
-        pool, self._prepare_pool = self._prepare_pool, None
-        if pool is not None:
-            pool.close(cancel=self.parsing_canceled)
+        if self._prepare_pool is not None:
+            # Retain ownership if bounded shutdown fails; archive cleanup must wait.
+            self._prepare_pool.close(cancel=self.parsing_canceled)
+            self._prepare_pool = None
 
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function

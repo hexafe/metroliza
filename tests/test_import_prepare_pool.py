@@ -443,3 +443,69 @@ def test_cancel_during_unresolved_future_never_prepares_serially(tmp_path, monke
     result = thread.last_parse_result
     assert (result.imported_files, result.failed_files, result.cancelled_files) == (0, 0, 2)
     assert shutdown and shutdown[0]["cancel_futures"] is True
+
+
+def _blocked_prepare_worker(task):
+    """A deliberately stuck, core-dump-free worker for the shutdown regression."""
+    import signal
+    import time
+
+    marker, _database, mode = task
+    if mode == "ignore_terminate" and sys.platform != "win32":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    Path(marker).write_text(str(os.getpid()))
+    while True:
+        time.sleep(60)
+
+
+@pytest.mark.parametrize("mode", ["light", "ignore_terminate"])
+def test_cancel_reaps_blocked_workers_and_manager_with_bounded_shutdown(tmp_path, monkeypatch, mode):
+    import time
+
+    monkeypatch.setattr(import_prepare_pool, "prepare_cmm_report_in_worker", _blocked_prepare_worker)
+    for cycle in range(2):
+        markers = [tmp_path / f"{mode}-{cycle}-{index}.started" for index in range(2)]
+        pool = ImportPreparePool(
+            [str(marker) for marker in markers], database_path=str(tmp_path / "unused.sqlite3"),
+            metadata_parsing_mode=mode, workers=2,
+            parser_plugin_id=CMMReportParser.manifest.plugin_id,
+        )
+        executor = pool._executor
+        children = list(executor._processes.values())
+        manager = executor._executor_manager_thread
+        try:
+            deadline = time.monotonic() + 10
+            while not all(marker.exists() for marker in markers) and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert all(marker.exists() for marker in markers), "both blocked workers must be running"
+            started = time.monotonic()
+            pool.close(cancel=True)
+            assert time.monotonic() - started < 5
+            assert all(not child.is_alive() and child.exitcode is not None for child in children)
+            assert not manager.is_alive()
+            assert not pool._futures
+        finally:
+            # Also reap on the deliberately failing pre-fix run; never leak test children.
+            for child in children:
+                if child.is_alive():
+                    child.kill()
+                child.join(timeout=5)
+            executor.shutdown(wait=True, cancel_futures=True)
+
+
+def test_owner_retains_pool_if_bounded_shutdown_fails(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    _write_synthetic_reports(tmp_path / "reports", 2)
+    thread = ParseReportsThread(_plan(tmp_path / "reports", tmp_path / "db.sqlite3"))
+
+    def failed_close(**kwargs):
+        raise RuntimeError("shutdown deadline")
+
+    pool = SimpleNamespace(close=failed_close)
+    thread._prepare_pool = pool
+    thread.stop_parsing()
+    with pytest.raises(RuntimeError, match="shutdown deadline"):
+        thread._close_prepare_pool()
+    assert thread._prepare_pool is pool
+    thread._prepare_pool = None
