@@ -9,6 +9,9 @@
 - The splash screen closes as soon as the main window is visible.
 - A missing or damaged program file is repaired automatically, or the message names the affected file and what to do.
 - Modify Database opens instantly and filters quickly on large databases, and uses far less memory.
+- Excel export (Main plots) is about twice as fast and uses much less memory; Extended plots and CSV Summary exports are faster; the output is unchanged.
+- The filter window opens instantly and loads its choices in the background.
+- Import reads each report file fewer times, which helps most with large reports.
 
 ## 2026.09 RC1 (build 260927)
 - A refreshed Windows workspace brings report review, selected PDF import, analysis, and export together.

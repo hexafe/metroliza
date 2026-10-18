@@ -58,6 +58,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 '- The splash screen closes as soon as the main window is visible<br>',
                 '- A missing or damaged program file is repaired automatically, or the message names the affected file<br>',
                 '- Modify Database opens instantly and searches quickly, even with hundreds of thousands of measurements<br>',
+                '- Excel exports are about twice as fast and use much less memory; Extended plots and CSV Summary exports are faster too<br>',
+                '- The filter window opens instantly and loads its choices in the background<br>',
             ],
         )
         self.assertIn("Version 2026.06rc2 (build 260711)", VersionDate.release_notes)
