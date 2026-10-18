@@ -132,7 +132,10 @@ def test_import_releases_each_inspections_extracted_text(tmp_path, monkeypatch, 
     def capture_filter(*args):
         result = original_filter(*args)
         captured.extend(item.source_inspection for item in result.approved_reports)
-        assert all(item.get_cached_pdf_text(max_chars=16_000_000) for item in captured)
+        # The cold probe cache made the filter extract text; no item may carry it onward.
+        assert captured and all(
+            item.get_cached_pdf_text(max_chars=16_000_000) is None for item in captured
+        )
         return result
 
     def import_and_check_release(self, *args, **kwargs):

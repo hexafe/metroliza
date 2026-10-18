@@ -207,16 +207,6 @@ def compute_sha256(file_path: str | Path, *, chunk_size: int = 1024 * 1024) -> s
     return digest.hexdigest()
 
 
-def _source_stat_signature(path: str | Path) -> tuple[int, int] | None:
-    """Return the cheap ``(size, mtime_ns)`` change signal without reading content."""
-
-    try:
-        stat_result = os.stat(path)
-    except (OSError, ValueError):
-        return None
-    return stat_result.st_size, stat_result.st_mtime_ns
-
-
 def infer_source_format(file_path: str | Path) -> str:
     """Infer a neutral source format from a file suffix."""
 
