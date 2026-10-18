@@ -303,7 +303,8 @@ PR based on it, an active release/integration stack, or a currently running exec
 cannot yet move. The keep decision must name the consumer and the exact retirement trigger.
 
 A historical link, old CI run, benchmark, audit, review, or useful commit is **not** a reason to keep
-the branch. Those remain recoverable through the PR/commit history.
+the branch. Preserve that evidence through verified retained PR refs/artifacts; every deletion still requires
+the clean-repository recovery-fetch proof below, including merged and squash-merged work.
 
 Closed or superseded unmerged PRs also retire once unique useful work is either integrated elsewhere
 or deliberately preserved in a durable PR/commit/document. Do not merge stale code merely to make
@@ -327,17 +328,30 @@ branch, retire the integration/acceptance refs.
 
 Before deleting a branch:
 
-1. re-read its current SHA and PR state;
-2. confirm no open PR uses it as head/base and no active workflow/executor needs the ref name;
-3. confirm accepted work is present in the retained destination. For a closed/superseded unmerged
-   PR containing unique work, also prove in a clean disposable repository that the exact head is
-   fetchable through a retained recovery ref such as `refs/pull/<number>/head`; a SHA or web page
-   alone is not recovery proof;
-4. obtain Product Owner approval for the finite exact-ref manifest (branch + full expected SHA);
-5. delete only the approved exact ref/SHA with an expected-old-value lease, never by wildcard or
-   blind force;
-6. verify the ref is absent and record the cleanup result in #921 when the operation is part of a
-   batch.
+1. re-read its exact current ref/full SHA, PR state and complete remote inventory;
+2. inspect the full live-consumer list from the
+   [exact-ref deletion gate](../project/branch_cleanup_execution.md#fresh-exact-ref-deletion-gate):
+   open PR head/base and stacked review history; workflows, rulesets, releases, settings, documents,
+   scheduled jobs, deployments, submodules, scripts, package jobs, support processes, known
+   integrations and handoffs; also active executors, release/integration stacks, rollback and
+   product-control evidence. Record any named consumer and retirement trigger. Historical mentions
+   alone are not live consumers. Private GitHub App settings and unknown off-GitHub consumers need
+   explicit owner/PO attestation; absence from repository search is not proof of no consumers;
+3. prove accepted work is present in the retained destination and no unreviewed unique work remains,
+   using graph plus direct tree/patch comparisons as applicable. For **every deletion**, including
+   merged, squash-merged, closed and superseded PR branches, prove in a clean disposable repository
+   that the exact source commit and tree can be fetched from the recorded durable retained recovery
+   ref (for example `refs/pull/<number>/head`) or separately approved restore-tested recovery object.
+   Record fetched commit/tree and successful fetch result. A SHA, web page, merged badge or squash
+   destination alone is not recovery proof; keep separately preserved unique work for unmerged PRs;
+4. obtain Product Owner approval for the finite manifest of exact refs/full expected SHAs with
+   recovery ref/commit/tree, consumer evidence/attestations, rollback owner and guarded command;
+   candidate or recovery movement invalidates the affected gate and authorization;
+5. delete each approved exact ref/SHA at most once with an expected-old-value lease; never use a
+   wildcard, blind force, name-only fallback or automatic retry/alternate mutation after failure;
+6. immediately verify absence, unchanged recovery ref/commit/tree and complete remote inventory,
+   including retained heads unchanged; record actual per-row result and adverse receipts in #921
+   for a batch (or its specifically assigned exact-ref execution ledger).
 
 A branch with no open PR and no explicit release/integration role is a cleanup candidate immediately.
 Housekeeping should happen continuously after merges, not as a rare repository-wide archaeology

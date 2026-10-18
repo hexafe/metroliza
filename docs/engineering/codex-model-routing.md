@@ -1,30 +1,42 @@
-# Codex orchestration and model-routing playbook
+# Development orchestration and model-routing playbook
 
-Status: policy update for new or explicitly reconciled tasks; repository adoption requires review.
-Owner: external product/development orchestration. Reviewed: 2026-09-23. Refs #1061.
+Status: user-adopted direction for current and future work, 2026-10-18; repository-source activation
+on merge of #1063 to `develop`. Shared policy v1.1; model map v1.0. Refs #1061.
+Owner: external product/development orchestration. Reviewed: 2026-10-18.
 
-Root [AGENTS](../../AGENTS.md) is the concise router. The
-[dated research](model-routing-research-2026-09-23.md) records vendor facts and limitations.
-This document is a working policy, not an agent configuration, benchmark result or release approval.
+Root [AGENTS](../../AGENTS.md) is the concise router. Shared `development-routing` owns reusable
+roles, availability, cooperation and handoff; this playbook binds them to Metroliza. The
+[dated research](model-routing-research-2026-09-23.md) remains historical vendor evidence, not a
+maintained default or permission to enable optional capabilities.
 
-## 1. Authority and continuity
+## 1. Authority, activation and continuity
+
+The [user's 2026-10-18 adoption](https://github.com/hexafe/metroliza/issues/1061#issuecomment-6251973769)
+applies to new tasks immediately under the accepted #1061 Issue/packet direction, and to already-running or paused work at its next safe packet boundary. Before #1063
+merges these branch documents are a review candidate, not merged repository policy;
+accepted Issue/packet direction supplies in-flight authority. After merge this playbook is the active
+repository binding. Updating a Project mirror does not change ChatGPT settings or grant actions.
+
+At the safe boundary record exact worktree/base/head/tree, source and patch ownership, old/new
+policy and map versions, evidence, named gates, active processes/resources, and spent/remaining
+budgets. WIN-DLV-1 and other existing packets continue without interruption, reset, additional
+spending or reassignment merely because policy changed. Named model, review and acceptance gates
+remain until explicitly reconciled by their authorized owner. Correct unchanged evidence retains
+its actual model/source identity; never infer a historical identity from today's mapping.
 
 PO owns product/release direction and separately approved remote/destructive operations. External
 orchestration owns the leaf packet, risk/routing decision, independent merge assessment and merge.
-The coordinator owns complete in-scope execution and integration; helpers own explicit slices only.
-Ordinary related edits, fixtures, tests and review corrections need no repeated PO approval.
-Actual scope, security, data ownership, cost or capability conflicts require adjudication.
+Either Codex or Claude may be the admitted coordinator, owning in-scope execution and integration;
+helpers own explicit slices. This does not grant an author merge power. Ordinary related edits,
+fixtures, tests and review corrections need no repeated PO approval. Actual scope, security, data
+ownership, cost or capability conflicts require adjudication.
 
-**An active or paused packet is grandfathered.** This update must not switch WIN-DLV-1 or another
-running executor, change its budget, reset failed attempts, rebase its source, restart it, or send it
-new instructions. Apply revised routing at the next new task or an explicit reconciled handoff.
-Old evidence keeps its actual model/source identity. Never relabel a 5.6 result as a GPT-6 result.
-Updating a Project mirror does not edit ChatGPT settings.
-
-Follow the [source hierarchy](../project/README.md). Read live relevant Issues/code/CI, not the full
-old conversation each time. Recover lost sessions from published commits and accessible evidence;
-mark unavailable local objects honestly and reconstruct only necessary missing work. Transfer
-ownership before writes; a named archive path is not proof its bytes were transferred.
+Follow the [source hierarchy](../project/README.md). Read relevant live Issues/code/CI rather than
+replaying the full conversation. Recover sessions from published commits and accessible evidence;
+mark unavailable local bytes honestly. Before takeover, verify the old writer and descendants are
+idle/stopped, confirm resource ownership and exact source/dirty state, then record the handoff.
+Quota exhaustion does not prove processes or CI stopped. Do not kill, reset, clean, steal a lease or
+start competing CI to resolve ambiguity. A named archive path is not proof its bytes transferred.
 
 ## 2. Delivery outcomes and severity triage
 
@@ -52,102 +64,117 @@ Windows journeys. Remaining minor items need explicit owner, rationale and next 
 A patch release normally uses targeted verification plus every applicable security/data/package gate.
 Do not postpone development testing until release or audit every unchanged file by ritual.
 
-## 3. Routing dimensions and actual support
+## 3. Versioned role resolution and portable clients
 
-Classify whole-change risk separately from model, effort, delegation, speed and permissions.
-Capability, tool access, client support, source evidence and release authority are not interchangeable.
-A stronger model does not fix missing Windows/Docker access or retrieve an unavailable local file.
+Shared `development-routing` policy v1.1 and its `references/model-map.json` v1.0 are the maintained
+routing sources. Exact IDs and default effort live only in that map; repository prose uses semantic
+roles. Resolve and record role, provider, model ID, effort, map version and snapshot hash at dispatch.
+Derived client settings must be checked against it. A packet may justify effort overrides; a prompt
+request is not applied configuration. Standard speed is default; Ultra is never mandatory and no
+silent downgrade or automatic escalation ladder is allowed.
 
-Verified current IDs: `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`, and legacy `gpt-5.6-terra`.
-No official GPT-6 Terra was confirmed in the inspected catalogue. Terra remains available only as
-an explicit compatibility/availability or measured-workload choice; it is not a mandatory price tier.
-Resolve ID and effort in the actual client at dispatch. Planned, configured and observed settings
-are separate; absent telemetry is `not visible`, not a guess based on self-identification.
+A client with local skills reads `SKILL.md`, `references/model-map.json`, `references/collaboration.md`
+and `references/packet.md` from its installed `development-routing`. A client without those files
+(including ChatGPT Projects) must obtain the same authoritative versioned contents or an immutable
+snapshot through the authorized coordinator, linked from the accepted Issue/packet. Record the
+version, origin, content hash and accepted packet binding. Local absolute paths are not portable
+prerequisites. Missing/mismatched policy, map or task authority requires that concrete material;
+do not reconstruct defaults from dated research, model names, uploaded mirrors or memory. This
+adoption does not automatically opt packets into a future shared version.
 
-## 4. Whole-PR coordinator and reviewer
+Classify whole-change risk separately from model, effort, delegation, speed and permissions. Use
+max(packet risk, affected-path floor, semantic risk). Unknown scope needs inspection before MICRO.
+CRITICAL includes authorization/isolation, sensitive data, migrations, destructive operations,
+data-loss concurrency and gate/review-integrity changes, including governance documentation.
+Capability and Windows/Docker access are separate from model strength.
 
-These defaults are provisional local engineering choices, not a Metroliza benchmark ranking.
-
-| Class and actual scope | Coordinator | One independent scope reviewer |
+| Class | Implementation role | Generic independent review in BOTH |
 | --- | --- | --- |
-| MICRO, explicit code correction under a fixed contract | Luna 6 / high | Sol 6 / medium |
-| BOUNDED INTEGRATION, accepted seam without new critical boundary | Sol 6 / medium | Sol 6 / high |
-| FEATURE / CROSS-LAYER, ordinary multi-layer feature | Sol 6 / medium | Sol 6 / high |
-| Complex feature state, failure paths or contracts | Sol 6 / high | Sol 6 / high |
-| CRITICAL, proven settled bounded implementation exception below | Sol 6 / high | Astra 6 / high |
-| Unresolved critical ownership/architecture, data-loss/concurrency reasoning | Astra 6 / high | Independent Astra 6 / high for the critical boundary |
-| Formal milestone/release assessment | Astra 6 / high | Independent Astra 6 / high for unresolved critical acceptance |
+| MICRO: clear small correction under an accepted contract | `economy_worker` | `light_reviewer` |
+| BOUNDED: accepted integration seam | `implementer` | `bounded_reviewer` |
+| FEATURE: new contract or layers | `implementer` | `independent_reviewer` |
+| CRITICAL: sensitive/data/gate boundary | `implementer`; justify higher effort for a demonstrated boundary | `independent_reviewer`; xhigh for Auth/RLS/migration review |
+| Milestone or named escalation | admitted coordinator | `independent_reviewer` plus `escalation_reviewer` on the named question |
 
-A release assessor reuses already accepted independent reviews; it does not order another complete
-review of every merged leaf. For a new unresolved critical change, an author cannot provide the
-independent review of its own implementation. Required configured GitHub review remains; do not
-request duplicate bot passes or add Sol review before the selected Astra review without a distinct risk.
+Use `escalation_reviewer` for milestone acceptance, unresolved P0/P1 disagreement, unresolved
+security/privacy/data-loss boundary, a reproducible hard blocker after adequate diagnosis, or an
+explicit user/packet request. State trigger and question; CRITICAL classification alone does not
+trigger escalation. Escalate an economy worker on ambiguity, and after two unsuccessful meaningful
+attempts do not send it through the same loop. Trivial non-development work uses an adequate current
+or economy route without artificial agents, PR review or CI.
 
-### Settled-critical exception: all conditions are required
+## 4. Provider modes and preserved gates
 
-External orchestration may explicitly select Sol/high for a still-CRITICAL leaf only if the packet:
+Either client can coordinate and dispatch bounded work to an existing approved integration for the
+other provider. Preparing a packet is not invoking a provider. Do not add API billing, accounts,
+daemons, broader filesystem access or recursive cross-client calls. If integration is absent,
+prepare the handoff and report the missing capability.
 
-1. Names an accepted versioned contract and complete owned boundary, including failure/cancel paths.
-2. States data/authorization/concurrency invariants, testable negative cases and rollback or safe
-   recovery/idempotence where relevant; no unresolved ownership or irreversible side effect remains.
-3. Does not ask the implementer to invent a new trust/transaction/native-lifetime architecture or
-   decide release risk. Small file count and the word "migration" do not establish settlement.
-4. Assigns one independent Astra/high review of that whole affected critical boundary and retains
-   all specialized tests and separate operational approvals.
+Record provider/account/model/capability, observed window/reset, timestamp and source. CLI, cloud
+and GitHub review capacity may differ. Missing, malformed, future-dated, wrong-account or
+older-than-60-minute evidence is UNKNOWN; recent capacity is not reserved against concurrent use.
+Use existing documented UI/statusline/log evidence without secrets; recheck before costly admission
+when feasible. Never issue a paid probe, scrape tokens or use undocumented quota endpoints. Token
+counts and API-price equivalents do not prove subscription reserve. Reserve completion and review/
+delta capacity; a 25% warning is a heuristic, not promised turns. Unknown reserve disables optional
+parallel/second-provider work while allowing already-authorized useful bounded progress.
 
-If any condition is unproved, use Astra/high for the unresolved work. An expensive reviewer after
-implementation is not a substitute for resolving a missing design beforehand. Conversely, a
-mechanical fixture next to SQLite is not automatically critical. Formal release ownership remains
-with the designated release owner, not the model.
+| Mode | Implementation | Generic independent review |
+| --- | --- | --- |
+| BOTH | `implementer`; `economy_worker` for clear MICRO | class roles above |
+| OPENAI_ONLY | `implementer` / `economy_worker` | fresh `reviewer` for MICRO/BOUNDED/FEATURE; `escalation_reviewer` for CRITICAL, record provider-unavailable trigger |
+| CLAUDE_ONLY | `bounded_worker` for limited work; `claude_coordinator` for difficult planning/integration | fresh `light_reviewer` for MICRO; fresh `independent_reviewer` for BOUNDED and larger |
+| NEITHER | preserve/recover checkpoint; no inference launches | wait for capacity; INCOMPLETE |
+| UNKNOWN | known adequate available route, bounded packet | no optional escalation or reserve claim; record missing required review |
 
-### Reasoning and escalation
+These modes replace only generic role selection. A specifically assigned model/cross-provider gate,
+GitHub Codex Review, independent exact-head review, CI, thread resolution and every applicable
+SQLite/native/Windows/release/acceptance gate stay required. For CRITICAL delivery or milestone
+acceptance require applicable cross-provider evidence, or an explicit user exception for that
+candidate, before integration. Relevant GitHub Codex Review may supply OpenAI evidence only if the
+packet permits and its actual coverage fits; it does not automatically prove full MUST/milestone
+acceptance. An unavailable named gate remains INCOMPLETE until fulfilled or explicitly amended.
 
-For coding, begin at Luna/high or Sol/medium; use Sol/high for complex states/invariants.
-Astra/high is our deliberate critical-risk choice, not OpenAI's universal default. For a bounded
-noncritical question requiring Astra, low/medium may suffice. Trivial non-code can use Luna low/medium.
+CLAUDE_ONLY uses one packet at a time with review reserve. A critical candidate may be implemented
+and tested while awaiting OpenAI without declaring READY. No quota refusal retry loop, account
+switch or limit increase. Retain adverse receipts; a rejected invocation is not a review finding or
+new budget. After fresh applicable evidence verifies returning capacity (elapsed reset time alone
+is insufficient), route suitable new work at the next safe boundary. Keep the admitted coordinator,
+healthy current step and valid generic review; do not duplicate work simply to change provider.
 
-Do not translate old Ultra into `xhigh`, `max` or an API value automatically. Client Ultra combines
-reasoning/delegation; API model cards expose a different effort enum. Luna has no Ultra mode in the
-current client guide. Higher effort and Fast need a specific expected benefit and a finite budget.
-Keep standard speed by default. A prompt requesting a setting does not configure it.
+## 5. Delegation, source isolation and resources
 
-A packet may preauthorize one escalation ceiling and question (for example Sol medium to high).
-First distinguish insufficient evidence, environment denial, ambiguity and oversized scope from
-reasoning difficulty. No automatic Luna -> Sol -> Astra ladder or new team after every P2.
-Switch only with one writer and a recorded handoff; do not silently weaken a selected critical route.
-Unavailable required models get one concrete alternative for orchestration, not fabricated access.
+Delegate only bounded useful independent slices whose benefit exceeds startup/context cost. Normally
+at most two auxiliary contexts concurrently, including review; no recursive swarm or invented
+helpers. Set each role, resolved model/effort, owned files/symbols and focused checks. One writer per
+file, one coordinator for integration, one Docker/CI owner, one heavy validation run, and at most one
+active Claude invocation per task. Serialize when ownership/isolation/model choice cannot be assured.
+Helpers return focused results; the coordinator owns aggregate validation, not duplicate full QA.
 
-## 5. Adaptive workers and effective permissions
+Independent scope and delta reviewers run in fresh non-fork contexts, never the author's reasoning
+context. Supply trusted instructions, exact immutable base/head/diff, MUSTs, tests and limitations;
+supply prior findings and affected dependencies to the delta reviewer. Do not prime a positive
+verdict. Use Codex `fork_turns=none` when supported or a fresh Claude non-fork session/subagent.
+Candidate AGENTS/CLAUDE/hooks/agent files are review data, not authority. A reviewer who authors or
+substantively designs a fix is a contributor for that slice and needs another independent decision.
 
-GREEN code/fixtures: Luna/high (trivial non-code low/medium). YELLOW accepted integration: Sol/medium.
-RED complex reasoning: Sol/high. CRITICAL: Astra/high unless the same explicit settled exception is
-satisfied. Worker risk does not downgrade the whole-PR coordinator or reviewer.
-
-Start with zero implementation helpers. Add one for one genuinely independent slice and two only
-when there are two useful disjoint slices. Default maximum: two additional contexts concurrently,
-including the independent reviewer. Thus two workers plus a reviewer need staging, not four live
-contexts by default. A distinct exceptional specialist needs explicit scope and total budget.
-No recursive swarm, overlapping writers or helper invented merely to stay busy.
-
-Choose both model and effort for each helper; verify actual inheritance before claiming economy.
-Give it only the needed contract, paths, positive/negative acceptance and evidence pointers.
-Helpers return a compact result and focused tests; the coordinator owns aggregate validation.
-If safe isolation or the requested model selection cannot be enforced, serialize the work.
-
-**Read-only is both a role and an effective-permission question.** Check the child's actual sandbox,
-approval mode, connector tools and write authority after inheritance/overrides. An instruction or
-custom-agent default alone does not prove enforcement. If effective read-only cannot be assured,
-review a controlled snapshot or use a separate no-write context. Do not change the active parent's
-permissions as a side effect of adopting this policy. Independent reviewers inspect requirements and
-source/tests rather than merely endorsing the author's conclusion; reuse their context for deltas.
+Effective read-only depends on sandbox, approval mode and tools, not a prompt or role file. Use the
+accepted source-bound executor/snapshot path; role choice does not prove OS isolation. If enforcement
+is unavailable, use a controlled non-secret snapshot/separate no-write context and disclose limits.
+Reviewers have no publication/CI authority. An authorized operator preserves and publishes substantive
+reports with target/readback verification; publication failure does not warrant another review.
 
 ## 6. Bounded review, tests and budgets
 
 Default cycle: implement with focused tests -> one complete affected-scope review -> consolidate
-blocking families -> regression checks -> delta review of fixes/direct consumers -> exact-head merge
-disposition. Extra review needs a named substantive blocker/invalidated assumption and a limited
-question. Critical discoveries are raised promptly; other safe review work may finish together.
-This is a review-effort default, never permission to accept a serious remaining defect.
+blocking families -> regression checks -> at most one changed-head delta review of fixes/direct
+consumers in a fresh non-fork context with prior findings -> exact-head merge disposition. Track
+consumed/remaining rounds. Extra review needs a named substantive blocker/invalidated assumption,
+a limited question and explicit finite extension from the authorized coordinator within user caps.
+Critical discoveries are raised promptly; other safe review work may finish together.
+This is a review-effort default, never permission to accept a serious remaining defect. A release
+assessor reuses bound accepted leaf reviews rather than ordering another full audit of every merged
+leaf. Required GitHub review remains; do not request duplicate bot passes without a distinct need.
 
 Use representative fail-before/negative controls for consequential new invariants, not test-count
 claims or an enormous redundant Cartesian matrix. Distinguish a test-oracle defect, product defect,
@@ -229,11 +256,13 @@ Dependabot activation and other separately owned infrastructure remain outside t
 
 ## 10. Adoption record and reporting
 
-This replaces the reusable routing/process guidance adopted in #965 while preserving its Metroliza
-bindings. Historical reference blobs remain recorded: TupTup AGENTS `2e2e5013decdf025e8e5d55ef354ddc2b2af9c5b`
-and old playbook `2e49a655b0f8098abf498c7f2e5b795c0cf2f8a0`. Current comparison is TupTup PR175
-at `d0db1cc476942cb77e26adb8e759c4edbb8e5e67`, still an unmerged proposal at inspection.
-We adopt independently verified model facts and the approved delivery-first direction, not TupTup's
+The accepted 2026-10-18 direction supersedes reusable model-routing defaults from #965/#1061
+while preserving their Metroliza delivery and gate bindings. Repository-source activation is on
+merge of #1063, with pre-merge execution authority and safe-boundary adoption defined in section 1.
+Historical reference blobs remain recorded: TupTup AGENTS `2e2e5013decdf025e8e5d55ef354ddc2b2af9c5b`
+and old playbook `2e49a655b0f8098abf498c7f2e5b795c0cf2f8a0`. The earlier comparison was TupTup PR175
+at `d0db1cc476942cb77e26adb8e759c4edbb8e5e67`, an unmerged proposal at that inspection.
+Current routing comes from the versioned shared policy/map and approved delivery-first direction, not TupTup's
 Next.js/Supabase/RLS/space/GPX/Mapy/Vercel rules or its CI check names. Metroliza's Windows/native/data
 rules are equally not universal requirements for other repositories.
 

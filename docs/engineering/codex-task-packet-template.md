@@ -1,24 +1,35 @@
-# Codex task-packet template
+# Development task-packet template
 
-Reviewed: 2026-09-23. Refs #1061. Use for new or explicitly reconciled tasks only.
+Reviewed: 2026-10-18. Refs #1061/#1063. Shared policy v1.1 / model map v1.0.
+New work adopts immediately; running work adopts at its next safe packet boundary under the
+accepted direction, retaining source, owners, budgets and named gates. See playbook section 1.
 Keep one bounded outcome and the three priority sections; link the
 [playbook](codex-model-routing.md) rather than copying global instructions.
 A prompt is requested configuration, not proof that the client applied it.
 
 ```text
 Issue / observable user outcome / target release:
-Repository / verified base+head / owned branch and PR target:
+Repository / owned worktree+branch / verified base+head+tree / PR target:
 Current contract and source paths actually read:
-Active-packet continuity: new task OR explicit reconciliation link;
-  settings, authority and spent budgets that must remain unchanged:
+Authority: accepted Oct18 adoption/Issue link; pre-merge packet or merged policy source:
+Policy/map version, origin, immutable snapshot/hash and accepted packet binding:
+  clients without local skills obtain authoritative shared contents; no inferred defaults:
+Active-packet continuity: new task OR recorded next safe boundary/adoption link;
+  exact source/patch, owners, settings, named gates and spent/remaining budgets:
 
 Whole-change risk and reason:
-Coordinator: client/version/sign-in class; exact model ID; reasoning;
-  standard/Fast; single-agent/delegation; effective permissions:
-Independent reviewer: review risk; model+effort; no-write enforcement:
-Settled-critical exception: not used OR evidence for all four playbook conditions:
+Mode: BOTH / OPENAI_ONLY / CLAUDE_ONLY / NEITHER / UNKNOWN:
+Quota evidence: provider/account/model/capability/window/reset, source and time;
+  freshness <=60min or UNKNOWN; no paid probes; completion/review reserve or unknown:
+Coordinator: Codex OR Claude; role/client/version/sign-in class; resolved ID/effort;
+  standard speed or justified override; single-agent/delegation; effective permissions:
+Implementation and independent review roles by risk+mode; resolved map ID/effort:
+Named project/model/cross-provider gates retained; authorized amendment or INCOMPLETE:
+CRITICAL/milestone integration: applicable cross-provider evidence or user exception:
+Independent reviewer: fresh non-fork trusted context; snapshot and no-write enforcement:
 Preauthorized escalation ceiling, trigger and affected question (or none):
-Requested / configured / observed settings; unknown = not visible:
+Requested / configured-reported / response-observed model+effort evidence separately;
+  unsupported claims = not visible:
 
 MUST — blocking behavior/invariants and observable acceptance:
 SHOULD — useful improvements that remain inside this scope:
@@ -31,18 +42,23 @@ Forbidden surfaces; data/remote/destructive approval boundaries:
 Rollback or safe recovery; applicability of clean-machine/manual acceptance:
 
 Delegation: zero/one/two implementation helpers, justified by actual independence;
-  helper name | slice risk | model+effort | owned symbols | focused checks.
+  helper name | slice risk | semantic role+resolved model/effort | owned files/symbols | focused checks.
 Concurrency including reviewer; effective sandbox/tools after inheritance:
-One integration writer owns shared workflow/metadata conflict resolution.
+One coordinator/integration writer; one writer per file; one Docker/CI owner:
+Task-owned resource/PID/container/run identities and heavy validation owner:
+At most one active Claude invocation; takeover only after old writers/processes idle,
+  ownership transferred and source/resources verified; no kill/reset/competing CI:
 
 Positive user journey / negative, cancellation and data-safety cases:
 Focused checks and owners:
 Aggregate/current-base CI and specialized gates, where they run:
-Review baseline; one scope review + one delta verification;
-  explicit trigger/question for further review:
+Review baseline; one independent affected-scope review + at most one changed-head delta;
+  fresh non-fork scope/delta context, delta gets prior findings+affected dependencies:
+Rounds consumed / remaining; named blocker + explicit finite extension for more:
+Required GitHub Codex Review, independent exact-head review and resolved threads:
 Reusable evidence with source/dependency/configuration bindings:
 Resource budget: model/API or subscription visibility, runner time/per-job cap,
-  aggregate attempts if explicitly required; historical spent amounts:
+  aggregate attempts if explicitly required; spent/remaining amounts and user hard caps:
 Publication for CI may precede complete QA only under this packet's authority.
 
 Autonomy: ordinary in-domain fixes, fixtures and review corrections continue.
@@ -56,7 +72,8 @@ Allowed branch/push/PR/review/CI actions:
 Forbidden: author self-merge, release/tag/deploy, paid or destructive operations,
   production/private data operations unless separately explicitly approved.
 Handoff: exact source/evidence, delivered behavior, findings/dispositions,
-  remaining risk and one next action. No automatic restart.
+  remaining risk, named blockers, terminal state and one next action/takeover condition.
+  No automatic restart or quota reset by model/policy change.
 ```
 
 Helpers return focused results, not another full QA campaign. The coordinator binds one integrated

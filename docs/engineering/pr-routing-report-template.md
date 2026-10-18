@@ -1,6 +1,7 @@
 # PR routing-report template
 
-Reviewed: 2026-09-23. Refs #1061. Use with the [playbook](codex-model-routing.md).
+Reviewed: 2026-10-18. Shared policy v1.1 / model map v1.0. Refs #1061/#1063.
+Use with the [playbook](codex-model-routing.md).
 Keep a compact current record and links; do not paste full historical logs. This report does not
 request fresh product-wide audits. Every unknown remains explicit.
 
@@ -15,16 +16,20 @@ State: Draft / awaiting review / Ready for external decision / merged.
 ## Routing and authority
 
 Whole-PR risk / semantic reason:
-Requested coordinator client+model+effort / speed / delegation:
-Configured and observed runtime (or `not visible`):
-Critical exception evidence and independent review risk (or not used):
-Current task/operation authority; no silent active-task migration:
+Policy/map version, authoritative origin/snapshot hash, accepted packet:
+Mode and fresh quota observation/source/time/window/reset, or UNKNOWN; reserve:
+Coordinator Codex OR Claude; semantic implementation/review roles and resolved IDs/effort:
+Requested / configured-reported / response-observed evidence separately (`not visible` if absent):
+Standard speed or justified override / delegation / independent review risk:
+Current task/operation authority; Oct18 adoption link; pre-merge packet or merged-source activation:
+Safe-boundary continuity: exact source/patch owner, retained named gates, spent/remaining budgets:
+CRITICAL/milestone cross-provider evidence or explicit candidate user exception:
 
-| Role/slice | Risk | Requested model/effort | Observed/inherited | Owned scope | Effective permissions | Focused evidence |
+| Role/slice | Risk | Requested model/effort + map | Configured / response-observed | Owned scope | Effective permissions | Focused evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | Coordinator/helper/reviewer | ... | ... | ... | ... | ... | ... |
 
-Why this number of helpers; review context reused:
+Why this number of helpers; fresh non-fork scope/delta contexts and prior findings supplied:
 Allowed escalation actually used and reason:
 
 ## MUST evidence and preserved contracts
@@ -56,9 +61,11 @@ Primary residual risk and rollback:
 
 ## Review and readiness
 
-One scoped review: scope, source and outcome:
-Delta verification: fixed families, affected consumers, source and outcome:
-Extra round, if any: named blocker/invalidated assumption and limited question:
+One independent scoped review: trusted context, exact source, scope and outcome:
+At most one changed-head delta: fresh non-fork context, prior findings supplied,
+  fixed families, affected consumers, exact source and outcome:
+Rounds consumed / remaining; extra round explicit finite budget extension,
+  named blocker/invalidated assumption and limited question:
 Configured GitHub Codex Review, actual final state:
 Independent exact-head review, nonauthor identity/role, actual final state:
 Threads: adjudicated/resolved count OR unknown; later blockers:
@@ -67,8 +74,10 @@ Head unchanged; mergeable; external verdict READY FOR MERGE / NOT READY / pendin
 
 ## Resources and remote actions
 
-Observed usage and original remaining budget; unknown telemetry not estimated:
+Observed usage, original spent/remaining budget and user hard cap; unknown telemetry not estimated:
 Actual agent starts/review rounds/aggregate runs; no invented cost saving:
+One coordinator/writer per file/Docker+CI owner/heavy validation; active resource identities:
+Takeover: former writers and processes verified idle; source/ownership checked; next safe boundary:
 Published/merged/released/artifact-qualified: separate actual states:
 Operations performed and approval links; excluded operations not performed:
 Next concrete action; residual Issues with target review/release:

@@ -5,12 +5,19 @@
 Read the active Issue/packet and relevant live code/CI. Use [project hierarchy](docs/project/README.md),
 [architecture](docs/project/architecture.md), [development workflow](docs/project/development_workflow.md)
 and [release rules](docs/release_checks/branching_strategy.md) for their boundaries.
-The [playbook](docs/engineering/codex-model-routing.md) owns model allocation and delivery;
-its research is optional reference, not compulsory context for every task.
+The [playbook](docs/engineering/codex-model-routing.md) binds shared `development-routing` policy
+v1.1 and model map v1.0 to Metroliza delivery. Resolve semantic roles from that versioned shared
+map; dated research is historical reference, not the current model default. Clients without local
+skills must obtain the authoritative policy/map snapshot and accepted packet through the
+coordinator before dispatch; no particular host path or inferred model default is required.
 
-**Revision 2026-09-23 applies to new or explicitly reconciled tasks only.** Do not switch,
-interrupt, restart or re-budget running/paused executors. Existing WIN-DLV-1 retains its packet.
-New models do not invalidate correct old evidence. No client configuration is installed here.
+**[User adoption: 2026-10-18](https://github.com/hexafe/metroliza/issues/1061#issuecomment-6251973769).**
+Current and future work follows accepted #1061 direction. New tasks adopt immediately. Running/paused work, including WIN-DLV-1, adopts at its next safe packet boundary
+with recorded source, owner and spent/remaining budget continuity; do not interrupt, reset, spend
+or reassign merely because policy changed. Named review/acceptance gates remain until explicitly
+reconciled. Before #1063 merges, accepted Issue/packet direction governs execution and these branch
+files are a review candidate; after merge they are the active repository source. Old evidence
+keeps its actual identity. No client configuration is installed here.
 
 ## Non-negotiable contracts
 
@@ -35,9 +42,10 @@ Issue. Lesser defects get evidence, impact, owner, workaround and target stabili
 than hijacking the feature. Bot priority, severity and merge/release disposition are separate.
 
 Test affected behavior continuously. One complete affected-scope/direct-consumer review, grouped
-blocking fixes, then delta verification. Extra rounds need a named material blocker or invalidated
-assumption. No whole-repository audit per correction or full QA per helper. Reuse valid unchanged
-evidence, but rebind the exact-head verdict. Keep required CI, GitHub Codex Review, independent
+blocking fixes, then at most one changed-head delta in a fresh non-fork context supplied with prior
+findings and affected dependencies. Extra rounds need a named blocker and an explicit finite budget
+extension within the user cap. No whole-repository audit per correction or full QA per helper.
+Reuse valid unchanged evidence, but rebind the exact-head verdict. Keep required CI, GitHub Codex Review, independent
 review and adjudicated/resolved threads. Self-check is not independent review.
 
 Before each minor/major release, complete selected stabilization packs, inspect integrated changes
@@ -46,32 +54,31 @@ need explicit disposition. Never relabel FAIL, skipped or unknown as PASS.
 
 ## Routing and helpers
 
-Separate risk, model, reasoning, delegation, speed and effective permissions. New-task defaults:
+Separate risk, model, reasoning, delegation, speed and effective permissions. Use the highest of
+packet risk, path floor and semantic risk. MICRO uses `economy_worker`; BOUNDED/FEATURE/CRITICAL use
+`implementer`. Select independent review by class and observed provider mode in the playbook;
+CRITICAL alone does not automatically add `escalation_reviewer`. Resolve exact IDs/effort at dispatch
+from shared map v1.0 and record overrides. Standard speed; no silent downgrade or default Ultra.
 
-| Whole change | Coordinator | Independent scope reviewer |
-| --- | --- | --- |
-| MICRO code | GPT-6 Luna / high | GPT-6 Sol / medium |
-| BOUNDED INTEGRATION | GPT-6 Sol / medium | GPT-6 Sol / high |
-| FEATURE / CROSS-LAYER | GPT-6 Sol / medium; high for complex state/contracts | GPT-6 Sol / high |
-| Settled bounded CRITICAL, only with all playbook exception conditions | GPT-6 Sol / high | GPT-6 Astra / high |
-| Unresolved critical data/ownership/architecture or formal milestone | GPT-6 Astra / high | Independent Astra / high for critical acceptance |
+Either Codex or Claude may coordinate. Record BOTH / OPENAI_ONLY / CLAUDE_ONLY / NEITHER / UNKNOWN
+from applicable timestamped capacity evidence; missing, invalid or older-than-60-minute data is
+UNKNOWN. Never make paid quota probes or infer reserve from token/cost estimates. A generic approved
+fallback cannot waive a specifically assigned reviewer or Metroliza's actual gates.
 
-Trivial non-code may use Luna low/medium. Verify `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra` availability;
-`gpt-5.6-terra` is an explicit compatibility option, not GPT-6 Terra. No silent downgrade or default
-Max/Ultra/Fast. Ultra is client-specific, not a universal API reasoning value.
-
-Begin without implementation helpers; add one or two only for useful disjoint slices. Default
-maximum is two additional contexts concurrently, including reviewer, not a staffing target.
-GREEN code Luna/high; YELLOW Sol/medium; RED Sol/high; unresolved CRITICAL Astra/high.
-Set model AND effort, ownership and focused checks. No recursive swarm, overlapping writers or
-invented savings from expensive inheritance. Verify effective read-only permissions for reviewers;
-a prompt is not enforcement. Observed identity/effort/usage is evidence or `not visible`.
+Delegate only useful disjoint slices, normally at most two auxiliary contexts concurrently,
+including reviewers. No recursive swarm or overlapping writers. One coordinator, one writer per
+file, one Docker/CI owner and one heavy validation run; at most one active Claude invocation per
+task. Verify former writers/processes idle and transfer resource ownership before takeover.
+Independent review uses fresh non-fork context, trusted instructions and exact immutable sources;
+verify effective no-write permissions or use a controlled snapshot and disclose limitations.
+Record requested, configured/reported and response-observed identity/effort separately; unsupported
+telemetry is `not visible`. Keep finite shared budgets and consumed/remaining review rounds.
 
 ## Authority and handoff
 
 PO owns direction and separately gated operations. External orchestration owns packets, routing,
-risk decisions and merge; coordinator owns tactical execution/integration and routine in-scope
-corrections without per-file/per-commit PO approvals. Use the [packet](docs/engineering/codex-task-packet-template.md)
+risk decisions and merge; the Codex or Claude coordinator owns tactical execution/integration and
+routine in-scope corrections without per-file/per-commit PO approvals. Use the [packet](docs/engineering/codex-task-packet-template.md)
 and [PR report](docs/engineering/pr-routing-report-template.md). GitHub is durable;
 a remote archive pathname is not recovered code.
 

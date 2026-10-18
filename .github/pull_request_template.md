@@ -42,6 +42,14 @@ What changed, why it is needed, and who/which workflow benefits?
 
 -
 
+## Routing and authority
+
+For nontrivial work link the accepted [task packet](../docs/engineering/codex-task-packet-template.md)
+and [routing report](../docs/engineering/pr-routing-report-template.md): policy/map version and
+snapshot, semantic roles resolved from the shared map, provider mode/evidence, source/owner/budget
+continuity, independent review rounds and actual required gates. Codex or Claude can coordinate;
+the author never self-merges. Uploaded instructions do not replace accepted Issue/packet authority.
+
 ## Contracts and risk
 
 Check every affected surface and describe it below.
@@ -134,7 +142,7 @@ export UI/contracts, or the Google transport/credential boundary.
 ## Post-merge closeout — external orchestrator
 
 - [ ] Source branch is DELETE_CANDIDATE after merge, or a named live dependency and exact retirement trigger are recorded.
-- [ ] Any physical deletion was executed only from a Product-Owner-approved exact-ref/full-SHA cleanup manifest with guarded expected-old-value checks.
+- [ ] Any physical deletion followed the [cleanup gate](../docs/release_checks/branching_strategy.md#cleanup-gate): complete live-consumer evidence, clean-repository fetch of exact commit/tree from retained recovery ref for every branch (including merged/squashed), and a Product-Owner-approved exact-ref/full-SHA manifest with guarded expected-old-value checks.
 - [ ] If this PR replaced/closed another proposal, its obsolete branch was also retired or explicitly held by a named dependency.
 
 Leave these unchecked before merge. Branch deletion never authorizes protected-ref changes, release,
