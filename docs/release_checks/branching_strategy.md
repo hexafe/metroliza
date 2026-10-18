@@ -346,12 +346,15 @@ Before deleting a branch:
    destination alone is not recovery proof; keep separately preserved unique work for unmerged PRs;
 4. obtain Product Owner approval for the finite manifest of exact refs/full expected SHAs with
    recovery ref/commit/tree, consumer evidence/attestations, rollback owner and guarded command;
+   record that manifest, approver, approval timestamp and expected result in the authoritative
+   exact-ref execution ledger #960 before execution;
    candidate or recovery movement invalidates the affected gate and authorization;
 5. delete each approved exact ref/SHA at most once with an expected-old-value lease; never use a
    wildcard, blind force, name-only fallback or automatic retry/alternate mutation after failure;
 6. immediately verify absence, unchanged recovery ref/commit/tree and complete remote inventory,
-   including retained heads unchanged; record actual per-row result and adverse receipts in #921
-   for a batch (or its specifically assigned exact-ref execution ledger).
+   including retained heads unchanged; record actual per-row result, immediate verification and
+   adverse receipts in #960. Batch summaries in #921 or another assigned ledger link to those
+   canonical per-ref records and never replace them.
 
 A branch with no open PR and no explicit release/integration role is a cleanup candidate immediately.
 Housekeeping should happen continuously after merges, not as a rare repository-wide archaeology
