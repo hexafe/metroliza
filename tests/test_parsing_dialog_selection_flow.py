@@ -26,6 +26,9 @@ else:
     PYQT_IMPORT_ERROR = None
 
 
+pytestmark = pytest.mark.usefixtures("qapplication_session")
+
+
 class _DummyParent(QWidget if QWidget is not None else object):
     def __init__(self):
         super().__init__()
