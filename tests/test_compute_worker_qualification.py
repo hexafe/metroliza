@@ -1,5 +1,6 @@
 """Exercise the real synthetic qualification workloads and fail-closed oracles."""
 
+from contextlib import closing
 import json
 import shutil
 import zipfile
@@ -30,7 +31,7 @@ def test_large_real_import_and_extended_export_match_with_workers_on_and_off(tmp
     # Both content comparisons must detect a real change, not merely matching counts.
     database = tmp_path / 'False/result.sqlite3'
     import sqlite3
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute('UPDATE report_measurements SET meas=meas+1 WHERE id=1')
     assert host.database_rows(database) != rows
     workbook = tmp_path / 'False/result.xlsx'
@@ -75,7 +76,7 @@ def test_read_only_database_oracle_quotes_schema_identifiers(tmp_path):
 
     database = tmp_path / 'synthetic.sqlite3'
     hostile = 'x"; DROP TABLE parsed_reports; --'
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute('CREATE TABLE parsed_reports (id INTEGER PRIMARY KEY)')
         connection.executemany('INSERT INTO parsed_reports VALUES (?)', [(index,) for index in range(200)])
         connection.execute('CREATE TABLE report_measurements (header TEXT, ax TEXT)')

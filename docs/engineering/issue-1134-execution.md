@@ -168,3 +168,45 @@ Rollback/disable: `METROLIZA_EXPORT_GROUP_MP=0` and
 `METROLIZA_IMPORT_PREPARE_WORKERS=0` retain serial processing. No data migration or
 preflight parallelization was introduced. No push, PR, merge, rebase, hard reset,
 force push, shared stash, release or deployment was performed.
+
+## Windows CI repair packet — run 39134591765
+
+Authority: the external orchestrator's supplied repair task for Issue #1134;
+continue locally on the existing branch at `0e094149dc0d926eb76c9cef2c29a95d42fe75c4`.
+The approved RC2 base/target and FEATURE / CROSS-LAYER whole-PR classification
+remain unchanged. This repair is BOUNDED INTEGRATION, coordinator-only because
+the launch classifier, receipt and regression evidence form one bounded slice.
+Runtime model/reasoning: `not visible`. No remote operations are authorized.
+
+### MUST
+
+- Explicitly close both SQLite test connections while preserving transactions.
+- Diagnose the four rejected launch events without expanding accepted process
+  roles, command signatures, counts, ancestry or cleanup allowances.
+- Retain the failed run, failing stage and bounded audit events in the receipt
+  and print that evidence, including failures during topology verification.
+- Record import preflight, prepare and persist timings; preserve output and
+  processing behavior. Run related files and all required local quality gates.
+- Commit locally, with Issue #1134 and the requested co-author trailer.
+
+### SHOULD
+
+- Preserve completed workload timings when a later topology check fails.
+- Explain timing scopes and retain base-versus-final synthetic output evidence
+  under the session scratch `codex/1134-ci-fix/` directory.
+
+### DEFERRED
+
+- Import optimization, parallel preflight, audit allowlist expansion, runtime
+  upgrades, remote operations, Windows execution and frozen-build acceptance.
+  The external orchestrator owns the Windows rerun and independent review.
+
+Owned files: this execution record, `tests/test_compute_worker_qualification.py`,
+`tests/test_frozen_compute_worker.py`, `tests/test_windows_runtime_audit.py`,
+`src/metroliza/shared/diagnostic_runtime_audit.py`,
+`src/metroliza/app/compute_worker_qualification.py`, and
+`scripts/qualify_windows_compute_workers.py`. Keep pipeline, packaging, OCR,
+SQLite schema, security baseline and complexity budget unchanged. Stop and
+escalate if a repair requires crossing these boundaries. Validation is source
+evidence only; the recorded Windows failure supersedes the earlier local-pass
+claim for frozen qualification.
