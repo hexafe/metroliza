@@ -68,6 +68,7 @@ def prepare_review(app, window, reports):
     host.scan_button.click()
     wait_until(app, workspace_idle(host))
     assert host.report_planner.model.counts["ready"] == 5
+    assert all(row.state != "pending" for row in host.report_planner.model.selected_metadata_rows())
     assert not database.exists()
     return host, source, database
 

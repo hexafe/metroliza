@@ -1001,8 +1001,6 @@ class _ReportOperations:
         ids = tuple(occurrence_ids)
         if not ids or self._preflight_result is None or self.metadata_thread is not None:
             return False
-        if not self.can_change_workspace():
-            return False
         if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return False
         if self._metadata_workers_running():
