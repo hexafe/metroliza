@@ -5876,6 +5876,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         try:
             if self._check_canceled():
                 return
+            if self._stream_measurements_sheet(excel_writer):
+                return
             export_df = self._build_export_filtered_dataframe()
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
             if self.include_industrial_context:
@@ -5883,6 +5885,52 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         except Exception as e:
             self.log_and_exit(e)
             raise
+
+    def _can_stream_measurements_sheet(self):
+        """Return whether the raw sheet can be streamed from the export snapshot.
+
+        Streaming skips the in-memory copy of the whole snapshot, so it is only
+        used when no later stage (Group Analysis, industrial context) needs it.
+        """
+        return bool(
+            self._db_connection is not None
+            and self._snapshot_table_name
+            and self._cached_export_filtered_df is None
+            and not self.include_industrial_context
+            and str(self.group_analysis_level or 'off').strip().lower() == 'off'
+        )
+
+    def _stream_measurements_sheet(self, excel_writer):
+        """Write MEASUREMENTS straight from the export snapshot; ``False`` if not applicable."""
+        from metroliza.exporting.measurement_stream import ColumnWidthSample, iter_row_chunks
+
+        if not self._can_stream_measurements_sheet():
+            return False
+        backend = self._active_backend or self.get_export_backend()
+        write_streamed_rows = getattr(backend, 'write_streamed_rows', None)
+        if write_streamed_rows is None:
+            return False
+        sheet_name = unique_sheet_name("MEASUREMENTS", backend.list_sheet_names(excel_writer))
+        sample = ColumnWidthSample(_COLUMN_WIDTH_SAMPLE_LIMIT)
+        cursor = self._db_connection.cursor()
+        try:
+            cursor.execute(self._active_export_query)
+            columns = [description[0] for description in cursor.description or ()]
+            row_chunks = iter_row_chunks(cursor, sample, self._check_canceled)
+            row_count = write_streamed_rows(excel_writer, sheet_name, columns, row_chunks)
+        finally:
+            cursor.close()
+        if row_count is None:
+            return False
+        self._record_exported_sheet_name(sheet_name)
+        if self._check_canceled():
+            return True
+        worksheet = backend.get_worksheet(excel_writer, sheet_name)
+        worksheet.autofilter(0, 0, row_count, len(columns) - 1)
+        worksheet.freeze_panes(1, 0)
+        for index, width in enumerate(sample.column_widths(len(columns))):
+            worksheet.set_column(index, index, width)
+        return True
 
     def export_industrial_context_data(self, export_df, excel_writer):
         """Write cached industrial context and link diagnostics when enabled."""
