@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
@@ -458,7 +458,53 @@ def _log_parse_file_failure(report, stage, exception, processed_files, total_fil
     )
 
 
+def _release_report_inspections(work_items):
+    for item in work_items:
+        if item.source_inspection is not None:
+            item.source_inspection.release_extracted_text()
+
+
 def parse_new_reports(
+    report_paths,
+    report_fingerprints,
+    parser_factory,
+    persist_report,
+    should_cancel=lambda: False,
+    on_progress=None,
+    on_file_parsed=None,
+    on_file_failed=None,
+    enable_two_stage_pipeline=False,
+    worker_count=None,
+    log_file_failures=True,
+    on_file_imported=None,
+    require_typed_persistence_outcome=False,
+    on_file_accepted=None,
+    prepare_pool=None,
+):
+    # Keep source evidence on each item, but release its potentially large text
+    # representations even when processing aborts or leaves a cancelled suffix.
+    work_items = tuple(_coerce_selected_report_work_item(report) for report in report_paths)
+    work_items = tuple(
+        replace(item, source_inspection=item.source_inspection or SourceInspectionContext.from_path(
+            item.report_path, source_format=infer_source_format(item.report_path)
+        ))
+        for item in work_items
+    )
+    try:
+        return _parse_new_reports(
+            work_items, report_fingerprints, parser_factory, persist_report,
+            should_cancel=should_cancel, on_progress=on_progress,
+            on_file_parsed=on_file_parsed, on_file_failed=on_file_failed,
+            enable_two_stage_pipeline=enable_two_stage_pipeline, worker_count=worker_count,
+            log_file_failures=log_file_failures, on_file_imported=on_file_imported,
+            require_typed_persistence_outcome=require_typed_persistence_outcome,
+            on_file_accepted=on_file_accepted, prepare_pool=prepare_pool,
+        )
+    finally:
+        _release_report_inspections(work_items)
+
+
+def _parse_new_reports(
     report_paths,
     report_fingerprints,
     parser_factory,
@@ -629,27 +675,31 @@ def parse_new_reports(
 
         def _stage1_worker(work_item, enqueued_at, source_inspection):
             try:
-                prepared = _construct_prepared_report(
-                    work_item,
-                    source_inspection,
-                )
-            except Exception as exc:
-                setattr(exc, "_metroliza_parse_failure_stage", "parser")
-                raise
-            parser = prepared.parser
-            stage_timings = getattr(parser, "stage_timings_s", None)
-            if isinstance(stage_timings, dict):
-                stage_timings["stage1_queue_wait_s"] = max(0.0, time.perf_counter() - enqueued_at)
-
-            prepare_method = getattr(parser, "prepare_for_two_stage_pipeline", None)
-            if callable(prepare_method):
                 try:
-                    prepare_method()
+                    prepared = _construct_prepared_report(
+                        work_item,
+                        source_inspection,
+                    )
                 except Exception as exc:
-                    setattr(exc, "_metroliza_parse_failure_stage", "prepare")
+                    setattr(exc, "_metroliza_parse_failure_stage", "parser")
                     raise
+                parser = prepared.parser
+                stage_timings = getattr(parser, "stage_timings_s", None)
+                if isinstance(stage_timings, dict):
+                    stage_timings["stage1_queue_wait_s"] = max(0.0, time.perf_counter() - enqueued_at)
 
-            return prepared, time.perf_counter()
+                prepare_method = getattr(parser, "prepare_for_two_stage_pipeline", None)
+                if callable(prepare_method):
+                    try:
+                        prepare_method()
+                    except Exception as exc:
+                        setattr(exc, "_metroliza_parse_failure_stage", "prepare")
+                        raise
+
+                return prepared, time.perf_counter()
+
+            finally:
+                source_inspection.release_extracted_text()
 
         executor = ThreadPoolExecutor(max_workers=max_workers)
         futures = []
@@ -664,12 +714,14 @@ def parse_new_reports(
                 try:
                     source_inspection, fingerprint = _inspect_work_item(work_item)
                 except Exception as exc:
+                    work_item.source_inspection.release_extracted_text()
                     if _is_selected_approval_drift(work_item, exc):
                         _record_approval_drift(report, exc)
                         continue
                     _record_file_failure(report, "inspection", exc)
                     continue
                 if not require_typed_persistence_outcome and fingerprint in report_fingerprints:
+                    source_inspection.release_extracted_text()
                     parsed_files += 1
                     already_present_files += 1
                     _emit_processed_progress()
@@ -790,69 +842,73 @@ def parse_new_reports(
         )
 
     for work_item in work_items:
-        if should_cancel():
-            break
-
-        report = work_item.report_path
-        report_parse_start = time.perf_counter()
         try:
-            source_inspection, fingerprint = _inspect_work_item(work_item)
-        except Exception as exc:
-            if _is_selected_approval_drift(work_item, exc):
-                _record_approval_drift(report, exc)
-                continue
-            _record_file_failure(report, "inspection", exc)
-            continue
-        if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
-            try:
-                prepared = _construct_prepared_report(work_item, source_inspection)
-            except report_parser_factory.UnsupportedReportFormatError as exc:
-                _record_unsupported_skip(report, exc)
-                continue
-            except Exception as exc:
-                if _is_selected_approval_drift(work_item, exc):
-                    _record_approval_drift(report, exc)
-                    continue
-                _record_file_failure(report, "parser", exc)
-                continue
-            parser = prepared.parser
-
-            try:
-                if require_typed_persistence_outcome:
-                    _prepare_report(work_item, prepared)
-                _require_prepared_report_approval(
-                    prepared, verify_current=not require_typed_persistence_outcome
-                )
-                if should_cancel():
-                    break
-                outcome = persist_report(parser)
-                _record_persistence_outcome(outcome)
-            except ImportPreparationCancelled:
+            if should_cancel():
                 break
+
+            report = work_item.report_path
+            report_parse_start = time.perf_counter()
+            try:
+                source_inspection, fingerprint = _inspect_work_item(work_item)
             except Exception as exc:
                 if _is_selected_approval_drift(work_item, exc):
                     _record_approval_drift(report, exc)
                     continue
-                _record_file_failure(report, "persistence", exc)
+                _record_file_failure(report, "inspection", exc)
                 continue
-            report_fingerprints.add(fingerprint)
-            if on_file_imported and (
-                not require_typed_persistence_outcome
-                or outcome is ReportImportDisposition.IMPORTED
-            ):
-                on_file_imported(report, parser)
-            if on_file_accepted and require_typed_persistence_outcome:
-                on_file_accepted(work_item, parser, outcome)
-        else:
-            parser = None
-            already_present_files += 1
-        parsed_files = imported_files + already_present_files
-        parse_duration_s = time.perf_counter() - report_parse_start
+            if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
+                try:
+                    prepared = _construct_prepared_report(work_item, source_inspection)
+                except report_parser_factory.UnsupportedReportFormatError as exc:
+                    _record_unsupported_skip(report, exc)
+                    continue
+                except Exception as exc:
+                    if _is_selected_approval_drift(work_item, exc):
+                        _record_approval_drift(report, exc)
+                        continue
+                    _record_file_failure(report, "parser", exc)
+                    continue
+                parser = prepared.parser
 
-        if on_file_parsed:
-            on_file_parsed(parser, parsed_files, total_files, parse_duration_s)
+                try:
+                    if require_typed_persistence_outcome:
+                        _prepare_report(work_item, prepared)
+                    _require_prepared_report_approval(
+                        prepared, verify_current=not require_typed_persistence_outcome
+                    )
+                    if should_cancel():
+                        break
+                    outcome = persist_report(parser)
+                    _record_persistence_outcome(outcome)
+                except ImportPreparationCancelled:
+                    break
+                except Exception as exc:
+                    if _is_selected_approval_drift(work_item, exc):
+                        _record_approval_drift(report, exc)
+                        continue
+                    _record_file_failure(report, "persistence", exc)
+                    continue
+                report_fingerprints.add(fingerprint)
+                if on_file_imported and (
+                    not require_typed_persistence_outcome
+                    or outcome is ReportImportDisposition.IMPORTED
+                ):
+                    on_file_imported(report, parser)
+                if on_file_accepted and require_typed_persistence_outcome:
+                    on_file_accepted(work_item, parser, outcome)
+            else:
+                parser = None
+                already_present_files += 1
+            parsed_files = imported_files + already_present_files
+            parse_duration_s = time.perf_counter() - report_parse_start
 
-        _emit_processed_progress()
+            if on_file_parsed:
+                on_file_parsed(parser, parsed_files, total_files, parse_duration_s)
+
+            _emit_processed_progress()
+
+        finally:
+            work_item.source_inspection.release_extracted_text()
 
     return ParseBatchResult(
         parsed_files=parsed_files,
@@ -1822,6 +1878,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
     def run(self):
         diagnostic = start_workflow_trace(WorkflowOperation.SELECTED_IMPORT)
+        reports_to_parse = ()
         try:
             plan = self._validated_import_plan()
             preflight = plan.preflight_result
@@ -2152,6 +2209,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(e)
         finally:
+            _release_report_inspections(reports_to_parse)
             self._finish_import_resources(diagnostic)
 
     def _finish_import_resources(self, diagnostic) -> None:

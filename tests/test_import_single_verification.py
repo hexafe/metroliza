@@ -326,8 +326,10 @@ def test_pre_schema_guard_does_not_replace_final_content_verification(
 
 
 @pytest.mark.parametrize("already_present", [False, True])
-def test_same_size_same_mtime_replacement_during_lock_wait_is_rejected(
-    tmp_path, already_present
+@pytest.mark.parametrize("change_content", [False, True])
+@pytest.mark.parametrize("change_mtime", [False, True])
+def test_content_hash_is_authoritative_when_mtime_changes_during_lock_wait(
+    tmp_path, monkeypatch, already_present, change_content, change_mtime
 ):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
@@ -344,7 +346,9 @@ def test_same_size_same_mtime_replacement_during_lock_wait_is_rejected(
     repository.ensure_schema()
     if already_present:
         repository.import_report_if_absent(source_path=source, **_payload("accepted"))
+    state = _count_hash_reads(monkeypatch)
     waiting = Event()
+    modified_ns = before.st_mtime_ns + (5_000_000_000 if change_mtime else 0)
 
     def import_contender():
         with closing(sqlite3.connect(database, timeout=5)) as connection:
@@ -366,14 +370,56 @@ def test_same_size_same_mtime_replacement_during_lock_wait_is_rejected(
         try:
             assert waiting.wait(5), "contender never reached BEGIN IMMEDIATE"
             replacement = tmp_path / "replacement.report"
-            replacement.write_bytes(b"tampered")
-            os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+            replacement.write_bytes(b"tampered" if change_content else b"reviewed")
+            os.utime(replacement, ns=(before.st_atime_ns, modified_ns))
             replacement.replace(source)
             assert (source.stat().st_size, source.stat().st_mtime_ns) == (
-                before.st_size, before.st_mtime_ns
+                before.st_size, modified_ns
             )
         finally:
             lock.rollback()
-        with pytest.raises((ValueError, SourceChangedAfterInspectionError)):
-            future.result(timeout=10)
-    assert len(_imported_hashes(database)) == int(already_present)
+        if change_content:
+            with pytest.raises(SourceChangedAfterInspectionError):
+                future.result(timeout=10)
+        else:
+            expected = (
+                report_repository.ReportImportDisposition.ALREADY_PRESENT if already_present
+                else report_repository.ReportImportDisposition.IMPORTED
+            )
+            assert future.result(timeout=10) is expected
+    assert len(_imported_hashes(database)) == (int(already_present) if change_content else 1)
+    assert state["reads"] == [source.name]
+    assert state["reads_in_transaction"] == 1
+
+
+@pytest.mark.parametrize("change_content", [False, True])
+def test_mtime_change_before_transaction_is_classified_without_a_dialog(
+    tmp_path, monkeypatch, change_content
+):
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
+
+    source = tmp_path / "reports"
+    report, = _write_reports(source, 1)
+    database = tmp_path / "db.sqlite3"
+    _prepare_schema(database, "ready")
+    _preflight, plan = _plan(source, database)
+    original = report_repository.run_transaction_with_retry
+    dialogs = []
+
+    def touch_before_begin(database_path, callback, *args, **kwargs):
+        before = report.stat()
+        data = report.read_bytes()
+        if change_content:
+            report.write_bytes(data.replace(b"synthetic-report-0", b"synthetic-report-9"))
+        os.utime(report, ns=(before.st_atime_ns, before.st_mtime_ns + 5_000_000_000))
+        return original(database_path, callback, *args, **kwargs)
+
+    monkeypatch.setattr(report_repository, "run_transaction_with_retry", touch_before_begin)
+    monkeypatch.setattr(CMMReportParser, "log_and_exit", lambda _self, exc: dialogs.append(exc))
+    thread = ParseReportsThread(plan)
+    thread.run()
+    result = thread.last_parse_result
+    assert (result.imported_files, result.preflight_changed_files, result.failed_files) == (
+        (0, 1, 0) if change_content else (1, 0, 0)
+    )
+    assert dialogs == []
