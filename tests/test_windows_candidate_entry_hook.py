@@ -39,6 +39,13 @@ def _run_entry(monkeypatch, *, startup_code: int, diagnostic_scenario, candidate
         requested_scenario=lambda: events.append("candidate_requested") or candidate_scenario,
         run_qualification=lambda: events.append("candidate_run") or 12,
     )
+    # Both real requested_scenario() functions return a scenario only when
+    # METROLIZA_STARTUP_SMOKE=1, and the entry checks that shared gate before importing
+    # either harness (#1112). Stubbed scenarios therefore run under the gate.
+    if diagnostic_scenario is not None or candidate_scenario is not None:
+        monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
+    else:
+        monkeypatch.delenv("METROLIZA_STARTUP_SMOKE", raising=False)
     monkeypatch.setitem(sys.modules, "metroliza.shared.diagnostic_transport", transport)
     monkeypatch.setitem(sys.modules, "metroliza.app.bootstrap", bootstrap)
     monkeypatch.setitem(sys.modules, "metroliza.app.diagnostic_qualification", diagnostic)
