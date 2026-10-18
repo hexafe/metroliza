@@ -4467,6 +4467,7 @@ def export_tabular_analytics_workbook(
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
 
+    from metroliza.tabular.tabular_xlsx_writer import write_tabular_dataframe
     from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
     from metroliza.industrial.industrial_analytics_workbook import groupstats_result_dataframe
     from metroliza.industrial.industrial_analytics_workbook_charts import (
@@ -4492,20 +4493,16 @@ def export_tabular_analytics_workbook(
         engine_kwargs=pandas_xlsxwriter_engine_kwargs(),
     ) as writer:
         table_sheet = unique_sheet_name("Table Data", used_names)
-        safe_dataframe.to_excel(writer, sheet_name=table_sheet, index=False)
+        write_tabular_dataframe(safe_dataframe, writer, table_sheet)
         sheet_names.append(table_sheet)
 
         if safe_aggregation_frame is not None and not safe_aggregation_frame.empty:
             aggregate_sheet = unique_sheet_name("Aggregates", used_names)
-            safe_aggregation_frame.to_excel(writer, sheet_name=aggregate_sheet, index=False)
+            write_tabular_dataframe(safe_aggregation_frame, writer, aggregate_sheet)
             sheet_names.append(aggregate_sheet)
 
         summary_sheet = unique_sheet_name("Metrics", used_names)
-        _metric_summary_dataframe(safe_dataframe, metric_candidates).to_excel(
-            writer,
-            sheet_name=summary_sheet,
-            index=False,
-        )
+        write_tabular_dataframe(_metric_summary_dataframe(safe_dataframe, metric_candidates), writer, summary_sheet)
         sheet_names.append(summary_sheet)
 
         add_analytics_workbook_charts(
@@ -4521,15 +4518,11 @@ def export_tabular_analytics_workbook(
 
         if groupstats_result is not None and groupstats_result.metrics:
             stats_sheet = unique_sheet_name("Groupstats", used_names)
-            groupstats_result_dataframe(groupstats_result).to_excel(
-                writer,
-                sheet_name=stats_sheet,
-                index=False,
-            )
+            write_tabular_dataframe(groupstats_result_dataframe(groupstats_result), writer, stats_sheet)
             sheet_names.append(stats_sheet)
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
-        diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)
+        write_tabular_dataframe(diagnostics_dataframe(diagnostics), writer, diagnostics_sheet)
         sheet_names.append(diagnostics_sheet)
 
         parameter_sheet_count = 0
@@ -4538,11 +4531,7 @@ def export_tabular_analytics_workbook(
                 if candidate.field_name not in safe_dataframe.columns:
                     continue
                 parameter_sheet = unique_sheet_name(candidate.display_label, used_names)
-                _parameter_dataframe(safe_dataframe, candidate.field_name).to_excel(
-                    writer,
-                    sheet_name=parameter_sheet,
-                    index=False,
-                )
+                write_tabular_dataframe(_parameter_dataframe(safe_dataframe, candidate.field_name), writer, parameter_sheet)
                 sheet_names.append(parameter_sheet)
                 parameter_sheet_count += 1
 
