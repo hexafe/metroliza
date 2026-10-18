@@ -5,23 +5,29 @@ metadata of the ready reports in the background and the cells fill in place.
 Cells can be corrected inline; nothing is written before the host imports.
 """
 
+from html import escape
+
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMenu, QPlainTextEdit, QPushButton, QSizePolicy, QTableView, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QMenu, QPlainTextEdit, QPushButton, QSizePolicy, QTableView, QVBoxLayout, QWidget,
 )
 
 from metroliza.parsing.preflight import ParsePreflightStatus
 from metroliza.reports.report_metadata_review import CORE_FIELDS, FIELD_LABELS, REVIEW_FIELDS
 from metroliza.ui.report_planner_model import ReportPlannerFilterModel, ReportPlannerModel
-from metroliza.ui.ui_foundation import _is_dark_widget_palette, set_status_variant, status_chip
+from metroliza.ui import ui_theme_tokens as tokens
+from metroliza.ui.ui_foundation import _is_dark_widget_palette, configure_accessibility
 
 
 PLANNER_ACTION_STYLE = "QPushButton { padding: 3px 9px; min-height: 20px; }"
 # The planner's own toolbar is slimmer so its three control rows stay within the
 # compact (720x480) shell; the host's primary actions keep PLANNER_ACTION_STYLE.
-PLANNER_TOOLBAR_STYLE = "QPushButton { padding: 1px 8px; min-height: 18px; }"
+PLANNER_TOOLBAR_STYLE = (
+    "QPushButton { padding: 1px 6px; min-height: 18px; }"
+    "QLineEdit, QComboBox { min-height: 18px; padding-top: 1px; padding-bottom: 1px; }"
+)
 COMPACT_WIDTH = 850
 _DEFAULT_COLUMN_WIDTHS = {
     ReportPlannerModel.CHECKBOX_COLUMN: 60,
@@ -90,11 +96,13 @@ class ReportPlanner(QWidget):
         self._worker_mode = None
         self._ocr_reason = ""
         self._busy = False
+        self._status_text = ""
+        self._status_variant = "neutral"
         self.model = ReportPlannerModel(self)
         self.proxy = ReportPlannerFilterModel(self)
         self.proxy.setSourceModel(self.model)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search report names, locations or metadata")
+        self.search.setPlaceholderText("Search reports and metadata")
         self.search.setAccessibleName("Search reports")
         self.search.textChanged.connect(self.proxy.set_text_filter)
         self.status_filter = QComboBox()
@@ -172,7 +180,9 @@ class ReportPlanner(QWidget):
         self.outcome.setAccessibleName("Last report import outcome")
         self.outcome.setMaximumHeight(110)
         self.outcome.hide()
-        self.outcome_button = QPushButton("Last import outcome")
+        self.outcome_button = QPushButton("Import outcome")
+        self.outcome_button.setToolTip("Show the outcome of the last import.")
+        configure_accessibility(self.outcome_button, name="Last import outcome")
         self.outcome_button.setCheckable(True)
         self.outcome_button.hide()
         self.outcome_button.toggled.connect(self.outcome.setVisible)
@@ -188,54 +198,57 @@ class ReportPlanner(QWidget):
             pane.setStyleSheet("QPlainTextEdit { min-height: 32px; }")
             pane.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
 
-        self.copy_to_checked = QPushButton("Copy to checked")
-        self.copy_to_checked.clicked.connect(self.copy_current_value_to_checked)
-        self.reset_to_detected = QPushButton("Reset to detected")
-        self.reset_to_detected.clicked.connect(self.reset_current_row)
         self.ocr_button = QPushButton("Read with OCR")
         self.ocr_button.clicked.connect(self.ocr_requested)
-        self.stop_button = QPushButton("Stop")
-        self.stop_button.setToolTip("Stop after the current report. Values already read are kept.")
-        self.stop_button.clicked.connect(self.stop_requested)
-        self.stop_button.hide()
-        self.metadata_status = status_chip("", "neutral")
-        self.metadata_status.setAccessibleName("Metadata status")
-        self.metadata_status.hide()
+        # The other metadata actions live in one menu so the toolbar keeps two rows.
+        self.metadata_menu = QMenu(self)
+        self.metadata_menu.setToolTipsVisible(True)
+        self.copy_to_checked = self._add_menu_action("Copy to checked", self.copy_current_value_to_checked)
+        self.reset_to_detected = self._add_menu_action("Reset to detected", self.reset_current_row)
+        self.stop_action = self._add_menu_action("Stop metadata read", self.stop_requested.emit)
+        self.stop_action.setToolTip("Stop after the current report. Values already read are kept.")
+        self.metadata_button = QPushButton("Metadata")
+        self.metadata_button.setMenu(self.metadata_menu)
+        self.metadata_button.setToolTip(
+            "Copy a value to the checked reports, reset a report to the detected values, "
+            "or stop the metadata read."
+        )
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_metadata_menu)
+        configure_accessibility(self.ocr_button, name="Read checked reports with OCR")
+        configure_accessibility(self.metadata_button, name="Metadata actions")
 
-        controls = QGridLayout()
-        controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(2)
-        controls.addWidget(self.search, 0, 0, 1, 2)
-        controls.addWidget(self.status_filter, 0, 2)
-        controls.addWidget(self.parser_filter, 0, 3, 1, 2)
-        controls.addWidget(self.attention_filter, 1, 0)
-        controls.addWidget(self.select_ready, 1, 1)
-        controls.addWidget(self.clear, 1, 2)
-        controls.addWidget(self.details_button, 1, 3)
-        controls.addWidget(self.outcome_button, 1, 4)
-        controls.setColumnStretch(0, 1)
-        metadata_actions = QHBoxLayout()
-        metadata_actions.setContentsMargins(0, 0, 0, 0)
-        metadata_actions.setSpacing(2)
-        metadata_actions.addWidget(self.copy_to_checked)
-        metadata_actions.addWidget(self.reset_to_detected)
-        metadata_actions.addWidget(self.ocr_button)
-        metadata_actions.addWidget(self.metadata_status, 1)
-        metadata_actions.addWidget(self.stop_button)
+        # Two toolbar rows keep the planner inside the compact 720x480 shell, also at
+        # its 704 px width when the "Last import outcome" button is visible.
+        filters = QHBoxLayout()
+        filters.setContentsMargins(0, 0, 0, 0)
+        filters.setSpacing(2)
+        filters.addWidget(self.search, 1)
+        filters.addWidget(self.attention_filter)
+        filters.addWidget(self.status_filter)
+        filters.addWidget(self.parser_filter)
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(2)
+        actions.addWidget(self.select_ready)
+        actions.addWidget(self.clear)
+        actions.addWidget(self.details_button)
+        actions.addWidget(self.outcome_button)
+        actions.addStretch(1)
+        actions.addWidget(self.ocr_button)
+        actions.addWidget(self.metadata_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        layout.addLayout(controls)
-        layout.addLayout(metadata_actions)
+        layout.addLayout(filters)
+        layout.addLayout(actions)
         layout.addWidget(self.counts)
         layout.addWidget(self.table, 3)
         layout.addWidget(self.details, 1)
         layout.addWidget(self.outcome, 1)
         self.model.selection_changed.connect(self._selection_updated)
         self.model.metadata_changed.connect(self._metadata_updated)
-        self.model.edit_rejected.connect(
-            lambda text: self.set_metadata_status(text, "warning")
-        )
+        self.model.edit_rejected.connect(lambda text: self.set_metadata_status(text, "warning"))
         self.proxy.rowsInserted.connect(self._update_counts)
         self.proxy.rowsRemoved.connect(self._update_counts)
         self.proxy.modelReset.connect(self._update_counts)
@@ -309,18 +322,32 @@ class ReportPlanner(QWidget):
 
         self._worker_mode = mode
         self._ocr_reason = ocr_reason
-        self.stop_button.setVisible(mode is not None)
         self._update_metadata_actions()
 
+    @property
+    def metadata_status_text(self):
+        """Progress or message currently shown in front of the counts line."""
+
+        return self._status_text
+
     def set_metadata_status(self, text, variant="neutral"):
-        self.metadata_status.setText(text)
-        self.metadata_status.setAccessibleDescription(text)
-        set_status_variant(self.metadata_status, variant)
-        self.metadata_status.setVisible(bool(text))
+        """Show progress ("Reading metadata 3/7...") or a message in the counts line."""
+
+        self._status_text, self._status_variant = str(text or ""), variant
+        self._update_counts()
 
     def clear_metadata_status(self):
         self.set_metadata_status("")
-        self.stop_button.hide()
+
+    def _add_menu_action(self, text, slot):
+        action = QAction(text, self.metadata_menu)
+        action.triggered.connect(lambda _checked=False: slot())
+        self.metadata_menu.addAction(action)
+        return action
+
+    def _show_metadata_menu(self, position):
+        self._update_metadata_actions()
+        self.metadata_menu.exec(self.table.viewport().mapToGlobal(position))
 
     def current_metadata_cell(self):
         """Return ``(review_row, field_name)`` for the current cell, or ``(None, None)``."""
@@ -390,28 +417,27 @@ class ReportPlanner(QWidget):
         row, field_name = self.current_metadata_cell()
         usable = not self._busy and self.model.valid
         editable = row is not None and row.editable
-        self.copy_to_checked.setEnabled(
-            usable and editable and self._worker_mode is None and bool(row.value(field_name))
-        )
+        can_copy = usable and editable and self._worker_mode is None and bool(row.value(field_name))
+        self.copy_to_checked.setEnabled(can_copy)
         self.copy_to_checked.setToolTip(
             "Copy this cell's value to the same field of every checked report "
             "(counts as a manual edit)."
-            if self.copy_to_checked.isEnabled()
+            if can_copy
             else "Select a filled metadata cell of an editable report, then copy its value to all checked reports."
         )
-        self.reset_to_detected.setEnabled(
-            usable and editable and bool(row.edited_fields or row.conflict_fields)
-        )
+        can_reset = usable and editable and bool(row.edited_fields or row.conflict_fields)
+        self.reset_to_detected.setEnabled(can_reset)
         self.reset_to_detected.setToolTip(
             "Drop the manual edits of the current report and return to the detected values."
-            if self.reset_to_detected.isEnabled()
+            if can_reset
             else "The current report has no manual edits."
         )
+        self.stop_action.setEnabled(self._worker_mode is not None)
         checked_ready = self.model.has_checked_editable_rows()
         if self._ocr_reason:
             tooltip = self._ocr_reason
         elif self._worker_mode is not None:
-            tooltip = "Wait for the metadata read to finish or press Stop."
+            tooltip = "Wait for the metadata read to finish or use Metadata > Stop metadata read."
         elif not checked_ready:
             tooltip = "Check at least one editable ready report to read its header with OCR."
         else:
@@ -423,6 +449,7 @@ class ReportPlanner(QWidget):
             usable and checked_ready and self._worker_mode is None and not self._ocr_reason
         )
         self.ocr_button.setToolTip(tooltip)
+        self.metadata_button.setEnabled(usable)
 
     def _metadata_updated(self):
         self._update_counts()
@@ -447,8 +474,19 @@ class ReportPlanner(QWidget):
         missing_reference = self.model.missing_reference_count
         if missing_reference:
             text += f" · {missing_reference} missing reference"
-        self.counts.setText(text)
-        self.counts.setAccessibleDescription(text)
+        if not self._status_text:
+            self.counts.setTextFormat(Qt.TextFormat.PlainText)
+            self.counts.setText(text)
+            self.counts.setAccessibleDescription(text)
+            return
+        # Progress and messages lead the existing line (bold, in the theme's status colour).
+        color = tokens.theme_tokens(dark_mode=self.model._dark)["STATUS_COLORS"].get(
+            self._status_variant, (None, None)
+        )[0]
+        style = f' style="color:{color}"' if color and not self.model._high_contrast else ""
+        self.counts.setTextFormat(Qt.TextFormat.RichText)
+        self.counts.setText(f"<b><span{style}>{escape(self._status_text)}</span></b> · {escape(text)}")
+        self.counts.setAccessibleDescription(f"{self._status_text} · {text}")
 
     def _show_details(self, current, _previous=None):
         # The model is the sole sanitizer and never renders raw parser exceptions.
@@ -471,6 +509,8 @@ class ReportPlanner(QWidget):
             application is not None and application.property("metrolizaThemeMode") == "high_contrast"
         )
         self.model.set_theme(dark=_is_dark_widget_palette(self.window()), high_contrast=high_contrast)
+        if self._status_text:
+            self._update_counts()
 
 
     def changeEvent(self, event):

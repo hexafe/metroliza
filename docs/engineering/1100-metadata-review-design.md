@@ -23,9 +23,10 @@ metadata inline:
 
 * When a review completes, a background **fast read** (`light`) starts
   automatically for every selectable (READY) report, in the order the table
-  shows them. There is no modal progress: a status line ("Reading metadata
-  37/120...") and a **Stop** button appear in the planner; unread cells show a
-  neutral `...` placeholder.
+  shows them. There is no modal progress: "Reading metadata 37/120..." leads the
+  planner's existing counts line (so no extra row is needed) and unread cells
+  show a neutral `...` placeholder. Messages (a rejected edit, "stopped") use the
+  same place.
 * Columns after *Status*: **Reference, Part name, Sample no., Date** (visible),
   **Time, Revision, Operator, Comment** (hidden by default, toggled from the
   header context menu "Columns"), then Parser, Confidence, Reason / warning.
@@ -35,11 +36,18 @@ metadata inline:
   toggles the row checkbox). Input goes through `ReviewRow.set_user_value`
   and `normalize_review_value`; an invalid value (for example a bad date) is
   rejected with an inline message and the old value stays.
-* Toolbar: **Copy to checked** (current cell's value to the same field of every
-  checked editable report), **Reset to detected** (current report), **Read with
-  OCR** (checked reports, in the background with progress and Stop). OCR is
-  disabled with the reason as tooltip when the OCR backend is switched off or
-  the models are missing (`ocr_unavailable_reason()`).
+* Toolbar (two rows; it must fit the compact 720x480 shell, also at 704 px with
+  the "Import outcome" button visible): the action row ends with **Read with OCR**
+  (checked reports, background, progress in the counts line) and a compact
+  **Metadata** menu button holding **Copy to checked** (current cell's value to
+  the same field of every checked editable report), **Reset to detected**
+  (current report) and **Stop metadata read** (enabled while a read runs). The
+  same menu opens from the table's context menu. OCR is disabled with the reason
+  as tooltip when the OCR backend is switched off or the models are missing
+  (`ocr_unavailable_reason()`). "Needs attention" sits on the filter row.
+  The planner's toolbar controls use a slimmer style so the planner keeps about
+  36 px of vertical slack at 720x480 (22 px at DejaVu Sans 9 pt, which
+  reproduces the Linux CI metrics of the earlier three-row layout).
 * Import sends `build_overrides(rows of the CHECKED reports)`.
 
 ## Data flow
@@ -214,7 +222,7 @@ the existing CHECK values (`unknown` for typed values).
 
 Fast read and OCR run in `MetadataReviewThread` using the Qt-free reader; results
 come back as one queued signal per report and are merged on the GUI thread.
-**Stop** sets a flag checked between reports (a single report's read or OCR call
+**Stop** (Metadata menu) sets a flag checked between reports (a single report's read or OCR call
 cannot be interrupted); everything already read stays. One worker is active at a
 time (OCR is disabled while the fast read runs).
 
