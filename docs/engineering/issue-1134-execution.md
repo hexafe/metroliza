@@ -210,3 +210,162 @@ SQLite schema, security baseline and complexity budget unchanged. Stop and
 escalate if a repair requires crossing these boundaries. Validation is source
 evidence only; the recorded Windows failure supersedes the earlier local-pass
 claim for frozen qualification.
+
+## Windows CI repair handoff
+
+Status: **SOURCE_FIX / LOCAL_CHECKS_PASS / WINDOWS_RERUN_REQUIRED**.
+Implementation head: `411a58cce70c437489608698f89261d9d26fe275`; the next
+commit only records this handoff. Starting head:
+`0e094149dc0d926eb76c9cef2c29a95d42fe75c4`. Actual runtime model/reasoning:
+`not visible`. Coordinator-only routing remained adequate for the bounded fix;
+external independent exact-head review and Windows CI remain outstanding.
+
+### Diagnosis and design
+
+The saved CI log contains four `other_command` events, zero
+`compute_worker_launch` events, four verified compute images and exactly one
+NumPy-owned command/console pair. The four rejected events correspond to the
+compute launches, not four extra version-probing subprocesses. CPython 3.11.9
+[passes a command-line PyObject pointer to the native audit event using `uuu`](https://github.com/python/cpython/blob/v3.11.9/Modules/_winapi.c#L1184),
+which treats it as wide-character data. The synchronous Python caller still
+holds the actual command passed to CreateProcess.
+
+- The classifier now requires the **immediate**
+  `multiprocessing.popen_spawn_win32.__init__` frame, matches its `python_exe`
+  to the native event's executable, and validates its actual `cmd` using the
+  existing exact frozen command signature. Native cwd, fixed image identity,
+  application ancestry, member counts, phases and empty-Job proof remain
+  required. It never serializes command lines or frame locals. Outer-frame,
+  missing-local, changed-command/image/cwd and unrelated-caller cases fail.
+- The log also shows NumPy's lazy parent version probe **between** the import
+  and export pools, incompatible with the existing strict helper-before-compute
+  order. The synthetic qualification entry now installs the existing native
+  Windows-version fallback before lazy workload imports. No audit roles,
+  allowlists, ordering rules or topology validators were changed. Worker
+  freeze-support dispatch remains unchanged.
+- Both SQLite fixtures use `closing(connection), connection`, preserving commit
+  behavior and explicit closure on Windows.
+- The host registers each run before launch, records its stage, reads completed
+  workload timings before topology verification, snapshots bounded runtime
+  events/owned-process evidence before journal cleanup, and prints the final
+  receipt. Failures identify the stage, run and fixed failure code. Arbitrary
+  exception text is omitted.
+- Import profiling exists only in the explicit synthetic qualification workflow.
+  `stage_seconds.preflight` measures the initial scan; `prepare` measures parser
+  construction/preparation and parent-side pool wait; `persist` measures the
+  persistence callback; `other_pipeline` contains setup, source approval and
+  cleanup outside those callbacks. These are parent wall times, not summed
+  worker CPU times. Existing `seconds` still excludes the initial preflight;
+  `total_seconds` includes it. Hooks restore on success and failure. No import
+  algorithm, optimization, schema or normal UI path was changed.
+
+### MUST evidence
+
+| Requirement | Evidence | Result |
+| --- | --- | --- |
+| Explicit SQLite closure | Full `test_db_utils.py`, including repository AST rule | PASS locally |
+| Exact compute launch observation | Native-event corruption simulation, live Python call-frame observation and adversarial rejection cases | PASS locally; real Windows pending |
+| Preserve topology contract | Existing role/count/ancestry/drain tests; native fallback installed before synthetic workloads | PASS locally; built package pending |
+| Self-explaining failures | Injected topology rejection retains workload, stage, fixed failure code, audit events and empty-Job evidence before close; timeout run is registered before launch | PASS locally |
+| Import stage timing | Deterministic 1/2/3/4-second stage test, hook restoration on failure, real 200-report serial/worker timing fields | PASS locally |
+| Equivalence and quality gates | Captured base equality, full 200-report/40-group integration, required gates below | PASS locally |
+
+Changed scope: this document, `scripts/qualify_windows_compute_workers.py`,
+`src/metroliza/app/compute_worker_qualification.py`,
+`src/metroliza/shared/diagnostic_runtime_audit.py`,
+`tests/test_compute_worker_qualification.py`, and
+`tests/test_windows_runtime_audit.py`. No new repository files need coverage
+ownership. No security baseline, complexity budget, packaging or pipeline file
+was changed. No push, PR, merge, rebase, hard reset, force push or stash occurred.
+
+### Equivalence and before/after controls
+
+A `git archive` of the exact starting head was captured before implementation
+under session scratch `codex/1134-ci-fix/base/`; no extra worktree was created.
+Three baseline and three final source trials imported 24 synthetic reports and
+rendered one four-PNG group. All persisted non-clock rows and all worksheet
+commands, including exact PNG bytes, match. The separate integration test
+compares all database rows and XLSX parts for 200 reports/40 groups with actual
+spawned workers enabled and disabled.
+
+| Source serial control, median of three (seconds) | Base | Updated |
+| --- | ---: | ---: |
+| Import 24 synthetic PDFs | 0.397 | 0.295 |
+| Render one four-PNG group | 1.753 | 1.582 |
+
+Load averages (1/5/15 minutes) at capture: base 8.572 / 8.458 / 5.623;
+updated 9.028 / 8.583 / 5.770. These are differing-load source controls, not a
+speedup claim or Windows calibration. The reported CI serial 200-report import
+72.571 s/export 63.154 s remain the prior Windows measurements; no new packaged
+Windows measurement exists. Scripts, raw samples, comparison and scan outputs
+remain under the authorized session scratch `codex/1134-ci-fix/` directory.
+
+### Exact commands and results
+
+All tests used the required persistent-QApplication plugin and disabled cores.
+The first selection passed **167 tests, 13 skipped, 5 subtests** in 10.21 s:
+
+```bash
+ulimit -c 0; env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" tests/test_windows_runtime_audit.py tests/test_frozen_compute_worker.py tests/test_db_utils.py
+```
+
+The qualification integration and required gates passed **126 tests** in
+173.99 s. Two additional failure/native-order tests were added afterward and
+passed in the following related selection; the integration implementation and
+quality-gated production paths were unchanged except for the tested native
+fallback at the separate smoke entry.
+
+```bash
+ulimit -c 0; env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" tests/test_compute_worker_qualification.py tests/test_complexity_ratchet.py tests/test_bug_sweep_coverage.py tests/test_security_audit.py
+```
+
+The final related selection passed **149 tests, 3 skipped, 1 deselected** in
+22.40 s (`large_real` is the already-passed 200-report integration):
+
+```bash
+ulimit -c 0; env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" tests/test_compute_worker_qualification.py -k 'not large_real' tests/test_frozen_ocr_worker.py tests/test_windows_owned_process_probe.py tests/test_export_summary_render_pool.py tests/test_import_prepare_pool.py tests/test_directory_reorganization_architecture.py tests/test_packaging_payload_exclusions.py
+```
+
+The required gates were rerun against implementation head `411a58cc` after all
+production changes: **118 passed** in 66.06 s.
+
+```bash
+ulimit -c 0; env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" tests/test_complexity_ratchet.py tests/test_bug_sweep_coverage.py tests/test_security_audit.py
+```
+
+Base workload capture (cwd: scratch `codex/1134-ci-fix/base/`) passed **1 test**
+in 8.78 s; final workload capture (cwd: working root) passed **1 test** in 7.48 s:
+
+```bash
+ulimit -c 0; env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper CAPTURE_LABEL=base-workload /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" /tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1134-ci-fix/test_capture.py
+ulimit -c 0; env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper CAPTURE_LABEL=final-workload /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" /tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1134-ci-fix/test_capture.py
+```
+
+Exact saved-output comparison passed **1 test** in 0.01 s:
+
+```bash
+ulimit -c 0; env -u QT_QPA_PLATFORMTHEME QT_QPA_PLATFORM=offscreen PYTHONPATH=src:.:/tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/qt_keeper /home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m pytest -p qt_app_keeper -q -p no:cacheprovider -o addopts="" /tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1134-ci-fix/test_compare.py
+```
+
+```bash
+/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m ruff check .
+git diff --check
+/home/hexaf-p15/Projects/metroliza/dev/.venv/bin/python -m bandit -q -r src/metroliza scripts packaging --severity-level medium --format json --exit-zero -o /tmp/claude-1000/-home-hexaf-p15-Projects-metroliza/9466a750-f701-4a3a-be83-d9aee8d78fd8/scratchpad/codex/1134-ci-fix/bandit-final.json
+```
+
+Ruff and diff checks pass. Base and updated Bandit scans each contain the same
+152 medium findings at the same file/line/test/message identities, with zero new
+or shifted findings. `config/security/bandit_baseline.json` is unchanged.
+An initial Ruff E731 test-fixture finding was corrected before commit.
+
+### Open proof and risks
+
+Windows/frozen build, real native audit argument recovery, packaged worker
+startup, strict topology order after removal of the parent helper pair, packaged
+output equivalence and per-stage Windows timings are **not verified locally**.
+The immediate-frame adapter deliberately depends on the qualified CPython
+multiprocessing caller and local names; an upstream implementation change fails
+closed and needs renewed review. Linux mocks/source checks do not replace the
+orchestrator's Windows CI rerun. No full suite, release acceptance, clean-machine
+proof or independent external review was claimed. The import slowdown remains
+undiagnosed pending the new Windows stage measurements, as requested.
