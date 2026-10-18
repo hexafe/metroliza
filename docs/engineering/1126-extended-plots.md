@@ -79,8 +79,14 @@ original per-group parent loop.
 The first serial group establishes the existing adaptive density policy. If
 active settings change after submission, stale results are discarded and that
 group follows the original serial path. Startup/submission/task failures switch
-remaining groups to serial without duplicating writes. Cancellation and early
-exit cancel queued futures and shut down the executor in a `finally` block.
+remaining groups to serial without duplicating writes. A shared spawn event
+connects parent cancellation to the workers' existing chart-boundary checks.
+The parent polls futures every 100 ms and discards results after cancellation.
+Cancellation, early exit and failures signal workers and cancel queued futures.
+Cleanup allows two seconds for cooperative exit, then terminates remaining
+workers, waits another 500 ms, kills survivors and waits another 500 ms. The
+executor manager thread has a final 500 ms join. These deadlines are shared
+across all workers in each phase, rather than multiplied by the worker count.
 Worker initialization disables core dumps on POSIX; no QApplication is created
 in workers.
 
@@ -247,3 +253,64 @@ concurrency/lifecycle acceptance burden merits CRITICAL / MILESTONE capability
 coordination on a similar task. Independent exact-head review, CI and merge
 readiness belong to the external orchestrator and remain pending; this local
 handoff does not assert READY FOR MERGE.
+
+## PR #1130 review correction — cancellation (#1126)
+
+Authority: the supplied external-orchestrator finding and repair packet; current
+worktree only, branch `perf/1126-extended-plots`, review base
+`22547dee5938f08339bed8441874a6b4c24d5d05`. PR comparison base remains
+`origin/integrate/2026.09-rc1-into-develop`. No remote actions are authorized.
+Whole-change class remains CRITICAL / MILESTONE; coordinator-only execution,
+actual runtime model/reasoning: not visible. Owned files: the existing render
+pool, its existing test file and this record. No added repository files.
+
+### MUST
+
+Reproduce cancellation during an active spawn render before fixing production
+code; stop subsequent charts, discard canceled results and reap workers within
+a bounded shutdown. Preserve ordered, bounded submission, serial fallback and
+strict PNG/workbook equivalence. Repeat three-run synthetic benchmarks with
+load averages, related tests, complexity/coverage/security gates and Ruff.
+Commit locally; leave external review, CI and integration to the orchestrator.
+
+### SHOULD
+
+Use the existing chart-boundary cancellation checks and avoid a manager process
+or a new per-chart IPC protocol. Keep core dumps disabled.
+
+### DEFERRED
+
+Actual Windows/frozen-build execution remains the existing external acceptance
+gate. No packaging/entry-point, UI, database or native-renderer changes.
+
+The P2 finding is valid. Before production edits, real spawn tests failed in
+both cooperative chart-release and stuck-chart cases. The former yielded a
+canceled result and rendered distribution/IQR/histogram/trend in both workers;
+the latter remained blocked beyond five seconds. The old completed-future
+tests did not prove active cancellation; this receipt supersedes that part of
+the earlier readiness table. Baseline pool/exporter sources and six full
+synthetic exports were captured from the review base in
+`scratchpad/codex/1130-cancel/` before production edits, without another worktree.
+
+Worker initialization receives the shared event through spawn `initargs`.
+Workers observe it without emitting parent-owned Qt cancellation signals.
+Already-canceled jobs skip summary rendering. Pool errors stop workers before
+replaying remaining groups serially; cancellation prevents that replay.
+Worker-raised `TimeoutError` remains a failure eligible for serial fallback.
+
+Python 3.11 lacks public executor worker termination. Cleanup snapshots this
+executor's private process/manager references before nonblocking shutdown;
+joins and termination touch only those processes. This narrow compatibility
+dependency requires attention when changing supported Python versions. The
+current chart can finish cooperatively; an unresponsive chart can be forcibly
+stopped after the grace period. As with any process timeout, kernel scheduling
+and uninterruptible OS waits are outside a strict wall-clock guarantee.
+
+The real spawn regression checks both release-at-chart-boundary and a chart
+that stays blocked: no later chart types, no results replayed after cancel,
+collector return within five seconds, all child exit codes collected and the
+executor manager thread stopped. Cooperative workers must exit with code zero.
+Two intermediate test runs were interrupted because test teardown tried to
+notify a multiprocessing Event after killing its waiters. The trace identified
+the test's release event, not production cleanup. A filesystem release marker
+removed that harness deadlock; no crash was induced.

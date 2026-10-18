@@ -6,10 +6,12 @@ boundary. They never open the database, workbook, or dashboard output paths.
 """
 
 from collections import deque
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError
 from dataclasses import replace
+from itertools import chain
 import multiprocessing
 import sys
+import time
 
 from metroliza.exporting.contracts import AppPaths, ExportRequest
 from metroliza.shared.env_utils import env_bool
@@ -17,6 +19,10 @@ from metroliza.shared.env_utils import env_bool
 
 MIN_PARALLEL_GROUPS = 8
 MAX_RENDER_WORKERS = 4
+RESULT_POLL_SECONDS = 0.1
+WORKER_EXIT_GRACE_SECONDS = 2.0
+WORKER_STOP_GRACE_SECONDS = 0.5
+_worker_cancel_event = None
 
 
 class RecordingWorksheet:
@@ -34,7 +40,9 @@ class RecordingWorksheet:
         self.commands.append(('image', (row, col, options, payload)))
 
 
-def _initialize_render_worker():
+def _initialize_render_worker(cancel_event=None):
+    global _worker_cancel_event
+    _worker_cancel_event = cancel_event
     # A failed native/scientific dependency must never generate desktop cores.
     if sys.platform != 'win32':
         import resource
@@ -51,13 +59,18 @@ def render_summary_group(task):
         options=replace(task['options'], generate_html_dashboard=False, chart_worker_count=1),
     )
     thread = ExportDataThread(request)
+    if _worker_cancel_event is not None:
+        # Observe cancellation at the existing chart boundaries without emitting
+        # parent-owned Qt cancellation/progress signals from a child process.
+        thread._check_canceled = _worker_cancel_event.is_set
     thread._prepared_grouping_df = task['grouping_df']
     thread._optimization_toggles = dict(task['toggles'])
     thread._lookup_sql_measurement_summary = lambda **_kwargs: task['sql_summary']
     sheet = RecordingWorksheet()
     labels = []
     thread.update_label.connect(labels.append)
-    thread.summary_sheet_fill(sheet, task['header'], task['group'], task['col'])
+    if not thread._check_canceled():
+        thread.summary_sheet_fill(sheet, task['header'], task['group'], task['col'])
     return {
         'commands': sheet.commands,
         'stage_timings': thread._stage_timings,
@@ -109,6 +122,54 @@ def _pool_policy(owner, group_count):
     return 'spawn'
 
 
+def _render_canceled(owner, cancel_event):
+    if owner._check_canceled():
+        cancel_event.set()
+        return True
+    return False
+
+
+def _await_render_result(owner, future, cancel_event):
+    while not _render_canceled(owner, cancel_event):
+        try:
+            return future.result(timeout=RESULT_POLL_SECONDS)
+        except TimeoutError:
+            if future.done():
+                # A worker-raised TimeoutError is a task failure, not a poll.
+                return future.result()
+    return None
+
+
+def _join_render_processes(processes, timeout):
+    deadline = time.monotonic() + timeout
+    for process in processes:
+        process.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
+def _shutdown_render_pool(executor, pending, cancel_event):
+    cancel_event.set()
+    for _entry, future, _toggles in pending:
+        if future is not None:
+            future.cancel()
+    # Python 3.11 has no public executor terminate_workers(). Snapshot only this
+    # executor's processes before shutdown clears its references. Never wait
+    # indefinitely for a chart/native call that cannot observe the shared event.
+    processes = list((getattr(executor, '_processes', None) or {}).values())
+    manager = getattr(executor, '_executor_manager_thread', None)
+    executor.shutdown(wait=False, cancel_futures=True)
+    _join_render_processes(processes, WORKER_EXIT_GRACE_SECONDS)
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    _join_render_processes(processes, WORKER_STOP_GRACE_SECONDS)
+    for process in processes:
+        if process.is_alive():
+            process.kill()
+    _join_render_processes(processes, WORKER_STOP_GRACE_SECONDS)
+    if manager is not None:
+        manager.join(timeout=WORKER_STOP_GRACE_SECONDS)
+
+
 def iter_summary_render_results(owner, entries):
     """Yield entries in input order with at most queue_size outstanding groups.
 
@@ -132,34 +193,36 @@ def iter_summary_render_results(owner, entries):
     remaining = iter(entries[1:])
     executor = None
     try:
+        context = multiprocessing.get_context('spawn')
+        cancel_event = context.Event()
         executor = ProcessPoolExecutor(
-            max_workers=workers, mp_context=multiprocessing.get_context('spawn'),
-            initializer=_initialize_render_worker,
+            max_workers=workers, mp_context=context,
+            initializer=_initialize_render_worker, initargs=(cancel_event,),
         )
         telemetry['workers'] = workers
-        yield from _collect_ordered(owner, remaining, pending, executor, bound, telemetry)
+        yield from _collect_ordered(owner, remaining, pending, executor, bound, telemetry, cancel_event)
     except Exception as exc:
+        if executor is not None:
+            _shutdown_render_pool(executor, pending, cancel_event)
+            executor = None
         telemetry.update(mode='serial_pool_failure', exception_class=type(exc).__name__)
-        for entry, future, _toggles in pending:
-            if future is not None:
-                future.cancel()
-            yield entry, None
-        for entry in remaining:
+        for entry in chain((entry for entry, _future, _toggles in pending), remaining):
+            if owner._check_canceled():
+                return
             yield entry, None
     finally:
-        for _entry, future, _toggles in pending:
-            if future is not None:
-                future.cancel()
         if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
+            _shutdown_render_pool(executor, pending, cancel_event)
 
 
-def _collect_ordered(owner, remaining, pending, executor, bound, telemetry):
+def _collect_ordered(owner, remaining, pending, executor, bound, telemetry, cancel_event):
     exhausted = False
     while not exhausted or pending:
-        if owner._check_canceled():
+        if _render_canceled(owner, cancel_event):
             return
         while not exhausted and len(pending) < bound:
+            if _render_canceled(owner, cancel_event):
+                return
             entry = next(remaining, None)
             if entry is None:
                 exhausted = True
@@ -172,7 +235,9 @@ def _collect_ordered(owner, remaining, pending, executor, bound, telemetry):
                 telemetry['max_pending'] = max(telemetry['max_pending'], len(pending))
         if pending:
             entry, future, toggles = pending[0]
-            result = future.result()
+            result = _await_render_result(owner, future, cancel_event)
+            if _render_canceled(owner, cancel_event):
+                return
             pending.popleft()
             if toggles != owner._optimization_toggles:
                 result = None
