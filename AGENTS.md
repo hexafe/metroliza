@@ -22,6 +22,7 @@ keeps its actual identity. No client configuration is installed here.
 ## Non-negotiable contracts
 
 - Normal branches start from and target `develop`; never assume GitHub's default base.
+- Apply the accepted develop PR template explicitly using the [publication procedure](docs/project/development_workflow.md#pr-template-publication); the template auto-filled from default `master` may be stale. Record its source commit and verify the actual PR body before handoff.
 - Remote branches are disposable execution refs, not evidence archives. Steady state is `master` + `develop` + an active `release/*` when needed + current PR heads.
 - Do not create a remote branch per agent, reviewer, test attempt or checkpoint. Reuse the Issue branch for in-scope corrections.
 - After merge, mark the source branch for retirement unless a named live consumer per the [cleanup gate](docs/release_checks/branching_strategy.md#cleanup-gate) requires that exact ref; record the consumer and retirement trigger. Physical deletion follows that gate: complete live-consumer checks and clean-repository recovery fetch of the exact commit/tree for every branch, including merged and squashed branches, then a Product-Owner-approved finite exact-ref/full-SHA manifest and expected-old-value guards.

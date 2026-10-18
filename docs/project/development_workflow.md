@@ -62,6 +62,33 @@ and expected-old-value guards.
 - GitHub still presents `master` as the default branch, so select the PR base explicitly:
   `develop` for normal work or `release/2026.06-rc2` for approved release work.
 
+### PR template publication
+
+[GitHub serves PR templates from the default branch](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
+Merging this policy to `develop` activates repository guidance but does not update the form
+auto-filled from `master`. The coordinator owns the following mandatory interim procedure for
+new PRs and the next safe update of an existing PR:
+
+1. Read `.github/pull_request_template.md` from an exact accepted `develop` commit. Before #1063
+   merges, use the exact candidate template admitted by the #1061 packet and identify it as such.
+2. Explicitly apply that template to the PR body (for example, edit a local body file and use
+   `gh pr create --body-file` or `gh pr edit --body-file`). Merge required fields into an existing
+   body without losing its evidence. Do not rely on the automatically selected template.
+3. Record the template source commit and verify the published body contains its lifecycle,
+   routing/authority and closeout controls, with applicable evidence or explicit pending status.
+   Check repository links in the PR-body context; absolute `blob/develop/...` links are used in
+   the template. Bind acceptance evidence separately to immutable commits, not those moving links.
+
+Default-branch synchronization is tracked in #1061 and belongs to the release owner. In the next
+approved release synchronization packet, include the exact accepted develop template among the
+documentation promoted through the reviewed release PR into `master`. If the frozen RC is used,
+first obtain the narrowly scoped documentation approval and triage required by the release rules;
+all existing #901 evidence and release-owner Go gates remain. After authorized promotion, compare
+the template blob on `master` with the accepted source and verify the auto-filled PR body. Only
+then record automatic-template activation in #1061. Until then the explicit procedure above remains
+mandatory. This policy does not authorize an early write to `master`, a default-branch change or a
+release bypass. A template-only early synchronization would require its own explicit PO packet.
+
 ## 3. Issue lifecycle
 
 ### 3.1 Create
