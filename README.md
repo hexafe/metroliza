@@ -124,11 +124,15 @@ native launcher instead of using the PyInstaller onefile. It unpacks the applica
 version into `%LOCALAPPDATA%\Metroliza\runtime` and reuses it on every later start:
 
 ```powershell
-.\build_windows_launcher_exe.ps1 -BuildOnedir
+.\build_windows_portable_exe.ps1              # supervised onedir + portable envelope
+.\build_windows_launcher_exe.ps1 -Supervised  # the same onedir -> native launcher EXE
 ```
 
-The result is `dist\metroliza_<version>_<yymmdd>.exe`. See `packaging/launcher/README.md` for the
-format, cache layout and fallbacks; `scripts/qualify_windows_launcher.py` qualifies a built EXE.
+The result is `dist\metroliza_<version>_<yymmdd>_launcher.exe` (the portable envelope is
+`dist\metroliza_<version>_<yymmdd>.exe`). See `packaging/launcher/README.md` for the format, cache
+layout, self-repair contract, benchmark and fallbacks; `scripts/qualify_windows_launcher.py`
+qualifies the launcher with a synthetic payload and `scripts/qualify_windows_portable_onefile.py
+--kind launcher` the real packaged application.
 
 If the OCR model files are missing, refresh them before building:
 

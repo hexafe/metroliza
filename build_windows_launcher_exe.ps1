@@ -6,6 +6,12 @@ param(
     [switch]$WithNative,
     [switch]$Clean,
 
+    # Pack the RC supervised onedir (entry metroliza.exe, metroliza_application.exe, the OCR worker
+    # and supervision_manifest.json): requires the exact, clean-head build provenance and the same
+    # verified supervisor identity the portable envelope requires. Use the same onedir that
+    # build_windows_portable_exe.ps1 just built to compare the two deliveries.
+    [switch]$Supervised,
+
     [string]$OnedirPath,
 
     # Relative path of the executable to start inside the onedir. It is recorded in the payload
@@ -15,7 +21,8 @@ param(
     # Release label such as 2026.06rc2(260711). Default: read from VersionDate.py.
     [string]$ReleaseLabel,
 
-    # Output EXE. Default: dist/metroliza_<version>_<yymmdd>.exe
+    # Output EXE. Default: dist/metroliza_<version>_<yymmdd>_launcher.exe. The suffix keeps it
+    # apart from the PyInstaller portable envelope dist/metroliza_<version>_<yymmdd>.exe.
     [string]$Output
 )
 
@@ -121,7 +128,7 @@ try {
         $OnedirPath = Join-Path $distDir "metroliza_P_${label}_onedir"
     }
     if (-not $Output) {
-        $Output = Join-Path $distDir "metroliza_$version.exe"
+        $Output = Join-Path $distDir "metroliza_${version}_launcher.exe"
     }
     $gitSha = (git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $gitSha -notmatch '^[0-9a-f]{40}$') {
@@ -129,6 +136,43 @@ try {
     }
     if (@(git status --porcelain).Count -ne 0) {
         Write-Warning 'The working tree is dirty; the EXE records the commit id only.'
+    }
+
+    if ($Supervised) {
+        Invoke-Step 'Checking the supervised onedir (exact head, verified identity)' {
+            if ($Entry -ne 'metroliza.exe') {
+                throw '-Supervised starts the supervisor: the entry must be metroliza.exe'
+            }
+            if (-not (Test-Path -LiteralPath $OnedirPath -PathType Container)) {
+                throw "Onedir not found: $OnedirPath (use -BuildOnedir or -OnedirPath)"
+            }
+            foreach ($required in @('metroliza.exe', 'metroliza_application.exe',
+                                    'metroliza_ocr_worker.exe', 'supervision_manifest.json')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $OnedirPath $required) -PathType Leaf)) {
+                    throw "The supervised onedir is incomplete: $required is missing"
+                }
+            }
+            if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf) -or
+                -not (Test-Path -LiteralPath $provenanceManifestPath -PathType Leaf)) {
+                throw 'The exact supervised onedir build (build venv and provenance) is required first'
+            }
+            $provenance = Get-Content -LiteralPath $provenanceManifestPath -Raw | ConvertFrom-Json
+            if ($provenance.git_sha -ne $gitSha -or $provenance.dirty) {
+                throw 'The launcher needs a clean, exact-head supervised payload'
+            }
+            if ([string]$provenance.release_label -ne $label) {
+                throw 'The release label does not match the build provenance'
+            }
+            # The same check the portable envelope runs: complete package identity plus the exact
+            # supervisor executable sidecar.
+            $verify = "import sys; sys.path[:0] = ['packaging', 'src']; from pathlib import Path; " +
+                "from metroliza_portable_entry import _verified_launcher; " +
+                "sys.exit(0 if _verified_launcher(Path(sys.argv[1])) is not None else 1)"
+            & $venvPython -c $verify $OnedirPath
+            if ($LASTEXITCODE -ne 0) {
+                throw 'The supervised onedir identity is not verified'
+            }
+        }
     }
 
     Invoke-Step 'Checking inputs' {
@@ -164,17 +208,28 @@ try {
     Invoke-Step 'Packing the onedir into one EXE' {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Output) | Out-Null
         if (Test-Path -LiteralPath $Output) { Remove-Item -LiteralPath $Output -Force }
-        Invoke-Checked -Executable $packer -Arguments @(
+        # --content-key appends the onedir content hash to the version, so the runtime cache
+        # directory (<version>-<hash12>_<sha8>) follows the packed files, not only the label.
+        $packerArguments = @(
             '--input', $OnedirPath,
             '--entry', $Entry,
             '--version', $version,
+            '--content-key',
             '--git-sha', $gitSha,
             '--stub', $stub,
             '--output', $Output
         )
+        Write-Host "    $packer $($packerArguments -join ' ')"
+        $packerOutput = & $packer @packerArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Packer failed with exit code ${LASTEXITCODE}"
+        }
         if (-not (Test-Path -LiteralPath $Output -PathType Leaf)) {
             throw 'Packer did not produce the output EXE'
         }
+        $script:packSummary = ([string]($packerOutput | Select-Object -Last 1)) | ConvertFrom-Json
+        Write-Host "    runtime key: $($script:packSummary.dir_name)"
+        Write-Host "    content SHA-256: $($script:packSummary.content_sha256)"
     }
 
     Invoke-Step 'Signing (optional)' {
@@ -206,6 +261,7 @@ try {
     Write-Host ""
     Write-Host "Launcher EXE: $Output"
     Write-Host "    size $size bytes, SHA-256 $sha"
+    Write-Host "    runtime cache directory: $($script:packSummary.dir_name)"
 }
 finally {
     Pop-Location

@@ -327,6 +327,56 @@ def scenario_kill_during_extraction(h: Harness, exe: Path, summary: dict, onedir
     return {"seconds": round(result["seconds"], 3)}
 
 
+def repair_variable_per_start(record: Path) -> list[str]:
+    """Value of METROLIZA_RUNTIME_REPAIR_AVAILABLE the test entry saw at each start."""
+    return [
+        line.rsplit("repair_available=", 1)[1]
+        for line in record.read_text(encoding="utf-8").splitlines()
+        if line.startswith("started ")
+    ]
+
+
+def scenario_self_repair(h: Harness, exe: Path, summary: dict) -> dict:
+    """Exit code 75 re-extracts the runtime and restarts the entry once, without the variable."""
+    target = h.root / summary["dir_name"]
+    victim = target / "data" / "file_000.txt"
+    original = victim.read_bytes()
+    # Same size, different content: the size-only warm check cannot see this.
+    victim.write_bytes(bytes([original[0] ^ 0xFF]) + original[1:])
+    record = h.work / "record-self-repair.txt"
+    record.unlink(missing_ok=True)
+
+    repaired = h.run(
+        exe, "--record", str(record), "--request-repair", "--exit-code", "0", timeout=300.0
+    )
+    check(repaired["returncode"] == 0, f"exit code {repaired['returncode']} after repair")
+    check("repair=requested" in repaired["log"], f"no repair request: {repaired['log']}")
+    check("cache=repair" in repaired["log"], f"no re-extraction: {repaired['log']}")
+    check(
+        repair_variable_per_start(record) == ["1", "unset"],
+        f"starts/variable: {repair_variable_per_start(record)}",
+    )
+    check(victim.read_bytes() == original, "damaged file was not restored")
+    check(not h.staging_dirs(), "staging directory left behind")
+
+    # A second 75 is final: no loop, the second run's exit code is returned.
+    record.unlink()
+    twice = h.run(exe, "--record", str(record), "--exit-code", "75", timeout=300.0)
+    check(twice["returncode"] == 75, f"exit code {twice['returncode']} after two requests")
+    check(repair_variable_per_start(record) == ["1", "unset"], "second 75 must not loop")
+    check(
+        sum(line == "repair=requested" for line in twice["log"]) == 1,
+        f"repair requested more than once: {twice['log']}",
+    )
+
+    # Ordinary exit codes pass through unchanged and are never restarted.
+    record.unlink()
+    plain = h.run(exe, "--record", str(record), "--exit-code", "9", timeout=300.0)
+    check(plain["returncode"] == 9, f"exit code {plain['returncode']} was altered")
+    check(repair_variable_per_start(record) == ["1"], "ordinary exit code restarted the entry")
+    return {"seconds": round(repaired["seconds"], 3)}
+
+
 def scenario_no_temp_use(h: Harness) -> dict:
     leftovers = sorted(p.name for p in h.temp.iterdir())
     check(not leftovers, f"launcher runs left files in TEMP: {leftovers}")
@@ -392,6 +442,7 @@ def qualify_synthetic(args, work: Path, report: Report) -> None:
         h, exe1, sum1, onedir, run_args,
         ["blobs/blob_00.bin", "data/file_000.txt"],
     )
+    report.run("self_repair_exit_75", scenario_self_repair, h, exe1, sum1)
     report.run("version_upgrade_cleanup", scenario_upgrade, h, exes, ("--exit-code", "0"))
     exe4, sum4 = exes["v4"]
     report.run("kill_during_extraction", scenario_kill_during_extraction, h, exe4, sum4, onedir)

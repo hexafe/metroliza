@@ -153,7 +153,12 @@ pub fn publish_entry_pid(guard: &InstanceGuard, pid: u32) {
         }
         (view.Value as *mut u32).write_volatile(pid);
         UnmapViewOfFile(view);
-        *guard.pid_mapping.lock().unwrap_or_else(|p| p.into_inner()) = mapping;
+        // A repair restart publishes a second pid under the same name: keep one handle only.
+        let mut slot = guard.pid_mapping.lock().unwrap_or_else(|p| p.into_inner());
+        if !slot.is_null() {
+            CloseHandle(*slot);
+        }
+        *slot = mapping;
     }
 }
 
