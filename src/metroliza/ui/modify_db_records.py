@@ -305,6 +305,16 @@ class RecordTableView(QTableView):
         if model is not None:
             self.setCurrentIndex(model.index(row, column))
 
+    def try_apply_filter(self, text: str) -> bool:
+        """Defer model resets until the user accepts or cancels the delegate's cell edit."""
+
+        if self.state() == self.State.EditingState:
+            return False
+        model = self.model()
+        if model is not None:
+            model.set_filter_text(text)
+        return True
+
 
 class RecordBusyBanner(QWidget):
     """Compact "loading" row with an indeterminate progress bar."""

@@ -737,10 +737,10 @@ class ModifyDB(QDialog):
     def _apply_record_filter(self, slot):
         try:
             slot.filter_timer.stop()
-            model = slot.view.model()
-            if model is not None:
-                model.set_filter_text(slot.filter_edit.text())
+            if slot.view.try_apply_filter(slot.filter_edit.text()):
                 self._last_clicked_row_by_table.pop(slot.view, None)
+            else:
+                slot.filter_timer.start()
         except Exception as e:
             self.log_and_exit(e)
 

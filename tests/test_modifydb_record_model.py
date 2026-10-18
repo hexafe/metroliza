@@ -330,6 +330,44 @@ def test_in_cell_editor_commits_through_the_model_and_marks_the_dialog_dirty(cur
     assert dialog.has_pending_changes()
 
 
+@pytest.mark.parametrize("filter_text", ["pending edit", "no matching row"])
+def test_pending_filter_waits_for_uncommitted_cell_editor(current_dialog, filter_text):
+    from PyQt6.QtWidgets import QLineEdit
+
+    dialog = current_dialog
+    dialog.ensure_record_tables_loaded()
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    slot = dialog._record_slots[1]
+    view = slot.view
+    model = view.model()
+    timeouts = []
+    slot.filter_timer.timeout.connect(lambda: timeouts.append(True))
+    slot.filter_edit.setText(filter_text)
+    assert slot.filter_timer.isActive()
+
+    index = model.index(0, 2)
+    view.setCurrentIndex(index)
+    view.edit(index)
+    editor = view.viewport().findChild(QLineEdit)
+    assert editor is not None
+    editor.setText("pending edit")
+
+    assert _pump(lambda: bool(timeouts))
+    assert model.filter_text == ""  # no reset while the delegate owns uncommitted text
+    assert view.state() == view.State.EditingState
+    assert editor.text() == "pending edit"
+    dialog.flush_record_filters()  # explicit flush must also preserve the editor
+    assert view.state() == view.State.EditingState
+
+    QTest.keyClick(editor, Qt.Key.Key_Return)
+    assert _pump(lambda: model.filter_text == filter_text)
+    assert model.text_at(0, 2) == "pending edit"
+    assert model.original_text(0, 2) == "WIDTH"
+    assert dialog.collect_measurement_record_updates() == [(101, {"header": "pending edit"})]
+    assert model.rowCount() == (1 if filter_text == "pending edit" else 0)
+    assert dialog.has_pending_changes()
+
+
 def test_mouse_clicks_emit_cell_pressed_and_shift_click_selects_a_row_range(current_dialog):
     dialog = current_dialog
     dialog.ensure_record_tables_loaded()
