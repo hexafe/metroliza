@@ -652,6 +652,16 @@ def build_distinct_value_query(column_name, *, source_view=_MEASUREMENT_EXPORT_V
     else:
         source = source_view
 
+    unfiltered = not normalized_filter_query or normalized_filter_query == _normalize_sql_query(build_measurement_export_query())
+    if unfiltered and source_view == _MEASUREMENT_EXPORT_VIEW and column_name.upper() in {"AX", "HEADER", "STATUS_CODE"}:
+        # The omitted LEFT JOINs cannot change DISTINCT measurement values.
+        # Keep the view's inner-join exclusions even for legacy orphan rows.
+        source = (
+            "report_measurements AS meas "
+            "JOIN parsed_reports AS pr ON pr.id = meas.report_id "
+            "JOIN source_files AS sf ON sf.id = pr.source_file_id"
+        )
+
     return (
         f'SELECT DISTINCT "{column_name}" AS value '
         f'FROM {source} '
