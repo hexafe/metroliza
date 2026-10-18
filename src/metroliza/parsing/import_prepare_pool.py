@@ -67,7 +67,11 @@ def resolve_prepare_worker_count(report_count: int) -> int:
         except ValueError:
             return 0
     if frozen_windows():
-        return min(2, report_count) if (os.cpu_count() or 1) >= 2 else 0
+        # Off by default in the packaged Windows app. Windows CI run 39151254630 measured the
+        # import 2 of 3 times SLOWER with workers (82-86 s vs 33-58 s serial, 200 reports):
+        # the parent's persist stage dominates and is not understood yet (#1136).
+        # METROLIZA_IMPORT_PREPARE_WORKERS=N still enables them explicitly.
+        return 0
     workers = min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1)
     return workers if workers >= 2 else 0
 

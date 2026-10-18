@@ -519,10 +519,12 @@ def test_packaged_windows_build_uses_separate_defaults_and_explicit_override(mon
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
+    # Import workers are opt-in in the packaged Windows app (#1136 evidence, run 39151254630).
     assert resolve_prepare_worker_count(199) == 0
-    assert resolve_prepare_worker_count(200) == 2
-    assert resolve_prepare_worker_count(5000) == 2
+    assert resolve_prepare_worker_count(200) == 0
+    assert resolve_prepare_worker_count(5000) == 0
     monkeypatch.setenv(WORKERS_ENV, "3")
+    assert resolve_prepare_worker_count(199) == 0
     assert resolve_prepare_worker_count(5000) == 3
 
 
