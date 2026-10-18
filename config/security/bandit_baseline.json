@@ -1345,7 +1345,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "45a712cca3b33077ec74ca58d0687568f9fb101bb25512d020589769deeae15d",
+      "fingerprint": "6b34fe93c0f64c85cd8ff10010ccb63e566be34fb8624873c60d7845797fe6fc",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1354,7 +1354,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c2d0f2b3e36179504337e6b6633ffd9367a5845b4c52fab125bc465707e1f400",
+      "fingerprint": "85bcf7ccd0d6dd0357e248523d5c9b980e70599bd40b3bd65b910be4f5f529ff",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1363,7 +1363,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "493245bf44c61a0b362c66bfad016daec8f35386dcb8810d91edb028d9046574",
+      "fingerprint": "d53bd2c057b8f0b24e0c0622847326639dbb2c6562ae421c3b5db8ea6aaf963e",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1372,7 +1372,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4acf379802b7f3aa2b194c83fbaa141dc6e65114ecd38f5952a59211eaaef20d",
+      "fingerprint": "ebf4588e094770c5c119636ce7919e21876cb86b404fa19e0c1695dbc24c62fd",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1381,7 +1381,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "206b25a706ddbe91c481a58c6889ddee2b7d7c0b69a130c9b08877d3b6e9ed90",
+      "fingerprint": "6df172d864567914b817b93d81a53c04a87454d9c312c8e7b72927b6b1f61be8",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1390,7 +1390,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "9089ce07442cbab911030e051254da74658f0edc2fd4a3fe8119aadaed493c53",
+      "fingerprint": "dc3e0019db7074e44e89d597cb29c117702c5e2c5ac3112696e82a4a9146743c",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",

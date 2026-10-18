@@ -1,33 +1,28 @@
+import types
 import unittest
 from unittest.mock import patch
 
 from PyQt6.QtCore import Qt
 from metroliza.ui.modify_db import ModifyDB
+from metroliza.ui.modify_db_records import RecordTableModel
 
 
-class _FakeItem:
-    def __init__(self, original, current):
-        self._original = original
-        self._current = current
+def _record_table(specs, rows):
+    """Build a record-table stand-in from ``(original, current)`` cell pairs per row.
 
-    def data(self, role):
-        if role == Qt.ItemDataRole.UserRole:
-            return self._original
-        return None
+    Record tables are model/view based since #1118: originals live in the model and every
+    differing ``current`` value is applied through ``setData`` like an in-cell edit. Cells the
+    model refuses (read-only columns) are returned so tests can assert they were rejected.
+    """
 
-    def text(self):
-        return self._current
-
-
-class _FakeTable:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def rowCount(self):
-        return len(self._rows)
-
-    def item(self, row, col):
-        return self._rows[row][col]
+    model = RecordTableModel(specs, [tuple(original for original, _current in row) for row in rows])
+    rejected = []
+    for row_index, row in enumerate(rows):
+        for column_index, (original, current) in enumerate(row):
+            accepted = model.setData(model.index(row_index, column_index), current, Qt.ItemDataRole.EditRole)
+            if not accepted and current != ("" if original is None else str(original)):
+                rejected.append((row_index, column_index))
+    return types.SimpleNamespace(model=lambda: model), rejected
 
 
 class _FakeRepository:
@@ -62,27 +57,18 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
             {"label": "COMMENT", "field": "comment", "editable": True},
             {"label": "FILENAME", "field": "file_name", "editable": False},
         ]
-        table = _FakeTable(
+        table, rejected = _record_table(
+            specs,
             [
-                [
-                    _FakeItem(42, "42"),
-                    _FakeItem("REF_A", "REF_B"),
-                    _FakeItem("old comment", ""),
-                    _FakeItem("source.pdf", "renamed.pdf"),
-                ],
-                [
-                    _FakeItem(43, "43"),
-                    _FakeItem("REF_C", "REF_C"),
-                    _FakeItem(None, ""),
-                    _FakeItem("source2.pdf", "source2.pdf"),
-                ],
-            ]
+                [(42, "42"), ("REF_A", "REF_B"), ("old comment", ""), ("source.pdf", "renamed.pdf")],
+                [(43, "43"), ("REF_C", "REF_C"), (None, ""), ("source2.pdf", "source2.pdf")],
+            ],
         )
-        dialog._record_specs_by_table = {table: specs}
 
         updates = dialog.collect_record_table_updates(table, "report_id")
 
         self.assertEqual(updates, [(42, {"reference": "REF_B", "comment": None})])
+        self.assertEqual(rejected, [(0, 3)])
 
     def test_collect_measurement_record_updates_coerces_float_cells(self):
         dialog = ModifyDB.__new__(ModifyDB)
@@ -93,18 +79,10 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
             {"label": "OUTTOL", "field": "outtol", "editable": True, "value_type": "float"},
             {"label": "STATUS_CODE", "field": "status_code", "editable": True},
         ]
-        table = _FakeTable(
-            [
-                [
-                    _FakeItem(7, "7"),
-                    _FakeItem(42, "42"),
-                    _FakeItem(10.0, "10.25"),
-                    _FakeItem(0.1, ""),
-                    _FakeItem("nok", "ok"),
-                ]
-            ]
+        table, _rejected = _record_table(
+            specs,
+            [[(7, "7"), (42, "42"), (10.0, "10.25"), (0.1, ""), ("nok", "ok")]],
         )
-        dialog._record_specs_by_table = {table: specs}
 
         updates = dialog.collect_record_table_updates(table, "measurement_id")
 
@@ -136,16 +114,10 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
             {"label": "REFERENCE", "field": "reference", "editable": True},
             {"label": "COMMENT", "field": "comment", "editable": True},
         ]
-        table = _FakeTable(
-            [
-                [
-                    _FakeItem(42, "42"),
-                    _FakeItem("REF_A", "REF_B"),
-                    _FakeItem("old comment", ""),
-                ]
-            ]
+        table, _rejected = _record_table(
+            specs,
+            [[(42, "42"), ("REF_A", "REF_B"), ("old comment", "")]],
         )
-        dialog._record_specs_by_table = {table: specs}
 
         summary = dialog.collect_record_table_modifications(table, "Report records", "report_id")
 
