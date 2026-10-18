@@ -270,22 +270,14 @@ def test_filter_helpers_and_parent_callback_compatibility(monkeypatch):
 
     assert no_arg_parent.called
 
-    list_widget = QListWidget()
-    monkeypatch.setattr(
-        filter_dialog,
-        "execute_with_retry",
-        lambda db_file, query: [("B",), ("A",)],
-    )
-    dialog = filter_dialog.FilterDialog.__new__(filter_dialog.FilterDialog)
-    dialog.db_file = "reports.db"
-    dialog.log_and_exit = lambda *_args, **_kwargs: None
-    dialog._populate_distinct_values(list_widget, "AX")
-
-    assert [list_widget.item(row).text() for row in range(list_widget.count())] == [
-        "SELECT ALL",
-        "B",
-        "A",
-    ]
+    dialog = _build_dialog(monkeypatch)
+    calls = []
+    dialog._start_value_load = lambda specs, query: calls.append((specs, query))
+    try:
+        dialog._populate_distinct_values(dialog.ax_list, "AX", filter_query="scope")
+        assert calls == [((("ax_list", "AX", "vw_measurement_export"),), "scope")]
+    finally:
+        dialog.close()
 
 
 def test_selected_header_delete_branches(monkeypatch):
@@ -309,3 +301,128 @@ def test_selected_header_delete_branches(monkeypatch):
         assert dialog.header_list.item(1).isSelected() is False
     finally:
         dialog.close()
+
+
+def _wait_for_filter(predicate):
+    import time
+
+    deadline = time.monotonic() + 5
+    while not predicate() and time.monotonic() < deadline:
+        QTest.qWait(5)
+    assert predicate(), "Filter worker did not finish"
+
+
+def test_background_choices_keep_gui_responsive_and_close_safe(monkeypatch):
+    import threading
+    from metroliza.ui import filter_values_loader
+
+    app = _app()
+    started = threading.Event()
+    release = threading.Event()
+    gui_thread = threading.get_ident()
+    workers = []
+
+    def slow_load(*_args, **kwargs):
+        workers.append(threading.get_ident())
+        started.set()
+        assert release.wait(5)
+        return {attribute: ("A", "Z") for attribute, _, _ in kwargs["specs"]}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", slow_load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        dialog.show()
+        _wait_for_filter(started.is_set)
+        assert workers == [workers[0]] and workers[0] != gui_thread
+        assert dialog._values_loading
+        assert dialog.filter_summary_label.text() == "Loading filter values…"
+        assert not dialog.apply_button.isEnabled()
+        assert not dialog.filter_tabs.isEnabled()
+        assert dialog.cancel_button.isEnabled()
+        # Processing events while the worker is gated proves the GUI is free.
+        app.processEvents()
+        assert dialog.close()
+        assert not dialog.isVisible()
+        # Even a queued result cannot repopulate the closed dialog.
+        original_count = dialog.ax_list.count()
+        dialog._receive_filter_values(dialog._value_request - 1, {"ax_list": ("late",)})
+        assert dialog.ax_list.count() == original_count
+        dialog.deleteLater()
+        app.processEvents()
+    finally:
+        release.set()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+def test_background_success_error_and_reopen(monkeypatch):
+    from metroliza.ui import filter_values_loader
+
+    _app()
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(args)
+        return {attribute: ("A", "Z") for attribute, _, _ in kwargs["specs"]}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        for attr in ("ax_list", "header_list", "all_headers_list", "filename_list"):
+            widget = getattr(dialog, attr)
+            assert [widget.item(row).text() for row in range(widget.count())] == ["SELECT ALL", "A", "Z"]
+        assert dialog.apply_button.isEnabled()
+        assert dialog.close()
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert len(calls) == 2
+
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("synthetic load failure")
+
+        errors = []
+        monkeypatch.setattr(filter_values_loader, "load_filter_values", fail)
+        dialog.log_and_exit = errors.append
+        dialog.populate_list_widgets()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert len(errors) == 1
+        assert not dialog.apply_button.isEnabled()
+        assert "Unable to load" in dialog.filter_summary_label.text()
+        dialog.apply_filters()
+        assert dialog.isVisible()
+    finally:
+        dialog.close()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+def test_replaced_background_request_ignores_old_results(monkeypatch):
+    import threading
+    from metroliza.ui import filter_values_loader
+
+    _app()
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def load(*_args, **kwargs):
+        calls.append(kwargs["specs"])
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(5)
+            return {"ax_list": ("old",)}
+        return {"ax_list": ("new",)}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        _wait_for_filter(started.is_set)
+        old_request = dialog._value_request
+        dialog.populate_list_widgets()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog._receive_filter_values(old_request, {"ax_list": ("old",)})
+        assert dialog.ax_list.item(1).text() == "new"
+    finally:
+        release.set()
+        dialog.close()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
