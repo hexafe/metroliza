@@ -1,11 +1,21 @@
-RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "260927"
+RELEASE_VERSION = "2026.10rc2"
+VERSION_DATE = "261018"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, analyzing measurements, exporting workbooks, and reviewing private diagnostic reports."
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 260927)"
+CURRENT_RELEASE_HIGHLIGHT = "Faster start-up and report import, and report metadata you can review and correct before import."
+PUBLIC_VERSION_LABEL = "2026.10 RC2 (build 261018)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Much faster start on Windows: the app unpacks once per version, and later starts open the main window in about a second<br>
+    - A smaller download: unused OCR acceleration and video components are no longer bundled<br>
+    - Fast report import is about 2.5 times faster<br>
+    - After review, report metadata (reference, part name, sample number, date) is read automatically into the import table, where you can correct it or run OCR for selected reports; your corrections are kept<br>
+    - The dark theme is applied correctly when the app starts<br>
+    - The splash screen closes as soon as the main window is visible<br>
+    - A missing or damaged program file is repaired automatically, or the message names the affected file<br>
+
+    <br><b>Archive:</b><br>
+    <br><b>Version 2026.09rc1 (build 260927):</b><br>
     - A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>
     - Choose PDF reports before import and reopen saved measurements without repeating completed work<br>
     - Filters and grouping keep numeric results consistent between the table and analysis views<br>
@@ -14,8 +24,6 @@ release_notes = f"""
     - Reports without a reference remain exportable, while group comparisons identify missing references<br>
     - The Help menu opens private incident reports for preview and export when a supervised run fails<br>
     - Canceling active work protects completed database and workbook output<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.06rc2 (build 260711):</b><br>
     - Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result<br>
