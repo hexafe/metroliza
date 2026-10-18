@@ -1579,11 +1579,17 @@ class ReportRepository:
 
         del measurement_count, has_nok, nok_count
         policy = import_policy or ReportImportPolicy()
-        prechecked_digest = self._verify_import_source_digest(
-            source_path,
-            expected_sha256=source_sha256,
-            source_digest_verifier=source_digest_verifier,
-        )
+        # Content is authoritative after the write lock is acquired, including
+        # when BEGIN IMMEDIATE waited and an unchanged file's mtime moved.
+        if source_digest_verifier is None or not self._import_schema_is_ready():
+            # Reject stale content before schema creation/migration can commit.
+            # An inspected import into a ready schema needs only the verification
+            # under the write lock below; schema work requires this extra guard.
+            source_sha256 = self._verify_import_source_digest(
+                source_path,
+                expected_sha256=source_sha256,
+                source_digest_verifier=source_digest_verifier,
+            )
         self._ensure_import_schema()
         now = utc_timestamp()
         measurement_values = tuple(measurements)
@@ -1594,7 +1600,7 @@ class ReportRepository:
             cursor.execute("BEGIN IMMEDIATE")
             verified_digest = self._verify_import_source_digest(
                 source_path,
-                expected_sha256=prechecked_digest,
+                expected_sha256=source_sha256,
                 source_digest_verifier=source_digest_verifier,
             )
             if self._accepted_report_id(cursor, verified_digest, policy) is not None:

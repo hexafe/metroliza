@@ -59,7 +59,7 @@ def _resolve_source_digest_binding(
     source_sha256: str | None,
     source_inspection: SourceInspectionContext | None,
 ) -> tuple[str | None, Callable[[], str | None] | None]:
-    """Bind an explicit digest to the exact inspected source, if provided."""
+    """Bind the inspected digest to a fresh content verification at persistence."""
 
     if source_inspection is None:
         return source_sha256, None
@@ -71,6 +71,7 @@ def _resolve_source_digest_binding(
         raise ValueError(
             f"Explicit source digest does not match the inspected source digest: {source_path}"
         )
+    source_inspection.require_unchanged_size()
     return inspected_sha256, source_inspection.verified_sha256
 
 
