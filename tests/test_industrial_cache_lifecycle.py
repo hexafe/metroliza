@@ -938,3 +938,29 @@ def test_dialog_save_paths_cannot_replace_active_workspace_database(
             lambda *_args, **_kwargs: QMessageBox.StandardButton.Discard,
         )
         dialog.close()
+
+
+@pytest.mark.parametrize("counts, expected", [
+    ({"industrial_records": 5000, "industrial_record_values": 810000}, "5,000 cached source row(s)"),
+    ({"industrial_samples": 12}, "12 signal sample(s)"),
+    ({"industrial_realtime_stream_events": 4, "industrial_samples": 12}, "4 realtime event(s), 12 signal sample(s)"),
+    ({"industrial_source_profiles": 1}, "stored configuration"),
+    ({"unreadable_industrial_cache": 1}, "temporary cache could not be read"),
+    ({"unreadable_realtime_session": 1}, "temporary realtime session could not be read"),
+])
+def test_realtime_retention_prompt_reports_meaningful_units(monkeypatch, counts, expected):
+    from PyQt6.QtWidgets import QMessageBox
+    from metroliza.ui.main_window import MainWindow
+
+    _qapplication()
+    prompts = []
+
+    def cancel(_parent, _title, message, *_args):
+        prompts.append(message)
+        return QMessageBox.StandardButton.Cancel
+
+    window = SimpleNamespace(_realtime_session_disposable_counts=lambda: counts)
+    monkeypatch.setattr(QMessageBox, "question", cancel)
+    assert MainWindow._resolve_realtime_session_before_discard(window) == (False, None)
+    assert expected in prompts[0]
+    assert "persisted data row(s)" not in prompts[0]

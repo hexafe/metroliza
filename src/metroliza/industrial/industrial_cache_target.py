@@ -159,6 +159,22 @@ def disposable_cache_counts(database: str | Path) -> dict[str, int]:
     return counts
 
 
+def temporary_cache_contents_summary(counts: dict[str, int]) -> str:
+    """Describe retained source records/events/samples without summing EAV rows."""
+
+    if counts.get("unreadable_industrial_cache"):
+        return "unknown contents (the temporary cache could not be read)"
+    if counts.get("unreadable_realtime_session"):
+        return "unknown contents (the temporary realtime session could not be read)"
+    units = (
+        ("industrial_records", "cached source row(s)"),
+        ("industrial_realtime_stream_events", "realtime event(s)"),
+        ("industrial_samples", "signal sample(s)"),
+    )
+    parts = [f"{counts[table]:,} {label}" for table, label in units if counts.get(table)]
+    return ", ".join(parts) + " and related data" if parts else "stored configuration or other industrial data"
+
+
 def temporary_cache_has_data(target: IndustrialCacheTarget | None) -> bool:
     """Return whether a temporary target contains user-relevant persisted rows."""
 
@@ -367,4 +383,5 @@ __all__ = [
     "persistent_industrial_cache_target",
     "resolve_industrial_cache_destination",
     "temporary_cache_has_data",
+    "temporary_cache_contents_summary",
 ]

@@ -26,6 +26,7 @@ from metroliza.industrial.industrial_cache_target import (
     cleanup_temporary_industrial_cache,
     create_temporary_industrial_cache_target,
     disposable_cache_counts,
+    temporary_cache_contents_summary as _temporary_cache_contents_summary,
     existing_metroliza_cache_target,
     persist_temporary_industrial_cache,
     resolve_industrial_cache_destination,
@@ -62,17 +63,6 @@ from metroliza.ui.ui_foundation import (
     status_chip,
     update_path_field,
 )
-
-
-def _temporary_cache_contents_summary(counts: dict[str, int]) -> str:
-    """Count fetched records separately from their field values and related data."""
-
-    if counts.get("unreadable_industrial_cache"):
-        return "unknown contents (the temporary cache could not be read)"
-    records = counts.get("industrial_records", 0)
-    if records:
-        return f"{records:,} cached source row(s) and related data"
-    return "stored configuration or other industrial data"
 
 
 class IndustrialDataDialog(QDialog):
