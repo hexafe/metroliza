@@ -64,6 +64,108 @@ def _app():
     return _APP
 
 
+@pytest.mark.parametrize("with_workbook, fail_workbook", [(False, False), (True, False), (True, True)])
+def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(
+    tmp_path, monkeypatch, with_workbook, fail_workbook,
+) -> None:
+    from metroliza.industrial import industrial_analytics_workflow as workflow
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionAggregationState, ProductionChartSelection, ProductionMetricSelection,
+    )
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+    from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
+    from metroliza.reports.db import sqlite_connection_scope
+    from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog
+
+    _app()
+    database = tmp_path / "industrial.sqlite"
+    repository = IndustrialDataRepository(str(database))
+    profile = repository.upsert_source_profile(
+        profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+        database_type="sqlite", source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id, source_db_alias=profile.source_db_alias,
+        rows=({"source_record_key": f"row-{i}", "length_mm": 10 + i} for i in range(7)),
+    )
+    # CSV identities are dense source row numbers, not industrial_records.id.
+    with sqlite_connection_scope(str(database)) as connection:
+        connection.execute("DELETE FROM industrial_record_values WHERE record_id = 1")
+        connection.execute("DELETE FROM industrial_records WHERE id = 1")
+        connection.commit()
+    loaded = load_industrial_cache_tabular_result(database)
+    parent = IndustrialAnalyticsDialog(
+        source_kind="tabular_file", tabular_load_result=loaded, input_file=str(database),
+    )
+    dialog = TabularAnalyticsGroupingDialog(
+        parent, dataframe=loaded.dataframe, column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    captured = []
+    write_dashboard = workflow._write_dashboard
+
+    def capture_dashboard(**kwargs):
+        captured.append(kwargs["frame"].copy())
+        return write_dashboard(**kwargs)
+
+    monkeypatch.setattr(workflow, "_write_dashboard", capture_dashboard)
+    try:
+        dialog._apply_group_assignments({1: ("Selected", "#123456"), 3: ("Selected", "#123456")})
+        assignment_store = dialog._sqlite_grouping_assignment_store()
+        dialog.use_grouping()
+        assert assignment_store._connection is None
+        parent.output_dashboard_file = str(tmp_path / "dashboard.html")
+        parent.output_workbook_file = str(tmp_path / "workbook.xlsx")
+        parent.workbook_checkbox.setChecked(with_workbook)
+        request = parent._build_analytics_request(require_runnable=True)
+        assert [(row.report_id, row.group, row.group_color) for row in request.grouping_df] == [
+            (1, "Selected", "#123456"), (3, "Selected", "#123456"),
+        ]
+        arguments = dict(
+            input_file=str(database), tabular_load_result=loaded,
+            output_dashboard_file=request.output_dashboard_file,
+            output_workbook_file=request.output_workbook_file or None,
+            grouping_df=request.grouping_df,
+            metric_selection=(ProductionMetricSelection("length_mm"),),
+            aggregation_state=ProductionAggregationState(time_bucket="none"),
+            chart_selection=ProductionChartSelection(groupstats=True),
+            separate_parameter_sheets=False,
+        )
+        if fail_workbook:
+            Path(request.output_workbook_file).write_bytes(b"previous workbook")
+
+            def fail_export(**kwargs):
+                Path(kwargs["output_file"]).write_bytes(b"partial workbook")
+                raise OSError("synthetic export failure")
+
+            monkeypatch.setattr(workflow, "export_tabular_analytics_workbook", fail_export)
+            with pytest.raises(OSError, match="synthetic export failure"):
+                workflow.run_tabular_file_analytics(**arguments)
+            assert Path(request.output_workbook_file).read_bytes() == b"previous workbook"
+            assert not list(tmp_path.glob(".*.tmp.xlsx"))
+            assert loaded.sqlite_store.count_rows() == 6
+            return
+        result = workflow.run_tabular_file_analytics(**arguments)
+        assert Path(request.output_dashboard_file).is_file()
+        expected_groups = ["Selected", "POPULATION", "Selected", "POPULATION", "POPULATION", "POPULATION"]
+        assert captured[0]["GROUP"].tolist() == expected_groups
+        assert captured[0]["length_mm"].astype(float).tolist() == [11, 12, 13, 14, 15, 16]
+        assert result.groupstats_metric_count == 1
+        if with_workbook:
+            frame = pd.read_excel(request.output_workbook_file, sheet_name="Table Data")
+            assert frame["GROUP"].tolist() == expected_groups
+            assert frame["source_row_number"].tolist() == list(range(1, 7))
+            assert frame["source_record_key"].tolist() == [f"row-{i}" for i in range(1, 7)]
+    finally:
+        _dispose_preview_dialog(dialog)
+        view_name = loaded.sqlite_store.table_name
+        parent.reject()
+        with sqlite_connection_scope(str(database)) as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = ?", (view_name,),
+            ).fetchall() == []
+
+
 def _process_events_until(predicate, *, timeout_ms: int = 1500) -> bool:
     app = _app()
     deadline = time.monotonic() + timeout_ms / 1000
