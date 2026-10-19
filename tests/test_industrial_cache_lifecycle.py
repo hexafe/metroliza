@@ -964,3 +964,18 @@ def test_realtime_retention_prompt_reports_meaningful_units(monkeypatch, counts,
     assert MainWindow._resolve_realtime_session_before_discard(window) == (False, None)
     assert expected in prompts[0]
     assert "persisted data row(s)" not in prompts[0]
+
+
+def test_opening_csv_summary_on_an_empty_cache_needs_no_retention_decision():
+    from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
+
+    target = create_temporary_industrial_cache_target()
+    try:
+        load_industrial_cache_tabular_result(target.cache_db_file)
+        # Rebuildable derived Summary tables are not operator data on their own.
+        assert not temporary_cache_has_data(target)
+        _populate_cache(target.cache_db_file)
+        load_industrial_cache_tabular_result(target.cache_db_file)
+        assert temporary_cache_has_data(target)
+    finally:
+        cleanup_temporary_industrial_cache(target)

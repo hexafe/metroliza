@@ -407,8 +407,9 @@ def test_scope_replacement_prunes_facets_and_rebuilds_saved_previews(tmp_path):
                     (single.sqlite_store.value_facet_scope_key,),
                 ]
         counts = disposable_cache_counts(database)
-        assert counts["industrial_tabular_value_facets"] > 0
-        assert counts["industrial_tabular_metadata_cache"] == 1
+        # Derived Summary tables are rebuilt from operator data, never counted as it.
+        assert counts["industrial_records"] == 6
+        assert "industrial_tabular_value_facets" not in counts
         assert single.sqlite_store.preview_value_rows("length_mm", search_text="missing")[1] == 0
         assert single.sqlite_store.preview_group_rows(("length_mm",), offset=99)[1] == 3
         # Missing derived facets must use the current view, not report no values.
