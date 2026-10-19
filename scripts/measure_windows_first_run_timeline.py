@@ -197,11 +197,10 @@ def classify(cls: str, title: str, width: int, height: int) -> str:
     if cls == PROGRESS_CLASS or (cls.startswith("MetrolizaLauncher")):
         return "launcher_progress"
     if cls.startswith("Qt"):
-        # The Qt splash is a small frameless 500x190 (logical) dialog without a title.
-        if width <= 900 and height <= 400 and not title.strip():
-            return "qt_splash"
+        # The Qt startup splash is the only small frameless application window (500x190
+        # logical px; its title is the executable name). The main window is much larger.
         if width <= 900 and height <= 400:
-            return "qt_small_window"
+            return "qt_splash"
         return "main_window"
     if cls == "#32770":
         return "message_box"
@@ -468,6 +467,9 @@ def main(argv: list[str] | None = None) -> int:
     if os.name != "nt":
         print("Windows only", file=sys.stderr)
         return 2
+    # Absolute: the launched processes run in a private working directory, and the launcher log
+    # and startup profile paths are handed to them through the environment.
+    args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     timeline = Timeline(args.output_dir, frames=args.frames, frame_every_ms=args.frame_every_ms)
     records: list[dict[str, Any]] = []
