@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "261019"
+VERSION_DATE = "261020"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import."
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261019)"
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261020)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
@@ -19,6 +19,8 @@ release_notes = f"""
     - Multi-page reports in very large imports (more than 2048 reports at once) are read the same way as other imports, without extra measurement groups at page breaks<br>
     - The filter window opens instantly, loads its choices in the background and reuses them while the database is unchanged<br>
     - Canceling an export right after it starts stops at once, without loading all measurements first<br>
+    - Creating an analysis in CSV Summary works after applying groups to Industrial Data, and a renamed default group is kept in the dashboard and workbook<br>
+    - Industrial Data temporary storage shows how many rows were fetched, and opening CSV Summary for different sources no longer makes the temporary file grow each time<br>
     - A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>
     - Choose PDF reports before import and reopen saved measurements without repeating completed work<br>
     - Filters and grouping keep numeric results consistent between the table and analysis views<br>

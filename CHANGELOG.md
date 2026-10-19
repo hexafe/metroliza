@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261019) — current version
+## 2026.09 RC1 (build 261020) — current version
 - Much faster start on Windows: the app unpacks once per version into the local app data folder; later starts open the main window in about a second.
 - Smaller download: unused OCR acceleration (OpenVINO), video and software-OpenGL components are no longer bundled.
 - Fast report import is about 2.5 times faster.
@@ -12,6 +12,8 @@
 - Excel export (Main plots) is about twice as fast and uses much less memory; Extended plots and CSV Summary exports are faster; the output is unchanged.
 - The filter window opens instantly, loads its choices in the background and reuses them while the database is unchanged.
 - Canceling an export right after it starts stops at once, without loading all measurements first.
+- Creating an analysis in CSV Summary works after applying groups to Industrial Data, and a renamed default group is kept in the dashboard and workbook.
+- Industrial Data temporary storage shows how many rows were fetched, and opening CSV Summary for different sources no longer makes the temporary file grow each time.
 - Import reads each report file fewer times, which helps most with large reports.
 - Importing reports on Windows saves them to the database much faster: the database is written through to disk every few seconds instead of after every report. After a sudden power loss during an import, re-running the import adds any reports from those last seconds.
 - Multi-page reports in very large imports (more than 2048 reports at once) are read the same way as other imports, without extra measurement groups at page breaks

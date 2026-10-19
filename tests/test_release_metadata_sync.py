@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261019)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261020)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -63,6 +63,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 '- Multi-page reports in very large imports (more than 2048 reports at once) are read the same way as other imports, without extra measurement groups at page breaks<br>',
                 '- The filter window opens instantly, loads its choices in the background and reuses them while the database is unchanged<br>',
                 '- Canceling an export right after it starts stops at once, without loading all measurements first<br>',
+                '- Creating an analysis in CSV Summary works after applying groups to Industrial Data, and a renamed default group is kept in the dashboard and workbook<br>',
+                '- Industrial Data temporary storage shows how many rows were fetched, and opening CSV Summary for different sources no longer makes the temporary file grow each time<br>',
                 '- A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>',
                 '- Choose PDF reports before import and reopen saved measurements without repeating completed work<br>',
                 '- Filters and grouping keep numeric results consistent between the table and analysis views<br>',
