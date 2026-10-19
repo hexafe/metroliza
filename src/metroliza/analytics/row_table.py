@@ -244,6 +244,7 @@ class RowTable:
 
     rows: tuple[tuple[Any, ...], ...]
     columns: tuple[str, ...]
+    default_group_label: str | None = None
 
     @property
     def empty(self) -> bool:
@@ -317,7 +318,10 @@ class RowTable:
         self.rows = tuple((*row, value) for row, value in zip(self.rows, value_tuple))
 
     def copy(self) -> "RowTable":
-        return RowTable(rows=tuple(tuple(row) for row in self.rows), columns=tuple(self.columns))
+        return RowTable(
+            rows=tuple(tuple(row) for row in self.rows), columns=tuple(self.columns),
+            default_group_label=self.default_group_label,
+        )
 
     def get(self, column_name: str, default: Any = None) -> RowColumn | Any:
         if column_name not in self.columns:

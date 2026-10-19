@@ -1342,14 +1342,15 @@ class MainWindow(QMainWindow):
         *,
         forbidden_destination: str | Path | None = None,
     ) -> tuple[bool, Path | None]:
+        from metroliza.industrial.industrial_cache_target import temporary_cache_contents_summary
+
         counts = self._realtime_session_disposable_counts()
-        persisted_rows = sum(counts.values())
-        if persisted_rows < 1:
+        if not any(counts.values()):
             return True, None
         choice = QMessageBox.question(
             self,
             "Temporary realtime data",
-            f"The temporary realtime session contains {persisted_rows:,} persisted data row(s). "
+            f"The temporary realtime session contains {temporary_cache_contents_summary(counts)}. "
             "Save a separate durable archive before removing the session?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard

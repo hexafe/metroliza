@@ -2314,3 +2314,16 @@ def test_tabular_column_filter_grouped_integer_literals(tmp_path, backend, opera
             assert connection.execute("SELECT *, typeof(code) FROM tabular_rows ORDER BY rowid").fetchall() == before
     finally:
         canonical_tabular_service.cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("assigned", [False, True])
+def test_apply_tabular_grouping_keeps_renamed_default_on_sparse_row_table(assigned):
+    from metroliza.analytics.row_table import RowTable
+    from metroliza.exporting.export_grouping_utils import set_default_group_label
+
+    grouping = RowTable(rows=((1, "Selected"),) if assigned else (), columns=("REPORT_ID", "GROUP"))
+    set_default_group_label(grouping, "Rest")
+    frame = pd.DataFrame({"source_row_number": [1, 2], "measurement": [10, 20]})
+    result = apply_tabular_grouping(frame, grouping.copy())
+    assert result.dataframe["GROUP"].tolist() == (["Selected", "Rest"] if assigned else ["Rest", "Rest"])
+    assert result.applied
