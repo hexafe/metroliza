@@ -213,15 +213,16 @@ class _LazySQLiteConnection:
         self._checkpoint()
 
     def checkpoint_pending(self):
-        """Checkpoint now when commits have not been checkpointed yet (or the last attempt failed)."""
+        """Checkpoint now when commits are not fully checkpointed (or the last attempt failed)."""
         if self._connection is not None and self._uncheckpointed:
             self._checkpoint()
 
     def _checkpoint(self):
-        # PASSIVE respects readers/writers; SQLite's busy/frame counts stay diagnostic. The
+        # PASSIVE respects readers/writers and never retries or opens a transaction. The
         # commit before it already succeeded, so a checkpoint error (for example a full disk
         # while the database file grows) is logged and never turns that report into a failure.
-        # The cadence restarts either way; a failed attempt stays pending, so the persistence
+        # The cadence restarts either way; an attempt that raised, or that returned busy or
+        # left WAL frames unsynced (a reader pinned them), stays pending, so the persistence
         # boundary and close retry it.
         self._commits_since_checkpoint = 0
         self._last_checkpoint = self._clock()
@@ -231,8 +232,9 @@ class _LazySQLiteConnection:
         except sqlite3.Error as exc:
             logger.warning("Import WAL checkpoint failed; committed reports are kept: %s", exc)
             return
-        self._uncheckpointed = False
-        if result and (result[0] or result[2] < result[1]):
+        incomplete = bool(result) and bool(result[0] or result[2] < result[1])
+        self._uncheckpointed = incomplete
+        if incomplete:
             logger.debug("Import WAL checkpoint incomplete: busy=%s frames=%s checkpointed=%s",
                          *result)
         observe_persist_checkpoint(result)
