@@ -118,10 +118,11 @@ def _pool_policy(owner, group_count):
     minimum = _minimum_groups()
     if owner.chart_worker_count <= 1 or group_count < max(2, minimum or 40):
         return 'serial_small_export'
-    if not compute_workers_available():
-        return 'serial_frozen_multiprocessing_unavailable'
     if not env_bool('METROLIZA_EXPORT_GROUP_MP', default=True):
         return 'serial_disabled'
+    # Last: on a frozen build this validates (hashes) the package identity.
+    if not compute_workers_available():
+        return 'serial_frozen_multiprocessing_unavailable'
     return 'spawn'
 
 

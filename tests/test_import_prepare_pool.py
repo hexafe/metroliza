@@ -787,3 +787,24 @@ def test_run_handles_shutdown_failure_and_retains_inputs_until_retry(tmp_path, m
     thread._finish_import_resources(diagnostic)
     assert thread._prepare_pool is None and thread._extracted_archive_dir is None
     assert cleaned == [True]
+
+
+def test_serial_policies_never_validate_the_package_identity(monkeypatch):
+    # compute_workers_available() hashes the packaged executables on frozen Windows.
+    calls = []
+    monkeypatch.setattr(import_prepare_pool, "compute_workers_available", lambda: calls.append(1) or False)
+    monkeypatch.delenv(WORKERS_ENV, raising=False)
+    monkeypatch.delenv(MIN_REPORTS_ENV, raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 12)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    assert resolve_prepare_worker_count(5000) == 0  # packaged default: auto stays serial
+    assert resolve_prepare_worker_count(10) == 0  # below the packaged minimum
+    for configured in ("0", "garbage"):
+        monkeypatch.setenv(WORKERS_ENV, configured)
+        assert resolve_prepare_worker_count(5000) == 0
+    assert calls == []
+    monkeypatch.setenv(WORKERS_ENV, "3")
+    assert resolve_prepare_worker_count(5000) == 0  # unavailable package keeps it serial
+    assert calls == [1]

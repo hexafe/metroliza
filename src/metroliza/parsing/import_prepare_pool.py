@@ -51,8 +51,6 @@ def resolve_prepare_worker_count(report_count: int) -> int:
     measured by the built-package CI qualification (see Issue #1134).
     """
 
-    if not compute_workers_available():
-        return 0
     configured = (env_value(WORKERS_ENV) or "auto").lower()
     default_minimum = 200 if frozen_windows() else DEFAULT_MIN_REPORTS
     try:
@@ -63,9 +61,10 @@ def resolve_prepare_worker_count(report_count: int) -> int:
         return 0
     if configured != "auto":
         try:
-            return max(0, min(int(configured), MAX_EXPLICIT_WORKERS, report_count))
+            workers = max(0, min(int(configured), MAX_EXPLICIT_WORKERS, report_count))
         except ValueError:
             return 0
+        return _available(workers)
     if frozen_windows():
         # Off by default in the packaged Windows app. Windows CI run 39151254630 measured the
         # import 2 of 3 times SLOWER with workers (82-86 s vs 33-58 s serial, 200 reports):
@@ -73,7 +72,13 @@ def resolve_prepare_worker_count(report_count: int) -> int:
         # METROLIZA_IMPORT_PREPARE_WORKERS=N still enables them explicitly.
         return 0
     workers = min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1)
-    return workers if workers >= 2 else 0
+    return _available(workers) if workers >= 2 else 0
+
+
+def _available(workers: int) -> int:
+    # Validate the package identity (it hashes the packaged executables) only when a
+    # worker would actually start, so serial imports never pay for it.
+    return workers if workers and compute_workers_available() else 0
 
 
 _WORKER_PARSER_CLASS = None
