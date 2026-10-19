@@ -15,6 +15,7 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, Any
 
+from metroliza.exporting.export_grouping_utils import get_default_group_label
 from metroliza.analytics.row_table import RowTable, coerce_to_row_table
 from metroliza.reports.db import (
     QueryResult,
@@ -4330,10 +4331,11 @@ def apply_tabular_grouping(
 ) -> TabularGroupingResult:
     """Apply manual DataGrouping assignments to a CSV/Excel analytics dataframe."""
 
+    default_group = get_default_group_label(grouping_df, fallback=default_group)
     frame = dataframe.copy()
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
     grouping_records = _tabular_grouping_records(grouping_df)
-    if not grouping_records:
+    if not grouping_records and default_group == TABULAR_DEFAULT_GROUP:
         return TabularGroupingResult(dataframe=frame)
 
     if "source_row_number" not in frame.columns:
@@ -4346,7 +4348,7 @@ def apply_tabular_grouping(
         )
         return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
 
-    if not any(
+    if grouping_records and not any(
         _first_present(row, ("REPORT_ID", "report_id", "SAMPLE_NUMBER", "sample_number")) is not None
         for row in grouping_records
     ):
@@ -4369,7 +4371,7 @@ def apply_tabular_grouping(
         group_label = str(_first_present(row, ("GROUP", "group")) or default_group).strip()
         assignment[source_row] = group_label or default_group
 
-    if not assignment:
+    if grouping_records and not assignment:
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
                 severity="warning",

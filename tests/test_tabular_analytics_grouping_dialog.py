@@ -65,8 +65,9 @@ def _app():
 
 
 @pytest.mark.parametrize("with_workbook, fail_workbook", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("default_label", ["POPULATION", "Rest"])
 def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(
-    tmp_path, monkeypatch, with_workbook, fail_workbook,
+    tmp_path, monkeypatch, with_workbook, fail_workbook, default_label,
 ) -> None:
     from metroliza.industrial import industrial_analytics_workflow as workflow
     from metroliza.industrial.industrial_analytics_state import (
@@ -111,6 +112,11 @@ def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(
     monkeypatch.setattr(workflow, "_write_dashboard", capture_dashboard)
     try:
         dialog._apply_group_assignments({1: ("Selected", "#123456"), 3: ("Selected", "#123456")})
+        if default_label != "POPULATION":
+            with monkeypatch.context() as scoped:
+                scoped.setattr(dialog, "_selected_group_name", lambda: "POPULATION")
+                scoped.setattr(grouping_dialog_module.QInputDialog, "getText", lambda *_a: (default_label, True))
+                dialog.rename_group()
         assignment_store = dialog._sqlite_grouping_assignment_store()
         dialog.use_grouping()
         assert assignment_store._connection is None
@@ -126,6 +132,7 @@ def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(
             output_dashboard_file=request.output_dashboard_file,
             output_workbook_file=request.output_workbook_file or None,
             grouping_df=request.grouping_df,
+            grouping_default_group_label=request.grouping_default_group_label,
             metric_selection=(ProductionMetricSelection("length_mm"),),
             aggregation_state=ProductionAggregationState(time_bucket="none"),
             chart_selection=ProductionChartSelection(groupstats=True),
@@ -147,7 +154,7 @@ def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(
             return
         result = workflow.run_tabular_file_analytics(**arguments)
         assert Path(request.output_dashboard_file).is_file()
-        expected_groups = ["Selected", "POPULATION", "Selected", "POPULATION", "POPULATION", "POPULATION"]
+        expected_groups = ["Selected", default_label, "Selected", default_label, default_label, default_label]
         assert captured[0]["GROUP"].tolist() == expected_groups
         assert captured[0]["length_mm"].astype(float).tolist() == [11, 12, 13, 14, 15, 16]
         assert result.groupstats_metric_count == 1

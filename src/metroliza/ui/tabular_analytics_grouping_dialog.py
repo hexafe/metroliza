@@ -1393,11 +1393,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 tuple(self._sqlite_assignment_operations),
                 default_group=self.default_group,
             )
-            return self._sqlite_assignment_dataframe(
+            return set_default_group_label(self._sqlite_assignment_dataframe(
                 [record.row_id for record in records],
                 group_names=[record.group_name for record in records],
                 colors=[self._normalized_group_color(record.color) for record in records],
-            )
+            ), self.default_group)
 
         frame = self._base_grouping_dataframe().copy()
         if frame.empty or "REPORT_ID" not in frame.columns:
