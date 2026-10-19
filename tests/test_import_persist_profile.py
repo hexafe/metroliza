@@ -203,6 +203,27 @@ def test_failed_checkpoint_stays_pending_and_close_retries_it(tmp_path, caplog):
         assert (busy, count) == (0, 1) and frames == written > 0
 
 
+@pytest.mark.parametrize("returned", [(1, 10, 0), (0, 10, 5)])
+def test_busy_or_incomplete_checkpoint_stays_pending_for_boundary_and_close(returned):
+    # A reader can pin WAL frames: PASSIVE then returns busy or leaves frames unsynced.
+    results = [returned, (0, 10, 10)]
+    executed = []
+
+    class Connection:
+        def execute(self, sql):
+            executed.append(sql)
+            row = results.pop(0)
+            return type("Cursor", (), {"fetchone": lambda self: row})()
+
+    connection = db_module._LazySQLiteConnection(":memory:", clock=lambda: 0.0)
+    connection._connection = Connection()
+    connection._commits_since_checkpoint = db_module.IMPORT_CHECKPOINT_COMMITS - 1
+    connection.checkpoint_after_commit()  # cadence checkpoint: incomplete
+    connection.checkpoint_pending()  # persistence boundary retries it and completes
+    connection.checkpoint_pending()  # nothing left to sync
+    assert executed == ["PRAGMA wal_checkpoint(PASSIVE)"] * 2 and not results
+
+
 def test_close_still_closes_the_connection_when_its_checkpoint_raises(tmp_path, monkeypatch):
     connection = db_module._LazySQLiteConnection(str(tmp_path / "reports.sqlite3"))
     connection.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
