@@ -301,6 +301,8 @@ def animation_summary(frames: list[dict[str, Any]], launched_ms: float) -> dict[
 
 def profile_points(events: list[dict[str, Any]], launched_ms: float) -> dict[str, Any]:
     wanted = (
+        "supervisor_entry", "supervisor_imported", "supervisor_package_inspection_start",
+        "supervisor_package_inspection_done", "supervisor_launch_start",
         "process_entry", "qapplication_create_done", "splash_shown", "splash_launcher_bridge",
         "main_window_import_done", "main_window_construct_done", "main_window_show_called",
         "first_event_loop_tick", "main_window_first_paint_tick", "launcher_splash_handoff_posted",

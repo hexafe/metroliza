@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from metroliza.app.diagnostic_supervisor import SupervisedResult, launch_supervised
+from metroliza.app.startup_profile import record_event
 from metroliza.shared.diagnostic_events import WorkflowDiagnosticEvent, WorkflowOutcome
 from metroliza.shared.diagnostic_incident import (
     ChannelState,
@@ -353,7 +354,9 @@ def main() -> int:
     if getattr(sys, "frozen", False):
         root = Path(sys.executable).absolute().parent
         mark("package_inspection")
+        record_event("supervisor_package_inspection_start")
         identity = inspect_package(root)
+        record_event("supervisor_package_inspection_done", valid=identity.valid)
         if not identity.valid:
             mark("package_rejected")
             observed = SupervisedResult(
@@ -377,6 +380,7 @@ def main() -> int:
         ]
         git_sha = "unknown"
     mark("supervision_entered")
+    record_event("supervisor_launch_start")
     delivery = run_with_store(argv, store=store, git_sha=git_sha)
     mark("supervision_returned")
     mark("storage_" + delivery.storage_status.value)
