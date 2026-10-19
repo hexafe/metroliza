@@ -287,6 +287,14 @@ def _load_or_refresh_tabular_metadata(
 ) -> _IndustrialTabularMetadata:
     _ensure_tabular_metadata_cache(connection)
     scope_key = _metadata_scope_key(where_sql=where_sql, params=params)
+    # These derived caches serve the current Summary scope only. Preparing
+    # another scope (including after saving/reopening) rebuilds its data.
+    connection.execute(
+        "DELETE FROM industrial_tabular_metadata_cache WHERE scope_key <> ?", (scope_key,),
+    )
+    connection.execute(
+        "DELETE FROM industrial_tabular_value_facets WHERE scope_key <> ?", (scope_key,),
+    )
     row_count, max_record_id, max_updated_at, value_count, max_value_id = _metadata_scope_fingerprint(
         connection,
         where_sql=where_sql,

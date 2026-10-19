@@ -90,6 +90,8 @@ def test_wide_5000_row_cache_reports_source_rows_without_grouping_growth(tmp_pat
     assert before["industrial_record_values"] == 810000
     assert sum(before.values()) == 815001
     loaded = load_industrial_cache_tabular_result(dialog.db_file)
+    after_summary = industrial_data_dialog.disposable_cache_counts(dialog.db_file)
+    assert after_summary["industrial_tabular_value_facets"] > 0
     grouping = TabularAnalyticsGroupingDialog(
         dataframe=loaded.dataframe, column_mapping=loaded.column_mapping,
         sqlite_store=loaded.sqlite_store,
@@ -102,7 +104,7 @@ def test_wide_5000_row_cache_reports_source_rows_without_grouping_growth(tmp_pat
             grouped = apply_tabular_grouping(frame, assignments)
             assert len(grouped.dataframe) == 5000
             assert grouped.dataframe["GROUP"].tolist().count("Selected") == 1
-        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == before
+        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == after_summary
         dialog._refresh_storage_lifecycle()
         assert "5,000 cached source row(s)" in dialog.storage_lifecycle_label.text()
         prompts = []
@@ -135,7 +137,7 @@ def test_wide_5000_row_cache_reports_source_rows_without_grouping_growth(tmp_pat
             )
         assert not list(tmp_path.glob(".*.tmp.xlsx"))
         assert not (tmp_path / "failed.xlsx").exists()
-        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == before
+        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == after_summary
     finally:
         assignment_store = grouping._sqlite_grouping_assignment_store()
         grouping.reject()

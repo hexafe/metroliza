@@ -1367,12 +1367,21 @@ class TabularSqliteStore:
         with sqlite_connection_scope(self.path) as connection:
             records = connection.execute(query, params).fetchall()
         if not records:
+            # Distinguish an absent scope cache from a search/page with no hits.
+            # Missing derived facets fall back to the current Summary view.
             count_query = (
-                f"SELECT COUNT(*) FROM {_quote_identifier(self.value_facet_table)} {where_sql}"
+                "SELECT COUNT(*), "
+                f"(SELECT 1 FROM {_quote_identifier(self.value_facet_table)} "
+                "WHERE scope_key = ? LIMIT 1) "
+                f"FROM {_quote_identifier(self.value_facet_table)} {where_sql}"
             )
             with sqlite_connection_scope(self.path) as connection:
-                total = int(connection.execute(count_query, params).fetchone()[0] or 0)
-            return [], total
+                total, available = connection.execute(
+                    count_query, (self.value_facet_scope_key, *params),
+                ).fetchone()
+            if available is None:
+                return None
+            return [], int(total or 0)
         total = int(records[0][2] or 0)
         rows = [
             {

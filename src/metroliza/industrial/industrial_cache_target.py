@@ -14,6 +14,8 @@ from metroliza.reports.db import backup_sqlite_database, sqlite_query_only_conne
 
 
 _DISPOSABLE_COUNT_QUERIES = {
+    "industrial_tabular_metadata_cache": "SELECT COUNT(*) FROM industrial_tabular_metadata_cache",
+    "industrial_tabular_value_facets": "SELECT COUNT(*) FROM industrial_tabular_value_facets",
     "industrial_source_profiles": "SELECT COUNT(*) FROM industrial_source_profiles",
     "industrial_sync_runs": "SELECT COUNT(*) FROM industrial_sync_runs",
     "industrial_sync_staging_records": "SELECT COUNT(*) FROM industrial_sync_staging_records",
