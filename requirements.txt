@@ -8,7 +8,9 @@ matplotlib>=3.8.1
 numpy>=1.24.3
 openpyxl>=3.1.2
 Pillow>=12.2.0
-PyMuPDF>=1.27.2.3
+# PyMuPDF 2.0 adds pymupdf4llm/pymupdf-layout and an unpinned onnxruntime dependency,
+# which broke the PDF/OCR isolation tests and the packaged smoke; stay on 1.x.
+PyMuPDF>=1.27.2.3,<2
 # Keep the PyQt wrapper and bundled Qt payload pinned to the same safe Qt line.
 # Do not relax this without rerunning the Windows Qt runtime smoke test.
 PyQt6==6.6.1
