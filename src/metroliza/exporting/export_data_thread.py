@@ -5917,7 +5917,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         )
 
     def _stream_measurements_sheet(self, excel_writer):
-        """Write MEASUREMENTS straight from the export snapshot; ``False`` if not applicable."""
+        """Write MEASUREMENTS from the snapshot; ``True`` if written or canceled."""
         from metroliza.exporting.measurement_stream import ColumnWidthSample, iter_row_chunks
 
         if not self._can_stream_measurements_sheet():
@@ -5937,7 +5937,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         finally:
             cursor.close()
         if row_count is None:
-            return False
+            return self._check_canceled()
         self._record_exported_sheet_name(sheet_name)
         if self._check_canceled():
             return True
