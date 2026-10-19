@@ -30,8 +30,9 @@ _CACHE_LIMIT = 8
 _CACHE = OrderedDict()
 _CACHE_LOCK = Lock()
 # Header bytes that change with content: the database header (offset 24 is its
-# change counter) and the WAL header (checkpoint sequence and salts per restart).
-# These catch same-size writes even with coarse or unchanged mtimes. On POSIX the
+# change counter; rollback-journal commits) and the WAL header (checkpoint
+# sequence and salts; changes at each WAL restart). Commits that overwrite WAL
+# frames within the existing length rely on mtime_ns. On POSIX the
 # main database file is never opened: closing any descriptor of it would release
 # every fcntl lock SQLite holds on it in this process. SQLite takes no locks on
 # the -wal file, and Windows locks belong to their own handle.
