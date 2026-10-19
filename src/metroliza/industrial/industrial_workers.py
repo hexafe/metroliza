@@ -424,6 +424,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     tabular_filter_expression=self.tabular_filter_expression,
                     dashboard_detail_mode=self.dashboard_detail_mode,
                     grouping_df=self.grouping_df,
+                    grouping_default_group_label=self.request.grouping_default_group_label,
                     aggregation_state=self.aggregation_state,
                     cohort_state=self.cohort_state,
                     chart_selection=self.chart_selection,

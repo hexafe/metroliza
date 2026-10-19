@@ -18,12 +18,15 @@ DEFAULT_GROUP_LABEL_ATTR = 'default_group_label'
 def get_default_group_label(df, *, fallback=DEFAULT_GROUP_LABEL):
     """Read the per-run default group label stored on a grouping DataFrame."""
     attrs = getattr(df, 'attrs', {}) if df is not None else {}
-    return normalize_default_group_label(attrs.get(DEFAULT_GROUP_LABEL_ATTR), fallback=fallback)
+    label = getattr(df, 'default_group_label', None) or attrs.get(DEFAULT_GROUP_LABEL_ATTR)
+    return normalize_default_group_label(label, fallback=fallback)
 
 
 def set_default_group_label(df, label):
     """Attach a per-run default group label to a DataFrame when possible."""
-    if df is not None and hasattr(df, 'attrs'):
+    if isinstance(df, RowTable):
+        df.default_group_label = normalize_default_group_label(label)
+    elif df is not None and hasattr(df, 'attrs'):
         df.attrs[DEFAULT_GROUP_LABEL_ATTR] = normalize_default_group_label(label)
     return df
 

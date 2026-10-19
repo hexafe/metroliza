@@ -288,3 +288,24 @@ def test_baseline_repository_returns_latest_by_created_at(tmp_path):
     assert latest["id"] == newer_id
     assert latest["baseline_version"] == "v2"
     assert latest["n"] == 30
+
+
+@pytest.mark.parametrize("status, expected", [(None, 1), ("open", 0), ("acknowledged", 1)])
+def test_event_counts_preserve_optional_status_filter(tmp_path, status, expected):
+    database = str(tmp_path / "count-status.sqlite")
+    signal, sample_id = _persist_sample(database)
+    repository = AnomalyEventRepository(database)
+    inserted = repository.insert_events([
+        DetectionResult(
+            detector_key="spec_limits", sample_id=sample_id, signal_id=signal.id,
+            signal_key=signal.signal_key, event_time="2026-06-13T10:00:00Z",
+            severity="warning", score=0.5, observed_value=12.5, expected_value=10.0,
+            threshold={"usl": 12.0}, explanation="Synthetic specification breach.",
+        ),
+    ])
+    repository.acknowledge_event(event_id=inserted.event_ids[0], ack_by="synthetic")
+    assert repository.count_by_severity(status=status)["warning"] == expected
+    assert repository.count_by_detector(status=status) == ({"spec_limits": 1} if expected else {})
+    for count in (repository.count_by_severity, repository.count_by_detector):
+        with pytest.raises(ValueError):
+            count(status="open' OR 1=1 --")

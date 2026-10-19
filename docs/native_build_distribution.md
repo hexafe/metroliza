@@ -186,6 +186,23 @@ Distribution audit status:
   `requirements-ocr.txt`, and runs the packaged-dependency validator with
   `--require-header-ocr` before building, so missing build dependencies, RapidOCR
   dependencies, or model files fail before a broken EXE is produced.
+- User builds (default, `METROLIZA_BUILD_FLAVOR` unset or `user`) exclude payload the
+  product does not use: OpenVINO, `cv2/opencv_videoio_ffmpeg*.dll`, `cv2/data/*`,
+  RapidOCR's bundled `rapidocr/models/*`, and `opengl32sw.dll`. Header OCR uses the
+  ONNX Runtime models vendored under `src/metroliza/resources/ocr_models/rapidocr`.
+  The backend passes that directory as `Global.model_root_dir`: RapidOCR 3.8.1 otherwise
+  requires its own `rapidocr/models/` directory to exist even when every model path is
+  explicit, and the packaged recognizer reads its character list from the vendored model's
+  embedded metadata. The rules live in `packaging/pyinstaller_common.py`
+  (`filter_payload_toc`) and are mirrored in `packaging/build_nuitka.ps1`. Set
+  `METROLIZA_BUILD_FLAVOR=benchmark` (and install `requirements-ocr-benchmark.txt`) only
+  for a dev/benchmark build that keeps OpenVINO and the unfiltered payload.
+- In the supervised Windows onedir the filter is applied to both the application analysis
+  and the Qt-free `metroliza_ocr_worker.exe` analysis before the single `COLLECT`, and
+  OpenVINO is excluded from both analyses (and from the worker's hidden imports) unless the
+  flavor is `benchmark`. `supervision_manifest.json` is written from the collected
+  directory afterwards, so it only hashes files that were actually packaged. The portable
+  onefile spec embeds that finished onedir unchanged and must not filter it again.
 - Commercial or external distributions must keep `THIRD_PARTY_NOTICES.md` with the
   packaged artifact and retain the bundled package license/metadata files where the
   packager preserves them.
@@ -221,8 +238,49 @@ library paths, and VC++ Redistributable registry status. Do not release a Window
 artifact from an environment where the PyQt wrapper and bundled Qt payload are
 from different Qt major/minor lines.
 
+Native launcher (single EXE with a persistent runtime cache):
+
+`packaging/launcher` is a Rust launcher that replaces per-launch onefile extraction. For the RC1
+line it carries the supervised onedir: `build_windows_portable_exe.ps1` builds the onedir and the
+PyInstaller portable envelope, and `build_windows_launcher_exe.ps1 -Supervised` packs **the same
+onedir** (entry `metroliza.exe`, after the exact-head provenance and package identity checks) into
+`dist/metroliza_<version>_<yymmdd>_launcher.exe` with `cargo build --release --locked` and an LZ4
+payload. The `_launcher` suffix keeps it apart from the envelope. On first start the payload is
+unpacked once to `%LOCALAPPDATA%\Metroliza\runtime\<version>-<contenthash12>_<sha8>\`; the
+cache key therefore contains the release label, the onedir content hash and the commit. Later
+starts only check the cache and run the entry EXE recorded in the payload manifest.
+
+Self-repair: the launcher starts the supervisor with `METROLIZA_RUNTIME_REPAIR_AVAILABLE=1`. When
+the supervisor finds the package identity invalid it shows no notice and exits with code 75; the
+launcher then re-extracts the runtime and starts the supervisor once more without the variable and
+returns that run's exit code, so a second failure shows the user the precise notice and there is no
+loop. Other exit codes pass through unchanged. (The supervisor side is specified in #1111.)
+
+Optional Authenticode signing runs on the final EXE when `METROLIZA_SIGNING_*` variables are
+configured (see the script); without them the step is skipped. Format, cache states, the repair
+contract and security notes are in `packaging/launcher/README.md`. The launcher is a standalone Rust
+binary, not a Python extension: it has no Python fallback, and the PyInstaller portable envelope
+and onedir remain available as the fallback deliveries. To compare the deliveries on Windows, run
+the `windows-startup-benchmark` job (`scripts/measure_windows_startup_routes.py`): the same startup
+smoke through the envelope, the launcher cold, its one-time verification, and the launcher warm, with median wall time and
+time to the first main-window paint.
+
 PyInstaller onefile remains the closest turnkey single-file distribution for
 non-technical users because it bundles the Python runtime into one artifact.
+The older `packaging/metroliza_onefile.spec` starts the application directly and
+does not provide the supervised incident history of the Windows onedir. For a
+single user-facing EXE **with** that history, run
+`build_windows_portable_exe.ps1`: it builds the current supervised onedir and
+then embeds the complete onedir inside a versioned, windowed outer EXE. On each
+launch PyInstaller extracts the payload to its temporary directory; the outer
+process verifies the child manifest and launcher provenance, starts the existing
+supervisor, and stays alive until it exits. This preserves the private incident
+store under the user's application state. It does not reuse an installed cache,
+so startup and temporary disk use can be higher than onedir. The user receives
+only `metroliza_<release>_<build>.exe`; all inner executables are internal.
+Run `scripts/qualify_windows_portable_onefile.py` against the exact Windows EXE
+before claiming packaged behavior. Release still needs its own notice,
+clean-machine, independent-review and approval gates.
 For startup-sensitive Windows testing, prefer the onedir artifact: it avoids
 bootloader extraction of the full scientific/OCR payload on every cold launch
 and gives Windows Defender a more stable file set to cache. Treat both outputs
@@ -250,6 +308,24 @@ the first Qt event-loop tick. Python-side events start at `process_entry`; they
 cannot include PyInstaller/Nuitka bootloader extraction time, so compare the
 helper's wall-clock time against the first profile event to understand onefile
 extraction and antivirus overhead.
+
+Startup profile events also carry a wall-clock `epoch_ms`. `scripts/measure_windows_startup_routes.py`
+uses it to time the shipped deliveries from process creation to the first main-window paint,
+bootloader, extraction, launcher and supervisor included:
+
+```powershell
+.\build_windows_portable_exe.ps1
+.\build_windows_launcher_exe.ps1 -Supervised
+.\.venv-build\Scripts\python.exe scripts\measure_windows_startup_routes.py `
+  --portable .\dist\metroliza_<version>_<yymmdd>.exe `
+  --launcher .\dist\metroliza_<version>_<yymmdd>_launcher.exe --runs 3
+```
+
+It runs the same `METROLIZA_STARTUP_UI_SMOKE=1` smoke through the portable envelope, the launcher
+with an empty cache (a fresh `METROLIZA_RUNTIME_ROOT` per run), its second-launch verification,
+and the launcher on a completed warm cache, and
+writes `startup-benchmark.json` and `startup-benchmark.md`. The CI job
+`windows-startup-benchmark` (`run_windows_startup_benchmark=1`) does exactly this.
 
 For local diagnosis, run `python scripts/summarize_startup_profile.py
 <profile.jsonl>` on a captured profile. The summary reports first feedback,

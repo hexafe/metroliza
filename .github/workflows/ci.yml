@@ -3,7 +3,10 @@ name: CI
 on:
   pull_request:
   push:
-    branches: ['**']
+    # Topic branches are qualified by pull_request, avoiding duplicate heavy runs.
+    # Keep direct integration/release/build pushes covered, including nested names.
+    # RC artifacts are cut from build/** branches. Pushes always run the full lane.
+    branches: [master, main, develop, rc2, 'integrate/**', 'release/**', 'hotfix/**', 'build/**']
   workflow_dispatch:
     inputs:
       run_packaging_smoke:
@@ -18,15 +21,475 @@ on:
         description: "Set to 1 for the owner-only bounded Windows wrapper discriminator"
         required: false
         default: "0"
+      run_windows_launcher_qualification:
+        description: "Set to 1 to build and qualify the native Windows launcher (synthetic payload)"
+        required: false
+        default: "0"
+      run_windows_diagnostic_qualification:
+        description: "Set to 1 for owner-only bounded Windows incident feature qualification"
+        required: false
+        default: "0"
+      run_windows_candidate_acceptance:
+        description: "Set to 1 for the authorized combined diagnostic/core Windows candidate acceptance"
+        required: false
+        default: "0"
+      run_windows_portable_onefile:
+        description: "Set to 1 to build and smoke-test the supervised single-EXE envelope"
+        required: false
+        default: "0"
+      run_windows_import_persist_benchmark:
+        description: "Set to 1 with portable onefile to compare 200-PDF persistence in the build venv"
+        required: false
+        default: "0"
+      diagnostic_mode:
+        description: "Native identity discriminator or full incident qualification"
+        type: choice
+        options: [full, identity, startup]
+        required: false
+        default: "full"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1') }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1')) }}
 
 jobs:
+  windows-launcher-qualification:
+    name: Native launcher qualification (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_launcher_qualification == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 30
+    concurrency:
+      group: windows-launcher-qualification-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Launcher unit and integration tests (Windows file-system semantics)
+        working-directory: packaging/launcher
+        run: cargo test --locked
+
+      - name: Build launcher, packer and test entry
+        working-directory: packaging/launcher
+        run: cargo build --release --locked
+
+      - name: Qualify launcher with a synthetic payload
+        shell: pwsh
+        run: |
+          $bin = 'packaging/launcher/target/release'
+          New-Item -ItemType Directory -Force -Path qualification | Out-Null
+          python scripts/qualify_windows_launcher.py --synthetic `
+            --launcher "$bin/metroliza-launcher.exe" `
+            --packer "$bin/metroliza-packer.exe" `
+            --test-entry "$bin/launcher-test-entry.exe" `
+            --filler-mb 128 `
+            --output qualification/launcher-qualification.json
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher qualification failed' }
+
+      - name: Exercise the packaging script on a synthetic onedir
+        shell: pwsh
+        run: |
+          $bin = 'packaging/launcher/target/release'
+          python scripts/qualify_windows_launcher.py --write-synthetic-onedir qualification/onedir `
+            --test-entry "$bin/launcher-test-entry.exe" --filler-mb 8
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic onedir creation failed' }
+          .\build_windows_launcher_exe.ps1 -OnedirPath qualification/onedir `
+            -Entry launcher-test-entry.exe -ReleaseLabel '2026.00test(260101)' `
+            -Output qualification/metroliza_2026.00test_260101_launcher.exe
+          $env:METROLIZA_RUNTIME_ROOT = (Join-Path $PWD 'qualification/packaging-root')
+          $env:METROLIZA_LAUNCHER_NO_UI = '1'
+          $process = Start-Process -FilePath qualification/metroliza_2026.00test_260101_launcher.exe `
+            -ArgumentList '--exit-code', '3' -Wait -PassThru
+          if ($process.ExitCode -ne 3) { throw "Unexpected launcher exit code $($process.ExitCode)" }
+
+      - name: Upload launcher EXE and qualification report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-launcher-qualification
+          path: |
+            qualification/launcher-qualification.json
+            qualification/metroliza_2026.00test_260101_launcher.exe
+          if-no-files-found: warn
+
+  classify-changes:
+    name: Classify CI changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout complete comparison history
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup classifier Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+      - name: Classify complete event diff
+        id: classify
+        run: python scripts/ci_change_classifier.py
+
+  windows-portable-onefile:
+    name: Supervised portable onefile (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_portable_onefile == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 60
+    concurrency:
+      group: windows-portable-onefile-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Build the supervised onedir and its single-EXE envelope
+        shell: pwsh
+        env:
+          METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
+        run: .\build_windows_portable_exe.ps1
+
+      - name: Record package identity behavior on the built onedir (#1111 discriminator)
+        shell: pwsh
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          $onedir = @(Get-ChildItem -LiteralPath dist -Directory -Filter 'metroliza_P_*_onedir')
+          if ($onedir.Count -ne 1) { throw 'Expected exactly one supervised onedir' }
+          $receiptDirectory = Join-Path $env:RUNNER_TEMP 'package-identity-receipt'
+          New-Item -ItemType Directory -Force -Path $receiptDirectory | Out-Null
+          $receipt = Join-Path $receiptDirectory 'package-identity-receipt.json'
+          & .\.venv-build\Scripts\python.exe scripts/qualify_package_identity.py $onedir[0].FullName --receipt $receipt
+          if ($LASTEXITCODE -ne 0) { throw 'Package identity discriminator failed: invalid baseline or script error' }
+
+      - name: Retain the package identity receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-package-identity-receipt
+          path: ${{ runner.temp }}/package-identity-receipt/package-identity-receipt.json
+          if-no-files-found: warn
+
+      - name: Qualify first launch, reopen, core outputs, incident and extraction cleanup
+        shell: pwsh
+        run: |
+          $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*.exe' |
+            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}\.exe$' })
+          if ($portable.Count -ne 1) { throw 'Expected exactly one versioned portable EXE' }
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py --artifact $portable[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Portable supervised smoke failed' }
+          $sha = (Get-FileHash -LiteralPath $portable[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Portable EXE: $($portable[0].Name) SHA-256 $sha"
+
+      - name: Pack the same supervised onedir into the native launcher EXE
+        shell: pwsh
+        run: .\build_windows_launcher_exe.ps1 -Supervised
+
+      - name: Qualify the launcher EXE (cold first launch, warm reopen, incident, cache layout)
+        shell: pwsh
+        run: |
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe' |
+            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}_launcher\.exe$' })
+          if ($launcher.Count -ne 1) { throw 'Expected exactly one versioned launcher EXE' }
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py --artifact $launcher[0].FullName --kind launcher
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher supervised smoke failed' }
+          $sha = (Get-FileHash -LiteralPath $launcher[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Launcher EXE: $($launcher[0].Name) SHA-256 $sha"
+
+      - name: Qualify frozen compute workers against serial synthetic outputs (#1134)
+        shell: pwsh
+        run: |
+          $onedir = @(Get-ChildItem -LiteralPath dist -Directory -Filter 'metroliza_P_*_onedir')
+          if ($onedir.Count -ne 1) { throw 'Expected exactly one supervised onedir' }
+          $receipt = Join-Path $env:RUNNER_TEMP 'compute-worker-receipt/compute-workers.json'
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_compute_workers.py --artifact-dir $onedir[0].FullName --receipt $receipt
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen compute workers qualification failed' }
+
+      - name: Retain frozen compute worker equivalence and timing receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-compute-worker-receipt
+          path: ${{ runner.temp }}/compute-worker-receipt/compute-workers.json
+          if-no-files-found: warn
+
+      - name: Compare synthetic import persist substages in the build venv
+        if: inputs.run_windows_import_persist_benchmark == '1'
+        shell: pwsh
+        env:
+          PYTHONPATH: src
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $receipts = Join-Path $env:RUNNER_TEMP 'import-persist-receipts'
+          New-Item -ItemType Directory -Path $receipts -Force | Out-Null
+          try {
+            Get-MpComputerStatus -ErrorAction Stop |
+              Select-Object AntivirusEnabled, RealTimeProtectionEnabled, AMProductVersion |
+              ConvertTo-Json | Set-Content (Join-Path $receipts 'antivirus-state.json')
+          } catch {
+            '{"status":"unavailable"}' | Set-Content (Join-Path $receipts 'antivirus-state.json')
+          }
+          & .\.venv-build\Scripts\python.exe scripts/benchmark_import_persist.py --reports 200 --output (Join-Path $receipts 'persist.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Import persist equivalence/substage qualification failed' }
+
+      - name: Upload synthetic import persist receipts
+        if: always() && inputs.run_windows_import_persist_benchmark == '1'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-import-persist-receipts
+          path: ${{ runner.temp }}/import-persist-receipts/*.json
+          if-no-files-found: error
+
+      - name: Verify source checkout remains at the exact clean head
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Source head changed' }
+          if (@(git status --porcelain).Count -ne 0) { throw 'Source checkout became dirty' }
+
+      - name: Retain the single user-facing portable envelope EXE
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-supervised-portable-onefile
+          path: dist/metroliza_[0-9]*_[0-9][0-9][0-9][0-9][0-9][0-9].exe
+          if-no-files-found: error
+
+      - name: Retain the native launcher EXE for testers
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-supervised-launcher-exe
+          path: |
+            dist/metroliza_[0-9]*_launcher.exe
+            dist/metroliza_[0-9]*_launcher.exe.provenance.json
+          if-no-files-found: error
+
+  windows-candidate-acceptance:
+    name: Combined Windows candidate acceptance (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 60
+    concurrency:
+      group: windows-candidate-acceptance-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup build and acceptance host Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Build actual candidate with optional native modules
+        shell: pwsh
+        env:
+          METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
+        run: .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
+
+      - name: Prepare acceptance host after freezing
+        shell: pwsh
+        run: |
+          & .\.venv-build\Scripts\python.exe -m pip install -r requirements-windows-candidate-host.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate host dependencies failed' }
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          $browser = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
+          if (-not (Test-Path -LiteralPath $browser -PathType Leaf)) { throw 'Installed Windows Edge is required' }
+          $package = @(Get-ChildItem -LiteralPath dist -Directory -Filter '*_onedir')
+          if ($package.Count -ne 1) { throw 'Expected exactly one candidate package' }
+          $receipts = Join-Path $env:RUNNER_TEMP 'metroliza-candidate-acceptance'
+          if (Test-Path -LiteralPath $receipts) { throw 'Candidate receipt root must be new' }
+          New-Item -Path $receipts -ItemType Directory | Out-Null
+          "CANDIDATE_BROWSER=$browser" >> $env:GITHUB_ENV
+          "CANDIDATE_PACKAGE=$($package[0].FullName)" >> $env:GITHUB_ENV
+          "CANDIDATE_RECEIPTS=$receipts" >> $env:GITHUB_ENV
+
+      - name: Qualify supervisor and incident menu on the same candidate
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_diagnostics.py --artifact-dir $env:CANDIDATE_PACKAGE --output-dir (Join-Path $env:CANDIDATE_RECEIPTS 'diagnostics')
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate supervised incident acceptance failed' }
+
+      - name: Verify exact source checkout remains clean after build
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw 'Candidate source head changed during build' }
+          $dirty = @(git status --porcelain)
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate source status unavailable' }
+          if ($dirty.Count -ne 0) {
+            $dirty | Write-Host
+            throw 'Candidate source checkout is dirty after build'
+          }
+
+      - name: Qualify actual core, OCR, private dashboard and geometry at each scale
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          foreach ($scale in @('1.0', '1.25', '1.5')) {
+            & .\.venv-build\Scripts\python.exe scripts/qualify_windows_candidate_core.py `
+              --source-checkout $env:GITHUB_WORKSPACE --expected-source-sha $env:GITHUB_SHA `
+              --artifact-dir $env:CANDIDATE_PACKAGE `
+              --fixture-dir (Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_candidate') `
+              --oracle (Join-Path $env:GITHUB_WORKSPACE 'scripts/synthetic-report-oracle.json') `
+              --browser $env:CANDIDATE_BROWSER --dpi-scale $scale --native-mode default `
+              --output-dir (Join-Path $env:CANDIDATE_RECEIPTS "core-dpr-$scale")
+            if ($LASTEXITCODE -ne 0) { throw "Candidate core failed at DPR $scale" }
+          }
+
+      - name: Qualify unavailable-native fallback using unchanged package bytes
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_candidate_core.py `
+            --source-checkout $env:GITHUB_WORKSPACE --expected-source-sha $env:GITHUB_SHA `
+            --artifact-dir $env:CANDIDATE_PACKAGE `
+            --fixture-dir (Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_candidate') `
+            --oracle (Join-Path $env:GITHUB_WORKSPACE 'scripts/synthetic-report-oracle.json') `
+            --browser $env:CANDIDATE_BROWSER --dpi-scale 1.0 --native-mode unavailable `
+            --output-dir (Join-Path $env:CANDIDATE_RECEIPTS 'core-native-unavailable')
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate native fallback acceptance failed' }
+
+      - name: Verify every receipt binds the same source and immutable package
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate tree identity unavailable' }
+          & .\.venv-build\Scripts\python.exe scripts/finalize_windows_candidate_receipts.py --receipt-root $env:CANDIDATE_RECEIPTS --expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate combined receipt gate failed' }
+
+      - name: Retain bounded synthetic candidate receipts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-candidate-acceptance-receipts
+          path: |
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.json
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.sqlite
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.xlsx
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.html
+          if-no-files-found: warn
+
+      - name: Retain accepted engineering package for orchestrator review
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-candidate-development-onedir
+          path: ${{ runner.temp }}/metroliza-candidate-acceptance/diagnostics/qualified-windows-development-package.zip
+          if-no-files-found: error
+
+  windows-diagnostic-qualification:
+    name: Windows incident feature qualification (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && github.actor == github.repository_owner && github.event.repository.private == false
+    runs-on: windows-latest
+    timeout-minutes: 45
+    concurrency:
+      group: windows-incident-qualification-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Validate diagnostic execution mode
+        shell: pwsh
+        env:
+          DIAGNOSTIC_MODE: ${{ inputs.diagnostic_mode }}
+        run: |
+          if ($env:DIAGNOSTIC_MODE -notin @('full', 'identity', 'startup')) { throw 'Invalid diagnostic mode' }
+
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Build actual Windows onedir and minimal incident launcher
+        shell: pwsh
+        env:
+          METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
+        run: .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
+
+      - name: Build and run bounded native process identity controls
+        if: inputs.diagnostic_mode == 'identity'
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          .\.venv-build\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name metroliza-native-identity-control --distpath native-identity-dist --workpath native-identity-build --specpath native-identity-build scripts/windows_native_identity_control.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native identity control build failed' }
+          $package = @(Get-ChildItem -LiteralPath dist -Directory -Filter '*_onedir')
+          if ($package.Count -ne 1) { throw 'Expected one diagnostic package' }
+          $control = Join-Path $env:GITHUB_WORKSPACE 'native-identity-dist/metroliza-native-identity-control/metroliza-native-identity-control.exe'
+          .\.venv-build\Scripts\python.exe scripts/qualify_windows_diagnostics.py --artifact-dir $package[0].FullName --output-dir (Join-Path $env:GITHUB_WORKSPACE 'native-identity-receipts') --identity-control-executable $control
+          if ($LASTEXITCODE -ne 0) { throw 'Native process identity controls failed' }
+
+      - name: Qualify actual packaged incident flow with public synthetic inputs
+        if: inputs.diagnostic_mode == 'full' || inputs.diagnostic_mode == 'startup'
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+          METROLIZA_DIAGNOSTIC_STARTUP_PROBE: ${{ inputs.diagnostic_mode == 'startup' && '1' || '0' }}
+        run: |
+          $package = @(Get-ChildItem -LiteralPath dist -Directory -Filter '*_onedir')
+          if ($package.Count -ne 1) { throw 'Expected one diagnostic package' }
+          .\.venv-build\Scripts\python.exe scripts/qualify_windows_diagnostics.py --artifact-dir $package[0].FullName --output-dir (Join-Path $env:GITHUB_WORKSPACE 'diagnostic-qualification-receipts')
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged diagnostic qualification failed' }
+
+      - name: Upload bounded diagnostic qualification receipts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-diagnostic-qualification-receipts
+          path: |
+            diagnostic-qualification-receipts/*.json
+            native-identity-receipts/*.json
+          if-no-files-found: warn
+
+      - name: Upload qualified development onedir package
+        if: success() && inputs.diagnostic_mode == 'full'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-diagnostic-development-onedir
+          path: diagnostic-qualification-receipts/qualified-windows-development-package.zip
+          if-no-files-found: error
+
   windows-wrapper-diagnostics:
     name: Windows wrapper discriminator (manual/opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && github.actor == github.repository_owner && github.event.repository.private == false
@@ -60,6 +523,27 @@ jobs:
           import tempfile
           import xml.etree.ElementTree as ET
 
+          def safe_native_controls(report):
+              names = {
+                  'test_native_resumed_thread_matches_child_initial_thread': 'primary_thread_identity',
+                  'test_native_interrupted_creation_cleans_unresumed_primary_thread': 'interrupted_creation',
+              }
+              statuses = {label: 'unobserved' for label in names.values()}
+              for case in report.iter('testcase'):
+                  if (case.get('classname') != 'tests.test_windows_ocr_wrapper_completion'
+                          or case.get('name') not in names):
+                      continue
+                  label = names[case.get('name')]
+                  if statuses[label] != 'unobserved':
+                      raise ValueError('duplicate_native_control')
+                  if case.find('failure') is not None or case.find('error') is not None:
+                      statuses[label] = 'failed'
+                  elif case.find('skipped') is not None:
+                      statuses[label] = 'skipped'
+                  else:
+                      statuses[label] = 'passed'
+              return statuses
+
           def safe_receipts(root):
               path = root / 'windows-ocr-wrapper-receipts.jsonl'
               if not path.is_file() or not 0 < path.stat().st_size <= 32768:
@@ -77,7 +561,7 @@ jobs:
                              'not_completed', 'output_limit'},
                   'shell_state': {'exited', 'live', 'wait_failed', 'unobserved'},
                   'fixture_stage': {'child_ready', 'shell_ready', 'fixture_mismatch', 'unobserved'},
-                  'fixture_phase': {'unobserved', 'shell_initialized', 'native_factory_ready',
+                  'fixture_phase': {'unobserved', 'shell_entered', 'shell_initialized', 'native_factory_ready',
                                     'child_created', 'fixture_mismatch'},
                   'invoke_state': {'returned', 'timeout_returned', 'failed', 'unobserved'},
                   'invoke_reason': {'completed', 'timeout', 'cancelled', 'containment_unavailable',
@@ -145,8 +629,30 @@ jobs:
                               result = 1
                           print(json.dumps({'stage': 'pytest_complete', 'exit_code': result,
                                             **counts}, sort_keys=True))
+                          controls = safe_native_controls(ET.parse(report).getroot())
+                          print(json.dumps({'stage': 'native_primary_thread_controls',
+                                            **controls}, sort_keys=True))
+                          if result == 0 and set(controls.values()) != {'passed'}:
+                              raise ValueError('missing_native_control')
                           for receipt in safe_receipts(root):
                               print(json.dumps(receipt, sort_keys=True))
+                          sys.path.insert(0, str(Path.cwd()))
+                          from tests.windows_ocr_stages import validate_observation
+                          observed_pairs = set()
+                          for prop in ET.parse(report).getroot().iter('property'):
+                              if prop.get('name') == 'wrapper_completion_stages':
+                                  receipt = validate_observation(prop.get('value', ''))
+                                  pair = (receipt['shell'], receipt['mode'])
+                                  if pair in observed_pairs:
+                                      raise ValueError('duplicate_stage_receipt')
+                                  observed_pairs.add(pair)
+                                  print(json.dumps({'stage': 'wrapper_completion_stages',
+                                                    **receipt}, sort_keys=True))
+                          if result == 0 and observed_pairs != {
+                              ('powershell', 'pass'), ('powershell', 'fail'),
+                              ('pwsh', 'pass'), ('pwsh', 'fail'),
+                          }:
+                              raise ValueError('missing_stage_receipt')
                       else:
                           print('{"stage":"pytest_incomplete","reason":"report_unavailable"}')
                           result = 1
@@ -169,13 +675,25 @@ jobs:
 
   static-checks:
     name: Static checks
+    needs: [classify-changes]
+    # A failed classifier must fail an existing required check, not skip it green.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Require a successful classification
+        env:
+          CLASSIFIER_RESULT: ${{ needs.classify-changes.result }}
+          DOCS_ONLY: ${{ needs.classify-changes.outputs.docs_only }}
+        run: |
+          test "$CLASSIFIER_RESULT" = success
+          test "$DOCS_ONLY" = true || test "$DOCS_ONLY" = false
+
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -189,14 +707,38 @@ jobs:
             requirements-dev.txt
 
       - name: Install dependencies
+        if: needs.classify-changes.outputs.docs_only != 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
+      - name: Install focused documentation dependencies
+        if: needs.classify-changes.outputs.docs_only == 'true'
+        run: python -m pip install 'pytest>=8.0.0' 'PyYAML>=6.0' 'defusedxml>=0.7.1'
+
+      - name: Focused documentation and policy checks
+        if: needs.classify-changes.outputs.docs_only == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha || github.event.after }}
+        run: |
+          PYTHONPATH=src:. python -m pytest -q -o addopts="" \
+            tests/test_docs_markdown_links.py tests/test_docs_policy_repo_metrics_hygiene.py \
+            tests/test_ci_policy_sync.py tests/test_ci_change_classifier.py \
+            tests/test_release_metadata_sync.py tests/test_release_hygiene.py
+          base="$BASE_REF"
+          if [ "$EVENT_NAME" = pull_request ]; then
+            base="$(git merge-base "$BASE_REF" "$HEAD_REF")"
+          fi
+          git diff --check "$base" "$HEAD_REF" --
+
       - name: Compile check
+        if: needs.classify-changes.outputs.docs_only != 'true'
         run: python -m compileall -x '^\./\.git/' .
 
       - name: Parser profile self-service smoke
+        if: needs.classify-changes.outputs.docs_only != 'true'
         run: |
           workspace="artifacts/parser_profile_self_service_ci"
           home_dir="artifacts/parser_profile_self_service_home"
@@ -233,9 +775,11 @@ jobs:
           PYTHONPATH=src:. python scripts/parser_plugin_self_service.py --home "${home_dir}" evidence ci_smoke
 
       - name: Ruff lint (full repository)
+        if: needs.classify-changes.outputs.docs_only != 'true'
         run: python -m ruff check .
 
       - name: Narrow static type boundary
+        if: needs.classify-changes.outputs.docs_only != 'true'
         run: |
           python -m mypy \
             src/metroliza/integrations/google_credentials_hygiene.py \
@@ -254,6 +798,7 @@ jobs:
         run: python scripts/check_release_hygiene.py
 
       - name: Checkout pinned hexafe-groupstats for security audit
+        if: needs.classify-changes.outputs.docs_only != 'true'
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
@@ -262,6 +807,7 @@ jobs:
           path: artifacts/security_siblings/hexafe-groupstats
 
       - name: Checkout pinned hexafe-plotstats for security audit
+        if: needs.classify-changes.outputs.docs_only != 'true'
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
@@ -270,6 +816,7 @@ jobs:
           path: artifacts/security_siblings/hexafe-plotstats
 
       - name: Checkout pinned oznak for security audit
+        if: needs.classify-changes.outputs.docs_only != 'true'
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
@@ -278,10 +825,13 @@ jobs:
           path: artifacts/security_siblings/oznak
 
       - name: Security audit
+        if: needs.classify-changes.outputs.docs_only != 'true'
         run: python scripts/security_audit.py --ci --sibling-root artifacts/security_siblings
 
   unit-tests:
     name: Unit tests
+    needs: [classify-changes]
+    if: ${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -466,6 +1016,8 @@ jobs:
 
   native-artifacts:
     name: Native wheel build and smoke checks
+    needs: [classify-changes]
+    if: ${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -500,6 +1052,9 @@ jobs:
           python -m maturin build --locked --manifest-path src/metroliza/native/comparison_stats_bootstrap/Cargo.toml --release --out dist/native
           python -m maturin build --locked --manifest-path src/metroliza/native/distribution_fit_ad/Cargo.toml --release --out dist/native
           python -m maturin build --locked --manifest-path src/metroliza/native/chart_renderer/Cargo.toml --release --out dist/native
+
+      - name: Native launcher tests (cross-platform logic)
+        run: cargo test --locked --manifest-path packaging/launcher/Cargo.toml
 
       - name: Install built native wheel
         run: |
@@ -645,7 +1200,8 @@ jobs:
     name: CMM parser perf guardrail
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [static-checks, unit-tests]
+    needs: [classify-changes, static-checks, unit-tests]
+    if: ${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' && needs.static-checks.result == 'success' && needs.unit-tests.result == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -733,7 +1289,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     continue-on-error: true
-    needs: [static-checks, unit-tests]
+    needs: [classify-changes, static-checks, unit-tests]
+    if: ${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' && needs.static-checks.result == 'success' && needs.unit-tests.result == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -925,6 +1482,8 @@ jobs:
 
   windows-core-smoke:
     name: Windows core smoke
+    needs: [classify-changes]
+    if: ${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -936,7 +1495,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.11.9'
           cache: 'pip'
           cache-dependency-path: |
             requirements.txt
@@ -977,6 +1536,32 @@ jobs:
           tests/test_logging_utils.py
           tests/test_build_provenance.py
 
+      - name: Run native Windows supervised incident tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: >-
+          python -m pytest -v
+          tests/test_diagnostic_wire.py tests/test_diagnostic_ring.py
+          tests/test_diagnostic_incident.py tests/test_diagnostic_store.py
+          tests/test_diagnostic_transport.py tests/test_diagnostic_supervisor.py
+          tests/test_diagnostic_launcher.py tests/test_diagnostic_package.py
+          tests/test_workflow_diagnostics.py tests/test_incident_dialog.py
+          tests/test_diagnostic_qualification.py tests/test_windows_diagnostic_qualification.py
+          tests/test_diagnostic_startup_probe.py
+          tests/test_packaging_setuptools_hook.py
+          tests/test_windows_runtime_audit.py
+
+      - name: Run Windows candidate receipt and ownership contracts
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_fresh_reopen.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_frozen_ocr_worker.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py
+
       - name: Run native Windows Qt lifecycle tests
         env:
           PYTHONPATH: src;.
@@ -993,6 +1578,48 @@ jobs:
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py
+
+      - name: Run native Windows report workspace tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_WORKSPACE_SCREEN: 1920x1080
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py
+
+      - name: Run native Windows specialist geometry tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_INDUSTRIAL_SCREEN: 1920x1080
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -vv -s tests/test_industrial_native_geometry.py
+
+      - name: Run native Windows realtime dashboard scheduling tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+          METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9
+        run: >-
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_realtime_monitoring_dialog.py
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
+          tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
+
+      - name: Run native Windows grouping-preview lifecycle tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: >-
+          python -m pytest -vv -s --tb=short --show-capture=no
+          tests/test_tabular_analytics_grouping_dialog.py
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:
@@ -1013,6 +1640,7 @@ jobs:
           tests/test_export_chart_writer.py
           tests/test_export_backends.py
           tests/test_export_workbook_output.py
+          tests/test_windows_candidate_xlsx_xml.py::test_native_canonical_w07_export_and_cancellation
 
       - name: Run finite numeric filter and query-consumer parity on Windows
         env:
@@ -1050,7 +1678,6 @@ jobs:
     name: Windows startup benchmark (manual/opt-in)
     runs-on: windows-latest
     timeout-minutes: 120
-    needs: [static-checks, unit-tests]
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_startup_benchmark == '1'
     env:
       METROLIZA_RUN_WINDOWS_STARTUP_BENCHMARK: ${{ inputs.run_windows_startup_benchmark }}
@@ -1076,32 +1703,43 @@ jobs:
             throw 'Windows startup benchmark gate was not enabled.'
           }
 
-      - name: Build PyInstaller onefile and onedir artifacts
-        shell: pwsh
-        run: .\build_windows_exe.ps1 -Mode both
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
 
-      - name: Measure packaged startup
+      - name: Build the supervised onedir and the portable envelope EXE (user flavor)
+        shell: pwsh
+        env:
+          METROLIZA_BUILD_FLAVOR: user
+          METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
+        run: .\build_windows_portable_exe.ps1
+
+      - name: Pack the same onedir into the native launcher EXE
+        shell: pwsh
+        run: .\build_windows_launcher_exe.ps1 -Supervised
+
+      - name: Verify source checkout remains at the exact clean head
         shell: pwsh
         run: |
-          $onefile = Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_P_*.exe' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          $onedir = Get-ChildItem -LiteralPath dist -Recurse -File -Filter 'metroliza.exe' |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Source head changed' }
+          if (@(git status --porcelain).Count -ne 0) { throw 'Source checkout became dirty' }
 
-          if (-not $onefile) {
-            throw 'PyInstaller onefile artifact was not found.'
-          }
-          if (-not $onedir) {
-            throw 'PyInstaller onedir artifact was not found.'
-          }
-
-          .\scripts\measure_windows_startup.ps1 `
-            -ArtifactPath @($onefile.FullName, $onedir.FullName) `
-            -Iterations 2 `
-            -WarmupRuns 1 `
-            -OutputDirectory startup-artifacts
+      - name: Measure real-application startup (envelope, launcher cold, launcher warm)
+        shell: pwsh
+        run: |
+          $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*.exe' |
+            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}\.exe$' })
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe' |
+            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}_launcher\.exe$' })
+          if ($portable.Count -ne 1) { throw 'Expected exactly one versioned portable envelope EXE' }
+          if ($launcher.Count -ne 1) { throw 'Expected exactly one versioned launcher EXE' }
+          & .\.venv-build\Scripts\python.exe scripts/measure_windows_startup_routes.py `
+            --portable $portable[0].FullName `
+            --launcher $launcher[0].FullName `
+            --runs 3 `
+            --output-dir startup-artifacts
+          if ($LASTEXITCODE -ne 0) { throw 'Startup measurement failed' }
 
       - name: Upload Windows startup artifacts
         if: always()

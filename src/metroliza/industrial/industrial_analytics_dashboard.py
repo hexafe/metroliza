@@ -15,6 +15,7 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+from metroliza.charts.full_data_violin import full_data_violin
 from metroliza.charts.dashboard_navigation import (
     render_back_to_dashboard_start,
     render_section_navigation_css,
@@ -46,7 +47,7 @@ from metroliza.charts.dashboard_visual_options import dashboard_visual_preview_l
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
 from metroliza.charts.hexafe_plotstats_adapter import (
     build_dashboard_plotly_spec,
-    build_histogram_stats_table,
+    build_histogram_stats_tables,
     build_plotstats_dashboard_spec,
     metroliza_dashboard_plotstats_theme,
     plotstats_export_charts_enabled,
@@ -2699,20 +2700,11 @@ def _histogram_stats_tables(
     metric: ProductionMetricSelection,
     groups: list[tuple[str, pd.DataFrame]],
 ) -> list[dict[str, Any]]:
-    tables: list[dict[str, Any]] = []
-    for label, group in groups:
-        if metric.field_name not in group.columns:
-            continue
-        table = build_histogram_stats_table(
-            group[metric.field_name],
-            title=label,
-            backend="metroliza",
-            lsl=metric.lsl,
-            usl=metric.usl,
-        )
-        if table is not None:
-            tables.append(table.as_dict())
-    return tables
+    tables = build_histogram_stats_tables(
+        [(label, group[metric.field_name]) for label, group in groups if metric.field_name in group.columns],
+        backend="metroliza", lsl=metric.lsl, usl=metric.usl,
+    )
+    return [table.as_dict() for table in tables]
 
 
 def _render_distribution_image(
@@ -2791,8 +2783,8 @@ def _render_matplotlib_distribution_image(
                 )
             ax.set_ylabel("Density" if len(value_groups) > 1 else "Count")
         elif chart_type == "violin":
-            parts = ax.violinplot(
-                arrays,
+            parts = full_data_violin(
+                ax, arrays,
                 positions=positions,
                 showmeans=False,
                 showmedians=True,

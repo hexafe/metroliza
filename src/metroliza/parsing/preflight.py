@@ -26,8 +26,9 @@ import zipfile
 from metroliza.parsing import report_parser_factory
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
-from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.source_inspection import SourceInspectionContext, source_stat_signature
 from metroliza.reports.db import sqlite_readonly_connection_scope
+from metroliza.reports.report_metadata_review import ReportMetadataOverride
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 
@@ -391,6 +392,18 @@ class ParseFilePreflight:
     registry_generation_id: int | None = None
     diagnostic_detail: str = ""
     occurrence_id: str = ""
+    # Cheap change signal observed around the fingerprint hash (not part of result_id).
+    # The import may carry the fingerprint forward only while this signal is unchanged.
+    file_size_bytes: int | None = None
+    file_modified_ns: int | None = None
+
+    @property
+    def stat_signature(self) -> tuple[int, int] | None:
+        """Return ``(size, mtime_ns)`` as recorded with the fingerprint, if consistent."""
+
+        if self.file_size_bytes is None or self.file_modified_ns is None:
+            return None
+        return self.file_size_bytes, self.file_modified_ns
 
     @property
     def is_importable(self) -> bool:
@@ -562,6 +575,9 @@ class ImportPlan:
     preflight_version: str
     preflight_result_id: str
     selected_reports: tuple[SelectedReportIdentity, ...]
+    # Values confirmed in the pre-import metadata review (#1100). Each override
+    # is bound to a selected report by occurrence id and content fingerprint.
+    metadata_overrides: tuple[ReportMetadataOverride, ...] = ()
 
     @classmethod
     def from_preflight(
@@ -570,6 +586,7 @@ class ImportPlan:
         preflight_result: ParsePreflightResult,
         *,
         selected_occurrence_ids: Iterable[str],
+        metadata_overrides: Iterable[ReportMetadataOverride] = (),
     ) -> ImportPlan:
         """Build a plan from an explicit set of reviewed occurrence identities."""
 
@@ -625,6 +642,7 @@ class ImportPlan:
             preflight_version=preflight_result.version,
             preflight_result_id=preflight_result.result_id,
             selected_reports=tuple(selected_reports),
+            metadata_overrides=tuple(metadata_overrides),
         )
         return validate_import_plan(plan)
 
@@ -710,6 +728,7 @@ def validate_import_plan(plan: ImportPlan) -> ImportPlan:
         raise ValueError("Import plan must be provided as an ImportPlan instance.")
     _validate_import_plan_context(plan)
     _validate_selected_reports(plan)
+    _validate_metadata_overrides(plan)
     return plan
 
 
@@ -766,6 +785,30 @@ def _validate_selected_reports(plan: ImportPlan) -> None:
         if identity.occurrence_id not in eligible or identity != approved_identity:
             raise ValueError(
                 f"Selected report identity is not an exact atomic approval: {identity.occurrence_id}"
+            )
+
+
+def _validate_metadata_overrides(plan: ImportPlan) -> None:
+    """Overrides may only target selected reports, by exact identity."""
+
+    if not isinstance(plan.metadata_overrides, tuple):
+        raise ValueError("Import plan metadata_overrides must be an immutable tuple.")
+    selected = {identity.occurrence_id: identity for identity in plan.selected_reports}
+    seen: set[str] = set()
+    for override in plan.metadata_overrides:
+        if not isinstance(override, ReportMetadataOverride):
+            raise ValueError("Import plan contains an invalid metadata override.")
+        if override.occurrence_id in seen:
+            raise ValueError("Import plan contains duplicate metadata overrides.")
+        seen.add(override.occurrence_id)
+        identity = selected.get(override.occurrence_id)
+        if identity is None:
+            raise ValueError(
+                f"Metadata override targets an unselected report: {override.occurrence_id}"
+            )
+        if override.fingerprint != identity.fingerprint:
+            raise ValueError(
+                f"Metadata override does not match the reviewed content: {override.occurrence_id}"
             )
 
 
@@ -895,6 +938,15 @@ def _unreadable_entry(display_name: str, source_path: Path, detail: str) -> Pars
         diagnostic_detail=str(detail),
         occurrence_id=_normalize_occurrence_id(display_name),
     )
+
+
+def _consistent_stat_evidence(inspection: SourceInspectionContext) -> dict[str, int]:
+    """Return size/mtime evidence only if the file did not move while it was hashed."""
+
+    observed = (inspection.file_size_bytes, inspection.file_modified_ns)
+    if None in observed or source_stat_signature(inspection.source_path) != observed:
+        return {}
+    return {"file_size_bytes": observed[0], "file_modified_ns": observed[1]}
 
 
 class ParsePreflightService:
@@ -1035,6 +1087,7 @@ class ParsePreflightService:
         if not sha256_value:
             return _unreadable_entry(display_name, path, "Could not read source content")
         fingerprint = f"sha256:{sha256_value}"
+        stat_evidence = _consistent_stat_evidence(inspection)
 
         try:
             diagnostics = report_parser_factory.resolve_parser_with_diagnostics(
@@ -1049,6 +1102,7 @@ class ParsePreflightService:
                 status=ParsePreflightStatus.AMBIGUOUS,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=_reason_codes(diagnostics),
                 candidates=_candidate_evidence(diagnostics),
                 competing_parser_ids=tuple(exc.plugin_ids),
@@ -1063,6 +1117,7 @@ class ParsePreflightService:
                 status=ParsePreflightStatus.UNREADABLE,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=("parser_inspection_exception",),
                 diagnostic_detail=f"{type(exc).__name__}: {exc}",
                 occurrence_id=_normalize_occurrence_id(display_name),
@@ -1082,6 +1137,7 @@ class ParsePreflightService:
                 status=status,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=reason_codes,
                 candidates=evidence,
                 competing_parser_ids=tuple(diagnostics.ambiguous_plugin_ids),
@@ -1101,6 +1157,7 @@ class ParsePreflightService:
             status=status,
             source_format=source_format,
             fingerprint=fingerprint,
+            **stat_evidence,
             parser_id=str(selected.plugin_id),
             confidence=int(selected.confidence or 0),
             reason_codes=reason_codes,

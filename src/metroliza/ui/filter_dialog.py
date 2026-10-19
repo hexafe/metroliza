@@ -1,5 +1,4 @@
 from metroliza.shared.custom_logger import CustomLogger
-from metroliza.reports.db import execute_with_retry
 from metroliza.shared.list_selection_utils import ListSelectionUtils
 from metroliza.ui import ui_theme_tokens
 try:
@@ -157,14 +156,15 @@ class FilterDialog(QDialog):
             self.filter_query = self.parent().get_filter_query()
         else:
             self.filter_query = ""
+        self._choice_scope_query = self.filter_query
 
         self._list_selection_utils = ListSelectionUtils()
         self._discard_gate_active = False
-
-        try:
-            self._ensure_schema_ready()
-        except Exception as e:
-            self.log_and_exit(e)
+        self._value_loader = None
+        self._value_request = 0
+        self._values_loading = False
+        self._values_closed = False
+        self._values_error = False
 
         self.setup_ui()
 
@@ -185,11 +185,11 @@ class FilterDialog(QDialog):
         try:
             self.create_widgets()
             self.arrange_layout()
-            self.populate_list_widgets()
             self._apply_list_theme_styles()
             self.connect_signals()
             self._refresh_filter_summary()
             self._committed_draft_snapshot = self._draft_snapshot()
+            self.populate_list_widgets()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -749,13 +749,21 @@ class FilterDialog(QDialog):
     def reject(self):
         if not self._discard_draft_if_allowed():
             return
+        self._stop_value_load()
         super().reject()
 
     def closeEvent(self, event):
         if not self._discard_draft_if_allowed():
             event.ignore()
             return
+        self._stop_value_load()
         super().closeEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._values_closed or not self._values_loading:
+            self._values_closed = False
+            self.populate_list_widgets()
 
     def _selected_filter_counts(self):
         field_widgets = (
@@ -804,6 +812,13 @@ class FilterDialog(QDialog):
     def _refresh_filter_summary(self):
         summary_label = getattr(self, "filter_summary_label", None)
         if summary_label is None or not hasattr(summary_label, "setText"):
+            return
+        if getattr(self, "_values_loading", False) or getattr(self, "_values_error", False):
+            summary_label.setText(
+                "Loading filter values…" if self._values_loading
+                else "Unable to load filter values. Reopen the dialog to retry."
+            )
+            self._set_filter_apply_enabled(False)
             return
         selected_counts = self._selected_filter_counts()
         active_fields = sum(1 for count in selected_counts.values() if count > 0)
@@ -877,34 +892,83 @@ class FilterDialog(QDialog):
         super().keyPressEvent(event)
 
     def populate_list_widgets(self):
-        try:
-            current_filter_query = self.filter_query
-            self._populate_distinct_values(self.ax_list, "AX", filter_query=current_filter_query)
-            self._populate_distinct_values(self.header_list, "HEADER", filter_query=current_filter_query)
-            self._populate_distinct_values(self.all_headers_list, "HEADER", filter_query=current_filter_query)
-            self._populate_distinct_values(self.reference_list, "REFERENCE", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.part_name_list, "PART_NAME", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.revision_list, "REVISION", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.template_variant_list, "TEMPLATE_VARIANT", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.sample_number_list, "SAMPLE_NUMBER", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.operator_name_list, "OPERATOR_NAME", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.sample_number_kind_list, "SAMPLE_NUMBER_KIND", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.status_code_list, "STATUS_CODE", filter_query=current_filter_query)
-            self._populate_distinct_values(self.filename_list, "FILENAME", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.parser_id_list, "PARSER_ID", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.template_family_list, "TEMPLATE_FAMILY", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._refresh_filter_summary()
-        except Exception as e:
-            self.log_and_exit(e)
+        from metroliza.reports.filter_values import FILTER_VALUE_SPECS
+
+        self._start_value_load(FILTER_VALUE_SPECS, self._choice_scope_query)
+
+    def _stop_value_load(self):
+        self._values_closed = True
+        self._value_request += 1
+        loader = self._value_loader
+        self._value_loader = None
+        if loader is not None:
+            loader.requestInterruption()
+            loader.values_ready.disconnect(self._receive_filter_values)
+            loader.load_failed.disconnect(self._filter_values_failed)
+
+    def _start_value_load(self, specs, filter_query):
+        from metroliza.ui.filter_values_loader import FilterValuesLoader
+
+        self._stop_value_load()
+        self._values_closed = False
+        self._values_loading = True
+        self._values_error = False
+        self.filter_tabs.setEnabled(False)
+        self.reset_button.setEnabled(False)
+        self._refresh_filter_summary()
+        loader = FilterValuesLoader(self._value_request, self.db_file, filter_query, specs)
+        self._value_loader = loader
+        loader.values_ready.connect(self._receive_filter_values)
+        loader.load_failed.connect(self._filter_values_failed)
+        loader.finished.connect(self._value_load_finished)
+        loader.start()
+
+    def _value_load_finished(self):
+        # Interrupted requests emit no result. Drop their wrapper before the
+        # registry deletes it, including during application shutdown.
+        if self.sender() is self._value_loader:
+            self._values_error = True
+            self._finish_value_load()
+
+    def _finish_value_load(self):
+        self._value_loader = None
+        self._values_loading = False
+        self.filter_tabs.setEnabled(True)
+        self.reset_button.setEnabled(True)
+        self._refresh_filter_summary()
+
+    def _receive_filter_values(self, request_id, values):
+        if request_id != self._value_request or self._values_closed:
+            return
+        for attribute, items in values.items():
+            widget = getattr(self, attribute)
+            selected = tuple(item.text() for item in widget.selectedItems())
+            blocked = widget.blockSignals(True)
+            widget.clear()
+            widget.addItem("SELECT ALL")
+            # A database refresh changes available choices, not the user's
+            # conditions. Keep missing selections as ordinary selectable items
+            # until the user explicitly clears them.
+            choices = tuple(items)
+            available = set(choices) | {"SELECT ALL"}
+            choices += tuple(value for value in selected if value not in available)
+            for value in choices:
+                widget.addItem(QListWidgetItem(value))
+            self._set_selected_values(widget, selected)
+            widget.blockSignals(blocked)
+        self.update_selected_headers()
+        self._finish_value_load()
+
+    def _filter_values_failed(self, request_id, exception):
+        if request_id != self._value_request or self._values_closed:
+            return
+        self._values_error = True
+        self._finish_value_load()
+        self.log_and_exit(exception)
 
     def _populate_distinct_values(self, list_widget, column_name, *, source_view="vw_measurement_export", filter_query=None):
-        query = build_distinct_value_query(column_name, source_view=source_view, filter_query=filter_query)
-        values = execute_with_retry(self.db_file, query)
-        list_widget.clear()
-        list_widget.addItem("SELECT ALL")
-        for value in values:
-            item = QListWidgetItem(value[0])
-            list_widget.addItem(item)
+        attribute = next(name for name in self._FILTER_LIST_ATTRS if getattr(self, name) is list_widget)
+        self._start_value_load(((attribute, column_name, source_view),), filter_query)
 
     def search_list_widgets(self, list_widget, search_text):
         try:
@@ -922,6 +986,10 @@ class FilterDialog(QDialog):
                 filter_query = build_measurement_filter_query(reference_values=selected_references)
                 self._populate_distinct_values(self.header_list, "HEADER", filter_query=filter_query)
             else:
+                if getattr(self, "_value_loader", None) is not None:
+                    self._stop_value_load()
+                    self._values_closed = False
+                    self._finish_value_load()
                 for row in range(self.all_headers_list.count()):
                     item = self.all_headers_list.item(row)
                     self.header_list.addItem(item.text())
@@ -964,6 +1032,8 @@ class FilterDialog(QDialog):
             self.log_and_exit(e)
 
     def apply_filters(self):
+        if getattr(self, "_values_loading", False) or getattr(self, "_values_error", False):
+            return
         try:
             # Get the selected values from the list widgets and calendars
             ax_selected_items = [item.text() for item in self.ax_list.selectedItems()]

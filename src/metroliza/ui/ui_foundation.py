@@ -91,6 +91,19 @@ class _AdaptiveWindowEventFilter(QObject if QObject is not None else object):
 
 
 def _is_dark_widget_palette(widget):
+    # A theme applied to this widget itself (``apply_metroliza_theme`` records it)
+    # wins. Otherwise the application theme is authoritative: a widget built before
+    # it was applied (e.g. the main window restoring a persisted theme in its own
+    # constructor) still reports the previous palette here.
+    if hasattr(widget, "property"):
+        own_dark_mode = widget.property("metrolizaDarkMode")
+        if isinstance(own_dark_mode, bool):
+            return own_dark_mode
+    application = QApplication.instance()
+    if application is not None and widget is not application:
+        application_dark_mode = application.property("metrolizaDarkMode")
+        if isinstance(application_dark_mode, bool):
+            return application_dark_mode
     try:
         palette = widget.palette()
         if QPalette is not None:
@@ -221,6 +234,7 @@ QListView, QListWidget, QTreeView, QTreeWidget, QTableView, QTableWidget {{
     padding: 3px;
     min-height: 22px;
     selection-background-color: {tokens.SELECTED_ROW_BACKGROUND_FALLBACK};
+    selection-color: {tokens.selected_text_color(tokens.SELECTED_ROW_BACKGROUND_FALLBACK)};
 }}
 QLineEdit:read-only, QPlainTextEdit:read-only, QTextEdit:read-only {{
     background: {palette["SURFACE_MUTED_BACKGROUND"]};
@@ -357,6 +371,11 @@ def apply_metroliza_theme(widget, *, dark_mode=None):
         return
     resolved_dark_mode = _is_dark_widget_palette(widget) if dark_mode is None else bool(dark_mode)
     semantic_palette = tokens.theme_tokens(dark_mode=resolved_dark_mode)
+    # Record the mode before restyling: StyleChange/PaletteChange handlers (e.g. the
+    # import review planner re-reading its window's theme) must see the new mode.
+    if hasattr(widget, "setProperty"):
+        widget.setProperty("metrolizaThemeManaged", True)
+        widget.setProperty("metrolizaDarkMode", resolved_dark_mode)
     # Replace QSS before resolving explicit palette roles; otherwise a previous
     # theme's style-sheet palette can overwrite link and placeholder roles.
     widget.setStyleSheet(metroliza_stylesheet(dark_mode=resolved_dark_mode))
@@ -366,9 +385,6 @@ def apply_metroliza_theme(widget, *, dark_mode=None):
         for link_label in widget.findChildren(QWidget) or ():
             if link_label.property("linkLabel") is True:
                 link_label.setPalette(_themed_palette(link_label.palette(), semantic_palette))
-    if hasattr(widget, "setProperty"):
-        widget.setProperty("metrolizaThemeManaged", True)
-        widget.setProperty("metrolizaDarkMode", resolved_dark_mode)
 
 
 def _restore_widget_system_theme(widget):

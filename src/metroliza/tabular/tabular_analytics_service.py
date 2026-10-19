@@ -15,6 +15,7 @@ import tempfile
 import time
 from typing import TYPE_CHECKING, Any
 
+from metroliza.exporting.export_grouping_utils import get_default_group_label
 from metroliza.analytics.row_table import RowTable, coerce_to_row_table
 from metroliza.reports.db import (
     QueryResult,
@@ -1367,12 +1368,21 @@ class TabularSqliteStore:
         with sqlite_connection_scope(self.path) as connection:
             records = connection.execute(query, params).fetchall()
         if not records:
+            # Distinguish an absent scope cache from a search/page with no hits.
+            # Missing derived facets fall back to the current Summary view.
             count_query = (
-                f"SELECT COUNT(*) FROM {_quote_identifier(self.value_facet_table)} {where_sql}"
+                "SELECT COUNT(*), "
+                f"(SELECT 1 FROM {_quote_identifier(self.value_facet_table)} "
+                "WHERE scope_key = ? LIMIT 1) "
+                f"FROM {_quote_identifier(self.value_facet_table)} {where_sql}"
             )
             with sqlite_connection_scope(self.path) as connection:
-                total = int(connection.execute(count_query, params).fetchone()[0] or 0)
-            return [], total
+                total, available = connection.execute(
+                    count_query, (self.value_facet_scope_key, *params),
+                ).fetchone()
+            if available is None:
+                return None
+            return [], int(total or 0)
         total = int(records[0][2] or 0)
         rows = [
             {
@@ -4321,10 +4331,11 @@ def apply_tabular_grouping(
 ) -> TabularGroupingResult:
     """Apply manual DataGrouping assignments to a CSV/Excel analytics dataframe."""
 
+    default_group = get_default_group_label(grouping_df, fallback=default_group)
     frame = dataframe.copy()
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
     grouping_records = _tabular_grouping_records(grouping_df)
-    if not grouping_records:
+    if not grouping_records and default_group == TABULAR_DEFAULT_GROUP:
         return TabularGroupingResult(dataframe=frame)
 
     if "source_row_number" not in frame.columns:
@@ -4337,7 +4348,7 @@ def apply_tabular_grouping(
         )
         return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
 
-    if not any(
+    if grouping_records and not any(
         _first_present(row, ("REPORT_ID", "report_id", "SAMPLE_NUMBER", "sample_number")) is not None
         for row in grouping_records
     ):
@@ -4360,7 +4371,7 @@ def apply_tabular_grouping(
         group_label = str(_first_present(row, ("GROUP", "group")) or default_group).strip()
         assignment[source_row] = group_label or default_group
 
-    if not assignment:
+    if grouping_records and not assignment:
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
                 severity="warning",
@@ -4467,6 +4478,7 @@ def export_tabular_analytics_workbook(
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
 
+    from metroliza.tabular.tabular_xlsx_writer import write_tabular_dataframe
     from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
     from metroliza.industrial.industrial_analytics_workbook import groupstats_result_dataframe
     from metroliza.industrial.industrial_analytics_workbook_charts import (
@@ -4492,20 +4504,16 @@ def export_tabular_analytics_workbook(
         engine_kwargs=pandas_xlsxwriter_engine_kwargs(),
     ) as writer:
         table_sheet = unique_sheet_name("Table Data", used_names)
-        safe_dataframe.to_excel(writer, sheet_name=table_sheet, index=False)
+        write_tabular_dataframe(safe_dataframe, writer, table_sheet)
         sheet_names.append(table_sheet)
 
         if safe_aggregation_frame is not None and not safe_aggregation_frame.empty:
             aggregate_sheet = unique_sheet_name("Aggregates", used_names)
-            safe_aggregation_frame.to_excel(writer, sheet_name=aggregate_sheet, index=False)
+            write_tabular_dataframe(safe_aggregation_frame, writer, aggregate_sheet)
             sheet_names.append(aggregate_sheet)
 
         summary_sheet = unique_sheet_name("Metrics", used_names)
-        _metric_summary_dataframe(safe_dataframe, metric_candidates).to_excel(
-            writer,
-            sheet_name=summary_sheet,
-            index=False,
-        )
+        write_tabular_dataframe(_metric_summary_dataframe(safe_dataframe, metric_candidates), writer, summary_sheet)
         sheet_names.append(summary_sheet)
 
         add_analytics_workbook_charts(
@@ -4521,15 +4529,11 @@ def export_tabular_analytics_workbook(
 
         if groupstats_result is not None and groupstats_result.metrics:
             stats_sheet = unique_sheet_name("Groupstats", used_names)
-            groupstats_result_dataframe(groupstats_result).to_excel(
-                writer,
-                sheet_name=stats_sheet,
-                index=False,
-            )
+            write_tabular_dataframe(groupstats_result_dataframe(groupstats_result), writer, stats_sheet)
             sheet_names.append(stats_sheet)
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
-        diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)
+        write_tabular_dataframe(diagnostics_dataframe(diagnostics), writer, diagnostics_sheet)
         sheet_names.append(diagnostics_sheet)
 
         parameter_sheet_count = 0
@@ -4538,11 +4542,7 @@ def export_tabular_analytics_workbook(
                 if candidate.field_name not in safe_dataframe.columns:
                     continue
                 parameter_sheet = unique_sheet_name(candidate.display_label, used_names)
-                _parameter_dataframe(safe_dataframe, candidate.field_name).to_excel(
-                    writer,
-                    sheet_name=parameter_sheet,
-                    index=False,
-                )
+                write_tabular_dataframe(_parameter_dataframe(safe_dataframe, candidate.field_name), writer, parameter_sheet)
                 sheet_names.append(parameter_sheet)
                 parameter_sheet_count += 1
 

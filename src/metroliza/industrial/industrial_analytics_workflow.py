@@ -290,6 +290,7 @@ def run_tabular_file_analytics(
     tabular_filter_expression: str | None = None,
     dashboard_detail_mode: str = "full",
     grouping_df=None,
+    grouping_default_group_label: str | None = None,
     aggregation_state: ProductionAggregationState | None = None,
     cohort_state: ReferenceCohortState | None = None,
     chart_selection: ProductionChartSelection | None = None,
@@ -326,6 +327,7 @@ def run_tabular_file_analytics(
             dashboard_detail_mode=dashboard_detail_mode,
             dashboard_interactivity_options=dashboard_interactivity_options,
             grouping_df=grouping_df,
+            grouping_default_group_label=grouping_default_group_label,
             dashboard_visual_settings=dashboard_visual_settings,
         ),
         require_runnable=True,
@@ -380,6 +382,7 @@ def run_tabular_file_analytics(
                 tabular_filter_expression=request.tabular_filter_expression,
                 dashboard_detail_mode=request.dashboard_detail_mode,
                 grouping_df=request.grouping_df,
+                grouping_default_group_label=request.grouping_default_group_label,
                 aggregation_state=request.aggregation_state,
                 cohort_state=request.cohort_state,
                 chart_selection=request.chart_selection,
@@ -424,7 +427,9 @@ def run_tabular_file_analytics(
         loaded=loaded,
         required_columns=required_columns,
     )
-    grouped = apply_tabular_grouping(filtered.dataframe, request.grouping_df)
+    grouped = apply_tabular_grouping(
+        filtered.dataframe, request.grouping_df, default_group=request.grouping_default_group_label,
+    )
     _emit_progress(
         progress_callback,
         "Applying groups and references...",

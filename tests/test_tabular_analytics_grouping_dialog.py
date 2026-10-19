@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import ast
+from contextlib import contextmanager
+import os
 import time
 from pathlib import Path
+from threading import Event
 
 import pandas as pd
 import pytest
 
 try:
-    from PyQt6.QtCore import Qt
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent, QTimer, Qt
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import (
         QApplication,
@@ -46,6 +50,7 @@ else:
     PYQT_IMPORT_ERROR = None
 
 _APP = None
+_UNJOINED_PREVIEW_TEST_OWNERS = []
 
 
 def _app():
@@ -53,7 +58,119 @@ def _app():
         pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
     global _APP
     _APP = QApplication.instance() or _APP or QApplication([])
+    expected_platform = os.environ.get("METROLIZA_EXPECT_QT_PLATFORM")
+    if expected_platform:
+        assert _APP.platformName() == expected_platform
     return _APP
+
+
+@pytest.mark.parametrize("with_workbook, fail_workbook", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("default_label", ["POPULATION", "Rest"])
+def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(
+    tmp_path, monkeypatch, with_workbook, fail_workbook, default_label,
+) -> None:
+    from metroliza.industrial import industrial_analytics_workflow as workflow
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionAggregationState, ProductionChartSelection, ProductionMetricSelection,
+    )
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+    from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
+    from metroliza.reports.db import sqlite_connection_scope
+    from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog
+
+    _app()
+    database = tmp_path / "industrial.sqlite"
+    repository = IndustrialDataRepository(str(database))
+    profile = repository.upsert_source_profile(
+        profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+        database_type="sqlite", source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id, source_db_alias=profile.source_db_alias,
+        rows=({"source_record_key": f"row-{i}", "length_mm": 10 + i} for i in range(7)),
+    )
+    # CSV identities are dense source row numbers, not industrial_records.id.
+    with sqlite_connection_scope(str(database)) as connection:
+        connection.execute("DELETE FROM industrial_record_values WHERE record_id = 1")
+        connection.execute("DELETE FROM industrial_records WHERE id = 1")
+        connection.commit()
+    loaded = load_industrial_cache_tabular_result(database)
+    parent = IndustrialAnalyticsDialog(
+        source_kind="tabular_file", tabular_load_result=loaded, input_file=str(database),
+    )
+    dialog = TabularAnalyticsGroupingDialog(
+        parent, dataframe=loaded.dataframe, column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    captured = []
+    write_dashboard = workflow._write_dashboard
+
+    def capture_dashboard(**kwargs):
+        captured.append(kwargs["frame"].copy())
+        return write_dashboard(**kwargs)
+
+    monkeypatch.setattr(workflow, "_write_dashboard", capture_dashboard)
+    try:
+        dialog._apply_group_assignments({1: ("Selected", "#123456"), 3: ("Selected", "#123456")})
+        if default_label != "POPULATION":
+            with monkeypatch.context() as scoped:
+                scoped.setattr(dialog, "_selected_group_name", lambda: "POPULATION")
+                scoped.setattr(grouping_dialog_module.QInputDialog, "getText", lambda *_a: (default_label, True))
+                dialog.rename_group()
+        assignment_store = dialog._sqlite_grouping_assignment_store()
+        dialog.use_grouping()
+        assert assignment_store._connection is None
+        parent.output_dashboard_file = str(tmp_path / "dashboard.html")
+        parent.output_workbook_file = str(tmp_path / "workbook.xlsx")
+        parent.workbook_checkbox.setChecked(with_workbook)
+        request = parent._build_analytics_request(require_runnable=True)
+        assert [(row.report_id, row.group, row.group_color) for row in request.grouping_df] == [
+            (1, "Selected", "#123456"), (3, "Selected", "#123456"),
+        ]
+        arguments = dict(
+            input_file=str(database), tabular_load_result=loaded,
+            output_dashboard_file=request.output_dashboard_file,
+            output_workbook_file=request.output_workbook_file or None,
+            grouping_df=request.grouping_df,
+            grouping_default_group_label=request.grouping_default_group_label,
+            metric_selection=(ProductionMetricSelection("length_mm"),),
+            aggregation_state=ProductionAggregationState(time_bucket="none"),
+            chart_selection=ProductionChartSelection(groupstats=True),
+            separate_parameter_sheets=False,
+        )
+        if fail_workbook:
+            Path(request.output_workbook_file).write_bytes(b"previous workbook")
+
+            def fail_export(**kwargs):
+                Path(kwargs["output_file"]).write_bytes(b"partial workbook")
+                raise OSError("synthetic export failure")
+
+            monkeypatch.setattr(workflow, "export_tabular_analytics_workbook", fail_export)
+            with pytest.raises(OSError, match="synthetic export failure"):
+                workflow.run_tabular_file_analytics(**arguments)
+            assert Path(request.output_workbook_file).read_bytes() == b"previous workbook"
+            assert not list(tmp_path.glob(".*.tmp.xlsx"))
+            assert loaded.sqlite_store.count_rows() == 6
+            return
+        result = workflow.run_tabular_file_analytics(**arguments)
+        assert Path(request.output_dashboard_file).is_file()
+        expected_groups = ["Selected", default_label, "Selected", default_label, default_label, default_label]
+        assert captured[0]["GROUP"].tolist() == expected_groups
+        assert captured[0]["length_mm"].astype(float).tolist() == [11, 12, 13, 14, 15, 16]
+        assert result.groupstats_metric_count == 1
+        if with_workbook:
+            frame = pd.read_excel(request.output_workbook_file, sheet_name="Table Data")
+            assert frame["GROUP"].tolist() == expected_groups
+            assert frame["source_row_number"].tolist() == list(range(1, 7))
+            assert frame["source_record_key"].tolist() == [f"row-{i}" for i in range(1, 7)]
+    finally:
+        _dispose_preview_dialog(dialog)
+        view_name = loaded.sqlite_store.table_name
+        parent.reject()
+        with sqlite_connection_scope(str(database)) as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = ?", (view_name,),
+            ).fetchall() == []
 
 
 def _process_events_until(predicate, *, timeout_ms: int = 1500) -> bool:
@@ -540,7 +657,7 @@ def test_sqlite_grouping_dialog_uses_preview_rows_and_sparse_assignments(tmp_pat
         assert materialized["REPORT_ID"].tolist() == [1, 2, 3, 4]
         assert materialized["GROUP"].tolist() == ["Line A", "Line B", "Line A", "Line B"]
     finally:
-        dialog.close()
+        _dispose_preview_dialog(dialog)
         cleanup_tabular_load_result(loaded)
 
 
@@ -568,10 +685,303 @@ def test_sqlite_grouping_dialog_loads_large_multi_column_preview_async(tmp_path)
 
         assert dialog.selector_preview_label.text() == "Loading matching groups..."
         assert _process_events_until(lambda: dialog.selector_list.count() == 4)
+        assert [dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole) for index in range(4)] == [
+            ("A", "S1"), ("A", "S2"), ("B", "S1"), ("B", "S2"),
+        ]
         assert dialog._selector_total_rows == 4
         assert dialog.selector_preview_label.text() == "Showing 4 matching group(s)."
     finally:
-        dialog.close()
+        _dispose_preview_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def _dispose_preview_dialog(dialog):
+    """Do not let this preview owner or its queued work escape into the next test."""
+    workers = tuple(dialog._selector_preview_threads)
+    dialog.close()
+    workers = tuple(set(workers) | set(dialog._selector_preview_threads))
+    late_join = _join_preview_test_workers(dialog, workers)
+    assert _process_events_until(lambda: dialog._dialog_cleanup_done)
+    for worker in workers:
+        assert sip.isdeleted(worker) or worker.wait(1500)
+    assert not dialog._selector_preview_threads
+    assert not dialog._selector_preview_join_timer.isActive()
+    dialog.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _app().processEvents()
+    assert sip.isdeleted(dialog)
+    assert all(sip.isdeleted(worker) for worker in workers)
+    assert not late_join, "test worker missed its acceptance join; safety cleanup completed"
+
+
+def _join_preview_test_workers(dialog, workers):
+    """Keep acceptance at 1500 ms; a safety join never changes FAIL to PASS."""
+    late = [worker for worker in workers if not sip.isdeleted(worker) and not worker.wait(1500)]
+    if not late:
+        return False
+    # The fixture gates are already released. Use their existing 5s safety
+    # budget once for cooperative cleanup, not for accepting a slow result.
+    deadline = time.monotonic() + 5
+    for worker in late:
+        worker.requestInterruption()
+    unjoined = [worker for worker in late if not worker.wait(max(0, int((deadline - time.monotonic()) * 1000)))]
+    if unjoined:
+        _UNJOINED_PREVIEW_TEST_OWNERS.append((dialog, workers, dialog.sqlite_store))
+        pytest.exit("grouping preview failed bounded cleanup; owners retained, next test prohibited", returncode=1)
+    return True
+
+
+@contextmanager
+def _held_sqlite_preview(tmp_path, *, after_result=False):
+    """Hold one real store/worker; never patch global Qt or database behavior."""
+    _app()
+    source = tmp_path / "held_preview.csv"
+    pd.DataFrame({"Line": ["A", "B", "A", "B"], "Station": ["S1", "S1", "S2", "S2"]}).to_csv(source, index=False)
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    # Four real rows select the async branch, not a 300k-row performance claim.
+    object.__setattr__(loaded.sqlite_store, "row_count", 300_000)
+    entered, read_allowed, result_held, finish_allowed = (Event() for _ in range(4))
+    preview = loaded.sqlite_store.preview_group_rows
+
+    def held_preview(*args, **kwargs):
+        entered.set()
+        if not read_allowed.wait(5):
+            raise RuntimeError("test preview gate was not released")
+        return preview(*args, **kwargs)
+
+    dialog = TabularAnalyticsGroupingDialog(dataframe=loaded.dataframe, column_mapping=loaded.column_mapping, sqlite_store=loaded.sqlite_store)
+    worker = None
+    try:
+        dialog.show()
+        object.__setattr__(loaded.sqlite_store, "preview_group_rows", held_preview)
+        dialog.selector_columns = ["line", "station"]
+        dialog._refresh_selectors()
+        worker = dialog._selector_preview_threads[0]
+        assert _process_events_until(entered.is_set)
+        if after_result:
+            def hold_emitter(*_args):
+                result_held.set()
+                finish_allowed.wait(5)
+
+            worker.result_ready.connect(hold_emitter, Qt.ConnectionType.DirectConnection)
+            read_allowed.set()
+            assert _process_events_until(lambda: result_held.is_set() and dialog.selector_list.count() == 4)
+        yield dialog, worker, loaded, read_allowed, finish_allowed
+    finally:
+        read_allowed.set()
+        finish_allowed.set()
+        workers = set(dialog._selector_preview_threads)
+        if worker is not None:
+            workers.add(worker)
+        late_join = _join_preview_test_workers(dialog, workers)
+        _app().processEvents()
+        dialog.hide()
+        _dispose_preview_dialog(dialog)
+        if worker is not None:
+            assert sip.isdeleted(worker)
+        cleanup_tabular_load_result(loaded)
+        assert not late_join, "test worker missed its acceptance join; safety cleanup completed"
+
+
+@pytest.mark.parametrize("close_action", ["close", "reject", "accept"])
+@pytest.mark.parametrize("after_result", [False, True], ids=["before-read", "result-not-finished"])
+def test_async_preview_close_keeps_live_worker_and_database_owned(tmp_path, after_result, close_action) -> None:
+    with _held_sqlite_preview(tmp_path, after_result=after_result) as (dialog, worker, loaded, read_allowed, finish_allowed):
+        closed = []
+        dialog.finished.connect(closed.append)
+        heartbeat = []
+        assert worker.isRunning()
+        result = getattr(dialog, close_action)()
+        if close_action == "close":
+            assert result is False
+        assert dialog.isVisible()
+        assert worker in dialog._selector_preview_threads
+        assert not dialog._dialog_cleanup_done
+        assert Path(loaded.sqlite_store.path).is_file()
+        QTimer.singleShot(0, lambda: heartbeat.append(True))
+        assert _process_events_until(lambda: heartbeat == [True])
+        assert closed == []
+        read_allowed.set()
+        finish_allowed.set()
+        assert _process_events_until(lambda: bool(closed))
+        assert not dialog._selector_preview_threads
+        assert dialog._dialog_cleanup_done
+        assert Path(loaded.sqlite_store.path).is_file()
+
+
+def test_async_preview_disposes_its_progress_objects_after_completion(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, _worker, _loaded, read_allowed, _finish_allowed):
+        progress = dialog._selector_preview_loading_dialog
+        movie = dialog._selector_preview_loading_gif
+        read_allowed.set()
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(progress)
+        assert sip.isdeleted(movie)
+
+
+def test_async_preview_result_cannot_replace_new_invalid_filter(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, _worker, _loaded, read_allowed, _finish_allowed):
+        _apply_selector_search(dialog, "MissingColumn=bad")
+        assert dialog.selector_list.count() == 0
+        assert dialog.selector_preview_label.text().startswith("Invalid filter:")
+        read_allowed.set()
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert dialog.selector_list.count() == 0
+        assert dialog._selector_total_rows == 0
+        assert dialog.selector_preview_label.text().startswith("Invalid filter:")
+
+
+def test_async_preview_queued_result_is_ignored_after_filter_invalidation(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, worker, loaded, read_allowed, _finish_allowed):
+        queued = Event()
+        worker.result_ready.connect(lambda *_args: queued.set(), Qt.ConnectionType.DirectConnection)
+        read_allowed.set()
+        # Hold the GUI delivery until the real producer has queued its result.
+        assert queued.wait(1.5)
+        _apply_selector_search(dialog, "MissingColumn=bad")
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert dialog.selector_list.count() == 0
+        assert dialog._selector_total_rows == 0
+        assert dialog.selector_preview_label.text().startswith("Invalid filter:")
+        assert loaded.sqlite_store.row_ids_for_group_keys(("line", "station"), {("A", "S1")}) == [1]
+
+
+def test_async_preview_completion_handler_does_not_release_live_worker(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, worker, _loaded, _read_allowed, _finish_allowed):
+        # Invoke the GUI completion handler while the real worker is held;
+        # do not synthesize Qt's private QThread.finished signal.
+        dialog._on_sqlite_selector_preview_stopped()
+        _app().processEvents()
+        assert worker.isRunning()
+        assert worker in dialog._selector_preview_threads
+        assert not sip.isdeleted(worker)
+
+
+@pytest.mark.parametrize("close_action", ["close", "reject"])
+@pytest.mark.parametrize("discard", [False, True])
+def test_async_preview_dirty_close_confirms_once_without_starting_new_work(tmp_path, close_action, discard) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, worker, _loaded, read_allowed, _finish_allowed):
+        dialog._temp_group_assignments[1] = ("Draft", "#123456")
+        assert dialog._is_grouping_dirty()
+        confirmations = []
+
+        def confirm(**_kwargs):
+            confirmations.append(True)
+            return discard
+
+        dialog._confirm_discard = confirm
+        getattr(dialog, close_action)()
+        assert confirmations == [True]
+        assert dialog._selector_preview_threads == [worker]
+        if not discard:
+            assert dialog._is_grouping_dirty()
+            assert dialog._selector_preview_close_action is None
+        read_allowed.set()
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert confirmations == [True]
+        assert dialog.isVisible() is (not discard)
+
+
+def test_preview_fixture_late_join_still_fails_after_safe_disposal(tmp_path) -> None:
+    dialog = worker = loaded = real_wait = None
+    try:
+        with pytest.raises(AssertionError, match="join"):
+            with _held_sqlite_preview(tmp_path) as (dialog, worker, loaded, _read_allowed, _finish_allowed):
+                real_wait = worker.wait
+                acceptance_missed = False
+
+                def miss_acceptance_once(timeout):
+                    nonlocal acceptance_missed
+                    if timeout == 1500 and not acceptance_missed:
+                        acceptance_missed = True
+                        return False
+                    return real_wait(timeout)
+
+                # Per-instance negative control for failed acceptance cleanup;
+                # the real QThread and all subsequent joins remain untouched.
+                worker.wait = miss_acceptance_once
+        assert sip.isdeleted(dialog)
+        assert sip.isdeleted(worker)
+        assert not Path(loaded.sqlite_store.path).exists()
+    finally:
+        if worker is not None and not sip.isdeleted(worker):
+            assert real_wait(1500)
+        if dialog is not None and not sip.isdeleted(dialog):
+            dialog.hide()
+            _dispose_preview_dialog(dialog)
+        if loaded is not None:
+            cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_async_preview_error_delivery_respects_current_request(tmp_path, stale) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, worker, loaded, read_allowed, _finish_allowed):
+        # The already-held real store call remains intact; errors are emitted by
+        # its actual worker when the owned connection target no longer exists.
+        original_path = loaded.sqlite_store.path
+        object.__setattr__(loaded.sqlite_store, "path", str(tmp_path / "missing-parent" / "preview.sqlite"))
+        queued = Event()
+        worker.error_occurred.connect(lambda *_args: queued.set(), Qt.ConnectionType.DirectConnection)
+        try:
+            read_allowed.set()
+            assert queued.wait(1.5)
+        finally:
+            object.__setattr__(loaded.sqlite_store, "path", original_path)
+        if stale:
+            _apply_selector_search(dialog, "MissingColumn=bad")
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        expected = "Invalid filter:" if stale else "Could not load groups:"
+        assert dialog.selector_preview_label.text().startswith(expected)
+        assert dialog.selector_list.count() == 0
+
+
+def test_async_preview_cancel_ignores_late_result_and_reopens_cleanly(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, worker, _loaded, read_allowed, _finish_allowed):
+        dialog._cancel_sqlite_selector_preview()
+        assert worker in dialog._selector_preview_threads
+        read_allowed.set()
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert dialog.selector_list.count() == 0
+        assert dialog.selector_preview_label.text() == "Group preview canceled."
+        for _ in range(2):
+            dialog.close()
+            assert dialog._dialog_cleanup_done
+            dialog.show()
+            assert _process_events_until(lambda: dialog.selector_list.count() == 4 and not dialog._selector_preview_threads)
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert dialog._selector_preview_loading_dialog is None
+            assert not dialog.findChildren(grouping_dialog_module._SqliteSelectorPreviewThread)
+
+
+def test_sqlite_grouping_preview_with_actual_async_threshold_rows(tmp_path) -> None:
+    _app()
+    source = tmp_path / "real_async_preview.csv"
+    row_count = grouping_dialog_module._ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS
+    with source.open("w") as stream:
+        stream.write("Line,Station\n")
+        for index in range(row_count):
+            stream.write(f"{'A' if index % 2 == 0 else 'B'},S{index % 4}\n")
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    dialog = TabularAnalyticsGroupingDialog(dataframe=loaded.dataframe, column_mapping=loaded.column_mapping, sqlite_store=loaded.sqlite_store)
+    try:
+        assert loaded.sqlite_store.row_count == row_count
+        # Keep this as an actual threshold-size async read and native lifecycle
+        # check, without treating cold expression-index DDL as a 1500 ms UI
+        # performance contract. The held-worker cases above exercise ownership
+        # while preview_group_rows performs its ordinary cold setup.
+        loaded.sqlite_store._ensure_grouping_column_indexes(("line", "station"))
+        dialog.selector_columns = ["line", "station"]
+        dialog._refresh_selectors()
+        assert dialog._selector_preview_threads
+        assert _process_events_until(lambda: dialog.selector_list.count() == 4 and not dialog._selector_preview_threads)
+        assert [dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole) for index in range(4)] == [
+            ("A", "S0"), ("A", "S2"), ("B", "S1"), ("B", "S3"),
+        ]
+        row_ids = loaded.sqlite_store.row_ids_for_group_keys(("line", "station"), {("A", "S0")})
+        assert row_ids == list(range(1, row_count + 1, 4))
+    finally:
+        _dispose_preview_dialog(dialog)
         cleanup_tabular_load_result(loaded)
 
 

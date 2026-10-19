@@ -11,7 +11,9 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QMenu,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from metroliza.industrial.industrial_data_repository import (
@@ -24,6 +26,7 @@ from metroliza.industrial.industrial_cache_target import (
     cleanup_temporary_industrial_cache,
     create_temporary_industrial_cache_target,
     disposable_cache_counts,
+    temporary_cache_contents_summary as _temporary_cache_contents_summary,
     existing_metroliza_cache_target,
     persist_temporary_industrial_cache,
     resolve_industrial_cache_destination,
@@ -68,6 +71,7 @@ class IndustrialDataDialog(QDialog):
     def __init__(self, parent=None, db_file: str | None = None):
         super().__init__(parent)
         self.report_db_file = db_file
+        self.database_change_allowed = None
         self._workspace_db_file = db_file
         self.cache_target: IndustrialCacheTarget = (
             existing_metroliza_cache_target(db_file)
@@ -168,6 +172,7 @@ class IndustrialDataDialog(QDialog):
         self._configure_accessibility()
         self.refresh_status()
         apply_metroliza_theme(self)
+        self._preserve_status_label_heights()
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -175,6 +180,17 @@ class IndustrialDataDialog(QDialog):
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Industrial data"))
+
+        # The lifecycle/status rows remain persistent operator context.  Keep
+        # their full label heights in a scrollable content surface so the
+        # launcher stays reachable on compact working areas without clipping
+        # text or replacing information with transient messages.
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setWidgetResizable(True)
+        content = QWidget(self.content_scroll)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -248,7 +264,23 @@ class IndustrialDataDialog(QDialog):
 
         row += 1
         grid.addWidget(self.status_label, row, 0, 1, 3)
-        layout.addLayout(grid)
+        self._persistent_status_labels = (
+            self.storage_lifecycle_label,
+            self.oznak_label,
+            self.workflow_label,
+            self.sync_summary_label,
+            self.cache_label,
+            self.sources_label,
+            self.sync_filter_label,
+            self.export_filter_label,
+            self.grouping_label,
+            self.export_options_label,
+            self.analytics_status_label,
+            self.status_label,
+        )
+        content_layout.addLayout(grid)
+        self.content_scroll.setWidget(content)
+        layout.addWidget(self.content_scroll, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -263,21 +295,33 @@ class IndustrialDataDialog(QDialog):
         actions.addWidget(self.close_button)
         layout.addLayout(actions)
 
+    def _preserve_status_label_heights(self) -> None:
+        """Let the scroll surface preserve themed status-label text heights."""
+
+        for status_label in self._persistent_status_labels:
+            status_label.setMinimumHeight(status_label.sizeHint().height())
+        content = self.content_scroll.widget()
+        content.setMinimumHeight(content.layout().sizeHint().height())
+
     def update_db_file(self, db_file: str | None) -> bool:
         """Point an already-open dialog at the current main-window database."""
 
         if db_file:
-            updated = self._set_cache_target(existing_metroliza_cache_target(db_file))
+            updated = self._set_cache_target(existing_metroliza_cache_target(db_file), guard_workspace=True)
         else:
-            updated = self._set_cache_target(create_temporary_industrial_cache_target())
+            updated = self._set_cache_target(create_temporary_industrial_cache_target(), guard_workspace=True)
         if not updated:
             return False
         self._workspace_db_file = db_file
         self.refresh_status()
         return True
 
-    def _set_cache_target(self, target: IndustrialCacheTarget) -> bool:
+    def _set_cache_target(self, target: IndustrialCacheTarget, *, guard_workspace: bool = False) -> bool:
         previous = getattr(self, "cache_target", None)
+        if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
+            if previous is None or previous.cache_db_file != target.cache_db_file:
+                cleanup_temporary_industrial_cache(target)
+            return False
         if previous is not None and previous != target and self._link_refresh_owns_context():
             if previous.cache_db_file != target.cache_db_file:
                 cleanup_temporary_industrial_cache(target)
@@ -288,6 +332,9 @@ class IndustrialDataDialog(QDialog):
                 previous,
                 additional_forbidden=(target.cache_db_file,),
             ):
+                cleanup_temporary_industrial_cache(target)
+                return False
+            if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
                 cleanup_temporary_industrial_cache(target)
                 return False
             cleanup_temporary_industrial_cache(previous)
@@ -316,6 +363,8 @@ class IndustrialDataDialog(QDialog):
     def select_database_file(self) -> None:
         """Select an existing Metroliza database used for cache and links."""
 
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return
         if self._link_refresh_owns_context():
             self._show_link_refresh_context_guard()
             return
@@ -328,7 +377,7 @@ class IndustrialDataDialog(QDialog):
         if not filename:
             return
 
-        if not self._set_cache_target(existing_metroliza_cache_target(filename)):
+        if not self._set_cache_target(existing_metroliza_cache_target(filename), guard_workspace=True):
             return
         self._workspace_db_file = filename
         parent = self.parent()
@@ -385,11 +434,10 @@ class IndustrialDataDialog(QDialog):
         counts = self._temporary_cache_lifecycle_counts(target)
         if not any(counts.values()):
             return True
-        persisted_rows = sum(counts.values())
         choice = QMessageBox.question(
             self,
             "Temporary industrial data",
-            f"This temporary cache contains {persisted_rows:,} persisted data row(s). "
+            f"This temporary cache contains {_temporary_cache_contents_summary(counts)}. "
             "Save it before removing the temporary files?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
@@ -476,12 +524,10 @@ class IndustrialDataDialog(QDialog):
 
     def _refresh_storage_lifecycle(self) -> None:
         if self.cache_target.is_temporary:
-            persisted_rows = sum(
-                self._temporary_cache_lifecycle_counts(self.cache_target).values()
-            )
-            if persisted_rows:
+            counts = self._temporary_cache_lifecycle_counts(self.cache_target)
+            if any(counts.values()):
                 self.storage_lifecycle_label.setText(
-                    f"Temporary storage · {persisted_rows:,} persisted data row(s) will be "
+                    f"Temporary storage · {_temporary_cache_contents_summary(counts)} will be "
                     "deleted when this window closes. Save cache as… to keep them."
                 )
                 set_status_variant(self.storage_lifecycle_label, "danger")

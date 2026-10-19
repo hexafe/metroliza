@@ -27,11 +27,21 @@ def app():
     return application
 
 
-def wait_until(app, predicate):
+def wait_until(app, predicate, *, parse_dialog=None):
     deadline = time.monotonic() + 20
     while not predicate() and time.monotonic() < deadline:
         app.processEvents()
         QTest.qWait(5)
+    if not predicate() and parse_dialog is not None:
+        worker = parse_dialog.parse_thread
+        assert worker is not None, "Qt parse worker disappeared without terminal state"
+        result = getattr(worker, "last_parse_result", None)
+        progress = parse_dialog._operation_progress
+        assert False, (
+            "Qt parse worker did not reach terminal state: "
+            f"running={worker.isRunning()} result_finalized={getattr(result, 'total_files', 0) > 0} "
+            f"progress={progress} error_seen={bool(parse_dialog.parse_error_message)}"
+        )
     assert predicate(), "Qt worker did not reach the expected terminal state"
 
 
@@ -55,9 +65,10 @@ def reviewed(app, reports, monkeypatch):
     dialog = ParsingDialog(directory=str(source), db_file=str(database))
     dialog.show()
     dialog.scan_reports()
-    wait_until(app, lambda: dialog.preflight_thread is None)
+    # The automatic background metadata read (#1100) is part of a finished review.
+    wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
     yield dialog, source, database
-    for worker in (dialog.preflight_thread, dialog.parse_thread):
+    for worker in (dialog.preflight_thread, dialog.parse_thread, dialog.metadata_thread):
         if worker is not None:
             dialog._request_active_worker_cancellation()
             worker.wait(20000)
@@ -74,7 +85,7 @@ def test_real_review_selection_imports_exactly_two_of_five(app, reports, monkeyp
     dialog.show()
     try:
         dialog.scan_button.click()
-        wait_until(app, lambda: dialog.preflight_thread is None)
+        wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
         assert not database.exists(), "Review must not create the destination database"
         planner = dialog.report_planner
         assert len(planner.model.selected_ids) == 5
@@ -90,7 +101,7 @@ def test_real_review_selection_imports_exactly_two_of_five(app, reports, monkeyp
         dialog.parse_button.click()
         worker = dialog.parse_thread
         assert worker is not None
-        wait_until(app, lambda: dialog.parse_thread is None)
+        wait_until(app, lambda: dialog.parse_thread is None, parse_dialog=dialog)
         assert worker.last_parse_result.imported_files == 2
         assert worker.last_parse_result.intentionally_excluded_files == 3
         with closing(sqlite3.connect(database)) as connection:
@@ -194,7 +205,7 @@ def test_worker_start_failure_releases_busy_state_and_allows_retry(app, reviewed
     assert "could not start" in dialog.readiness_label.text()
     assert not database.exists()
     dialog.scan_reports()
-    wait_until(app, lambda: dialog.preflight_thread is None)
+    wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
     assert dialog.parse_button.isEnabled()
     assert len(dialog.report_planner.model.selected_ids) == 5
 
@@ -246,7 +257,7 @@ def test_changed_selected_source_is_blocked_by_real_worker(app, reviewed):
     (source / "report-0.pdf").write_bytes(b"changed public synthetic input")
     dialog.parse_button.click()
     worker = dialog.parse_thread
-    wait_until(app, lambda: dialog.parse_thread is None)
+    wait_until(app, lambda: dialog.parse_thread is None, parse_dialog=dialog)
     result = worker.last_parse_result
     assert result.imported_files == 1
     assert result.preflight_changed_files == 1
@@ -261,9 +272,9 @@ def test_changed_selected_source_is_blocked_by_real_worker(app, reviewed):
 def test_destination_matches_cannot_be_selected_after_refresh(app, reviewed):
     dialog, _source, _database = reviewed
     dialog.parse_button.click()
-    wait_until(app, lambda: dialog.parse_thread is None)
+    wait_until(app, lambda: dialog.parse_thread is None, parse_dialog=dialog)
     dialog.scan_button.click()
-    wait_until(app, lambda: dialog.preflight_thread is None)
+    wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
     model = dialog.report_planner.model
     assert model.rowCount() == 5
     assert not model.selected_ids
@@ -361,7 +372,7 @@ def test_archive_selection_uses_member_location_and_real_import(app, reports, mo
     dialog = ParsingDialog(directory=str(archive), db_file=str(database))
     try:
         dialog.scan_reports()
-        wait_until(app, lambda: dialog.preflight_thread is None)
+        wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
         planner = dialog.report_planner
         model = planner.model
         assert set(model.selected_ids) == {f"nested/report-{n}.pdf" for n in range(5)}
@@ -410,7 +421,7 @@ def test_real_review_cancellation_and_deferred_close(app, reports, monkeypatch, 
         else:
             dialog.stop_scanning()
         release.set()
-        wait_until(app, lambda: dialog.preflight_thread is None)
+        wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
         assert not database.exists()
         assert not dialog.report_planner.model.selected_ids
         assert not dialog.parse_button.isEnabled()

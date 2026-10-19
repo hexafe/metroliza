@@ -287,6 +287,14 @@ def _load_or_refresh_tabular_metadata(
 ) -> _IndustrialTabularMetadata:
     _ensure_tabular_metadata_cache(connection)
     scope_key = _metadata_scope_key(where_sql=where_sql, params=params)
+    # These derived caches serve the current Summary scope only. Preparing
+    # another scope (including after saving/reopening) rebuilds its data.
+    connection.execute(
+        "DELETE FROM industrial_tabular_metadata_cache WHERE scope_key <> ?", (scope_key,),
+    )
+    connection.execute(
+        "DELETE FROM industrial_tabular_value_facets WHERE scope_key <> ?", (scope_key,),
+    )
     row_count, max_record_id, max_updated_at, value_count, max_value_id = _metadata_scope_fingerprint(
         connection,
         where_sql=where_sql,
@@ -859,9 +867,12 @@ def _literal_where_sql(where_parts: list[str], params: list[Any]) -> str:
     iterator = iter(params)
     literal_parts: list[str] = []
     for part in where_parts:
-        literal = part
-        while "?" in literal:
-            literal = literal.replace("?", _sql_literal(next(iterator)), 1)
+        # Split the generated template before inserting values: a literal may
+        # itself contain '?' and must never become another placeholder.
+        pieces = part.split("?")
+        literal = pieces[0]
+        for piece in pieces[1:]:
+            literal += _sql_literal(next(iterator)) + piece
         literal_parts.append(literal)
     return f"WHERE {' AND '.join(literal_parts)}"
 

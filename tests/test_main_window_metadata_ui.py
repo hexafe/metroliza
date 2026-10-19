@@ -4,6 +4,8 @@ import sys
 import tempfile
 import types
 import unittest
+
+import pytest
 from unittest.mock import patch
 
 try:
@@ -198,45 +200,67 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 
         window = self._main_window()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            window.launch_realtime_industrial_monitoring_dialog()
-            dialog = window.realtime_monitoring_dialog
-            session_db = Path(dialog.db_file)
-            IndustrialDataRepository(str(session_db)).upsert_source_profile(
-                profile_key="line-a",
-                profile_name="Line A",
-                source_db_alias="line-a",
-                database_type="sqlite",
-                source_object_name="events",
-            )
-            durable_db = str(Path(temp_dir) / "durable.db")
-            saved_copy = Path(temp_dir) / "saved-session.sqlite"
+        errors = []
+        warnings = []
 
-            with (
-                patch(
-                    "metroliza.ui.main_window.QMessageBox.question",
-                    return_value=QMessageBox.StandardButton.Save,
-                ),
-                patch(
-                    "metroliza.ui.main_window.QFileDialog.getSaveFileName",
-                    return_value=(str(saved_copy), "SQLite database"),
-                ),
+        def capture_error(exception, **_kwargs):
+            cause = exception.__cause__
+            errors.append({
+                "exception_class": type(exception).__name__,
+                "cause_class": type(cause).__name__ if cause is not None else None,
+                "errno": getattr(cause or exception, "errno", None),
+                "winerror": getattr(cause or exception, "winerror", None),
+            })
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                window.launch_realtime_industrial_monitoring_dialog()
+                dialog = window.realtime_monitoring_dialog
+                session_db = Path(dialog.db_file)
+                IndustrialDataRepository(str(session_db)).upsert_source_profile(
+                    profile_key="line-a",
+                    profile_name="Line A",
+                    source_db_alias="line-a",
+                    database_type="sqlite",
+                    source_object_name="events",
+                )
+                durable_db = str(Path(temp_dir) / "durable.db")
+                saved_copy = Path(temp_dir) / "saved-session.sqlite"
+
+                with (
+                    patch(
+                        "metroliza.ui.main_window.QMessageBox.question",
+                        return_value=QMessageBox.StandardButton.Save,
+                    ),
+                    patch(
+                        "metroliza.ui.main_window.QFileDialog.getSaveFileName",
+                        return_value=(str(saved_copy), "SQLite database"),
+                    ),
+                    patch("metroliza.ui.main_window.CustomLogger", side_effect=capture_error),
+                    patch("metroliza.ui.main_window.QMessageBox.warning", side_effect=lambda *_: warnings.append(True)),
+                ):
+                    window.set_db_file(durable_db)
+                    self.assertFalse(errors, f"Unexpected archive error (closed fields only): {errors}")
+                    self.assertFalse(warnings, "Unexpected archive warning")
+
+                self.assertFalse(session_db.exists())
+                self.assertTrue(saved_copy.exists())
+                self.assertEqual(dialog.db_file, durable_db)
+                self.assertEqual(
+                    len(
+                        IndustrialDataRepository(str(saved_copy)).list_source_profiles(
+                            include_disabled=True
+                        )
+                    ),
+                    1,
+                )
+                self.assertIn("Durable storage", dialog.storage_lifecycle_label.text())
+        finally:
+            with patch(
+                "metroliza.ui.main_window.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Discard,
             ):
-                window.set_db_file(durable_db)
-
-            self.assertFalse(session_db.exists())
-            self.assertTrue(saved_copy.exists())
-            self.assertEqual(dialog.db_file, durable_db)
-            self.assertEqual(
-                len(
-                    IndustrialDataRepository(str(saved_copy)).list_source_profiles(
-                        include_disabled=True
-                    )
-                ),
-                1,
-            )
-            self.assertIn("Durable storage", dialog.storage_lifecycle_label.text())
-        window.close()
+                window.close()
 
     def test_realtime_temp_session_archive_cannot_replace_active_database(self):
         import sqlite3
@@ -511,20 +535,24 @@ class TestMainWindowMetadataUi(unittest.TestCase):
     def test_workflow_next_step_tracks_source_and_database_context(self):
         window = self._main_window()
         try:
-            self.assertIn("choose reports", window.workflow_next_step_label.text())
+            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertIn("Select a source and database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_directory("/tmp/metroliza-reports")
-            self.assertIn("select or create a database", window.workflow_next_step_label.text())
+            self.assertEqual(window.home_next_action.text(), "Choose database in Reports")
+            self.assertIn("Select or create a database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_db_file("/tmp/metroliza.db")
-            self.assertIn("parse reports", window.workflow_next_step_label.text())
-            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "success")
+            self.assertEqual(window.home_next_action.text(), "Review reports in Reports")
+            self.assertIn("Ready to review", window.workflow_next_step_label.text())
+            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
+            self.assertFalse(window.reports_workspace.parse_button.isEnabled())
 
             window.set_directory("")
-            self.assertIn("export this database", window.workflow_next_step_label.text())
-            self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "info")
+            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertTrue(window.export_button.isEnabled())
         finally:
             window.close()
 
@@ -597,17 +625,18 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 return True
 
         try:
-            window.parsing_dialog = OpenWorkflow()
+            host = window.reports_workspace
             window.export_dialog = OpenWorkflow()
 
             window.set_db_file("/tmp/current.db")
 
             self.assertFalse(window.workspace_notice_label.isHidden())
-            self.assertIn("Report import", window.workspace_notice_label.text())
+            self.assertIs(window.parsing_dialog, host)
+            self.assertEqual(host.db_file, window.workspace_context.snapshot.database_file)
+            self.assertNotIn("Report import", window.workspace_notice_label.text())
             self.assertIn("Export", window.workspace_notice_label.text())
             self.assertIn("previously selected database", window.workspace_notice_label.text())
         finally:
-            window.parsing_dialog = None
             window.export_dialog = None
             window.close()
 
@@ -628,6 +657,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     "Industrial Data",
                     "Realtime Monitor",
                     "Parser Profiles",
+                    "Tools",
                 ],
             )
             self.assertEqual(window.workspace_stack.count(), len(navigation))
@@ -696,6 +726,9 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         class FakeThread:
             result = FakeResult()
 
+            def isRunning(self):  # noqa: N802 - Qt API
+                return False
+
         try:
             window.metadata_enrichment_thread = FakeThread()
             window.metadata_enrichment_error_message = None
@@ -736,11 +769,17 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         calls = []
         try:
             window.launch_metadata_enrichment = lambda: calls.append(window.db_file)
+            window.set_db_file("/tmp/metroliza.db")
 
             window.start_metadata_enrichment_from_parsing("/tmp/metroliza.db")
 
             self.assertEqual(window.db_file, "/tmp/metroliza.db")
             self.assertEqual(calls, ["/tmp/metroliza.db"])
+
+            window.start_metadata_enrichment_from_parsing("/tmp/previous.db")
+            self.assertEqual(window.db_file, "/tmp/metroliza.db")
+            self.assertEqual(calls, ["/tmp/metroliza.db"])
+            self.assertIn("different database", window.workspace_notice_label.text())
         finally:
             window.close()
 
@@ -1147,6 +1186,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertTrue(window.isVisible())
             self.assertFalse(window._close_deferred_for_realtime)
             self.assertTrue(source_editor.isVisible())
+            self.assertIn("unsaved source changes", window.workspace_notice_label.text())
+            self.assertNotIn("Private dashboard storage", window.workspace_notice_label.text())
 
             with patch(
                 "metroliza.ui.industrial_source_profiles_dialog.QMessageBox.question",
@@ -1163,6 +1204,163 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertTrue(window.isVisible())
             self.assertFalse(window._close_deferred_for_realtime)
         window.close()
+
+    def test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice(self):
+        window = self._main_window()
+        window.show()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window.set_db_file(str(Path(temp_dir) / "realtime.db"))
+            with patch(
+                "metroliza.ui.realtime_industrial_monitoring_dialog.default_industrial_source_config_path",
+                return_value=Path(temp_dir) / "unused-sources.yaml",
+            ):
+                window.launch_realtime_industrial_monitoring_dialog()
+            realtime = window.realtime_monitoring_dialog
+            owned = realtime._dashboard_temp_dir
+            directory = Path(owned.name)
+            cleanup = owned.cleanup
+            attempts = []
+
+            def fail_once():
+                attempts.append(True)
+                if len(attempts) == 1:
+                    raise OSError("synthetic cleanup detail")
+                cleanup()
+
+            try:
+                with patch.object(owned, "cleanup", side_effect=fail_once):
+                    event = QCloseEvent()
+                    window.closeEvent(event)
+                    self.assertFalse(event.isAccepted())
+                    self.assertTrue(window.isVisible())
+                    self.assertFalse(window._close_deferred_for_realtime)
+                    self.assertIs(realtime._dashboard_temp_dir, owned)
+                    self.assertTrue(directory.is_dir())
+                    self.assertTrue(realtime.dashboard_cleanup_retry_required())
+                    self.assertEqual(
+                        window.workspace_notice_label.text(),
+                        "Private dashboard storage could not be removed. Close again to retry.",
+                    )
+                    self.assertNotIn("synthetic", window.workspace_notice_label.text())
+                    self.assertTrue(window.close())
+                self.assertEqual(len(attempts), 2)
+                self.assertFalse(directory.exists())
+            finally:
+                window.close()
+
+    def test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries(self):
+        import threading
+        import time
+        from PyQt6 import sip
+        from PyQt6.QtTest import QSignalSpy, QTest
+        from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
+
+        def wait_until(predicate):
+            deadline = time.monotonic() + 3
+            while not predicate() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(5)
+            self.assertTrue(predicate())
+
+        window = self._main_window()
+        window.show()
+        entered = threading.Event()
+        release = threading.Event()
+        worker = None
+        snapshot = RealtimeDashboardService.dashboard_snapshot
+
+        def gated_snapshot(service):
+            entered.set()
+            assert release.wait(3), "test did not release the real dashboard worker"
+            return snapshot(service)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            window.set_db_file(str(Path(temp_dir) / "realtime.db"))
+            with patch(
+                "metroliza.ui.realtime_industrial_monitoring_dialog.default_industrial_source_config_path",
+                return_value=Path(temp_dir) / "unused-sources.yaml",
+            ):
+                window.launch_realtime_industrial_monitoring_dialog()
+            realtime = window.realtime_monitoring_dialog
+            owned = realtime._dashboard_temp_dir
+            directory = Path(owned.name)
+            output = realtime._default_dashboard_path()
+            cleanup = owned.cleanup
+            attempts = []
+            completions = QSignalSpy(realtime.shutdown_complete)
+
+            class StaleFailureEmitter(QDialog):
+                shutdown_cleanup_failed = pyqtSignal()
+
+            stale = StaleFailureEmitter(window)
+            stale.shutdown_cleanup_failed.connect(window._on_realtime_shutdown_cleanup_failed)
+            notice_before_close = window.workspace_notice_label.text()
+            realtime.shutdown_cleanup_failed.emit()
+            self.assertEqual(window.workspace_notice_label.text(), notice_before_close)
+
+            def fail_once():
+                attempts.append(True)
+                if len(attempts) == 1:
+                    raise OSError("synthetic cleanup detail")
+                cleanup()
+
+            try:
+                with patch.object(owned, "cleanup", side_effect=fail_once), patch.object(
+                    RealtimeDashboardService, "dashboard_snapshot", gated_snapshot,
+                ):
+                    realtime._schedule_dashboard_write(open_after=False)
+                    wait_until(entered.is_set)
+                    worker = realtime.dashboard_thread
+                    self.assertTrue(worker.isRunning())
+                    event = QCloseEvent()
+                    window.closeEvent(event)
+                    self.assertFalse(event.isAccepted())
+                    self.assertTrue(window._close_deferred_for_realtime)
+                    self.assertTrue(realtime.is_close_deferred())
+                    self.assertEqual(attempts, [])
+                    stale.shutdown_cleanup_failed.emit()
+                    self.assertTrue(window._close_deferred_for_realtime)
+                    # An earlier child close may already have queued its retry.
+                    window._close_deferred_for_children = True
+                    window._deferred_child_close_retry_scheduled = True
+                    release.set()
+                    wait_until(lambda: bool(attempts))
+                    self.assertIsNone(realtime.dashboard_thread)
+                    self.assertIn("Real-time Industrial Monitoring", output.read_text(encoding="utf-8"))
+                    self.assertEqual(len(completions), 0)
+                    self.assertTrue(window.isVisible())
+                    self.assertFalse(window._close_deferred_for_realtime)
+                    self.assertFalse(window._close_deferred_for_children)
+                    self.assertFalse(window._deferred_child_close_retry_scheduled)
+                    self.assertEqual(window._deferred_close_blockers, set())
+                    self.assertFalse(realtime.is_close_deferred())
+                    self.assertIs(realtime._dashboard_temp_dir, owned)
+                    self.assertTrue(directory.is_dir())
+                    self.assertTrue(realtime.dashboard_cleanup_retry_required())
+                    self.assertEqual(
+                        window.workspace_notice_label.text(),
+                        "Private dashboard storage could not be removed. Close again to retry.",
+                    )
+                    self.assertTrue(window.workspace_notice_label.isVisible())
+                    self.assertNotIn("synthetic", window.workspace_notice_label.text())
+                    window._retry_deferred_child_close()
+                    self.app.processEvents()
+                    self.assertTrue(window.isVisible())
+                    self.assertEqual(len(attempts), 1)
+                    self.assertTrue(window.close())
+                self.assertEqual(len(attempts), 2)
+                self.assertFalse(directory.exists())
+            finally:
+                release.set()
+                if worker is not None and not sip.isdeleted(worker):
+                    self.assertTrue(worker.wait(3000))
+                self.app.processEvents()
+                window.close()
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                self.assertTrue(sip.isdeleted(window))
+                if worker is not None:
+                    self.assertTrue(sip.isdeleted(worker))
 
     def test_realtime_shutdown_retry_intent_is_consumed_before_other_blocker(self):
         window = self._main_window()
@@ -1293,3 +1491,145 @@ class TestMainWindowMetadataUi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _wait_for_filter_shutdown(predicate):
+    import time
+    from PyQt6.QtTest import QTest
+
+    deadline = time.monotonic() + 5
+    while not predicate() and time.monotonic() < deadline:
+        QTest.qWait(5)
+    assert predicate(), "Filter shutdown did not finish"
+
+
+@pytest.mark.parametrize("blocked_in", ["schema", "sqlite_lock"])
+@pytest.mark.parametrize("cancel_dialog", [False, True])
+def test_main_close_drains_cancelled_and_replaced_filter_loaders(tmp_path, monkeypatch, blocked_in, cancel_dialog):
+    import sqlite3
+    import threading
+
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtTest import QTest
+    from metroliza.reports import filter_values
+    from metroliza.ui.filter_dialog import FilterDialog
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    app = QApplication.instance() or QApplication([])
+    qt_errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *error: qt_errors.append(error))
+    preferences = UiPreferences(QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat))
+    window = MainWindow(version_label="test", days_until_expiration=None, ui_preferences=preferences)
+    database = str(tmp_path / "shutdown.sqlite")
+    original_ensure = filter_values.ensure_report_schema
+    original_ensure(database)
+    release = threading.Event()
+    started = []
+    writer = sqlite3.connect(database)
+    if blocked_in == "sqlite_lock":
+        writer.execute("BEGIN IMMEDIATE")
+
+    def blocked_ensure(*args, **kwargs):
+        started.append(threading.get_ident())
+        if blocked_in == "schema":
+            assert release.wait(5)
+        return original_ensure(*args, **kwargs)
+
+    monkeypatch.setattr(filter_values, "ensure_report_schema", blocked_ensure)
+    dialog = None
+    try:
+        window.show()
+        dialog = FilterDialog(window, db_file=database)
+        dialog.show()
+        _wait_for_filter_shutdown(lambda: len(started) == 1)
+        first = dialog._value_loader
+        dialog.populate_list_widgets()  # First loader remains retained after replacement.
+        _wait_for_filter_shutdown(lambda: len(started) == 2)
+        second = dialog._value_loader
+        if cancel_dialog:
+            dialog.reject()  # Neither worker remains reachable through the dialog now.
+            assert dialog._value_loader is None
+        else:
+            dialog.hide()
+            assert not second.isInterruptionRequested()
+        assert {first, second}.issubset(_RUNNING_LOADERS)
+        assert first.isRunning() and second.isRunning()
+
+        assert window.close() is False
+        assert window.isVisible()
+        assert first.isInterruptionRequested() and second.isInterruptionRequested()
+        assert "filter" in window.workspace_notice_label.text().lower()
+        # The close waits asynchronously: other GUI events run while SQLite is blocked.
+        heartbeats = []
+        QTimer.singleShot(0, lambda: heartbeats.append(True))
+        QTest.qWait(30)
+        assert heartbeats == [True]
+        assert window.isVisible()
+
+        def unblock():
+            writer.rollback()
+            release.set()
+
+        QTimer.singleShot(0, unblock)
+        _wait_for_filter_shutdown(lambda: not window.isVisible())
+        # This assertion precedes any test-owned cleanup: closure itself must drain.
+        assert not _RUNNING_LOADERS
+    finally:
+        writer.rollback()
+        release.set()
+        if dialog is not None:
+            dialog.close()
+        _wait_for_filter_shutdown(lambda: not _RUNNING_LOADERS)
+        writer.close()
+        window.close()
+        app.processEvents()
+        assert not qt_errors, "Unhandled exception in Qt callback"
+
+
+def test_filter_load_can_retry_if_another_shutdown_guard_keeps_main_open(tmp_path, monkeypatch):
+    import threading
+
+    from PyQt6.QtCore import Qt
+    from metroliza.ui import filter_values_loader
+    from metroliza.ui.filter_dialog import FilterDialog
+
+    app = QApplication.instance() or QApplication([])
+    qt_errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *error: qt_errors.append(error))
+    preferences = UiPreferences(QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat))
+    window = MainWindow(version_label="test", days_until_expiration=None, ui_preferences=preferences)
+    started = threading.Event()
+    release = threading.Event()
+
+    def gated_load(*_args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return {attribute: ("X", "Y") for attribute, _, _ in kwargs["specs"]}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", gated_load)
+    monkeypatch.setattr(window, "_resolve_realtime_session_before_discard", lambda **_kwargs: (False, None))
+    dialog = None
+    try:
+        window.show()
+        dialog = FilterDialog(window, db_file="synthetic.sqlite")
+        _wait_for_filter_shutdown(started.is_set)
+        assert window.close() is False
+        release.set()
+        _wait_for_filter_shutdown(lambda: "Temporary realtime data was kept" in window.workspace_notice_label.text())
+        assert window.isVisible()
+        assert not filter_values_loader._RUNNING_LOADERS
+        assert not dialog._values_loading
+        assert not dialog.apply_button.isEnabled()
+        dialog.show()
+        _wait_for_filter_shutdown(lambda: not dialog._values_loading)
+        assert dialog.apply_button.isEnabled()
+        assert dialog.ax_list.findItems("Y", Qt.MatchFlag.MatchExactly)
+    finally:
+        release.set()
+        if dialog is not None:
+            dialog.close()
+        _wait_for_filter_shutdown(lambda: not filter_values_loader._RUNNING_LOADERS)
+        monkeypatch.setattr(window, "_resolve_realtime_session_before_discard", lambda **_kwargs: (True, None))
+        window.close()
+        app.processEvents()
+        assert not qt_errors, "Unhandled exception in Qt callback"

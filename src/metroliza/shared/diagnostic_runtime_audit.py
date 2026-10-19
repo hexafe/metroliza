@@ -1,0 +1,397 @@
+"""Opt-in, bounded subprocess evidence for the synthetic Windows qualifier.
+
+This is not an application log. Arguments and frame data are inspected in memory
+and never serialized. Each immutable event is closed before Popen may execute;
+the host must independently prove the exact owned process chain and drain it.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import time
+
+GATE = "METROLIZA_WINDOWS_RUNTIME_AUDIT"
+ROOT = "METROLIZA_WINDOWS_RUNTIME_AUDIT_ROOT"
+NONCE = "METROLIZA_WINDOWS_RUNTIME_AUDIT_NONCE"
+MAX_EVENTS = 16
+FAILURE_EXIT = 97
+CALLERS = frozenset({"setuptools", "numpy", "matplotlib", "platformdirs", "metroliza", "other"})
+PLATFORM_CALLERS = CALLERS - {"metroliza", "other"}
+KINDS = frozenset({
+    "platform_ver", "ocr_worker_launch", "compute_worker_launch", "other", "other_arguments", "other_executable",
+    "other_command", "other_frames", "other_depth",
+})
+
+
+def _plain_directory(path: Path) -> bool:
+    info = path.lstat()
+    return stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400
+
+
+def _write(root: Path, name: str, value: dict) -> None:
+    data = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    if len(data) > 1024:
+        raise ValueError("runtime_audit_invalid")
+    with (root / name).open("xb") as stream:
+        stream.write(data)
+
+
+def _owned_ocr_launch(arguments, frame, expected_worker: str | None) -> bool:
+    import ntpath
+    from subprocess import list2cmdline
+
+    if expected_worker is None or len(arguments) != 4:
+        return False
+    executable, command, cwd, environment = arguments
+    if (executable is not None or type(command) is not str
+            or type(cwd) is not str or not ntpath.isabs(cwd) or ntpath.normpath(cwd) != cwd
+            or command != list2cmdline([expected_worker, cwd])
+            or type(environment) is not dict
+            or environment.get("PYINSTALLER_RESET_ENVIRONMENT") != "1"
+            or any(key in environment for key in (
+                GATE, ROOT, NONCE, "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION",
+            ))):
+        return False
+    for _ in range(64):
+        if frame is None:
+            break
+        if (frame.f_globals.get("__name__") == "metroliza.parsing.frozen_ocr_worker"
+                and frame.f_code.co_name == "_run_owned_worker"):
+            return True
+        frame = frame.f_back
+    return False
+
+
+def classify_call(
+    arguments, frame, expected_cmd: str, expected_worker: str | None = None,
+) -> tuple[str, str]:
+    if _owned_ocr_launch(arguments, frame, expected_worker):
+        return "ocr_worker_launch", "metroliza"
+    return _classify_platform_call(arguments, frame, expected_cmd)
+
+
+def _classify_platform_call(arguments, frame, expected_cmd: str) -> tuple[str, str]:
+    import ntpath
+
+    if len(arguments) < 2:
+        return "other_arguments", "other"
+    executable, command = arguments[:2]
+    if type(executable) is not str or type(command) is not str:
+        return "other_arguments", "other"
+    if ntpath.normcase(executable) != ntpath.normcase(expected_cmd):
+        return "other_executable", "other"
+    if command.casefold() != (expected_cmd + ' /c "ver"').casefold():
+        return "other_command", "other"
+    required = set()
+    caller = "other"
+    for _ in range(64):
+        if frame is None:
+            break
+        module = frame.f_globals.get("__name__")
+        name = frame.f_code.co_name
+        if module == "platform" and name in {"_syscmd_ver", "win32_ver"}:
+            required.add(name)
+        if type(module) is str and module.split(".", 1)[0] in PLATFORM_CALLERS:
+            caller = module.split(".", 1)[0]
+        frame = frame.f_back
+    else:
+        # The bound limits observation, not the caller's total stack depth.
+        # Retain a complete signature already proved inside that window.
+        if required != {"_syscmd_ver", "win32_ver"}:
+            return ("other_depth" if frame is not None else "other_frames"), "other"
+    return ("platform_ver" if required == {"_syscmd_ver", "win32_ver"} else "other_frames"), caller
+
+
+def classify_compute_call(arguments, frame, expected_worker: str | None) -> tuple[str, str]:
+    """Windows multiprocessing uses CreateProcess directly, not subprocess.Popen."""
+    import ntpath
+    import re
+    if expected_worker is None or len(arguments) != 3:
+        return "other_arguments", "other"
+    executable, command, cwd = arguments
+    # CPython 3.11 get_command_line uses the parent's sys.executable when
+    # frozen, even though Popen uses spawn.get_executable as application_name.
+    # Verify the actual compute image separately from this application argv[0].
+    application = ntpath.join(ntpath.dirname(expected_worker), "metroliza_application.exe")
+    prefix = f'"{application}" "--multiprocessing-fork" '
+    if (executable != expected_worker or type(command) is not str
+            or cwd is not None
+            or not command.startswith(prefix)
+            or re.fullmatch(r'"parent_pid=[1-9][0-9]{0,9}" "pipe_handle=[0-9]{1,20}"', command[len(prefix):]) is None):
+        return "other_command", "other"
+    if _is_spawn_caller(frame):
+        return "compute_worker_launch", "metroliza"
+    return "other_frames", "other"
+
+
+def _is_spawn_caller(frame):
+    try:
+        from multiprocessing.popen_spawn_win32 import Popen
+    except ImportError:
+        return False
+    return (frame is not None and frame.f_code is Popen.__init__.__code__
+            and frame.f_globals is Popen.__init__.__globals__)
+
+
+def _forward_create_process(native, *arguments):
+    # Only the opt-in audit installs this adapter. The tuple in this frame is
+    # exactly what the native function receives, including its command line.
+    return native(*arguments)
+
+
+def _is_create_process_adapter(frame):
+    return (frame is not None and frame.f_code is _forward_create_process.__code__
+            and frame.f_globals is globals())
+
+
+def _adapt_create_process():
+    import _winapi
+    from functools import partial
+
+    _winapi.CreateProcess = partial(_forward_create_process, _winapi.CreateProcess)
+
+
+def install() -> None:
+    # Ordinary product execution performs only this fixed opt-in check.
+    if os.environ.get(GATE) != "1":
+        return
+    try:
+        _install()
+    except BaseException:
+        # Optional upstream hooks can catch Exception. A failed journal must
+        # never be mistaken for zero calls, even if the fixture uses os._exit.
+        os._exit(FAILURE_EXIT)
+
+
+def _observed_call(event, arguments, frame, expected_cmd, expected_worker, expected_compute):
+    if event == "_winapi.CreateProcess":
+        return _classify_native_compute_call(arguments, frame, expected_compute)
+    return classify_call(arguments, frame, expected_cmd, expected_worker)
+
+
+def _classify_native_compute_call(arguments, frame, expected_compute):
+    # CPython 3.11 _winapi.c audits command_line (a PyObject*) with "uuu",
+    # treating it as wchar_t*, so the event's command string is unusable.
+    # Recover only the exact forwarded argument tuple at our native boundary,
+    # with CPython's actual Popen constructor as its immediate caller. Never
+    # recover unrelated cmd locals or trust module/function names.
+    if (len(arguments) != 3 or not _is_create_process_adapter(frame)
+            or not _is_spawn_caller(frame.f_back)):
+        return "other_frames", "other"
+    forwarded = frame.f_locals.get("arguments")
+    if (type(forwarded) is not tuple or len(forwarded) != 9
+            or forwarded[0] != arguments[0] or forwarded[7] != arguments[2]):
+        return "other_arguments", "other"
+    return classify_compute_call((forwarded[0], forwarded[1], forwarded[7]), frame.f_back, expected_compute)
+
+
+def _already_observed(event, frame):
+    # subprocess.Popen is journalled before its internal native CreateProcess.
+    if _is_create_process_adapter(frame):
+        frame = frame.f_back
+    return (event == "_winapi.CreateProcess" and frame.f_globals.get("__name__") == "subprocess"
+            and frame.f_code.co_name == "_execute_child")
+
+
+def _expected_compute(application):
+    if application.name.lower() == "metroliza_application.exe":
+        return str(application.with_name("metroliza_compute_worker.exe"))
+    return None
+
+
+def _install() -> None:
+    import ctypes
+
+    root = Path(os.environ[ROOT])
+    nonce = os.environ[NONCE]
+    if (
+        os.name != "nt"
+        or not root.is_absolute()
+        or not _plain_directory(root)
+        or len(nonce) != 32
+        or any(char not in "0123456789abcdef" for char in nonce)
+    ):
+        raise ValueError("runtime_audit_invalid")
+    buffer = ctypes.create_unicode_buffer(32768)
+    copied = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    if not 0 < copied < len(buffer) or not Path(buffer.value).is_absolute():
+        raise ValueError("runtime_audit_invalid")
+    expected_cmd = str(Path(buffer.value) / "cmd.exe")
+    application = Path(sys.executable)
+    expected_worker = (
+        str(application.with_name("metroliza_ocr_worker.exe"))
+        if application.name.lower() == "metroliza_application.exe" else None
+    )
+    expected_compute = _expected_compute(application)
+    observe, installed_seen = _make_observer(root, nonce, expected_cmd, expected_worker, expected_compute)
+    _adapt_create_process()
+    sys.addaudithook(observe)
+    # CPython can silently decline registration if an earlier hook rejects it.
+    sys.audit("metroliza.qualifier.audit_installed", nonce)
+    if not installed_seen:
+        raise ValueError("runtime_audit_invalid")
+    _write(root, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+
+
+def _make_observer(root, nonce, expected_cmd, expected_worker, expected_compute):
+    import _thread
+
+    lock = _thread.allocate_lock()
+    count = 0
+    installed_seen = []
+
+    def observe(event, arguments):
+        nonlocal count
+        if event == "metroliza.qualifier.audit_installed" and arguments == (nonce,):
+            installed_seen.append(True)
+            return
+        if event not in {"subprocess.Popen", "_winapi.CreateProcess"}:
+            return
+        frame = sys._getframe(1)
+        if _already_observed(event, frame):
+            return
+        acquired = False
+        try:
+            acquired = lock.acquire(timeout=1.0)
+            if not acquired or count >= MAX_EVENTS:
+                raise ValueError("runtime_audit_invalid")
+            count += 1
+            kind, caller = _observed_call(event, arguments, frame, expected_cmd, expected_worker, expected_compute)
+            phase = "after_ready" if (root / "ready").exists() else "startup"
+            _write(
+                root,
+                f"event-{count:02}.json",
+                {
+                    "schema_version": 1,
+                    "nonce": nonce,
+                    "ordinal": count,
+                    "kind": kind,
+                    "caller": caller,
+                    "phase": phase,
+                },
+            )
+        except BaseException:
+            os._exit(FAILURE_EXIT)
+        finally:
+            if acquired:
+                lock.release()
+
+    return observe, installed_seen
+
+
+def wait_for_host_ready(*, seconds: float = 5.0) -> None:
+    """Keep synthetic work behind the host's existing private phase acknowledgement."""
+    if os.environ.get(GATE) != "1":
+        return
+    try:
+        _wait_for_host_ready(seconds)
+    except (OSError, KeyError) as error:
+        raise ValueError("runtime_audit_invalid") from error
+
+
+def _wait_for_host_ready(seconds: float) -> None:
+    root = Path(os.environ[ROOT])
+    nonce = os.environ[NONCE]
+    if (not root.is_absolute() or not _plain_directory(root)
+            or len(nonce) != 32 or any(char not in "0123456789abcdef" for char in nonce)):
+        raise ValueError("runtime_audit_invalid")
+    identity = root.lstat()
+    installed = _read(root / "installed.json")
+    if (installed != {"schema_version": 1, "nonce": nonce, "installed": True}
+            or type(installed.get("schema_version")) is not int
+            or installed.get("installed") is not True):
+        raise ValueError("runtime_audit_invalid")
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        current = root.lstat()
+        if not _plain_directory(root) or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+            raise ValueError("runtime_audit_invalid")
+        try:
+            ready = (root / "ready").lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if not _plain_file(ready) or ready.st_size != 0:
+                raise ValueError("runtime_audit_invalid")
+            if time.monotonic() < deadline:
+                return
+            break
+        time.sleep(0.005)
+    raise ValueError("runtime_ready_timeout")
+
+
+def read_evidence(root: Path, nonce: str) -> list[dict]:
+    """Read only a drained Job's private journal; omit its nonce from output."""
+    if not _plain_directory(root):
+        raise ValueError("runtime_audit_invalid")
+    names = []
+    with os.scandir(root) as entries:
+        for entry in entries:
+            names.append(entry.name)
+            if len(names) > MAX_EVENTS + 2:
+                raise ValueError("runtime_audit_invalid")
+    _remove_ready_name(root, names)
+    if "installed.json" not in names:
+        raise ValueError("runtime_audit_invalid")
+    names.remove("installed.json")
+    if len(names) > MAX_EVENTS:
+        raise ValueError("runtime_audit_invalid")
+    if sorted(names) != [f"event-{index:02}.json" for index in range(1, len(names) + 1)]:
+        raise ValueError("runtime_audit_invalid")
+    installed = _read(root / "installed.json")
+    if (installed != {"schema_version": 1, "nonce": nonce, "installed": True}
+            or type(installed.get("schema_version")) is not int
+            or installed.get("installed") is not True):
+        raise ValueError("runtime_audit_invalid")
+    result = []
+    for ordinal, name in enumerate(sorted(names), 1):
+        event = _read(root / name)
+        if (
+            set(event) != {"schema_version", "nonce", "ordinal", "kind", "caller", "phase"}
+            or type(event["schema_version"]) is not int
+            or event["schema_version"] != 1
+            or event["nonce"] != nonce
+            or type(event["ordinal"]) is not int
+            or event["ordinal"] != ordinal
+            or event["kind"] not in KINDS
+            or event["caller"] not in CALLERS
+            or event["phase"] not in {"startup", "after_ready"}
+        ):
+            raise ValueError("runtime_audit_invalid")
+        result.append({key: event[key] for key in ("kind", "caller", "phase")})
+    return result
+
+
+def _remove_ready_name(root: Path, names: list[str]) -> None:
+    if "ready" not in names:
+        return
+    info = (root / "ready").lstat()
+    if not _plain_file(info) or info.st_size != 0:
+        raise ValueError("runtime_audit_invalid")
+    names.remove("ready")
+
+
+def _plain_file(info) -> bool:
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_nlink == 1
+        and not getattr(info, "st_file_attributes", 0) & 0x400
+    )
+
+
+def _read(path: Path) -> dict:
+    info = path.lstat()
+    if not _plain_file(info) or not 0 < info.st_size <= 1024:
+        raise ValueError("runtime_audit_invalid")
+    with path.open("rb") as stream:
+        data = stream.read(1025)
+    if len(data) != info.st_size:
+        raise ValueError("runtime_audit_invalid")
+    value = json.loads(data)
+    if type(value) is not dict:
+        raise ValueError("runtime_audit_invalid")
+    return value

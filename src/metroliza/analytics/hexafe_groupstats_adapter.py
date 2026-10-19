@@ -2,35 +2,54 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
 
-from hexafe_groupstats import (
-    AnalysisConfig,
-    analyze_metric,
-    describe_correction_policy,
-    format_correction_method,
-)
 from metroliza.shared.numeric_coercion import coerce_finite_float as _coerce_float
 from metroliza.shared.stats_utils import compute_capability_confidence_intervals
-try:
-    from hexafe_groupstats.adapters import (
-        capability_rows as _package_capability_rows,
-        descriptive_rows as _package_descriptive_rows,
-        distribution_rows as _package_distribution_rows,
-        metric_row as _package_metric_row,
-        pairwise_rows as _package_pairwise_rows,
-        posthoc_rows as _package_posthoc_rows,
+
+# ``hexafe_groupstats`` eagerly imports its statistics backend (``scipy.stats``,
+# roughly 0.7 s). Keep every import of it behind these lazy boundaries so that
+# importing Metroliza UI modules during startup stays cheap; the engine is
+# loaded on the first actual analysis.
+_PACKAGE_ADAPTER_NAMES = (
+    'capability_rows',
+    'descriptive_rows',
+    'distribution_rows',
+    'metric_row',
+    'pairwise_rows',
+    'posthoc_rows',
+)
+
+
+def _load_engine():
+    """Import the hexafe-groupstats engine API on first use."""
+    from hexafe_groupstats import (
+        AnalysisConfig,
+        analyze_metric,
+        describe_correction_policy,
+        format_correction_method,
     )
-except Exception:  # pragma: no cover - compatibility with older package builds
-    _package_capability_rows = None
-    _package_descriptive_rows = None
-    _package_distribution_rows = None
-    _package_metric_row = None
-    _package_pairwise_rows = None
-    _package_posthoc_rows = None
+
+    return AnalysisConfig, analyze_metric, describe_correction_policy, format_correction_method
+
+
+@functools.lru_cache(maxsize=None)
+def _load_package_adapters() -> dict[str, Any]:
+    """Return optional package row adapters (``None`` for older package builds)."""
+    try:
+        from hexafe_groupstats import adapters
+    except Exception:  # pragma: no cover - compatibility with older package builds
+        return {name: None for name in _PACKAGE_ADAPTER_NAMES}
+    return {name: getattr(adapters, name, None) for name in _PACKAGE_ADAPTER_NAMES}
+
+
+def _package_adapter(name: str):
+    return _load_package_adapters().get(name)
+
 
 _CORRECTION_METHOD_ALIASES = {
     'holm': 'holm',
@@ -336,7 +355,7 @@ def _capability_ci_payload(capability_row) -> dict[str, dict[str, float] | None]
 
 def _descriptive_rows(result) -> list[dict[str, Any]]:
     capability_by_group = {row.group: row for row in result.capability_results}
-    package_rows = _package_rows(_package_descriptive_rows, result)
+    package_rows = _package_rows(_package_adapter('descriptive_rows'), result)
     package_by_group = {str(row.get('group')): row for row in package_rows}
     rows = []
     for row in result.descriptive_stats:
@@ -373,7 +392,7 @@ def _descriptive_rows(result) -> list[dict[str, Any]]:
 
 
 def _pairwise_rows(result, grouped_values: Mapping[str, Sequence[Any]]) -> list[dict[str, Any]]:
-    package_rows = _package_rows(_package_pairwise_rows, result)
+    package_rows = _package_rows(_package_adapter('pairwise_rows'), result)
     if not package_rows:
         package_rows = [
             {
@@ -478,7 +497,7 @@ def _structured_insight_payloads(result) -> list[dict[str, Any]]:
 
 
 def _distribution_rows(result) -> list[dict[str, Any]]:
-    package_rows = _package_rows(_package_distribution_rows, result)
+    package_rows = _package_rows(_package_adapter('distribution_rows'), result)
     if package_rows:
         return package_rows
     rows = []
@@ -500,9 +519,10 @@ def _distribution_rows(result) -> list[dict[str, Any]]:
 
 
 def _metric_summary_row(result) -> dict[str, Any]:
-    if callable(_package_metric_row):
+    package_metric_row = _package_adapter('metric_row')
+    if callable(package_metric_row):
         try:
-            row = dict(_package_metric_row(result))
+            row = dict(package_metric_row(result))
         except Exception:
             row = {}
         if row:
@@ -626,6 +646,7 @@ def analyze_group_metric(
     normalized_correction_method = _normalize_correction_method(correction_method)
     normalized_posthoc_method = _normalize_posthoc_method(posthoc_method)
     normalized_backend = _normalize_backend(backend)
+    AnalysisConfig, analyze_metric, describe_correction_policy, format_correction_method = _load_engine()
     result = analyze_metric(
         metric_identity,
         grouped_values,
@@ -657,7 +678,7 @@ def analyze_group_metric(
     structured_insights = _structured_insight_payloads(result)
     legacy_insights = [str(item) for item in (getattr(result, 'insights', ()) or ()) if str(item).strip()]
     descriptive_rows = _descriptive_rows(result)
-    capability_rows = _package_rows(_package_capability_rows, result)
+    capability_rows = _package_rows(_package_adapter('capability_rows'), result)
     capability_payload = _metric_capability_payload(result, grouped_values, statistical_spec_payload)
     if one_sided_mode:
         structured_insights = []
@@ -688,7 +709,7 @@ def analyze_group_metric(
         'distribution_rows': _distribution_rows(result),
         'omnibus': _omnibus_payload(result, alpha=float(alpha)),
         'pairwise_rows': _pairwise_rows(result, grouped_values),
-        'posthoc_rows': _package_rows(_package_posthoc_rows, result),
+        'posthoc_rows': _package_rows(_package_adapter('posthoc_rows'), result),
         'capability_rows': capability_rows,
         'capability': capability_payload,
         'metric_summary': metric_summary,

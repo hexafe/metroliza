@@ -278,7 +278,7 @@ Native acceleration is optional and policy-controlled.
 | Dashboard concentration | controls/options/spec modules embed large shared behavior surfaces | #904 contract-preserving split |
 | Compatibility ambiguity in tests | behavior tests still use many `modules.*` imports | #905 measured burn-down, shims retained |
 | Planning duplication | multiple active/historical roadmaps compete for attention | #902 consolidate/archive |
-| Expiring security exceptions | reviewed Bandit baseline entries expire 2026-10-31 | #906 review/eliminate/renew narrowly |
+| Expiring security exceptions | reviewed Bandit baseline entries expire 2027-04-30 | #906: Security review owns the next per-site review, due 2027-04-16 before expiry |
 | Optional package boundary drift | plotting/native capabilities exist in multiple locations | #907 and #908 with parity/performance gates |
 
 ## 12. Architecture change process

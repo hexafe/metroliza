@@ -16,6 +16,7 @@ import statistics
 import math
 from collections import OrderedDict
 from datetime import date, datetime
+from functools import lru_cache
 from io import BytesIO
 import os
 from pathlib import Path
@@ -34,9 +35,14 @@ import matplotlib.transforms as mtransforms
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter
-from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
+from matplotlib.text import Text
+from metroliza.workers.export_thread_runtime import QCoreApplication, QThread, pyqtSignal
 
 from metroliza.exporting.contracts import ExportRequest, validate_export_request
+from metroliza.exporting.export_summary_render_pool import (
+    apply_summary_render_result,
+    iter_summary_render_results,
+)
 import metroliza.shared.custom_logger as custom_logger
 from metroliza.reports.db import execute_select_with_columns, read_sql_query_result, sqlite_connection_scope
 from metroliza.shared.env_utils import env_bool
@@ -103,6 +109,7 @@ from metroliza.charts.export_chart_writer import (
     insert_measurement_chart,
 )
 from metroliza.exporting.export_query_service import (
+    build_analytical_partition_query,
     build_export_dataframe as _build_export_dataframe,
     build_measurement_export_dataframe as _build_measurement_export_dataframe,
     execute_export_query as _execute_export_query,
@@ -1011,10 +1018,13 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     plot_rect = annotation_box.get('plot_rect') if isinstance(annotation_box, dict) else None
     title_artist = annotation_box.get('title_artist') if isinstance(annotation_box, dict) else None
     plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
+    # Resolve axes transforms once. Text/Annotation.get_window_extent updates
+    # candidate geometry (including leader lines) without drawing the figure.
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
     title_bbox = None
     if title_artist is not None:
-        figure.canvas.draw()
-        title_bbox = title_artist.get_window_extent(renderer=figure.canvas.get_renderer())
+        title_bbox = title_artist.get_window_extent(renderer=renderer)
     priority_sorted = sorted(
         list(enumerate(annotation_specs or [])),
         key=lambda item: (-int(item[1].get('priority', 100)), item[0]),
@@ -1089,8 +1099,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
                     clip_on=False,
                     fontfamily=candidate_fontfamily,
                 )
-            figure.canvas.draw()
-            candidate_bbox = candidate_artist.get_window_extent(renderer=figure.canvas.get_renderer())
+            candidate_bbox = candidate_artist.get_window_extent(renderer=renderer)
             is_safe = _bbox_fits_plot_rect(candidate_bbox, plot_rect_bounds)
             if is_safe and title_bbox is not None and candidate_bbox.overlaps(title_bbox):
                 is_safe = False
@@ -1995,7 +2004,6 @@ def render_histogram_note_panel(
     pad_y = float(options.get('pad_y', 0.04))
 
     fig = ax.figure
-    fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
     line_height_px = _measure_text_extent(fig, renderer, 'Ag', fontsize=fontsize, fontweight=header_fontweight)[1]
     max_height_px = max(1.0, available_height_px if available_height_px is not None else float(ax.bbox.height))
@@ -3135,12 +3143,10 @@ def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
     if _uses_symbol_font_fallback(text):
         probe_kwargs['fontfamily'] = 'DejaVu Sans'
 
-    probe = fig.text(0.0, 0.0, str(text), **probe_kwargs)
-    try:
-        extent = probe.get_window_extent(renderer=renderer)
-        return extent.width, extent.height
-    finally:
-        probe.remove()
+    probe = Text(0.0, 0.0, str(text), **probe_kwargs)
+    probe.set_figure(fig)
+    extent = probe.get_window_extent(renderer=renderer)
+    return extent.width, extent.height
 
 
 def _wrap_table_value_text(value_text, *, width):
@@ -3196,8 +3202,7 @@ def render_panel_table(
                 value_text = _wrap_table_value_text(value_text, width=value_wrap_width)
             normalized_rows.append((label_text, value_text))
 
-    # Ensure renderer-backed text metrics are current.
-    fig.canvas.draw()
+    # Panel axes geometry and text metrics do not require rendering any artists.
     renderer = fig.canvas.get_renderer()
     ax_height_px = max(1.0, float(ax.bbox.height))
     available_height_px = max(1.0, rect['height'] * ax_height_px)
@@ -3207,16 +3212,20 @@ def render_panel_table(
     applied_fallbacks = []
     using_compact_labels = False
 
+    @lru_cache(maxsize=256)
+    def _measure(text, fontsize, fontweight='normal'):
+        return _measure_text_extent(fig, renderer, text, fontsize=fontsize, fontweight=fontweight)
+
     def _measure_layout(candidate_rows, candidate_fontsize):
-        label_header_w, header_h = _measure_text_extent(fig, renderer, title, fontsize=candidate_fontsize, fontweight=header_fontweight)
-        value_header_w, _ = _measure_text_extent(fig, renderer, 'Value', fontsize=candidate_fontsize, fontweight=header_fontweight)
-        line_h = _measure_text_extent(fig, renderer, 'Ag', fontsize=candidate_fontsize)[1]
+        label_header_w, header_h = _measure(title, candidate_fontsize, header_fontweight)
+        value_header_w, _ = _measure('Value', candidate_fontsize, header_fontweight)
+        line_h = _measure('Ag', candidate_fontsize)[1]
 
         label_max = label_header_w
         value_max = value_header_w
         for label, value in candidate_rows:
-            label_max = max(label_max, _measure_text_extent(fig, renderer, label, fontsize=candidate_fontsize)[0])
-            value_max = max(value_max, _measure_text_extent(fig, renderer, value, fontsize=candidate_fontsize)[0])
+            label_max = max(label_max, _measure(label, candidate_fontsize)[0])
+            value_max = max(value_max, _measure(value, candidate_fontsize)[0])
 
         required_total_w = label_max + value_max + (4.0 * cell_padding_px)
         dynamic_label_fraction = (label_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
@@ -3341,7 +3350,6 @@ def render_panel_table_in_panel_axes(
     panel_rect = {'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0}
     del row_height
     fig = ax.figure
-    fig.canvas.draw()
     row_metrics = resolve_histogram_dashboard_row_metrics(
         table_fontsize=float((style_options or {}).get('fontsize', 8.0)),
         dpi=float(fig.dpi),
@@ -3523,6 +3531,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         super().__init__()
 
         validated_request = validate_export_request(export_request)
+        self._summary_render_options = validated_request.options
         self.db_file = validated_request.paths.db_file
         self.excel_file = validated_request.paths.excel_file
         self.html_dashboard_file = (
@@ -3589,6 +3598,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 or validated_request.options.export_target == "html_dashboard"
             ),
             "summary_sheet_requested": bool(validated_request.options.generate_summary_sheet),
+            "group_analysis_requested": validated_request.options.group_analysis_level != 'off',
+            "group_analysis_warnings": [],
             "html_dashboard_plotly_spec_count": 0,
             "html_dashboard_embedded_plotly_spec_count": 0,
             "html_dashboard_plotly_serialized_json_bytes": 0,
@@ -4029,6 +4040,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._sql_measurement_summary_cache.clear()
 
     def _iter_reference_partitions(self):
+        partition_query = build_analytical_partition_query(self._active_export_query)
         try:
             partition_values = list(self._partition_header_counts().keys())
         except Exception:
@@ -4038,26 +4050,27 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             )
             partition_values = fetch_partition_values(
                 self.db_file,
-                self._active_export_query,
-                partition_column='REFERENCE',
+                partition_query,
+                partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
             )
         for partition_value in partition_values:
             partition_df = load_measurement_export_partition_dataframe(
                 self.db_file,
-                self._active_export_query,
+                partition_query,
                 partition_value,
-                partition_column='REFERENCE',
+                partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
             )
-            yield partition_value, partition_df
+            if not partition_df.empty:
+                yield partition_df['EXPORT_PARTITION_LABEL'].iloc[0], partition_df
 
     def _partition_header_counts(self):
         if self._partition_header_counts_cache is None:
             self._partition_header_counts_cache = fetch_partition_header_counts(
                 self.db_file,
-                self._active_export_query,
-                partition_column='REFERENCE',
+                build_analytical_partition_query(self._active_export_query),
+                partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
             )
         return self._partition_header_counts_cache
@@ -4377,6 +4390,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
     def _insert_summary_image(worksheet, slot, image_data):
         """Insert summary image and guard against missing worksheet backends."""
 
+        if worksheet is None:
+            return
+
         options = {'image_data': image_data}
         for key in ('x_scale', 'y_scale'):
             if slot.get(key) is not None:
@@ -4685,6 +4701,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return True
         return False
 
+    def _run_group_analysis_outputs(self, writer):
+        self._write_group_analysis_outputs(writer)
+        if self.group_analysis_level != 'off' and not self.export_canceled:
+            self.completion_metadata['group_analysis_completed'] = True
+
     def run_export_pipeline(self, excel_writer):
         """Handle `run_export_pipeline` for `ExportDataThread`.
 
@@ -4717,7 +4738,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 ),
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing grouped comparisons", "ETA --")),
-                    self._write_group_analysis_outputs(excel_writer),
+                    self._run_group_analysis_outputs(excel_writer),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -4737,7 +4758,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 ),
                 lambda: (
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing dashboard statistics", "ETA --")),
-                    self._write_group_analysis_outputs(dashboard_writer),
+                    self._run_group_analysis_outputs(dashboard_writer),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -4813,6 +4834,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         emit_completed_after_cleanup = False
+        from metroliza.shared.diagnostic_events import WorkflowOperation, WorkflowStage
+        from metroliza.shared.workflow_diagnostics import start_workflow_trace
+
+        diagnostic_cancelled = False
+        diagnostic = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
         try:
             if self._check_canceled():
                 return
@@ -4835,10 +4861,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
                 backend = self.get_export_backend()
                 self._active_backend = backend
+                diagnostic.stage(WorkflowStage.OUTPUT_STAGING)
                 local_outcome = normalize_export_outcome(backend.run(self))
+                diagnostic_cancelled = not bool(local_outcome)
                 self.completion_metadata["local_export_outcome"] = local_outcome.kind.value
                 if not local_outcome:
                     return
+                diagnostic.stage(WorkflowStage.OUTPUT_PUBLISHED)
 
             if self.export_target == "google_sheets_drive_convert":
                 stage_attempts = {
@@ -5011,6 +5040,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     self._log_export_stage("Export completed", stage="completed")
                 self.completed.emit()
                 QCoreApplication.processEvents()
+            diagnostic.finish_export(
+                completed=emit_completed_after_cleanup,
+                cancelled=self.export_canceled or diagnostic_cancelled,
+                fallback=bool(self.completion_metadata.get("fallback_message")),
+                omissions=(self.export_run_result is not None
+                           and self.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS),
+            )
 
     def add_measurements_horizontal_sheet(self, excel_writer):
         """Handle `add_measurements_horizontal_sheet` for `ExportDataThread`.
@@ -5025,10 +5061,17 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             May update UI state, database rows, or in-memory export context.
         """
 
+        summary_results = None
         try:
             partition_header_counts = self._partition_header_counts()
             total_references = len(partition_header_counts)
             total_header_units = sum(partition_header_counts.values())
+            if total_references == 0 or total_header_units == 0:
+                if len(self._build_export_filtered_dataframe()) > 0:
+                    raise ValueError(
+                        'Selected measurements have no usable reference/report partition '
+                        'with HEADER and AX; review imported measurement metadata.'
+                    )
             completed_header_units = 0
             measurement_stage_start = time.perf_counter()
             label_emit_every_headers = 10
@@ -5100,7 +5143,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     precomputed_header_entries.append((header, header_group, write_bundle))
                 self._record_stage_timing('transform_grouping', time.perf_counter() - precompute_start)
 
-                for (header, header_group, write_bundle) in precomputed_header_entries:
+                summary_results = iter_summary_render_results(self, precomputed_header_entries)
+                for (header, header_group, write_bundle), rendered_summary in summary_results:
                     if self._check_canceled():
                         return
 
@@ -5135,8 +5179,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     if self._check_canceled():
                         return
 
-                    if self.generate_summary_sheet:
-                        self.summary_sheet_fill(summary_worksheet, header, header_group, col)
+                    if self.generate_summary_sheet or self.generate_html_dashboard:
+                        if rendered_summary is None:
+                            self.summary_sheet_fill(summary_worksheet, header, header_group, col)
+                        else:
+                            apply_summary_render_result(self, summary_worksheet, rendered_summary)
                         if self._check_canceled():
                             return
 
@@ -5207,6 +5254,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self.log_and_exit(e)
             raise
             raise
+        finally:
+            if summary_results is not None:
+                summary_results.close()
 
     def _write_group_analysis_message_sheet(self, worksheet, message):
         from metroliza.exporting.group_analysis_writer import (
@@ -5690,6 +5740,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 'Group Analysis skipped: grouping assignments could not be matched '
                 'to the exported measurement rows.'
             )
+            self.completion_metadata.setdefault('group_analysis_warnings', []).append(message)
             if self.generate_html_dashboard:
                 self._html_group_analysis_payload = {
                     'status': 'skipped',
@@ -5753,6 +5804,29 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
         finally:
             self._record_stage_timing('group_analysis_payload', time.perf_counter() - payload_start)
+        missing_reference = 'REFERENCE' not in grouped_export_df.columns or any(
+            value is None or (isinstance(value, str) and not value.strip())
+            for value in grouped_export_df['REFERENCE']
+        )
+        warnings = []
+        if not payload.get('metric_rows'):
+            warnings.append(
+                'Group Analysis has no metric with measurements from two groups '
+                'in the selected reference scope; review group assignments.'
+            )
+        if missing_reference:
+            warnings.append(
+                'Reports without a reference remain in measurement charts, but '
+                'reference-specific Group Analysis cannot compare them; complete '
+                'reference metadata to include those reports in grouped comparisons.'
+            )
+        if warnings:
+            self.completion_metadata.setdefault('group_analysis_warnings', []).extend(warnings)
+            warning_summary = payload.setdefault('diagnostics', {}).setdefault(
+                'warning_summary', {'count': 0, 'messages': []}
+            )
+            warning_summary['messages'] = [*warning_summary.get('messages', []), *warnings]
+            warning_summary['count'] = len(warning_summary['messages'])
         if self.generate_html_dashboard:
             self._html_group_analysis_payload = payload
             self._html_group_analysis_plot_assets = {'metrics': {}}
@@ -5818,6 +5892,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         try:
             if self._check_canceled():
                 return
+            if self._stream_measurements_sheet(excel_writer):
+                return
             export_df = self._build_export_filtered_dataframe()
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
             if self.include_industrial_context:
@@ -5825,6 +5901,52 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         except Exception as e:
             self.log_and_exit(e)
             raise
+
+    def _can_stream_measurements_sheet(self):
+        """Return whether the raw sheet can be streamed from the export snapshot.
+
+        Streaming skips the in-memory copy of the whole snapshot, so it is only
+        used when no later stage (Group Analysis, industrial context) needs it.
+        """
+        return bool(
+            self._db_connection is not None
+            and self._snapshot_table_name
+            and self._cached_export_filtered_df is None
+            and not self.include_industrial_context
+            and str(self.group_analysis_level or 'off').strip().lower() == 'off'
+        )
+
+    def _stream_measurements_sheet(self, excel_writer):
+        """Write MEASUREMENTS from the snapshot; ``True`` if written or canceled."""
+        from metroliza.exporting.measurement_stream import ColumnWidthSample, iter_row_chunks
+
+        if not self._can_stream_measurements_sheet():
+            return False
+        backend = self._active_backend or self.get_export_backend()
+        write_streamed_rows = getattr(backend, 'write_streamed_rows', None)
+        if write_streamed_rows is None:
+            return False
+        sheet_name = unique_sheet_name("MEASUREMENTS", backend.list_sheet_names(excel_writer))
+        sample = ColumnWidthSample(_COLUMN_WIDTH_SAMPLE_LIMIT)
+        cursor = self._db_connection.cursor()
+        try:
+            cursor.execute(self._active_export_query)
+            columns = [description[0] for description in cursor.description or ()]
+            row_chunks = iter_row_chunks(cursor, sample, self._check_canceled)
+            row_count = write_streamed_rows(excel_writer, sheet_name, columns, row_chunks)
+        finally:
+            cursor.close()
+        if row_count is None:
+            return self._check_canceled()
+        self._record_exported_sheet_name(sheet_name)
+        if self._check_canceled():
+            return True
+        worksheet = backend.get_worksheet(excel_writer, sheet_name)
+        worksheet.autofilter(0, 0, row_count, len(columns) - 1)
+        worksheet.freeze_panes(1, 0)
+        for index, width in enumerate(sample.column_widths(len(columns))):
+            worksheet.set_column(index, index, width)
+        return True
 
     def export_industrial_context_data(self, export_df, excel_writer):
         """Write cached industrial context and link diagnostics when enabled."""
@@ -6025,7 +6147,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             header_value = header_group['HEADER'].iloc[0] if 'HEADER' in header_group.columns and not header_group.empty else None
             axis_value = header_group['AX'].iloc[0] if 'AX' in header_group.columns and not header_group.empty else None
             sql_summary = None
-            if reference_value is not None and header_value is not None and axis_value is not None:
+            if (
+                reference_value is not None
+                and str(reference_value).strip()
+                and header_value is not None
+                and axis_value is not None
+            ):
                 sql_summary = self._lookup_sql_measurement_summary(
                     reference=reference_value,
                     header=header_value,
@@ -6117,10 +6244,15 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             capability_badge = summary_table_composition['capability_badge']
             histogram_row_badges = summary_table_composition['histogram_row_badges']
             panel_subtitle = worksheet_plan['subtitle_value']
+            display_reference = (
+                header_group['EXPORT_PARTITION_LABEL'].iloc[0]
+                if 'EXPORT_PARTITION_LABEL' in header_group.columns and not header_group.empty
+                else reference_value
+            )
             dashboard_section = self._begin_html_dashboard_section(
                 header=header,
                 subtitle=panel_subtitle,
-                reference=reference_value,
+                reference=display_reference,
                 axis=axis_value,
                 grouping_applied=grouping_applied,
                 sample_size=summary_stats.get('sample_size', 0),
@@ -6187,8 +6319,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return scaled_slot
 
             write_start = time.perf_counter()
-            summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
-            summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, worksheet_plan['subtitle_value'])
+            if summary_worksheet is not None:
+                summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
+                summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, worksheet_plan['subtitle_value'])
             self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._summary_chart_required('distribution'):

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from contextvars import ContextVar, copy_context
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 import math
 import re
+from threading import Lock
 from typing import Any
 
 import numpy as np
@@ -63,6 +65,7 @@ class HistogramStatsTable:
 class _HistogramTableCache:
     rows: dict[tuple[bytes, str | None, str | None], tuple[tuple[str, str], ...]]
     payload_bytes: int = 0
+    lock: Any = field(default_factory=Lock)
 
 
 _histogram_table_cache: ContextVar[_HistogramTableCache | None] = ContextVar(
@@ -101,14 +104,16 @@ def _request_histogram_table_rows(
         None if lsl is None else float(lsl).hex(),
         None if usl is None else float(usl).hex(),
     )
-    if key in cache.rows:
-        return cache.rows[key]
+    with cache.lock:
+        if key in cache.rows:
+            return cache.rows[key]
     rows = _histogram_table_rows_from_plotstats(values, lsl=lsl, usl=usl)
     payload_bytes = len(key[0]) + sum(len(text.encode("utf-8")) for row in rows for text in row)
-    if (rows and len(cache.rows) < _HISTOGRAM_TABLE_CACHE_MAX_ENTRIES
-            and cache.payload_bytes + payload_bytes <= _HISTOGRAM_TABLE_CACHE_MAX_BYTES):
-        cache.rows[key] = rows
-        cache.payload_bytes += payload_bytes
+    with cache.lock:
+        if (rows and key not in cache.rows and len(cache.rows) < _HISTOGRAM_TABLE_CACHE_MAX_ENTRIES
+                and cache.payload_bytes + payload_bytes <= _HISTOGRAM_TABLE_CACHE_MAX_BYTES):
+            cache.rows[key] = rows
+            cache.payload_bytes += payload_bytes
     return rows
 
 
@@ -694,6 +699,48 @@ def build_histogram_stats_table(
     return HistogramStatsTable(title=str(title or "Parameter"), rows=rows, backend=resolved_backend)
 
 
+class _HistogramThreadsUnavailable(Exception):
+    pass
+
+
+def _bounded_histogram_tables(pool, build, groups):
+    tables = []
+    for start in range(0, len(groups), 3):
+        batch = groups[start:start + 3]
+        try:
+            futures = [pool.submit(copy_context().run, build, group) for group in batch]
+        except (OSError, RuntimeError) as exc:
+            raise _HistogramThreadsUnavailable from exc
+        tables.extend(table for future in futures if (table := future.result()) is not None)
+    return tables
+
+
+def build_histogram_stats_tables(
+    groups, *, backend="metroliza", lsl=None, usl=None,
+) -> list[HistogramStatsTable]:
+    """Compute full-data tables with at most three joined threads/pending jobs.
+
+    Input and result order stay unchanged. Request-local cache state is copied
+    explicitly; its byte/entry accounting is locked and released by the caller's
+    existing request context. No renderer or pyplot state runs in these threads.
+    """
+    def build(group):
+        label, values = group
+        return build_histogram_stats_table(values, title=label, backend=backend, lsl=lsl, usl=usl)
+
+    groups = list(groups)
+    if len(groups) < 2 or sum(len(values) for _label, values in groups) < 5_000:
+        tables = map(build, groups)
+        return [table for table in tables if table is not None]
+    with ThreadPoolExecutor(max_workers=min(3, len(groups)), thread_name_prefix="histogram-stats") as pool:
+        try:
+            return _bounded_histogram_tables(pool, build, groups)
+        except _HistogramThreadsUnavailable:
+            # Join any started workers before falling back on thread exhaustion.
+            pass
+    return [table for group in groups if (table := build(group)) is not None]
+
+
 def render_histogram_png(
     values: Iterable[Any],
     *,
@@ -846,9 +893,6 @@ def _histogram_table_rows_from_plotstats(
     lsl: float | None = None,
     usl: float | None = None,
 ) -> tuple[tuple[str, str], ...]:
-    from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
-
-    configure_headless_matplotlib()
     try:
         from hexafe_plotstats import HistogramConfig, build_histogram_payload
         from hexafe_plotstats.models.common import SpecLimits
@@ -2800,6 +2844,7 @@ __all__ = [
     "build_chart_artifact",
     "build_dashboard_plotly_spec",
     "build_histogram_stats_table",
+    "build_histogram_stats_tables",
     "build_plotstats_dashboard_spec",
     "metroliza_dashboard_plotstats_theme",
     "normalize_distribution_stat_legend",

@@ -41,7 +41,9 @@ Dependency files:
 - `requirements.txt` - runtime
 - `requirements-dev.txt` - development/testing
 - `requirements-build.txt` - packaging
-- `requirements-ocr.txt` - packaged header OCR runtime
+- `requirements-ocr.txt` - packaged header OCR runtime (ONNX Runtime; user builds)
+- `requirements-ocr-benchmark.txt` - adds OpenVINO for OCR benchmarks and the explicit
+  `METROLIZA_BUILD_FLAVOR=benchmark` build; user builds never ship OpenVINO
 
 ## Windows Runtime Setup And OCR Diagnostics
 
@@ -116,6 +118,21 @@ validates the vendored RapidOCR model files, builds `packaging/metroliza_onefile
 bundles `THIRD_PARTY_NOTICES.md`, and prints the generated `dist\*.exe` path. Use `.\build_windows_exe.ps1 -Clean` to
 remove previous `build`/`dist` output first, or `.\build_windows_exe.ps1 -WithNative` to
 use the native-module packaging helper.
+
+For a single-file delivery that starts fast after the first run, pack the onedir with the
+native launcher instead of using the PyInstaller onefile. It unpacks the application once per
+version into `%LOCALAPPDATA%\Metroliza\runtime` and reuses it on every later start:
+
+```powershell
+.\build_windows_portable_exe.ps1              # supervised onedir + portable envelope
+.\build_windows_launcher_exe.ps1 -Supervised  # the same onedir -> native launcher EXE
+```
+
+The result is `dist\metroliza_<version>_<yymmdd>_launcher.exe` (the portable envelope is
+`dist\metroliza_<version>_<yymmdd>.exe`). See `packaging/launcher/README.md` for the format, cache
+layout, self-repair contract, benchmark and fallbacks; `scripts/qualify_windows_launcher.py`
+qualifies the launcher with a synthetic payload and `scripts/qualify_windows_portable_onefile.py
+--kind launcher` the real packaged application.
 
 If the OCR model files are missing, refresh them before building:
 
@@ -277,14 +294,34 @@ Examples of metric availability by spec type:
 - Parser plugin generation and onboarding: [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md)
 - Historical plans and retired docs: [`docs/archive/`](docs/archive/)
 
+## Read-only CMM database check
+
+To check existing imports for extra page-break blocks, close Metroliza and use a
+checkpointed database (no WAL/SHM/journal sidecars) plus the original report folders
+or ZIP/TAR archives. From an installed source environment:
+
+```bash
+PYTHONPATH=src:. python scripts/detect_cmm_page_breaks.py reports.db original_reports/ reports.zip --output comparison.json
+```
+
+On Windows (PowerShell): `$env:PYTHONPATH = "src;."; python scripts\detect_cmm_page_breaks.py reports.db original_reports\ --output comparison.csv`.
+Run it on a copy: close Metroliza normally (closing checkpoints the database), then copy the
+`.db` file. Archives are extracted to a temporary directory, so leave free disk space.
+
+Use `.csv` for CSV output; the output must be a new file. Every stored report gets
+counts and a verdict. SHA-256 identifies sources; missing sources and weak identity
+remain explicit. `EXTRA_BLOCKS_SUSPECTED` needs investigation; `MATCH` confirms
+counts only. The script never repairs, re-imports or migrates the database. Keep
+the database closed throughout the check. See the script docstring for limits.
+
 ## Release metadata
 
-Current release highlight (`2026.06 RC2 (build 260711)`): Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates.
+Current release highlight (`2026.09 RC1 (build 261020)`): A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.06 RC2 (build 260711)`)
+### Changelog highlights (release `2026.09 RC1 (build 261020)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
