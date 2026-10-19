@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import closing
+from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import random
@@ -27,6 +29,11 @@ from metroliza.parsing.pdf_backend import require_pdf_backend
 from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
 from metroliza.parsing.source_inspection import PDF_EMBEDDED_TEXT_CACHE_KEY, SourceInspectionContext
 from metroliza.reports.report_repository import ReportRepository
+from metroliza.reports.report_metadata_models import MetadataCandidate
+from metroliza.reports.report_metadata_review import (
+    FieldOverride,
+    ReportMetadataOverride,
+)
 from metroliza.shared.parse_contracts import ParseRequest
 
 # The only columns excluded from the serial-vs-pool comparison: wall-clock values written
@@ -274,6 +281,72 @@ def test_pooled_import_database_is_identical_to_the_serial_database(tmp_path, mo
     assert serial_dump["report_metadata_candidates"] and serial_dump["report_parse_state"]
 
 
+def test_reviewed_metadata_pooled_import_matches_serial_persisted_rows(tmp_path, monkeypatch):
+    source = tmp_path / "reports"
+    reports = _write_synthetic_reports(source, 4)
+    # One untouched report, a manual edit, a deliberate clear, and accepted OCR.
+    fields = (
+        (),
+        (FieldOverride("reference", "USER-REF", "user"),
+         FieldOverride("report_date", "2025-06-07", "user")),
+        (FieldOverride("reference", None, "user"),
+         FieldOverride("sample_number", "", "user")),
+        (FieldOverride("reference", "OCR-REF", "ocr"),
+         FieldOverride("sample_number", "17", "ocr")),
+    )
+    ocr_candidate = MetadataCandidate(
+        field_name="reference", raw_value="OCR-REF", normalized_value="OCR-REF",
+        source_type="header_alias", source_detail="review_ocr", page_number=1,
+        region_name="page1_header_band_ocr", label_text="REFERENCE", rule_id="ocr:reference",
+        confidence=0.9, evidence_text="REFERENCE: OCR-REF",
+    )
+    dumps = []
+    for label, workers in (("serial", "0"), ("pooled", "2")):
+        _pool_env(monkeypatch, workers)
+        counts = _count_in_process_work(monkeypatch)
+        database = tmp_path / f"{label}.sqlite3"
+        plan = _plan(source, database)
+        reviewed = {item.stable_occurrence_id: item for item in plan.preflight_result.ready_files}
+        overrides = tuple(
+            ReportMetadataOverride(
+                report.name, reviewed[report.name].fingerprint, edits,
+                ocr_candidates=(ocr_candidate,) if index == 3 else (),
+            )
+            for index, (report, edits) in enumerate(zip(reports, fields)) if edits
+        )
+        thread = ParseReportsThread(replace(plan, metadata_overrides=overrides))
+        thread.run()
+        assert thread.last_parse_result.imported_files == 4
+        assert counts == {
+            "hydrated": 4 if workers == "2" else 0,
+            "prepared_in_process": 0 if workers == "2" else 4,
+        }
+        dump = _dump_database(database)
+        with closing(sqlite3.connect(database)) as connection:
+            columns = [row[1] for row in connection.execute("PRAGMA table_info(report_metadata)")]
+            json_index = columns.index("metadata_json")
+            stored = connection.execute(
+                "SELECT reference, report_date, sample_number FROM report_metadata ORDER BY report_id"
+            ).fetchall()
+        if workers == "0":
+            assert stored[1][:2] == ("USER-REF", "2025-06-07")
+            assert stored[2][0] is None and stored[2][2] == ""
+            assert (stored[3][0], stored[3][2]) == ("OCR-REF", "17")
+        # Ignore only review wall-clock stamps; compare every other persisted value,
+        # including identity hashes, candidates, diagnostics and derived metadata.
+        rows = []
+        for row in dump["report_metadata"]:
+            diagnostics = json.loads(row[json_index])
+            if "metadata_review" in diagnostics:
+                assert diagnostics["metadata_review"].pop("applied_at")
+            for override in diagnostics.get("manual_overrides", {}).values():
+                assert override.pop("updated_at")
+            rows.append(row[:json_index] + (json.dumps(diagnostics, sort_keys=True),) + row[json_index + 1:])
+        dump["report_metadata"] = rows
+        dumps.append(dump)
+    assert dumps[0] == dumps[1]
+
+
 def test_cold_probe_cache_serial_and_pooled_imports_match_the_warm_serial_database(tmp_path, monkeypatch):
     """A probe-cache miss lets open_report reuse the inspected text; the result must not change."""
 
@@ -429,6 +502,24 @@ def test_worker_result_is_discarded_when_the_file_moved_while_it_was_parsed():
         assert accepted_worker_state(moved, Inspection()) is None
 
 
+def test_worker_result_is_discarded_unless_it_applied_the_parents_review_override():
+    from metroliza.reports.report_metadata_review import ReportMetadataOverride
+
+    class Inspection:
+        file_size_bytes, file_modified_ns = 10, 20
+
+    confirmed = ReportMetadataOverride(occurrence_id="occ-1", fingerprint="fp-1")
+    other = ReportMetadataOverride(occurrence_id="occ-2", fingerprint="fp-2")
+    base = {"state": {"k": 1}, "stat_before": (10, 20), "stat_after": (10, 20)}
+    applied = {**base, "metadata_review_override": confirmed}
+    assert accepted_worker_state(applied, Inspection(), confirmed) == {"k": 1}
+    assert accepted_worker_state({**base, "metadata_review_override": None}, Inspection()) == {"k": 1}
+    # A worker that missed (or got a different) confirmed override is never trusted.
+    assert accepted_worker_state({**base, "metadata_review_override": None}, Inspection(), confirmed) is None
+    assert accepted_worker_state({**applied, "metadata_review_override": other}, Inspection(), confirmed) is None
+    assert accepted_worker_state(applied, Inspection(), None) is None
+
+
 def test_worker_count_policy(monkeypatch):
     monkeypatch.delenv(WORKERS_ENV, raising=False)
     monkeypatch.delenv(MIN_REPORTS_ENV, raising=False)
@@ -564,7 +655,7 @@ def _blocked_prepare_worker(task):
     import signal
     import time
 
-    marker, _database, mode = task
+    marker, _database, mode, *_review_override = task
     if mode == "ignore_terminate" and sys.platform != "win32":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     Path(marker).write_text(str(os.getpid()))

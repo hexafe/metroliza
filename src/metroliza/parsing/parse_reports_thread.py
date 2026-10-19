@@ -2279,6 +2279,16 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         workers = resolve_prepare_worker_count(len(paths))
         if not workers:
             return None
+        overrides = {
+            override.occurrence_id: override
+            for override in (self.import_plan.metadata_overrides if self.import_plan else ())
+        }
+        path_overrides = {
+            path: overrides[occurrence_id]
+            for path in paths
+            if overrides
+            and (occurrence_id := self._occurrence_id_for_report(Path(path))) in overrides
+        }
         try:
             self._prepare_pool = ImportPreparePool(
                 paths,
@@ -2287,6 +2297,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 workers=workers,
                 parser_plugin_id=plugin_id,
                 should_cancel=lambda: self.parsing_canceled,
+                metadata_review_overrides=path_overrides,
             )
         except Exception as exc:  # fall back to the in-process path
             logger.warning(
