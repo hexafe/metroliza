@@ -55,7 +55,13 @@ def _load_bootloader_splash_module():
 
 
 def update_bootloader_splash(message: str, *, phase: str) -> None:
-    """Update PyInstaller's pre-Python splash when it is available."""
+    """Update the pre-Qt splash: the native launcher's window, or PyInstaller's splash."""
+    from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+    launcher_splash = launcher_splash_from_environment()
+    if launcher_splash is not None:
+        launcher_splash.show_message(message, phase=phase)
+        return
     pyi_splash = _load_bootloader_splash_module()
     if pyi_splash is None:
         return
@@ -284,6 +290,16 @@ def _scaled_splash_gif_size(source_size, qsize_type):
 
 def create_startup_splash(app, *, ui_smoke_mode: bool) -> StartupSplash:
     """Create a startup splash or a no-op replacement for this launch."""
+
+    # A live native launcher splash is already on screen: keep it (its animation is independent
+    # of this process's GUI thread) instead of opening a second splash, also in smoke runs, so
+    # it is handed off and closed after the main window is shown.
+    from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+    launcher_splash = launcher_splash_from_environment()
+    if launcher_splash is not None:
+        record_event("splash_launcher_bridge")
+        return launcher_splash
 
     if not should_show_startup_splash(ui_smoke_mode=ui_smoke_mode):
         record_event("splash_disabled")

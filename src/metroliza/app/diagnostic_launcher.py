@@ -325,12 +325,26 @@ def _fixed_notice(message: str) -> None:
         mark("notice_suppressed")
         return
     mark("notice_requested")
+    _close_launcher_splash()
     if os.name == "nt":
         import ctypes
 
         ctypes.windll.user32.MessageBoxW(None, message, "Metroliza", 0x10)
     elif sys.stderr is not None:
         sys.stderr.write(message + "\n")
+
+
+def _close_launcher_splash() -> None:
+    """Close the native launcher splash so it never covers this notice (best effort)."""
+    try:
+        from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+        # A copy: the application child must still receive the handle when it is started.
+        splash = launcher_splash_from_environment(environ=dict(os.environ))
+        if splash is not None:
+            splash.close()
+    except Exception:
+        pass
 
 
 def main() -> int:

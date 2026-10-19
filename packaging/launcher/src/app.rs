@@ -2,6 +2,8 @@
 //!
 //! 1. Read and validate the payload appended to this EXE.
 //! 2. Take the per-version single-instance guard; a second instance only activates the first.
+//!    The first instance shows the splash right away, before any cache work; it stays up until
+//!    the application hands off after painting its main window (see `platform::Splash`).
 //! 3. Resolve the cache root and make sure a valid runtime exists (extracting if needed).
 //! 4. Start the entry executable from the runtime (with the launcher's own working directory,
 //!    not the cache), clean up old versions in the background, wait for the entry process and
@@ -56,9 +58,11 @@ fn env_path(name: &str) -> Option<PathBuf> {
 }
 
 fn launch(log: &Log) -> Result<i32> {
+    log.mark("main");
     let exe =
         std::env::current_exe().map_err(|e| LauncherError::payload(format!("current exe: {e}")))?;
     let payload = Payload::open(&exe)?;
+    log.mark("payload_opened");
     let version = payload.manifest.version.clone();
 
     // Before any cache work: a second instance must never extract or start anything.
@@ -70,6 +74,10 @@ fn launch(log: &Log) -> Result<i32> {
         }
         Instance::First(guard) => guard,
     };
+    log.mark("instance_acquired");
+    // First visible feedback: before root resolution, the warm check or any extraction. It is
+    // dropped (closed) on every early return, before `run` shows an error dialog.
+    let splash = platform::Splash::show(log);
 
     let inputs = RootInputs {
         override_root: env_path(ROOT_ENV),
@@ -78,26 +86,28 @@ fn launch(log: &Log) -> Result<i32> {
     };
     let root = resolve_root(&inputs)?;
 
-    let progress = platform::ProgressWindow::new();
-    let mut runtime = ensure_runtime(&root, &payload, &progress, &Options::default())?;
+    let mut runtime = ensure_runtime(&root, &payload, &splash, &Options::default())?;
     log.line(&format!("cache={}", runtime.outcome.as_str()));
+    log.mark("runtime_ready");
 
     let entry = runtime.dir.join(&payload.manifest.entry);
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let (child, repair_available) = match start_entry(&entry, &args, true, &instance, log) {
+    let (child, repair_available) = match start_entry(&entry, &args, true, &instance, &splash, log)
+    {
         Ok(child) => (child, true),
         Err(error) if should_repair_spawn(runtime.outcome, &error) => {
             // Only a Warm cache skipped hashing this launch. An image-format/missing-file
             // error may mean same-size damage or removal after that check. No cleanup runs yet.
             log.line(&format!("repair=spawn_failed error={error}"));
-            runtime = repair_runtime(&root, &payload, runtime, &progress, &Options::default())
+            splash.status("Repairing Metroliza...");
+            runtime = repair_runtime(&root, &payload, runtime, &splash, &Options::default())
                 .map_err(|repair_error| {
                     log.line(&format!("repair_error={repair_error}"));
                     error
                 })?;
             log.line(&format!("cache={}", runtime.outcome.as_str()));
             let entry = runtime.dir.join(&payload.manifest.entry);
-            (start_entry(&entry, &args, false, &instance, log)?, false)
+            (start_entry(&entry, &args, false, &instance, &splash, log)?, false)
         }
         Err(error) => return Err(error),
     };
@@ -109,6 +119,7 @@ fn launch(log: &Log) -> Result<i32> {
     let cleanup = thread::spawn(move || cleanup_old_versions(&cleanup_root, &current));
 
     let mut code = child.wait()?;
+    log.mark("entry_exited");
     if let Ok(report) = cleanup.join() {
         log.line(&format!(
             "cleanup removed={} in_use={} failed={} busy={}",
@@ -123,12 +134,14 @@ fn launch(log: &Log) -> Result<i32> {
         // The entry rejected its own files without telling the user. Rebuild once and retry
         // once; the second run is final, even if it asks for a repair again.
         log.line("repair=requested");
-        runtime = repair_runtime(&root, &payload, runtime, &progress, &Options::default())?;
+        splash.status("Repairing Metroliza...");
+        runtime = repair_runtime(&root, &payload, runtime, &splash, &Options::default())?;
         log.line(&format!("cache={}", runtime.outcome.as_str()));
         let entry = runtime.dir.join(&payload.manifest.entry);
-        code = start_entry(&entry, &args, false, &instance, log)?.wait()?;
+        code = start_entry(&entry, &args, false, &instance, &splash, log)?.wait()?;
     }
 
+    splash.close();
     log.line(&format!("exit={code}"));
     // Windows exit codes are unsigned 32-bit; the process exit API takes the same bits as i32.
     Ok(code as i32)
@@ -138,12 +151,14 @@ fn launch(log: &Log) -> Result<i32> {
 ///
 /// `repair_available` sets or removes [`REPAIR_AVAILABLE_ENV`] in this process just before the
 /// spawn (the entry inherits the environment), so the first and the second start differ only in
-/// that variable. No other thread of the launcher is running while it changes.
+/// that variable. The splash handle is passed the same way while the splash is open. No other
+/// launcher thread reads the environment while it changes (the splash thread never does).
 fn start_entry(
     entry: &Path,
     args: &[OsString],
     repair_available: bool,
     instance: &platform::InstanceGuard,
+    splash: &platform::Splash,
     log: &Log,
 ) -> Result<platform::Child> {
     if repair_available {
@@ -151,12 +166,17 @@ fn start_entry(
     } else {
         std::env::remove_var(REPAIR_AVAILABLE_ENV);
     }
+    match splash.handle_for_entry() {
+        Some(handle) => std::env::set_var(platform::SPLASH_HWND_ENV, handle),
+        None => std::env::remove_var(platform::SPLASH_HWND_ENV),
+    }
     // No explicit working directory: the entry runs where the user started the launcher, as the
     // portable envelope does. The runtime directory is a disposable cache, so nothing (a
     // relative export name, a file dialog's start folder) may default into it.
     let child = platform::spawn_entry(entry, args, None)?;
     platform::publish_entry_pid(instance, child.id());
     log.line("entry=started");
+    log.mark("entry_spawned");
     Ok(child)
 }
 
