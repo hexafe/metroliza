@@ -1411,3 +1411,30 @@ def test_reference_paste_parser_accepts_common_user_formats():
         "REF6",
     )
     assert parse_reference_values("REF1 REF1,REF2") == ("REF1", "REF2")
+
+
+def test_unreadable_temporary_cache_reports_unknown_contents_and_requires_decision(tmp_path, monkeypatch):
+    _app()
+    monkeypatch.setattr(industrial_data_dialog, "default_industrial_source_config_path",
+                        lambda: tmp_path / "sources.yaml")
+    dialog = IndustrialDataDialog()
+    prompts = []
+
+    def unreadable(_path):
+        raise OSError("synthetic unreadable cache")
+
+    def cancel(_parent, _title, message, *_args):
+        prompts.append(message)
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(industrial_data_dialog, "disposable_cache_counts", unreadable)
+    monkeypatch.setattr(QMessageBox, "question", cancel)
+    try:
+        dialog._refresh_storage_lifecycle()
+        assert not dialog._resolve_temporary_cache_before_discard(dialog.cache_target)
+        assert "temporary cache could not be read" in prompts[0]
+        assert "temporary cache could not be read" in dialog.storage_lifecycle_label.text()
+        assert Path(dialog.db_file).exists()
+    finally:
+        monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+        dialog.close()

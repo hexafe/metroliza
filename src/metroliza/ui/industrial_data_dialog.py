@@ -67,6 +67,8 @@ from metroliza.ui.ui_foundation import (
 def _temporary_cache_contents_summary(counts: dict[str, int]) -> str:
     """Count fetched records separately from their field values and related data."""
 
+    if counts.get("unreadable_industrial_cache"):
+        return "unknown contents (the temporary cache could not be read)"
     records = counts.get("industrial_records", 0)
     if records:
         return f"{records:,} cached source row(s) and related data"
