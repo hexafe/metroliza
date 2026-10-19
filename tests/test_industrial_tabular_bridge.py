@@ -354,3 +354,29 @@ def test_industrial_cache_bridge_discovers_metric_after_preview_window(tmp_path,
         assert "late_metric" in candidate_names
     finally:
         loaded.sqlite_store.cleanup()
+
+
+def test_industrial_view_literals_do_not_reinterpret_question_marks(tmp_path):
+    database = str(tmp_path / "literal-scope.sqlite")
+    repository = IndustrialDataRepository(database)
+    alias = "source?' OR 1=1 --"
+    profile = repository.upsert_source_profile(
+        profile_key="literal_scope",
+        profile_name="Synthetic source",
+        source_db_alias=alias,
+        database_type="sqlite",
+        source_object_name="measurements",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=alias,
+        rows=({"source_record_key": "selected", "reference": "REF-1"},),
+    )
+    loaded = load_industrial_cache_tabular_result(
+        database, source_db_aliases=(alias, "other?source"),
+    )
+    try:
+        assert loaded.row_count == 1
+        assert loaded.sqlite_store.read_dataframe()["source_record_key"].tolist() == ["selected"]
+    finally:
+        loaded.sqlite_store.cleanup()
