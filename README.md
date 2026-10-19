@@ -294,6 +294,22 @@ Examples of metric availability by spec type:
 - Parser plugin generation and onboarding: [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md)
 - Historical plans and retired docs: [`docs/archive/`](docs/archive/)
 
+## Read-only CMM database check
+
+To check existing imports for extra page-break blocks, close Metroliza and use a
+checkpointed database (no WAL/SHM/journal sidecars) plus the original report folders
+or ZIP/TAR archives. From an installed source environment:
+
+```bash
+PYTHONPATH=src:. python scripts/detect_cmm_page_breaks.py reports.db original_reports/ reports.zip --output comparison.json
+```
+
+Use `.csv` for CSV output; the output must be a new file. Every stored report gets
+counts and a verdict. SHA-256 identifies sources; missing sources and weak identity
+remain explicit. `EXTRA_BLOCKS_SUSPECTED` needs investigation; `MATCH` confirms
+counts only. The script never repairs, re-imports or migrates the database. Keep
+the database closed throughout the check. See the script docstring for limits.
+
 ## Release metadata
 
 Current release highlight (`2026.09 RC1 (build 261019)`): A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import.

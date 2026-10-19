@@ -2492,6 +2492,7 @@
         "scripts/compare_header_ocr_crop_results.py",
         "scripts/compare_ocr_metadata_benchmarks.py",
         "scripts/create_parser_plugin_workspace.py",
+        "scripts/detect_cmm_page_breaks.py",
         "scripts/diagnose_header_ocr_metadata.py",
         "scripts/explain_parser_resolution.py",
         "scripts/extract_header_ocr_crops.py",
