@@ -36,11 +36,25 @@ def _database_signature(path):
     for candidate in (path, Path(str(path) + "-wal")):
         try:
             stat = candidate.stat()
+            try:
+                with candidate.open("rb") as source:
+                    # The DB header includes its change counter; the WAL header
+                    # includes the checkpoint sequence and salts for each restart.
+                    # These catch same-size writes even with coarse/fixed mtimes.
+                    header = source.read(100 if candidate == path else 32)
+            except FileNotFoundError:
+                raise
+            except OSError:
+                # Briefly unreadable (e.g. a Windows sharing lock): this unique
+                # value never matches, so the snapshot is simply not cached.
+                header = object()
             # A read-only WAL connection may create an empty sidecar. It carries
             # no committed changes and is equivalent to an absent WAL.
+            # Ignore ctime: readers may change it without changing any content
+            # (and on CPython 3.11 Windows it is only the creation time).
             signatures.append(
                 None if candidate != path and stat.st_size == 0 else
-                (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, header)
             )
         except FileNotFoundError:
             signatures.append(None)

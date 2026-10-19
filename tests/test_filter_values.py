@@ -1,7 +1,10 @@
 """Ordered-choice equivalence and database cache regressions for #1127."""
 
 from contextlib import closing
+import os
+from pathlib import Path
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
@@ -123,6 +126,85 @@ def test_cache_invalidates_replacement_and_is_bounded(choices_db, tmp_path):
     assert len(filter_values._CACHE) <= filter_values._CACHE_LIMIT
 
 
+@pytest.mark.skipif(os.name != "posix", reason="chmod changes inode ctime only on POSIX")
+@pytest.mark.parametrize("wal", [False, True])
+def test_cache_ignores_reader_metadata_changes(choices_db, monkeypatch, wal):
+    with closing(sqlite3.connect(choices_db)) as keeper:
+        keeper.execute("PRAGMA journal_mode=" + ("WAL" if wal else "DELETE"))
+        target = Path(choices_db + "-wal" if wal else choices_db)
+        original = filter_values._query_values
+
+        def query_with_metadata_change(*args):
+            values = original(*args)
+            before = target.stat()
+            os.chmod(target, before.st_mode)
+            after = target.stat()
+            assert after.st_ctime_ns != before.st_ctime_ns
+            assert (after.st_ino, after.st_size, after.st_mtime_ns) == (
+                before.st_ino, before.st_size, before.st_mtime_ns,
+            )
+            return values
+
+        monkeypatch.setattr(filter_values, "_query_values", query_with_metadata_change)
+        before = load_filter_values(choices_db)
+        # Neither the next lookup nor snapshot publication should depend on ctime.
+        os.chmod(target, target.stat().st_mode)
+        monkeypatch.setattr(filter_values, "ensure_report_schema", lambda *_: pytest.fail("cache miss"))
+        assert load_filter_values(choices_db) == before
+
+
+@pytest.mark.parametrize("mode", ["DELETE", "TRUNCATE", "RESTART"])
+def test_cache_invalidates_same_size_commit_with_unchanged_timestamps(choices_db, monkeypatch, mode):
+    database = Path(choices_db)
+    wal = Path(choices_db + "-wal")
+    # The fixture schema is ready. Its schema writer would switch DELETE to WAL
+    # and add unrelated WAL frames, obscuring the controlled same-size commits.
+    monkeypatch.setattr(filter_values, "ensure_report_schema", lambda *_: None)
+    # Model creation-time ctime (CPython 3.11 on Windows), even on Unix.
+    original_stat = Path.stat
+
+    def creation_time_fields(stat):
+        fields = {name: getattr(stat, name) for name in dir(stat) if name.startswith("st_")}
+        fields.update(st_ctime=0, st_ctime_ns=0)
+        return SimpleNamespace(**fields)
+
+    def creation_time_stat(path, *args, **kwargs):
+        stat = original_stat(path, *args, **kwargs)
+        if path not in (database, wal):
+            return stat
+        return creation_time_fields(stat)
+
+    monkeypatch.setattr(Path, "stat", creation_time_stat)
+    with closing(sqlite3.connect(choices_db)) as writer:
+        writer.execute("PRAGMA journal_mode=" + ("DELETE" if mode == "DELETE" else "WAL"))
+        writer.execute("UPDATE report_measurements SET ax = 'FIRST' WHERE report_id = 1")
+        writer.commit()
+        if mode != "DELETE":
+            # Copy the initial commit into the DB before caching, keeping the WAL.
+            assert writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()[0] == 0
+        before = load_filter_values(choices_db)
+        paths = (database,) if mode == "DELETE" else (database, wal)
+        stats = {path: path.stat() for path in paths}
+        database_header = database.read_bytes()[:100]
+        wal_header = wal.read_bytes()[:32] if mode != "DELETE" else None
+        if mode != "DELETE":
+            assert writer.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()[0] == 0
+        writer.execute("UPDATE report_measurements SET ax = 'LATER' WHERE report_id = 1")
+        writer.commit()
+        for path, stat in stats.items():
+            assert path.stat().st_ino == stat.st_ino
+            assert path.stat().st_size == stat.st_size
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+            assert path.stat().st_mtime_ns == stat.st_mtime_ns
+        if mode != "DELETE":
+            assert database.read_bytes()[:100] == database_header
+            assert wal.read_bytes()[:32] != wal_header
+        else:
+            assert database.read_bytes()[:100] != database_header
+        assert before["ax_list"] == ("FIRST", "y")
+        assert load_filter_values(choices_db)["ax_list"] == ("LATER", "y")
+
+
 def test_cancel_and_writer_during_snapshot_do_not_cache(choices_db, monkeypatch):
     with pytest.raises(InterruptedError):
         load_filter_values(choices_db, cancelled=lambda: True)
@@ -139,3 +221,23 @@ def test_cancel_and_writer_during_snapshot_do_not_cache(choices_db, monkeypatch)
     monkeypatch.setattr(filter_values, "_database_signature", changing_signature)
     load_filter_values(choices_db)
     assert not filter_values._CACHE
+
+
+def test_unreadable_header_loads_values_without_caching(choices_db, monkeypatch):
+    database = Path(choices_db)
+    original_open = Path.open
+
+    def locked_open(path, *args, **kwargs):
+        if path == database:
+            raise PermissionError("sharing violation")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", locked_open)
+    first = load_filter_values(choices_db)
+    calls = []
+    original_schema = filter_values.ensure_report_schema
+    monkeypatch.setattr(
+        filter_values, "ensure_report_schema", lambda *args: calls.append(args) or original_schema(*args)
+    )
+    assert load_filter_values(choices_db) == first
+    assert calls, "an unreadable header must not produce a cache hit"
