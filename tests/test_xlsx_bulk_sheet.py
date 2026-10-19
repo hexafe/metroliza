@@ -97,6 +97,12 @@ class TestBulkWorksheetEquivalence(BulkEquivalenceCase):
         self.assertNotIn('<f>', sheet_xml)
         self.assertNotIn('hyperlink', sheet_xml)
 
+    def test_integers_beyond_float64_precision_match_the_classic_writer(self):
+        # XlsxWriter renders numbers with 16 significant digits, so the classic
+        # path writes 2**53 + 1 exactly as the bulk path's float64 does.
+        rows = [(2**53 + 1, 'a', 1.0), (-(2**53) - 1, 'b', 2.0), (2**60 + 1, 'c', 3.0)]
+        self.assert_same(['big', 'label', 'value'], rows)
+
     def test_long_strings_are_truncated_like_write_string(self):
         rows = [(1, 'a' * 40000, 1.0, 'a' * 40000, None, 'b' * 32767)]
         self.assert_same(self.COLUMNS, rows)
