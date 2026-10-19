@@ -310,3 +310,20 @@ def test_frozen_executor_uses_shared_compute_context_and_worker_cap(monkeypatch)
     assert len(list(_fake_tasks(monkeypatch, owner, executor))) == 8
     assert executor.kwargs['mp_context'] is context
     assert executor.kwargs['max_workers'] == 2
+
+
+def test_serial_policies_never_validate_the_package_identity(monkeypatch):
+    # compute_workers_available() hashes the packaged executables on frozen Windows.
+    calls = []
+    monkeypatch.setattr(pool, 'compute_workers_available', lambda: calls.append(1) or False)
+    monkeypatch.setattr(pool.sys, 'platform', 'win32')
+    monkeypatch.setattr(pool.sys, 'frozen', True, raising=False)
+    monkeypatch.delenv('METROLIZA_EXPORT_GROUP_MIN_GROUPS', raising=False)
+    owner = _owner()
+    monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '0')
+    assert pool._pool_policy(owner, 40) == 'serial_disabled'
+    assert pool._pool_policy(owner, 39) == 'serial_small_export'
+    assert calls == []
+    monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '1')
+    assert pool._pool_policy(owner, 40) == 'serial_frozen_multiprocessing_unavailable'
+    assert calls == [1]
