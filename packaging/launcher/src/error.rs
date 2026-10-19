@@ -57,6 +57,8 @@ impl ErrorKind {
 pub struct LauncherError {
     pub kind: ErrorKind,
     pub detail: String,
+    /// Structured OS error from entry creation, when available.
+    pub raw_os_error: Option<i32>,
 }
 
 impl LauncherError {
@@ -64,6 +66,7 @@ impl LauncherError {
         Self {
             kind,
             detail: detail.into(),
+            raw_os_error: None,
         }
     }
 
@@ -77,6 +80,13 @@ impl LauncherError {
 
     pub fn extraction(detail: impl Into<String>) -> Self {
         Self::new(ErrorKind::ExtractionFailed, detail)
+    }
+
+    pub fn spawn(detail: impl Into<String>, raw_os_error: Option<i32>) -> Self {
+        Self {
+            raw_os_error,
+            ..Self::launch(detail)
+        }
     }
 
     pub fn launch(detail: impl Into<String>) -> Self {

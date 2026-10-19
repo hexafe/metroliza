@@ -528,8 +528,9 @@ pub fn ensure_runtime(
     })
 }
 
-/// Declare `runtime` invalid and rebuild it: the entry reported that it cannot trust its own
-/// files even though the cheap warm check passed (for example a same-size modification).
+/// Declare `runtime` invalid and rebuild it after an entry's exit-75 request, or a Warm cache's
+/// first spawn failed with an image-format/missing-file OS error. The caller gates spawn repair
+/// to caches that skipped hashing this launch and shares one repair budget across both paths.
 ///
 /// The marker is removed first, so from then on the directory can never look valid, and the
 /// normal repair path re-extracts and re-verifies every file. The old handle is released before
