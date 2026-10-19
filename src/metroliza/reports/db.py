@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import time
 from contextlib import closing, contextmanager
@@ -5,6 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import quote
+
+from metroliza.reports.import_persist_profile import (
+    close_persist_connection,
+    measure_persist_stage,
+    observe_persist_connection,
+    observe_persist_checkpoint,
+    persist_sqlite_options,
+)
 
 
 TRANSIENT_SQLITE_ERRORS = (
@@ -14,6 +23,7 @@ TRANSIENT_SQLITE_ERRORS = (
 )
 
 T = TypeVar('T')
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -128,8 +138,10 @@ def connect_sqlite(
     pragma_config: SQLitePragmaConfig = DEFAULT_PRAGMA_CONFIG,
 ) -> sqlite3.Connection:
     """Create a SQLite connection and apply deterministic PRAGMAs on open."""
-    connection = sqlite3.connect(db_path, timeout=timeout_s)
-    _apply_sqlite_pragmas(connection, pragma_config)
+    with measure_persist_stage("connection_open"):
+        connection = sqlite3.connect(db_path, timeout=timeout_s, **persist_sqlite_options())
+        _apply_sqlite_pragmas(connection, pragma_config)
+    observe_persist_connection(connection)
     return connection
 
 
@@ -141,13 +153,112 @@ def sqlite_connection_scope(
     pragma_config: SQLitePragmaConfig = DEFAULT_PRAGMA_CONFIG,
 ) -> Iterator[sqlite3.Connection]:
     """Yield a managed SQLite connection suitable for multi-query workflows."""
-    if pragma_config == DEFAULT_PRAGMA_CONFIG:
-        with closing(connect_sqlite(db_path, timeout_s=timeout_s)) as conn:
-            yield conn
-        return
-
-    with closing(connect_sqlite(db_path, timeout_s=timeout_s, pragma_config=pragma_config)) as conn:
+    conn = (
+        connect_sqlite(db_path, timeout_s=timeout_s)
+        if pragma_config == DEFAULT_PRAGMA_CONFIG
+        else connect_sqlite(db_path, timeout_s=timeout_s, pragma_config=pragma_config)
+    )
+    try:
         yield conn
+    finally:
+        close_persist_connection(conn)
+
+
+# Import checkpoint cadence (PO decision 2026-10-18, #1136). A WAL checkpoint syncs the
+# database file; doing it after every report cost ~125 ms per report on Windows (about
+# 90 % of import persist time). A passive checkpoint runs after a commit once
+# IMPORT_CHECKPOINT_COMMITS commits or IMPORT_CHECKPOINT_SECONDS have passed since the last
+# one, when import persistence completes, and when the import connection closes (also on
+# cancellation). The cadence is commit-triggered: on a sudden power loss only the reports
+# committed since the last checkpoint can be lost, the database stays consistent, and
+# re-running the import adds them because present reports are skipped. An application
+# crash loses nothing that was committed.
+IMPORT_CHECKPOINT_SECONDS = 2.0
+IMPORT_CHECKPOINT_COMMITS = 25
+
+
+class _LazySQLiteConnection:
+    """Owner-thread connection handle that creates no DB before first SQL use."""
+
+    def __init__(self, db_path, *, clock=time.monotonic):
+        self._db_path = db_path
+        self._connection = None
+        self._clock = clock
+        self._last_checkpoint = clock()
+        self._commits_since_checkpoint = 0
+        self._uncheckpointed = False
+
+    def __getattr__(self, name):
+        if self._connection is None:
+            self._connection = connect_sqlite(self._db_path)
+        return getattr(self._connection, name)
+
+    def close(self):
+        if self._connection is not None:
+            # SQLite checkpoints on close only for the last connection to the database, so
+            # sync the tail explicitly while a reader or another instance keeps it open.
+            try:
+                self.checkpoint_pending()
+            finally:
+                close_persist_connection(self._connection)
+
+    def checkpoint_after_commit(self):
+        # NORMAL commits do not sync the WAL; a checkpoint does. Bounded cadence, see
+        # IMPORT_CHECKPOINT_SECONDS / IMPORT_CHECKPOINT_COMMITS above.
+        self._uncheckpointed = True
+        self._commits_since_checkpoint += 1
+        if (self._commits_since_checkpoint < IMPORT_CHECKPOINT_COMMITS
+                and self._clock() - self._last_checkpoint < IMPORT_CHECKPOINT_SECONDS):
+            return
+        self._checkpoint()
+
+    def checkpoint_pending(self):
+        """Checkpoint now when commits are not fully checkpointed (or the last attempt failed)."""
+        if self._connection is not None and self._uncheckpointed:
+            self._checkpoint()
+
+    def _checkpoint(self):
+        # PASSIVE respects readers/writers and never retries or opens a transaction. The
+        # commit before it already succeeded, so a checkpoint error (for example a full disk
+        # while the database file grows) is logged and never turns that report into a failure.
+        # The cadence restarts either way; an attempt that raised, or that returned busy or
+        # left WAL frames unsynced (a reader pinned them), stays pending, so the persistence
+        # boundary and close retry it.
+        self._commits_since_checkpoint = 0
+        self._last_checkpoint = self._clock()
+        try:
+            with measure_persist_stage("checkpoint"):
+                result = self._connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        except sqlite3.Error as exc:
+            logger.warning("Import WAL checkpoint failed; committed reports are kept: %s", exc)
+            return
+        incomplete = bool(result) and bool(result[0] or result[2] < result[1])
+        self._uncheckpointed = incomplete
+        if incomplete:
+            logger.debug("Import WAL checkpoint incomplete: busy=%s frames=%s checkpointed=%s",
+                         *result)
+        observe_persist_checkpoint(result)
+
+
+@contextmanager
+def lazy_sqlite_connection_scope(db_path: str):
+    """Reuse one connection without creating a database for rejected imports."""
+    connection = _LazySQLiteConnection(db_path)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def _checkpoint_import_connection(connection):
+    if isinstance(connection, _LazySQLiteConnection):
+        connection.checkpoint_after_commit()
+
+
+def checkpoint_pending_import_commits(connection):
+    """Sync committed import reports before a long phase that may not commit (enrichment)."""
+    if isinstance(connection, _LazySQLiteConnection):
+        connection.checkpoint_pending()
 
 
 @contextmanager
@@ -165,7 +276,7 @@ def sqlite_readonly_connection_scope(
     database_uri = f"file:{quote(str(resolved_path))}?mode=ro"
     if immutable:
         database_uri += "&immutable=1"
-    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+    with closing(sqlite3.connect(database_uri, uri=True, **persist_sqlite_options())) as connection:
         yield connection
 
 
@@ -310,16 +421,17 @@ def run_transaction_with_retry(
         try:
             if conn is None:
                 conn = connect_sqlite(db_path)
-            cursor = conn.cursor()
+            cursor = conn.cursor(**persist_sqlite_options(cursor=True))
             result = operation(cursor)
-            conn.commit()
-            return result
+            with measure_persist_stage("commit"):
+                conn.commit()
         except sqlite3.OperationalError as exc:
             if conn is not None:
                 conn.rollback()
             if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
+            continue
         except Exception:
             if conn is not None:
                 conn.rollback()
@@ -328,7 +440,12 @@ def run_transaction_with_retry(
             if cursor is not None:
                 cursor.close()
             if owns_connection and conn is not None:
-                conn.close()
+                close_persist_connection(conn)
+
+        # Maintenance runs with the statement finalized and outside the retry
+        # boundary: a checkpoint failure must never replay a committed write.
+        _checkpoint_import_connection(conn)
+        return result
 
     raise sqlite3.OperationalError('Failed to complete SQLite transaction after retries')
 
@@ -548,7 +665,7 @@ def sqlite_query_only_connection_scope(db_path: str) -> Iterator[sqlite3.Connect
 
     resolved_path = Path(db_path).resolve(strict=False)
     database_uri = f"file:{quote(str(resolved_path))}?mode=rw"
-    with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+    with closing(sqlite3.connect(database_uri, uri=True, **persist_sqlite_options())) as connection:
         with closing(connection.cursor()) as cursor:
             cursor.execute("PRAGMA query_only=ON")
         yield connection

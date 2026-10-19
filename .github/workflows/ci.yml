@@ -30,6 +30,10 @@ on:
         description: "Set to 1 to build and smoke-test the supervised single-EXE envelope"
         required: false
         default: "0"
+      run_windows_import_persist_benchmark:
+        description: "Set to 1 with portable onefile to compare 200-PDF persistence in the build venv"
+        required: false
+        default: "0"
       diagnostic_mode:
         description: "Native identity discriminator or full incident qualification"
         type: choice
@@ -80,6 +84,33 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Portable supervised smoke failed' }
           $sha = (Get-FileHash -LiteralPath $portable[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "Portable EXE: $($portable[0].Name) SHA-256 $sha"
+
+      - name: Compare synthetic import persist substages in the build venv
+        if: inputs.run_windows_import_persist_benchmark == '1'
+        shell: pwsh
+        env:
+          PYTHONPATH: src
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $receipts = Join-Path $env:RUNNER_TEMP 'import-persist-receipts'
+          New-Item -ItemType Directory -Path $receipts -Force | Out-Null
+          try {
+            Get-MpComputerStatus -ErrorAction Stop |
+              Select-Object AntivirusEnabled, RealTimeProtectionEnabled, AMProductVersion |
+              ConvertTo-Json | Set-Content (Join-Path $receipts 'antivirus-state.json')
+          } catch {
+            '{"status":"unavailable"}' | Set-Content (Join-Path $receipts 'antivirus-state.json')
+          }
+          & .\.venv-build\Scripts\python.exe scripts/benchmark_import_persist.py --reports 200 --output (Join-Path $receipts 'persist.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Import persist equivalence/substage qualification failed' }
+
+      - name: Upload synthetic import persist receipts
+        if: always() && inputs.run_windows_import_persist_benchmark == '1'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-import-persist-receipts
+          path: ${{ runner.temp }}/import-persist-receipts/*.json
+          if-no-files-found: error
 
       - name: Verify source checkout remains at the exact clean head
         shell: pwsh

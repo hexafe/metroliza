@@ -2417,6 +2417,7 @@
       "id": "build-release-tools",
       "include": [
         "scripts/__init__.py",
+        "scripts/benchmark_import_persist.py",
         "scripts/benchmark_paths.py",
         "scripts/benchmark_trend_compare.py",
         "scripts/build_provenance.py",

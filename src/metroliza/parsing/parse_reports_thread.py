@@ -6,7 +6,6 @@ import logging
 import os
 import time
 import traceback
-from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
@@ -16,7 +15,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
-from metroliza.reports.db import execute_with_retry
+from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
+from metroliza.reports.db import checkpoint_pending_import_commits
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
 from metroliza.shared.diagnostic_events import WorkflowError, WorkflowOperation, WorkflowStage
@@ -1962,7 +1962,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.parsing_finished.emit()
                 return
 
-            with nullcontext(None) as connection:
+            # Keep one owner-thread connection alive across per-report commits.
+            # Closing the last WAL connection after each report forces repeated
+            # checkpoint/sidecar cleanup. Preparation workers never borrow it.
+            with lazy_sqlite_connection_scope(self.db_file) as connection:
                 report_fingerprints = set()
                 self._emit_stage_progress('load_existing_reports', 1.0)
 
@@ -2185,6 +2188,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     ),
                 )
                 self.last_parse_result = result
+                # Enrichment can run for minutes without committing; sync the import first.
+                checkpoint_pending_import_commits(connection)
                 diagnostic.stage(WorkflowStage.PERSISTENCE_COMPLETE)
 
                 self._complete_requested_enrichment(list(accepted_reports.values()), connection)

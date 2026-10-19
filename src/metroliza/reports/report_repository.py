@@ -12,6 +12,7 @@ import os
 from typing import Any, Callable, Iterable
 
 from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
+from metroliza.reports.import_persist_profile import measure_persist_stage, persist_stage
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_schema import (
@@ -339,6 +340,7 @@ class ReportRepository:
                 pass
         return False
 
+    @persist_stage("schema_probe")
     def _ensure_import_schema(self) -> None:
         if self._import_schema_is_ready():
             return
@@ -977,6 +979,7 @@ class ReportRepository:
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
+    @persist_stage("row_building")
     def _measurement_rows(self, report_id: int, measurements: Iterable[Any]) -> list[tuple[Any, ...]]:
         rows = []
         for row_order, measurement in enumerate(measurements, start=1):
@@ -1468,6 +1471,7 @@ class ReportRepository:
         self._persist_semantic_duplicate_warnings(cursor, report_id, identity_hash)
 
     @staticmethod
+    @persist_stage("hash")
     def _verify_import_source_digest(
         source_path: str | Path,
         *,
@@ -1545,6 +1549,7 @@ class ReportRepository:
         row = cursor.fetchone()
         return int(row[0]) if row is not None else None
 
+    @persist_stage("persist")
     def import_report_if_absent(
         self,
         *,
@@ -1585,11 +1590,14 @@ class ReportRepository:
             # Reject stale content before schema creation/migration can commit.
             # An inspected import into a ready schema needs only the verification
             # under the write lock below; schema work requires this extra guard.
-            source_sha256 = self._verify_import_source_digest(
-                source_path,
-                expected_sha256=source_sha256,
-                source_digest_verifier=source_digest_verifier,
-            )
+            # Profiled separately from the in-transaction "hash" stage, which must
+            # stay exactly one full read per imported file (#1125/#1136).
+            with measure_persist_stage("pre_schema_hash"):
+                source_sha256 = type(self)._verify_import_source_digest.__wrapped__(
+                    source_path,
+                    expected_sha256=source_sha256,
+                    source_digest_verifier=source_digest_verifier,
+                )
         self._ensure_import_schema()
         now = utc_timestamp()
         measurement_values = tuple(measurements)
