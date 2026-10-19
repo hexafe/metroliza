@@ -19,8 +19,9 @@ from concurrent.futures.process import BrokenProcessPool
 import logging
 import os
 from time import monotonic
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
+from metroliza.reports.report_metadata_review import ReportMetadataOverride
 from metroliza.shared.env_utils import env_int, env_value
 from metroliza.shared.compute_worker import compute_workers_available, frozen_windows, spawn_context
 
@@ -113,12 +114,14 @@ def initialize_prepare_worker() -> None:
     _worker_parser_class()
 
 
-def prepare_cmm_report_in_worker(task: tuple[str, str, str]) -> dict[str, object]:
+def prepare_cmm_report_in_worker(
+    task: tuple[str, str, str, ReportMetadataOverride | None],
+) -> dict[str, object]:
     """Run the CPU-bound CMM report preparation for one source and return its state."""
 
     from metroliza.parsing.source_inspection import source_stat_signature
 
-    source_path, database_path, metadata_parsing_mode = task
+    source_path, database_path, metadata_parsing_mode, review_override = task
     stat_before = source_stat_signature(source_path)
     parser = _worker_parser_class()(
         source_path,
@@ -126,24 +129,32 @@ def prepare_cmm_report_in_worker(task: tuple[str, str, str]) -> dict[str, object
         connection=None,
         metadata_parsing_mode=metadata_parsing_mode,
     )
+    # Apply confirmed values before metadata selection and identity derivation, just
+    # as the importing thread does for in-process preparation.
+    parser.metadata_review_override = review_override
     parser.prepare_for_two_stage_pipeline()
     return {
         "state": parser.export_prepared_state(),
         "stat_before": stat_before,
         "stat_after": source_stat_signature(source_path),
+        "metadata_review_override": review_override,
     }
 
 
-def accepted_worker_state(result, inspection) -> dict[str, object] | None:
+def accepted_worker_state(result, inspection, review_override=None) -> dict[str, object] | None:
     """Return a worker's prepared state only if the file stayed untouched while it was parsed.
 
     The worker's ``(size, mtime_ns)`` before and after parsing must equal each other and the
     signature of the importer's own inspection; otherwise the report is parsed again
     in-process. (The content hash verified right before persistence is the final authority.)
+    The worker must also have applied exactly the parent's reviewed metadata override, so a
+    confirmed correction can never be replaced by auto-extracted values.
     """
 
     reviewed = (inspection.file_size_bytes, inspection.file_modified_ns)
     if not (result["stat_before"] == result["stat_after"] == reviewed):
+        return None
+    if result.get("metadata_review_override") != review_override:
         return None
     return result["state"]
 
@@ -213,11 +224,13 @@ class ImportPreparePool:
         workers: int,
         parser_plugin_id: str,
         should_cancel: Callable[[], bool] = lambda: False,
+        metadata_review_overrides: Mapping[str, ReportMetadataOverride] | None = None,
     ) -> None:
         self._paths = [str(path) for path in report_paths]
         self._index = {path: position for position, path in enumerate(self._paths)}
         self._database_path = str(database_path)
         self._mode = str(metadata_parsing_mode)
+        self._metadata_review_overrides = dict(metadata_review_overrides or {})
         self._parser_plugin_id = parser_plugin_id
         self._should_cancel = should_cancel
         self._window = max(2, int(workers)) * INFLIGHT_PER_WORKER
@@ -243,7 +256,10 @@ class ImportPreparePool:
             try:
                 self._futures[index] = self._executor.submit(
                     prepare_cmm_report_in_worker,
-                    (self._paths[index], self._database_path, self._mode),
+                    (
+                        self._paths[index], self._database_path, self._mode,
+                        self._metadata_review_overrides.get(self._paths[index]),
+                    ),
                 )
             except Exception:  # pool is broken or shut down: stay in-process
                 self._broken = True
@@ -293,7 +309,11 @@ class ImportPreparePool:
         result = self._result(future)
         if result is None:
             return False
-        state = accepted_worker_state(result, prepared.source_inspection)
+        state = accepted_worker_state(
+            result,
+            prepared.source_inspection,
+            getattr(prepared.parser, "metadata_review_override", None),
+        )
         if state is None:
             return False
         try:
