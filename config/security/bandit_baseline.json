@@ -305,7 +305,7 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "_cached_query_filter_clause: table_alias is supplied only as the literal ir by the two internal export callers. Dynamic column is a bound rv_filter.field_name parameter; operators are validated by IndustrialQueryFilter.validated and values remain bound in the enclosing predicate.",
+      "rationale": "_cached_query_filter_clause: table_alias is supplied only as the literal ir by every internal export caller (six call sites in this module). Dynamic column is a bound rv_filter.field_name parameter; operators are validated by IndustrialQueryFilter.validated and values remain bound in the enclosing predicate.",
       "expires_on": "2027-04-30"
     },
     {
