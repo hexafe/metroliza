@@ -1,6 +1,7 @@
 """Snapshot filter choices with a bounded, database-change-aware cache."""
 
 from collections import OrderedDict
+import os
 from pathlib import Path
 from threading import Lock
 
@@ -28,6 +29,14 @@ FILTER_VALUE_SPECS = (
 _CACHE_LIMIT = 8
 _CACHE = OrderedDict()
 _CACHE_LOCK = Lock()
+# Header bytes that change with content: the database header (offset 24 is its
+# change counter) and the WAL header (checkpoint sequence and salts per restart).
+# These catch same-size writes even with coarse or unchanged mtimes. On POSIX the
+# main database file is never opened: closing any descriptor of it would release
+# every fcntl lock SQLite holds on it in this process. SQLite takes no locks on
+# the -wal file, and Windows locks belong to their own handle.
+_DATABASE_HEADER_BYTES = 100 if os.name == "nt" else 0
+_WAL_HEADER_BYTES = 32
 
 
 def _database_signature(path):
@@ -36,12 +45,12 @@ def _database_signature(path):
     for candidate in (path, Path(str(path) + "-wal")):
         try:
             stat = candidate.stat()
+            size = _DATABASE_HEADER_BYTES if candidate == path else _WAL_HEADER_BYTES
             try:
-                with candidate.open("rb") as source:
-                    # The DB header includes its change counter; the WAL header
-                    # includes the checkpoint sequence and salts for each restart.
-                    # These catch same-size writes even with coarse/fixed mtimes.
-                    header = source.read(100 if candidate == path else 32)
+                header = b""
+                if size:
+                    with candidate.open("rb") as source:
+                        header = source.read(size)
             except FileNotFoundError:
                 raise
             except OSError:

@@ -155,6 +155,8 @@ def test_cache_ignores_reader_metadata_changes(choices_db, monkeypatch, wal):
 
 @pytest.mark.parametrize("mode", ["DELETE", "TRUNCATE", "RESTART"])
 def test_cache_invalidates_same_size_commit_with_unchanged_timestamps(choices_db, monkeypatch, mode):
+    # The database header is read on Windows only; exercise that policy everywhere.
+    monkeypatch.setattr(filter_values, "_DATABASE_HEADER_BYTES", 100)
     database = Path(choices_db)
     wal = Path(choices_db + "-wal")
     # The fixture schema is ready. Its schema writer would switch DELETE to WAL
@@ -224,6 +226,7 @@ def test_cancel_and_writer_during_snapshot_do_not_cache(choices_db, monkeypatch)
 
 
 def test_unreadable_header_loads_values_without_caching(choices_db, monkeypatch):
+    monkeypatch.setattr(filter_values, "_DATABASE_HEADER_BYTES", 100)
     database = Path(choices_db)
     original_open = Path.open
 
@@ -241,3 +244,24 @@ def test_unreadable_header_loads_values_without_caching(choices_db, monkeypatch)
     )
     assert load_filter_values(choices_db) == first
     assert calls, "an unreadable header must not produce a cache hit"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the POSIX fcntl lock rule")
+def test_posix_signature_never_opens_the_live_database_file(choices_db, monkeypatch):
+    # Closing any descriptor of a SQLite database drops this process's fcntl locks.
+    database = Path(choices_db)
+    opened = []
+    original_open = Path.open
+
+    def recording_open(path, *args, **kwargs):
+        opened.append(Path(path))
+        return original_open(path, *args, **kwargs)
+
+    with closing(sqlite3.connect(choices_db)) as keeper:
+        keeper.execute("PRAGMA journal_mode=WAL")
+        keeper.execute("UPDATE report_measurements SET ax = ax")
+        keeper.commit()
+        monkeypatch.setattr(Path, "open", recording_open)
+        filter_values._database_signature(database)
+    assert database not in opened
+    assert Path(choices_db + "-wal") in opened
