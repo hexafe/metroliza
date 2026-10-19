@@ -64,6 +64,15 @@ from metroliza.ui.ui_foundation import (
 )
 
 
+def _temporary_cache_contents_summary(counts: dict[str, int]) -> str:
+    """Count fetched records separately from their field values and related data."""
+
+    records = counts.get("industrial_records", 0)
+    if records:
+        return f"{records:,} cached source row(s) and related data"
+    return "stored configuration or other industrial data"
+
+
 class IndustrialDataDialog(QDialog):
     """Show industrial-data status and launch source, sync, and export dialogs."""
 
@@ -433,11 +442,10 @@ class IndustrialDataDialog(QDialog):
         counts = self._temporary_cache_lifecycle_counts(target)
         if not any(counts.values()):
             return True
-        persisted_rows = sum(counts.values())
         choice = QMessageBox.question(
             self,
             "Temporary industrial data",
-            f"This temporary cache contains {persisted_rows:,} persisted data row(s). "
+            f"This temporary cache contains {_temporary_cache_contents_summary(counts)}. "
             "Save it before removing the temporary files?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
@@ -524,12 +532,10 @@ class IndustrialDataDialog(QDialog):
 
     def _refresh_storage_lifecycle(self) -> None:
         if self.cache_target.is_temporary:
-            persisted_rows = sum(
-                self._temporary_cache_lifecycle_counts(self.cache_target).values()
-            )
-            if persisted_rows:
+            counts = self._temporary_cache_lifecycle_counts(self.cache_target)
+            if any(counts.values()):
                 self.storage_lifecycle_label.setText(
-                    f"Temporary storage · {persisted_rows:,} persisted data row(s) will be "
+                    f"Temporary storage · {_temporary_cache_contents_summary(counts)} will be "
                     "deleted when this window closes. Save cache as… to keep them."
                 )
                 set_status_variant(self.storage_lifecycle_label, "danger")

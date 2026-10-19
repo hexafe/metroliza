@@ -60,6 +60,122 @@ def _app():
     return _QT_APP
 
 
+def test_wide_5000_row_cache_reports_source_rows_without_grouping_growth(tmp_path, monkeypatch):
+    from metroliza.industrial import industrial_analytics_workflow as workflow
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionAggregationState, ProductionChartSelection, ProductionMetricSelection,
+    )
+    from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
+    from metroliza.tabular.tabular_analytics_service import apply_tabular_grouping
+    from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+
+    _app()
+    monkeypatch.setattr(industrial_data_dialog, "default_industrial_source_config_path",
+                        lambda: tmp_path / "sources.yaml")
+    dialog = IndustrialDataDialog()
+    repository = IndustrialDataRepository(dialog.db_file)
+    profile = repository.upsert_source_profile(
+        profile_key="wide", profile_name="Wide synthetic", source_db_alias="wide",
+        database_type="sqlite", source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id, source_db_alias=profile.source_db_alias,
+        rows=(
+            {"source_record_key": f"row-{i}", **{f"metric_{j}": j for j in range(162)}}
+            for i in range(5000)
+        ),
+    )
+    before = industrial_data_dialog.disposable_cache_counts(dialog.db_file)
+    assert before["industrial_records"] == 5000
+    assert before["industrial_record_values"] == 810000
+    assert sum(before.values()) == 815001
+    loaded = load_industrial_cache_tabular_result(dialog.db_file)
+    grouping = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe, column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        grouping._apply_group_assignments({1: ("Selected", "#123456")})
+        assignments = grouping._materialize_grouping_dataframe()
+        for _attempt in range(3):
+            frame = loaded.sqlite_store.read_dataframe(columns=("source_row_number", "metric_0"))
+            grouped = apply_tabular_grouping(frame, assignments)
+            assert len(grouped.dataframe) == 5000
+            assert grouped.dataframe["GROUP"].tolist().count("Selected") == 1
+        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == before
+        dialog._refresh_storage_lifecycle()
+        assert "5,000 cached source row(s)" in dialog.storage_lifecycle_label.text()
+        prompts = []
+
+        def discard(_parent, _title, message, *_args):
+            prompts.append(message)
+            return QMessageBox.StandardButton.Discard
+
+        monkeypatch.setattr(QMessageBox, "question", discard)
+        assert dialog._resolve_temporary_cache_before_discard(dialog.cache_target)
+        assert "5,000 cached source row(s)" in prompts[0]
+
+        def fail_export(**kwargs):
+            Path(kwargs["output_file"]).write_bytes(b"partial workbook")
+            raise OSError("synthetic workbook failure")
+
+        # Keep the full request/materialization/export path; rendering is not
+        # relevant to storage accounting and is covered by the artifact tests.
+        monkeypatch.setattr(workflow, "_write_dashboard", lambda **_kwargs: {})
+        monkeypatch.setattr(workflow, "export_tabular_analytics_workbook", fail_export)
+        with pytest.raises(OSError, match="synthetic workbook failure"):
+            workflow.run_tabular_file_analytics(
+                input_file=dialog.db_file, tabular_load_result=loaded,
+                output_dashboard_file=str(tmp_path / "failed.html"),
+                output_workbook_file=str(tmp_path / "failed.xlsx"),
+                grouping_df=assignments,
+                metric_selection=(ProductionMetricSelection("metric_0"),),
+                aggregation_state=ProductionAggregationState(time_bucket="none"),
+                chart_selection=ProductionChartSelection(groupstats=False),
+            )
+        assert not list(tmp_path.glob(".*.tmp.xlsx"))
+        assert not (tmp_path / "failed.xlsx").exists()
+        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == before
+    finally:
+        assignment_store = grouping._sqlite_grouping_assignment_store()
+        grouping.reject()
+        assert assignment_store._connection is None
+        view_name = loaded.sqlite_store.table_name
+        loaded.sqlite_store.cleanup()
+        with sqlite_connection_scope(dialog.db_file) as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = ?", (view_name,),
+            ).fetchall() == []
+        monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+        cache_path = Path(dialog.db_file)
+        dialog.close()
+        assert not cache_path.exists()
+
+
+def test_temporary_cache_without_source_rows_still_warns_about_stored_configuration(tmp_path, monkeypatch):
+    _app()
+    monkeypatch.setattr(industrial_data_dialog, "default_industrial_source_config_path",
+                        lambda: tmp_path / "sources.yaml")
+    dialog = IndustrialDataDialog()
+    repository = IndustrialDataRepository(dialog.db_file)
+    repository.upsert_source_profile(
+        profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+        database_type="sqlite", source_object_name="events",
+    )
+    prompts = []
+
+    def discard(_parent, _title, message, *_args):
+        prompts.append(message)
+        return QMessageBox.StandardButton.Discard
+
+    monkeypatch.setattr(QMessageBox, "question", discard)
+    dialog._refresh_storage_lifecycle()
+    assert "stored configuration" in dialog.storage_lifecycle_label.text()
+    dialog.close()
+    assert "stored configuration" in prompts[0]
+    assert not Path(dialog.db_file).exists()
+
+
 def _populate_industrial_cache(database: str) -> None:
     repository = IndustrialDataRepository(database)
     profile = repository.upsert_source_profile(
