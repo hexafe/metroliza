@@ -130,6 +130,30 @@ def open_readonly(database: Path):
         yield db
 
 
+def _classify(result, parser_id, digest, candidates) -> None:
+    """Set ``result.verdict``/``reason`` for a report that has source candidates."""
+    blocks = result.stored_blocks
+    if not digest and len(candidates) != 1:
+        result.verdict, result.reason = "AMBIGUOUS", "MULTIPLE_FILENAME_CANDIDATES"
+        return
+    if parser_id != DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id:
+        result.verdict, result.reason = "OTHER_DIFF", "UNSUPPORTED_PARSER"
+        return
+    try:
+        result.reparsed_blocks, result.reparsed_measurements = reparse_counts(candidates[0])
+    except Exception:  # Parser errors must not disclose document text.
+        result.verdict, result.reason = "OTHER_DIFF", "PARSE_FAILED"
+        return
+    if not digest or blocks is None:
+        result.verdict, result.reason = "AMBIGUOUS", "WEAK_IDENTITY_OR_MISSING_BLOCK_COUNT"
+    elif (blocks, result.stored_measurements) == (result.reparsed_blocks, result.reparsed_measurements):
+        result.verdict, result.reason = "MATCH", "COUNTS_EQUAL"
+    elif blocks > result.reparsed_blocks:
+        result.verdict, result.reason = "EXTRA_BLOCKS_SUSPECTED", "STORED_BLOCK_SURPLUS"
+    else:
+        result.verdict, result.reason = "OTHER_DIFF", "COUNTS_DIFFER"
+
+
 def compare_database(database: Path, sources: list[Path], *, temp_dir: Path | None = None):
     """Return one comparison per stored report, including unavailable sources."""
     comparisons = []
@@ -164,25 +188,7 @@ def compare_database(database: Path, sources: list[Path], *, temp_dir: Path | No
             if not candidates:
                 comparisons.append(result)
                 continue
-            if not digest and len(candidates) != 1:
-                result.verdict, result.reason = "AMBIGUOUS", "MULTIPLE_FILENAME_CANDIDATES"
-            elif report["parser_id"] != DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id:
-                result.verdict, result.reason = "OTHER_DIFF", "UNSUPPORTED_PARSER"
-            else:
-                try:
-                    result.reparsed_blocks, result.reparsed_measurements = reparse_counts(candidates[0])
-                    if not digest or blocks is None:
-                        result.verdict, result.reason = "AMBIGUOUS", "WEAK_IDENTITY_OR_MISSING_BLOCK_COUNT"
-                    elif (blocks, result.stored_measurements) == (
-                        result.reparsed_blocks, result.reparsed_measurements
-                    ):
-                        result.verdict, result.reason = "MATCH", "COUNTS_EQUAL"
-                    elif blocks > result.reparsed_blocks:
-                        result.verdict, result.reason = "EXTRA_BLOCKS_SUSPECTED", "STORED_BLOCK_SURPLUS"
-                    else:
-                        result.verdict, result.reason = "OTHER_DIFF", "COUNTS_DIFFER"
-                except Exception:  # Parser errors must not disclose document text.
-                    result.verdict, result.reason = "OTHER_DIFF", "PARSE_FAILED"
+            _classify(result, report["parser_id"], digest, candidates)
             comparisons.append(result)
     return comparisons
 

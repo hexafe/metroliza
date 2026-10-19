@@ -1,5 +1,6 @@
 """Early streaming cancellation must not trigger a full-snapshot fallback."""
 
+from contextlib import closing
 import sqlite3
 from unittest.mock import Mock
 
@@ -19,7 +20,7 @@ def test_stream_measurements_sheet_fallback_requires_no_cancellation(
 ):
     print(f'Export source: {export_data_thread.__file__}')
     monkeypatch.setenv('METROLIZA_EXPORT_BULK_WRITE', '1')
-    with sqlite3.connect(':memory:') as connection:
+    with closing(sqlite3.connect(':memory:')) as connection:
         connection.execute('CREATE TABLE snapshot (VALUE)')
         connection.executemany('INSERT INTO snapshot VALUES (?)', rows)
         for cancel in (False, True):
