@@ -304,6 +304,10 @@ or ZIP/TAR archives. From an installed source environment:
 PYTHONPATH=src:. python scripts/detect_cmm_page_breaks.py reports.db original_reports/ reports.zip --output comparison.json
 ```
 
+On Windows (PowerShell): `$env:PYTHONPATH = "src;."; python scripts\detect_cmm_page_breaks.py reports.db original_reports\ --output comparison.csv`.
+Run it on a copy: close Metroliza normally (closing checkpoints the database), then copy the
+`.db` file. Archives are extracted to a temporary directory, so leave free disk space.
+
 Use `.csv` for CSV output; the output must be a new file. Every stored report gets
 counts and a verdict. SHA-256 identifies sources; missing sources and weak identity
 remain explicit. `EXTRA_BLOCKS_SUSPECTED` needs investigation; `MATCH` confirms
