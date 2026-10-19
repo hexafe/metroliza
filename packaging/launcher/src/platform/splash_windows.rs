@@ -63,7 +63,8 @@ pub const MAX_STATUS_BYTES: u32 = 512;
 
 const TIMER_TICK: usize = 1;
 const TIMER_DEADLINE: usize = 2;
-const TICK_MS: u32 = 50;
+/// One tick per animation frame (the GIF uses 100 ms); the indeterminate bar moves with it.
+const TICK_MS: u32 = 100;
 /// Safety net: a splash nobody hands off disappears after this long.
 const DEADLINE_MS: u32 = 120_000;
 
@@ -103,6 +104,8 @@ static STATE: OnceLock<Mutex<WindowState>> = OnceLock::new();
 
 struct WindowState {
     frames: Option<Frames>,
+    /// Title, status and note fonts, created once for the window's DPI (raw HFONT values).
+    fonts: [isize; 3],
     frame: usize,
     frame_elapsed_ms: u32,
     tick: u64,
@@ -191,9 +194,9 @@ unsafe fn fill(hdc: HDC, rect: &RECT, color: u32) {
     DeleteObject(brush as HGDIOBJ);
 }
 
-unsafe fn text(hdc: HDC, value: &str, rect: RECT, height: i32, weight: u32, color: u32, flags: u32) {
+unsafe fn create_font(height: i32, weight: u32) -> isize {
     let face = wide("Segoe UI");
-    let font = CreateFontW(
+    CreateFontW(
         -height,
         0,
         0,
@@ -208,14 +211,16 @@ unsafe fn text(hdc: HDC, value: &str, rect: RECT, height: i32, weight: u32, colo
         u32::from(CLEARTYPE_QUALITY),
         0,
         face.as_ptr(),
-    );
+    ) as isize
+}
+
+unsafe fn text(hdc: HDC, value: &str, rect: RECT, font: isize, color: u32, flags: u32) {
     let previous = SelectObject(hdc, font as HGDIOBJ);
     SetTextColor(hdc, color);
     let mut rect = rect;
     let value = wide(value);
     DrawTextW(hdc, value.as_ptr(), -1, &mut rect, flags | DT_NOPREFIX);
     SelectObject(hdc, previous);
-    DeleteObject(font as HGDIOBJ);
 }
 
 unsafe fn paint(hwnd: HWND) {
@@ -238,6 +243,7 @@ unsafe fn paint(hwnd: HWND) {
     let state = STATE.get().map(|s| s.lock().unwrap_or_else(|p| p.into_inner()));
     let scale = state.as_ref().map_or(100, |s| s.scale_percent);
     let tick = state.as_ref().map_or(0, |s| s.tick);
+    let fonts = state.as_ref().map_or([0; 3], |s| s.fonts);
     if let Some(state) = &state {
         if let Some(frames) = &state.frames {
             let (fw, fh) = (frames.width as i32, frames.height as i32);
@@ -296,8 +302,7 @@ unsafe fn paint(hwnd: HWND) {
         dc,
         "Metroliza",
         RECT { left, top: title_top, right, bottom: title_top + scaled(34, scale) },
-        scaled(22, scale),
-        FW_BOLD,
+        fonts[0],
         TITLE_REF,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
     );
@@ -306,8 +311,7 @@ unsafe fn paint(hwnd: HWND) {
         dc,
         if main.is_empty() { STARTING } else { &main },
         RECT { left, top: status_top, right, bottom: status_top + scaled(36, scale) },
-        scaled(13, scale),
-        FW_NORMAL,
+        fonts[1],
         STATUS_REF,
         DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS,
     );
@@ -317,8 +321,7 @@ unsafe fn paint(hwnd: HWND) {
             dc,
             &note,
             RECT { left, top: note_top, right, bottom: note_top + scaled(18, scale) },
-            scaled(12, scale),
-            FW_NORMAL,
+            fonts[2],
             STATUS_REF,
             DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS,
         );
@@ -335,7 +338,7 @@ unsafe fn paint(hwnd: HWND) {
         RECT { right: track.left + width, ..track }
     } else {
         let block = span / 4;
-        let period = 30u64; // ticks per sweep (1.5 s at 50 ms)
+        let period = 15u64; // ticks per sweep (1.5 s at 100 ms)
         let offset = ((tick % period) as i32 * (span + block) / period as i32) - block;
         RECT {
             left: (track.left + offset).max(track.left),
@@ -459,8 +462,13 @@ unsafe extern "system" fn window_proc(
             KillTimer(hwnd, TIMER_DEADLINE);
             WINDOW.store(0, Ordering::Release);
             if let Some(state) = STATE.get() {
-                let state = state.lock().unwrap_or_else(|p| p.into_inner());
+                let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
                 state.log.mark(&format!("splash_closed_{}", state.close_reason));
+                for font in std::mem::take(&mut state.fonts) {
+                    if font != 0 {
+                        DeleteObject(font as HGDIOBJ);
+                    }
+                }
             }
             PostQuitMessage(0);
             0
@@ -476,6 +484,7 @@ fn window_thread(ready: mpsc::Sender<isize>, log: Log) {
     let state = STATE.get_or_init(|| {
         Mutex::new(WindowState {
             frames: None,
+            fonts: [0; 3],
             frame: 0,
             frame_elapsed_ms: 0,
             tick: 0,
@@ -489,6 +498,14 @@ fn window_thread(ready: mpsc::Sender<isize>, log: Log) {
         state.frames = frames;
         state.scale_percent = scale_percent;
         state.log = log.clone();
+        // SAFETY: plain GDI font creation; the handles are deleted when the window is destroyed.
+        state.fonts = unsafe {
+            [
+                create_font(scaled(22, scale_percent), FW_BOLD),
+                create_font(scaled(13, scale_percent), FW_NORMAL),
+                create_font(scaled(12, scale_percent), FW_NORMAL),
+            ]
+        };
     }
     // SAFETY: plain Win32 window creation and message loop on a thread dedicated to the window.
     unsafe {

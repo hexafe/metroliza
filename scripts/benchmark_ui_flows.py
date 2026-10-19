@@ -153,6 +153,24 @@ class StallProbe:
         }
 
 
+def _visibility_filter_class():
+    from PyQt6.QtCore import QEvent, QObject
+
+    class _Visibility(QObject):
+        def __init__(self, record):
+            super().__init__()
+            self.record = record
+
+        def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+            if event.type() == QEvent.Type.Show and self.record["visible_ms"] is None:
+                self.record["visible_ms"] = Clock.ms()
+            elif event.type() == QEvent.Type.Hide and self.record["visible_ms"] is not None:
+                self.record["hidden_ms"] = Clock.ms()
+            return False
+
+    return _Visibility
+
+
 class DuckProbe:
     """Wraps the loading-indicator factories in every module that imported them."""
 
@@ -164,66 +182,57 @@ class DuckProbe:
         self.patched_modules: list[str] = []
 
     def install(self) -> None:
-        from PyQt6.QtCore import QEvent, QObject
-
         import metroliza.ui.worker_progress_dialog as wpd
 
         originals = {name: getattr(wpd, name) for name in self.FACTORIES}
+        visibility_class = _visibility_filter_class()
+        wrapped = {name: self._wrap_factory(name, factory, visibility_class)
+                   for name, factory in originals.items()}
+        self._patch_importers(wpd, originals, wrapped)
+
+    def _wrap_factory(self, name, factory, visibility_class):
         probe = self
 
-        class _Visibility(QObject):
-            def __init__(self, record):
-                super().__init__()
-                self.record = record
+        def wrapped(*args, **kwargs):
+            started = time.perf_counter()
+            dialog, label, bar, movie = factory(*args, **kwargs)
+            record = {
+                "factory": name, "title": kwargs.get("window_title"),
+                "created_ms": Clock.ms(started),
+                "create_cost_ms": round((time.perf_counter() - started) * 1000, 1),
+                "show_called_ms": None, "visible_ms": None, "hidden_ms": None, "frames": [],
+                "alive_at_end": None,
+            }
+            original_show = dialog.show
 
-            def eventFilter(self, obj, event):  # noqa: N802 - Qt API
-                if event.type() == QEvent.Type.Show and self.record["visible_ms"] is None:
-                    self.record["visible_ms"] = Clock.ms()
-                elif event.type() == QEvent.Type.Hide and self.record["visible_ms"] is not None:
-                    self.record["hidden_ms"] = Clock.ms()
-                return False
+            def show(*a, **k):
+                if record["show_called_ms"] is None:
+                    record["show_called_ms"] = Clock.ms()
+                return original_show(*a, **k)
 
-        def wrap(name):
-            factory = originals[name]
+            dialog.show = show
+            visibility = visibility_class(record)
+            dialog.installEventFilter(visibility)
+            probe._filters.append(visibility)
+            movie.frameChanged.connect(lambda _i, r=record: r["frames"].append(Clock.ms()))
+            record["_dialog"] = dialog
+            probe.records.append(record)
+            return dialog, label, bar, movie
 
-            def wrapped(*args, **kwargs):
-                started = time.perf_counter()
-                dialog, label, bar, movie = factory(*args, **kwargs)
-                record = {
-                    "factory": name, "title": kwargs.get("window_title"),
-                    "created_ms": Clock.ms(started),
-                    "create_cost_ms": round((time.perf_counter() - started) * 1000, 1),
-                    "show_called_ms": None, "visible_ms": None, "hidden_ms": None, "frames": [],
-                    "alive_at_end": None,
-                }
-                original_show = dialog.show
+        wrapped.__wrapped_original__ = factory
+        return wrapped
 
-                def show(*a, **k):
-                    if record["show_called_ms"] is None:
-                        record["show_called_ms"] = Clock.ms()
-                    return original_show(*a, **k)
-
-                dialog.show = show
-                visibility = _Visibility(record)
-                dialog.installEventFilter(visibility)
-                probe._filters.append(visibility)
-                movie.frameChanged.connect(lambda _i, r=record: r["frames"].append(Clock.ms()))
-                record["_dialog"] = dialog
-                probe.records.append(record)
-                return dialog, label, bar, movie
-
-            wrapped.__wrapped_original__ = factory
-            return wrapped
-
-        wrapped = {name: wrap(name) for name in self.FACTORIES}
+    def _patch_importers(self, factory_module, originals, wrapped) -> None:
+        """Replace the factory names every loaded metroliza module imported."""
+        by_identity = {id(original): name for name, original in originals.items()}
         for module_name, module in list(sys.modules.items()):
-            if not module_name.startswith("metroliza.") or module is wpd:
+            if not module_name.startswith("metroliza.") or module is factory_module:
                 continue
-            for name, original in originals.items():
-                for attribute, value in list(vars(module).items()):
-                    if value is original:
-                        setattr(module, attribute, wrapped[name])
-                        self.patched_modules.append(f"{module_name}.{attribute}")
+            for attribute, value in list(vars(module).items()):
+                name = by_identity.get(id(value))
+                if name is not None and value is originals[name]:
+                    setattr(module, attribute, wrapped[name])
+                    self.patched_modules.append(f"{module_name}.{attribute}")
 
     def summary(self) -> list[dict[str, Any]]:
         out = []
@@ -596,7 +605,7 @@ class ExportRun(Scenario):
         from metroliza.exporting.export_preset_utils import get_export_preset_label
 
         self.export.preset_combobox.setCurrentText(get_export_preset_label(ctx.args.preset))
-        self.output = ctx.work / ("export.html" if ctx.args.preset == "html_dashboard" else "export.xlsx")
+        self.output = ctx.work / ("export.html" if ctx.args.preset == "html_dashboard_only" else "export.xlsx")
         self.export.excel_file = str(self.output)
         self.export._set_path_field_value(self.export.excel_file_text_label, str(self.output))
         ctx.app.processEvents()
@@ -837,11 +846,144 @@ SCENARIOS: dict[str, type[Scenario]] = {
 # ---------------------------------------------------------------- runner
 
 
-def run_scenario(args) -> dict[str, Any]:
+def _profile_worker_class(spec: str, sink: list[str]) -> None:
+    """Wrap ``module:QThreadClass.run`` in cProfile; each finished run appends its report."""
+    import cProfile
+    import importlib
+    import io
+    import pstats
+
+    module_name, _, class_name = spec.partition(":")
+    worker_class = getattr(importlib.import_module(module_name), class_name)
+    original_run = worker_class.run
+
+    def profiled_run(self, *a, **k):
+        worker_profiler = cProfile.Profile()
+        worker_profiler.enable()
+        try:
+            return original_run(self, *a, **k)
+        finally:
+            worker_profiler.disable()
+            stream = io.StringIO()
+            pstats.Stats(worker_profiler, stream=stream).sort_stats("cumulative").print_stats(60)
+            sink.append(stream.getvalue())
+
+    worker_class.run = profiled_run
+
+
+def _profile_report(profiler, top: int) -> str:
+    import io
+    import pstats
+
+    profiler.disable()
+    stream = io.StringIO()
+    pstats.Stats(profiler, stream=stream).sort_stats("cumulative").print_stats(top)
+    return stream.getvalue()
+
+
+def _bootstrap_paths() -> None:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     for path in (str(ROOT), str(ROOT / "src")):
         if path not in sys.path:
             sys.path.insert(0, path)
+
+
+class _Run:
+    """One scenario run: probes, the poll loop and the result record."""
+
+    def __init__(self, app, ctx, scenario, args) -> None:
+        from PyQt6.QtCore import QTimer
+
+        self.app, self.ctx, self.scenario, self.args = app, ctx, scenario, args
+        self.duck = DuckProbe()
+        self.duck.install()
+        self.watch = WindowWatch(app)
+        self.stall = StallProbe(app)
+        self.sampler = ResourceSampler()
+        self.result: dict[str, Any] = {"scenario": scenario.name, "flows": list(scenario.flows),
+                                       "status": "ok"}
+        self.cpu0: dict[str, float] | None = None
+        self.deadline = 0.0
+        self.thread_profiles: list[str] = []
+        if getattr(args, "profile_thread", ""):
+            _profile_worker_class(args.profile_thread, self.thread_profiles)
+        self.profiler = None
+        if getattr(args, "profile", 0):
+            import cProfile
+
+            self.profiler = cProfile.Profile()
+        self.poll_timer = QTimer(app)
+        self.poll_timer.setInterval(10)
+        self.poll_timer.timeout.connect(self.poll)
+
+    def fail(self, error: str) -> None:
+        self.result.update(status="failed", error=error)
+
+    def poll(self) -> None:
+        from PyQt6.QtCore import QTimer
+
+        try:
+            finished = self.scenario.done(self.ctx)
+        except Exception as error:  # noqa: BLE001
+            self.fail(f"done(): {type(error).__name__}: {error}")
+            finished = True
+        if finished:
+            self.ctx.mark("result")
+            self.poll_timer.stop()
+            QTimer.singleShot(50, self.app.quit)
+        elif time.monotonic() > self.deadline:
+            self.fail("timeout")
+            self.poll_timer.stop()
+            self.app.quit()
+
+    def start(self) -> None:
+        self.sampler.start()
+        self.cpu0 = cpu_seconds()
+        self.deadline = time.monotonic() + SCENARIO_TIMEOUT_S
+        Clock.start()
+        self.stall.reset()
+        self.ctx.mark("action")
+        self.poll_timer.start()
+        if self.profiler is not None:
+            self.profiler.enable()
+        try:
+            self.scenario.action(self.ctx)
+        except Exception as error:  # noqa: BLE001
+            self.fail(f"action(): {type(error).__name__}: {error}")
+            self.app.quit()
+
+    def finish(self) -> dict[str, Any]:
+        result, ctx = self.result, self.ctx
+        if self.profiler is not None:
+            result["gui_thread_profile"] = _profile_report(self.profiler, int(self.args.profile))
+        if self.thread_profiles:
+            result["worker_thread_profiles"] = self.thread_profiles
+        result_ms = ctx.marks.get("result")
+        cpu1 = cpu_seconds()
+        try:
+            result.update(self.scenario.finish(ctx))
+        except Exception as error:  # noqa: BLE001
+            result.setdefault("warnings", []).append(f"finish(): {type(error).__name__}: {error}")
+        cpu0 = self.cpu0 or cpu1
+        result.update({
+            "result_ms": result_ms,
+            "first_feedback_ms": self.watch.first_window_ms,
+            "windows_shown": self.watch.windows[:12],
+            "marks_ms": ctx.marks,
+            "cpu_self_s": round(cpu1["self"] - cpu0["self"], 2),
+            "cpu_children_s": round(cpu1["children"] - cpu0["children"], 2),
+            "message_boxes": ctx.messages,
+            "duck": self.duck.summary(),
+            "duck_patched": self.duck.patched_modules,
+            **self.stall.summary(result_ms),
+            **self.sampler.stop(),
+            **ctx.extra,
+        })
+        return result
+
+
+def run_scenario(args) -> dict[str, Any]:
+    _bootstrap_paths()
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication
 
@@ -852,71 +994,11 @@ def run_scenario(args) -> dict[str, Any]:
     setup_started = time.perf_counter()
     scenario.setup(ctx)
     setup_ms = round((time.perf_counter() - setup_started) * 1000, 1)
-
-    duck = DuckProbe()
-    duck.install()
-    watch = WindowWatch(app)
-    stall = StallProbe(app)
-    sampler = ResourceSampler()
-    result: dict[str, Any] = {"scenario": scenario.name, "flows": list(scenario.flows), "status": "ok",
-                              "setup_ms": setup_ms}
-    state = {"cpu0": None, "deadline": None}
-
-    def poll() -> None:
-        try:
-            finished = scenario.done(ctx)
-        except Exception as error:  # noqa: BLE001
-            result.update(status="failed", error=f"done(): {type(error).__name__}: {error}")
-            finished = True
-        if finished:
-            ctx.mark("result")
-            poll_timer.stop()
-            QTimer.singleShot(50, app.quit)
-        elif time.monotonic() > state["deadline"]:
-            result.update(status="failed", error="timeout")
-            poll_timer.stop()
-            app.quit()
-
-    poll_timer = QTimer(app)
-    poll_timer.setInterval(10)
-    poll_timer.timeout.connect(poll)
-
-    def start() -> None:
-        sampler.start()
-        state["cpu0"] = cpu_seconds()
-        state["deadline"] = time.monotonic() + SCENARIO_TIMEOUT_S
-        Clock.start()
-        stall.reset()
-        ctx.mark("action")
-        poll_timer.start()
-        try:
-            scenario.action(ctx)
-        except Exception as error:  # noqa: BLE001
-            result.update(status="failed", error=f"action(): {type(error).__name__}: {error}")
-            app.quit()
-
-    QTimer.singleShot(300, start)
+    run = _Run(app, ctx, scenario, args)
+    run.result["setup_ms"] = setup_ms
+    QTimer.singleShot(300, run.start)
     app.exec()
-    result_ms = ctx.marks.get("result")
-    cpu1 = cpu_seconds()
-    try:
-        result.update(scenario.finish(ctx))
-    except Exception as error:  # noqa: BLE001
-        result.setdefault("warnings", []).append(f"finish(): {type(error).__name__}: {error}")
-    result.update({
-        "result_ms": result_ms,
-        "first_feedback_ms": watch.first_window_ms,
-        "windows_shown": watch.windows[:12],
-        "marks_ms": ctx.marks,
-        "cpu_self_s": round(cpu1["self"] - state["cpu0"]["self"], 2) if state["cpu0"] else None,
-        "cpu_children_s": round(cpu1["children"] - state["cpu0"]["children"], 2) if state["cpu0"] else None,
-        "message_boxes": ctx.messages,
-        "duck": duck.summary(),
-        "duck_patched": duck.patched_modules,
-        **stall.summary(result_ms),
-        **sampler.stop(),
-        **ctx.extra,
-    })
+    result = run.finish()
     shutil.rmtree(ctx.work, ignore_errors=True)
     return result
 
@@ -1052,6 +1134,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--preset", default="fast_diagnostics")
     run.add_argument("--keep-db", default="", help="reports_import: copy the resulting DB here")
     run.add_argument("--csv", default="csv_100k.csv", help="CSV fixture name in --data-dir")
+    run.add_argument("--profile-thread", default="",
+                     help="module:QThreadClass whose run() is profiled (worker threads)")
+    run.add_argument("--profile", type=int, default=0,
+                     help="cProfile the GUI thread from the action; keep N top cumulative rows")
     prep = sub.add_parser("prepare")
     prep.add_argument("--data-dir", required=True)
     prep.add_argument("--csv-rows", type=int, default=100_000)
