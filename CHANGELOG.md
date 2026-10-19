@@ -10,10 +10,11 @@
 - A missing or damaged program file is repaired automatically, or the message names the affected file and what to do.
 - Modify Database opens instantly and filters quickly on large databases, and uses far less memory.
 - Excel export (Main plots) is about twice as fast and uses much less memory; Extended plots and CSV Summary exports are faster; the output is unchanged.
-- The filter window opens instantly and loads its choices in the background.
+- The filter window opens instantly, loads its choices in the background and reuses them while the database is unchanged.
+- Canceling an export right after it starts stops at once, without loading all measurements first.
 - Import reads each report file fewer times, which helps most with large reports.
 - Importing reports on Windows saves them to the database much faster: the database is written through to disk every few seconds instead of after every report. After a sudden power loss during an import, re-running the import adds any reports from those last seconds.
-- Multi-page reports imported from an archive or in a very large batch are read the same way as other imports, without extra measurement groups at page breaks
+- Multi-page reports in very large imports (more than 2048 reports at once) are read the same way as other imports, without extra measurement groups at page breaks
 - Extended plots export uses several processor cores in the Windows app.
 - Metadata you clear before import stays empty, also after background metadata enrichment.
 
