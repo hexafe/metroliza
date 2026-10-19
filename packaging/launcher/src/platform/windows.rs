@@ -518,10 +518,11 @@ pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: Option<&Path>) -> Result<
             &mut info,
         );
         if created == 0 {
-            return Err(LauncherError::launch(format!(
-                "CreateProcessW error {}",
-                GetLastError()
-            )));
+            let code = GetLastError();
+            return Err(LauncherError::spawn(
+                format!("CreateProcessW error {code}"),
+                Some(code as i32),
+            ));
         }
         CloseHandle(info.hThread);
         Ok(Child {

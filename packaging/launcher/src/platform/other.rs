@@ -78,7 +78,7 @@ pub fn spawn_entry(exe: &Path, args: &[OsString], cwd: Option<&Path>) -> Result<
     command
         .spawn()
         .map(Child)
-        .map_err(|e| LauncherError::launch(format!("spawn: {e}")))
+        .map_err(|e| LauncherError::spawn(format!("spawn: {e}"), e.raw_os_error()))
 }
 
 /// Linux qualification stand-in: executable mappings survive their launcher and supervisor.

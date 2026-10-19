@@ -71,28 +71,37 @@ any onedir (the CI synthetic payload uses that).
 ## Self-repair contract
 
 After the second-launch integrity/durability pass, the completed warm check is size-only.
-Later same-size modifications need the supervisor's package-identity check and this repair contract:
+Later same-size modifications use these two paths, which share **one repair budget per launch**:
 
 1. The launcher sets `METROLIZA_RUNTIME_REPAIR_AVAILABLE=1` in the environment of the **first**
-   start of the entry (any inherited value is overwritten).
+   start attempt (any inherited value is overwritten).
 2. If the supervisor finds its package invalid and that variable is `1`, it shows **no notice** and
    exits with code **75** (`EX_TEMPFAIL`). Without the variable it keeps showing its precise notice.
-3. On exit code 75 the launcher logs `repair=requested`, releases the runtime, deletes the
-   pending and completion markers (so the directory can never look valid again; the whole tree is
-   removed if a matching marker cannot be deleted), re-extracts and re-verifies every file through the normal repair path
-   (`cache=repair`) and starts the entry **once more, with the variable removed**.
-4. The exit code of that second run is returned unchanged, 75 included. There is never a second
-   repair and never a loop; a second failure therefore reaches the user as the supervisor's precise
-   notice.
-5. Every other exit code, of the first start, passes through unchanged and nothing is restarted. If
-   the re-extraction itself fails the user sees the fixed extraction error (exit code 101-104).
+   The launcher logs `repair=requested` and repairs once.
+3. If the first spawn fails, repair is allowed only for `cache=warm` (files only size-checked this
+   launch) and an image-format or missing-file OS error: Windows `ERROR_BAD_EXE_FORMAT` (193),
+   `ERROR_INVALID_EXE_SIGNATURE` (191), `ERROR_EXE_MARKED_INVALID` (192),
+   `ERROR_EXE_MACHINE_TYPE_MISMATCH` (216), `ERROR_BAD_FORMAT` (11), `ERROR_FILE_CORRUPT` (1392),
+   `ERROR_FILE_NOT_FOUND` (2), `ERROR_PATH_NOT_FOUND` (3); Unix `ENOEXEC` or `ENOENT` in the test
+   stand-in. It logs `repair=spawn_failed error=LaunchFailed: ...`. All other spawn failures,
+   including policy/access blocks, and failures after Cold, Verified or Repaired preparation,
+   return the fixed LaunchFailed text and exit **104** immediately.
+4. Either repair releases the runtime, deletes the pending and completion markers (the whole tree
+   is removed if a matching marker cannot be deleted), then re-extracts and re-verifies every file
+   through the normal repair path (`cache=repair`). The final start has the variable removed.
+   If this repair fails after a spawn failure, `repair_error=...` records the repair error and the
+   original LaunchFailed is returned (exit **104**, "Metroliza could not be started..."). A failed
+   exit-75 repair retains the existing fixed cache/extraction error handling.
+5. The final spawn failure returns LaunchFailed; the exit code of a successfully started final
+   run is returned unchanged, **75 included**. There is never a second repair or a loop. All other
+   exit codes of the first run pass through unchanged.
 
 The single-instance mutex, the `.use` lock and the entry process id publication stay in place
-across both starts. The supervisor side of the contract is specified in #1111 and is **not part of
-this branch**; until it lands nothing exits with 75 and the launcher behaves exactly as before. The
-launcher half is covered by the e2e tests with a fake entry (75 then success, 75 twice, other exit
-codes unchanged, an inherited variable never reaches the restart) and by the `self_repair_exit_75`
-scenario of `scripts/qualify_windows_launcher.py`.
+across both starts. Cleanup starts only after a successful spawn and is joined before an exit-75
+repair. The supervisor side of the contract is specified in #1111 and is **not part of this branch**;
+until it lands, spawn-failure recovery still works without a supervisor repair request. E2e tests
+cover both paths, the shared budget, excluded spawn failures and repair errors. The exit-75 path
+also has the `self_repair_exit_75` scenario of `scripts/qualify_windows_launcher.py`.
 
 ## EXE format
 
@@ -166,8 +175,10 @@ written to `%TEMP%`.
    working directory** (where the user started it, as with the portable envelope; the runtime
    directory is a disposable cache and must never become the default folder of a file dialog or of
    a relative export name), arguments passed through, `METROLIZA_RUNTIME_REPAIR_AVAILABLE=1` set.
-   Wait for it. If it exits with 75, repair the runtime and start it once more without the variable (see
-   [Self-repair contract](#self-repair-contract)). Return the exit code of the last run.
+   A Warm-cache image-format/missing-file spawn failure can repair once before the final start.
+   Wait for a successful start; exit 75 can request repair only if that budget is still available.
+   The final start has the variable removed (see [Self-repair contract](#self-repair-contract)).
+   Return the exit code of the last run, or LaunchFailed (104) for a spawn failure.
 7. Alongside the app, a best-effort cleanup keeps the current version and the most recently
    completed other version and removes the rest. It only touches directories named
    `<version>_<sha8>`, skips versions whose `.use` lock is held, and yields to a running
@@ -186,8 +197,10 @@ passed verification and file flushing. A verification mismatch repairs without r
 Only fixed English texts (`src/error.rs`): no exception text, paths or codes. Details go to the log
 file named by `METROLIZA_LAUNCHER_LOG` if set. The launcher's own failures use exit codes
 101-104; otherwise the exit code of the entry process is returned. Log lines: `cache=cold|verified|warm|repair`,
-`instance=second`, `entry=started` (twice after a repair), `repair=requested`, `exit=<code>`,
-`cleanup ...`, `error=...`. Setting `METROLIZA_LAUNCHER_NO_UI=1` suppresses message boxes (CI).
+`instance=second`, `entry=started` (successful spawns only: twice for exit-75 repair, once for
+successful spawn-failure recovery, zero if neither spawn succeeds), `repair=requested`,
+`repair=spawn_failed error=LaunchFailed: ...`, `repair_error=...` (failed spawn-triggered repair),
+`exit=<code>`, `cleanup ...`, `error=...`. Setting `METROLIZA_LAUNCHER_NO_UI=1` suppresses message boxes (CI).
 
 ## Measuring startup and qualifying the real payload
 

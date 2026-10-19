@@ -7,9 +7,9 @@
 //!    not the cache), clean up old versions in the background, wait for the entry process and
 //!    return its exit code.
 //! 5. Self-repair: the first start carries [`REPAIR_AVAILABLE_ENV`]. If the entry exits with
-//!    [`REPAIR_EXIT_CODE`] it found its own package invalid and showed no notice; the launcher
-//!    then re-extracts the runtime and starts the entry exactly once more, without the variable,
-//!    and returns that run's exit code whatever it is. There is never a second repair.
+//!    [`REPAIR_EXIT_CODE`] it found its own package invalid and showed no notice. If that happens
+//!    or a Warm cache's first spawn fails with an image-format/missing-file OS error, the launcher
+//!    re-extracts and starts the entry once more, without the variable. There is no second repair.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -17,7 +17,8 @@ use std::thread;
 
 use crate::archive::Payload;
 use crate::cache::{
-    cleanup_old_versions, ensure_runtime, repair_runtime, resolve_root, Options, RootInputs,
+    cleanup_old_versions, ensure_runtime, repair_runtime, resolve_root, Options, Outcome,
+    RootInputs,
 };
 use crate::error::{LauncherError, Result};
 use crate::log::Log;
@@ -83,7 +84,23 @@ fn launch(log: &Log) -> Result<i32> {
 
     let entry = runtime.dir.join(&payload.manifest.entry);
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let child = start_entry(&entry, &args, true, &instance, log)?;
+    let (child, repair_available) = match start_entry(&entry, &args, true, &instance, log) {
+        Ok(child) => (child, true),
+        Err(error) if should_repair_spawn(runtime.outcome, &error) => {
+            // Only a Warm cache skipped hashing this launch. An image-format/missing-file
+            // error may mean same-size damage or removal after that check. No cleanup runs yet.
+            log.line(&format!("repair=spawn_failed error={error}"));
+            runtime = repair_runtime(&root, &payload, runtime, &progress, &Options::default())
+                .map_err(|repair_error| {
+                    log.line(&format!("repair_error={repair_error}"));
+                    error
+                })?;
+            log.line(&format!("cache={}", runtime.outcome.as_str()));
+            let entry = runtime.dir.join(&payload.manifest.entry);
+            (start_entry(&entry, &args, false, &instance, log)?, false)
+        }
+        Err(error) => return Err(error),
+    };
 
     // Housekeeping runs beside the application; it never affects the exit code. It is joined
     // before anything below changes the environment or touches the cache again.
@@ -102,7 +119,7 @@ fn launch(log: &Log) -> Result<i32> {
         ));
     }
 
-    if code == REPAIR_EXIT_CODE {
+    if repair_available && code == REPAIR_EXIT_CODE {
         // The entry rejected its own files without telling the user. Rebuild once and retry
         // once; the second run is final, even if it asks for a repair again.
         log.line("repair=requested");
@@ -141,4 +158,64 @@ fn start_entry(
     platform::publish_entry_pid(instance, child.id());
     log.line("entry=started");
     Ok(child)
+}
+
+/// Re-extraction can fix a damaged/missing image only when this launch skipped hashing it.
+fn should_repair_spawn(outcome: Outcome, error: &LauncherError) -> bool {
+    if outcome != Outcome::Warm || error.kind != crate::error::ErrorKind::LaunchFailed {
+        return false;
+    }
+    if cfg!(windows) {
+        // BAD_FORMAT, INVALID_EXE_SIGNATURE, EXE_MARKED_INVALID, BAD_EXE_FORMAT,
+        // EXE_MACHINE_TYPE_MISMATCH, FILE_CORRUPT, FILE_NOT_FOUND, PATH_NOT_FOUND.
+        matches!(
+            error.raw_os_error,
+            Some(11 | 191 | 192 | 193 | 216 | 1392 | 2 | 3)
+        )
+    } else if cfg!(unix) {
+        // ENOEXEC, ENOENT (the development stand-in).
+        matches!(error.raw_os_error, Some(8 | 2))
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawn_repair_requires_warm_cache_and_an_allowed_os_code() {
+        let allowed: &[i32] = if cfg!(windows) {
+            &[193, 191, 192, 216, 11, 1392, 2, 3]
+        } else if cfg!(unix) {
+            &[8, 2]
+        } else {
+            &[]
+        };
+        for code in allowed {
+            let error = LauncherError::spawn("spawn failed", Some(*code));
+            assert!(should_repair_spawn(Outcome::Warm, &error), "code {code}");
+            for outcome in [Outcome::Cold, Outcome::Verified, Outcome::Repaired] {
+                assert!(!should_repair_spawn(outcome, &error), "{outcome:?}, {code}");
+            }
+        }
+        // Policy, AV/EDR, path length, elevation, Unix access denial/busy, unknown code.
+        for code in [1260, 5, 225, 206, 740, 13, 26, 9999] {
+            assert!(
+                !should_repair_spawn(
+                    Outcome::Warm,
+                    &LauncherError::spawn("spawn failed", Some(code))
+                ),
+                "code {code}"
+            );
+        }
+        assert!(!should_repair_spawn(
+            Outcome::Warm,
+            &LauncherError::launch("no OS code")
+        ));
+        let error = LauncherError::spawn("same detail", Some(193));
+        assert_eq!(error.to_string(), "LaunchFailed: same detail");
+        assert_eq!(error.kind.exit_code(), 104);
+    }
 }

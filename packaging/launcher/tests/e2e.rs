@@ -451,6 +451,232 @@ fn exit_75_repairs_the_runtime_and_restarts_once_without_the_repair_variable() {
 }
 
 #[test]
+fn warm_same_length_entry_damage_repairs_once_even_if_restarted_entry_exits_75() {
+    let (_tmp, exe, root, log, record) = repair_fixture("spawn-damage");
+    assert_eq!(run_launcher(&exe, &root, &log, &[]).code, Some(0));
+    let verified = run_launcher(&exe, &root, &log, &[]);
+    assert!(verified.log.contains("cache=verified"), "{}", verified.log);
+    let payload = Payload::open(&exe).unwrap();
+    let dir = root.join("1.0-spawn-damage_abcdef01");
+    let entry = dir.join("entry.exe");
+    let original = fs::read(&entry).unwrap();
+    // All-zero bytes of the same length are neither ELF nor PE. The completed cache still
+    // passes the size-only warm check, but the OS cannot spawn its entry executable.
+    fs::write(&entry, vec![0; original.len()]).unwrap();
+    assert!(is_warm(&dir, &payload));
+
+    let run = run_launcher(
+        &exe,
+        &root,
+        &log,
+        &["--record", record.to_str().unwrap(), "--exit-code", "75"],
+    );
+    assert_eq!(run.code, Some(75), "{}", run.log);
+    assert!(run.log.contains("cache=warm"), "{}", run.log);
+    assert!(
+        run.log.contains("repair=spawn_failed error=LaunchFailed"),
+        "{}",
+        run.log
+    );
+    assert_eq!(run.log.matches("repair=").count(), 1, "{}", run.log);
+    assert_eq!(run.log.matches("cache=repair").count(), 1, "{}", run.log);
+    assert_eq!(starts(&record), ["unset"], "{}", run.log);
+    assert_eq!(run.log.matches("entry=started").count(), 1, "{}", run.log);
+    assert_eq!(
+        run.log.matches("cleanup removed=").count(),
+        1,
+        "{}",
+        run.log
+    );
+    assert!(run.log.contains("exit=75"), "{}", run.log);
+    assert_eq!(fs::read(&entry).unwrap(), original, "entry restored");
+    assert!(dir.join(PENDING_MARKER).is_file());
+    assert!(!dir.join(MARKER).exists());
+}
+
+#[test]
+fn persistent_spawn_failure_after_repair_returns_error_without_another_repair() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let log = tmp.path().join("launcher.log");
+    let invalid = tmp.path().join("invalid.exe");
+    // Even a successful re-extraction cannot make this payload's entry a valid executable.
+    fs::write(&invalid, vec![0; 4096]).unwrap();
+    let exe = build(
+        tmp.path(),
+        "invalid-entry",
+        "1.0-spawn-persistent",
+        "abcdef01",
+        Path::new(LAUNCHER),
+        &invalid,
+    );
+    let payload = Payload::open(&exe).unwrap();
+    drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
+    let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+    assert_eq!(runtime.outcome, Outcome::Verified);
+    let dir = runtime.dir.clone();
+    drop(runtime);
+    assert!(is_warm(&dir, &payload));
+
+    let run = run_launcher(&exe, &root, &log, &[]);
+    assert_eq!(run.code, Some(104), "{}", run.log);
+    assert!(run.log.contains("cache=warm"), "{}", run.log);
+    assert_eq!(
+        run.log.matches("repair=spawn_failed").count(),
+        1,
+        "{}",
+        run.log
+    );
+    assert_eq!(run.log.matches("repair=").count(), 1, "{}", run.log);
+    assert_eq!(run.log.matches("cache=repair").count(), 1, "{}", run.log);
+    assert_eq!(
+        run.log.matches("error=LaunchFailed").count(),
+        2,
+        "{}",
+        run.log
+    );
+    assert!(!run.log.contains("entry=started"), "{}", run.log);
+    assert!(!run.log.contains("cleanup removed="), "{}", run.log);
+    assert!(dir.join(PENDING_MARKER).is_file());
+    assert!(!dir.join(MARKER).exists());
+}
+
+// Build a payload that passes hash verification but cannot be spawned by the OS.
+fn unspawnable_fixture(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let log = tmp.path().join("launcher.log");
+    let invalid = tmp.path().join("invalid.exe");
+    fs::write(&invalid, bytes).unwrap();
+    let exe = build(
+        tmp.path(),
+        "invalid-entry",
+        &format!("1.0-{name}"),
+        "abcdef01",
+        Path::new(LAUNCHER),
+        &invalid,
+    );
+    (tmp, exe, root, log)
+}
+
+fn freshly_checked_spawn_failure_does_not_repair(outcome: &str) {
+    let label = format!("spawn-checked-{outcome}");
+    let (_tmp, exe, root, log) = unspawnable_fixture(&label, &[0; 4096]);
+    let dir = root.join(format!("1.0-{label}_abcdef01"));
+    if outcome != "cold" {
+        let payload = Payload::open(&exe).unwrap();
+        drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
+        assert!(dir.join(PENDING_MARKER).is_file());
+        if outcome == "repair" {
+            fs::remove_file(dir.join(PENDING_MARKER)).unwrap();
+        }
+    }
+    // Hashes match the payload even though its entry is not a valid executable.
+    let run = run_launcher(&exe, &root, &log, &[]);
+    assert_eq!(run.code, Some(104), "{}", run.log);
+    assert!(run.log.contains(&format!("cache={outcome}")), "{}", run.log);
+    assert!(!run.log.contains("repair="), "{}", run.log);
+    assert_eq!(
+        run.log.matches("error=LaunchFailed").count(),
+        1,
+        "{}",
+        run.log
+    );
+    assert!(!run.log.contains("entry=started"), "{}", run.log);
+    assert!(!run.log.contains("cleanup removed="), "{}", run.log);
+    assert_eq!(dir.join(PENDING_MARKER).exists(), outcome != "verified");
+    assert_eq!(dir.join(MARKER).exists(), outcome == "verified");
+}
+
+#[test]
+fn cold_spawn_failure_does_not_repair() {
+    freshly_checked_spawn_failure_does_not_repair("cold");
+}
+
+#[test]
+fn verified_pending_spawn_failure_does_not_repair() {
+    freshly_checked_spawn_failure_does_not_repair("verified");
+}
+
+#[test]
+fn repaired_spawn_failure_does_not_repair_again() {
+    freshly_checked_spawn_failure_does_not_repair("repair");
+}
+
+#[cfg(unix)]
+#[test]
+fn warm_permission_denied_spawn_does_not_repair() {
+    // The Unix stand-in chmods the entry before spawning. A directory as the script's
+    // interpreter reliably yields EACCES even after that chmod, without a privileged test.
+    // Windows policy/access-denial codes are covered by the spawn policy unit test there.
+    let (_tmp, exe, root, log) = unspawnable_fixture("spawn-denied", b"#!/\n");
+    let payload = Payload::open(&exe).unwrap();
+    drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
+    let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+    assert_eq!(runtime.outcome, Outcome::Verified);
+    let dir = runtime.dir.clone();
+    drop(runtime);
+    let marker = fs::read(dir.join(MARKER)).unwrap();
+    let error = metroliza_launcher::platform::spawn_entry(&dir.join("entry.exe"), &[], None)
+        .err()
+        .unwrap();
+    assert!(error.detail.contains("os error 13"), "{error}");
+
+    let run = run_launcher(&exe, &root, &log, &[]);
+    assert_eq!(run.code, Some(104), "{}", run.log);
+    assert!(run.log.contains("cache=warm"), "{}", run.log);
+    assert!(!run.log.contains("repair="), "{}", run.log);
+    assert_eq!(
+        run.log.matches("error=LaunchFailed").count(),
+        1,
+        "{}",
+        run.log
+    );
+    assert!(!run.log.contains("entry=started"), "{}", run.log);
+    assert!(!run.log.contains("cleanup removed="), "{}", run.log);
+    assert_eq!(fs::read(dir.join(MARKER)).unwrap(), marker);
+    assert!(!dir.join(PENDING_MARKER).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_spawn_repair_preserves_original_launch_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_tmp, exe, root, log) = unspawnable_fixture("spawn-repair-fails", &[0; 4096]);
+    let payload = Payload::open(&exe).unwrap();
+    drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
+    let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+    let dir = runtime.dir.clone();
+    drop(runtime);
+    // Prevent marker invalidation/removal after a repairable ENOEXEC on a Warm cache.
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let run = run_launcher(&exe, &root, &log, &[]);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(run.code, Some(104), "{}", run.log);
+    assert!(run.log.contains("cache=warm"), "{}", run.log);
+    assert_eq!(
+        run.log.matches("repair=spawn_failed").count(),
+        1,
+        "{}",
+        run.log
+    );
+    assert!(
+        run.log.contains("repair_error=CacheUnavailable"),
+        "{}",
+        run.log
+    );
+    assert_eq!(
+        run.log.matches("error=LaunchFailed").count(),
+        2,
+        "{}",
+        run.log
+    );
+    assert!(!run.log.contains("entry=started"), "{}", run.log);
+}
+
+#[test]
 fn a_second_exit_75_is_final_and_does_not_loop() {
     let (_tmp, exe, root, log, record) = repair_fixture("twice");
     let record_arg = record.to_str().unwrap();
