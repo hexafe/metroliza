@@ -396,16 +396,18 @@ class Timeline:
         return record
 
 
-def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | None) -> list[dict[str, Any]]:
+def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | None,
+                round_index: int = 1) -> list[dict[str, Any]]:
     records = []
-    home = timeline.work / variant
+    home = timeline.work / f"{variant}-r{round_index}"
     home.mkdir()
     fresh = home / "fresh"
     fresh.mkdir()
     cold_exe = fresh / exe.name
     shutil.copy2(exe, cold_exe)  # a new file: antivirus has not seen this path yet
     root = home / "root"
-    print(f"{variant}: {exe.name}", flush=True)
+    print(f"{variant} round {round_index}: {exe.name}", flush=True)
+    variant = f"{variant}#{round_index}"
     records.append(timeline.launch(variant, "cold", cold_exe, root, smoke=True, expect_cache="cold", frames=True))
     records.append(timeline.launch(variant, "verified", cold_exe, root, smoke=True, expect_cache="verified", frames=True))
     for index in (1, 2):
@@ -463,6 +465,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--frames", action="store_true", help="save half-size screenshots")
     parser.add_argument("--frame-every-ms", type=int, default=200)
+    parser.add_argument("--rounds", type=int, default=1,
+                        help="repeat the whole sequence, alternating the variants each round")
     args = parser.parse_args(argv)
     if os.name != "nt":
         print("Windows only", file=sys.stderr)
@@ -474,11 +478,15 @@ def main(argv: list[str] | None = None) -> int:
     timeline = Timeline(args.output_dir, frames=args.frames, frame_every_ms=args.frame_every_ms)
     records: list[dict[str, Any]] = []
     try:
-        for spec in args.variant:
-            name, _, paths = spec.partition("=")
-            exe_text, _, next_text = paths.partition(",")
-            records.extend(run_variant(timeline, name, Path(exe_text),
-                                       Path(next_text) if next_text else None))
+        specs = list(args.variant)
+        for round_index in range(1, args.rounds + 1):
+            # Alternate the order so neither variant always runs first on a fresh runner.
+            ordered = specs if round_index % 2 == 1 else list(reversed(specs))
+            for spec in ordered:
+                name, _, paths = spec.partition("=")
+                exe_text, _, next_text = paths.partition(",")
+                records.extend(run_variant(timeline, name, Path(exe_text),
+                                           Path(next_text) if next_text else None, round_index))
     finally:
         timeline.close()
     (args.output_dir / "timeline.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
