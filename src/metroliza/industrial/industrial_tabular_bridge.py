@@ -859,9 +859,12 @@ def _literal_where_sql(where_parts: list[str], params: list[Any]) -> str:
     iterator = iter(params)
     literal_parts: list[str] = []
     for part in where_parts:
-        literal = part
-        while "?" in literal:
-            literal = literal.replace("?", _sql_literal(next(iterator)), 1)
+        # Split the generated template before inserting values: a literal may
+        # itself contain '?' and must never become another placeholder.
+        pieces = part.split("?")
+        literal = pieces[0]
+        for piece in pieces[1:]:
+            literal += _sql_literal(next(iterator)) + piece
         literal_parts.append(literal)
     return f"WHERE {' AND '.join(literal_parts)}"
 

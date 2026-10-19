@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_on": "2026-07-17",
+  "generated_on": "2026-10-19",
   "entries": [
     {
       "repository": "hexafe-plotstats",
@@ -8,8 +8,8 @@
       "test_id": "B108",
       "path": "scripts/benchmark_large_dataset.py",
       "owner": "Security review",
-      "rationale": "Benchmark-only temporary paths contain synthetic data and use process-scoped cleanup; expiry requires renewed filesystem review.",
-      "expires_on": "2026-10-31"
+      "rationale": "<module>: MPLCONFIGDIR defaults via os.environ.setdefault to the literal /tmp/hexafe-plotstats-matplotlib, before importing Matplotlib. This opt-in developer benchmark generates synthetic datasets; an existing environment override wins. The path is shared/predictable, not process-scoped or automatically cleaned. Renewal accepts local benchmark cache integrity risk on a trusted single-user runner; it is unsuitable for hostile shared /tmp execution.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "hexafe-plotstats",
@@ -17,8 +17,8 @@
       "test_id": "B108",
       "path": "scripts/benchmark_renderers.py",
       "owner": "Security review",
-      "rationale": "Benchmark-only temporary paths contain synthetic data and use process-scoped cleanup; expiry requires renewed filesystem review.",
-      "expires_on": "2026-10-31"
+      "rationale": "<module>: MPLCONFIGDIR is the literal /tmp/hexafe-plotstats-matplotlib set only when the environment has no override, before Matplotlib import. _build_cases uses seeded synthetic arrays and PNG benchmarks, not customer inputs. This remains a predictable shared cache directory with no process cleanup guarantee; renewal is limited to trusted single-user benchmark execution, retaining shared-/tmp integrity risk.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "hexafe-plotstats",
@@ -26,8 +26,8 @@
       "test_id": "B108",
       "path": "scripts/compare_renderers.py",
       "owner": "Security review",
-      "rationale": "Benchmark-only temporary paths contain synthetic data and use process-scoped cleanup; expiry requires renewed filesystem review.",
-      "expires_on": "2026-10-31"
+      "rationale": "main: The --output default is the literal /tmp/hexafe_plotstats_renderer_comparisons; the explicit CLI option controls output_dir. main creates it with mkdir(exist_ok=True) and writes only synthetic comparison PNG/JSON/Markdown artifacts from _cases. There is no process uniqueness/cleanup or no-clobber guarantee; renewal accepts predictable-output integrity/overwrite risk only for opt-in trusted single-user runs, not hostile shared /tmp.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "hexafe-plotstats",
@@ -35,8 +35,8 @@
       "test_id": "B108",
       "path": "scripts/compare_renderers.py",
       "owner": "Security review",
-      "rationale": "Benchmark-only temporary paths contain synthetic data and use process-scoped cleanup; expiry requires renewed filesystem review.",
-      "expires_on": "2026-10-31"
+      "rationale": "<module>: MPLCONFIGDIR is the fixed /tmp/hexafe-plotstats-matplotlib default applied by setdefault before Matplotlib import; an operator may override it. _cases generates synthetic renderer comparisons. The cache path is predictable/shared and has no process cleanup contract; accepted only for opt-in trusted single-user developer/CI benchmarks, with shared-/tmp integrity risk retained.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -44,8 +44,8 @@
       "test_id": "B608",
       "path": "scripts/benchmark_paths.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "benchmark_csv_summary_large_data_probe: scope_query comes from TabularSqliteStore.source_row_number_query_for_group_search on the synthetic CSV benchmark store; the builder quotes columns and binds filter/search values, and scope_params is passed unchanged to execute.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -53,8 +53,8 @@
       "test_id": "B608",
       "path": "scripts/benchmark_paths.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "benchmark_sqlite_grouping_high_cardinality_probe: scope_query comes from store.source_row_number_query_for_group_search for the synthetic high-cardinality benchmark; TabularSqliteStore quotes identifiers and emits bound search/filter values, supplied separately as scope_params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -62,8 +62,8 @@
       "test_id": "B310",
       "path": "scripts/fetch_rapidocr_models.py",
       "owner": "Security review",
-      "rationale": "Existing URL open call is constrained to an application-owned HTTPS endpoint or validated scheme; expiry requires renewed transport review.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_model: url is supplied only by main from the three HTTPS URL constants in RAPIDOCR_MODEL_ASSET_MANIFEST in header_ocr_backend; the CLI exposes output-dir and force, not URLs. expected_sha256 comes from the same manifest and is verified before replacing the destination. This is a trusted developer downloader API, not a URL ingestion endpoint; urllib redirects remain enabled.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -71,8 +71,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
-      "rationale": "Export snapshots use process-generated quoted temp identifiers and embed only the read-only export SELECT scope; data values stay parameterized.",
-      "expires_on": "2026-10-31"
+      "rationale": "_prepare_export_snapshot: snapshot_table_name consists only of the fixed _export_snapshot_ prefix, integer milliseconds and id(self). self.filter_query is the application-generated measurement scope from ExportDialog/FilterDialog via build_measurement_filter_query/build_measurement_export_query (or the analytical partition wrapper); filter literals are escaped by _escape_sql_literal and expression identifiers/operators are validated by the filter compiler. No raw SQL editor/file field feeds this path; arbitrary SQL callers are outside this internal API contract.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -80,8 +80,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
-      "rationale": "Export snapshots use process-generated quoted temp identifiers and embed only the read-only export SELECT scope; data values stay parameterized.",
-      "expires_on": "2026-10-31"
+      "rationale": "_prepare_export_snapshot: snapshot_table_name is generated in _prepare_export_snapshot exclusively from the fixed _export_snapshot_ prefix, integer milliseconds and id(self); it contains no user/file/database text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -89,8 +89,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_build_scoped_export_query: filter_query is an internal SQL scope supplied by ExportDataThread from report_query_service builders or its generated snapshot SELECT. FilterDialog compiles the filter DSL and escapes literal values; this wrapper is SQL composition, not sanitization and must not accept raw external SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -98,8 +98,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Export-only partition query wraps the existing export SELECT scope; its CASE expressions use fixed REFERENCE and REPORT_ID columns with no interpolated data or identifiers.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_analytical_partition_query: missing_reference is the local constant NULLIF(TRIM(REFERENCE), empty string) IS NULL. filter_query comes from ExportDataThread application scope builders, which compile filter expressions and escape literals; report IDs/references are read as data by the CASE expressions, never interpolated here.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -107,8 +107,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_partition_values: quoted_partition is quote_identifier(partition_column), which doubles embedded double quotes; scoped_query comes from _build_scoped_export_query over the application-generated export/snapshot scope. Raw external SQL is not an accepted scope source.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -116,8 +116,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_partition_header_counts: quoted_partition uses db.quote_identifier(partition_column); validated_header_expr is accepted only by _validated_partition_header_expression against the one-element _PARTITION_HEADER_EXPRESSIONS allowlist. scoped_query wraps the generated export/snapshot SELECT through _build_scoped_export_query, not external SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -125,8 +125,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
-      "expires_on": "2026-10-31"
+      "rationale": "load_export_partition_dataframe: scoped_query wraps the internal generated export/snapshot SELECT via _build_scoped_export_query; quoted_partition is db.quote_identifier(partition_column). partition_value is separately bound as a single ? parameter.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -134,8 +134,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_sql_measurement_summary: scoped_query is produced by _build_scoped_export_query over the application-generated export/snapshot SELECT. usl, lsl, reference, header and ax remain five bound parameters; no measurement/reference value is interpolated into this summary.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -143,17 +143,8 @@
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
-      "rationale": "Export query composition wraps a read-only SELECT scope, quotes partition identifiers, allowlists the header expression, and parameterizes all values.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "aa5679202e8486f8d64080870ddd5ece2b04bb5e6847ffc0fd4d74fe56c09302",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/anomaly/detector_config_repository.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_sql_measurement_summaries: scoped_query is the internal export/snapshot scope from _build_scoped_export_query. where_clause is chosen locally between the empty string and WHERE REFERENCE = ?; an optional reference is passed in params, never in SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -161,35 +152,17 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/anomaly/event_repository.py",
       "owner": "Security review",
-      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_events._list: where joins only local detector_key = ?, signal_id = ? and status = ? fragments; _validate_status checks status and values are in params. limit_clause is empty or the literal LIMIT ? with _positive_limit supplied separately.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "a2aceb0fa80249d26a2d063d7e0764e2e9ecfb8937381ed853f1a2dd4ba47e0a",
+      "fingerprint": "3ddc5ab84224820690c115e71a4c93c8a60bcc738d365da8313cb0e002f008bd",
       "test_id": "B608",
       "path": "src/metroliza/industrial/anomaly/event_repository.py",
       "owner": "Security review",
-      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "bc8ac950207057009c7b0e6537ef57acbc354bcf977657b99e9e80f5a58e6aca",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/anomaly/event_repository.py",
-      "owner": "Security review",
-      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "f7c4b49bae3c86322efd529b6c9b3c2acd236ec5f0acdf6a64b46fbd81c954ac",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/anomaly/event_repository.py",
-      "owner": "Security review",
-      "rationale": "Anomaly-event queries select only fixed optional clauses, validate statuses, and bind detector, signal, status, and limit values; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "recent_events_by_signal._list: where is a local list beginning with signal_id = ? and optionally status = ? after _validate_status. Signal ID, status and _positive_limit(limit) are all passed in params; joining the list adds no caller SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -197,8 +170,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/anomaly/model_registry.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_artifacts._list: where joins only locally generated artifact_key/model_type/signal_id/status = ? predicates. status is validated, all filter values are bound, and limit_clause is empty or LIMIT ? with a positive bound limit.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -206,8 +179,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_load_dynamic_values_for_records: record_placeholders and field_placeholders are comma-joined literal ? markers sized from bounded record/field chunks. Actual record IDs and field names are in tuple(record_chunk) + tuple(field_chunk); require_identifier also validates field_names.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -215,8 +188,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_load_fixed_production_frame: select_columns is built from PRODUCTION_RECORD_COLUMNS plus schema-present extra_columns after require_identifier; every source column and alias passes db.quote_identifier. where_sql uses _fixed_filter_sql fixed columns and bound values via _append_in_filter.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -224,8 +197,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_load_dynamic_metric_discovery_rows: where_sql is built from _fixed_filter_sql: fixed records column names and _append_in_filter question-mark lists, with all ProductionFilterState values in params. No dynamic field/value is embedded in SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -233,8 +206,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_load_fixed_metric_discovery_rows: field_name passes require_identifier and db.quote_identifier (imported as _quote_identifier). where_sql comes from _fixed_filter_sql using fixed records columns and bound IN values via _append_in_filter; metric values remain data.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -242,8 +215,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_source_profiles._list_profiles: where_clause is chosen locally between empty and WHERE is_enabled = 1 from the include_disabled boolean; none of the profile configuration or database strings enter the SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -251,8 +224,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "latest_sync_run._latest: profile_filter is empty or the fixed WHERE runs.source_profile_id = ?; source_profile_id is passed separately in params, not interpolated.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -260,8 +233,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "upsert_industrial_records_from_rows._upsert_rows: placeholders consists only of ? markers for the bounded key_chunk. source_profile_id, source_db_alias and every source_record_key are separately bound in (source_profile_id, source_db_alias, *key_chunk).",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -269,8 +242,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "upsert_industrial_records_from_rows._upsert_rows: placeholders is generated solely from literal ? for key_chunk length. Profile ID, source alias and source record keys are bound separately; database-origin keys do not become query text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -278,8 +251,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "upsert_industrial_records_from_rows._upsert_rows: placeholders is a comma-separated sequence of ? sized from record_id_chunk. All record IDs are bound via tuple(record_id_chunk); no identifier or data interpolation occurs.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -287,8 +260,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "summarize_counts._counts: profile_filter is empty or the literal WHERE source_profile_id = ? selected in _counts; the profile ID is supplied in params. The sync-runs table is a fixed schema name.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -296,8 +269,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_data_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "summarize_counts._counts: profile_filter is the same empty/fixed WHERE source_profile_id = ? branch in _counts; the profile ID is bound in params. The industrial_records table is fixed in source.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -305,8 +278,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "load_cached_industrial_dataframe: select_columns is assembled exclusively from _CACHE_RECORD_ID_COLUMN, INDUSTRIAL_EXPORT_COLUMNS and the fixed ir.raw_record_json expression; all identifiers are module constants, not cached data or requested dynamic fields.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -314,8 +287,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_prepare_cached_export_scope: _EXPORT_SCOPE_TABLE and _EXPORT_REFERENCE_FILTER_TABLE are module constants. reference_column has passed _resolve_filter_column and membership in INDUSTRIAL_FILTER_RECORD_COLUMNS. filter_sql comes from _cached_query_filter_where_clause with table_alias=ir, validated operator enums and bound values in filter_params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -323,8 +296,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_append_cached_dynamic_columns: placeholders is generated from literal ? for a bounded chunk of cached record IDs; chunk is supplied separately to execute, so cached values cannot change SQL structure.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -332,8 +305,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_cached_query_filter_clause: table_alias is supplied only as the literal ir by every internal export caller (six call sites in this module). Dynamic column is a bound rv_filter.field_name parameter; operators are validated by IndustrialQueryFilter.validated and values remain bound in the enclosing predicate.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -341,8 +314,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_cached_export_dynamic_fields: _EXPORT_SCOPE_TABLE is a module constant. rv.field_name values are returned as data; no database field name is interpolated into this SELECT.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -350,8 +323,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_prepare_cached_export_scope: _EXPORT_SCOPE_TABLE is the fixed module-owned temporary scope table name; no user or cached record data contributes to the interpolated identifier.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -359,8 +332,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_attach_cached_dynamic_values: id_placeholders and field_placeholders are generated solely from ? markers sized from record_ids/dynamic_fields. All cached IDs and field names are bound in (*record_ids, *dynamic_fields).",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -368,8 +341,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_prepare_cached_export_scope: _EXPORT_SCOPE_TABLE/_EXPORT_REFERENCE_FILTER_TABLE are module-owned temp names. _append_filter_sql only changes the prefix of the generated _cached_query_filter_where_clause result (fixed ir alias, allowlisted fixed columns or bound dynamic field names, validated operators); reference_column and all filter values are bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -377,8 +350,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_prepare_cached_export_scope: _EXPORT_SCOPE_TABLE is a module constant; filter_sql is generated by _cached_query_filter_where_clause with fixed ir alias, fixed-column allowlist or bound dynamic field lookup and validated operator enums. filter_params carries every value.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -386,8 +359,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_iter_cached_export_batches: select_columns is built only from fixed ir.id, INDUSTRIAL_EXPORT_COLUMNS and ir.raw_record_json. _EXPORT_SCOPE_TABLE is a module constant; requested dynamic fields are attached separately via bound queries.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -395,8 +368,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "load_cached_industrial_dataframe: base_query uses only module-owned INDUSTRIAL_EXPORT_COLUMNS and _CACHE_RECORD_ID_COLUMN. _append_filter_sql(filter_sql) transforms the WHERE built by _cached_query_filter_where_clause: fixed allowlisted columns, validated IndustrialQueryFilter operators and bound values. Dynamic reference_column is bound as rv.field_name = ?; table_alias is the literal ir.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -404,8 +377,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_join_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "materialize_industrial_report_links: report_expr and industrial_expr are looked up in fixed REPORT_FIELD_SQL/INDUSTRIAL_FIELD_SQL maps after validate_join_rule. time_clause comes from _time_window_clause using fixed timestamp expressions or empty text; time_window_seconds, rule IDs/names/field labels and timestamps are bound parameters.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -413,8 +386,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_load_or_refresh_tabular_metadata: _INDUSTRIAL_TABULAR_METADATA_TABLE is a module constant passed through this module's _quote_identifier (double-quote escaping). scope_key is bound as ?, and metadata JSON remains data.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -422,8 +395,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_dynamic_field_view_expression: Database-origin field_name is encoded by _sql_literal (single quotes doubled); output_column is escaped with _quote_identifier. The correlated SELECT shape is fixed. No database string is treated as raw expression SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -431,8 +404,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_refresh_value_facets: where_sql is generated by load_industrial_cache_tabular_result from fixed records.source_profile_id/source_db_alias IN predicates and ? lists; scope params are passed unchanged to execute.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -440,8 +413,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_load_or_refresh_tabular_metadata: _INDUSTRIAL_TABULAR_METADATA_TABLE is a module constant escaped by _quote_identifier. scope key, counters and dynamic-field JSON are all bound parameters; database-derived field names are not SQL fragments here.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -449,17 +422,17 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_refresh_value_facets: _INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE is a fixed module identifier quoted by _quote_identifier; scope_key is bound as ?. This DELETE does not interpolate a cache key.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8ce1ea28326b12fec62a757418d5a0727e237a84455320238e6265611281cc37",
+      "fingerprint": "a1034bfcc52f286514a98bd453b09fc51f6e44c8083076ccd805550c36997767",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_dynamic_field_names: prefix is empty or source_db., supplied only as the fixed source_db ATTACH alias by _write_tabular_sqlite_from_industrial_cache. where_sql is the fixed-column source-profile/source-alias scope from load_industrial_cache_tabular_result, with values bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -467,8 +440,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_ensure_value_facets_for_scope: _INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE is a module constant quoted by _quote_identifier. scope_key is bound; no cached column names or values enter the SELECT text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -476,8 +449,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_dynamic_field_metadata: value_expr is a local constant TRIM/COALESCE expression over values_row fields. where_sql is the generated fixed source-profile/source-alias scope with ? lists, and all profile IDs/aliases are supplied separately in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -485,8 +458,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_insert_base_value_facets: _INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE is a module constant quoted by _quote_identifier. normalized_expr comes from _normalized_value_sql(expression) where expression is a fixed _BASE_INDUSTRIAL_COLUMNS SQL expression. scope_key and output column label are bound as data.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -494,17 +467,17 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_write_tabular_sqlite_from_industrial_cache: where_sql comes from load_industrial_cache_tabular_result: fixed source_profile_id/source_db_alias predicates with ? lists. IDs and aliases are separately bound as params; source_db is a fixed ATTACH alias.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ac8287e1fdbd10c23f891e6a09a7cf8b5f8b9780dbd3b1da8ab59f7f9c55f040",
+      "fingerprint": "4738af8cb8b06496c10dd289cc8bb8673d4d8bd6816b0473af92dc9c26b0bd22",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_insert_industrial_tabular_rows: selected_columns is fixed _BASE_INDUSTRIAL_COLUMNS expressions plus _quote_identifier aliases. where_sql uses fixed profile/alias predicates and bound params; _INDUSTRIAL_TABULAR_TABLE is constant and quoted. output_columns and selected_output_columns quote every database-derived output name using _quote_identifier, and dynamic field selectors are bound in (*params, *dynamic_fields).",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -512,8 +485,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_metadata_scope_fingerprint: where_sql is the generated fixed records source-profile/source-alias IN scope from load_industrial_cache_tabular_result; the joined value-table contents never enter SQL text, and scope values are bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -521,8 +494,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_insert_dynamic_value_facets: _INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE is module-owned and quoted by _quote_identifier. normalized_expr wraps the local constant COALESCE(NULLIF(values_row.field_value_text, empty string), values_row.field_value_json) through _normalized_value_sql. scope_key, output_column and field_name are bound.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -530,8 +503,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_metadata_scope_fingerprint: where_sql originates in load_industrial_cache_tabular_result with only fixed source_profile_id/source_db_alias IN predicates and ? marker lists; all profile IDs/aliases are passed in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -539,8 +512,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_create_industrial_tabular_view: view_name uses the module prefix plus uuid4().hex and is escaped by _quote_identifier. selected_columns uses fixed _BASE_INDUSTRIAL_COLUMNS expressions, quoted output aliases and _dynamic_field_view_expression (field names via _sql_literal). view_where_sql comes from _literal_where_sql on fixed profile/alias predicates; reviewed fix splits templates before escaping values so embedded ? never re-enters substitution. SQL literals use doubled single quotes, with IDs normalized to int.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -548,8 +521,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/db_poller.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_bounded_poll_query: columns_sql quotes _validated_selected_columns via _quote_identifier; table_name uses _quote_dotted_identifier(profile.source_object_name). cursor/tie_breaker also use _quote_identifier; those helpers call require_identifier/require_dotted_identifier before dialect quoting. where is generated only from fixed resume predicates and those validated identifiers. Offset values and cycle limit are bound; dialect selects fixed TOP/LIMIT query shapes.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -557,8 +530,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/db_poller.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_bounded_poll_query: columns_sql quotes _validated_selected_columns via _quote_identifier; table_name uses _quote_dotted_identifier(profile.source_object_name). cursor/tie_breaker also use _quote_identifier; those helpers call require_identifier/require_dotted_identifier before dialect quoting. where is generated only from fixed resume predicates and those validated identifiers. Offset values and cycle limit are bound; dialect selects fixed TOP/LIMIT query shapes.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -566,8 +539,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/event_stream_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "read_events_after._read: event_type_clause is empty or fixed AND event_type IN with comma-joined ? markers. Event types, source profile, stream key, after-event ID and safe limit are supplied in params; event payloads never enter SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -575,8 +548,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/event_stream_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_dead_letters._list: where_clause joins only = ? predicates for the local consumer_key/source_profile_id/stream_key/status column tuple; caller values are passed in params, and no column name comes from the caller.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -584,8 +557,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/monitor_config.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_configs._list: where_clause joins only local enabled = 1 and source_profile_id = ? strings. The optional profile ID is normalized to int and separately bound; config JSON and stream names are not interpolated.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -593,8 +566,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "anomaly_counts_by_severity._count: where_clause is constructed by _append_event_filters from fixed events.status/signal_id/detector_key/severity = ? strings; status and severity are allowlisted, signal ID normalized and every requested value bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -602,8 +575,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "anomaly_counts_by_detector._count: where_clause is constructed by _append_event_filters from fixed events.status/signal_id/detector_key/severity = ? strings; status and severity are allowlisted, signal ID normalized and every requested value bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -611,8 +584,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "signal_timeline_window._list: where joins fixed samples.signal_id = ? with optional fixed samples.event_time >= ? and <= ? strings; signal ID, canonical UTC boundaries and _positive_limit(limit) are bound. Timeline sample values are not SQL fragments.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -620,8 +593,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "_aggregate_rows_from_cursor: where_clause is empty or fixed WHERE samples.signal_id IN with ? markers sized from signal_ids. limit_clause is empty or fixed LIMIT ? with _positive_limit; IDs and limit are separately bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -629,8 +602,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "_snapshot_timelines: selected_values is generated solely from comma-joined (?) marker groups sized from signal_ids. Actual IDs and the timeline limit are bound in (*signal_ids, limit); no event/sample values are embedded.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -638,8 +611,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
-      "rationale": "Dashboard queries interpolate only fixed SQL fragments or placeholder sequences derived from integer signal IDs; all values remain bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "_snapshot_recent_events: selected_values is a sequence of literal (?) marker groups, with IDs/limit bound as (*signal_ids, limit). _DASHBOARD_EVENT_SELECT is the fixed module SELECT/JOIN constant, not event data or caller SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -647,8 +620,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_samples_by_ids._list: placeholders is a literal ? sequence sized from a bounded chunk of int-normalized sample IDs. Actual IDs are supplied as chunk; raw record data never enters the SELECT text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -656,8 +629,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_signal_definitions_by_ids._list: placeholders contains only ? markers sized from a bounded chunk of int-normalized signal IDs; execute receives chunk separately. Signal configuration strings do not enter SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -665,8 +638,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_recent_samples._list: where is fixed WHERE signal_id = ? plus optional AND segment_key_json = ?; normalized signal ID, JSON-serialized segment_key and safe_limit are all bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -674,8 +647,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_samples_before._list: where uses the fixed signal_id and (event_time,id) boundary predicate, plus optional segment_key_json = ?. Signal ID, canonical boundary time, sample ID, JSON segment key and safe limit are bound separately.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -683,8 +656,8 @@
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/source_health_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_latest_sample._get: placeholders is comma-joined literal ? sized from config.signal_keys. config.source_profile_id and each signal key are bound in (config.source_profile_id, *config.signal_keys); no config string becomes SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -692,8 +665,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_alias_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "resolve_characteristic_aliases_bulk: alias_name_placeholders is a ? list; scope_where is either fixed scope_type = global or a fixed global/reference predicate with a ? list from reference count. Actual alias names and references are supplied as tuple(params), not interpolated.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -701,8 +674,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_distinct_references: source_sql is a fixed SELECT chosen by _measurement_source_sql after view/table existence checks. _REFERENCE_SQL is a module expression constant; reference strings are evaluated as data and never interpolated.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -710,8 +683,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_fetch_sample_references: _metric_source_cte(source_sql) uses only _measurement_source_sql fixed schema-dependent SELECT shapes and _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. metric_name and sample-reference limit are bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -719,8 +692,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_metric_source_cte: source_sql is selected by _measurement_source_sql from three fixed view/current-table/legacy-table SELECT shapes after schema probes. _METRIC_IDENTITY_SQL and _REFERENCE_SQL are module constants; measurement/reference data is evaluated by SQL, not inserted as SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -728,8 +701,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_mapping_impact_counts: _metric_source_cte(source_sql) uses the fixed schema-dependent _measurement_source_sql result plus module identity/reference constants. where_clause is fixed metric_name = ? plus optional AND reference = ? after normalize_alias_scope; alias and scope value are bound.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -737,8 +710,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "fetch_distinct_report_metric_names: _metric_source_cte(source_sql) composes a source chosen by _measurement_source_sql from fixed view/current/legacy SELECT shapes plus _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. Metric and reference contents remain database values.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -746,8 +719,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/db.py",
       "owner": "Security review",
-      "rationale": "Row counting wraps an internal QueryScope whose constructors quote identifiers and bind values; raw external SQL is outside this trusted contract.",
-      "expires_on": "2026-10-31"
+      "rationale": "count_query_scope_rows: scope.sql is the internal QueryScope SQL produced by TabularSqliteStore.query_scope: table/column names are quoted, predicate operators compiled from the filter model and values bound in scope.params. row_count_sql is likewise generated by that builder. QueryScope is a trusted SQL composition contract, not an external raw-query ingestion API.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -755,8 +728,8 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/report_edit_service.py",
       "owner": "Security review",
-      "rationale": "Report-edit identifiers are selected from fixed mappings or escaped with quote_identifier, and edited values and record IDs are bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_value_update_statements: quoted_table and quoted_column come from db.quote_identifier, doubling embedded double quotes. Normalization callers choose names from NORMALIZATION_TARGETS, and old/new values are bound as ?. Even direct identifier arguments cannot break quoting.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -764,116 +737,89 @@
       "test_id": "B608",
       "path": "src/metroliza/reports/report_edit_service.py",
       "owner": "Security review",
-      "rationale": "Report-edit identifiers are selected from fixed mappings or escaped with quote_identifier, and edited values and record IDs are bound parameters.",
-      "expires_on": "2026-10-31"
+      "rationale": "_build_legacy_update_statements: quoted_table and quoted_key use db.quote_identifier. assignments is built only from field_columns lookups in LEGACY_REPORT_FIELD_COLUMNS/LEGACY_MEASUREMENT_FIELD_COLUMNS with every column quoted and an appended = ?. record_id and field values remain bound.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8dd2f3aa22d17056330f1ac1c6b328f9baa22b8395813be33d4f90d30f38a10c",
+      "fingerprint": "93aa868c406f825bc4037d142d7ffe529d76ce31bce082e9c80d4cce01317cf0",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_grouping_scope_query_from_filter_state: select_clause and _GROUPING_REPORT_VIEW are source constants. where_clauses here are only reference/part_name predicates from _build_in_clause, which inserts values solely inside single-quoted literals escaped by _escape_sql_literal. The richer filter branch delegates to the validated measurement filter builder.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ca1aa794a17f569c5ec7514c64a09293cb4d210ee7461d912c306918b053d2cd",
+      "fingerprint": "91c9859e96888813aac63cc79f3dc23b0b3cce39bf2f73da0ebd85fb8b466e87",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_distinct_value_query: quoted_column uses db.quote_identifier(column_name), including embedded-double-quote escaping. source is a generated filtered scope from build_measurement_export_query/_distinct_filter_scope, a fixed optimized join, or db.quote_identifier(source_view). Filter scopes come from application builders with validated DSL/escaped literals; no caller identifier can break out of quoting after the reviewed fix.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1d434d3410d416bcd9216cfda450c68a2babf2ba4e5b008a46e8d0d102c3372a",
+      "fingerprint": "5a2e7e02f88b4009a2ce7cabb67b3614aeb2962e5df502803211ee8785128294",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_measurement_export_query: _MEASUREMENT_EXPORT_SELECT_FROM_VIEW and _MEASUREMENT_EXPORT_VIEW are module constants. normalized_filter_query is the compiled application report scope from FilterDialog/FilterState, with allowlisted DSL identifiers/operators and _escape_sql_literal values, not external raw SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ef67403a9c52cfa385adb37a839d54f1b204c6a0e04d904297d9838d4dddb075",
+      "fingerprint": "821287a6c29cfc7446cacb9fcb50887d15db16d2d0aab30957b51c1a65d64db5",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_measurement_export_query: _MEASUREMENT_EXPORT_SELECT_FROM_SCOPE is a fixed module column list. normalized_filter_query is the application-generated measurement SELECT scope; filter values use _escape_sql_literal and expressions use the validated filter compiler. Raw external SQL is outside this helper contract.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2f411f0741dd67253d042cc6d36b860b41bb83743eb3563e3fc744e8d247412e",
+      "fingerprint": "bbb0689d6f956234d5271535a82b92da35e8655ac6e97c0ee284a725f157b11e",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_measurement_filter_query: _MEASUREMENT_EXPORT_SELECT_FROM_VIEW and _MEASUREMENT_EXPORT_VIEW are fixed module constants. Subsequent filters use only local column names, _escape_sql_literal for values/dates and parse_filter_expression with _MEASUREMENT_FILTER_COLUMNS followed by the safe SQL compiler for user expressions.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e26b524c7ad0ae3afbcd990194d0788aaf929fead30c020662725133cd7926a1",
+      "fingerprint": "86c3117783786b51b210a3b072ed51519187abc32742baa36cde911fa0ee255c",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_append_industrial_context_to_export_query: normalized_base_query is built internally by build_measurement_export_query via build_industrial_measurement_export_query. It uses fixed view/column constants and validated filter DSL with escaped data literals; industrial identifiers in this wrapper are fixed schema names. No industrial metadata becomes SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "24b376dbab885217af6f1d4a1931b664f75bff1e65fe655a30b894e3fa5a9414",
+      "fingerprint": "8024393f71b3ab7f680aace17982e737b536736ee7454f45262233c41584259c",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_build_select_from_view: select_clause is selected only by the internal report/grouping/measurement builders from fixed source SELECT lists; view_name is one of the module-owned _REPORT_OVERVIEW_VIEW/_GROUPING_REPORT_VIEW/_MEASUREMENT_EXPORT_VIEW constants. No filter text enters this base SELECT.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "f19366546d282a663704e7d52691326f5db14609dce7659135fa6fa409ab712c",
+      "fingerprint": "ed2d012219a050d8a62db2e9abc009317542d6bbf231779b1b06a113c218fd57",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_grouping_query: normalized_filter_query is the application-generated FilterDialog/FilterState SELECT scope with validated DSL identifiers/operators and literals escaped by _escape_sql_literal. The caller path supplies compiled scope SQL, not a raw query field; _normalize_sql_query itself is not a sanitizer.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "f5eae63476e023e3adecb906dd309b150e397b3a4acb7346170748de9a9e66df",
+      "fingerprint": "ba991e921364974dc8d622e8a5ae1bbc237ed5f30cc52a05e495fa0a4963fa95",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "42b61eb736fe5fce1474fd1864f6cfc2cef00b2d84d9f6a0b44f3bbd50bd7108",
-      "test_id": "B608",
-      "path": "src/metroliza/reports/report_repository.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "94ed1070d2dfe47d958b117afd980a629361d5fbbbc8885c4e58b3990b529954",
-      "test_id": "B608",
-      "path": "src/metroliza/reports/report_repository.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "ff77132cb629e2f76e07883da24d1a5e90bfb6dbbc85c4cc4f136663947363e8",
-      "test_id": "B608",
-      "path": "src/metroliza/reports/report_repository.py",
-      "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_build_select_from_view: select_clause is an internal fixed column-list argument. normalized_filter_query comes from the generated FilterDialog scope (build_measurement_filter_query/build_grouping_scope_query_from_filter_state); DSL identifiers/operators are validated and data literals use _escape_sql_literal. _normalize_sql_query only trims terminators; arbitrary external SQL is outside this composition API.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -881,8 +827,8 @@
       "test_id": "B608",
       "path": "src/metroliza/storage/industrial_schema.py",
       "owner": "Security review",
-      "rationale": "Timestamp and schema migrations iterate module-owned table and column constants, quote identifiers, and bind migrated values; sync-run columns are fixed.",
-      "expires_on": "2026-10-31"
+      "rationale": "_ensure_canonical_timestamp_storage: quoted_table/quoted_column come from _quote_identifier over fixed _CANONICAL_TIMESTAMP_COLUMNS table/column names, additionally checked against sqlite_master/PRAGMA table_info. Stored timestamp text is fetched as data, never used as an identifier.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -890,8 +836,8 @@
       "test_id": "B608",
       "path": "src/metroliza/storage/industrial_schema.py",
       "owner": "Security review",
-      "rationale": "Timestamp and schema migrations iterate module-owned table and column constants, quote identifiers, and bind migrated values; sync-run columns are fixed.",
-      "expires_on": "2026-10-31"
+      "rationale": "_ensure_canonical_timestamp_storage: quoted_table/quoted_column are escaped by _quote_identifier from the fixed _CANONICAL_TIMESTAMP_COLUMNS map, with schema existence checks. Canonical timestamps and row IDs are bound in updates via executemany.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -899,8 +845,8 @@
       "test_id": "B608",
       "path": "src/metroliza/storage/industrial_schema.py",
       "owner": "Security review",
-      "rationale": "Timestamp and schema migrations iterate module-owned table and column constants, quote identifiers, and bind migrated values; sync-run columns are fixed.",
-      "expires_on": "2026-10-31"
+      "rationale": "_ensure_sync_run_status_constraint: column_list is generated by _quote_identifier over the local fixed tuple of industrial_sync_runs migration columns. Both table names and the SELECT/INSERT shape are fixed; no schema-derived or record-derived names are inserted.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -908,8 +854,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_grouping_query: normalized_filter_query is the application FilterDialog/FilterState generated scope with validated filter expressions and escaped literals; this compatibility fallback is used only if the canonical report_query_service grouping helper is unavailable. Trimming in _normalize_filter_query is not sanitization and external raw SQL is not a valid caller input.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -917,8 +863,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "build_grouping_query: _GROUPING_SCOPE_SELECT is the module-owned fixed grouping report column list. vw_grouping_reports is a fixed schema view; the fallback unfiltered SELECT contains no external fragment.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -926,8 +872,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "assignments.read: table_name is passed to this local read closure by _prepare_effective_table after _quote_identifier(self.table_name); the default identifier uses a UUID hex token and caller overrides are still escaped. Group-name filters and preview limits, where present, are bound parameters, not SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -935,8 +881,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "group_counts.read: table_name is passed to this local read closure by _prepare_effective_table after _quote_identifier(self.table_name); the default identifier uses a UUID hex token and caller overrides are still escaped. Group-name filters and preview limits, where present, are bound parameters, not SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -944,8 +890,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "group_counts.read: table_name is passed to this local read closure by _prepare_effective_table after _quote_identifier(self.table_name); the default identifier uses a UUID hex token and caller overrides are still escaped. Group-name filters and preview limits, where present, are bound parameters, not SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -953,8 +899,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "group_members.read: table_name is passed to this local read closure by _prepare_effective_table after _quote_identifier(self.table_name); the default identifier uses a UUID hex token and caller overrides are still escaped. Group-name filters and preview limits, where present, are bound parameters, not SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -962,8 +908,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "group_members.read: table_name is passed to this local read closure by _prepare_effective_table after _quote_identifier(self.table_name); the default identifier uses a UUID hex token and caller overrides are still escaped. Group-name filters and preview limits, where present, are bound parameters, not SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -971,8 +917,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_prepare_effective_table: table_name is _quote_identifier(self.table_name); the default name is a fixed prefix plus uuid.uuid4().hex and overrides have double quotes escaped. This reset DELETE embeds no group or row data.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -980,8 +926,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_command: table_name is already escaped by _prepare_effective_table via _quote_identifier. command.group_name is bound as ? for DeleteGroupingGroup; it cannot alter SQL structure.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -989,8 +935,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_command: table_name is escaped by _prepare_effective_table via _quote_identifier; replacement group name, replacement color and original group name are all separately bound for RenameGroupingGroup.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -998,8 +944,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_rows_command: table_name is escaped by _prepare_effective_table via _quote_identifier. placeholders contains only ? markers for a chunk of int-normalized row IDs; execute receives the chunk separately.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1007,8 +953,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_rows_command: table_name is escaped by _prepare_effective_table via _quote_identifier. Row ID, group name and color are bound in executemany; ON CONFLICT SQL is fixed in source.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1016,8 +962,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_scope_command: scope_table is _quote_identifier(self._scope_table_name), whose name is a fixed prefix plus the per-store uuid.uuid4().hex token. No command or source-row content contributes to this identifier.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1025,8 +971,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_scope_command: scope_table uses _quote_identifier on the UUID-based _scope_table_name. query comes only from _scope_query: TabularSqliteStore generated quoted-identifier/bound-filter queries or _selected_group_keys_query. Its returned params are passed unchanged; scope search/key text is never raw SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1034,8 +980,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_scope_command: table_name is escaped by _prepare_effective_table via _quote_identifier; scope_table is _quote_identifier of the UUID-based _scope_table_name. Both identifiers are generated/quoted, with no command data inserted.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1043,8 +989,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_scope_command: table_name comes quoted from _prepare_effective_table and scope_table from _quote_identifier(self._scope_table_name); UUID defaults and overrides cannot escape identifier quotes. command.group_name and command.color are bound parameters.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1052,8 +998,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_apply_scope_command: table_name is quoted by _prepare_effective_table and scope_table by _quote_identifier; names are UUID-based unless explicitly overridden, still quoted. Group name and color are supplied as ? values to the INSERT SELECT.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1061,8 +1007,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/grouping_assignment_store.py",
       "owner": "Security review",
-      "rationale": "Grouping persistence uses UUID-generated or escaped temporary identifiers, TabularSqliteStore-produced scopes, generated placeholders, and bound values.",
-      "expires_on": "2026-10-31"
+      "rationale": "_selected_group_keys_query: row_column is _quote_identifier(source_row_number). base_scope.sql comes from TabularSqliteStore.query_scope with quoted names and bound filters. predicate is generated by _selected_key_predicate using quoted selector columns and ? lists; selected key values join base_scope.params as key_params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1070,8 +1016,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "preview_value_rows: grouped_query is built locally in preview_value_rows from quoted self.table_name, _sqlite_normalized_value_expr of a known column and generated _where_clause/LIKE ? filters. Search/filter values remain bound; optional limits are int-normalized.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1079,8 +1025,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "has_rows: self.table_name is escaped by _quote_identifier; where_sql is generated by _where_clause from schema-known columns, validated filter model/DSL, fixed operator choices and ? predicates. Filter/key values are supplied separately in params; no search text or spreadsheet cell becomes raw SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1088,8 +1034,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "preview_group_keys: expressions use _sqlite_normalized_value_expr for self.columns-validated column names and _quote_identifier on generated key-index aliases. self.table_name and ORDER BY aliases are quoted; where_sql is _where_clause generated filter SQL with values in params. index is an enumerate integer.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1097,8 +1043,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "query_scope: select expressions come from _select_column_expression over _normalized_tabular_required_columns(self.columns, columns), quoting original/sidecar names via _quote_identifier. self.table_name is quoted. where_sql comes from _where_clause: schema-known columns, compiled filter operators/DSL and bound values in params; limits are converted to int.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1106,8 +1052,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "source_row_number_query_for_group_search: grouped_keys and label_expr are composed only from locally generated key-index aliases escaped by _quote_identifier. The source base_rows is a fixed CTE name; no actual key or search value enters these fragments.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1115,8 +1061,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_load_tabular_files_into_sqlite: _TABULAR_SQLITE_TABLE is a fixed module table name escaped by _quote_identifier. Every file-derived storage_columns identifier is also escaped by _quote_identifier; VALUES contains only ? markers sized from the column count. Rows are bound via executemany, never interpolated.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1124,8 +1070,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "source_row_number_query_for_group_search: row_column is quoted source_row_number; select_exprs normalizes self.columns-validated columns through _sqlite_normalized_value_expr and quoted key-index aliases. self.table_name is quoted; where_sql comes from _where_clause with compiled operators and bound values.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1133,8 +1079,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "preview_group_rows: grouped_query is locally generated from _sqlite_normalized_value_expr, quoted table/aliases and _where_clause bound filters. outer_where is empty or fixed WHERE LOWER(label) LIKE ? ESCAPE backslash, with search in outer_params; LIMIT/OFFSET additions use only normalized integers.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1142,8 +1088,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "preview_group_rows: aliases are locally generated key-index identifiers escaped by _quote_identifier; label_expr concatenates only those quoted aliases with a fixed separator. inner_query is built locally from quoted names and _where_clause bound filters; no group key text is interpolated.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1151,8 +1097,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "source_row_number_query: row_column is _quote_identifier(source_row_number) and self.table_name is quoted by _quote_identifier. where_sql uses _where_clause generated compiled filters/quoted names and bound values, returned with params; optional row ordering is fixed.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1160,8 +1106,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "is_date_filterable: column passes self.columns membership and is escaped at every occurrence by _quote_identifier; self.table_name is likewise quoted. The sampling limit and nonempty test are fixed SQL literals.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1169,8 +1115,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_preview_value_rows_from_facets: self.value_facet_table is escaped by _quote_identifier. where_sql joins only fixed scope_key = ?, column_name = ? and optional normalized_value LIKE ? predicates. Scope key, column and escaped search are bound in params; limits/offsets are normalized integers.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1178,8 +1124,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "preview_group_rows: grouped_query is the local preview_group_rows SELECT with quoted schema-known columns/generated aliases and _where_clause bound filters. outer_where is empty or fixed WHERE LOWER(label) LIKE ? ESCAPE backslash; search value is in outer_params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1187,8 +1133,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "has_rows_for_group_search: grouped_query comes from _grouped_search_query with quoted schema-known columns/table/aliases and compiled _where_clause predicates. Search is appended as a bound LIKE parameter; the existence limit is the fixed literal 1.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1196,8 +1142,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "count_rows_for_group_keys: self.table_name is escaped by _quote_identifier. where_sql is generated by _where_clause_for_group_keys from compiled base filters and _sqlite_group_key_predicate over schema-known quoted columns. All selected group keys and filter values remain bound.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1205,8 +1151,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "count_source_row_numbers: self.table_name is escaped by _quote_identifier. where_parts combines generated _where_clause predicates with a quoted source_row_number IN clause containing only ? markers. int-normalized row IDs and filter values are bound in [*filter_params, *chunk].",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1214,8 +1160,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "query_scope: query is built earlier in query_scope from _select_column_expression, quoted self.table_name and _where_clause bound filters. Its optional LIMIT is interpolated only after int(limit) >= 0 and int conversion. This wrapper adds no caller SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1223,8 +1169,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_grouped_search_query: select_exprs uses _sqlite_normalized_value_expr on self.columns-validated names plus quoted generated aliases. self.table_name is escaped; where_sql is _where_clause output using compiled filters and separately bound parameters.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1232,8 +1178,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "preview_group_rows: select_exprs uses _sqlite_normalized_value_expr for schema-known columns plus _quote_identifier on generated aliases. self.table_name is quoted; where_sql is generated by _where_clause with compiled filter operators and separately bound values.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1241,8 +1187,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "row_ids_for_group_keys: Both source_row_number references and self.table_name are escaped by _quote_identifier. where_sql is generated by _where_clause_for_group_keys, combining _where_clause filters and _sqlite_group_key_predicate over known columns with all selected key values bound in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1250,8 +1196,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "count_rows_for_group_search: grouped_query is produced by _grouped_search_query using self.columns-validated names, _sqlite_normalized_value_expr, quoted table/generated aliases and _where_clause compiled bound filters. This count adds only a fixed LIKE ? predicate and separately appends escaped search to params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1259,8 +1205,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "source_row_number_query_for_group_search: base_query uses known columns normalized by _sqlite_normalized_value_expr, quoted self.table_name and _where_clause bound filters. grouped_keys/grouped_query/row_column/join_clause reference only quoted key-index/source_row_number aliases. order_sql is empty or fixed quoted row ordering. Search remains a separately bound LIKE value.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1268,8 +1214,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "aggregate_numeric_columns: group_select_sql uses _sqlite_normalized_value_expr plus quoted generated group aliases. aggregate_selects use _sqlite_stored_numeric_expr_and_guard and quoted m-index aliases. self.table_name is quoted, where_sql comes from _where_clause with bound filters, and group_by_sql/order_by_sql join quoted generated aliases. Metrics/groups are restricted to self.columns.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1277,8 +1223,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "preview_value_rows: value_expr is _sqlite_normalized_value_expr(column), which quotes the column after membership in self.columns. self.table_name is quoted; where_sql combines _where_clause compiled/bound predicates with a fixed LOWER(value_expr) LIKE ? search shape, with escaped search in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1286,8 +1232,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "date_bounds: date_expr is generated by _sqlite_date_filter_expr, applying date() to _quote_identifier(self.date_filter_columns.get(column, column)); column must belong to self.columns. self.table_name is also escaped by _quote_identifier; no date value is spliced into SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1295,8 +1241,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "count_rows: self.table_name is escaped by _quote_identifier; where_sql is generated by _where_clause from schema-known columns, validated filter model/DSL, fixed operator choices and ? predicates. Filter/key values are supplied separately in params; no search text or spreadsheet cell becomes raw SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1304,8 +1250,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_preview_value_rows_from_facets: self.value_facet_table is escaped by _quote_identifier. where_sql is the same locally generated scope_key/column_name equality plus optional LIKE ? predicate from _preview_value_rows_from_facets; every scope/search value stays in params.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1313,8 +1259,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "_grouped_search_query: aliases are generated key-index names escaped by _quote_identifier; label_expr concatenates those aliases with a fixed separator. inner_query is built locally by _grouped_search_query using normalized/quoted column expressions and _where_clause bound filters.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1322,8 +1268,8 @@
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "query_scope: self.table_name is escaped by _quote_identifier. where_sql comes from _where_clause using schema-known quoted columns, validated filter operators/DSL and bound values. QueryScope carries the same params for the count.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1331,8 +1277,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/industrial_linking_dialog.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_reports_for_manual_linking: where_clause is empty or a local fixed OR list of rm.reference/part_name/revision/sample_number and pr.source_file_name LIKE ? predicates. pattern from search_text is bound five times; no user search string is SQL text.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1340,8 +1286,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/industrial_linking_dialog.py",
       "owner": "Security review",
-      "rationale": "Existing dynamic SQL is limited to repository-owned schema fragments, parameter placeholders, or validated identifiers; expiry requires renewed query-boundary review.",
-      "expires_on": "2026-10-31"
+      "rationale": "list_production_records_for_manual_linking: where_clause is empty or a local fixed OR list of production/profile column LIKE ? predicates. The search pattern is supplied ten times in params; aliases and columns are all fixed in source.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1349,8 +1295,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
-      "expires_on": "2026-10-31"
+      "rationale": "_distinct_value_counts: quoted_column and quoted_source use db.quote_identifier via the class helper, doubling embedded double quotes. column_name must be present in _source_columns schema discovery; record contents are read as data, never interpolated.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1358,8 +1304,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
-      "expires_on": "2026-10-31"
+      "rationale": "_plan_report_records: select_exprs comes from _select_exprs_for_specs on REPORT_RECORD_COLUMNS filtered by schema availability; source names and aliases are escaped with _quote_identifier. order_by is empty or the fixed ORDER BY report_id string; vw_report_overview is fixed.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1367,8 +1313,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
-      "expires_on": "2026-10-31"
+      "rationale": "_plan_measurement_records: select_exprs uses _select_exprs_for_specs with fixed MEASUREMENT_RECORD_COLUMNS/MEASUREMENT_TABLE_COLUMNS specifications and quoted names/aliases. quoted_source is _quote_identifier on one of two fixed schema names; order_by is a fixed report_id/measurement_id or report_id/id ordering.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1376,8 +1322,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
-      "expires_on": "2026-10-31"
+      "rationale": "_plan_legacy_report_records: select_exprs comes from fixed LEGACY_REPORT_RECORD_COLUMNS via _select_exprs_for_specs, with identifiers/aliases quoted. order_by is empty or fixed ORDER BY ID selected by schema presence; REPORTS is a fixed table name.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1385,8 +1331,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
-      "expires_on": "2026-10-31"
+      "rationale": "_plan_legacy_measurement_records: select_exprs uses fixed LEGACY_MEASUREMENT_RECORD_COLUMNS through _select_exprs_for_specs with quoted identifiers/aliases. order_by joins only the local fixed REPORT_ID/ID tuple after schema checks; no database-provided name becomes raw ordering SQL.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1394,8 +1340,8 @@
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "Modify Database queries compose only fixed source names or safely quoted identifiers from class-owned column specifications; values are not interpolated.",
-      "expires_on": "2026-10-31"
+      "rationale": "_source_columns: quoted_source is db.quote_identifier(source_name) via the class helper. Callers provide fixed schema tables/views and double quotes in any identifier are escaped; LIMIT 0 is fixed and no row values enter the query.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1403,8 +1349,8 @@
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
-      "rationale": "Issue #995 query-boundary review: callers validate and quote identifiers; operators and query fragments are compiler-owned. Decimal rounding keys and exact power-of-two literals derive only from normalized finite builtin numbers; key text contains computed digits only. Tabular values remain bound. No raw source value is interpolated. Renewal remains owned by #906.",
-      "expires_on": "2026-10-31"
+      "rationale": "_sqlite_normalized_source: column_sql comes from quoted column expressions in report_query_service._quote_measurement_filter_column or tabular_analytics_service._sqlite_numeric_filter_source, or the fixed internal _nf_value alias. overflow_exponent/overflow_digits are derived from _rounding_interval of the fixed largest finite float; exponent is an integer and digits contain only decimal digits, never raw numeric input.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1412,8 +1358,8 @@
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
-      "rationale": "Issue #995 query-boundary review: callers validate and quote identifiers; operators and query fragments are compiler-owned. Decimal rounding keys and exact power-of-two literals derive only from normalized finite builtin numbers; key text contains computed digits only. Tabular values remain bound. No raw source value is interpolated. Renewal remains owned by #906.",
-      "expires_on": "2026-10-31"
+      "rationale": "_decimal_membership: low/high/low_equal/high_equal are _decimal_compare results with fixed comparison operators and fixed ls/lk/ld/us/uk/ud aliases. VALUES rows are generated from _rounding_interval and _key_sql for validated finite numbers: integer signs/exponents, digit-only quoted mantissas and integer parity. No arbitrary input string is spliced into these numeric keys.",
+      "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
@@ -1421,8 +1367,8 @@
       "test_id": "B608",
       "path": "src/metroliza/shared/finite_numeric.py",
       "owner": "Security review",
-      "rationale": "Reviewed finite numeric dispatch accepts column_sql only from quoted/validated identifiers or compiler-owned source expressions. Predicates and operators are closed compiler-owned fragments; inline fast literals are canonical finite builtin numbers from the shared literal parser. Row values are never interpolated, and supplied fallback parameter bindings retain their order. Native/short-integer fast dispatch preserves exact fallback semantics; bound/unbound row-ID, source-evaluation, precision and injection regressions cover this boundary.",
-      "expires_on": "2026-10-31"
+      "rationale": "_sqlite_numeric_dispatch: fast_guard and number are local fixed SQL expressions. predicate/fast_predicate come only from sqlite_numeric_filter/sqlite_numeric_membership with _OPERATORS allowlisting and _required_literal/_exact_sql_number numeric validation (or bound numeric params). _sqlite_normalized_source uses the constant _nf_value alias; column_sql comes from quoted/allowlisted report or tabular column helpers. No raw filter expression is accepted as a predicate.",
+      "expires_on": "2027-04-30"
     }
   ]
 }

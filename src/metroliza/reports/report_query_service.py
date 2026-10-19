@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from metroliza.reports.db import quote_identifier
 from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
 from metroliza.shared.grouping_filter_core import (
     DateFilterSpec,
@@ -652,10 +653,11 @@ def build_distinct_value_query(column_name, *, source_view=_MEASUREMENT_EXPORT_V
     else:
         source = _unfiltered_distinct_source(column_name, source_view)
 
+    quoted_column = quote_identifier(column_name)
     return (
-        f'SELECT DISTINCT "{column_name}" AS value '
+        f'SELECT DISTINCT {quoted_column} AS value '
         f'FROM {source} '
-        f'WHERE "{column_name}" IS NOT NULL AND TRIM(CAST("{column_name}" AS TEXT)) <> \'\' '
+        f'WHERE {quoted_column} IS NOT NULL AND TRIM(CAST({quoted_column} AS TEXT)) <> \'\' '
         f'ORDER BY value'
     )
 
@@ -678,4 +680,4 @@ def _unfiltered_distinct_source(column_name, source_view):
             "JOIN parsed_reports AS pr ON pr.id = meas.report_id "
             "JOIN source_files AS sf ON sf.id = pr.source_file_id"
         )
-    return source_view
+    return quote_identifier(source_view)
