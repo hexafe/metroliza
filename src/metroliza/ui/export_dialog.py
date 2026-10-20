@@ -1199,7 +1199,7 @@ class ExportDialog(QDialog):
             # Check if grouping dialog is already open or visible
             if not self.grouping_window:
                 # Create a new grouping dialog if not already existing or visible
-                self.grouping_window = DataGrouping(self, db_file=self.db_file)
+                self.grouping_window = DataGrouping(self, db_file=self.db_file, background_load=True)
             else:
                 self.grouping_window.refresh_data()
             if not self.grouping_window.isVisible():

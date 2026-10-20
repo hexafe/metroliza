@@ -841,7 +841,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "7e2aced08e046594e0991a78c34d98aaa296297230fc248f9451696ce89c710e",
+      "fingerprint": "92620805b6afcaf2b97549b2b2425a1e2f38675d9025a80cde2e3accfa627265",
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
@@ -850,7 +850,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "b177f40f30ce707e7687891849b56ce5fd860a6ff14086eced237c2df241d64d",
+      "fingerprint": "9e2cc70bcd578460121a818e5a7cc01e0324c69796f225dcd30b4be1ff00b451",
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
