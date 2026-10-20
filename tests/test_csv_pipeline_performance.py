@@ -440,3 +440,46 @@ def test_benchmark_worker_requires_resource_before_setup(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "WORKER_REQUIRES_RESOURCE_OK" in result.stdout
     assert not (tmp_path / "output").exists()
+
+
+def test_small_csv_analytics_preserves_complete_artifacts(tmp_path, monkeypatch):
+    """Keep the uncached table/PNG path as a semantic oracle for one run."""
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionChartSelection, ProductionMetricSelection,
+    )
+    from metroliza.industrial.industrial_analytics_workflow import run_tabular_file_analytics
+
+    source = tmp_path / "parity.csv"
+    source.write_text("PART,DIM\n" + "".join(
+        f"P{i},{value}\n" for i, value in enumerate(
+            (1.2, 1.4, 1.7, 2.1, 2.2, 2.6, 1.8, 2.3, 2.7, 1.6), start=1,
+        )
+    ))
+    for name in ("baseline", "candidate"):
+        output = tmp_path / name
+        output.mkdir()
+        with monkeypatch.context() as patch:
+            if name == "baseline":
+                patch.setattr(adapter, "_request_histogram_table_rows",
+                              adapter._histogram_table_rows_from_plotstats)
+            run_tabular_file_analytics(
+                input_file=str(source), output_dashboard_file=str(output / "dashboard.html"),
+                output_workbook_file=str(output / "workbook.xlsx"), reference_column="PART",
+                metric_selection=(ProductionMetricSelection("dim", lsl=1.0, usl=3.0),),
+                chart_selection=ProductionChartSelection(
+                    time_series=True, histogram=True, violin=True, box=True, groupstats=False,
+                ),
+            )
+        workbook = openpyxl.load_workbook(output / "workbook.xlsx", read_only=True)
+        try:
+            assert list(workbook["Metrics"].values)[1][2:] == (
+                10, 1.96, 1.95, 0.5015531433014407, 1.2, 2.7,
+            )
+            rows = workbook["Table Data"].iter_rows(values_only=True)
+            headers = next(rows)
+            assert [row[headers.index("dim")] for row in rows] == [
+                1.2, 1.4, 1.7, 2.1, 2.2, 2.6, 1.8, 2.3, 2.7, 1.6,
+            ]
+        finally:
+            workbook.close()
+    assert compare_artifacts(tmp_path / "baseline", tmp_path / "candidate")["equal"]
