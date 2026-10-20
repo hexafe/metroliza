@@ -1,6 +1,7 @@
 import base64
 import importlib
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 from time import perf_counter
@@ -47,6 +48,8 @@ from metroliza.ui.ui_foundation import (
     status_chip,
 )
 
+
+WARMUP_IN_THREAD_ENV = "METROLIZA_WARMUP_IN_THREAD"
 
 FEATURE_IMPORT_WARMUP_MODULES = (
     ("Parse Reports", "metroliza.ui.parsing_dialog"),
@@ -265,6 +268,10 @@ class MainWindow(QMainWindow):
         if self._feature_import_warmup_completed:
             return
 
+        if os.getenv(WARMUP_IN_THREAD_ENV) == "1" and self._feature_import_warmup_queue:
+            self._start_threaded_feature_import_warmup()
+            return
+
         if not self._feature_import_warmup_queue:
             self._finish_feature_import_warmup()
             return
@@ -289,6 +296,42 @@ class MainWindow(QMainWindow):
             self._feature_import_warmup_failures.append(failed_module)
 
         QTimer.singleShot(0, self._preload_next_feature_import)
+
+    def _start_threaded_feature_import_warmup(self):
+        """STEP2 PoC: import the warmup modules on a background thread.
+
+        Module bodies run off the GUI thread, so the window keeps painting and taking input;
+        the GUI thread only polls for completion. Imports still take the GIL in turns.
+        """
+        import threading
+
+        self._feature_import_warmup_start = perf_counter()
+        record_event("feature_warmup_start", module_count=len(FEATURE_IMPORT_WARMUP_MODULES),
+                     mode="thread")
+        queue = list(self._feature_import_warmup_queue)
+        self._feature_import_warmup_queue = []
+        importer = self._feature_import_warmup_importer
+        done = threading.Event()
+
+        def work():
+            for label, module_name in queue:
+                loaded_module, failed_module = _warm_feature_module(label, module_name, importer=importer)
+                if loaded_module is not None:
+                    self._feature_import_warmup_loaded_modules.append(loaded_module)
+                if failed_module is not None:
+                    self._feature_import_warmup_failures.append(failed_module)
+            done.set()
+
+        threading.Thread(target=work, name="metroliza-feature-warmup", daemon=True).start()
+        self.statusBar().showMessage("Loading tools...", 2000)
+
+        def poll():
+            if done.is_set():
+                self._finish_feature_import_warmup()
+            else:
+                QTimer.singleShot(25, poll)
+
+        QTimer.singleShot(25, poll)
 
     def _finish_feature_import_warmup(self):
         loaded_modules = list(self._feature_import_warmup_loaded_modules)

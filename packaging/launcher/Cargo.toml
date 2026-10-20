@@ -24,6 +24,8 @@ name = "launcher-test-entry"
 path = "src/bin/launcher_test_entry.rs"
 
 [dependencies]
+# Decodes the embedded loading animation for the splash (pure Rust; decoder only).
+gif = { version = "0.13", default-features = false, features = ["std"] }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -34,6 +36,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_RestartManager",

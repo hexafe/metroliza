@@ -8,8 +8,10 @@ if not getattr(sys, "frozen", False):
     sys.path.insert(0, str(ROOT_DIR / "src"))
 
 from metroliza.shared.diagnostic_startup_probe import mark, mark_error  # noqa: E402
+from metroliza.app.startup_profile import record_event  # noqa: E402
 
 mark("launcher_entry")
+record_event("supervisor_entry")
 try:
     from metroliza.app.diagnostic_launcher import main
 except Exception as error:
@@ -17,6 +19,7 @@ except Exception as error:
     mark_error(error)
     raise
 mark("launcher_imported")
+record_event("supervisor_imported")
 
 
 if __name__ == "__main__":

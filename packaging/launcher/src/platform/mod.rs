@@ -5,7 +5,11 @@
 //! and can be exercised end to end on Linux; it provides no single-instance guard and no UI.
 
 #[cfg(windows)]
+mod splash_windows;
+#[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub use self::splash_windows::{Splash, SPLASH_CLASS, SPLASH_HWND_ENV};
 #[cfg(windows)]
 pub use self::windows::*;
 

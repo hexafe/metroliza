@@ -17,6 +17,7 @@ pub mod log;
 pub mod manifest;
 pub mod pack;
 pub mod platform;
+pub mod splash_frames;
 pub mod trailer;
 
 /// Lowercase hexadecimal encoding of `bytes`.

@@ -284,12 +284,18 @@ def get_or_create_qapplication():
     return app
 
 
+EXIT_AFTER_WARMUP_ENV = "METROLIZA_STARTUP_EXIT_AFTER_WARMUP"
+
+
 def _schedule_startup_ui_smoke_exit(app) -> None:
     """Exit after the first Qt event-loop tick for packaged startup benchmarks."""
     from PyQt6.QtCore import QTimer
 
     def record_and_quit() -> None:
         record_event("first_event_loop_tick")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("first_event_loop_tick")
         app.quit()
 
     QTimer.singleShot(0, record_and_quit)
@@ -311,6 +317,17 @@ def _schedule_splash_finish_then_warmup(app, splash, main_window) -> None:
     callback is deliberately not wired up).
     """
 
+    def warmup_finished() -> None:
+        record_event("launch_ui_warmup_finished")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("warmup_finished")
+        # Measurement aid: leave once the window is fully usable (first useful screen).
+        if os.getenv(EXIT_AFTER_WARMUP_ENV) == "1":
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, app.quit)
+
     def finish_splash_and_start_warmup() -> None:
         record_event("main_window_first_paint_tick")
         try:
@@ -322,7 +339,7 @@ def _schedule_splash_finish_then_warmup(app, splash, main_window) -> None:
         finally:
             main_window.schedule_feature_import_warmup(
                 delay_ms=0,
-                on_finished=lambda: record_event("launch_ui_warmup_finished"),
+                on_finished=warmup_finished,
             )
 
     _schedule_after_first_event_loop_tick(finish_splash_and_start_warmup)
@@ -385,6 +402,9 @@ def launch_ui(
     _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
     app = get_or_create_qapplication()
     _startup_event(StartupCallsite.QAPPLICATION_READY)
+    from metroliza.app.startup_stall_probe import install_if_requested
+
+    install_if_requested(app)
     splash = create_startup_splash(app, ui_smoke_mode=config.startup_ui_smoke_mode)
     close_bootloader_splash(phase="qt_splash_ready")
     splash.show_message("Checking license...", phase="license")

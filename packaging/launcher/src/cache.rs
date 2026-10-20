@@ -40,6 +40,20 @@ pub trait Progress: Sync {
     fn advance(&self, bytes: u64);
     /// Called once when extraction is over or turned out to be unnecessary.
     fn finish(&self);
+    /// The kind of work that is about to start; lets a window name it. Default: ignored.
+    fn stage(&self, _stage: Stage) {}
+    /// Bytes hashed by the second-launch verification since the last call. Kept apart from
+    /// [`Progress::advance`], which counts written bytes only. Default: ignored.
+    fn verified(&self, _bytes: u64) {}
+}
+
+/// Work the cold/repair path is doing, reported through [`Progress::stage`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Second launch: hashing and flushing the files the first launch extracted.
+    Verifying,
+    /// Unpacking the payload (first launch of a version, or a repair).
+    Extracting,
 }
 
 /// Progress sink that ignores everything.
@@ -405,11 +419,22 @@ fn write_marker(dir: &Path, marker: &str, payload: &Payload) -> Result<()> {
         .map_err(|e| LauncherError::extraction(format!("marker: {e}")))
 }
 
-fn promote_pending(dir: &Path, payload: &Payload, options: &Options) -> Result<bool> {
+fn promote_pending(
+    dir: &Path,
+    payload: &Payload,
+    progress: &dyn Progress,
+    options: &Options,
+) -> Result<bool> {
     if !marker_matches(dir, PENDING_MARKER, payload) {
         return Ok(false);
     }
-    if process_files(payload, options, &|entry| verify_and_flush(dir, entry)).is_err() {
+    progress.stage(Stage::Verifying);
+    let verify = |entry: &FileEntry| {
+        verify_and_flush(dir, entry)?;
+        progress.verified(entry.size);
+        Ok(())
+    };
+    if process_files(payload, options, &verify).is_err() {
         return Ok(false);
     }
     sync_payload_dirs(dir, payload)
@@ -575,9 +600,10 @@ fn extract_locked(
         return Ok(Outcome::Warm);
     }
 
-    if promote_pending(dir, payload, options)? {
+    if promote_pending(dir, payload, progress, options)? {
         return Ok(Outcome::Verified);
     }
+    progress.stage(Stage::Extracting);
 
     remove_stale_staging(root);
     let existed = fs::symlink_metadata(dir).is_ok();

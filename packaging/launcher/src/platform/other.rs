@@ -7,6 +7,12 @@ use std::process::Command;
 use super::Instance;
 use crate::cache::Progress;
 use crate::error::{ErrorKind, LauncherError, Result};
+use crate::log::Log;
+
+/// Environment variable carrying the splash window handle to the entry (Windows only).
+pub const SPLASH_HWND_ENV: &str = "METROLIZA_LAUNCHER_SPLASH_HWND";
+/// Window class of the Windows splash.
+pub const SPLASH_CLASS: &str = "MetrolizaLauncherSplash";
 
 /// Placeholder guard; there is no single-instance enforcement off Windows.
 pub struct InstanceGuard;
@@ -24,22 +30,25 @@ pub fn show_error(kind: ErrorKind) {
     eprintln!("{}", kind.user_message());
 }
 
-/// No window off Windows.
-pub struct ProgressWindow;
+/// No window off Windows; keeps the launcher flow identical for the development stand-in.
+pub struct Splash;
 
-impl ProgressWindow {
-    pub fn new() -> Self {
+impl Splash {
+    pub fn show(log: &Log) -> Self {
+        log.mark("splash_unavailable");
         Self
     }
-}
 
-impl Default for ProgressWindow {
-    fn default() -> Self {
-        Self::new()
+    pub fn handle_for_entry(&self) -> Option<String> {
+        None
     }
+
+    pub fn status(&self, _main: &str) {}
+
+    pub fn close(&self) {}
 }
 
-impl Progress for ProgressWindow {
+impl Progress for Splash {
     fn begin(&self, _total_bytes: u64) {}
     fn advance(&self, _bytes: u64) {}
     fn finish(&self) {}
