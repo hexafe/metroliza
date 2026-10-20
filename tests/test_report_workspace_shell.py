@@ -724,6 +724,8 @@ def test_export_context_transition_protects_real_child_drafts(app, window, repor
         child.expression_input.setText("MEAS > 1")
         assert child._is_dirty()
     else:
+        # Export opens Grouping with a background load; its controls are enabled once loaded.
+        wait_until(app, lambda: not child.is_loading_grouping())
         child.default_group = "RETAINED GROUP"
         assert child._is_grouping_dirty()
     target, name = ((ReportRepository, "import_report_if_absent") if stage == "import"

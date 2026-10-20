@@ -263,6 +263,8 @@ class DataGrouping(QDialog):
         self.setup_ui()
 
         if background_load and str(db_file or "").strip():
+            # Dirty checks need a committed baseline while the data is still loading.
+            self._capture_committed_grouping_state()
             self._start_background_load()
             return
         self.read_data_to_df()
