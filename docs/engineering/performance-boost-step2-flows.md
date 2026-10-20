@@ -9,8 +9,8 @@ crate'y Rust), a nie z dokumentacji; różnice z dokumentacją są w sekcji „K
 Czasy pochodzą z `scripts/benchmark_ui_flows.py` (Linux, źródła, Qt offscreen, dane syntetyczne)
 albo z `scripts/measure_windows_first_run_timeline.py` (Windows, hostowany runner CI, prawdziwe EXE).
 Mediana [min–max]; n=3 (Linux) i n=7/14 (Windows), jeśli nie zaznaczono inaczej. Czasy Linux: przebieg
-2026-10-20 05:54–06:17 w profilu energii `balanced`; wcześniejszy przebieg w `power-saver` (2,8–4,7×
-wolniejszy) jest w JSON jako `linux_power_saver`. Surowe agregaty:
+2026-10-20 05:54–06:17 w profilu energii `balanced`; porównanie z poprzednią wersją (build 261019) w tym
+samym profilu: raport §4.1. Surowe agregaty:
 [`performance-boost-step2-measurements.json`](performance-boost-step2-measurements.json).
 
 **Status:** `POMIAR` = sprawdzone pomiarowo; `STAT` = sprawdzone statycznie (kod, ścieżka i wywołania
@@ -49,7 +49,7 @@ współbieżności i 11 fabryk/zakresów połączeń SQLite (mapa w raporcie gł
 | IMP-SCAN | „Review reports" (`parsing_dialog.py:817-939`, `preflight.py:955`) | QThread, ściśle szeregowo per plik | kaczucha-op. (timer od `show()` po starcie wątku) | POMIAR: 1500 PDF: 25,6 s [22,3–25,8] w UI; sam kod: skan 8,0 s + odczyt metadanych 11,2 s; kaczucha od 1,08 s, 84–86% klatek, przerwy do 164 ms, ≈150 klatek po ukryciu (sygnał i restyle na plik). PoC puli: 6,6 s (4) / 5,3 s (8), wynik identyczny |
 | IMP-REVIEW | wypełnienie tabeli po Review; filtr, zaznaczenia, edycje | GUI, model/proxy w Pythonie | brak (kaczucha zamknięta przed `set_review`) | POMIAR: wypełnienie 1500 wierszy 0,26 s [0,18–0,29] zamrożenia GUI po zamknięciu kaczuchy; STAT: filtr per wiersz bez debounce, O(N) przy każdym zaznaczeniu |
 | IMP-META | automatyczny szybki odczyt metadanych i OCR | QThread szeregowo, ponowny hash i otwarcie PDF | tekst (licznik w tabeli) | POMIAR: część IMP-SCAN; ≈14 s w UI (kod: 11,2 s) na 1500 raportów bez animowanego wskaźnika |
-| IMP-RUN | „Import N selected reports" (`parse_reports_thread.py:1897`) | GUI: budowa planu ×3; QThread + pula prepare (3 procesy, źródła) + jeden zapisujący | kaczucha-op. | POMIAR: 1500 raportów 12,9 s [12,8–12,9] (8,6 ms/raport), RSS 398 MB, najdłuższy zastój 0,07 s; kaczucha od 1,06 s, ≈100% klatek. Profil (power-saver, proporcje): ≈17% sprawdzanie gotowości schematu (2× na raport), ≈6–8% odświeżanie rejestru parserów, ≈28% budowa wierszy |
+| IMP-RUN | „Import N selected reports" (`parse_reports_thread.py:1897`) | GUI: budowa planu ×3; QThread + pula prepare (3 procesy, źródła) + jeden zapisujący | kaczucha-op. | POMIAR: 1500 raportów 12,9 s [12,8–12,9] (8,6 ms/raport), RSS 398 MB, najdłuższy zastój 0,07 s; kaczucha od 1,06 s, ≈100% klatek. Profil (proporcje): ≈13% sprawdzanie gotowości schematu (2× na raport), ≈8% odświeżanie rejestru parserów, ≈30% budowa wierszy |
 | IMP-ENRICH | „Enrich existing database metadata…" (`metadata_enrichment_thread.py`) | QThread szeregowo per raport (OCR) | tekst + pasek w oknie głównym | STAT: OCR w EXE uruchamia proces na każde wywołanie (RISK-02) |
 | DB-OPEN | „Modify Database" (`modify_db.py:135-571`) | GUI: zapytania + 6609 `QTableWidgetItem` | brak | POMIAR: 0,18 s [0,18–0,22] zamrożenia (okno widoczne od 0,09 s bez treści); Windows niezmierzony |
 | DB-RECORDS | zakładki rekordów i filtr (`modify_db_records.py`) | QThread ładowania, filtr w GUI | baner zajętości | POMIAR: 216k wierszy + 1 znak filtra: 2,67 s [2,57–2,89], najdłuższy zastój 0,08 s |
@@ -88,7 +88,7 @@ współbieżności i 11 fabryk/zakresów połączeń SQLite (mapa w raporcie gł
 | CSV-08 | opcje interaktywności | GUI, tanie | n/d | N/D |
 | CSV-09 | „Create analytics" (`industrial_analytics_workflow.py:278-591`) | GUI: walidacja ×3; QThread: etapy szeregowo | kaczucha-op. | POMIAR: 100k wierszy: **50,3 s** [49,9–51,2], RSS 640 MB, dashboard 12,6 MB; najdłuższy zastój 0,43 s, przerwa animacji do 0,61 s pod koniec. Profil: fity rozkładów scipy (MLE, Nelder–Mead) na pełnych danych, powtórzone dla histogramu i tabeli |
 | VIS-01 | Dashboard visual options (QWebEngine) | GUI: podgląd `setHtml` po każdej zmianie | brak | STAT: nie mierzono QWebEngine w trybie offscreen |
-| IND-01 | otwarcie Industrial Data (`industrial_data_dialog.py:71`) | GUI: import pakietu `oznak` dla etykiety statusu, COUNT-y | brak | POMIAR: 0,78 s [0,75–0,83] zamrożenia (profil w power-saver: 1,8 s z 2,9 s to import `oznak`+SQLAlchemy) |
+| IND-01 | otwarcie Industrial Data (`industrial_data_dialog.py:71`) | GUI: import pakietu `oznak` dla etykiety statusu, COUNT-y | brak | POMIAR: 0,78 s [0,75–0,83] zamrożenia (profil: 48% otwarcia to import `oznak`+SQLAlchemy) |
 | IND-02 | cache: Temp/Open/Save as/Initialize | GUI: kopiowanie pliku cache | brak | STAT |
 | IND-03 | źródła produkcyjne (profile) | GUI: YAML + upsert, podwójny reload | brak | STAT |
 | IND-04 | pobieranie do cache (Oznak) | QThread per źródło, źródła szeregowo | tekst (chip) | BLOK: wymaga źródła produkcyjnego Oznak; brak w środowisku |
@@ -97,7 +97,7 @@ współbieżności i 11 fabryk/zakresów połączeń SQLite (mapa w raporcie gł
 | IND-07 | eksport cache → workbook; tryb live bez cache (`industrial_export_dialog.py:71`, `IndustrialLiveExportThread`) | QThread strumieniowo | kaczucha-nat., pasek stoi na 0 | STAT: miganie przy krótkich eksportach; tryb live: BLOK pomiaru (wymaga źródła Oznak) |
 | IND-08 | podokna filtra i grupowania Industrial (`IndustrialFilterDialog` z IND-04/IND-07, `IndustrialGroupingDialog` z IND-07) | GUI: „Load references" = `ensure_report_schema` + `SELECT DISTINCT` referencji w wątku GUI; grouping = stała lista pól | brak | STAT: tanie przy 1500 raportach; `ensure_report_schema` otwiera transakcję zapisu w GUI (ryzyko blokady przy aktywnym imporcie) |
 | IND-09 | filtr produkcyjny w CSV Summary (`IndustrialAnalyticsFilterDialog`, `industrial_analytics_dialog.py:1708`) | GUI: pola tekstowe; po Apply reset metryk i `_sync_ui_state` | brak | STAT: koszt po Apply niezmierzony osobno |
-| RT-01 | otwarcie Realtime Monitor | GUI: import modułu (poza rozgrzewką), stan bazy | brak | POMIAR: 0,31 s [0,30–0,36] zamrożenia (profil n=1 w power-saver: ≈1 s z 1,17 s to import modułu) |
+| RT-01 | otwarcie Realtime Monitor | GUI: import modułu (poza rozgrzewką), stan bazy | brak | POMIAR: 0,31 s [0,30–0,36] zamrożenia (profil n=1: 71% otwarcia to import modułu) |
 | RT-02 | konfiguracja źródeł | GUI upsert | tekst | STAT |
 | RT-03 | Start / Poll / Stop | QThread na cykl; detektory szeregowo po każdej paczce | tekst | BLOK: wymaga źródła produkcyjnego (replay CSV nieuruchomiony) |
 | RT-04 | zapis/otwarcie dashboardu | QThread, debounce 250 ms | tekst | STAT: HTML przepisywany co cykl także bez zmian |
