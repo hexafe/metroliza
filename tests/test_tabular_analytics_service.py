@@ -2352,6 +2352,15 @@ def test_numeric_chunk_conversion_matches_scalar_parser():
             "1.0000000000000002", "-0.0", "1e-320", "1e309", "NaN", "１２",
             "0.30000000000000004", "0.306610199380709547156",
         ]
-        assert service._parse_tabular_numbers(clean, decimal=decimal) == [
-            service._parse_tabular_number(value, decimal=decimal) for value in clean
+        chunks = [
+            clean,
+            ["1,5\x00", "2.5\x00", "  -0,0  ", " １２,５ ", " ٢.٥ "],
+            [None, " 1,5 ", "-0,0", "１２,５"],
         ]
+        for chunk in chunks:
+            converted = service._parse_tabular_numbers(chunk, decimal=decimal)
+            for value, actual_value in zip(chunk, converted):
+                expected_value = service._parse_tabular_number(value, decimal=decimal)
+                assert actual_value == expected_value, (decimal, repr(value))
+                if expected_value == 0:
+                    assert np.signbit(actual_value) == np.signbit(expected_value)

@@ -124,3 +124,36 @@ def test_queued_readings_of_a_retired_worker_never_reach_the_next_review(app, ma
 
     assert host._pending_readings == [] and host._pending_metadata_progress is None
     settle(app, host)
+
+
+def test_finished_preflight_is_released_on_gui_thread(app, make_host, readers, monkeypatch):
+    import gc
+    import threading
+    import weakref
+    from tests.test_detached_threads import _collect_in_another_thread
+
+    finalized_in = []
+    class TrackedPreflight(_BurstPreflightThread):
+        def __del__(self):
+            finalized_in.append(threading.current_thread())
+
+    host = make_host('dialog')
+    monkeypatch.setattr(parsing_dialog_module, 'ParsePreflightThread', TrackedPreflight)
+    monkeypatch.setattr(host, 'on_preflight_completed', lambda result: None)
+    TrackedPreflight.result = None
+    gc.collect()
+    gc.disable()
+    try:
+        host.scan_reports()
+        thread = host.preflight_thread
+        assert isinstance(thread, TrackedPreflight)
+        reference = weakref.ref(thread)
+        assert thread.wait(20000)
+        wait_until(app, lambda: host.preflight_thread is None)
+        del thread
+        released_without_gc = reference() is None
+        _collect_in_another_thread()
+    finally:
+        gc.enable()
+    assert released_without_gc, 'preflight signals retain the finished thread in a cycle'
+    assert finalized_in == [threading.current_thread()]

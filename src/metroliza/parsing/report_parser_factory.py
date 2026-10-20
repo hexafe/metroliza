@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from functools import partial
 import hashlib
 from importlib import metadata as importlib_metadata
 import importlib.util
@@ -450,11 +451,52 @@ def get_registry_snapshot(*, refresh: bool = True) -> RegistrySnapshot:
         return _synchronize_compatibility_maps_locked()
 
 
+def _identity_module(value: object) -> str:
+    module_name = getattr(value, "__module__", "") or ""
+    # Path-plugin module counters are process-local; bind those to their source.
+    if module_name.startswith("metroliza_external_parser_plugin_"):
+        module_file = getattr(sys.modules.get(module_name), "__file__", None)
+        if module_file:
+            return str(Path(module_file).resolve(strict=False))
+    return module_name
+
+
+def _stable_argument(value: object, depth: int = 0) -> object:
+    """Describe partial arguments without process-local repr/address values."""
+
+    if value is None or type(value) in (bool, int, str):
+        return value
+    if isinstance(value, float):
+        return ["float", value.hex()]
+    if isinstance(value, bytes):
+        return ["bytes", value.hex()]
+    kind = [_identity_module(type(value)), type(value).__qualname__]
+    if depth >= 8:
+        return kind
+    if isinstance(value, (list, tuple)):
+        return [kind, [_stable_argument(item, depth + 1) for item in value]]
+    if isinstance(value, dict):
+        items = [[_stable_argument(key, depth + 1), _stable_argument(item, depth + 1)]
+                 for key, item in value.items()]
+        return [kind, sorted(items, key=lambda item: json.dumps(item, sort_keys=True))]
+    if isinstance(value, (set, frozenset)):
+        return [kind, sorted((_stable_argument(item, depth + 1) for item in value),
+                             key=lambda item: json.dumps(item, sort_keys=True))]
+    return kind
+
+
 def _code_identity(value: object) -> list[object] | None:
-    """Name and source-file signature of a class or function (``None`` for no object)."""
+    """Stable code/type and partial-argument identity, without address-based reprs."""
 
     if value is None:
         return None
+    if isinstance(value, partial):
+        return [type(value).__module__, type(value).__qualname__,
+                _identity_module(value.func),
+                _code_identity(value.func), _stable_argument(value.args),
+                _stable_argument(value.keywords)]
+    if not getattr(value, "__qualname__", None):
+        return [_identity_module(type(value)), type(value).__qualname__, _code_identity(type(value))]
     module = sys.modules.get(getattr(value, "__module__", "") or "")
     module_file = getattr(module, "__file__", None)
     signature: list[object] | None = None
@@ -467,7 +509,7 @@ def _code_identity(value: object) -> list[object] | None:
             signature = [str(module_file), None, None]
     # External path plugins load under per-process module names, so the module name is
     # not part of the identity; the file it came from is.
-    return [str(getattr(value, "__qualname__", repr(value))), signature]
+    return [str(value.__qualname__), signature]
 
 
 def registry_configuration_fingerprint(snapshot: RegistrySnapshot | None = None) -> str:

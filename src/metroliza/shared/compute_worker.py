@@ -60,10 +60,14 @@ _SPAWN_ENVIRONMENT_LOCK = threading.Lock()
 def worker_thread_environment(environ=None):
     """Temporarily add the one-thread limits that the environment does not already set.
 
-    Only variables that are absent are added, and exactly those are removed again, so
-    nothing the user (or another thread) set is ever changed. The lock serialises
-    concurrent worker starts; the parent's own libraries never see the values because
-    they were loaded earlier and read their configuration only once.
+    The parent's os.environ gains missing variables for the duration of each spawn
+    start, so the child inherits them before importing math libraries. Afterwards,
+    added values still equal to "1" are removed; existing values are left alone.
+    The lock serialises these starts only: other parent threads reading the
+    environment or initializing libraries during that interval can see the limits.
+    Libraries already configured normally retain their earlier settings. The
+    packaged Windows environment API is internally locked as well; this does not
+    isolate the temporary values from other parent threads.
     """
 
     environ = os.environ if environ is None else environ

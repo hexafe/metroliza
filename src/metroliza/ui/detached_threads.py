@@ -16,9 +16,12 @@ The module imports Qt lazily so that modules that stub Qt in tests can still imp
 from __future__ import annotations
 
 import functools
+import logging
 import time
 import weakref
 from collections.abc import Callable, Iterable
+
+logger = logging.getLogger(__name__)
 
 # Upper bound for the whole wait at application exit, not per thread.
 QUIT_WAIT_TOTAL_MS = 5000
@@ -119,8 +122,8 @@ def _run_ready_deferred(*, force: bool = False) -> None:
             continue
         try:
             entry[1]()
-        except Exception:  # a failing cleanup must not break the thread-finished signal or exit
-            pass
+        except Exception as exc:  # a failing cleanup must not break the signal or exit
+            logger.warning("Deferred thread cleanup failed: %s: %s", type(exc).__name__, exc)
 
 
 def wait_for_all(total_timeout_ms: int = QUIT_WAIT_TOTAL_MS) -> bool:

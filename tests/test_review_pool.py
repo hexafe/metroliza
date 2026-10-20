@@ -293,3 +293,66 @@ def test_registry_fingerprint_is_deterministic_and_tracks_registrations():
         changed = factory.registry_configuration_fingerprint(factory.get_registry_snapshot())
     assert changed != fingerprint
     assert factory.registry_configuration_fingerprint(factory.get_registry_snapshot()) == fingerprint
+
+
+def _partial_registration_fingerprint(argument):
+    from dataclasses import replace
+    from functools import partial
+
+    snapshot = factory.get_registry_snapshot()
+    registration = snapshot.registrations[0]
+    detector = partial(_partial_registration_fingerprint, argument)
+    snapshot = replace(snapshot, registrations=(replace(registration, detector=detector),))
+    return factory.registry_configuration_fingerprint(snapshot)
+
+
+def test_partial_registration_fingerprint_matches_across_processes():
+    arguments = {'threshold': 0.5, 'formats': ['pdf', 'csv'], 'enabled': True, 'opaque': object()}
+    expected = _partial_registration_fingerprint(arguments)
+    with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context('spawn')) as executor:
+        actual = executor.submit(_partial_registration_fingerprint, arguments).result(timeout=60)
+    assert actual == expected
+    assert _partial_registration_fingerprint({'threshold': 0.6}) != expected
+
+
+def test_callable_instance_identity_uses_its_type_without_an_address():
+    class Detector:
+        def __call__(self):
+            pass
+    left, right = Detector(), Detector()
+    assert factory._code_identity(left) == factory._code_identity(right)
+
+
+def test_registry_mismatch_is_in_completion_telemetry(review_source, monkeypatch, caplog):
+    source, database = review_source
+    real_state = review_pool.registry_state
+    monkeypatch.setattr(review_pool, 'registry_state', lambda: (real_state()[0], 'forced-mismatch'))
+    completed = []
+    original_close = review_pool.OrderedChunkPool.close
+    def close(pool, **kwargs):
+        original_close(pool, **kwargs)
+        completed.append(pool.completion_metadata['review_pool'].copy())
+    monkeypatch.setattr(review_pool.OrderedChunkPool, 'close', close)
+    with caplog.at_level('INFO', logger=review_pool.__name__):
+        result = _scan(source, database, workers=2)
+    assert result.files
+    assert completed[-1]['mode'] == 'serial_fallback'
+    assert completed[-1]['fallback_reason'] == 'registry_fingerprint_mismatch'
+    assert any(getattr(record, 'completion_metadata', {}).get('review_pool', {}).get(
+        'fallback_reason') == 'registry_fingerprint_mismatch' for record in caplog.records)
+
+
+def test_callable_path_plugin_identity_ignores_process_local_module_counter(monkeypatch):
+    from functools import partial
+    import sys
+    from types import ModuleType
+
+    identities = []
+    for counter in (1, 9):
+        name = f"metroliza_external_parser_plugin_{counter}"
+        module = ModuleType(name)
+        module.__file__ = __file__
+        monkeypatch.setitem(sys.modules, name, module)
+        detector = type('Detector', (), {'__module__': name, '__call__': lambda self: None})()
+        identities.append((factory._code_identity(detector), factory._code_identity(partial(detector))))
+    assert identities[0] == identities[1]

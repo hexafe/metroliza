@@ -195,9 +195,9 @@ def render_workers(requested: int, entry_count: int, *, cap: int = RENDER_MAX_WO
 
 
 def chart_workers(requested: int) -> int:
-    """Worker processes for the export chart executor (the requested count, at least one)."""
+    """Chart processes capped by the CPU budget (or its global override), at least one."""
 
-    workers = max(1, int(requested))
+    workers = max(1, min(int(requested), worker_budget()))
     override = global_override()
     return min(workers, override) if override else workers
 

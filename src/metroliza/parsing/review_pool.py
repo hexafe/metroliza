@@ -165,6 +165,10 @@ class OrderedChunkPool:
         initializer: Callable | None = None,
         initargs: tuple = (),
     ) -> None:
+        self.completion_metadata = {"review_pool": {
+            "mode": "spawn", "workers": int(workers), "fallback_reason": None,
+        }}
+        self.telemetry = self.completion_metadata["review_pool"]
         self._function = function
         self._tasks = list(tasks)
         self._should_cancel = should_cancel
@@ -190,7 +194,8 @@ class OrderedChunkPool:
             self._next_to_submit += 1
             try:
                 self._futures[index] = self._executor.submit(self._function, self._tasks[index])
-            except Exception:  # noqa: BLE001 - broken or shut down: the rest runs in-process
+            except Exception as exc:  # noqa: BLE001 - the rest runs in-process
+                self._record_fallback("submit_failure", exc)
                 self._usable = False
 
     def _wait(self, future):
@@ -201,13 +206,20 @@ class OrderedChunkPool:
                 return future.result(timeout=_RESULT_POLL_SECONDS)
             except FutureTimeoutError:
                 continue
-            except BrokenProcessPool:
+            except BrokenProcessPool as exc:
+                self._record_fallback("broken_process_pool", exc)
                 self._usable = False
-                logger.debug("Review pool broke; the remaining files are read in-process.")
                 return None
             except Exception as exc:  # noqa: BLE001 - a failed chunk is redone in-process
-                logger.debug("Review worker failed: %s", type(exc).__name__)
+                self._record_fallback("worker_failure", exc)
                 return None
+
+    def _record_fallback(self, reason: str, exc: Exception | None = None) -> None:
+        self.telemetry["mode"] = "serial_fallback"
+        if self.telemetry["fallback_reason"] is None:
+            self.telemetry["fallback_reason"] = reason
+            if exc is not None:
+                self.telemetry["exception_class"] = type(exc).__name__
 
     def abandon(self) -> None:
         """Stop using the workers; every later chunk runs in-process."""
@@ -236,10 +248,14 @@ class OrderedChunkPool:
         for future in self._futures.values():
             future.cancel()
         self._futures.clear()
-        if cancel:
-            _stop_executor(self._executor)
-        else:
-            self._executor.shutdown(wait=True, cancel_futures=True)
+        try:
+            if cancel:
+                _stop_executor(self._executor)
+            else:
+                self._executor.shutdown(wait=True, cancel_futures=True)
+        finally:
+            logger.info("Review pool completed: %s", self.telemetry,
+                        extra={"completion_metadata": self.completion_metadata})
 
 
 class _Cancelled(Exception):
@@ -303,17 +319,19 @@ def _accepted(value, fingerprint: str, generation: int, pool: OrderedChunkPool):
         return None
     worker_fingerprint, worker_generation, items = value
     if items is None or worker_fingerprint != fingerprint:
-        logger.debug("Review worker registry differs from the parent; reading in-process.")
+        pool._record_fallback("registry_fingerprint_mismatch")
         pool.abandon()
         return None
     if report_parser_factory.get_registry_snapshot().generation_id != generation:
         # The parent's registry moved on: the in-process path stamps the new generation.
+        pool._record_fallback("parent_registry_generation_changed")
         pool.abandon()
         return None
     if any(
         getattr(item, "registry_generation_id", None) not in (None, worker_generation)
         for item in items
     ):
+        pool._record_fallback("worker_registry_generation_mismatch")
         return None
     return items
 

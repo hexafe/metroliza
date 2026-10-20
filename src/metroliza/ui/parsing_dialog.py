@@ -29,6 +29,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 import logging
+from functools import partial
+import weakref
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 try:
     from metroliza.ui.worker_progress_dialog import (
@@ -907,15 +909,16 @@ class _ReportOperations:
                 database_path=request.db_file,
                 metadata_parsing_mode=request.metadata_parsing_mode,
             )
+            thread_ref = weakref.ref(self.preflight_thread)
             self.preflight_thread.finished.connect(
-                lambda thread=self.preflight_thread: self._on_preflight_thread_stopped(thread)
+                partial(self._on_preflight_thread_stopped, thread_ref)
             )
             self._scan_feedback = {}
             self.preflight_thread.update_label.connect(
-                lambda text, thread=self.preflight_thread: self._on_scan_feedback(thread, "label", text)
+                partial(self._on_scan_feedback, thread_ref, "label")
             )
             self.preflight_thread.update_progress.connect(
-                lambda value, thread=self.preflight_thread: self._on_scan_feedback(thread, "progress", value)
+                partial(self._on_scan_feedback, thread_ref, "progress")
             )
             self.preflight_thread.completed.connect(self.on_preflight_completed)
             self.preflight_thread.failed.connect(self.on_preflight_failed)
@@ -930,8 +933,9 @@ class _ReportOperations:
             self.scan_button.setFocus()
             self.log_and_exit(exc)
 
-    def _on_scan_feedback(self, thread, kind, value):
-        if thread is not self.preflight_thread:
+    def _on_scan_feedback(self, thread_ref, kind, value):
+        thread = thread_ref()
+        if thread is None or thread is not self.preflight_thread:
             return
         self._scan_feedback[kind] = value
         self._scan_feedback_throttle.request()
@@ -962,8 +966,9 @@ class _ReportOperations:
                     )
                 )
 
-    def _on_preflight_thread_stopped(self, stopped_thread):
-        if stopped_thread is self.preflight_thread:
+    def _on_preflight_thread_stopped(self, thread_ref):
+        stopped_thread = thread_ref()
+        if stopped_thread is not None and stopped_thread is self.preflight_thread:
             self.preflight_thread = None
         self._sync_readiness_state()
         if not self._close_requested:

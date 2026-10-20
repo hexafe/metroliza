@@ -434,3 +434,40 @@ def test_serial_policies_never_validate_the_package_identity(monkeypatch):
     monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '1')
     assert pool._pool_policy(owner, 40) == 'serial_frozen_multiprocessing_unavailable'
     assert calls == [1]
+
+
+@pytest.mark.parametrize('summary_sheet', [True, False])
+def test_each_pooled_chart_image_is_registered_once(summary_sheet, monkeypatch):
+    from dataclasses import replace
+    from metroliza.exporting.contracts import AppPaths, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
+
+    task = _task()
+    task['options'] = replace(task['options'], generate_summary_sheet=summary_sheet,
+                              generate_html_dashboard=True)
+    result = pool.render_summary_group(task)
+    assert not result['failed']
+    charts = [chart for section in result['dashboard_sections'] for chart in section['charts']]
+    assert charts
+    if summary_sheet:
+        assert all(isinstance(chart['image_buffer'], tuple) for chart in charts)
+    else:
+        assert all(isinstance(chart['image_buffer'], bytes) for chart in charts)
+    owner = ExportDataThread(ExportRequest(AppPaths('unused.sqlite', 'unused.xlsx'), task['options']))
+    registered = []
+    register = owner._register_chart_image
+    def record(payload):
+        buffer = register(payload)
+        registered.append(buffer)
+        return buffer
+    monkeypatch.setattr(owner, '_register_chart_image', record)
+    sheet_images = []
+    sheet = SimpleNamespace(write=lambda *args: None,
+                            insert_image=lambda *args: sheet_images.append(args[-1]['image_data']))
+    pool.apply_summary_render_result(owner, sheet, result)
+    assert len(registered) == len(charts)
+    if summary_sheet:
+        assert len(sheet_images) == len(charts)
+        assert all(chart['image_buffer'] is buffer for chart, buffer in zip(charts, sheet_images))
+    else:
+        assert not sheet_images

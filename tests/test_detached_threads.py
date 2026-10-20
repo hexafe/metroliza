@@ -191,7 +191,7 @@ def test_exit_runs_deferred_callbacks_once_even_when_a_thread_is_stuck(gate):
     assert calls == ["cleanup"]  # never run a second time
 
 
-def test_a_failing_deferred_callback_does_not_break_the_registry(gate):
+def test_a_failing_deferred_callback_does_not_break_the_registry(gate, caplog):
     thread = gate()
     thread.start()
     calls = []
@@ -205,6 +205,9 @@ def test_a_failing_deferred_callback_does_not_break_the_registry(gate):
     assert thread.wait(_TIMEOUT_S * 1000)
 
     assert _wait_until(lambda: calls == ["second"])
+    assert any(record.name == "metroliza.ui.detached_threads"
+               and record.levelname == "WARNING"
+               and "OSError: synthetic" in record.getMessage() for record in caplog.records)
 
 
 class _TrackedThread(QThread):

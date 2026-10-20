@@ -222,6 +222,13 @@ def test_chart_workers_follow_the_request(monkeypatch):
     assert [budget.chart_workers(n) for n in (1, 2, 7)] == [1, 2, 3]
 
 
+def test_chart_workers_are_capped_by_two_cpu_budget(monkeypatch):
+    monkeypatch.setattr(os, "cpu_count", lambda: 2)
+    assert budget.chart_workers(4) == 1
+    monkeypatch.setenv(budget.GLOBAL_WORKERS_ENV, "3")
+    assert budget.chart_workers(4) == 3
+
+
 def test_resolve_workers_dispatches_every_kind_and_rejects_unknown():
     assert budget.resolve_workers("import_prepare", items=500) == 3
     assert budget.resolve_workers("review", items=500) == 4

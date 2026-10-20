@@ -2474,16 +2474,20 @@ def _parse_tabular_numbers(texts: list[str | None], *, decimal: str) -> list[flo
     """
     import numpy as np
 
-    text = np.asarray(texts, dtype=object)
+    original_texts = texts
+    # Keep Python strings: fixed-width NumPy strings discard trailing NULs,
+    # which float() must reject just as the scalar parser does.
     if decimal == ",":
-        text = np.char.replace(np.char.replace(text.astype(str), ".", ""), ",", ".")
+        texts = [value.replace(".", "").replace(",", ".") if value is not None else None
+                 for value in texts]
     elif any("," in value for value in texts if value is not None):
-        text = np.char.replace(text.astype(str), ",", "")
+        texts = [value.replace(",", "") if value is not None else None for value in texts]
+    text = np.asarray(texts, dtype=object)
     try:
         with np.errstate(over="ignore", invalid="ignore"):
             numbers = text.astype(np.float64)
     except ValueError:
-        return [_parse_tabular_number(value, decimal=decimal) for value in texts]
+        return [_parse_tabular_number(value, decimal=decimal) for value in original_texts]
     result = numbers.astype(object)
     result[~np.isfinite(numbers)] = None
     return result.tolist()

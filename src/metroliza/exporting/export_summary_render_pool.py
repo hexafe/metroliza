@@ -31,14 +31,16 @@ class RecordingWorksheet:
 
     def __init__(self):
         self.commands = []
+        self.image_commands = {}
 
     def write(self, *args):
         self.commands.append(('write', args))
 
     def insert_image(self, row, col, _filename, options):
         options = dict(options)
-        payload = options.pop('image_data').getvalue()
-        self.commands.append(('image', (row, col, options, payload)))
+        buffer = options.pop('image_data')
+        self.image_commands[id(buffer)] = len(self.commands)
+        self.commands.append(('image', (row, col, options, buffer.getvalue())))
 
 
 def _initialize_render_worker(cancel_event=None):
@@ -78,7 +80,12 @@ def render_summary_group(task):
         thread.summary_sheet_fill(sheet, task['header'], task['group'], task['col'])
     for section in thread._html_dashboard_sections:
         for chart in section['charts']:
-            chart['image_buffer'] = chart['image_buffer'].getvalue()
+            # Reuse the worksheet payload across the process boundary as well as
+            # its registered parent buffer. HTML-only charts still carry bytes.
+            buffer = chart['image_buffer']
+            command = sheet.image_commands.get(id(buffer)) if sheet is not None else None
+            chart['image_buffer'] = (('worksheet_image', command) if command is not None
+                                     else buffer.getvalue())
     return {
         'dashboard_sections': thread._html_dashboard_sections,
         'commands': sheet.commands if sheet is not None else [],
@@ -299,17 +306,22 @@ def _collect_ordered(owner, remaining, pending, executor, bound, telemetry, canc
 
 def apply_summary_render_result(owner, worksheet, result):
     """Replay ordered writes and account worker telemetry in the parent only."""
-    for operation, args in result['commands']:
+    image_buffers = {}
+    for index, (operation, args) in enumerate(result['commands']):
         if operation == 'write':
             worksheet.write(*args)
         else:
             row, col, options, payload = args
+            image_buffers[index] = owner._register_chart_image(payload)
             worksheet.insert_image(row, col, '', {
-                **options, 'image_data': owner._register_chart_image(payload),
+                **options, 'image_data': image_buffers[index],
             })
     for section in result.get('dashboard_sections', []):
         for chart in section['charts']:
-            chart['image_buffer'] = owner._register_chart_image(chart['image_buffer'])
+            payload = chart['image_buffer']
+            chart['image_buffer'] = (image_buffers[payload[1]] if isinstance(payload, tuple)
+                                     and payload[0] == 'worksheet_image'
+                                     else owner._register_chart_image(payload))
         owner._html_dashboard_sections.append(section)
     for stage, elapsed in result['stage_timings'].items():
         owner._record_stage_timing(stage, elapsed)
