@@ -15,11 +15,16 @@ The module imports Qt lazily so that modules that stub Qt in tests can still imp
 
 from __future__ import annotations
 
+import functools
 import time
+import weakref
 from collections.abc import Callable, Iterable
 
 # Upper bound for the whole wait at application exit, not per thread.
 QUIT_WAIT_TOTAL_MS = 5000
+# ``finished`` is emitted by the worker just before it leaves ``QThread::finish()``; this bounds the
+# wait for that last step before the registry lets go of the thread.
+FINISH_SETTLE_MS = 200
 
 _REGISTERED: set = set()
 _DEFERRED: list[tuple[tuple, Callable[[], None]]] = []
@@ -34,17 +39,38 @@ def _is_finished(thread) -> bool:
 
 
 def register(thread) -> None:
-    """Keep ``thread`` referenced until it has finished; call before ``thread.start()``."""
+    """Keep ``thread`` referenced until it has finished; call before ``thread.start()``.
+
+    Call it on the GUI thread (the thread that owns ``thread``). The ``finished`` hook must not hold a
+    strong reference to ``thread``: a connected closure that captures it forms a reference cycle through
+    the native slot proxy, and the cyclic garbage collector then destroys the ``QThread`` in whichever
+    thread happens to run a collection, for example another worker, instead of on the GUI thread.
+    """
 
     _REGISTERED.add(thread)
     _install_quit_hook()
-    thread.finished.connect(lambda: _on_thread_finished(thread))
+    thread.finished.connect(functools.partial(_on_thread_finished, weakref.ref(thread)))
+
+
+def _settled(thread) -> bool:
+    """Return True once ``thread`` has completely finished, waiting briefly for its last step."""
+
+    if _is_finished(thread):
+        return True
+    try:
+        return bool(thread.wait(FINISH_SETTLE_MS))
+    except RuntimeError:  # the native object is already gone
+        return True
 
 
 def discard(thread) -> None:
-    """Drop ``thread`` from the registry (used once it is known to have finished)."""
+    """Drop ``thread`` from the registry once it has finished (GUI thread).
 
-    _REGISTERED.discard(thread)
+    A thread that is still running stays registered, so a ``QThread`` is never released while running.
+    """
+
+    if thread in _REGISTERED and _settled(thread):
+        _REGISTERED.discard(thread)
     _run_ready_deferred()
 
 
@@ -61,9 +87,12 @@ def running_threads() -> tuple:
     return tuple(_REGISTERED)
 
 
-def _on_thread_finished(thread) -> None:
-    _REGISTERED.discard(thread)
-    _run_ready_deferred()
+def _on_thread_finished(thread_ref) -> None:
+    thread = thread_ref()
+    if thread is not None:
+        discard(thread)
+    else:
+        _run_ready_deferred()
 
 
 def run_when_finished(threads: Iterable, callback: Callable[[], None]) -> None:

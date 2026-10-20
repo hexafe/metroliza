@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gc
 import threading
 import time
+import weakref
 
 import pytest
 
@@ -203,3 +205,65 @@ def test_a_failing_deferred_callback_does_not_break_the_registry(gate):
     assert thread.wait(_TIMEOUT_S * 1000)
 
     assert _wait_until(lambda: calls == ["second"])
+
+
+class _TrackedThread(QThread):
+    """Records the Python thread that finalizes the wrapper, i.e. where the native QThread is destroyed."""
+
+    finalized_in: list = []
+
+    def run(self):
+        time.sleep(0.01)
+
+    def __del__(self):
+        type(self).finalized_in.append(threading.current_thread())
+
+
+def _collect_in_another_thread():
+    collector = threading.Thread(target=gc.collect, name="collector")
+    collector.start()
+    collector.join()
+
+
+def test_finished_thread_is_released_on_the_gui_thread_not_by_a_foreign_garbage_collection():
+    """The registry hook must not make the QThread part of a reference cycle.
+
+    A connected closure that captures the thread is reachable from the native slot proxy, so only the
+    cyclic collector could free the thread, and it then destroys the QThread in whichever thread runs the
+    collection (for example a worker). With the cycle gone, dropping the last reference frees it at once,
+    in the thread that dropped it.
+    """
+
+    _TrackedThread.finalized_in = []
+    gc.collect()
+    gc.disable()
+    try:
+        thread = _TrackedThread()
+        detached_threads.register(thread)
+        reference = weakref.ref(thread)
+        thread.start()
+        assert thread.wait(_TIMEOUT_S * 1000)
+        assert _wait_until(lambda: not detached_threads.is_registered(reference()))
+        del thread
+
+        assert reference() is None, "the thread is kept alive by a reference cycle"
+        _collect_in_another_thread()
+    finally:
+        gc.enable()
+
+    assert [item.name for item in _TrackedThread.finalized_in] == [threading.current_thread().name]
+
+
+def test_registry_drops_a_thread_only_after_it_finished():
+    release = threading.Event()
+    thread = _GatedThread(release)
+    detached_threads.register(thread)
+    thread.start()
+    try:
+        detached_threads.discard(thread)
+        assert detached_threads.is_registered(thread)
+    finally:
+        release.set()
+        assert thread.wait(_TIMEOUT_S * 1000)
+    detached_threads.discard(thread)
+    assert not detached_threads.is_registered(thread)
