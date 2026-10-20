@@ -31,12 +31,23 @@ pub fn show_error(kind: ErrorKind) {
 }
 
 /// No window off Windows; keeps the launcher flow identical for the development stand-in.
-pub struct Splash;
+///
+/// The hooks log the same timing marks as the Windows splash (`splash_show`, `splash_reopen`,
+/// `runtime_work_begin`, `runtime_work_done`), so tests on this stand-in can check when the
+/// launcher asks for visible feedback.
+pub struct Splash {
+    log: Log,
+}
 
 impl Splash {
     pub fn show(log: &Log) -> Self {
+        log.mark("splash_show");
         log.mark("splash_unavailable");
-        Self
+        Self { log: log.clone() }
+    }
+
+    pub fn reopen(&self) {
+        self.log.mark("splash_reopen");
     }
 
     pub fn handle_for_entry(&self) -> Option<String> {
@@ -49,9 +60,13 @@ impl Splash {
 }
 
 impl Progress for Splash {
-    fn begin(&self, _total_bytes: u64) {}
+    fn begin(&self, _total_bytes: u64) {
+        self.log.mark("runtime_work_begin");
+    }
     fn advance(&self, _bytes: u64) {}
-    fn finish(&self) {}
+    fn finish(&self) {
+        self.log.mark("runtime_work_done");
+    }
 }
 
 pub struct Child(std::process::Child);

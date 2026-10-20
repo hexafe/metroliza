@@ -1,4 +1,5 @@
-//! Operating-system layer: single-instance guard, progress window, error dialog, entry process.
+//! Operating-system layer: single-instance guard, splash (with the progress window as its
+//! fallback), error dialog, entry process.
 //!
 //! Windows has the real implementation (`windows.rs`, Win32 through `windows-sys`). Other
 //! platforms get a minimal stand-in (`other.rs`) so the library and the launcher binary build

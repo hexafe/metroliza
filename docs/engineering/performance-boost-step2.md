@@ -337,8 +337,9 @@ Warstwa supervisora to ≈0,65–0,9 s z ≈1,3 s ciepłego startu — najwięks
   okna, nie tworzy własnego Qt splasha, po pierwszym malowaniu okna głównego wysyła `MSG_HANDOFF` z jego
   uchwytem; launcher (ma prawo do pierwszego planu) przenosi fokus i zamyka splash. Zamknięcie także:
   przed komunikatem supervisora, przed błędem launchera, przy błędzie/smoke aplikacji, po wyjściu
-  aplikacji i po 120 s.
-- **DPI:** system-aware (rozmiar ze skalą systemu); per-monitor wymaga obsługi `WM_DPICHANGED` (A1).
+  aplikacji i po 120 s (w A1: 120 s od końca rozpakowania/weryfikacji, nigdy w ich trakcie).
+- **DPI:** system-aware (rozmiar ze skalą systemu); per-monitor wymaga obsługi `WM_DPICHANGED` —
+  w A1 odłożone.
 
 ### 5.5 Wynik PoC
 

@@ -4,16 +4,26 @@
 //! Linux (`cargo check --target x86_64-pc-windows-gnu`); runtime behaviour is covered by the
 //! Windows qualification job.
 
-use std::ffi::OsString;
+use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Mutex;
+use std::thread::JoinHandle;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, FALSE, HANDLE, HWND, INVALID_HANDLE_VALUE,
-    LPARAM, TRUE, WAIT_OBJECT_0,
+    LPARAM, LRESULT, RECT, TRUE, WAIT_OBJECT_0, WPARAM,
 };
+use windows_sys::Win32::Graphics::Gdi::{
+    BeginPaint, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect,
+    GetStockObject, GetSysColorBrush, InvalidateRect, SelectObject, SetBkMode, UpdateWindow,
+    COLOR_WINDOW, DEFAULT_GUI_FONT, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HBRUSH, HGDIOBJ,
+    PAINTSTRUCT, TRANSPARENT,
+};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_READ,
     FILE_MAP_WRITE, PAGE_READWRITE,
@@ -23,18 +33,24 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_INFORMATION, STARTUPINFOW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible, MessageBoxW,
-    SetForegroundWindow, ShowWindow, GW_OWNER, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
-    SW_RESTORE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GetMessageW,
+    GetSystemMetrics, GetWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible, KillTimer,
+    LoadCursorW, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+    SetTimer, ShowWindow, TranslateMessage, GW_OWNER, IDC_ARROW, MB_ICONERROR, MB_ICONINFORMATION,
+    MB_OK, MSG, SM_CXSCREEN, SM_CYSCREEN, SW_RESTORE, SW_SHOWNORMAL, WM_APP, WM_CLOSE, WM_CREATE,
+    WM_DESTROY, WM_PAINT, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_OVERLAPPED,
 };
 
 use super::Instance;
+use crate::cache::Progress;
 use crate::cmdline::build_command_line;
 use crate::error::{ErrorKind, LauncherError, Result};
 
 const TITLE: &str = "Metroliza";
 const ALREADY_RUNNING: &str =
     "Metroliza is already running or still starting. Please wait a moment.";
+const PREPARING: &str = "Preparing Metroliza for first use...";
+const PREPARING_NOTE: &str = "This only happens once for each new version.";
 
 /// NUL-terminated UTF-16 for Win32 string parameters.
 fn wide(text: &str) -> Vec<u16> {
@@ -207,6 +223,234 @@ pub fn activate_existing(version: &str) {
         }
     }
     message_box(ALREADY_RUNNING, MB_ICONINFORMATION);
+}
+
+// ---------------------------------------------------------------- progress window
+
+static DONE: AtomicU64 = AtomicU64::new(0);
+static TOTAL: AtomicU64 = AtomicU64::new(0);
+/// Window handle as an integer so it can be shared across threads.
+static WINDOW: AtomicIsize = AtomicIsize::new(0);
+
+const TIMER_ID: usize = 1;
+const WINDOW_WIDTH: i32 = 460;
+const WINDOW_HEIGHT: i32 = 150;
+const BAR_LEFT: i32 = 20;
+const BAR_TOP: i32 = 76;
+const BAR_HEIGHT: i32 = 20;
+
+const fn rgb(r: u8, g: u8, b: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+}
+
+fn draw_text(hdc: *mut c_void, text: &str, mut rect: RECT) {
+    let text = wide(text);
+    // SAFETY: `hdc` is the live paint DC of the window being painted.
+    unsafe {
+        DrawTextW(
+            hdc,
+            text.as_ptr(),
+            -1,
+            &mut rect,
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+        );
+    }
+}
+
+unsafe fn paint(hwnd: HWND) {
+    let mut ps: PAINTSTRUCT = std::mem::zeroed();
+    let hdc = BeginPaint(hwnd, &mut ps);
+    let mut client: RECT = std::mem::zeroed();
+    windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut client);
+    FillRect(hdc, &client, GetSysColorBrush(COLOR_WINDOW));
+
+    let font = GetStockObject(DEFAULT_GUI_FONT) as HGDIOBJ;
+    let previous = SelectObject(hdc, font);
+    SetBkMode(hdc, TRANSPARENT as i32);
+    draw_text(
+        hdc,
+        PREPARING,
+        RECT {
+            left: BAR_LEFT,
+            top: 16,
+            right: client.right - BAR_LEFT,
+            bottom: 40,
+        },
+    );
+    draw_text(
+        hdc,
+        PREPARING_NOTE,
+        RECT {
+            left: BAR_LEFT,
+            top: 40,
+            right: client.right - BAR_LEFT,
+            bottom: 64,
+        },
+    );
+
+    // Self-drawn bar: avoids comctl32 and the visual-styles manifest.
+    let frame = RECT {
+        left: BAR_LEFT,
+        top: BAR_TOP,
+        right: client.right - BAR_LEFT,
+        bottom: BAR_TOP + BAR_HEIGHT,
+    };
+    let (done, total) = (DONE.load(Ordering::Relaxed), TOTAL.load(Ordering::Relaxed));
+    let inner_width = u64::from((frame.right - frame.left - 2) as u32);
+    let filled = (done.min(total) * inner_width)
+        .checked_div(total)
+        .unwrap_or(0) as i32;
+    let fill_brush: HBRUSH = CreateSolidBrush(rgb(0, 120, 215));
+    let border_brush: HBRUSH = CreateSolidBrush(rgb(120, 120, 120));
+    let fill = RECT {
+        left: frame.left + 1,
+        top: frame.top + 1,
+        right: frame.left + 1 + filled,
+        bottom: frame.bottom - 1,
+    };
+    FillRect(hdc, &fill, fill_brush);
+    FrameRect(hdc, &frame, border_brush);
+    DeleteObject(fill_brush as HGDIOBJ);
+    DeleteObject(border_brush as HGDIOBJ);
+
+    SelectObject(hdc, previous);
+    EndPaint(hwnd, &ps);
+}
+
+unsafe extern "system" fn window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            SetTimer(hwnd, TIMER_ID, 50, None);
+            0
+        }
+        WM_TIMER => {
+            InvalidateRect(hwnd, null(), FALSE);
+            0
+        }
+        WM_PAINT => {
+            paint(hwnd);
+            0
+        }
+        // The user cannot cancel: only the launcher itself ends this window (WM_APP).
+        WM_CLOSE => 0,
+        WM_APP => {
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_DESTROY => {
+            KillTimer(hwnd, TIMER_ID);
+            PostQuitMessage(0);
+            0
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// Create the window and pump messages until it is destroyed. Runs on its own thread; sends the
+/// window handle (or 0 on failure) through `ready` once creation was attempted.
+fn window_thread(ready: mpsc::Sender<isize>) {
+    // SAFETY: plain Win32 window creation and message loop on a thread dedicated to the window.
+    unsafe {
+        let instance = GetModuleHandleW(null());
+        let class_name = wide("MetrolizaLauncherProgress");
+        let class = WNDCLASSW {
+            style: 0,
+            lpfnWndProc: Some(window_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: instance,
+            hIcon: null_mut(),
+            hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+            hbrBackground: null_mut(),
+            lpszMenuName: null(),
+            lpszClassName: class_name.as_ptr(),
+        };
+        RegisterClassW(&class);
+
+        let x = (GetSystemMetrics(SM_CXSCREEN) - WINDOW_WIDTH) / 2;
+        let y = (GetSystemMetrics(SM_CYSCREEN) - WINDOW_HEIGHT) / 2;
+        let title = wide(TITLE);
+        let hwnd = CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            title.as_ptr(),
+            WS_OVERLAPPED | WS_CAPTION,
+            x.max(0),
+            y.max(0),
+            WINDOW_WIDTH,
+            WINDOW_HEIGHT,
+            null_mut(),
+            null_mut(),
+            instance,
+            null(),
+        );
+        if hwnd.is_null() {
+            let _ = ready.send(0);
+            return;
+        }
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+        UpdateWindow(hwnd);
+        SetForegroundWindow(hwnd);
+        let _ = ready.send(hwnd as isize);
+
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
+/// Progress window shown only when an extraction is needed. If the window cannot be created the
+/// extraction simply runs without one.
+pub struct ProgressWindow {
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ProgressWindow {
+    pub fn new() -> Self {
+        Self {
+            thread: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for ProgressWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Progress for ProgressWindow {
+    fn begin(&self, total_bytes: u64) {
+        DONE.store(0, Ordering::Relaxed);
+        TOTAL.store(total_bytes, Ordering::Relaxed);
+        let (sender, receiver) = mpsc::channel();
+        let handle = std::thread::spawn(move || window_thread(sender));
+        let hwnd = receiver.recv().unwrap_or(0);
+        WINDOW.store(hwnd, Ordering::Release);
+        *self.thread.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
+    }
+
+    fn advance(&self, bytes: u64) {
+        DONE.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn finish(&self) {
+        let hwnd = WINDOW.swap(0, Ordering::AcqRel);
+        if hwnd != 0 {
+            // SAFETY: posting to a window owned by the UI thread is allowed from any thread.
+            unsafe { PostMessageW(hwnd as HWND, WM_APP, 0, 0) };
+        }
+        if let Some(handle) = self.thread.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 // ---------------------------------------------------------------- entry process

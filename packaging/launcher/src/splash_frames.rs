@@ -2,7 +2,7 @@
 //!
 //! The GIF is the application's own loading animation (the "duck",
 //! `metroliza.resources.base64_encoded_files.encoded_loading_gif`), committed decoded under
-//! `assets/`; `tests/test_launcher_splash_asset.py` keeps the two byte-identical. Frames are
+//! `assets/`; `tests/test_launcher_splash.py` keeps the two byte-identical. Frames are
 //! composited once into opaque pixels over the splash background, so painting a frame is a plain
 //! blit: no per-tick decoding, no alpha blending and no dependency on the application runtime.
 

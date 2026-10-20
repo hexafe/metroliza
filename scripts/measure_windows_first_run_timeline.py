@@ -23,6 +23,11 @@ Sources of truth per launch, all on the same wall clock (epoch milliseconds):
 * optional screenshots (``--frames``) for a frame chronology, and a per-frame signature of the
   splash animation area, so a frozen animation is visible as identical consecutive frames.
 
+Every launch that extracts or verifies (cache ``cold``, ``verified`` or ``repair``) must show a
+launcher window: the splash, or the plain progress window (the current launcher, and the splash
+launcher's fallback when ``METROLIZA_LAUNCHER_SPLASH=0`` or the splash cannot be shown). A launch
+without one, or a splash-disabled launch without the progress window, gets a warning.
+
 Derived metrics: time to the first visible Metroliza window, the longest interval without any
 Metroliza window before the main window, overlap of two splash windows, main window visible,
 foreground owner when the main window appeared, launcher ``main`` relative to process creation
@@ -273,6 +278,33 @@ def window_timeline(samples: list[dict[str, Any]], launched_ms: float) -> dict[s
     }
 
 
+LAUNCHER_WINDOW_KINDS = ("launcher_splash", "launcher_progress")
+# Cache outcomes for which the launcher extracts or verifies before it starts the entry.
+RUNTIME_WORK_CACHES = {"cold", "verified", "repair"}
+
+
+def launcher_window_check(cache: str | None, first_visible: dict[str, Any],
+                          splash_disabled: bool) -> tuple[list[str], str | None]:
+    """Launcher windows seen in a launch, and a warning when its runtime work had the wrong one.
+
+    Extraction and verification must always show a launcher window: the splash, or the plain
+    progress window (the current launcher, and the splash launcher's fallback). With the splash
+    disabled the fallback progress window is expected and the splash must not appear.
+    """
+    seen = [kind for kind in LAUNCHER_WINDOW_KINDS if kind in first_visible]
+    if cache not in RUNTIME_WORK_CACHES:
+        return seen, None
+    if splash_disabled:
+        if "launcher_progress" not in seen:
+            return seen, "splash disabled: expected the fallback progress window during runtime work"
+        if "launcher_splash" in seen:
+            return seen, "splash disabled, but the launcher splash was shown"
+        return seen, None
+    if not seen:
+        return seen, "runtime work without any launcher window"
+    return seen, None
+
+
 def animation_summary(frames: list[dict[str, Any]], launched_ms: float) -> dict[str, Any]:
     """Count consecutive identical animation-area frames while a splash was visible."""
     runs: dict[str, dict[str, Any]] = {}
@@ -390,6 +422,11 @@ class Timeline:
             record["pre_launcher_code_ms"] = round(marks["main"] - launched)
         record["app"] = profile_points(load_events(profile), launched)
         record["windows"] = window_timeline(sampler.samples, launched)
+        splash_disabled = (extra_env or {}).get("METROLIZA_LAUNCHER_SPLASH") == "0"
+        record["launcher_windows"], window_warning = launcher_window_check(
+            record["cache"], record["windows"]["first_visible_ms"], splash_disabled)
+        if window_warning is not None:
+            record.setdefault("warnings", []).append(window_warning)
         record["animation"] = animation_summary(sampler.frames, launched)
         (run_dir / "window_samples.json").write_text(
             json.dumps([s for s in sampler.samples if s.get("windows")], indent=0), encoding="utf-8")
@@ -446,9 +483,10 @@ def render_markdown(records: list[dict[str, Any]]) -> str:
         "",
         "Times in ms from process creation. `blank` = no Metroliza window visible. Hosted runner: indicative only.",
         "",
-        "| Variant | Scenario | Cache | Launcher code starts | First window (kind) | Blank before it | Longest blank after it | Splash overlap | Main window visible | Main window foreground | Usable (warmup done) | Longest GUI stall | Splash animation frames changed/total, longest static |",
-        "|---|---|---|---:|---|---:|---:|---:|---:|---|---:|---:|---|",
+        "| Variant | Scenario | Cache | Launcher code starts | First window (kind) | Launcher windows | Blank before it | Longest blank after it | Splash overlap | Main window visible | Main window foreground | Usable (warmup done) | Longest GUI stall | Splash animation frames changed/total, longest static |",
+        "|---|---|---|---:|---|---|---:|---:|---:|---:|---|---:|---:|---|",
     ]
+    warnings = [f"- {r['variant']} {r['scenario']}: {w}" for r in records for w in r.get("warnings", [])]
     for r in records:
         w = r["windows"]
         first = w["first_visible_ms"]
@@ -459,11 +497,14 @@ def render_markdown(records: list[dict[str, Any]]) -> str:
         ) or "n/a"
         lines.append(
             f"| {r['variant']} | {r['scenario']} | {r.get('cache')} | {r.get('pre_launcher_code_ms', 'n/a')} "
-            f"| {first.get(first_kind, 'n/a')} ({first_kind}) | {w.get('initial_blank_ms')} "
+            f"| {first.get(first_kind, 'n/a')} ({first_kind}) | {', '.join(r.get('launcher_windows', [])) or 'none'} "
+            f"| {w.get('initial_blank_ms')} "
             f"| {w.get('longest_blank_after_first_window_ms')} | {w.get('splash_overlap_ms')} "
             f"| {first.get('main_window', 'n/a')} | {w.get('main_window_foreground_when_shown')} "
             f"| {r['app'].get('launch_ui_warmup_finished', 'n/a')} | {stalls[-1].get('max_gap_ms', 'n/a')} | {anim} |"
         )
+    if warnings:
+        lines += ["", "Warnings:", "", *warnings]
     return "\n".join(lines) + "\n"
 
 

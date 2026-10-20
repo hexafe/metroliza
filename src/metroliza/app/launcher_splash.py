@@ -26,11 +26,44 @@ MSG_HANDOFF = WM_APP + 2
 WM_COPYDATA = 0x004A
 STATUS_MAGIC = 0x4D4C5354
 MAX_STATUS_CHARS = 120
+# The launcher rejects larger or odd-sized texts (packaging/launcher, MAX_STATUS_BYTES).
+MAX_STATUS_BYTES = 512
+DEFAULT_STATUS = "Metroliza is loading..."
 SMTO_ABORTIFHUNG = 0x0002
 SEND_TIMEOUT_MS = 200
 
 _BRIDGE: "LauncherSplash | None" = None
 _BRIDGE_RESOLVED = False
+_COPYDATASTRUCT = None
+
+
+def encode_status_text(message: object) -> bytes:
+    """UTF-16-LE bytes of a status text, as the launcher accepts them; never raises.
+
+    Text that cannot be encoded (lone surrogates) is replaced, the length is capped at
+    ``MAX_STATUS_CHARS`` characters and ``MAX_STATUS_BYTES`` bytes, and is always even.
+    """
+    text = message if isinstance(message, str) and message else DEFAULT_STATUS
+    encoded = text[:MAX_STATUS_CHARS].encode("utf-16-le", errors="replace")
+    # 120 characters outside the BMP are 480 bytes, so this cap is a guard only; it stays even.
+    return encoded[:MAX_STATUS_BYTES]
+
+
+def copydata_struct():
+    """The Win32 ``COPYDATASTRUCT`` type (created on first use; ``ctypes`` only)."""
+    global _COPYDATASTRUCT
+    if _COPYDATASTRUCT is None:
+        import ctypes
+
+        class COPYDATASTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("dwData", ctypes.c_size_t),
+                ("cbData", ctypes.c_uint32),  # DWORD
+                ("lpData", ctypes.c_void_p),
+            ]
+
+        _COPYDATASTRUCT = COPYDATASTRUCT
+    return _COPYDATASTRUCT
 
 
 class LauncherSplash:
@@ -46,25 +79,18 @@ class LauncherSplash:
         return self._open and bool(self._user32.IsWindow(self._hwnd))
 
     def show_message(self, message: str, *, phase: str) -> None:
+        """Send a status text; never raises (the text is display-only and best effort)."""
         record_event("launcher_splash_message", phase=phase)
         if not self.is_open:
             return
         import ctypes
-        from ctypes import wintypes
 
-        class COPYDATASTRUCT(ctypes.Structure):
-            _fields_ = [
-                ("dwData", ctypes.c_size_t),
-                ("cbData", wintypes.DWORD),
-                ("lpData", ctypes.c_void_p),
-            ]
-
-        text = (message or "Metroliza is loading...")[:MAX_STATUS_CHARS]
-        encoded = text.encode("utf-16-le")  # bytes, also for characters outside the BMP
-        buffer = ctypes.create_string_buffer(encoded, len(encoded) + 2)
-        data = COPYDATASTRUCT(STATUS_MAGIC, len(encoded), ctypes.cast(buffer, ctypes.c_void_p))
-        result = ctypes.c_size_t(0)
         try:
+            encoded = encode_status_text(message)
+            # NUL-terminated copy that stays alive for the synchronous send below.
+            buffer = ctypes.create_string_buffer(encoded, len(encoded) + 2)
+            data = copydata_struct()(STATUS_MAGIC, len(encoded), ctypes.cast(buffer, ctypes.c_void_p))
+            result = ctypes.c_size_t(0)
             self._user32.SendMessageTimeoutW(
                 self._hwnd,
                 WM_COPYDATA,
@@ -74,7 +100,7 @@ class LauncherSplash:
                 SEND_TIMEOUT_MS,
                 ctypes.byref(result),
             )
-        except Exception as exc:  # pragma: no cover - defensive packaged-startup guard.
+        except Exception as exc:  # defensive packaged-startup guard: a status text never fails startup
             record_event("launcher_splash_message_failed", error_type=type(exc).__name__)
 
     def finish(self, widget: object) -> None:

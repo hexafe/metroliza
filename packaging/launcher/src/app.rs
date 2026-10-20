@@ -2,8 +2,9 @@
 //!
 //! 1. Read and validate the payload appended to this EXE.
 //! 2. Take the per-version single-instance guard; a second instance only activates the first.
-//!    The first instance shows the splash right away, before any cache work; it stays up until
-//!    the application hands off after painting its main window (see `platform::Splash`).
+//!    Only the first instance shows the splash, right away, before any cache work; it stays up
+//!    until the application hands off after painting its main window (see `platform::Splash`;
+//!    without a splash, extraction and verification show the progress window).
 //! 3. Resolve the cache root and make sure a valid runtime exists (extracting if needed).
 //! 4. Start the entry executable from the runtime (with the launcher's own working directory,
 //!    not the cache), clean up old versions in the background, wait for the entry process and
@@ -75,8 +76,9 @@ fn launch(log: &Log) -> Result<i32> {
         Instance::First(guard) => guard,
     };
     log.mark("instance_acquired");
-    // First visible feedback: before root resolution, the warm check or any extraction. It is
-    // dropped (closed) on every early return, before `run` shows an error dialog.
+    // First visible feedback, after the instance check (a second instance never shows one) and
+    // before root resolution, the warm check or any extraction. It is dropped (closed) on every
+    // early return, before `run` shows an error dialog.
     let splash = platform::Splash::show(log);
 
     let inputs = RootInputs {
@@ -134,6 +136,9 @@ fn launch(log: &Log) -> Result<i32> {
         // The entry rejected its own files without telling the user. Rebuild once and retry
         // once; the second run is final, even if it asks for a repair again.
         log.line("repair=requested");
+        // The entry usually closed or handed off the splash before it asked: show it again
+        // for the repair and the restart (or the progress window when there is no splash).
+        splash.reopen();
         splash.status("Repairing Metroliza...");
         runtime = repair_runtime(&root, &payload, runtime, &splash, &Options::default())?;
         log.line(&format!("cache={}", runtime.outcome.as_str()));
