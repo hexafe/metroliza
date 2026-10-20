@@ -663,6 +663,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
         self.tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
         self.tabular_filter_expression = ""
+        self._tabular_row_count_cache: tuple[object, tuple, int] | None = None
         self.df_for_grouping = None
         self.grouping_applied = False
         self._auto_group_selected_files = False
@@ -1504,6 +1505,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if current is not None and current is not loaded:
             cleanup_tabular_load_result(current)
         self.tabular_load_result = loaded
+        self._tabular_row_count_cache = None
 
     def _selected_input_files(self) -> tuple[str, ...]:
         if self.input_files:
@@ -1522,16 +1524,43 @@ class IndustrialAnalyticsDialog(QDialog):
             preview = f"{preview}, +{len(names) - 3} more"
         return f"{len(names)} CSV files: {preview}"
 
-    def _tabular_filtered_row_count(self) -> int:
-        if self.tabular_load_result is None:
-            return 0
-        return count_tabular_materialized_rows(
-            self.tabular_load_result,
-            filter_columns=self.tabular_filter_columns,
-            selected_filter_keys=self.tabular_filter_keys,
-            column_filters=self.tabular_column_filters,
-            row_filter_expression=self.tabular_filter_expression,
+    def _tabular_filter_state_key(self) -> tuple:
+        return (
+            tuple(self.tabular_filter_columns or ()),
+            tuple(tuple(keys) for keys in (self.tabular_filter_keys or ())),
+            tuple(self.tabular_column_filters or ()),
+            str(self.tabular_filter_expression or ""),
         )
+
+    def _tabular_filtered_row_count(self) -> int:
+        """Return the filtered row count, computed once per load result and filter state."""
+
+        loaded = self.tabular_load_result
+        if loaded is None:
+            return 0
+        state = self._tabular_filter_state_key()
+        cached = self._tabular_row_count_cache
+        if cached is not None and cached[0] is loaded and cached[1] == state:
+            return cached[2]
+        if (
+            self.is_industrial_cache_presentation
+            and not any(state)
+            and loaded.sqlite_store is not None
+            and loaded.row_count is not None
+        ):
+            # The industrial bridge counted this exact scope while it built the view; an
+            # unfiltered state needs no second pass over the wide view.
+            count = int(loaded.row_count)
+        else:
+            count = count_tabular_materialized_rows(
+                loaded,
+                filter_columns=self.tabular_filter_columns,
+                selected_filter_keys=self.tabular_filter_keys,
+                column_filters=self.tabular_column_filters,
+                row_filter_expression=self.tabular_filter_expression,
+            )
+        self._tabular_row_count_cache = (loaded, state, count)
+        return count
 
     def clear_tabular_filter_and_groups(self) -> None:
         if self.is_production_source:
@@ -2079,13 +2108,13 @@ class IndustrialAnalyticsDialog(QDialog):
     def _tabular_filter_summary(self) -> tuple[str, str]:
         if self.tabular_load_result is None:
             return "No row filter", "neutral"
-        row_count = self._tabular_filtered_row_count()
         if (
             not self.tabular_column_filters
             and not self.tabular_filter_expression
             and (not self.tabular_filter_columns or not self.tabular_filter_keys)
         ):
             return f"All rows ({tabular_load_result_row_count(self.tabular_load_result)})", "neutral"
+        row_count = self._tabular_filtered_row_count()
         label_lookup = {
             normalized: original
             for original, normalized in self.tabular_load_result.column_mapping.items()

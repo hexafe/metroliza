@@ -744,6 +744,17 @@ class IndustrialOpen(Scenario):
         dialog = getattr(self.window, "industrial_data_dialog", None)
         return dialog is not None and dialog.isVisible() and "handler_returned" in ctx.marks
 
+    def finish(self, ctx):
+        # The Oznak status is computed in a background thread after the dialog is shown; let it finish
+        # (not timed) so no worker is still running when the measurement ends. Older builds set it at once.
+        dialog = getattr(self.window, "industrial_data_dialog", None)
+        label = getattr(dialog, "oznak_label", None)
+        deadline = time.monotonic() + 10
+        while label is not None and "checking" in label.text().lower() and time.monotonic() < deadline:
+            ctx.app.processEvents()
+            time.sleep(0.005)
+        return {"oznak_status": label.text() if label is not None else None}
+
 
 class IndustrialBridge(Scenario):
     """IND-05: Industrial Data -> "CSV Summary..." until the analytics dialog is shown."""

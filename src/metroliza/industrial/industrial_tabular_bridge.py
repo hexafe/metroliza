@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import hashlib
 import json
 import math
 from pathlib import Path
 import re
+import sqlite3
 import tempfile
 from typing import Any
 from uuid import uuid4
@@ -59,6 +61,16 @@ _BASE_INDUSTRIAL_COLUMNS: tuple[tuple[str, str], ...] = (
     ("operator_name", "records.operator_name"),
     ("process_status", "records.process_status"),
 )
+# Numeric test of a trimmed value for the metadata statistics. A value that SQLite renders back
+# to itself as a real ("12.5", "-3.0", "1.0e+20") is a finite float for Python as well, so the
+# Python callback runs only for the remaining values. "Inf" and "-Inf" are the only non-finite
+# renderings and always take the Python path.
+_NUMERIC_VALUE_SQL = """CASE
+                    WHEN field_value = '' THEN 0
+                    WHEN field_value NOT IN ('Inf', '-Inf')
+                        AND CAST(CAST(field_value AS REAL) AS TEXT) = field_value THEN 1
+                    ELSE metroliza_is_numeric_text(field_value)
+                END"""
 _METRIC_NUMERIC_THRESHOLD = 0.8
 _METRIC_MIN_NUMERIC_COUNT = 2
 _INDUSTRIAL_PREVIEW_DYNAMIC_COLUMN_LIMIT = 32
@@ -93,6 +105,19 @@ _EMPTY_INDUSTRIAL_TABULAR_COLUMNS = (
 )
 
 
+class IndustrialCacheLoadCanceled(Exception):
+    """Raised when the caller's cancel check asked the cache load to stop."""
+
+
+# SQLite calls the cancel check every this many virtual-machine steps while a statement runs.
+_CANCEL_CHECK_INTERVAL_STEPS = 20_000
+
+
+def _raise_if_canceled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise IndustrialCacheLoadCanceled()
+
+
 @dataclass(frozen=True)
 class _IndustrialTabularMetadata:
     scope_key: str
@@ -106,11 +131,19 @@ def load_industrial_cache_tabular_result(
     *,
     source_profile_ids: tuple[int, ...] | list[int] | None = None,
     source_db_aliases: tuple[str, ...] | list[str] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> TabularAnalyticsLoadResult:
-    """Load cached industrial rows as a SQLite-backed CSV Summary input."""
+    """Load cached industrial rows as a SQLite-backed CSV Summary input.
+
+    ``cancel_check`` lets a background caller stop the load: it is polled between steps and while
+    SQLite runs a statement, and a true result raises ``IndustrialCacheLoadCanceled`` after the
+    open transaction was rolled back.
+    """
 
     database = str(db_file)
+    _raise_if_canceled(cancel_check)
     ensure_industrial_data_schema(database)
+    _raise_if_canceled(cancel_check)
     normalized_source_profile_ids = tuple(int(item) for item in (source_profile_ids or ()))
     normalized_source_db_aliases = tuple(str(item) for item in (source_db_aliases or ()))
     summary_profile_id = None
@@ -136,6 +169,7 @@ def load_industrial_cache_tabular_result(
             where_sql=where_sql,
             view_where_sql=_literal_where_sql(where_parts, params),
             params=tuple(params),
+            cancel_check=cancel_check,
         )
     )
     store = TabularSqliteStore(
@@ -151,10 +185,16 @@ def load_industrial_cache_tabular_result(
         value_facet_scope_key=scope_key,
         cleanup_sql=(f"DROP VIEW IF EXISTS {_quote_identifier(view_name)}",),
     )
-    preview = store.read_dataframe(
-        columns=_industrial_preview_columns(columns),
-        limit=TABULAR_SQLITE_PREVIEW_ROWS,
-    )
+    try:
+        _raise_if_canceled(cancel_check)
+        preview = store.read_dataframe(
+            columns=_industrial_preview_columns(columns),
+            limit=TABULAR_SQLITE_PREVIEW_ROWS,
+        )
+        _raise_if_canceled(cancel_check)
+    except IndustrialCacheLoadCanceled:
+        store.cleanup()
+        raise
     preview_metric_candidates = discover_tabular_metric_candidates(
         preview,
         reserved_columns=(
@@ -241,42 +281,70 @@ def _prepare_tabular_view_from_industrial_cache(
     where_sql: str,
     view_where_sql: str,
     params: tuple[Any, ...],
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[str, tuple[str, ...], int, str, tuple[ProductionMetricCandidate, ...]]:
     view_name = f"{_INDUSTRIAL_TABULAR_TABLE}_{uuid4().hex}"
     with sqlite_connection_scope(database) as connection:
-        _prune_stale_industrial_tabular_views(connection)
-        metadata = _load_or_refresh_tabular_metadata(connection, where_sql=where_sql, params=params)
-        row_count = metadata.row_count
-        if row_count <= 0:
-            columns = _EMPTY_INDUSTRIAL_TABULAR_COLUMNS
-            _create_industrial_tabular_view(
+        if cancel_check is not None:
+            connection.set_progress_handler(
+                lambda: 1 if cancel_check() else 0,
+                _CANCEL_CHECK_INTERVAL_STEPS,
+            )
+        try:
+            return _prepare_tabular_view_in_connection(
                 connection,
                 view_name=view_name,
-                columns=columns,
-                dynamic_fields=(),
-                dynamic_columns=(),
+                where_sql=where_sql,
                 view_where_sql=view_where_sql,
+                params=params,
             )
-            connection.commit()
-            return view_name, columns, 0, metadata.scope_key, ()
+        except sqlite3.OperationalError as exc:
+            if cancel_check is not None and cancel_check() and "interrupt" in str(exc).lower():
+                raise IndustrialCacheLoadCanceled() from exc
+            raise
 
-        dynamic_fields = metadata.dynamic_fields
-        columns, dynamic_columns = _industrial_tabular_columns(dynamic_fields)
+
+def _prepare_tabular_view_in_connection(
+    connection,
+    *,
+    view_name: str,
+    where_sql: str,
+    view_where_sql: str,
+    params: tuple[Any, ...],
+) -> tuple[str, tuple[str, ...], int, str, tuple[ProductionMetricCandidate, ...]]:
+    _prune_stale_industrial_tabular_views(connection)
+    metadata = _load_or_refresh_tabular_metadata(connection, where_sql=where_sql, params=params)
+    row_count = metadata.row_count
+    if row_count <= 0:
+        columns = _EMPTY_INDUSTRIAL_TABULAR_COLUMNS
         _create_industrial_tabular_view(
             connection,
             view_name=view_name,
             columns=columns,
-            dynamic_fields=dynamic_fields,
-            dynamic_columns=dynamic_columns,
+            dynamic_fields=(),
+            dynamic_columns=(),
             view_where_sql=view_where_sql,
         )
-        metric_candidates = _metadata_metric_candidates(
-            dynamic_fields=dynamic_fields,
-            dynamic_columns=dynamic_columns,
-            dynamic_stats=metadata.dynamic_stats,
-        )
         connection.commit()
-        return view_name, columns, row_count, metadata.scope_key, metric_candidates
+        return view_name, columns, 0, metadata.scope_key, ()
+
+    dynamic_fields = metadata.dynamic_fields
+    columns, dynamic_columns = _industrial_tabular_columns(dynamic_fields)
+    _create_industrial_tabular_view(
+        connection,
+        view_name=view_name,
+        columns=columns,
+        dynamic_fields=dynamic_fields,
+        dynamic_columns=dynamic_columns,
+        view_where_sql=view_where_sql,
+    )
+    metric_candidates = _metadata_metric_candidates(
+        dynamic_fields=dynamic_fields,
+        dynamic_columns=dynamic_columns,
+        dynamic_stats=metadata.dynamic_stats,
+    )
+    connection.commit()
+    return view_name, columns, row_count, metadata.scope_key, metric_candidates
 
 
 def _load_or_refresh_tabular_metadata(
@@ -590,13 +658,12 @@ def _refresh_value_facets(
     )
     columns, dynamic_columns = _industrial_tabular_columns(dynamic_fields)
     _insert_base_value_facets(connection, scope_key=scope_key, columns=columns)
-    for field_name, output_column in zip(dynamic_fields, dynamic_columns, strict=False):
-        _insert_dynamic_value_facets(
-            connection,
-            scope_key=scope_key,
-            field_name=field_name,
-            output_column=output_column,
-        )
+    _insert_dynamic_value_facets(
+        connection,
+        scope_key=scope_key,
+        field_columns=tuple(zip(dynamic_fields, dynamic_columns, strict=False)),
+    )
+    connection.execute("DROP TABLE IF EXISTS temp_industrial_tabular_dynamic_fields")
     connection.execute("DROP TABLE IF EXISTS temp_industrial_tabular_scope_records")
     connection.execute("PRAGMA optimize")
 
@@ -639,9 +706,25 @@ def _insert_dynamic_value_facets(
     connection,
     *,
     scope_key: str,
-    field_name: str,
-    output_column: str,
+    field_columns: tuple[tuple[str, str], ...],
 ) -> None:
+    """Insert the value facets of every dynamic column with one grouped statement.
+
+    Records that have no value for a field fall into that column's ``(blank)`` facet, exactly as
+    the per-field LEFT JOIN did.
+    """
+
+    if not field_columns:
+        return
+    connection.execute("DROP TABLE IF EXISTS temp_industrial_tabular_dynamic_fields")
+    connection.execute(
+        "CREATE TEMP TABLE temp_industrial_tabular_dynamic_fields "
+        "(field_name TEXT NOT NULL, output_column TEXT NOT NULL)"
+    )
+    connection.executemany(
+        "INSERT INTO temp_industrial_tabular_dynamic_fields (field_name, output_column) VALUES (?, ?)",
+        field_columns,
+    )
     value_expr = "COALESCE(NULLIF(values_row.field_value_text, ''), values_row.field_value_json)"
     normalized_expr = _normalized_value_sql(value_expr)
     connection.execute(
@@ -656,18 +739,19 @@ def _insert_dynamic_value_facets(
         )
         SELECT
             ?,
-            ?,
+            dynamic_fields.output_column,
             {normalized_expr} AS normalized_value,
             {normalized_expr} AS display_value,
             COUNT(*) AS row_count,
             CURRENT_TIMESTAMP
         FROM temp_industrial_tabular_scope_records scope_records
+        JOIN temp_industrial_tabular_dynamic_fields dynamic_fields
         LEFT JOIN industrial_record_values values_row
             ON values_row.record_id = scope_records.record_id
-            AND values_row.field_name = ?
-        GROUP BY normalized_value, display_value
+            AND values_row.field_name = dynamic_fields.field_name
+        GROUP BY dynamic_fields.output_column, normalized_value, display_value
         """,
-        (scope_key, output_column, field_name),
+        (scope_key,),
     )
 
 
@@ -693,13 +777,7 @@ def _dynamic_field_metadata(
         SELECT
             field_name,
             COUNT(NULLIF(field_value, '')) AS non_null_count,
-            COALESCE(SUM(
-                CASE
-                    WHEN field_value <> '' AND metroliza_is_numeric_text(field_value)
-                    THEN 1
-                    ELSE 0
-                END
-            ), 0) AS numeric_count,
+            COALESCE(SUM({_NUMERIC_VALUE_SQL}), 0) AS numeric_count,
             MIN(NULLIF(field_value, '')) AS sample_value
         FROM field_values
         GROUP BY field_name
@@ -1042,4 +1120,4 @@ def _create_tabular_indexes(connection, columns: tuple[str, ...]) -> None:
         )
 
 
-__all__ = ["load_industrial_cache_tabular_result"]
+__all__ = ["IndustrialCacheLoadCanceled", "load_industrial_cache_tabular_result"]
