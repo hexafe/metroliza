@@ -64,6 +64,7 @@ class HistogramStatsTable:
 @dataclass
 class _HistogramTableCache:
     rows: dict[tuple[bytes, str | None, str | None], tuple[tuple[str, str], ...]]
+    fits: dict[tuple[Any, ...], Any] = field(default_factory=dict)
     payload_bytes: int = 0
     lock: Any = field(default_factory=Lock)
 
@@ -75,10 +76,11 @@ _histogram_table_cache: ContextVar[_HistogramTableCache | None] = ContextVar(
 
 @contextmanager
 def histogram_stats_request():
-    """Reuse immutable table rows only within one analytics request.
+    """Reuse table rows and distribution fits only within one analytics request.
 
-    Each nested request owns a separate bounded cache. Reset and clear on every
-    exit, including cancellation; source validation remains outside this helper.
+    Each nested request owns a separate cache: bounded table rows and compact
+    fit results without source populations. Reset and clear on every exit,
+    including cancellation; source validation remains outside this helper.
     """
     cache = _HistogramTableCache(rows={})
     token = _histogram_table_cache.set(cache)
@@ -87,6 +89,7 @@ def histogram_stats_request():
     finally:
         _histogram_table_cache.reset(token)
         cache.rows.clear()
+        cache.fits.clear()
         cache.payload_bytes = 0
 
 
@@ -800,7 +803,7 @@ def _render_with_hexafe_plotstats(
 
     configure_headless_matplotlib()
     try:
-        from hexafe_plotstats import HistogramConfig, build_histogram_payload, render_histogram
+        from hexafe_plotstats import HistogramConfig, render_histogram
         from hexafe_plotstats.models.common import SpecLimits
         from hexafe_plotstats.models.payloads import TableRow
     except Exception:
@@ -808,7 +811,7 @@ def _render_with_hexafe_plotstats(
 
     try:
         spec_limits = SpecLimits(lsl=lsl, nominal=_nominal_from_limits(lsl, usl), usl=usl)
-        payload = build_histogram_payload(
+        payload = _request_histogram_payload(
             values,
             spec_limits=spec_limits,
             config=HistogramConfig(bins=bin_count, density=False, include_fit=True),
@@ -887,6 +890,53 @@ def _render_with_metroliza_fallback(
     )
 
 
+def _request_histogram_payload(values, *, spec_limits, config, metadata=None):
+    """Share the fixed default distribution fit, independently of histogram bins.
+
+    Fingerprint the complete ordered float64 population and all limits. Full and
+    sampled populations therefore never alias. Only compact fit/table results are
+    retained, not raw populations; their lifetime is one analytics request. The
+    adapter always uses plotstats' default DistributionConfig without overrides.
+    Histogram bins/density do not enter that fit configuration.
+    """
+    from concurrent.futures import Future
+    from hashlib import sha256
+
+    from hexafe_plotstats import build_histogram_payload
+
+    cache = _histogram_table_cache.get()
+    if cache is None or not config.include_fit:
+        return build_histogram_payload(values, spec_limits=spec_limits, config=config, metadata=metadata)
+    key = (
+        sha256(values.tobytes()).digest(), values.shape, values.dtype.str,
+        tuple(None if value is None else float(value).hex()
+              for value in (spec_limits.lsl, spec_limits.nominal, spec_limits.usl)),
+        config.include_kde_reference,
+    )
+    with cache.lock:
+        pending = cache.fits.get(key)
+        owner = pending is None
+        if owner:
+            pending = Future()
+            cache.fits[key] = pending
+    if owner:
+        try:
+            payload = build_histogram_payload(values, spec_limits=spec_limits, config=config, metadata=metadata)
+            pending.set_result((payload.fit, payload.table_rows, payload.warnings))
+            return payload
+        except BaseException as exc:
+            # Wake existing waiters and allow a later attempt after a failed build.
+            pending.set_exception(exc)
+            with cache.lock:
+                cache.fits.pop(key, None)
+            raise
+    fit, table_rows, warnings = pending.result()
+    payload = build_histogram_payload(
+        values, spec_limits=spec_limits, config=replace(config, include_fit=False), metadata=metadata,
+    )
+    return replace(payload, fit=fit, table_rows=table_rows, warnings=warnings)
+
+
 def _histogram_table_rows_from_plotstats(
     values: np.ndarray,
     *,
@@ -894,12 +944,12 @@ def _histogram_table_rows_from_plotstats(
     usl: float | None = None,
 ) -> tuple[tuple[str, str], ...]:
     try:
-        from hexafe_plotstats import HistogramConfig, build_histogram_payload
+        from hexafe_plotstats import HistogramConfig
         from hexafe_plotstats.models.common import SpecLimits
     except Exception:
         return ()
     try:
-        payload = build_histogram_payload(
+        payload = _request_histogram_payload(
             values,
             spec_limits=SpecLimits(lsl=lsl, nominal=_nominal_from_limits(lsl, usl), usl=usl),
             config=HistogramConfig(density=False, include_fit=True),
