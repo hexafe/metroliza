@@ -484,3 +484,98 @@ def test_mouse_clicks_emit_cell_pressed_and_shift_click_selects_a_row_range(curr
     # setCurrentCell toggles the clicked row back off in multi-selection mode).
     assert sorted({index.row() for index in view.selectionModel().selectedRows()}) == [2, 3, 4]
     assert view.currentRow() == 5 and view.rowCount() == 10 and view.columnCount() == 17
+
+
+@pytest.mark.parametrize("batch_size", [1, 7, 5000])
+def test_loader_matches_cellwise_reference_for_unicode_nulls_and_reordered_columns(tmp_path, batch_size):
+    database = tmp_path / "equivalence.db"
+    values = [(i, text, number) for i in range(8) for text, number in [
+        ("İßΣ\x1fX", -0.0), ("", None), (None, 1.2345678901234567), ("Repeat", 1e100),
+    ]]
+    _write_database(database, values)
+    specs = [*SPECS, {"label": "ABSENT", "field": "absent"}]
+    result = load_record_rows(str(database), "SELECT nominal, reference, id AS report_id FROM t", specs,
+                              batch_size=batch_size)
+    with closing(sqlite3.connect(database)) as connection:
+        stored = connection.execute("SELECT id, reference, nominal FROM t").fetchall()
+    expected = [(*row, None) for row in stored]
+    assert result.rows == expected
+    assert result.haystack == [records.row_haystack(row) for row in expected]
+    model = RecordTableModel(specs, result.rows, result.haystack)
+    for needle in ["", "repeat", "i̇", "σ", "1e+100", "x\x1f", "absent"]:
+        model.set_filter_text(needle)
+        wanted = [i for i, row in enumerate(expected) if not needle or any(
+            needle in records.display_value(value).lower() for value in row
+        )] if records.FIELD_SEPARATOR in needle else [
+            i for i, row in enumerate(expected) if needle in records.row_haystack(row)
+        ]
+        assert [model.source_row(i) for i in range(model.rowCount())] == wanted
+
+
+def test_record_indicator_is_delayed_nonmodal_and_released_on_cancel(current_dialog, monkeypatch):
+    dialog = current_dialog
+    dialog.ensure_record_tables_loaded()
+    dialog._reset_record_tables()
+    entered = threading.Event()
+
+    def held_loader(*_args, should_cancel, **_kwargs):
+        entered.set()
+        while not should_cancel():
+            time.sleep(0.005)
+        return None
+
+    monkeypatch.setattr(records, "load_record_rows", held_loader)
+    dialog.show()
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    slot = dialog._record_slots[1]
+    assert entered.wait(1)
+    progress = slot.progress_dialog
+    assert progress is not None and not progress.isVisible()
+    assert progress.windowModality() == Qt.WindowModality.NonModal
+    assert progress._delayed_show_timer.interval() == 1000
+    assert _pump(progress.isVisible)
+    assert progress._loading_gif_buffer is not None
+    dialog._cancel_record_load(slot)
+    assert slot.progress_dialog is None and not progress.isVisible()
+    assert not progress._delayed_show_timer.isActive()
+
+@pytest.mark.parametrize("terminal", ["loaded", "failed", "close", "user_cancel"])
+def test_record_indicator_released_on_every_terminal_path(current_dialog, monkeypatch, terminal):
+    dialog = current_dialog
+    entered, release = threading.Event(), threading.Event()
+    logged = []
+
+    def held_loader(*_args, should_cancel, **_kwargs):
+        entered.set()
+        while not release.wait(0.005):
+            if should_cancel():
+                return None
+        if terminal == "failed":
+            raise ValueError("synthetic record load failure")
+        return records.RecordRows([], [])
+
+    monkeypatch.setattr(records, "load_record_rows", held_loader)
+    monkeypatch.setattr(dialog, "log_and_exit", logged.append)
+    dialog.show()
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    slot = dialog._record_slots[1]
+    progress, thread, generation = slot.progress_dialog, slot.thread, slot.generation
+    assert entered.wait(1)
+    try:
+        if terminal == "close":
+            dialog.close()
+        elif terminal == "user_cancel":
+            progress.reject()
+        else:
+            release.set()
+            assert _pump(lambda: slot.state != "loading")
+        assert slot.progress_dialog is None
+        assert not progress.isVisible() and not progress._delayed_show_timer.isActive()
+        assert thread.wait(1000)
+        assert bool(logged) == (terminal == "failed")
+        if terminal in {"close", "user_cancel"}:
+            dialog._on_record_rows_loaded(slot.kind, generation, records.RecordRows([(99,)], ["99"]))
+            assert slot.state == "idle" and slot.view.rowCount() == 0
+    finally:
+        release.set()
+        records.cancel_load_thread(thread)

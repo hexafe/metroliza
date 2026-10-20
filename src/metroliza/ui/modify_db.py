@@ -47,6 +47,10 @@ from metroliza.ui.ui_foundation import (
     configure_table,
     configure_window_size,
 )
+from metroliza.ui.worker_progress_dialog import (
+    create_delayed_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -667,7 +671,22 @@ class ModifyDB(QDialog):
         thread.loaded.connect(self._on_record_rows_loaded)
         thread.failed.connect(self._on_record_load_failed)
         slot.thread = thread
+        progress, _label, _bar, _movie = create_delayed_worker_progress_dialog(
+            self, window_title="Loading database records",
+            initial_status_text=f"Loading {slot.kind} records...",
+            on_cancel=lambda: self._cancel_record_load(slot), delay_ms=1000,
+        )
+        progress.setWindowModality(Qt.WindowModality.NonModal)
+        slot.progress_dialog = progress
+        progress.show()
         start_load_thread(thread)
+
+    @staticmethod
+    def _release_record_progress(slot):
+        progress, slot.progress_dialog = slot.progress_dialog, None
+        if progress is not None:
+            dismiss_worker_progress_dialog(progress)
+            progress.deleteLater()
 
     def _slot_for_kind(self, kind):
         return next((slot for slot in self._record_slots if slot.kind == kind), None)
@@ -696,6 +715,7 @@ class ModifyDB(QDialog):
         slot.thread = None
         slot.state = "idle"
         slot.banner.setVisible(False)
+        self._release_record_progress(slot)
         self.log_and_exit(error)
 
     def _cancel_record_load(self, slot, *, wait_ms=3000):
@@ -705,6 +725,7 @@ class ModifyDB(QDialog):
         if slot.state == "loading":
             slot.state = "idle"
         slot.banner.setVisible(False)
+        self._release_record_progress(slot)
         cancel_load_thread(thread, wait_ms=wait_ms)
 
     def ensure_record_tables_loaded(self):
@@ -733,6 +754,7 @@ class ModifyDB(QDialog):
         slot.state = "loaded"
         slot.pending_specs = None
         slot.banner.setVisible(False)
+        self._release_record_progress(slot)
 
     def _apply_record_filter(self, slot):
         try:
