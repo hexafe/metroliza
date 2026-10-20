@@ -3926,7 +3926,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
             return None
         if self._chart_executor is None:
-            self._chart_executor = ProcessPoolExecutor(max_workers=self.chart_worker_count)
+            self._chart_executor = self._new_chart_executor()
         return self._chart_executor
 
     def _shutdown_chart_executor(self):
@@ -4038,6 +4038,18 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._cached_export_filtered_df = None
             self._partition_header_counts_cache = None
             self._sql_measurement_summary_cache.clear()
+
+    def _new_chart_executor(self):
+        """Create the chart pool on the shared spawn context; None keeps the charts serial."""
+
+        from metroliza.shared.compute_budget import chart_workers
+        from metroliza.shared.compute_worker import compute_workers_available, spawn_context
+
+        if not compute_workers_available():
+            return None
+        return ProcessPoolExecutor(
+            max_workers=chart_workers(self.chart_worker_count), mp_context=spawn_context(),
+        )
 
     def _iter_reference_partitions(self):
         partition_query = build_analytical_partition_query(self._active_export_query)

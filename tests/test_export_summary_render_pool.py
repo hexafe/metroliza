@@ -49,6 +49,28 @@ def test_spawn_worker_matches_serial_pngs_and_worksheet_commands():
             assert left == right
 
 
+@pytest.mark.parametrize('workers', [1, 2, 4, 8])
+def test_every_worker_count_renders_the_serial_result_in_order(workers):
+    from metroliza.shared.compute_worker import spawn_context
+
+    tasks = [_task() for _ in range(4)]
+    expected = [pool.render_summary_group(task) for task in tasks]
+    with ProcessPoolExecutor(max_workers=workers, mp_context=spawn_context(),
+                             initializer=pool._initialize_render_worker) as executor:
+        actual = [future.result(timeout=120) for future in
+                  [executor.submit(pool.render_summary_group, task) for task in tasks]]
+    for left_result, right_result in zip(expected, actual):
+        assert not left_result['failed'] and not right_result['failed']
+        assert len(left_result['commands']) == len(right_result['commands']) == 6
+        for (op, left), (other_op, right) in zip(left_result['commands'], right_result['commands']):
+            assert op == other_op
+            if op == 'image':
+                assert left[:3] == right[:3]
+                assert_equivalent_pngs(left[3], right[3])
+            else:
+                assert left == right
+
+
 def _owner():
     return SimpleNamespace(
         generate_summary_sheet=True, generate_html_dashboard=False,

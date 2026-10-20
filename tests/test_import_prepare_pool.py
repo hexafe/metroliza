@@ -281,6 +281,22 @@ def test_pooled_import_database_is_identical_to_the_serial_database(tmp_path, mo
     assert serial_dump["report_metadata_candidates"] and serial_dump["report_parse_state"]
 
 
+@pytest.mark.parametrize("workers", ["1", "2", "4", "8"])
+def test_every_worker_count_persists_the_serial_database(tmp_path, monkeypatch, workers):
+    source = tmp_path / "reports"
+    _write_synthetic_reports(source, 16)
+
+    _pool_env(monkeypatch, "0")
+    serial = _run_import(source, tmp_path / "serial.sqlite3")
+    _pool_env(monkeypatch, workers)
+    counts = _count_in_process_work(monkeypatch)
+    pooled = _run_import(source, tmp_path / "pooled.sqlite3")
+
+    assert counts == {"hydrated": 16, "prepared_in_process": 0}
+    assert serial.last_parse_result == pooled.last_parse_result
+    assert _dump_database(tmp_path / "serial.sqlite3") == _dump_database(tmp_path / "pooled.sqlite3")
+
+
 def test_reviewed_metadata_pooled_import_matches_serial_persisted_rows(tmp_path, monkeypatch):
     source = tmp_path / "reports"
     reports = _write_synthetic_reports(source, 4)

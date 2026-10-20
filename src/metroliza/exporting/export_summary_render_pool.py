@@ -13,12 +13,13 @@ import sys
 import time
 
 from metroliza.exporting.contracts import AppPaths, ExportRequest
-from metroliza.shared.env_utils import env_bool, env_int
-from metroliza.shared.compute_worker import compute_workers_available, frozen_windows, spawn_context
+from metroliza.shared.compute_budget import RENDER_MAX_WORKERS, RENDER_MIN_GROUPS, render_min_groups, render_workers
+from metroliza.shared.env_utils import env_bool
+from metroliza.shared.compute_worker import compute_workers_available, spawn_context
 
 
-MIN_PARALLEL_GROUPS = 8
-MAX_RENDER_WORKERS = 4
+MIN_PARALLEL_GROUPS = RENDER_MIN_GROUPS
+MAX_RENDER_WORKERS = RENDER_MAX_WORKERS
 RESULT_POLL_SECONDS = 0.1
 WORKER_EXIT_GRACE_SECONDS = 2.0
 WORKER_STOP_GRACE_SECONDS = 0.5
@@ -127,12 +128,7 @@ def _pool_policy(owner, group_count):
 
 
 def _minimum_groups():
-    if not frozen_windows():
-        return MIN_PARALLEL_GROUPS
-    try:
-        return env_int('METROLIZA_EXPORT_GROUP_MIN_GROUPS', default=40)
-    except ValueError:
-        return 40
+    return render_min_groups()
 
 
 def _render_canceled(owner, cancel_event):
@@ -200,8 +196,7 @@ def iter_summary_render_results(owner, entries):
         return
 
     yield entries[0], None
-    workers = min(MAX_RENDER_WORKERS, owner.chart_worker_count, len(entries) - 1)
-    workers = _windows_worker_limit(workers)
+    workers = render_workers(owner.chart_worker_count, len(entries), cap=MAX_RENDER_WORKERS)
     bound = max(1, min(owner.chart_worker_queue_size, workers * 2))
     pending = deque()
     remaining = iter(entries[1:])
@@ -227,16 +222,6 @@ def iter_summary_render_results(owner, entries):
     finally:
         if executor is not None:
             _shutdown_render_pool(executor, pending, cancel_event)
-
-
-def _windows_worker_limit(workers):
-    if not frozen_windows():
-        return workers
-    try:
-        configured = env_int('METROLIZA_EXPORT_GROUP_WORKERS', default=2)
-    except ValueError:
-        configured = 2
-    return min(workers, max(1, configured or 2))
 
 
 def _collect_ordered(owner, remaining, pending, executor, bound, telemetry, cancel_event):
