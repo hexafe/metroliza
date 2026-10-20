@@ -1,6 +1,6 @@
 # Metroliza — Performance Boost STEP2: audyt, pomiary, PoC i plan wdrożenia
 
-- **Status:** audyt zakończony; PoC na gałęzi `perf/step2-audit` (draft PR); nic nie zostało zmergowane.
+- **Status:** audyt zakończony; PoC na gałęzi `perf/step2-audit` (draft PR #1149); nic nie zostało zmergowane.
 - **Właściciel:** koordynator audytu wydajności (Claude Opus 5.5, Claude Code). Decyzje produktowe: PO.
 - **Data:** 2026-10-20 (czasy: Warszawa, UTC+2, jeśli nie zaznaczono UTC).
 - **Baza audytu:** `78d5d775756e4b64530ce8fb04f175a2e3f461f1` = head PR #1142
@@ -10,7 +10,7 @@
   gałęzi PoC: ten sam onedir pakowany starym (`78d5d775`) i nowym launcherem.
 - **Dokumenty:** macierz [`performance-boost-step2-flows.md`](performance-boost-step2-flows.md);
   liczby (mediany, rozrzut, n, obciążenie, runy CI): [`performance-boost-step2-measurements.json`](performance-boost-step2-measurements.json).
-- **Tracker:** Issue „Performance Boost STEP2" (powiązane z #1120, #952, #918, #1101).
+- **Tracker:** Issue #1148 „Performance Boost STEP2" (powiązane z #1120, #952, #918, #1101); draft PR #1149.
 
 ## 1. Podsumowanie dla PO
 
@@ -71,7 +71,7 @@ przełączenie motywu 0,65 s, Export open 0,37 s. Wszystkie z zamrożeniem GUI p
 
 | PoC | Wynik | Zgodność | Decyzja |
 |---|---|---|---|
-| Natywny splash z kaczuchą w launcherze + przekazanie do aplikacji (Windows) | splash 44–166 ms przy starcie z cache (≈100 ms od startu kodu przy pierwszym); 0 ms pustki we wszystkich scenariuszach; brak podwójnego splasha; fokus w oknie głównym we wszystkich próbach; animacja: 1087 z 1088 par zrzutów różnych | ten sam onedir; okno główne w tym samym czasie przy starcie z cache | **PRZYJĘTY WARUNKOWO** — warunki w §5.6 (fallback okna postępu, naprawa po kodzie 75, kwalifikacja, ≥6 prób drugiego startu na czystym laptopie) |
+| Natywny splash z kaczuchą w launcherze + przekazanie do aplikacji (Windows) | splash 44–166 ms przy starcie z cache (≈100 ms od startu kodu przy pierwszym); 0 ms pustki we wszystkich scenariuszach; brak podwójnego splasha; fokus w oknie głównym we wszystkich próbach z zarejestrowanym oknem głównym; animacja: 1087 z 1088 par zrzutów różnych | ten sam onedir; okno główne w tym samym czasie przy starcie z cache | **PRZYJĘTY WARUNKOWO** — warunki w §5.6 (fallback okna postępu, naprawa po kodzie 75, kwalifikacja, ≥6 prób drugiego startu na czystym laptopie) |
 | Characteristic Mapping jednym zapytaniem | 681 s (szacunek) / 764 s (UI) → 2,19 s | mała baza: pełna identyczność; duża: 30 metryk identycznych | **PRZYJĘTY** |
 | Review reports w puli procesów | sam kod: 87,8 s → 30,2 s (4) / 23,7 s (8) | identyczne wpisy i odczyty metadanych | **PRZYJĘTY** (pełny zysk w UI wymaga też C2: strumieniowanie, throttling; skalowanie do potwierdzenia w profilu wydajnym) |
 | Rozgrzewka w wątku tła | najdłuższy zastój 636 → 171 ms; blokada 1562 → 431 ms | te same moduły; gotowość +9% | **PRZYJĘTY WARUNKOWO** (warunki A2, §9) |
