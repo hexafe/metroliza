@@ -568,7 +568,13 @@ class GroupingOpen(Scenario):
 
     def done(self, ctx):
         dialog = getattr(self.export, "grouping_window", None)
-        return dialog is not None and dialog.isVisible() and "handler_returned" in ctx.marks
+        if dialog is None or not dialog.isVisible() or "handler_returned" not in ctx.marks:
+            return False
+        # The data loads in a worker thread; wait for the populated dialog (older builds load synchronously).
+        if getattr(dialog, "is_loading_grouping", lambda: False)():
+            return False
+        ctx.mark("dialog_populated")
+        return True
 
 
 class CharacteristicMappingOpen(Scenario):
