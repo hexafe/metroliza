@@ -590,6 +590,11 @@ class CharacteristicMappingOpen(Scenario):
         modal = QApplication.activeModalWidget()
         if modal is not None and type(modal).__name__ == "CharacteristicMappingDialog":
             ctx.mark("dialog_visible")
+            # The names load in a worker thread; wait for the populated table (older builds load synchronously).
+            loading = getattr(modal, "is_loading_source_options", lambda: False)()
+            if loading or modal.metric_table.rowCount() == 0:
+                return False
+            ctx.mark("dialog_populated")
             modal.reject()
             return True
         return False

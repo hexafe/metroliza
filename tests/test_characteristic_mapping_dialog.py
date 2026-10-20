@@ -1,5 +1,7 @@
 import importlib.util
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -12,16 +14,19 @@ from modules.characteristic_alias_service import (
 
 if importlib.util.find_spec("PyQt6") is None:  # pragma: no cover - optional local test runtime.
     QApplication = None
+    QThread = None
     QMessageBox = None
     CharacteristicMappingDialog = None
     PYQT_IMPORT_ERROR = ModuleNotFoundError("PyQt6 is not installed")
 else:
+    from PyQt6.QtCore import QThread
     from PyQt6.QtWidgets import QApplication, QMessageBox
     from modules.characteristic_mapping_dialog import (
         ALL_REFERENCES_LABEL,
         CharacteristicMappingDialog,
         CharacteristicAliasEditorDialog,
         ONE_REFERENCE_LABEL,
+        _RUNNING_SOURCE_LOAD_THREADS,
         build_remediation_report_rows,
     )
     PYQT_IMPORT_ERROR = None
@@ -33,6 +38,14 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
         if PYQT_IMPORT_ERROR is not None:
             raise unittest.SkipTest(f'PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}')
         cls.app = QApplication.instance() or QApplication([])
+
+    def _wait_for_source_load(self, dialog, timeout_s=10.0):
+        deadline = time.monotonic() + timeout_s
+        while dialog.is_loading_source_options() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
+        self.app.processEvents()
+        self.assertFalse(dialog.is_loading_source_options(), 'source options did not finish loading')
 
     def test_dialog_constructs_and_loads_existing_rows(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -114,6 +127,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             with patch('modules.characteristic_mapping_dialog.fetch_distinct_report_metric_names', return_value=metric_rows):
                 with patch('modules.characteristic_mapping_dialog.fetch_distinct_references', return_value=reference_rows):
                     dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+                    self._wait_for_source_load(dialog)
 
             try:
                 self.assertEqual(dialog.metric_table.rowCount(), 2)
@@ -468,6 +482,225 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
                 self.assertTrue(critical_mock.called)
                 self.assertEqual(critical_mock.call_args[0][1], 'Export error')
+            finally:
+                dialog.close()
+
+
+    def _interruptible_fetch(self, result, seen_threads=None):
+        def fetch(*_args, **_kwargs):
+            if seen_threads is not None:
+                seen_threads.append(QThread.currentThread())
+            deadline = time.monotonic() + 10.0
+            while not QThread.currentThread().isInterruptionRequested() and time.monotonic() < deadline:
+                time.sleep(0.005)
+            return result
+
+        return fetch
+
+    def _gated_fetch(self, gate, result, seen_threads=None):
+        def fetch(*_args, **_kwargs):
+            if seen_threads is not None:
+                seen_threads.append(QThread.currentThread())
+            gate.wait(10.0)
+            return result
+
+        return fetch
+
+    def test_source_options_load_in_worker_thread_and_populate_on_gui_thread(self):
+        metric_rows = [
+            {'metric_name': 'DIA - X', 'measurement_count': 8, 'report_count': 2, 'reference_count': 1,
+             'sample_references': ['REF-1']},
+        ]
+        gate = threading.Event()
+        seen_threads = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            with patch(
+                'modules.characteristic_mapping_dialog.fetch_distinct_report_metric_names',
+                side_effect=self._gated_fetch(gate, metric_rows, seen_threads),
+            ), patch(
+                'modules.characteristic_mapping_dialog.fetch_distinct_references',
+                side_effect=self._gated_fetch(gate, [{'reference': 'REF-1'}], seen_threads),
+            ):
+                dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+                try:
+                    # The constructor returned while the worker is still blocked: nothing froze the GUI thread.
+                    self.assertTrue(dialog.is_loading_source_options())
+                    self.assertEqual(dialog.metric_table.rowCount(), 0)
+                    self.assertFalse(dialog.metric_empty_label.isHidden())
+                    self.assertEqual(dialog.metric_empty_label.text(), 'Loading report/export names...')
+                    self.assertFalse(dialog.add_button.isEnabled())
+                    self.assertIsNotNone(dialog._source_progress_dialog)
+                    self.assertFalse(dialog._source_progress_dialog.isVisible())  # delayed indicator
+
+                    gate.set()
+                    self._wait_for_source_load(dialog)
+
+                    self.assertEqual(dialog.metric_table.rowCount(), 1)
+                    self.assertEqual(dialog.metric_table.item(0, 0).text(), 'DIA - X')
+                    self.assertTrue(dialog.metric_empty_label.isHidden())
+                    self.assertTrue(dialog.add_button.isEnabled())
+                    self.assertIsNone(dialog._source_progress_dialog)
+                    self.assertEqual(dialog.reference_options, [{'reference': 'REF-1'}])
+                    self.assertEqual(len(seen_threads), 2)
+                    self.assertTrue(all(thread is not self.app.thread() for thread in seen_threads))
+                finally:
+                    gate.set()
+                    dialog.close()
+
+    def test_source_options_load_error_keeps_message_and_empty_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            with patch('modules.characteristic_mapping_dialog.fetch_distinct_report_metric_names', side_effect=RuntimeError('boom')):
+                with patch('modules.characteristic_mapping_dialog.CustomLogger') as logger_mock:
+                    with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                        dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+                        try:
+                            self._wait_for_source_load(dialog)
+                        finally:
+                            dialog.close()
+
+            critical_mock.assert_called_once_with(dialog, 'Load error', 'Could not load report/export names: boom')
+            self.assertEqual(logger_mock.call_count, 1)
+            self.assertIsInstance(logger_mock.call_args[0][0], RuntimeError)
+            self.assertEqual(dialog.metric_options, [])
+            self.assertEqual(dialog.reference_options, [])
+            self.assertEqual(dialog.metric_table.rowCount(), 0)
+
+    def test_closing_dialog_while_loading_interrupts_and_joins_worker(self):
+        seen_threads = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            with patch(
+                'modules.characteristic_mapping_dialog.fetch_distinct_report_metric_names',
+                side_effect=self._interruptible_fetch([{'metric_name': 'LATE'}], seen_threads),
+            ), patch('modules.characteristic_mapping_dialog.fetch_distinct_references', return_value=[]):
+                dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+                thread = dialog._source_thread
+                self.assertTrue(dialog.is_loading_source_options())
+                deadline = time.monotonic() + 5.0
+                while not seen_threads and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                self.assertTrue(thread.isRunning())
+
+                started = time.monotonic()
+                dialog.close()
+
+                self.assertLess(time.monotonic() - started, 5.0)
+                self.assertTrue(thread.isFinished())
+                self.assertIsNone(dialog._source_thread)
+                self.assertFalse(dialog.is_loading_source_options())
+                self.assertIsNone(dialog._source_progress_dialog)
+                self.app.processEvents()
+                self.assertEqual(dialog.metric_options, [])  # late result is dropped
+
+    def test_closing_dialog_with_uninterruptible_loader_detaches_thread_without_crash(self):
+        gate = threading.Event()
+        seen_threads = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            with patch(
+                'modules.characteristic_mapping_dialog.fetch_distinct_report_metric_names',
+                side_effect=self._gated_fetch(gate, [{'metric_name': 'LATE'}], seen_threads),
+            ), patch('modules.characteristic_mapping_dialog.fetch_distinct_references', return_value=[]), patch(
+                'modules.characteristic_mapping_dialog.SOURCE_LOAD_STOP_WAIT_MS', 50
+            ):
+                dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+                thread = dialog._source_thread
+                deadline = time.monotonic() + 5.0
+                while not seen_threads and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                self.assertTrue(seen_threads)
+                started = time.monotonic()
+                dialog.close()
+                self.assertLess(time.monotonic() - started, 2.0)  # bounded wait, never the 10 s gate
+                self.assertTrue(thread.isRunning())
+                self.assertIn(thread, _RUNNING_SOURCE_LOAD_THREADS)
+
+                gate.set()
+                self.assertTrue(thread.wait(5000))
+                deadline = time.monotonic() + 5.0
+                while thread in _RUNNING_SOURCE_LOAD_THREADS and time.monotonic() < deadline:
+                    self.app.processEvents()
+                    time.sleep(0.005)
+                self.assertNotIn(thread, _RUNNING_SOURCE_LOAD_THREADS)
+                self.assertEqual(dialog.metric_options, [])
+
+    def test_cancel_loading_discards_result_and_explains_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            with patch(
+                'modules.characteristic_mapping_dialog.fetch_distinct_report_metric_names',
+                side_effect=self._interruptible_fetch([{'metric_name': 'LATE'}]),
+            ), patch('modules.characteristic_mapping_dialog.fetch_distinct_references', return_value=[]):
+                dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+                try:
+                    progress_dialog = dialog._source_progress_dialog
+                    progress_dialog.reject()  # the Cancel / window-close path of the indicator
+                    self.assertFalse(dialog.is_loading_source_options())
+                    self.assertIsNone(dialog._source_progress_dialog)
+                    self.assertFalse(dialog.metric_empty_label.isHidden())
+                    self.assertIn('canceled', dialog.metric_empty_label.text())
+                    self.app.processEvents()
+                    self.assertEqual(dialog.metric_table.rowCount(), 0)
+                    self.assertTrue(dialog.add_button.isEnabled())
+                finally:
+                    dialog.close()
+
+    def test_stale_load_results_are_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                self._wait_for_source_load(dialog)
+                stale_id = dialog._source_request_id - 1
+                dialog._on_source_options_loaded(stale_id, [{'metric_name': 'STALE'}], [])
+                self.assertEqual(dialog.metric_options, [])
+                with patch.object(QMessageBox, 'critical') as critical_mock:
+                    dialog._on_source_options_failed(stale_id, RuntimeError('stale'))
+                critical_mock.assert_not_called()
+            finally:
+                dialog.close()
+
+    def test_source_options_load_real_measurement_database_matches_service(self):
+        import sqlite3
+        from contextlib import closing
+        from modules.characteristic_mapping_service import (
+            fetch_distinct_references,
+            fetch_distinct_report_metric_names,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/reports.sqlite'
+            with closing(sqlite3.connect(db_path)) as connection, connection:
+                connection.execute(
+                    'CREATE TABLE vw_measurement_export '
+                    '(report_id INTEGER, measurement_id INTEGER, reference TEXT, header TEXT, ax TEXT)'
+                )
+                connection.executemany(
+                    'INSERT INTO vw_measurement_export VALUES (?, ?, ?, ?, ?)',
+                    [
+                        (1, 1, 'REF-1', 'DIA', 'X'),
+                        (2, 2, 'ref-2', 'DIA', 'X'),
+                        (2, 3, 'REF-2', 'LEN', ''),
+                        (3, 4, None, 'LEN', ''),
+                    ],
+                )
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                self._wait_for_source_load(dialog)
+                self.assertEqual(dialog.metric_options, fetch_distinct_report_metric_names(db_path))
+                self.assertEqual(dialog.reference_options, fetch_distinct_references(db_path))
+                self.assertEqual(dialog.metric_table.rowCount(), 2)
+                self.assertEqual(dialog.metric_table.item(0, 0).text(), 'DIA - X')
+                self.assertEqual(dialog.metric_table.item(0, 0).toolTip(), 'References: REF-1, ref-2')
             finally:
                 dialog.close()
 

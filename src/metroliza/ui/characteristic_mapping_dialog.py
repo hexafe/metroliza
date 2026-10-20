@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import csv
+import sqlite3
+import threading
+import time
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -39,6 +42,8 @@ from metroliza.reports.characteristic_mapping_service import (
     fetch_distinct_report_metric_names,
     fetch_mapping_impact_counts,
 )
+from metroliza.reports.db import _is_transient_sqlite_error, connect_sqlite
+from metroliza.reports.import_persist_profile import close_persist_connection
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
@@ -49,12 +54,24 @@ from metroliza.ui.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+from metroliza.ui.worker_progress_dialog import (
+    create_delayed_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
 
 
 ALL_REFERENCES_LABEL = 'All references'
 ONE_REFERENCE_LABEL = 'One reference only'
 REMEDIATION_REPORT_HEADERS = ('row_number', 'field', 'code', 'category', 'message', 'remediation_hint')
 SOURCE_TABLE_HEADERS = ['Report/export name', 'References', 'Reports', 'Rows']
+SOURCE_LOADING_TEXT = 'Loading report/export names...'
+SOURCE_LOAD_CANCELED_TEXT = 'Loading report/export names was canceled. Use Browse DB to load them again.'
+# Upper bound for the GUI thread to wait for an interrupted loader; a loader that has not stopped by
+# then is detached (it keeps running to completion in the background and its result is dropped).
+SOURCE_LOAD_STOP_WAIT_MS = 2000
+
+# Loader threads stay referenced here until they finish, so a QThread is never destroyed while running.
+_RUNNING_SOURCE_LOAD_THREADS: set[QThread] = set()
 
 
 def _has_selected_db_file(db_file: str) -> bool:
@@ -139,6 +156,73 @@ def export_remediation_report_csv(
         for row in rows:
             writer.writerow({header: row.get(header) or '' for header in REMEDIATION_REPORT_HEADERS})
     return len(rows)
+
+
+class _SourceOptionsLoadThread(QThread):
+    """Read the report/export names and references of a database off the GUI thread."""
+
+    loaded = pyqtSignal(int, list, list)
+    failed = pyqtSignal(int, object)
+
+    def __init__(self, *, request_id: int, db_file: str):
+        super().__init__()
+        self.request_id = request_id
+        self.db_file = db_file
+        self._connection_lock = threading.Lock()
+        self._connection: sqlite3.Connection | None = None
+
+    def release(self) -> None:
+        """Drop the module-level reference once the thread has finished."""
+        _RUNNING_SOURCE_LOAD_THREADS.discard(self)
+
+    def interrupt_query(self) -> None:
+        """Ask the loader to stop; abort the running SQLite statement, if any."""
+        self.requestInterruption()
+        with self._connection_lock:
+            connection = self._connection
+            if connection is not None:
+                try:
+                    connection.interrupt()
+                except sqlite3.Error:
+                    pass
+
+    def _open_connection(self) -> sqlite3.Connection:
+        # Same transient lock/open retry policy as execute_with_retry, which opened the connection
+        # for every statement before the loader owned one.
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                return connect_sqlite(self.db_file)
+            except sqlite3.OperationalError as exc:
+                if attempt >= attempts - 1 or not _is_transient_sqlite_error(exc):
+                    raise
+                time.sleep(0.05)
+        raise RuntimeError('unreachable')  # pragma: no cover
+
+    def run(self) -> None:
+        try:
+            connection = self._open_connection()
+            try:
+                with self._connection_lock:
+                    self._connection = connection
+                try:
+                    if self.isInterruptionRequested():
+                        return
+                    metric_options = fetch_distinct_report_metric_names(self.db_file, connection=connection)
+                    if self.isInterruptionRequested():
+                        return
+                    reference_options = fetch_distinct_references(self.db_file, connection=connection)
+                finally:
+                    with self._connection_lock:
+                        self._connection = None
+            finally:
+                close_persist_connection(connection)
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.failed.emit(self.request_id, exc)
+            return
+        if not self.isInterruptionRequested():
+            self.loaded.emit(self.request_id, metric_options, reference_options)
 
 
 class CharacteristicAliasEditorDialog(QDialog):
@@ -381,6 +465,11 @@ class CharacteristicMappingDialog(QDialog):
         self.db_file = db_file
         self.metric_options: list[dict[str, object]] = []
         self.reference_options: list[dict[str, object]] = []
+        self._source_request_id = 0
+        self._source_loading = False
+        self._source_load_canceled = False
+        self._source_thread: _SourceOptionsLoadThread | None = None
+        self._source_progress_dialog = None
 
         self.subtitle_label = QLabel(
             'Map report/export names so Group Analysis treats equivalent characteristics as one metric.'
@@ -509,8 +598,8 @@ class CharacteristicMappingDialog(QDialog):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.alias_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         set_status_variant(self.collision_warning_label, 'info')
-        self.load_source_options()
         self.load_aliases()
+        self.load_source_options()
         self._sync_selection_actions()
         self._sync_warning_labels()
         apply_metroliza_theme(self)
@@ -543,12 +632,13 @@ class CharacteristicMappingDialog(QDialog):
         has_db = _has_selected_db_file(self.db_file)
         has_metric_selection = self._selected_metric_option() is not None
         has_selection = self._selected_mapping() is not None
-        self.add_button.setEnabled(has_db)
-        self.add_from_selected_button.setEnabled(has_db and has_metric_selection)
-        self.import_button.setEnabled(has_db)
+        options_ready = not self._source_loading
+        self.add_button.setEnabled(has_db and options_ready)
+        self.add_from_selected_button.setEnabled(has_db and options_ready and has_metric_selection)
+        self.import_button.setEnabled(has_db and options_ready)
         self.export_button.setEnabled(has_db)
-        self.edit_button.setEnabled(has_db and has_selection)
-        self.delete_button.setEnabled(has_db and has_selection)
+        self.edit_button.setEnabled(has_db and options_ready and has_selection)
+        self.delete_button.setEnabled(has_db and options_ready and has_selection)
 
     def _sync_warning_labels(self):
         has_db = bool(str(self.db_file or '').strip())
@@ -558,6 +648,14 @@ class CharacteristicMappingDialog(QDialog):
         if not has_db:
             self.metric_empty_label.setText('Select a database to load report/export names.')
             set_status_variant(self.metric_empty_label, 'neutral')
+            self.metric_empty_label.setVisible(True)
+        elif self._source_loading:
+            self.metric_empty_label.setText(SOURCE_LOADING_TEXT)
+            set_status_variant(self.metric_empty_label, 'neutral')
+            self.metric_empty_label.setVisible(True)
+        elif self._source_load_canceled:
+            self.metric_empty_label.setText(SOURCE_LOAD_CANCELED_TEXT)
+            set_status_variant(self.metric_empty_label, 'warning')
             self.metric_empty_label.setVisible(True)
         elif not self.metric_options:
             self.metric_empty_label.setText('No report/export names were found in this database.')
@@ -584,26 +682,106 @@ class CharacteristicMappingDialog(QDialog):
         self.db_path_input.setText(filename)
         if self.parent() is not None and hasattr(self.parent(), 'set_db_file'):
             self.parent().set_db_file(filename)
-        self.load_source_options()
         self.load_aliases()
+        self.load_source_options()
+
+    def is_loading_source_options(self) -> bool:
+        """Return True while the report/export names are being read in the background."""
+        return self._source_loading
 
     def load_source_options(self):
+        self._stop_source_loading()
+        self._source_load_canceled = False
         self.metric_options = []
         self.reference_options = []
         if not self.db_file:
             self._populate_metric_table()
             return
 
-        try:
-            self.metric_options = fetch_distinct_report_metric_names(self.db_file)
-            self.reference_options = fetch_distinct_references(self.db_file)
-        except Exception as exc:
-            CustomLogger(exc, reraise=False)
-            self.metric_options = []
-            self.reference_options = []
-            QMessageBox.critical(self, 'Load error', f'Could not load report/export names: {exc}')
+        self._source_loading = True
+        (
+            self._source_progress_dialog,
+            _loading_label,
+            loading_bar,
+            _loading_gif,
+        ) = create_delayed_worker_progress_dialog(
+            self,
+            window_title=SOURCE_LOADING_TEXT,
+            initial_status_text=f'{SOURCE_LOADING_TEXT}\nReading the database\nETA --',
+            on_cancel=self._cancel_source_loading,
+        )
+        loading_bar.setRange(0, 0)
 
+        thread = _SourceOptionsLoadThread(request_id=self._source_request_id, db_file=str(self.db_file))
+        self._source_thread = thread
+        _RUNNING_SOURCE_LOAD_THREADS.add(thread)
+        thread.loaded.connect(self._on_source_options_loaded)
+        thread.failed.connect(self._on_source_options_failed)
+        thread.finished.connect(thread.release)
         self._populate_metric_table()
+        thread.start()
+        self._source_progress_dialog.show()
+
+    def _dismiss_source_progress_dialog(self) -> None:
+        progress_dialog = self._source_progress_dialog
+        self._source_progress_dialog = None
+        if progress_dialog is not None:
+            dismiss_worker_progress_dialog(progress_dialog)
+            progress_dialog.deleteLater()
+
+    def _stop_source_loading(self, *, wait_ms: int | None = None) -> None:
+        """Invalidate any pending load; interrupt its thread and wait a bounded time for it."""
+        self._source_request_id += 1
+        self._source_loading = False
+        self._dismiss_source_progress_dialog()
+        thread = self._source_thread
+        self._source_thread = None
+        if thread is None:
+            return
+        for signal, slot in (
+            (thread.loaded, self._on_source_options_loaded),
+            (thread.failed, self._on_source_options_failed),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        thread.interrupt_query()
+        if thread.wait(SOURCE_LOAD_STOP_WAIT_MS if wait_ms is None else wait_ms):
+            thread.release()
+
+    def _cancel_source_loading(self) -> None:
+        self._stop_source_loading()
+        self._source_load_canceled = True
+        self._populate_metric_table()
+
+    def _on_source_options_loaded(self, request_id, metric_options, reference_options):
+        if request_id != self._source_request_id or not self._source_loading:
+            return
+        self._source_loading = False
+        self._dismiss_source_progress_dialog()
+        self.metric_options = list(metric_options)
+        self.reference_options = list(reference_options)
+        self._populate_metric_table()
+
+    def _on_source_options_failed(self, request_id, exc):
+        if request_id != self._source_request_id or not self._source_loading:
+            return
+        self._source_loading = False
+        self._dismiss_source_progress_dialog()
+        CustomLogger(exc, reraise=False)
+        self.metric_options = []
+        self.reference_options = []
+        self._populate_metric_table()
+        QMessageBox.critical(self, 'Load error', f'Could not load report/export names: {exc}')
+
+    def done(self, result):
+        self._stop_source_loading()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self._stop_source_loading()
+        super().closeEvent(event)
 
     def _metric_option_matches_filter(self, option, search_text):
         if not search_text:
