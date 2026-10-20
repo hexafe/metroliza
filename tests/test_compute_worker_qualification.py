@@ -220,6 +220,9 @@ def test_qualify_registers_failed_trial_before_launch(tmp_path, monkeypatch):
     assert receipt['runs'][0]['runtime_audit']['status'] == 'unavailable'
 
 
+# run_qualification() creates the process' QApplication in a local variable when none exists;
+# the session fixture keeps one alive so a later module never sees a second application (#1119).
+@pytest.mark.usefixtures("qapplication_session")
 def test_qualification_uses_parent_version_policy_without_harness_override(tmp_path, monkeypatch):
     from metroliza.shared import compute_worker, diagnostic_runtime_audit
 
