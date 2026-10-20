@@ -20,10 +20,16 @@ Od kliknięcia do użytecznego wyniku. Dane syntetyczne (bez danych klientów). 
 offscreen, Xeon W-10855M (6 rdzeni / 12 wątków); „Windows" = EXE na hostowanym runnerze CI (4 vCPU,
 Defender). Mediana [min–max], n = liczba prób.
 
+> **Ważne dla czasów z Linuksa:** wszystkie pomiary linuksowe powstały w profilu oszczędzania energii
+> (`power-saver`, CPU ≈0,9–1,1 GHz pod obciążeniem zamiast do 5,1 GHz). Czasy bezwzględne są przez to
+> zawyżone — ten sam benchmark CSV Summary z #1128 na tym samym commicie: 264 s tutaj, 76 s w #1133.
+> Kolejność strat i proporcje wariantów zmierzonych w tym samym stanie pozostają ważne; zyski z
+> równoległości w profilu wydajnym mogą być mniejsze. Pomiary Windows (start) tego nie dotyczą. §3.3.
+
 | # | Gdzie użytkownik czeka | Zmierzony czas | Przyczyna | Najlepszy zmierzony wariant |
 |---:|---|---:|---|---|
 | 1 | Reports → „Match Characteristic Names" (1500 raportów, 2664 metryk) | **764 s zamrożenia GUI** (n=1) | 1 + 2664 zapytań, każde skanuje widok pomiarów, w wątku GUI | jedno zapytanie (funkcja okna): **2,19 s** [2,18–2,35] (n=3); próbka 30 metryk identyczna, mała baza w pełni identyczna |
-| 2 | Export „Extended plots" (50 raportów, 216 grup) | **552 s**, RSS 944 MB (n=1) | ok. 2,5 s/grupę renderu matplotlib; pula 2 procesów tworzona od nowa dla każdej referencji; z dashboardem HTML render zawsze szeregowo | 48 grup: 220 s (1 proces) → 149 s (2, dziś) → 99 s (4) → 88 s (8), ta sama treść XLSX; z dashboardem przy 4: **209 s szeregowo** |
+| 2 | Export „Extended plots" (50 raportów, 216 grup) | **552 s**, RSS 944 MB (n=1) | ≈4,6 s renderu na grupę w jednym procesie (układ tekstu i fonty matplotlib, kompresja PNG, dopasowania scipy); pula 2 procesów tworzona od nowa dla każdej referencji; z dashboardem HTML render zawsze szeregowo | 48 grup: 220 s (1 proces) → 149 s (2, dziś) → 99 s (4) → 88 s (8), ta sama treść XLSX; z dashboardem przy 4: **209 s szeregowo** |
 | 3 | CSV Summary → „Create analytics" (100k wierszy) | **206,5 s** [203,1–207,7] (n=3), RSS 644 MB | dopasowania rozkładów scipy (MLE, Nelder–Mead) na pełnych danych, liczone osobno dla histogramu i tabeli statystyk; konwersje liczb w pętli Pythona | plan D2 (§9) |
 | 4 | Export „Main plots" (1500 raportów, 216k wierszy) | **109,5 s** [109,2–110,7] (n=3), RSS 764 MB | eksport + przy 1. kliknięciu 6,1 s importu modułu w GUI | plan A2/D1 |
 | 5 | Reports → „Review reports" (1500 PDF) | **105,6 s** [99,8–106,7] (n=3) | skan i odczyt metadanych ściśle szeregowo (sam kod: 87,8 s); reszta to GUI: sygnał i restyle na każdy plik, 1,2 s zamrożenia przy wypełnianiu tabeli | pula procesów (sam kod): **30,2 s przy 4, 23,7 s przy 8**, wynik identyczny; zysk w UI wymaga też strumieniowania i throttlingu |
@@ -67,9 +73,9 @@ przełączenie motywu 0,65 s, Export open 0,37 s. Wszystkie z zamrożeniem GUI p
 |---|---|---|---|
 | Natywny splash z kaczuchą w launcherze + przekazanie do aplikacji (Windows) | splash 44–166 ms przy starcie z cache (≈100 ms od startu kodu przy pierwszym); 0 ms pustki we wszystkich scenariuszach; brak podwójnego splasha; fokus w oknie głównym we wszystkich próbach; animacja: 1087 z 1088 par zrzutów różnych | ten sam onedir; okno główne w tym samym czasie przy starcie z cache | **PRZYJĘTY WARUNKOWO** — warunki w §5.6 (fallback okna postępu, naprawa po kodzie 75, kwalifikacja, ≥6 prób drugiego startu na czystym laptopie) |
 | Characteristic Mapping jednym zapytaniem | 681 s (szacunek) / 764 s (UI) → 2,19 s | mała baza: pełna identyczność; duża: 30 metryk identycznych | **PRZYJĘTY** |
-| Review reports w puli procesów | sam kod: 87,8 s → 30,2 s (4) / 23,7 s (8) | identyczne wpisy i odczyty metadanych | **PRZYJĘTY** (pełny zysk w UI wymaga też C2: strumieniowanie, throttling) |
+| Review reports w puli procesów | sam kod: 87,8 s → 30,2 s (4) / 23,7 s (8) | identyczne wpisy i odczyty metadanych | **PRZYJĘTY** (pełny zysk w UI wymaga też C2: strumieniowanie, throttling; skalowanie do potwierdzenia w profilu wydajnym) |
 | Rozgrzewka w wątku tła | najdłuższy zastój 636 → 171 ms; blokada 1562 → 431 ms | te same moduły; gotowość +9% | **PRZYJĘTY WARUNKOWO** (warunki A2, §9) |
-| Więcej procesów renderu Extended plots | 48 grup: 220 → 149 → 99 → 88 s (1/2/4/8) | identyczny XLSX przy automatycznej gęstości „reduced" (aktywnej we wszystkich próbach) | **PRZYJĘTY jako kierunek** (C3; zależy od decyzji E1) |
+| Więcej procesów renderu Extended plots | 48 grup: 220 → 149 → 99 → 88 s (1/2/4/8) | identyczny XLSX przy automatycznej gęstości „reduced" (aktywnej we wszystkich próbach) | **PRZYJĘTY jako kierunek** (C3; zależy od decyzji E1; skalowanie do potwierdzenia w profilu wydajnym) |
 | `PRAGMA cache_size`/`mmap_size` dla zapytań odczytu | −30%…+11% | — | **ODRZUCONY** (szum) |
 | BLAS=1 w procesach renderu | pomiar nieważny (§3.4), nie powtórzono | — | **NIEROZSTRZYGNIĘTY** |
 
@@ -95,7 +101,24 @@ przełączenie motywu 0,65 s, Export open 0,37 s. Wszystkie z zamrożeniem GUI p
 - Obszary regresji z polecenia (stan na `78d5d775`): granice stron #1143 — naprawione dla nowych importów
   (`d87c5801`), dane RC1 czekają na decyzję PO; metadane workerów — override przekazywany i odsyłany
   (`c476b7f2`), PoC puli Review daje identyczne odczyty; checkpointy WAL #1137 — import 1500 raportów
-  z identycznymi wierszami (fixture wszystkich scenariuszy DB).
+  zakończony poprawnie w 4 próbach (216 000 wierszy w bazie fixture); trwałości po przerwaniu nie testowano.
+
+### 2.1 Status poprzednich ustaleń (Issues nadal OPEN do landowania #1109/#1142)
+
+Wszystkie wymienione PR-y są w bazie `78d5d775` i żaden nie jest jeszcze w `develop` (sprawdzone
+`git merge-base --is-ancestor`, 2026-10-20).
+
+| Issue | Zmiana w bazie | Co pokazał STEP2 | Co zostaje → PR STEP2 |
+|---|---|---|---|
+| #1120 audyt STEP1 (top 10) | tracker | STEP2 jest następcą; pkt 10 (kod natywny w EXE) otwarty | D4 |
+| #1124 domyślny eksport 70 s / 1,7 GB | #1131 (bulk + stream XLSX) | Main plots 1500 raportów (z wykresami): 109,5 s, RSS 764 MB — inny preset niż w #1124, czasy nieporównywalne | 6,1 s blokady GUI przy 1. kliknięciu → A2 |
+| #1125 import: 7 hashy, 2 otwarcia PDF | #1132 (jeden hash, pula prepare) | import 1500: 54,3 s; nowe źródła kosztu: gotowość schematu ≈17%, rejestr parserów ≈6–8% | C4 |
+| #1126 Extended 2,5 s/grupę | #1130 (jeden przebieg układu, ograniczony render grup) | ≈4,6 s/grupę w 1 procesie; pula 2 procesów per referencja; z dashboardem szeregowo | C3 (po E1), D1 |
+| #1127 filtr: 14 DISTINCT w GUI | #1129 (indeksy, cache, worker) | 0,45 s zamrożenia przy otwarciu, 4,4 s do kompletu wartości bez kaczuchy | A3, równoległe DISTINCT |
+| #1128 eksport CSV Summary 97 s / 1 GB | #1133 (bulk XLSX, statystyki w wątkach) | benchmark z #1128 (100k × 8): baza 278,8 s, head #1133 264,3 s (n=1, ten sam stan maszyny) — bez regresji po #1133; 76 s z #1133 zmierzono w innym stanie/hoście. UI „Create analytics" 100k × 11: 206,5 s | D2 |
+| #1134 workery w EXE | #1138 (worker obliczeniowy dla pul) | prepare importu w EXE: opt-in (0 workerów domyślnie); na Windows nie mierzono eksportu ani importu | C1 |
+| #1136 zapis importu na Windows | #1137 (jedno połączenie, checkpoint co ≥25 commitów/2 s) | Linux: import poprawny, 54,3 s; Windows: niezmierzone w STEP2 | pomiar w C4 |
+| #1143 dane RC1 wielostronicowe | `d87c5801` (nowe importy) | PoC puli Review: identyczne odczyty | decyzja PO dla danych RC1 |
 
 ## 3. Metoda, środowisko i procedura odtworzenia
 
@@ -124,7 +147,10 @@ cache przemysłowy 50 000 rekordów × 20 metryk (1 000 000 wartości EAV) w kop
 
 ### 3.3 Środowisko
 
-- Linux: Xeon W-10855M (6C/12T), 62 GB RAM; Python 3.11.16, PyQt6/Qt 6.6.1, PyMuPDF 1.28.2, pandas 3.0.6,
+- Linux: Xeon W-10855M (6C/12T), 62 GB RAM, zasilanie sieciowe, **profil `power-saver`** (power-profiles-daemon,
+  stan zapisany 2026-10-19 21:32, przed wszystkimi pomiarami; ACPI `low-power`, governor `powersave`, EPP
+  `power`; pod obciążeniem jednego wątku 0,9–1,1 GHz). Profilu nie zmieniałem — to ustawienie użytkownika;
+  Python 3.11.16, PyQt6/Qt 6.6.1, PyMuPDF 1.28.2, pandas 3.0.6,
   numpy 2.4.6, matplotlib 3.11.2, SQLite 3.53.1, XlsxWriter 3.2.9 (venv deweloperski; `requirements.txt`
   ma zakresy, CI instaluje najnowsze zgodne). Dane na tmpfs (zimny dysk niemierzony). loadavg zapisany przy
   każdej próbie (2–6). Przez pierwsze ~2 h na maszynie działała gra — wtedy tylko analiza statyczna.
@@ -143,6 +169,9 @@ cache przemysłowy 50 000 rekordów × 20 metryk (1 000 000 wartości EAV) w kop
   Dwie udane próby serii 3-krotnej dały 40,2 i 41,9 s dla Industrial → CSV Summary; raport podaje
   powtórkę (45,3–46,8 s) — rozrzut między seriami ≈12%.
 - Profile (cProfile) wydłużają czasy 1,3–2×; liczby z profili tylko jako proporcje.
+- Profil energii (§3.3): wszystkie próby Linux w tym samym stanie, więc porównania baseline/PoC są
+  spójne; czasy bezwzględne i progi „>1 s" dla krótkich operacji (1–3 s) wymagają powtórki w profilu
+  zrównoważonym albo na docelowym laptopie Windows.
 - Windows: w 3 próbach próbnik okien nie zarejestrował okna głównego (PoC warm ×2, obecny verified po
   20 s ×1), choć profil aplikacji ma `main_window_show_called`, a harness zamknął aplikację ≈0,5 s
   później — to przeoczenia próbnika; czasy okna głównego i fokus liczone z pozostałych prób.
@@ -297,6 +326,9 @@ Warstwa supervisora to ≈0,65–0,9 s z ≈1,3 s ciepłego startu — najwięks
    (nie uruchomiono); licencja crate `gif` (MIT/Apache-2.0) w THIRD_PARTY_NOTICES.
 5. **Opóźnienie przed startem kodu** (2,2–3,9 s na świeżym pliku) zależy od rozmiaru EXE i skanera —
    zmniejsza je tylko mniejszy payload lub reputacja podpisu (E4; brak certyfikatu).
+6. **Uwagi P3 z review różnicowego:** gdy wątek okna wystartuje później niż 2 s, `Splash::close` nie
+   wyśle zamknięcia i czeka na wątek do 120 s (deadline splasha) — w produkcji flaga stopu albo
+   `PostThreadMessage`; `show_message` powinien kodować tekst z `errors="replace"`.
 
 ## 6. Mapa batchingu i współbieżności
 
@@ -352,7 +384,9 @@ Warstwa supervisora to ≈0,65–0,9 s z ≈1,3 s ciepłego startu — najwięks
 ## 7. Kaczucha: pełna lista luk (operacje >1 s)
 
 **BRAK** wskaźnika; **SPÓŹN.** (później niż ≈1 s od kliknięcia); **STOI** (zamrożona animacja);
-**LIFECYCLE** (zły cykl życia). Czasy: mediany n=3 (Linux), jeśli nie zaznaczono.
+**LIFECYCLE** (zły cykl życia). Czasy: mediany n=3 (Linux, profil `power-saver`), jeśli nie zaznaczono.
+Operacje 1–3 s (RT-01, IMP-REVIEW, IND-01) mogą na szybszym CPU spaść poniżej 1 s — kryterium odbioru
+dotyczy też wolnego laptopa, więc zostają na liście.
 
 | Flow | Operacja | Czas | Obecny loading | Luka | Przyczyna | Miejsce poprawki | Kryterium odbioru |
 |---|---|---:|---|---|---|---|---|
@@ -448,7 +482,7 @@ po decyzji (partia E).
 
 | PR | Zakres | Baseline → cel | Warunki poprawności | Regresja |
 |---|---|---|---|---|
-| D1 Render wykresów | cache fontów, jeden `draw` na wykres, kompresja PNG | 2,5–6,8 s/grupę → −30% (S) | parytet obrazów wg #1126 | porównanie obrazów |
+| D1 Render wykresów | cache wyszukiwania fontów, mniej przebiegów układu tekstu (`get_window_extent`), szybsze kodowanie PNG (bezstratne) | ≈4,6 s/grupę w 1 procesie → −30% (S; profil cProfile 45 s: układ i rysowanie tekstu ≈20%, w tym pomiar tekstu tabel paneli 12%; wyszukiwanie fontów ≈8%; kodowanie PNG ≈7%) | parytet pikseli wg #1126 | porównanie obrazów |
 | D2 CSV analytics | jeden fit na serię współdzielony przez histogram/tabelę/PNG; wektoryzacja konwersji; metryki w procesach; szybsze wczytanie CSV | 206,5 s / 20,4 s → <80 s (S) | statystyki identyczne (#1133); bez próbkowania fitów (to decyzja) | `benchmark_csv_pipeline.py`, testy CSV |
 | D3 OCR w EXE | trwały worker OCR | niezmierzone | identyczne wyniki, Job object | kwalifikacja OCR |
 | D4 Kod natywny w EXE | promocja per most | #1120 pkt 10 | parytet (#908) | testy parytetu |
@@ -467,6 +501,7 @@ po decyzji (partia E).
 | Obszar | Czego brakuje |
 |---|---|
 | Czysty laptop Windows z AV użytkownika (#1101 A5) | sprzęt; tu tylko hostowany runner |
+| Czasy Linux w profilu zrównoważonym/wydajnym | zmiana profilu energii użytkownika (niewykonana); pomiary w `power-saver` |
 | Pierwsze okno przy pierwszym uruchomieniu (PoC później o mediany ≈0,6 s, przed kodem launchera) | znaczniki startu kodu w obecnym launcherze; pomiar na czystym laptopie |
 | Drugie uruchomienie z pauzą (n=2) | ≥6 prób na czystym laptopie |
 | Realne raporty klientów, realny OCR (tryb Complete), układy wielostronicowe klientów | dane klienta (poufne), Windows z OCR |
@@ -486,7 +521,8 @@ po decyzji (partia E).
   high) — A1 rdzeń UI, A2 dane UI, B nie-UI i mapa współbieżności. B przerwał na limicie sesji i został
   wznowiony.
 - Niezależna weryfikacja: **Claude Opus 5.5** (`independent_reviewer`, effort high, świeży kontekst, tylko
-  odczyt) — §12. Wysiłek rozumowania w odpowiedziach: niewidoczny.
+  odczyt) — §12. Review różnicowe poprawek: **Claude Sonnet 5.5** (`light_reviewer`, effort medium, świeży
+  kontekst, tylko odczyt). Wysiłek rozumowania w odpowiedziach: niewidoczny.
 - GPT (Codex) nie był użyty: tygodniowy limit Codex wykorzystany w 79% (obserwacja 2026-10-19 17:52 UTC,
   reset 2026-10-25), później status nieznany — polityka wyłącza wtedy opcjonalną pracę drugiego dostawcy.
 
@@ -513,3 +549,25 @@ kliknięciu, szeregowy Review, wady mechanizmu kaczuchy). Rozliczenie uwag:
 | P3: wada 3 uogólniona | zawężone (Reports, CSV-06) |
 | P3: ryzyko A3 „niskie" | „średnie" |
 | P3: brak podokien filtra/grupowania Industrial, tryb live IND-07 | dodane do macierzy |
+
+Review dotyczyło kodu PoC na `28619733`. Poprawki (`28619733..c212f7b3`, 258 linii) przeszły review
+różnicowe: 7/7 potwierdzone (FIXED), bez P0/P1–P2; trzy nowe uwagi P3 — dwie są warunkiem A1 (§5.6 p.6),
+trzecia dotyczy tylko harnessu (separatory `,`/`;` w specyfikacji wariantu). Recenzent nie uruchamiał
+testów ani Windows; testy uruchomił koordynator (§13).
+
+## 13. Walidacja gałęzi PoC
+
+Lokalnie na `c212f7b3` (Linux, 2026-10-20): `ruff check .`, skan sekretów względem bazy, higiena wydania,
+spójność metadanych wydania — zielone; 22 testy-strażniki repo (rejestry, ratchety, Bandit, linki
+dokumentów) i testy startu/splasha: 786 passed, 2 skipped; `security_audit.py --ci --skip-pip-audit`
+(bez weryfikacji repozytoriów siostrzanych) — passed; launcher: `cargo test --locked` 57 + 19 passed,
+`cargo check --target x86_64-pc-windows-gnu --all-targets` czysto. Pełnego zestawu testów lokalnie nie
+uruchomiono (CI na draft PR).
+
+| Run CI (workflow_dispatch) | Commit | Wynik |
+|---|---|---|
+| 39315596611 | `22ed6048` | oś czasu zielona; Unit tests: 8 failed (rejestr bug-sweep bez nowych skryptów — poprawione) |
+| 39318835183 | `5c2537e5` | oś czasu czerwona z założenia: jedna próba obecnego launchera (corrupt) zakończyła się kodem 102, skrypt zwraca 1 przy każdej nieudanej próbie; dane w artefakcie; Unit tests: 8 failed (rejestr bug-sweep, jw.) |
+| 39322360692 | `727ec741` | oś czasu zielona; Unit tests: 1 failed (ratchet C901 148 > 147 — poprawione refaktorem harnessu) |
+| 39332127323 | `28619733` | wszystkie joby zielone (3 rundy) |
+| 39349370988 | `24caad6a` | wszystkie joby zielone (A/B: pauza 20 s, wariant bez okna, 2 rundy) |

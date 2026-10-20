@@ -4,7 +4,7 @@
  "base_sha": "78d5d775756e4b64530ce8fb04f175a2e3f461f1",
  "data": "synthetic only (see report \u00a73.2)",
  "linux": {
-  "host": "Xeon W-10855M 6C/12T, 62 GB, Python 3.11.16, PyQt 6.6.1, offscreen, tmpfs data",
+  "host": "Xeon W-10855M 6C/12T, 62 GB, AC power, power-profiles-daemon profile power-saver (ACPI low-power, governor powersave, EPP power; 0.9-1.1 GHz under 1-thread load), Python 3.11.16, PyQt 6.6.1, offscreen, tmpfs data",
   "scenarios": {
    "reports_scan_1500": {
     "runs": 3,
@@ -904,6 +904,14 @@
     "mode": "serial_output_mode"
    },
    "sqlite_cache_mmap_pragmas": "rejected: -30%..+11%, noise"
+  },
+  "absolute_time_caveat": "power-saver profile inflates absolute times; same-state ratios valid. Cross-check: benchmark_paths csv_summary_export_path 100k x 8 = 278.8 s at base, 264.3 s at #1133 head 2a134cde (n=1 each) vs 76.0 s reported in #1133.",
+  "cross_checks": {
+   "benchmark_paths_csv_summary_export_path_100k_8cols_s": {
+    "base_78d5d775": 278.8,
+    "pr1133_head_2a134cde": 264.3,
+    "reported_in_pr1133": 76.0
+   }
   }
  },
  "windows": {
