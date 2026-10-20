@@ -339,7 +339,8 @@ class Timeline:
         shutil.rmtree(self.work, ignore_errors=True)
 
     def launch(self, variant: str, scenario: str, exe: Path, root: Path, *, smoke: bool,
-               expect_cache: str | None, frames: bool) -> dict[str, Any]:
+               expect_cache: str | None, frames: bool,
+               extra_env: dict[str, str] | None = None) -> dict[str, Any]:
         tag = f"{variant}-{scenario}"
         run_dir = self.out / "runs" / tag
         if run_dir.exists():
@@ -353,6 +354,7 @@ class Timeline:
             METROLIZA_STARTUP_SPLASH="1",
             METROLIZA_STARTUP_STALL_PROBE="1",
         )
+        env.update(extra_env or {})
         if not smoke:
             env.pop("METROLIZA_STARTUP_UI_SMOKE", None)
             env["METROLIZA_STARTUP_EXIT_AFTER_WARMUP"] = "1"
@@ -399,7 +401,8 @@ class Timeline:
 
 
 def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | None,
-                round_index: int = 1) -> list[dict[str, Any]]:
+                round_index: int = 1, extra_env: dict[str, str] | None = None,
+                settle_s: float = 0.0) -> list[dict[str, Any]]:
     records = []
     home = timeline.work / f"{variant}-r{round_index}"
     home.mkdir()
@@ -410,12 +413,16 @@ def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | No
     root = home / "root"
     print(f"{variant} round {round_index}: {exe.name}", flush=True)
     variant = f"{variant}#{round_index}"
-    records.append(timeline.launch(variant, "cold", cold_exe, root, smoke=True, expect_cache="cold", frames=True))
-    records.append(timeline.launch(variant, "verified", cold_exe, root, smoke=True, expect_cache="verified", frames=True))
+    records.append(timeline.launch(variant, "cold", cold_exe, root, smoke=True, expect_cache="cold", frames=True, extra_env=extra_env))
+    # Let the OS write back the cold run's dirty pages, as on a real second start (minutes or days
+    # later); otherwise the verification's FlushFileBuffers pays for the previous run's writes.
+    if settle_s > 0:
+        time.sleep(settle_s)
+    records.append(timeline.launch(variant, "verified", cold_exe, root, smoke=True, expect_cache="verified", frames=True, extra_env=extra_env))
     for index in (1, 2):
         records.append(timeline.launch(variant, f"warm{index}", cold_exe, root, smoke=True,
-                                       expect_cache="warm", frames=index == 1))
-    records.append(timeline.launch(variant, "warmup", cold_exe, root, smoke=False, expect_cache="warm", frames=True))
+                                       expect_cache="warm", frames=index == 1, extra_env=extra_env))
+    records.append(timeline.launch(variant, "warmup", cold_exe, root, smoke=False, expect_cache="warm", frames=True, extra_env=extra_env))
     # Damage: truncate one runtime file of the current version (size check catches it).
     versions = [p for p in root.iterdir() if p.is_dir() and "_" in p.name and not p.name.endswith(".staging")]
     if versions:
@@ -424,12 +431,12 @@ def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | No
             with target.open("r+b") as handle:
                 handle.truncate(max(0, target.stat().st_size - 4096))
             records.append(timeline.launch(variant, "corrupt", cold_exe, root, smoke=True,
-                                           expect_cache="repair", frames=True))
+                                           expect_cache="repair", frames=True, extra_env=extra_env))
     if next_exe is not None:
         next_copy = fresh / next_exe.name
         shutil.copy2(next_exe, next_copy)
         records.append(timeline.launch(variant, "new_version", next_copy, root, smoke=True,
-                                       expect_cache="cold", frames=True))
+                                       expect_cache="cold", frames=True, extra_env=extra_env))
     return records
 
 
@@ -463,10 +470,12 @@ def render_markdown(records: list[dict[str, Any]]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--variant", action="append", required=True,
-                        help="NAME=EXE[,NEXT_VERSION_EXE]; repeat per launcher variant")
+                        help="NAME=EXE[,NEXT_VERSION_EXE][;ENV=VALUE,...]; repeat per launcher variant")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--frames", action="store_true", help="save half-size screenshots")
     parser.add_argument("--frame-every-ms", type=int, default=200)
+    parser.add_argument("--settle-seconds", type=float, default=0.0,
+                        help="pause before the second (verified) launch of each cache")
     parser.add_argument("--rounds", type=int, default=1,
                         help="repeat the whole sequence, alternating the variants each round")
     args = parser.parse_args(argv)
@@ -485,10 +494,13 @@ def main(argv: list[str] | None = None) -> int:
             # Alternate the order so neither variant always runs first on a fresh runner.
             ordered = specs if round_index % 2 == 1 else list(reversed(specs))
             for spec in ordered:
+                spec, _, env_text = spec.partition(";")
                 name, _, paths = spec.partition("=")
                 exe_text, _, next_text = paths.partition(",")
+                extra_env = dict(item.split("=", 1) for item in env_text.split(",") if "=" in item)
                 records.extend(run_variant(timeline, name, Path(exe_text),
-                                           Path(next_text) if next_text else None, round_index))
+                                           Path(next_text) if next_text else None, round_index,
+                                           extra_env, args.settle_seconds))
     finally:
         timeline.close()
     (args.output_dir / "timeline.json").write_text(json.dumps(records, indent=2), encoding="utf-8")

@@ -1832,7 +1832,8 @@ jobs:
           & .\.venv-build\Scripts\python.exe scripts/measure_windows_first_run_timeline.py `
             --variant "baseline=$base,$(Resolve-Path timeline-exe/baseline_next_launcher.exe)" `
             --variant "poc=$poc,$(Resolve-Path timeline-exe/poc_next_launcher.exe)" `
-            --frames --rounds 3 --output-dir first-run-timeline
+            --variant "poc_nosplash=$poc,$(Resolve-Path timeline-exe/poc_next_launcher.exe);METROLIZA_LAUNCHER_SPLASH=0" `
+            --frames --rounds 2 --settle-seconds 20 --output-dir first-run-timeline
           if ($LASTEXITCODE -ne 0) { Write-Warning 'Some timeline launches failed; see the artifact' }
           Get-Content first-run-timeline/timeline.md | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
