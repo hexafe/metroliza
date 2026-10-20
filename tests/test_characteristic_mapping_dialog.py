@@ -20,13 +20,13 @@ if importlib.util.find_spec("PyQt6") is None:  # pragma: no cover - optional loc
     PYQT_IMPORT_ERROR = ModuleNotFoundError("PyQt6 is not installed")
 else:
     from PyQt6.QtCore import QThread
+    from metroliza.ui import detached_threads
     from PyQt6.QtWidgets import QApplication, QMessageBox
     from modules.characteristic_mapping_dialog import (
         ALL_REFERENCES_LABEL,
         CharacteristicMappingDialog,
         CharacteristicAliasEditorDialog,
         ONE_REFERENCE_LABEL,
-        _RUNNING_SOURCE_LOAD_THREADS,
         build_remediation_report_rows,
     )
     PYQT_IMPORT_ERROR = None
@@ -619,15 +619,15 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 dialog.close()
                 self.assertLess(time.monotonic() - started, 2.0)  # bounded wait, never the 10 s gate
                 self.assertTrue(thread.isRunning())
-                self.assertIn(thread, _RUNNING_SOURCE_LOAD_THREADS)
+                self.assertTrue(detached_threads.is_registered(thread))
 
                 gate.set()
                 self.assertTrue(thread.wait(5000))
                 deadline = time.monotonic() + 5.0
-                while thread in _RUNNING_SOURCE_LOAD_THREADS and time.monotonic() < deadline:
+                while detached_threads.is_registered(thread) and time.monotonic() < deadline:
                     self.app.processEvents()
                     time.sleep(0.005)
-                self.assertNotIn(thread, _RUNNING_SOURCE_LOAD_THREADS)
+                self.assertFalse(detached_threads.is_registered(thread))
                 self.assertEqual(dialog.metric_options, [])
 
     def test_cancel_loading_discards_result_and_explains_state(self):

@@ -60,6 +60,7 @@ from metroliza.industrial.industrial_workflow_state import IndustrialFilterState
 from metroliza.industrial.oznak_adapter import get_oznak_adapter_status
 from metroliza.reports.db import _is_transient_sqlite_error, sqlite_query_only_connection_scope
 from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result
+from metroliza.ui import detached_threads
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
@@ -84,9 +85,6 @@ ANALYTICS_LOAD_CANCELED_TEXT = "Loading the industrial cache for CSV Summary was
 BACKGROUND_STOP_WAIT_MS = 2000
 _CACHE_LOAD_ATTEMPTS = 3
 
-# Background threads stay referenced here until they finish, so a QThread is never destroyed while running.
-_RUNNING_BACKGROUND_THREADS: set[QThread] = set()
-
 
 def _format_oznak_status(status) -> str:
     """Return the Oznak connector status line for an adapter status."""
@@ -106,8 +104,8 @@ class _OznakStatusThread(QThread):
     status_text_ready = pyqtSignal(str)
 
     def release(self) -> None:
-        """Drop the module-level reference once the thread has finished."""
-        _RUNNING_BACKGROUND_THREADS.discard(self)
+        """Drop the registry reference once the thread has finished."""
+        detached_threads.discard(self)
 
     def run(self) -> None:
         try:
@@ -130,8 +128,8 @@ class _AnalyticsCacheLoadThread(QThread):
         self.source_profile_ids = source_profile_ids
 
     def release(self) -> None:
-        """Drop the module-level reference once the thread has finished."""
-        _RUNNING_BACKGROUND_THREADS.discard(self)
+        """Drop the registry reference once the thread has finished."""
+        detached_threads.discard(self)
 
     def _load(self):
         # The load opens its own SQLite connections. Transient lock errors are retried like
@@ -189,6 +187,7 @@ class IndustrialDataDialog(QDialog):
         self.config_path = default_industrial_source_config_path()
         self.link_refresh_thread = None
         self._analytics_load_thread: _AnalyticsCacheLoadThread | None = None
+        self._cache_holding_threads: list[_AnalyticsCacheLoadThread] = []
         self._analytics_load_request_id = 0
         self._analytics_load_context: tuple[int | None, str] | None = None
         self._analytics_progress_dialog = None
@@ -450,7 +449,7 @@ class IndustrialDataDialog(QDialog):
             if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
                 cleanup_temporary_industrial_cache(target)
                 return False
-            cleanup_temporary_industrial_cache(previous)
+            self._cleanup_temporary_cache(previous)
         self.cache_target = target
         self.db_file = target.cache_db_file
         self.report_db_file = target.report_db_file
@@ -532,7 +531,7 @@ class IndustrialDataDialog(QDialog):
             return
         finally:
             cleanup_temporary_industrial_cache(generated_target)
-        cleanup_temporary_industrial_cache(previous)
+        self._cleanup_temporary_cache(previous)
         self.cache_target = target
         self.db_file = target.cache_db_file
         self.report_db_file = target.report_db_file
@@ -839,7 +838,7 @@ class IndustrialDataDialog(QDialog):
             return
         thread = _OznakStatusThread()
         self._oznak_status_thread = thread
-        _RUNNING_BACKGROUND_THREADS.add(thread)
+        detached_threads.register(thread)
         thread.status_text_ready.connect(self._on_oznak_status_ready)
         thread.finished.connect(thread.release)
         thread.start()
@@ -1040,7 +1039,7 @@ class IndustrialDataDialog(QDialog):
             source_profile_ids=source_profile_ids,
         )
         self._analytics_load_thread = thread
-        _RUNNING_BACKGROUND_THREADS.add(thread)
+        detached_threads.register(thread)
         thread.loaded.connect(self._on_analytics_cache_loaded)
         thread.failed.connect(self._on_analytics_cache_failed)
         thread.finished.connect(thread.release)
@@ -1081,6 +1080,19 @@ class IndustrialDataDialog(QDialog):
         thread.requestInterruption()
         if thread.wait(BACKGROUND_STOP_WAIT_MS):
             thread.release()
+        else:
+            # The detached loader may still read the cache file; its removal waits for it.
+            self._cache_holding_threads.append(thread)
+
+    def _cleanup_temporary_cache(self, target: IndustrialCacheTarget | None) -> None:
+        """Remove a temporary cache once no detached loader can still hold the file open."""
+
+        holding = [thread for thread in self._cache_holding_threads if not thread.isFinished()]
+        self._cache_holding_threads = holding
+        if not holding:
+            cleanup_temporary_industrial_cache(target)
+            return
+        detached_threads.run_when_finished(holding, lambda: cleanup_temporary_industrial_cache(target))
 
     def _cancel_analytics_load(self) -> None:
         self._stop_analytics_load()
@@ -1349,6 +1361,25 @@ class IndustrialDataDialog(QDialog):
         self._stop_analytics_load()
         self._stop_oznak_status_check()
 
+    def _stop_threads_and_resolve_cache(self, target: IndustrialCacheTarget | None) -> bool:
+        """Stop the background threads, then settle the temporary cache; False keeps the dialog open.
+
+        When the user cancels the save/discard question the dialog stays open, so a CSV Summary load that
+        was stopped for the close is reported as canceled and the action buttons are restored.
+        """
+
+        analytics_load_stopped = self._analytics_load_thread is not None
+        self._stop_background_threads()
+        if self._resolve_temporary_cache_before_discard(target):
+            return True
+        if analytics_load_stopped:
+            self._set_action_buttons_enabled(cache_available=bool(self.db_file))
+            self.status_label.setText(ANALYTICS_LOAD_CANCELED_TEXT)
+            set_status_variant(self.status_label, "neutral")
+        if self._oznak_status_text is None:
+            self._start_oznak_status_check()
+        return False
+
     def reject(self) -> None:
         if self._link_refresh_owns_context():
             QMessageBox.information(
@@ -1357,11 +1388,10 @@ class IndustrialDataDialog(QDialog):
                 "Wait for report-to-production link refresh to finish.",
             )
             return
-        self._stop_background_threads()
         target = getattr(self, "cache_target", None)
-        if not self._resolve_temporary_cache_before_discard(target):
+        if not self._stop_threads_and_resolve_cache(target):
             return
-        cleanup_temporary_industrial_cache(target)
+        self._cleanup_temporary_cache(target)
         super().reject()
 
     def closeEvent(self, event) -> None:
@@ -1373,10 +1403,9 @@ class IndustrialDataDialog(QDialog):
             )
             event.ignore()
             return
-        self._stop_background_threads()
         target = getattr(self, "cache_target", None)
-        if not self._resolve_temporary_cache_before_discard(target):
+        if not self._stop_threads_and_resolve_cache(target):
             event.ignore()
             return
-        cleanup_temporary_industrial_cache(target)
+        self._cleanup_temporary_cache(target)
         super().closeEvent(event)

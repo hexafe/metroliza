@@ -8,7 +8,7 @@ import time
 import pytest
 from PyQt6.QtWidgets import QApplication, QDialog
 
-from metroliza.ui import data_grouping
+from metroliza.ui import data_grouping, detached_threads
 from metroliza.ui.data_grouping import DataGrouping
 from tests.test_1089_acceptance_analytics import _fixture_db
 
@@ -154,7 +154,7 @@ def test_closing_while_loading_stops_the_worker_without_applying_the_result(tmp_
         assert thread.wait(5000)
         _APP.processEvents()
         assert dialog.df is None
-        assert thread not in data_grouping._RUNNING_GROUPING_LOAD_THREADS
+        assert not detached_threads.is_registered(thread)
         dialog.close()
         parent.close()
 
@@ -180,12 +180,12 @@ def test_closing_while_loading_does_not_wait_forever_for_a_stuck_worker(tmp_path
         dialog.reject()
         assert time.monotonic() - started_at < 2
         # The detached thread stays referenced until it finishes, so it cannot be destroyed while running.
-        assert thread in data_grouping._RUNNING_GROUPING_LOAD_THREADS
+        assert detached_threads.is_registered(thread)
     finally:
         release.set()
         assert thread.wait(5000)
         _APP.processEvents()
-        assert thread not in data_grouping._RUNNING_GROUPING_LOAD_THREADS
+        assert not detached_threads.is_registered(thread)
         dialog.close()
         parent.close()
 

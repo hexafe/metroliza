@@ -3,8 +3,10 @@
 The ``_oracle_*`` functions are verbatim copies of the pre-optimisation code.
 """
 
+import datetime
 import hashlib
 import json
+from decimal import Decimal
 
 import numpy as np
 import pandas as pd
@@ -92,6 +94,22 @@ _REPORT_ID_CASES = {
     "bool": [True, False, True],
     "datetime": pd.to_datetime(["2024-01-01", None, "2024-01-01", "2025-06-30"]),
     "categorical": pd.Series(pd.Categorical(["u", "v", None, "u"])),
+    # Values that compare equal but render differently must keep the string-form keys of the row-wise code.
+    "object_signed_zero": pd.Series([0.0, -0.0, 0.0, -0.0, np.nan], dtype=object),
+    "object_decimal": pd.Series([Decimal("1"), Decimal("1.0"), Decimal("1.00"), Decimal("1")], dtype=object),
+    "object_int_float_bool": pd.Series([1, 1.0, True, np.float64(1.0), np.int64(1), 1], dtype=object),
+    "object_tz_same_instant": pd.Series(
+        [
+            pd.Timestamp("2024-01-01 12:00", tz="UTC"),
+            pd.Timestamp("2024-01-01 13:00", tz="Europe/Warsaw"),
+            datetime.datetime(2024, 1, 1, 12, 0, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2024, 1, 1, 13, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=1))),
+            pd.Timestamp("2024-01-01 12:00", tz="UTC"),
+        ],
+        dtype=object,
+    ),
+    "float64_signed_zero_without_nan": np.array([0.0, -0.0, 0.0, -0.0, 1.5]),
+    "float64_distinct_nan_payloads": np.array([0x7FF8000000000000, 0x7FF8000000000001, 1], dtype=np.int64).view(np.float64),
 }
 
 
@@ -116,6 +134,31 @@ def test_group_keys_match_oracle_for_report_id_dtypes(case, column_name):
     df.index = pd.RangeIndex(100, 100 + len(df.index))
 
     _assert_keys_match_oracle(df)
+
+
+def test_group_keys_for_object_ids_hash_each_distinct_string_once(monkeypatch):
+    calls = []
+    real_sha1 = hashlib.sha1
+
+    def counting_sha1(data, **kwargs):
+        calls.append(data)
+        return real_sha1(data, **kwargs)
+
+    monkeypatch.setattr(service.hashlib, "sha1", counting_sha1)
+    ids = pd.Series(["a", "b", None, "a", "b", None] * 200, dtype=object)
+
+    keys = service.compute_group_key_for_df(pd.DataFrame({"REPORT_ID": ids}))
+
+    assert len(calls) == 3
+    assert keys.nunique() == 3
+
+
+def test_group_keys_keep_values_that_print_differently_apart():
+    ids = pd.Series([0.0, -0.0, Decimal("1"), Decimal("1.0")], dtype=object)
+
+    keys = service.compute_group_key_for_df(pd.DataFrame({"REPORT_ID": ids}))
+
+    assert keys.nunique() == 4
 
 
 def test_group_keys_prefer_upper_case_report_id_and_ignore_other_columns():

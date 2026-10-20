@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 import time
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 try:
+    from PyQt6.QtGui import QCloseEvent
     from PyQt6.QtWidgets import QApplication, QMessageBox
 
     import metroliza.ui.industrial_data_dialog as industrial_data_dialog
@@ -20,6 +22,7 @@ except Exception as exc:  # pragma: no cover - depends on local Qt runtime avail
 else:
     PYQT_IMPORT_ERROR = None
 
+from metroliza.ui import detached_threads
 from metroliza.industrial.industrial_tabular_bridge import IndustrialCacheLoadCanceled
 from metroliza.industrial.oznak_adapter import OznakAdapterStatus
 
@@ -84,7 +87,7 @@ def dialog_factory(tmp_path, monkeypatch):
     for dialog in created:
         dialog._stop_background_threads()
         dialog.close()
-    _wait_until(lambda: not industrial_data_dialog._RUNNING_BACKGROUND_THREADS)
+    _wait_until(lambda: not detached_threads.running_threads())
 
 
 class _FakeAnalyticsDialog:
@@ -289,7 +292,7 @@ def test_closing_the_dialog_while_loading_interrupts_the_worker(dialog_factory, 
     assert time.monotonic() - started < industrial_data_dialog.BACKGROUND_STOP_WAIT_MS / 1000 + 1
     assert state["saw_cancel"]
     assert not thread.isRunning()
-    assert thread not in industrial_data_dialog._RUNNING_BACKGROUND_THREADS
+    assert not detached_threads.is_registered(thread)
     assert not dialog.is_loading_analytics_cache()
     assert dialog._analytics_progress_dialog is None
     _app().processEvents()
@@ -320,11 +323,11 @@ def test_stuck_worker_is_detached_without_blocking_close_and_its_result_is_clean
         assert time.monotonic() - began < 2
         # The running QThread stays referenced until it finishes: it is never destroyed while running.
         assert thread.isRunning()
-        assert thread in industrial_data_dialog._RUNNING_BACKGROUND_THREADS
+        assert detached_threads.is_registered(thread)
     finally:
         release.set()
     assert _wait_until(lambda: not thread.isRunning())
-    assert _wait_until(lambda: thread not in industrial_data_dialog._RUNNING_BACKGROUND_THREADS)
+    assert _wait_until(lambda: not detached_threads.is_registered(thread))
     # The dropped result releases its cache view.
     assert result.sqlite_store.cleaned == 1
     assert not fake_analytics.created
@@ -348,6 +351,138 @@ def test_cancel_from_the_indicator_restores_the_dialog(dialog_factory, fake_anal
     assert dialog.analyze_button.isEnabled()
     assert dialog.status_label.text() == industrial_data_dialog.ANALYTICS_LOAD_CANCELED_TEXT
     assert not fake_analytics.created
+
+
+def _use_populated_temporary_cache(dialog):
+    from metroliza.industrial.industrial_cache_target import create_temporary_industrial_cache_target
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+
+    target = create_temporary_industrial_cache_target()
+    assert dialog._set_cache_target(target)
+    repository = IndustrialDataRepository(target.cache_db_file)
+    profile = repository.upsert_source_profile(
+        profile_key="line_a",
+        profile_name="Line A",
+        source_db_alias="line_a",
+        database_type="sqlite",
+        source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=({"source_record_key": "row-1", "measurement": 12.5},),
+    )
+    dialog.refresh_status()
+    return target
+
+
+def test_cancelling_the_save_prompt_restores_the_stopped_csv_summary_load(
+    dialog_factory, fake_analytics, monkeypatch,
+):
+    dialog = dialog_factory()
+    target = _use_populated_temporary_cache(dialog)
+    started = threading.Event()
+
+    def cancellable(_db_file, *, cancel_check, **_kwargs):
+        started.set()
+        while not cancel_check():
+            time.sleep(0.005)
+        raise IndustrialCacheLoadCanceled()
+
+    monkeypatch.setattr(industrial_data_dialog, "load_industrial_cache_tabular_result", cancellable)
+    dialog.open_analytics_dialog()
+    assert started.wait(_TIMEOUT_S)
+    assert not dialog.analyze_button.isEnabled()
+
+    asked = []
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *_a: asked.append(1) or QMessageBox.StandardButton.Cancel,
+    )
+    dialog.reject()
+
+    assert asked == [1]
+    # The dialog stays open: the stopped load is reported and the actions are usable again.
+    assert not dialog.is_loading_analytics_cache()
+    assert dialog.analyze_button.isEnabled()
+    assert dialog.sync_button.isEnabled()
+    assert dialog.select_database_button.isEnabled()
+    assert dialog.status_label.text() == industrial_data_dialog.ANALYTICS_LOAD_CANCELED_TEXT
+    assert dialog.cache_target == target
+    assert os.path.exists(target.cache_db_file)
+    assert not fake_analytics.created
+
+    # The same close with Discard removes the temporary files.
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+    dialog.reject()
+    assert not os.path.exists(target.cache_db_file)
+
+
+def test_closing_event_cancel_also_restores_the_stopped_csv_summary_load(
+    dialog_factory, fake_analytics, monkeypatch,
+):
+    dialog = dialog_factory()
+    target = _use_populated_temporary_cache(dialog)
+    started = threading.Event()
+
+    def cancellable(_db_file, *, cancel_check, **_kwargs):
+        started.set()
+        while not cancel_check():
+            time.sleep(0.005)
+        raise IndustrialCacheLoadCanceled()
+
+    monkeypatch.setattr(industrial_data_dialog, "load_industrial_cache_tabular_result", cancellable)
+    dialog.open_analytics_dialog()
+    assert started.wait(_TIMEOUT_S)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Cancel)
+
+    event = QCloseEvent()
+    dialog.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert dialog.analyze_button.isEnabled()
+    assert dialog.status_label.text() == industrial_data_dialog.ANALYTICS_LOAD_CANCELED_TEXT
+    assert os.path.exists(target.cache_db_file)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+    dialog.reject()
+
+
+def test_temporary_cache_removal_waits_for_a_detached_loader(dialog_factory, fake_analytics, monkeypatch):
+    dialog = dialog_factory()
+    target = _use_populated_temporary_cache(dialog)
+    monkeypatch.setattr(industrial_data_dialog, "BACKGROUND_STOP_WAIT_MS", 50)
+    release = threading.Event()
+    started = threading.Event()
+
+    def stuck(*_args, **_kwargs):
+        started.set()
+        release.wait(_TIMEOUT_S)
+        return _fake_loaded()
+
+    monkeypatch.setattr(industrial_data_dialog, "load_industrial_cache_tabular_result", stuck)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+    try:
+        dialog.open_analytics_dialog()
+        thread = dialog._analytics_load_thread
+        assert started.wait(_TIMEOUT_S)
+        dialog.reject()
+        # The detached loader may still hold the file (Windows): its removal is deferred, not lost.
+        assert thread.isRunning()
+        assert os.path.exists(target.cache_db_file)
+    finally:
+        release.set()
+    assert _wait_until(lambda: not os.path.exists(target.cache_db_file))
+    assert not fake_analytics.created
+
+
+def test_temporary_cache_removal_is_immediate_without_a_detached_loader(dialog_factory, monkeypatch):
+    dialog = dialog_factory()
+    target = _use_populated_temporary_cache(dialog)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+
+    dialog.reject()
+
+    assert not os.path.exists(target.cache_db_file)
 
 
 def test_stale_result_is_dropped_and_cleaned(dialog_factory, fake_analytics):
@@ -461,11 +596,11 @@ def test_closing_while_the_oznak_check_runs_does_not_destroy_the_thread(dialog_f
         dialog.reject()
         assert time.monotonic() - began < 2
         assert thread.isRunning()
-        assert thread in industrial_data_dialog._RUNNING_BACKGROUND_THREADS
+        assert detached_threads.is_registered(thread)
     finally:
         release.set()
     assert _wait_until(lambda: not thread.isRunning())
-    assert _wait_until(lambda: thread not in industrial_data_dialog._RUNNING_BACKGROUND_THREADS)
+    assert _wait_until(lambda: not detached_threads.is_registered(thread))
 
 
 def test_source_combo_lists_profiles_with_cached_rows_only(tmp_path, monkeypatch):

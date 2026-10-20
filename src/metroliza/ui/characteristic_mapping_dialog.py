@@ -45,6 +45,7 @@ from metroliza.reports.characteristic_mapping_service import (
 from metroliza.reports.db import _is_transient_sqlite_error, connect_sqlite
 from metroliza.reports.import_persist_profile import close_persist_connection
 from metroliza.shared.custom_logger import CustomLogger
+from metroliza.ui import detached_threads
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -69,9 +70,6 @@ SOURCE_LOAD_CANCELED_TEXT = 'Loading report/export names was canceled. Use Brows
 # Upper bound for the GUI thread to wait for an interrupted loader; a loader that has not stopped by
 # then is detached (it keeps running to completion in the background and its result is dropped).
 SOURCE_LOAD_STOP_WAIT_MS = 2000
-
-# Loader threads stay referenced here until they finish, so a QThread is never destroyed while running.
-_RUNNING_SOURCE_LOAD_THREADS: set[QThread] = set()
 
 
 def _has_selected_db_file(db_file: str) -> bool:
@@ -172,8 +170,8 @@ class _SourceOptionsLoadThread(QThread):
         self._connection: sqlite3.Connection | None = None
 
     def release(self) -> None:
-        """Drop the module-level reference once the thread has finished."""
-        _RUNNING_SOURCE_LOAD_THREADS.discard(self)
+        """Drop the registry reference once the thread has finished."""
+        detached_threads.discard(self)
 
     def interrupt_query(self) -> None:
         """Ask the loader to stop; abort the running SQLite statement, if any."""
@@ -714,7 +712,7 @@ class CharacteristicMappingDialog(QDialog):
 
         thread = _SourceOptionsLoadThread(request_id=self._source_request_id, db_file=str(self.db_file))
         self._source_thread = thread
-        _RUNNING_SOURCE_LOAD_THREADS.add(thread)
+        detached_threads.register(thread)
         thread.loaded.connect(self._on_source_options_loaded)
         thread.failed.connect(self._on_source_options_failed)
         thread.finished.connect(thread.release)

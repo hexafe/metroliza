@@ -23,7 +23,7 @@ from metroliza.exporting.export_grouping_utils import set_default_group_label
 from metroliza.shared.grouping_filter_core import parse_filter_expression
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.shared.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
-from metroliza.ui import ui_theme_tokens
+from metroliza.ui import detached_threads, ui_theme_tokens
 try:
     from metroliza.ui import ui_foundation
 except Exception:  # pragma: no cover - fallback for heavily stubbed tests
@@ -167,9 +167,6 @@ _GROUPING_LOADING_TEXT = "Loading grouping data..."
 # stopped by then is detached (it finishes in the background and its result is dropped).
 _GROUPING_LOAD_STOP_WAIT_MS = 2000
 
-# Loader threads stay referenced here until they finish, so a QThread is never destroyed while running.
-_RUNNING_GROUPING_LOAD_THREADS: set = set()
-
 
 _GROUPING_LOAD_THREAD_CLASS = None
 
@@ -195,8 +192,8 @@ def _grouping_load_thread_class():
             self.filter_query = filter_query
 
         def release(self):
-            """Drop the module-level reference once the thread has finished."""
-            _RUNNING_GROUPING_LOAD_THREADS.discard(self)
+            """Drop the registry reference once the thread has finished."""
+            detached_threads.discard(self)
 
         def run(self):
             try:
@@ -327,7 +324,7 @@ class DataGrouping(QDialog):
             filter_query=filter_query,
         )
         self._load_thread = thread
-        _RUNNING_GROUPING_LOAD_THREADS.add(thread)
+        detached_threads.register(thread)
         thread.loaded.connect(self._on_background_load_finished)
         thread.failed.connect(self._on_background_load_failed)
         thread.finished.connect(thread.release)

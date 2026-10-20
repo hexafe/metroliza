@@ -109,16 +109,25 @@ def load_grouping_dataframe(read_sql_dataframe, db_file, filter_query):
     return read_sql_dataframe(db_file, query)
 
 
-def _group_key_for_report_values(values):
-    """Return the SHA1 key for each value of a ``REPORT_ID`` series (row-wise reference semantics)."""
-    normalized_values = values.to_frame(name='REPORT_ID').fillna('').astype(str)
+def _report_id_texts(values):
+    """Return the string form of a ``REPORT_ID`` series (row-wise reference normalisation)."""
+    return values.to_frame(name='REPORT_ID').fillna('').astype(str)['REPORT_ID']
+
+
+def _group_keys_for_texts(texts):
+    """Return the SHA1 key of each report-id string."""
     return [
         hashlib.sha1(
             json.dumps([text], ensure_ascii=False, separators=(',', ':')).encode('utf-8'),
             usedforsecurity=False,
         ).hexdigest()
-        for text in normalized_values['REPORT_ID'].tolist()
+        for text in texts
     ]
+
+
+def _group_key_for_report_values(values):
+    """Return the SHA1 key for each value of a ``REPORT_ID`` series (row-wise reference semantics)."""
+    return _group_keys_for_texts(_report_id_texts(values).tolist())
 
 
 def _is_numpy_object_dtype(dtype):
@@ -171,8 +180,15 @@ def compute_group_key_for_df(df):
     if len(df.index) == 0 or not isinstance(report_ids, pd.Series):
         return _compute_group_key_row_wise(df, report_id_column)
     # The key depends only on the report id: hash every distinct value once and map it to the rows.
-    codes, representatives = _distinct_value_codes(report_ids)
-    distinct_keys = np.asarray(_group_key_for_report_values(representatives), dtype=object)
+    if _is_numpy_object_dtype(report_ids.dtype):
+        # Object values that compare equal can print differently (``0.0``/``-0.0``, ``Decimal('1')``/
+        # ``Decimal('1.0')``, one instant in two time zones): identify them by the string form the
+        # row-wise reference keys on, never by value equality.
+        codes, distinct_texts = pd.factorize(_report_id_texts(report_ids))
+        distinct_keys = np.asarray(_group_keys_for_texts(list(distinct_texts)), dtype=object)
+    else:
+        codes, representatives = _distinct_value_codes(report_ids)
+        distinct_keys = np.asarray(_group_key_for_report_values(representatives), dtype=object)
     return pd.Series(distinct_keys[codes], index=df.index)
 
 
