@@ -402,6 +402,9 @@ def launch_ui(
     _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
     app = get_or_create_qapplication()
     _startup_event(StartupCallsite.QAPPLICATION_READY)
+    from metroliza.app.gc_policy import install as install_gui_gc
+
+    install_gui_gc(app)
     from metroliza.app.startup_stall_probe import install_if_requested
 
     install_if_requested(app)

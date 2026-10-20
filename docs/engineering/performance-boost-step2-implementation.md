@@ -94,3 +94,57 @@ R2 = P02–P05; R3 = P06–P09 with the R2 fixes and the detached-thread/QApplic
 - Windows: `windows-first-run-timeline` (opt-in CI job) for P01 with the base and the package launcher on the
   same onedir, plus `Native launcher qualification`.
 - Results: report §4.2 (new), measurements JSON, Issue #1148.
+
+## Stability: GUI-thread garbage collection
+
+P14 (#1148) addresses process-wide cyclic GC destroying PyQt wrappers and their signal
+callables on an allocating worker thread. Qt may defer the C++ deletion until the GUI
+thread handles posted events, at which point a destroyed-signal callable can already
+be freed. A synthetic case with 20 parentless, signal-cycle-owned dialogs and 400,000
+worker allocations reproduced SIGSEGV with automatic GC (546/49/4 collections).
+With the policy, all 20 dialogs were destroyed on the GUI thread, with exit code 0;
+the subprocess regression exercises the real policy timer.
+
+`metroliza.app.gc_policy.install(app)` disables automatic GC before GUI workers can
+start. An application-owned 500 ms timer checks allocation/promotion thresholds,
+collects generation 0 when due, then checks fresh counts for generations 1 and 2.
+Each tick performs at most one collection per generation. Statistics expose counts,
+total collection time and maximum individual collection time. Uninstallation stops
+the timer and restores the original enabled state and thresholds; workers must first
+be stopped. Normal GUI shutdown keeps automatic GC disabled through interpreter exit.
+
+Installation is in `bootstrap.launch_ui`, immediately after obtaining QApplication
+and before license/UI imports or worker startup. Headless imports, spawn compute
+workers, synchronous diagnostic/compute qualification and startup/parser smoke modes
+retain their existing policy: those paths do not enter a Qt event loop. The benchmark
+harness remains unchanged. Tests install the policy on first application retention;
+after fixture teardown they force only a young sweep, promoting older generations
+only when due. The single-QApplication lifetime rule (#1119) remains required.
+
+Local CPython 3.11/offscreen measurements alternated baseline/policy with isolated
+HOME directories and one heavy-work lock; table values are ranges in milliseconds.
+Import used 1500 reports, Modify DB 216,000 rows, CSV 100,000 rows. Samples: 2/3,
+2/2 and 3/3 baseline/policy respectively. Invalid temporary-wrapper attempts were
+excluded; the initial import baseline had spawn-entry errors and was also excluded.
+
+| Scenario | Result before / policy | Longest stall before / policy | Maximum policy collection |
+|---|---|---|---|
+| reports_import | 18738–19896 / 17361–19865 | 67.5–98.3 / 83.8–99.9 | 27.9 |
+| modify_db_records | 2150–2196 / 1924–2197 | 68.7–69.7 / 68.6–70.8 | 16.0 |
+| csv_analytics | 33985–35857 / 33568–34658 | 370.1–584.6 / 363.8–513.3 | 42.0 |
+
+The 500 ms interval checks pressure twice per second and performs no scan below
+threshold. Measured result/stall ranges support retaining it: stall differences
+fit the observed run variation and timer granularity. The five-file Qt-heavy sample
+(`test_detached_threads`, `test_industrial_data_dialog`, `test_report_workspace_shell`,
+`test_main_window_metadata_ui`, `test_parser_plugin_wizard`) passed 158 tests per run:
+wall times 47.18/36.60 s before, 19.79/19.42 s with policy (net overhead −53.2%).
+The required ten-file stability sequence passed three times (264 tests each), with
+zero crashes. Broader validation had 603 passes and one missing fresh-reopen subprocess
+receipt; isolated original-bootstrap and candidate controls both passed. That broader
+failure remains unresolved and is not waived by the isolated controls.
+
+Application code must never explicitly collect cyclic garbage from a worker thread.
+Disabling automatic GC cannot prevent explicit third-party collections. Cyclic memory
+can grow while the GUI thread is blocked, and an individual collection is synchronous;
+native Windows responsiveness and packaged lifetime qualification remain required.

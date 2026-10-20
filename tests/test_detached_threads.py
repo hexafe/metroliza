@@ -239,6 +239,7 @@ def test_finished_thread_is_released_on_the_gui_thread_not_by_a_foreign_garbage_
 
     _TrackedThread.finalized_in = []
     gc.collect()
+    was_enabled = gc.isenabled()
     gc.disable()
     try:
         thread = _TrackedThread()
@@ -252,7 +253,8 @@ def test_finished_thread_is_released_on_the_gui_thread_not_by_a_foreign_garbage_
         assert reference() is None, "the thread is kept alive by a reference cycle"
         _collect_in_another_thread()
     finally:
-        gc.enable()
+        if was_enabled:
+            gc.enable()
 
     assert [item.name for item in _TrackedThread.finalized_in] == [threading.current_thread().name]
 
