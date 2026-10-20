@@ -48,8 +48,9 @@ use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
     GetSystemMetrics, IsWindow, KillTimer, LoadCursorW, PeekMessageW, PostMessageW,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, SetTimer, ShowWindow, TranslateMessage,
-    HTCAPTION, IDC_APPSTARTING, MSG, PM_REMOVE, SM_CXSCREEN, SM_CYSCREEN, SW_SHOWNORMAL, WM_APP,
+    PostQuitMessage, RegisterClassW, SendMessageTimeoutW, SetForegroundWindow, SetTimer,
+    ShowWindow, TranslateMessage, HTCAPTION, IDC_APPSTARTING, MSG, PM_REMOVE, SMTO_ABORTIFHUNG,
+    SM_CXSCREEN, SM_CYSCREEN, SW_SHOWNORMAL, WM_APP,
     WM_CLOSE, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT,
     WM_TIMER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
@@ -72,6 +73,10 @@ pub const MSG_CLOSE: u32 = WM_APP + 1;
 pub const MSG_HANDOFF: u32 = WM_APP + 2;
 /// Launcher-internal: the runtime work ended, restart the deadline from now.
 const MSG_REARM: u32 = WM_APP + 3;
+/// Launcher-internal, sent synchronously: runtime work starts, keep the splash open; returns 1.
+const MSG_HOLD: u32 = WM_APP + 4;
+/// Upper bound for the launcher's synchronous messages to the splash thread.
+const SEND_TIMEOUT_MS: u32 = 1000;
 /// `COPYDATASTRUCT::dwData` of a status-text update ("MLST").
 pub const STATUS_MAGIC: usize = 0x4D4C_5354;
 /// Largest accepted status text, in bytes of UTF-16.
@@ -113,6 +118,7 @@ const STARTING: &str = "Starting Metroliza...";
 const EXTRACTING: &str = "Preparing Metroliza for first use...";
 const EXTRACTING_NOTE: &str = "This only happens once for each new version.";
 const VERIFYING: &str = "Checking Metroliza files...";
+const REPAIRING: &str = "Repairing Metroliza...";
 
 // Window-thread claim states (one cell per `show` attempt).
 const PENDING: u8 = 0;
@@ -181,7 +187,7 @@ fn scaled(value: i32, scale_percent: i32) -> i32 {
     value * scale_percent / 100
 }
 
-type DpiAwarenessFn = unsafe extern "system" fn(isize) -> i32;
+type ThreadDpiAwarenessFn = unsafe extern "system" fn(isize) -> isize;
 type DpiForSystemFn = unsafe extern "system" fn() -> u32;
 
 fn user32_proc(name: &[u8]) -> Option<unsafe extern "system" fn() -> isize> {
@@ -196,21 +202,38 @@ fn user32_proc(name: &[u8]) -> Option<unsafe extern "system" fn() -> isize> {
     }
 }
 
-/// System DPI awareness when the system supports it (Windows 10 1607+), matching the sizing,
-/// which uses the system DPI; looked up at run time so older systems still start. Only set when
-/// the splash is tried; with the splash disabled the process keeps the old DPI behaviour.
+/// System DPI awareness for the calling (splash) thread only, when the system supports it
+/// (Windows 10 1607+), matching the sizing, which uses the system DPI. The rest of the process,
+/// including the fallback progress window and the error dialogs, keeps the base launcher's DPI
+/// behaviour. Looked up at run time: on older systems the thread stays DPI-unaware, the system
+/// then reports 96 DPI to it (scale 100%) and stretches the window, as for the progress window.
 ///
 /// Deferred (STEP2 A1): per-monitor DPI awareness. It needs `WM_DPICHANGED` handling (new fonts
 /// and geometry when the splash is on, or is moved to, a monitor with another scale); until then
 /// the splash is sized once for the system DPI.
-fn enable_dpi_awareness() {
-    if let Some(function) = user32_proc(b"SetProcessDpiAwarenessContext\0") {
-        // SAFETY: the symbol has this signature; -2 is DPI_AWARENESS_CONTEXT_SYSTEM_AWARE.
+fn enable_thread_dpi_awareness() {
+    if let Some(function) = user32_proc(b"SetThreadDpiAwarenessContext\0") {
+        // SAFETY: the symbol has this signature; -2 is DPI_AWARENESS_CONTEXT_SYSTEM_AWARE. The
+        // previous context is not restored: the thread exists only for the splash window.
         unsafe {
-            let set: DpiAwarenessFn = std::mem::transmute(function);
+            let set: ThreadDpiAwarenessFn = std::mem::transmute(function);
             set(-2);
         }
     }
+}
+
+/// Test-only fault injection for the splash failure paths, compiled into debug builds only
+/// (`cargo test`); release builds never read the variable. Values: `decode`, `class`, `window`,
+/// `late` (the window thread is slower than [`SHOW_WAIT`] before it creates its window) and
+/// `thread` (the window thread cannot be started).
+#[cfg(debug_assertions)]
+fn fault(name: &str) -> bool {
+    std::env::var("METROLIZA_LAUNCHER_SPLASH_FAULT").is_ok_and(|value| value == name)
+}
+
+#[cfg(not(debug_assertions))]
+fn fault(_name: &str) -> bool {
+    false
 }
 
 fn system_scale_percent() -> i32 {
@@ -529,6 +552,12 @@ unsafe extern "system" fn window_proc(
             DestroyWindow(hwnd);
             0
         }
+        MSG_HOLD => {
+            // Sent (not posted) by `Progress::begin`: handled on this thread, so it is ordered
+            // with the deadline above; once it returns 1 the deadline cannot close the window.
+            RUNTIME_WORK.store(true, Ordering::Release);
+            1
+        }
         MSG_REARM => {
             // Same id: replaces the running deadline timer.
             SetTimer(hwnd, TIMER_DEADLINE, DEADLINE_MS, None);
@@ -588,12 +617,15 @@ fn window_thread(ready: mpsc::Sender<isize>, claim: Arc<AtomicU8>, log: Log) {
             .ok()
             .map(Arc::new)
     });
-    let Some(frames) = decoded.clone() else {
+    let decoded = if fault("decode") { None } else { decoded.clone() };
+    let Some(frames) = decoded else {
         log.mark("splash_frames_failed");
         let _ = ready.send(0);
         return;
     };
     log.mark("splash_frames_decoded");
+    // Before any sizing: system metrics and the DPI below follow this thread's context.
+    enable_thread_dpi_awareness();
     let scale_percent = system_scale_percent();
     // SAFETY: plain Win32 window creation and message loop on a thread dedicated to the window;
     // every GDI font created here is deleted exactly once (here on failure, in WM_DESTROY after
@@ -601,13 +633,18 @@ fn window_thread(ready: mpsc::Sender<isize>, claim: Arc<AtomicU8>, log: Log) {
     unsafe {
         let instance = GetModuleHandleW(null());
         let class_name = wide(SPLASH_CLASS);
-        if !register_class(instance, &class_name) {
+        if fault("class") || !register_class(instance, &class_name) {
             log.mark("splash_class_failed");
             let _ = ready.send(0);
             return;
         }
         if abandoned(&claim) {
             return;
+        }
+        if fault("late") {
+            // Past the check above: the window is created after the launcher stopped waiting,
+            // so the claim below is what keeps it from ever being shown.
+            std::thread::sleep(SHOW_WAIT + Duration::from_secs(1));
         }
         let fonts = [
             create_font(scaled(22, scale_percent), FW_BOLD),
@@ -618,20 +655,24 @@ fn window_thread(ready: mpsc::Sender<isize>, claim: Arc<AtomicU8>, log: Log) {
         let x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
         let y = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
         let title = wide("Metroliza");
-        let hwnd = CreateWindowExW(
-            WS_EX_TOOLWINDOW,
-            class_name.as_ptr(),
-            title.as_ptr(),
-            WS_POPUP, // hidden until claimed
-            x.max(0),
-            y.max(0),
-            width,
-            height,
-            null_mut(),
-            null_mut(),
-            instance,
-            null(),
-        );
+        let hwnd = if fault("window") {
+            null_mut()
+        } else {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                class_name.as_ptr(),
+                title.as_ptr(),
+                WS_POPUP, // hidden until claimed
+                x.max(0),
+                y.max(0),
+                width,
+                height,
+                null_mut(),
+                null_mut(),
+                instance,
+                null(),
+            )
+        };
         if hwnd.is_null() {
             delete_fonts(fonts);
             log.mark("splash_window_failed");
@@ -691,7 +732,6 @@ struct Inner {
 /// Start a window thread and wait (at most [`SHOW_WAIT`]) for its window.
 fn start_splash(inner: &mut Inner, log: &Log) {
     log.mark("splash_show");
-    enable_dpi_awareness();
     set_status(STARTING, "");
     BAR_MODE.store(0, Ordering::Relaxed);
     DONE.store(0, Ordering::Relaxed);
@@ -699,9 +739,13 @@ fn start_splash(inner: &mut Inner, log: &Log) {
     let claim = Arc::new(AtomicU8::new(PENDING));
     let (sender, receiver) = mpsc::channel();
     let (thread_claim, thread_log) = (Arc::clone(&claim), log.clone());
-    let spawned = std::thread::Builder::new()
-        .name("launcher-splash".into())
-        .spawn(move || window_thread(sender, thread_claim, thread_log));
+    let spawned = if fault("thread") {
+        Err(std::io::Error::other("injected thread start failure"))
+    } else {
+        std::thread::Builder::new()
+            .name("launcher-splash".into())
+            .spawn(move || window_thread(sender, thread_claim, thread_log))
+    };
     let handle = match spawned {
         Ok(handle) => handle,
         Err(_) => {
@@ -749,17 +793,37 @@ fn close_splash(inner: &mut Inner) -> bool {
         return true;
     };
     let hwnd = WINDOW.load(Ordering::Acquire);
-    // SAFETY: posting to a window owned by another thread is allowed from any thread.
+    // SAFETY: posting and sending to a window owned by another thread is allowed from any
+    // thread; the send is bounded by a timeout and aborts if the thread hangs.
     let ending = hwnd == 0
         || unsafe { PostMessageW(hwnd as HWND, MSG_CLOSE, 0, 0) } != 0
         // The post failed because the window was destroyed meanwhile (hand-off, deadline).
-        || WINDOW.load(Ordering::Acquire) == 0;
+        || WINDOW.load(Ordering::Acquire) == 0
+        // Or the posted-message queue is full: a sent message does not use that queue.
+        || unsafe { send(hwnd, MSG_CLOSE) }.is_some();
     if ending {
         // The window is gone or MSG_CLOSE destroys it; either way its message loop ends now.
         let _ = handle.join();
     }
-    // Otherwise (a full message queue) the thread is detached rather than waited for.
+    // Otherwise (a hung window thread) it is detached rather than waited for. Residual risk:
+    // its window may stay visible until the launcher exits; `reopen` then uses the progress
+    // window, so two launcher windows are never shown on purpose.
     ending
+}
+
+/// Send `message` to the splash and wait (bounded) for its result; `None` if it was not handled.
+unsafe fn send(hwnd: isize, message: u32) -> Option<usize> {
+    let mut result = 0usize;
+    let handled = SendMessageTimeoutW(
+        hwnd as HWND,
+        message,
+        0,
+        0,
+        SMTO_ABORTIFHUNG,
+        SEND_TIMEOUT_MS,
+        &mut result,
+    );
+    (handled != 0).then_some(result)
 }
 
 /// The launcher's visible feedback: the splash, or the plain progress window as its fallback.
@@ -770,6 +834,8 @@ pub struct Splash {
     fallback: ProgressWindow,
     /// [`TARGET_NONE`], [`TARGET_SPLASH`] or [`TARGET_FALLBACK`] for the current runtime work.
     target: AtomicU8,
+    /// Set by [`Splash::repairing`], cleared when the repair's runtime work ends.
+    repairing: AtomicBool,
 }
 
 impl Splash {
@@ -785,6 +851,7 @@ impl Splash {
             }),
             fallback: ProgressWindow::new(),
             target: AtomicU8::new(TARGET_NONE),
+            repairing: AtomicBool::new(false),
         };
         if std::env::var_os(SPLASH_ENV).is_some_and(|v| v == "0") {
             log.mark("splash_show");
@@ -823,9 +890,13 @@ impl Splash {
             .then(|| current.to_string())
     }
 
-    /// Replace the status text (launcher-side phases such as a repair).
-    pub fn status(&self, main: &str) {
-        set_status(main, "");
+    /// A repair follows (exit 75 or a failed spawn): the splash says "Repairing Metroliza..."
+    /// until the repair's runtime work ends, instead of the first-use extraction text. The
+    /// progress window keeps its fixed text, as before the splash.
+    pub fn repairing(&self) {
+        self.log.mark("splash_repairing");
+        self.repairing.store(true, Ordering::Release);
+        set_status(REPAIRING, "");
     }
 
     /// Close the splash window if it is still open and wait for its thread. Idempotent; never
@@ -834,9 +905,17 @@ impl Splash {
         close_splash(&mut lock(&self.inner));
     }
 
-    fn splash_open(&self) -> bool {
+    /// Whether the splash window is open and now held open for runtime work: the hold is a
+    /// synchronous message, so it is ordered with the deadline on the window thread, and a
+    /// window that closed meanwhile is reported as not open.
+    fn hold_splash_for_work(&self) -> bool {
         let inner = lock(&self.inner);
-        inner.mode == Mode::Shown && inner.thread.is_some() && WINDOW.load(Ordering::Acquire) != 0
+        let hwnd = WINDOW.load(Ordering::Acquire);
+        inner.mode == Mode::Shown
+            && inner.thread.is_some()
+            && hwnd != 0
+            // SAFETY: bounded synchronous message to a window of this process.
+            && unsafe { send(hwnd, MSG_HOLD) } == Some(1)
     }
 }
 
@@ -849,18 +928,20 @@ impl Drop for Splash {
 impl Progress for Splash {
     fn begin(&self, total_bytes: u64) {
         self.log.mark("runtime_work_begin");
-        // Set first, so the deadline cannot close the splash between the check and the work.
-        RUNTIME_WORK.store(true, Ordering::Release);
-        if self.splash_open() {
+        if self.hold_splash_for_work() {
             DONE.store(0, Ordering::Relaxed);
             TOTAL.store(total_bytes, Ordering::Relaxed);
             BAR_MODE.store(1, Ordering::Relaxed);
             self.target.store(TARGET_SPLASH, Ordering::Release);
         } else {
-            RUNTIME_WORK.store(false, Ordering::Release);
             self.target.store(TARGET_FALLBACK, Ordering::Release);
             self.fallback.begin(total_bytes);
-            self.log.mark("progress_window_shown");
+            // The mark proves a window: the progress window reports whether it was created.
+            self.log.mark(if self.fallback.is_open() {
+                "progress_window_shown"
+            } else {
+                "progress_window_failed"
+            });
         }
     }
 
@@ -887,11 +968,15 @@ impl Progress for Splash {
                 }
             }
             TARGET_FALLBACK => {
+                let was_open = self.fallback.is_open();
                 self.fallback.finish();
-                self.log.mark("progress_window_closed");
+                if was_open {
+                    self.log.mark("progress_window_closed");
+                }
             }
             _ => {}
         }
+        self.repairing.store(false, Ordering::Release);
         self.log.mark("runtime_work_done");
     }
 
@@ -901,6 +986,11 @@ impl Progress for Splash {
             Stage::Extracting => (EXTRACTING, EXTRACTING_NOTE, "extract_begin"),
         };
         self.log.mark(mark);
+        let (main, note) = if self.repairing.load(Ordering::Acquire) {
+            (REPAIRING, "")
+        } else {
+            (main, note)
+        };
         // The progress window keeps its fixed text and bar, as before the splash.
         if self.target.load(Ordering::Acquire) == TARGET_SPLASH {
             DONE.store(0, Ordering::Relaxed);

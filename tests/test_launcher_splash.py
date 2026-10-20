@@ -108,6 +108,75 @@ def test_timeline_expects_a_launcher_window_for_runtime_work(cache, seen, disabl
     assert (warning is not None) == warned
 
 
+class _StubTimeline:
+    """Stands in for the Windows-only launch: 'extracts' into the root, fails on request."""
+
+    def __init__(self, base: Path, fail_on: str | None):
+        self.work, self.temp = base / "work", base / "temp"
+        self.work.mkdir()
+        self.temp.mkdir()
+        self.fail_on = fail_on
+        self.seen = []
+
+    def launch(self, variant, scenario, exe, root, **_kwargs):
+        self.seen.append((scenario, exe.is_file()))
+        if scenario == self.fail_on:
+            raise OSError(28, "No space left on device")
+        (root / "1.0_abc" / "_internal").mkdir(parents=True, exist_ok=True)
+        (root / "1.0_abc" / "_internal" / "python311.dll").write_bytes(b"x" * 8192)
+        (self.temp / f"{scenario}.tmp").write_bytes(b"t")
+        return {"variant": variant, "scenario": scenario, "status": "ok"}
+
+
+@pytest.mark.parametrize("fail_on", [None, "warm1"])
+def test_timeline_round_removes_its_exe_copies_and_runtime_even_after_a_failure(tmp_path, fail_on):
+    from scripts import measure_windows_first_run_timeline as timeline_script
+
+    exe = tmp_path / "metroliza_launcher.exe"
+    exe.write_bytes(b"MZ" * 1000)
+    following = tmp_path / "next_launcher.exe"
+    following.write_bytes(b"MZ" * 1000)
+    stub = _StubTimeline(tmp_path, fail_on)
+    records = timeline_script.run_variant(stub, "poc", exe, following, 3)
+
+    scenarios = [scenario for scenario, _ in stub.seen]
+    assert all(exists for _, exists in stub.seen), "each launch gets its EXE copy"
+    if fail_on is None:
+        assert scenarios == ["cold", "verified", "warm1", "warm2", "warmup", "corrupt", "new_version"]
+        assert all(r["status"] == "ok" for r in records)
+    else:
+        assert scenarios[-1] == fail_on
+        assert records[-1]["status"] == "failed" and records[-1]["scenario"] == "setup"
+        assert "No space left" in records[-1]["error"]
+    assert list(stub.work.iterdir()) == [], "EXE copies and runtime cache are deleted"
+    assert list(stub.temp.iterdir()) == [], "per-launch temporary files are deleted"
+
+
+def test_timeline_launch_errors_become_failed_records_and_still_render(tmp_path, monkeypatch):
+    from scripts import measure_windows_first_run_timeline as timeline_script
+
+    monkeypatch.setattr(timeline_script.tempfile, "tempdir", str(tmp_path))
+    timeline = timeline_script.Timeline(tmp_path / "out", frames=False, frame_every_ms=200)
+    try:
+        def no_space(*_args, **_kwargs):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(timeline, "_launch", no_space)
+        record = timeline.launch("poc#6", "new_version", Path("poc_next.exe"), tmp_path / "root",
+                                 smoke=True, expect_cache="cold", frames=True)
+    finally:
+        timeline.close()
+    assert record["status"] == "failed" and "No space left" in record["error"]
+    ok = {"variant": "poc#1", "scenario": "warm1", "status": "ok", "cache": "warm",
+          "windows": {"first_visible_ms": {"launcher_splash": 40}}, "app": {}, "animation": {},
+          "launcher_windows": ["launcher_splash"]}
+    timeline_script.write_outputs(tmp_path, [ok, record], quiet=True)
+    markdown = (tmp_path / "timeline.md").read_text(encoding="utf-8")
+    assert "| poc#1 | warm1 | warm |" in markdown
+    assert "Failed launches:" in markdown and "poc#6 new_version" in markdown
+    assert (tmp_path / "timeline.json").is_file()
+
+
 def test_bridge_posts_handoff_with_the_main_window_handle_once():
     class FakeUser32:
         def __init__(self):

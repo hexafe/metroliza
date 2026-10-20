@@ -519,6 +519,7 @@ fn exit_75_repair_shows_the_splash_or_progress_window_again_before_the_restart()
                 &after,
                 &[
                     "splash_reopen",
+                    "splash_repairing",
                     "runtime_work_begin",
                     "runtime_work_done",
                     "cache=repair",
@@ -645,6 +646,62 @@ fn a_disabled_splash_falls_back_to_the_progress_window() {
     assert_runtime_work_had_a_window(&run.log);
 }
 
+/// Each way the splash can fail (debug-build fault injection, see `splash_windows::fault`) ends
+/// in the progress window covering the runtime work; a late window thread never shows its window.
+#[cfg(windows)]
+#[test]
+fn every_splash_failure_falls_back_to_the_progress_window() {
+    let faults = [
+        ("decode", "splash_frames_failed"),
+        ("class", "splash_class_failed"),
+        ("window", "splash_window_failed"),
+        ("thread", "splash_thread_failed"),
+        ("late", "splash_late_abandoned"),
+    ];
+    for (fault, failure_mark) in faults {
+        let (_tmp, exe, root, log, _record) = repair_fixture(&format!("fault-{fault}"));
+        // `late`: the window thread creates its window 3 s after `show`; the entry keeps the
+        // launcher alive past that, so the thread's outcome is in the log.
+        let args: &[&str] = if fault == "late" {
+            &["--sleep-ms", "6000", "--exit-code", "0"]
+        } else {
+            &["--exit-code", "0"]
+        };
+        let env = [("METROLIZA_LAUNCHER_SPLASH_FAULT", fault)];
+        let run = run_launcher_with(&exe, &root, &log, args, &env);
+        assert_eq!(run.code, Some(0), "{fault}: {}", run.log);
+        assert!(run.log.contains("cache=cold"), "{fault}: {}", run.log);
+        let events = log_events(&run.log);
+        assert!(
+            in_order(
+                &events,
+                &[
+                    "splash_show",
+                    failure_mark,
+                    "runtime_work_begin",
+                    "progress_window_shown",
+                    "progress_window_closed",
+                    "runtime_work_done",
+                    "cache=cold",
+                ],
+            ),
+            "{fault}: {}",
+            run.log
+        );
+        for never in ["splash_shown", "splash_painted"] {
+            assert!(!run.log.contains(never), "{fault} {never}: {}", run.log);
+        }
+        assert_runtime_work_had_a_window(&run.log);
+        if fault == "late" {
+            assert!(
+                in_order(&events, &["splash_late_abandoned", "splash_abandoned_window_destroyed"]),
+                "the late thread's window is destroyed without being shown: {}",
+                run.log
+            );
+        }
+    }
+}
+
 /// Splash enabled: cold, verified and repair work is covered by the splash or, if the splash
 /// could not be shown on this desktop, by the progress window; never by both, never by none.
 #[cfg(windows)]
@@ -744,6 +801,19 @@ fn persistent_spawn_failure_after_repair_returns_error_without_another_repair() 
     );
     assert_eq!(run.log.matches("repair=").count(), 1, "{}", run.log);
     assert_eq!(run.log.matches("cache=repair").count(), 1, "{}", run.log);
+    // The spawn-failure repair is announced as a repair, around its runtime work.
+    let after_failure: Vec<String> = log_events(&run.log)
+        .into_iter()
+        .skip_while(|line| !line.starts_with("repair=spawn_failed"))
+        .collect();
+    assert!(
+        in_order(
+            &after_failure,
+            &["splash_repairing", "runtime_work_begin", "runtime_work_done", "cache=repair"],
+        ),
+        "{}",
+        run.log
+    );
     assert_eq!(
         run.log.matches("error=LaunchFailed").count(),
         2,

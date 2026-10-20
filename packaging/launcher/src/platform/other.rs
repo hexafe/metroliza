@@ -33,8 +33,8 @@ pub fn show_error(kind: ErrorKind) {
 /// No window off Windows; keeps the launcher flow identical for the development stand-in.
 ///
 /// The hooks log the same timing marks as the Windows splash (`splash_show`, `splash_reopen`,
-/// `runtime_work_begin`, `runtime_work_done`), so tests on this stand-in can check when the
-/// launcher asks for visible feedback.
+/// `runtime_work_begin`, `runtime_work_done`; plus `splash_repairing` here), so tests on this
+/// stand-in can check when the launcher asks for visible feedback.
 pub struct Splash {
     log: Log,
 }
@@ -54,7 +54,9 @@ impl Splash {
         None
     }
 
-    pub fn status(&self, _main: &str) {}
+    pub fn repairing(&self) {
+        self.log.mark("splash_repairing");
+    }
 
     pub fn close(&self) {}
 }

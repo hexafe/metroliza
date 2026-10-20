@@ -101,7 +101,7 @@ fn launch(log: &Log) -> Result<i32> {
             // Only a Warm cache skipped hashing this launch. An image-format/missing-file
             // error may mean same-size damage or removal after that check. No cleanup runs yet.
             log.line(&format!("repair=spawn_failed error={error}"));
-            splash.status("Repairing Metroliza...");
+            splash.repairing();
             runtime = repair_runtime(&root, &payload, runtime, &splash, &Options::default())
                 .map_err(|repair_error| {
                     log.line(&format!("repair_error={repair_error}"));
@@ -139,7 +139,7 @@ fn launch(log: &Log) -> Result<i32> {
         // The entry usually closed or handed off the splash before it asked: show it again
         // for the repair and the restart (or the progress window when there is no splash).
         splash.reopen();
-        splash.status("Repairing Metroliza...");
+        splash.repairing();
         runtime = repair_runtime(&root, &payload, runtime, &splash, &Options::default())?;
         log.line(&format!("cache={}", runtime.outcome.as_str()));
         let entry = runtime.dir.join(&payload.manifest.entry);

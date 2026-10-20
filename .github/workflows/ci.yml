@@ -1834,8 +1834,16 @@ jobs:
             --variant "poc=$poc,$(Resolve-Path timeline-exe/poc_next_launcher.exe)" `
             --variant "poc_nosplash=$poc,$(Resolve-Path timeline-exe/poc_next_launcher.exe);METROLIZA_LAUNCHER_SPLASH=0" `
             --frames --rounds 6 --settle-seconds 20 --output-dir first-run-timeline
-          if ($LASTEXITCODE -ne 0) { Write-Warning 'Some timeline launches failed; see the artifact' }
-          Get-Content first-run-timeline/timeline.md | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'Some timeline launches failed; see "Failed launches" in timeline.md and the artifact'
+            # The runner ends pwsh steps with `exit $LASTEXITCODE`; failed samples are data here.
+            $global:LASTEXITCODE = 0
+          }
+          if (Test-Path first-run-timeline/timeline.md) {
+            Get-Content first-run-timeline/timeline.md | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Warning 'timeline.md was not written'
+          }
 
       - name: Upload the first-run timeline
         if: always()
