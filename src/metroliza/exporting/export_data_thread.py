@@ -36,6 +36,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter
 from matplotlib.text import Text
+from matplotlib.font_manager import FontProperties
 from metroliza.workers.export_thread_runtime import QCoreApplication, QThread, pyqtSignal
 
 from metroliza.exporting.contracts import ExportRequest, validate_export_request
@@ -231,6 +232,9 @@ from metroliza.charts.chart_render_service import (
     deterministic_downsample_frame,
 )
 from metroliza.charts.chart_renderer import (
+    _resolve_figure_fonts,
+    _resolved_font_properties,
+    _text_render_context,
     build_chart_renderer,
     build_distribution_native_payload,
     build_histogram_native_payload,
@@ -1021,7 +1025,8 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
     # Resolve axes transforms once. Text/Annotation.get_window_extent updates
     # candidate geometry (including leader lines) without drawing the figure.
-    figure.canvas.draw()
+    _resolve_figure_fonts(figure)
+    figure.draw_without_rendering()
     renderer = figure.canvas.get_renderer()
     title_bbox = None
     if title_artist is not None:
@@ -2287,7 +2292,8 @@ def annotate_violin_group_stats(
         return style
 
     if use_dynamic_offsets:
-        ax.figure.canvas.draw()
+        _resolve_figure_fonts(ax.figure)
+        ax.figure.draw_without_rendering()
         renderer = ax.figure.canvas.get_renderer()
         preview_text = ax.text(0, 0, '', alpha=0)
 
@@ -2508,7 +2514,8 @@ def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
         strategy_bottom_margin = float(strategy['bottom_margin'])
         fig.subplots_adjust(bottom=strategy_bottom_margin)
 
-    fig.canvas.draw()
+    _resolve_figure_fonts(fig)
+    fig.draw_without_rendering()
     renderer = fig.canvas.get_renderer()
 
     artists = []
@@ -3133,21 +3140,39 @@ def apply_explicit_table_row_heights(table, *, row_heights, ncols):
             cell.set_height(float(row_height))
 
 
+_TEXT_EXTENT_CACHE_SIZE = 512
+
+
+@lru_cache(maxsize=128)
+def _probe_font_properties(fontsize, fontweight, symbol_fallback, context):
+    properties = FontProperties(
+        size=fontsize, weight=fontweight,
+        family='DejaVu Sans' if symbol_fallback else None,
+    )
+    return _resolved_font_properties(properties, context)
+
+
 def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
-    """Measure text extents in display pixels for sizing-aware panel layout."""
+    """Cache exact, unrotated probe extents on one renderer, bounded to 512."""
+    text = str(text)
+    context = _text_render_context()
+    properties = _probe_font_properties(fontsize, fontweight, _uses_symbol_font_fallback(text), context)
+    key = (text, properties, fig.dpi, getattr(renderer, 'dpi', None), renderer.points_to_pixels(1.0), context)
+    cache = getattr(renderer, '_metroliza_text_extents', None)
+    if cache is None:
+        cache = renderer._metroliza_text_extents = OrderedDict()
+    if key in cache:
+        cache.move_to_end(key)
+        return cache[key]
 
-    probe_kwargs = {
-        'fontsize': fontsize,
-        'fontweight': fontweight,
-        'alpha': 0.0,
-    }
-    if _uses_symbol_font_fallback(text):
-        probe_kwargs['fontfamily'] = 'DejaVu Sans'
-
-    probe = Text(0.0, 0.0, str(text), **probe_kwargs)
+    probe = Text(0.0, 0.0, text, fontproperties=properties, alpha=0.0)
     probe.set_figure(fig)
     extent = probe.get_window_extent(renderer=renderer)
-    return extent.width, extent.height
+    result = (extent.width, extent.height)
+    cache[key] = result
+    if len(cache) > _TEXT_EXTENT_CACHE_SIZE:
+        cache.popitem(last=False)
+    return result
 
 
 def _wrap_table_value_text(value_text, *, width):
@@ -5694,7 +5719,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             ax.grid(axis='y', alpha=0.25)
             fig.tight_layout()
             image_data = BytesIO()
-            fig.savefig(image_data, format='png', dpi=120)
+            fig.savefig(image_data, format='png', dpi=120, pil_kwargs={'compress_level': 4})
             image_data.seek(0)
             return {'image_data': image_data, 'row_span': 16, 'description': description}
         except Exception:

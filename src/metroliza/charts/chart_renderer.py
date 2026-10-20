@@ -10,6 +10,7 @@ from __future__ import annotations
 import statistics
 import warnings
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from io import BytesIO
 from typing import Any, Literal, NamedTuple
 
@@ -18,6 +19,8 @@ from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 configure_headless_matplotlib()
 
 import matplotlib.pyplot as plt
+from matplotlib import font_manager, rcParams
+from matplotlib.text import Text
 import numpy as np
 
 from metroliza.charts.chart_numeric_helpers import (
@@ -83,8 +86,41 @@ class ChartRenderer(ABC):
         """Render trend payload into PNG bytes."""
 
 
+# Include generic-family expansion and text/math defaults as well as explicit
+# FontProperties. A changed rc_context or an added font must not reuse a match.
+_TEXT_RC_KEYS = tuple(k for k in rcParams if k.startswith(("font.", "text.", "mathtext.")))
+
+
+def _text_render_context():
+    return tuple(
+        (key, tuple(rcParams[key]) if isinstance(rcParams[key], list) else rcParams[key])
+        for key in _TEXT_RC_KEYS
+    ) + (("font_manager", id(font_manager.fontManager), len(font_manager.fontManager.ttflist),
+          tuple(sorted(font_manager.fontManager.defaultFamily.items()))),)
+
+
+@lru_cache(maxsize=256)
+def _resolved_font_properties(properties, context):
+    """Reuse an exact single-file match; preserve multi-font glyph fallback."""
+    resolved = properties.copy()
+    paths = font_manager.fontManager._find_fonts_by_props(properties)
+    if len(paths) == 1:
+        resolved.set_file(paths[0])
+    return resolved
+
+
+def _resolve_figure_fonts(fig):
+    context = _text_render_context()
+    for artist in fig.findobj(match=Text):
+        properties = artist.get_fontproperties()
+        if properties.get_file() is None:
+            # Keep cache keys independent of mutable artist properties.
+            artist.set_fontproperties(_resolved_font_properties(properties.copy(), context))
+
+
 def _savefig_bytes(fig: Any, *, mode: str = "workbook", dpi: int = 150) -> bytes:
-    save_kwargs = {"format": "png", "dpi": dpi}
+    _resolve_figure_fonts(fig)
+    save_kwargs = {"format": "png", "dpi": dpi, "pil_kwargs": {"compress_level": 4}}
     if mode == "clipped":
         save_kwargs["bbox_inches"] = "tight"
     image_buffer = BytesIO()

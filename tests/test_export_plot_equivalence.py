@@ -16,6 +16,79 @@ from PIL import Image
 import pytest
 
 
+def _uncached_text_extent(fig, renderer, text, fontsize, fontweight):
+    from matplotlib.text import Text
+    from metroliza.exporting.export_data_thread import _uses_symbol_font_fallback
+
+    kwargs = dict(fontsize=fontsize, fontweight=fontweight, alpha=0.0)
+    if _uses_symbol_font_fallback(text):
+        kwargs['fontfamily'] = 'DejaVu Sans'
+    probe = Text(0.0, 0.0, str(text), **kwargs)
+    probe.set_figure(fig)
+    extent = probe.get_window_extent(renderer=renderer)
+    return extent.width, extent.height
+
+
+@pytest.mark.parametrize('dpi', [72, 100, 150])
+@pytest.mark.parametrize('weight', ['normal', 'bold'])
+def test_panel_measurement_matches_uncached_text_exactly(dpi, weight):
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    from metroliza.exporting.export_data_thread import _measure_text_extent
+
+    fig, _ = plt.subplots(dpi=dpi)
+    try:
+        for family in ['DejaVu Sans', 'DejaVu Serif']:
+            with mpl.rc_context({'font.family': family}):
+                renderer = fig.canvas.get_renderer()
+                for text in ['Ag', 'Value', '1.234', 'two\nlines', '✓ Pass ×', '$x^2$', '']:
+                    expected = _uncached_text_extent(fig, renderer, text, 8.4, weight)
+                    for _ in range(2):
+                        assert _measure_text_extent(
+                            fig, renderer, text, fontsize=8.4, fontweight=weight,
+                        ) == expected
+        fig.set_dpi(dpi * 2)
+        renderer = fig.canvas.get_renderer()
+        assert _measure_text_extent(fig, renderer, 'Ag', fontsize=9) == (
+            _uncached_text_extent(fig, renderer, 'Ag', 9, 'normal')
+        )
+    finally:
+        plt.close(fig)
+
+
+def test_panel_measurement_cache_reuses_probes_and_bounds_renderer_lifetime(monkeypatch):
+    import matplotlib.pyplot as plt
+    from metroliza.exporting import export_data_thread as module
+
+    fig, _ = plt.subplots()
+    try:
+        renderer = fig.canvas.get_renderer()
+        original_text = module.Text
+        probes = []
+
+        def text_probe(*args, **kwargs):
+            probes.append(1)
+            return original_text(*args, **kwargs)
+
+        monkeypatch.setattr(module, 'Text', text_probe)
+        expected = module._measure_text_extent(fig, renderer, 'Ag', fontsize=8)
+        assert module._measure_text_extent(fig, renderer, 'Ag', fontsize=8) == expected
+        assert len(probes) == 1
+        for index in range(module._TEXT_EXTENT_CACHE_SIZE + 1):
+            module._measure_text_extent(fig, renderer, str(index), fontsize=8)
+        assert len(renderer._metroliza_text_extents) == module._TEXT_EXTENT_CACHE_SIZE
+        before = len(probes)
+        module._measure_text_extent(fig, renderer, 'Ag', fontsize=8)
+        assert len(probes) == before + 1  # Oldest entry was evicted.
+        fig.set_dpi(fig.dpi * 2)
+        other_renderer = fig.canvas.get_renderer()
+        assert other_renderer is not renderer
+        module._measure_text_extent(fig, other_renderer, 'Ag', fontsize=8)
+        assert len(probes) == before + 2
+    finally:
+        plt.close(fig)
+
+
 def assert_equivalent_pngs(expected, actual):
     """Allow only isolated one-level antialiasing noise, never layout drift."""
     left = np.asarray(Image.open(BytesIO(expected)).convert('RGBA'), dtype=np.int16)
@@ -62,7 +135,7 @@ def test_png_equivalence_rejects_one_pixel_annotation_shift():
     assert_equivalent_pngs(left.getvalue(), left.getvalue())
 
 
-def test_annotation_candidates_draw_only_once_and_tables_never_draw(monkeypatch):
+def test_annotation_candidates_layout_once_and_tables_never_draw(monkeypatch):
     import matplotlib.pyplot as plt
     from metroliza.exporting.export_data_thread import (
         render_histogram_annotations, render_panel_table_in_panel_axes,
@@ -72,11 +145,12 @@ def test_annotation_candidates_draw_only_once_and_tables_never_draw(monkeypatch)
     try:
         ax.set_xlim(0, 10)
         calls = []
-        original_draw = fig.canvas.draw
+        original_draw = fig.draw_without_rendering
         def draw():
             calls.append(1)
             return original_draw()
-        monkeypatch.setattr(fig.canvas, 'draw', draw)
+        monkeypatch.setattr(fig, 'draw_without_rendering', draw)
+        monkeypatch.setattr(fig.canvas, 'draw', lambda: pytest.fail('Layout must not rasterize'))
         annotations = [dict(x=5., text='Overlapping specification label', color='black',
                             kind='usl', priority=i, text_y_axes=1.02) for i in range(3)]
         rendered = render_histogram_annotations(

@@ -1061,7 +1061,7 @@ def _draw_stats_table(table_ax, stats_table: HistogramStatsTable) -> None:
 
 def _figure_png_bytes(fig) -> bytes:
     image = BytesIO()
-    fig.savefig(image, format="png", dpi=150, bbox_inches="tight")
+    fig.savefig(image, format="png", dpi=150, bbox_inches="tight", pil_kwargs={"compress_level": 4})
     image.seek(0)
     return image.getvalue()
 
