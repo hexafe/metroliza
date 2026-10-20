@@ -16,6 +16,7 @@ import hashlib
 from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
+import json
 import logging
 from pathlib import Path
 import re
@@ -447,6 +448,61 @@ def get_registry_snapshot(*, refresh: bool = True) -> RegistrySnapshot:
         _ensure_external_plugins_loaded_once()
     with _PARSER_REGISTRY_LOCK:
         return _synchronize_compatibility_maps_locked()
+
+
+def _code_identity(value: object) -> list[object] | None:
+    """Name and source-file signature of a class or function (``None`` for no object)."""
+
+    if value is None:
+        return None
+    module = sys.modules.get(getattr(value, "__module__", "") or "")
+    module_file = getattr(module, "__file__", None)
+    signature: list[object] | None = None
+    if module_file:
+        try:
+            stat_result = Path(module_file).stat()
+            signature = [str(Path(module_file).resolve(strict=False)), stat_result.st_size,
+                         stat_result.st_mtime_ns]
+        except OSError:
+            signature = [str(module_file), None, None]
+    # External path plugins load under per-process module names, so the module name is
+    # not part of the identity; the file it came from is.
+    return [str(getattr(value, "__qualname__", repr(value))), signature]
+
+
+def registry_configuration_fingerprint(snapshot: RegistrySnapshot | None = None) -> str:
+    """Return a deterministic digest of what defines parser resolution in this process.
+
+    Read-only: it never refreshes or publishes a generation (pass the snapshot a caller
+    resolved with).  Two processes with the same digest have the same registrations in the
+    same order (ids, origins, manifests, parser and detector code files), the same plugin
+    configuration (paths and their content digests, entry points, approved profiles,
+    disabled ids), the same load errors and the same selection threshold.  Generation ids
+    are process-local counters and are deliberately excluded.
+    """
+
+    if snapshot is None:
+        snapshot = get_registry_snapshot(refresh=False)
+    with _PARSER_REGISTRY_LOCK:
+        config_signature = _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    payload = {
+        "registrations": [
+            {
+                "plugin_id": registration.plugin_id,
+                "origin": registration.origin,
+                "origin_ref": registration.origin_ref,
+                "parser": _code_identity(registration.parser_cls),
+                "detector": _code_identity(registration.detector),
+                "manifest": repr(registration.manifest),
+            }
+            for registration in snapshot.registrations
+        ],
+        "load_errors": list(snapshot.load_errors),
+        "plugin_configuration": repr(config_signature),
+        "minimum_confidence": _minimum_confidence_for_selection(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=repr)
+    return f"sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
 def list_plugins() -> tuple[PluginManifest, ...]:

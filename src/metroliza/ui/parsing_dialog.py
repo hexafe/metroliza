@@ -17,7 +17,7 @@ try:
 except ImportError:  # pragma: no cover - lightweight Qt test stubs.
     ParsePreflightThread = None
 from metroliza.shared.custom_logger import CustomLogger
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -65,9 +65,14 @@ from metroliza.ui.ui_foundation import (
     update_path_field,
 )
 import shutil
+from time import monotonic
 
 
 logger = logging.getLogger(__name__)
+
+# Worker progress and metadata readings reach the table at most this often (about 20 Hz),
+# so a burst from the review pool is applied in one pass instead of one restyle per file.
+_UI_UPDATE_INTERVAL_S = 0.05
 
 _METADATA_MODE_FAST = "fast"
 _METADATA_MODE_FAST_THEN_ENRICH = "fast_then_enrich"
@@ -307,6 +312,37 @@ def _build_parse_completion_summary(result, db_file, enrichment_result=None, *, 
     return severity, title, message + "\n\n" + enrichment_group
 
 
+class _UiThrottle:
+    """Run ``apply`` at most every ``_UI_UPDATE_INTERVAL_S``; a skipped request runs on a timer.
+
+    ``request()`` runs ``apply`` now when the interval has passed, otherwise once when it
+    does (single-shot timer owned by ``parent``).  ``flush()`` runs it now and ``cancel()``
+    drops a scheduled run.  GUI thread only.
+    """
+
+    def __init__(self, parent, apply):
+        self._apply = apply
+        self._last = None
+        self._timer = QTimer(parent)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.flush)
+
+    def request(self):
+        now = monotonic()
+        if self._last is None or now - self._last >= _UI_UPDATE_INTERVAL_S:
+            self.flush()
+        elif not self._timer.isActive():
+            self._timer.start(max(1, round(1000 * (_UI_UPDATE_INTERVAL_S - (now - self._last)))))
+
+    def flush(self):
+        self._timer.stop()
+        self._last = monotonic()
+        self._apply()
+
+    def cancel(self):
+        self._timer.stop()
+
+
 class _ReportOperations:
     """One implementation of report state, controls and worker ownership."""
 
@@ -335,6 +371,13 @@ class _ReportOperations:
         # metadata read queues behind any metadata worker that is still stopping.
         self._after_metadata_idle = []
         self._start_pending = False
+        # Throttled worker feedback: the latest scan progress and the metadata readings
+        # that arrived since the last table update (with the worker that sent them).
+        self._scan_feedback = {}
+        self._scan_feedback_throttle = _UiThrottle(self, self._apply_scan_feedback)
+        self._pending_readings = []
+        self._pending_metadata_progress = None
+        self._metadata_feedback_throttle = _UiThrottle(self, self._apply_metadata_feedback)
 
         # Initialize the widgets
         self.source_section_label = section_label("Source")
@@ -650,6 +693,8 @@ class _ReportOperations:
 
     @pyqtSlot(int)
     def _on_operation_progress(self, value):
+        if value == self._operation_progress:
+            return  # the shell restyles on every change; an equal value changes nothing
         self._operation_progress = value
         self.state_changed.emit()
 
@@ -865,9 +910,13 @@ class _ReportOperations:
             self.preflight_thread.finished.connect(
                 lambda thread=self.preflight_thread: self._on_preflight_thread_stopped(thread)
             )
-            self.preflight_thread.update_label.connect(self.scan_loading_label.setText)
-            self.preflight_thread.update_progress.connect(self.scan_loading_bar.setValue)
-            self.preflight_thread.update_progress.connect(self._on_operation_progress)
+            self._scan_feedback = {}
+            self.preflight_thread.update_label.connect(
+                lambda text, thread=self.preflight_thread: self._on_scan_feedback(thread, "label", text)
+            )
+            self.preflight_thread.update_progress.connect(
+                lambda value, thread=self.preflight_thread: self._on_scan_feedback(thread, "progress", value)
+            )
             self.preflight_thread.completed.connect(self.on_preflight_completed)
             self.preflight_thread.failed.connect(self.on_preflight_failed)
             self.preflight_thread.start()
@@ -881,11 +930,28 @@ class _ReportOperations:
             self.scan_button.setFocus()
             self.log_and_exit(exc)
 
+    def _on_scan_feedback(self, thread, kind, value):
+        if thread is not self.preflight_thread:
+            return
+        self._scan_feedback[kind] = value
+        self._scan_feedback_throttle.request()
+
+    def _apply_scan_feedback(self):
+        feedback, self._scan_feedback = self._scan_feedback, {}
+        if "label" in feedback and getattr(self, "scan_loading_label", None) is not None:
+            self.scan_loading_label.setText(feedback["label"])
+        if "progress" in feedback:
+            if getattr(self, "scan_loading_bar", None) is not None:
+                self.scan_loading_bar.setValue(feedback["progress"])
+            self._on_operation_progress(feedback["progress"])
+
     @pyqtSlot()
     def stop_scanning(self):
         thread = self.preflight_thread
         if thread is not None and thread.isRunning():
             thread.stop_scan()
+            self._scan_feedback_throttle.cancel()
+            self._scan_feedback = {}
             loading_label = getattr(self, "scan_loading_label", None)
             if loading_label is not None:
                 loading_label.setText(
@@ -909,10 +975,18 @@ class _ReportOperations:
 
     @pyqtSlot(object)
     def on_preflight_completed(self, result):
-        dismiss_worker_progress_dialog(
-            getattr(self, "scan_loading_dialog", None),
-            rejected=bool(result.cancelled),
-        )
+        # The indicator stays until the review is applied to the table.
+        self._scan_feedback_throttle.cancel()
+        self._scan_feedback = {}
+        try:
+            self._apply_preflight_result(result)
+        finally:
+            dismiss_worker_progress_dialog(
+                getattr(self, "scan_loading_dialog", None),
+                rejected=bool(result.cancelled),
+            )
+
+    def _apply_preflight_result(self, result):
         if result.cancelled:
             self._invalidate_preflight("Review cancelled. No database changes were made.")
         elif not result.matches_request(
@@ -931,6 +1005,8 @@ class _ReportOperations:
 
     @pyqtSlot(str)
     def on_preflight_failed(self, detail):
+        self._scan_feedback_throttle.cancel()
+        self._scan_feedback = {}
         dismiss_worker_progress_dialog(getattr(self, "scan_loading_dialog", None), rejected=True)
         # Arbitrary exception strings can contain confidential document content.
         self._invalidate_preflight("Review failed. Check the source and destination, then retry.")
@@ -1033,19 +1109,42 @@ class _ReportOperations:
 
     def _on_metadata_progress(self, thread, done, total):
         if thread is self.metadata_thread and not thread.cancel_requested:
-            self.report_planner.set_metadata_status(self._metadata_progress_text(thread.mode, done, total))
+            self._pending_metadata_progress = (thread, done, total)
+            self._metadata_feedback_throttle.request()
 
     def _on_metadata_reading(self, thread, reading):
         if thread is not self.metadata_thread:
             return  # a retired worker's late result must not touch the next review
-        self.report_planner.model.apply_reading(reading)
-        note = getattr(reading, "ocr_note", "")
-        if reading.mode == MODE_OCR and note and "not needed" not in note and note != "Header read with OCR.":
-            self._metadata_ocr_notes.add(note)
+        self._pending_readings.append((thread, reading))
+        self._metadata_feedback_throttle.request()
+
+    def _apply_metadata_feedback(self):
+        """Apply the readings and the latest progress that arrived since the last update."""
+        readings, self._pending_readings = self._pending_readings, []
+        progress, self._pending_metadata_progress = self._pending_metadata_progress, None
+        for thread, reading in readings:
+            if thread is not self.metadata_thread:
+                continue  # retired while queued
+            self.report_planner.model.apply_reading(reading)
+            note = getattr(reading, "ocr_note", "")
+            if reading.mode == MODE_OCR and note and "not needed" not in note and note != "Header read with OCR.":
+                self._metadata_ocr_notes.add(note)
+        if progress is not None:
+            thread, done, total = progress
+            if thread is self.metadata_thread and not thread.cancel_requested:
+                self.report_planner.set_metadata_status(self._metadata_progress_text(thread.mode, done, total))
+
+    def _drop_metadata_feedback(self):
+        self._metadata_feedback_throttle.cancel()
+        self._pending_readings = []
+        self._pending_metadata_progress = None
 
     def _on_metadata_completed(self, thread, summary):
         if thread is not self.metadata_thread:
             return
+        # Every reading of the batch is in the table before the summary replaces the progress.
+        self._pending_metadata_progress = None
+        self._metadata_feedback_throttle.flush()
         verb = "OCR" if thread.mode == MODE_OCR else "Metadata read"
         if summary.cancelled:
             text = f"{verb} stopped: {summary.read} of {summary.total} done; the rest was not read."
@@ -1063,9 +1162,14 @@ class _ReportOperations:
 
     def _on_metadata_failed(self, thread, text):
         if thread is self.metadata_thread:
+            self._pending_metadata_progress = None
+            self._metadata_feedback_throttle.flush()
             self.report_planner.set_metadata_status(text, "warning")
 
     def _on_metadata_thread_stopped(self, stopped_thread):
+        if stopped_thread is self.metadata_thread and self._pending_readings:
+            self._pending_metadata_progress = None
+            self._metadata_feedback_throttle.flush()
         self._release_metadata_thread(stopped_thread)
         queued = []
         if not self._metadata_workers_running() and not self._close_requested:
@@ -1112,6 +1216,7 @@ class _ReportOperations:
         if thread is None:
             return
         self.metadata_thread = None
+        self._drop_metadata_feedback()
         if self._thread_is_running(thread):
             thread.stop_reading()
         else:
