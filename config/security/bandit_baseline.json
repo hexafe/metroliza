@@ -670,20 +670,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "08370fbd7511a1a4518e6f7b9a85cdefdace3bdc1e68b076aed1545137e73b65",
+      "fingerprint": "395214477af19f8927a0edbbe2091a6023a55a8173b1fad7b1587f24a0ca662f",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
       "rationale": "fetch_distinct_references: source_sql is a fixed SELECT chosen by _measurement_source_sql after view/table existence checks. _REFERENCE_SQL is a module expression constant; reference strings are evaluated as data and never interpolated.",
-      "expires_on": "2027-04-30"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "238e4f98ae4bd4e7c212929b588c6c09b8867784835bf67d28dac180977b2cb9",
-      "test_id": "B608",
-      "path": "src/metroliza/reports/characteristic_mapping_service.py",
-      "owner": "Security review",
-      "rationale": "_fetch_sample_references: _metric_source_cte(source_sql) uses only _measurement_source_sql fixed schema-dependent SELECT shapes and _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. metric_name and sample-reference limit are bound in params.",
       "expires_on": "2027-04-30"
     },
     {
@@ -697,7 +688,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "de90df7ba450f918db38e1454fbf3d492ded8c6e12687338338cda8aeff980c2",
+      "fingerprint": "90ec8329d57446ceda792539d6eb45a601466115811331d8988b204b3c7daa25",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -706,11 +697,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e2a793d0213e381f49b256a6a9ae32eb1ec0f3e15027e3831fda6f36bfd2bb46",
+      "fingerprint": "aa4d0add76256565b8b79f39da37a80f7e0f2f11e494678aec426c382d8cc5dc",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "fetch_distinct_report_metric_names: _metric_source_cte(source_sql) composes a source chosen by _measurement_source_sql from fixed view/current/legacy SELECT shapes plus _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. Metric and reference contents remain database values.",
+      "rationale": "fetch_distinct_report_metric_names: _metric_source_cte(source_sql) composes a source chosen by _measurement_source_sql from fixed view/current/legacy SELECT shapes plus _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. The sample-reference limit is bound as a parameter; metric and reference contents remain database values.",
       "expires_on": "2027-04-30"
     },
     {
