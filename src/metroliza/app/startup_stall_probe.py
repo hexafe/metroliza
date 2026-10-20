@@ -19,6 +19,7 @@ TICK_MS = 5
 THRESHOLDS_MS = (50, 100, 250, 500, 1000)
 
 _PROBE = None
+_POST_PAINT_PROBE = None
 
 
 class StallProbe:
@@ -74,6 +75,16 @@ def install_if_requested(app) -> None:
         record_event("gui_stall_probe_failed", error_type=type(exc).__name__)
 
 
+def begin_post_paint_probe() -> None:
+    """Keep pre-paint stalls separate from feature warm-up, without losing either."""
+    global _POST_PAINT_PROBE
+    if _PROBE is not None and _POST_PAINT_PROBE is None:
+        _POST_PAINT_PROBE = StallProbe(_PROBE._timer.parent())
+
+
 def record_summary(phase: str) -> None:
     if _PROBE is not None:
-        record_event("gui_stall_summary", **_PROBE.summary(phase))
+        fields: dict[str, object] = dict(_PROBE.summary(phase))
+        if _POST_PAINT_PROBE is not None:
+            fields["post_paint"] = _POST_PAINT_PROBE.summary(phase)
+        record_event("gui_stall_summary", **fields)

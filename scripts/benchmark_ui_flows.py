@@ -354,6 +354,12 @@ def _main_window(ctx: Context):
     window = MainWindow("STEP2 benchmark", None)
     window.show()
     ctx.app.processEvents()
+    if getattr(ctx.args, "wait_warmup", False):
+        window.schedule_feature_import_warmup(delay_ms=0)
+        ctx.pump(lambda: window._feature_import_warmup_completed)
+        if window._feature_import_warmup_failures:
+            raise RuntimeError("Feature warm-up failed")
+        ctx.extra["wait_warmup"] = True
     return window
 
 
@@ -1157,6 +1163,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
+    run.add_argument("--wait-warmup", action="store_true",
+                     help="finish feature warm-up during setup, before timing the first action")
     run.add_argument("--scenario", choices=sorted(SCENARIOS), required=True)
     run.add_argument("--data-dir", required=True)
     run.add_argument("--out", required=True)

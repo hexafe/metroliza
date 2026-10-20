@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import tempfile
+import threading
 from time import perf_counter
 from typing import Callable
 
@@ -50,6 +51,7 @@ from metroliza.ui.ui_foundation import (
 
 
 WARMUP_IN_THREAD_ENV = "METROLIZA_WARMUP_IN_THREAD"
+FEATURE_WARMUP_JOIN_TIMEOUT_S = 0.25
 
 FEATURE_IMPORT_WARMUP_MODULES = (
     ("Parse Reports", "metroliza.ui.parsing_dialog"),
@@ -60,6 +62,8 @@ FEATURE_IMPORT_WARMUP_MODULES = (
     ("Modify Database", "metroliza.ui.modify_db"),
     ("Match Characteristic Names", "metroliza.ui.characteristic_mapping_dialog"),
     ("Parser Profiles", "metroliza.ui.parser_plugin_wizard"),
+    ("Realtime Monitor", "metroliza.ui.realtime_industrial_monitoring_dialog"),
+    ("Export Pipeline", "metroliza.exporting.export_data_thread"),
 )
 
 
@@ -196,6 +200,13 @@ class MainWindow(QMainWindow):
         self._feature_import_warmup_on_finished = None
         self._feature_import_warmup_status_callback = None
         self._feature_import_warmup_importer = importlib.import_module
+        self._feature_import_warmup_thread = None
+        self._feature_import_warmup_stop = threading.Event()
+        self._feature_import_warmup_closed = False
+        self._feature_import_warmup_timer = QTimer(self)
+        self._feature_import_warmup_timer.setInterval(25)
+        self._feature_import_warmup_timer.timeout.connect(self._poll_feature_import_warmup)
+        QApplication.instance().aboutToQuit.connect(self._stop_feature_import_warmup)
 
         # Initialize and set up command-center widgets
         self.workflow_label = section_label("Workflow")
@@ -244,12 +255,17 @@ class MainWindow(QMainWindow):
         status_callback: Callable[[str], None] | None = None,
     ) -> None:
         """Schedule feature import warmup after the first visible window paint."""
+        if self._feature_import_warmup_closed:
+            return
         if self._feature_import_warmup_completed:
             if on_finished is not None:
                 QTimer.singleShot(0, on_finished)
             return
         if self._feature_import_warmup_completed or self._feature_import_warmup_scheduled:
             return
+        from metroliza.app.startup_stall_probe import begin_post_paint_probe
+
+        begin_post_paint_probe()
         self._feature_import_warmup_scheduled = True
         self._feature_import_warmup_on_finished = on_finished
         self._feature_import_warmup_status_callback = status_callback
@@ -265,10 +281,10 @@ class MainWindow(QMainWindow):
 
     def _preload_next_feature_import(self):
         """Load the next feature module and yield back to Qt before continuing."""
-        if self._feature_import_warmup_completed:
+        if self._feature_import_warmup_completed or self._feature_import_warmup_closed:
             return
 
-        if os.getenv(WARMUP_IN_THREAD_ENV) == "1" and self._feature_import_warmup_queue:
+        if os.getenv(WARMUP_IN_THREAD_ENV) != "0" and self._feature_import_warmup_queue:
             self._start_threaded_feature_import_warmup()
             return
 
@@ -298,13 +314,11 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._preload_next_feature_import)
 
     def _start_threaded_feature_import_warmup(self):
-        """STEP2 PoC: import the warmup modules on a background thread.
+        """Import without Qt access; Python's per-module import locks also protect tool opens.
 
-        Module bodies run off the GUI thread, so the window keeps painting and taking input;
-        the GUI thread only polls for completion. Imports still take the GIL in turns.
+        Do not hold an application lock around imports: a GUI import must wait only
+        for its module/dependencies, never for the rest of the warm-up queue.
         """
-        import threading
-
         self._feature_import_warmup_start = perf_counter()
         record_event("feature_warmup_start", module_count=len(FEATURE_IMPORT_WARMUP_MODULES),
                      mode="thread")
@@ -312,28 +326,58 @@ class MainWindow(QMainWindow):
         self._feature_import_warmup_queue = []
         importer = self._feature_import_warmup_importer
         done = threading.Event()
+        stop = self._feature_import_warmup_stop
+        loaded = self._feature_import_warmup_loaded_modules
+        failed = self._feature_import_warmup_failures
 
         def work():
-            for label, module_name in queue:
-                loaded_module, failed_module = _warm_feature_module(label, module_name, importer=importer)
-                if loaded_module is not None:
-                    self._feature_import_warmup_loaded_modules.append(loaded_module)
-                if failed_module is not None:
-                    self._feature_import_warmup_failures.append(failed_module)
-            done.set()
+            try:
+                # Must precede feature imports, including transitive pyplot imports.
+                from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 
-        threading.Thread(target=work, name="metroliza-feature-warmup", daemon=True).start()
-        self.statusBar().showMessage("Loading tools...", 2000)
+                configure_headless_matplotlib()
+                for label, module_name in queue:
+                    if stop.is_set():
+                        break
+                    loaded_module, failed_module = _warm_feature_module(label, module_name, importer=importer)
+                    if loaded_module is not None:
+                        loaded.append(loaded_module)
+                    if failed_module is not None:
+                        failed.append(failed_module)
+            finally:
+                done.set()
 
-        def poll():
-            if done.is_set():
-                self._finish_feature_import_warmup()
-            else:
-                QTimer.singleShot(25, poll)
+        self._feature_import_warmup_done = done
+        self._feature_import_warmup_thread = threading.Thread(
+            target=work, name="metroliza-feature-warmup", daemon=False,
+        )
+        self._feature_import_warmup_thread.start()
+        self._feature_import_warmup_timer.start()
 
-        QTimer.singleShot(25, poll)
+    def _poll_feature_import_warmup(self):
+        if self._feature_import_warmup_done.is_set():
+            self._feature_import_warmup_timer.stop()
+            self._finish_feature_import_warmup()
+
+    def _stop_feature_import_warmup(self):
+        """Cancel pending imports and wait at most 250 ms for the current import.
+
+        Python cannot interrupt a running import safely. A timed-out import is
+        reported and retains normal non-daemon interpreter shutdown semantics.
+        """
+        self._feature_import_warmup_closed = True
+        self._feature_import_warmup_stop.set()
+        self._feature_import_warmup_timer.stop()
+        thread = self._feature_import_warmup_thread
+        if thread is not None:
+            thread.join(timeout=FEATURE_WARMUP_JOIN_TIMEOUT_S)
+            record_event("feature_warmup_join", timeout_s=FEATURE_WARMUP_JOIN_TIMEOUT_S,
+                         finished=not thread.is_alive())
+            self._feature_import_warmup_thread = None
 
     def _finish_feature_import_warmup(self):
+        if self._feature_import_warmup_completed or self._feature_import_warmup_closed:
+            return
         loaded_modules = list(self._feature_import_warmup_loaded_modules)
         failed_modules = list(self._feature_import_warmup_failures)
         warmup_start = self._feature_import_warmup_start or perf_counter()
@@ -944,6 +988,7 @@ class MainWindow(QMainWindow):
         self._cleanup_realtime_session_db()
         self.ui_preferences.set("windows/main/geometry", self.saveGeometry())
         self._persist_navigation_index(self.navigation_list.currentRow())
+        self._stop_feature_import_warmup()
         super().closeEvent(event)
 
     def _background_shutdown_allows_close(self):
