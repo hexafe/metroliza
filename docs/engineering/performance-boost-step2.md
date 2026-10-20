@@ -2,160 +2,158 @@
 
 - **Status:** audyt zakończony; PoC na gałęzi `perf/step2-audit` (draft PR); nic nie zostało zmergowane.
 - **Właściciel:** koordynator audytu wydajności (Claude Opus 5.5, Claude Code). Decyzje produktowe: PO.
-- **Data:** 2026-10-20 (czasy w tekście: UTC+2, Warszawa, chyba że zaznaczono UTC).
-- **Baza audytu:** `78d5d775756e4b64530ce8fb04f175a2e3f461f1` = aktualny head PR #1142
-  (`integrate/2026.09-rc1-build-261018`), czyli 2026.09 RC1 build 261020 + naprawa spawn w launcherze.
-- **Testowany EXE:** `metroliza_2026.09rc1_261020_launcher.exe`, SHA-256 `9b8cb752…5e266`,
-  zbudowany z `e4a739b8` (provenance `dirty: false`, CI 39286831429). Pomiary Windows w tym
-  raporcie pochodzą z EXE budowanych przez CI z gałęzi PoC (ten sam onedir pakowany starym i nowym
-  launcherem), a nie z ręcznie testowanego pliku.
-- **Macierz modułów/okien/flow:** [`performance-boost-step2-flows.md`](performance-boost-step2-flows.md).
-- **Tracker:** Issue „Performance Boost STEP2" (nowe; powiązane z #1120, #952, #918, #1101).
+- **Data:** 2026-10-20 (czasy: Warszawa, UTC+2, jeśli nie zaznaczono UTC).
+- **Baza audytu:** `78d5d775756e4b64530ce8fb04f175a2e3f461f1` = head PR #1142
+  (`integrate/2026.09-rc1-build-261018`): 2026.09 RC1 build 261020 + naprawa spawn w launcherze.
+- **Testowany EXE PO:** `metroliza_2026.09rc1_261020_launcher.exe`, SHA-256 `9b8cb752…5e266`, z `e4a739b8`
+  (provenance `dirty: false`, CI 39286831429). Pomiary Windows w raporcie pochodzą z EXE budowanych w CI z
+  gałęzi PoC: ten sam onedir pakowany starym (`78d5d775`) i nowym launcherem.
+- **Dokumenty:** macierz [`performance-boost-step2-flows.md`](performance-boost-step2-flows.md);
+  liczby (mediany, rozrzut, n, obciążenie, runy CI): [`performance-boost-step2-measurements.json`](performance-boost-step2-measurements.json).
+- **Tracker:** Issue „Performance Boost STEP2" (powiązane z #1120, #952, #918, #1101).
 
 ## 1. Podsumowanie dla PO
 
 ### 1.1 Największe zmierzone straty czasu
 
-Pomiary od kliknięcia do użytecznego wyniku. Dane syntetyczne (bez danych klientów). „Linux" =
-źródła, Qt offscreen, ta sama maszyna (Xeon W-10855M, 6 rdzeni / 12 wątków); „Windows" = EXE na
-hostowanym runnerze CI (4 vCPU, Defender włączony). n = liczba prób.
+Od kliknięcia do użytecznego wyniku. Dane syntetyczne (bez danych klientów). „Linux" = źródła, Qt
+offscreen, Xeon W-10855M (6 rdzeni / 12 wątków); „Windows" = EXE na hostowanym runnerze CI (4 vCPU,
+Defender). Mediana [min–max], n = liczba prób.
 
-| # | Gdzie użytkownik czeka | Zmierzony czas | Co się dzieje w tym czasie | Najlepszy zmierzony wariant |
+| # | Gdzie użytkownik czeka | Zmierzony czas | Przyczyna | Najlepszy zmierzony wariant |
 |---:|---|---:|---|---|
-| 1 | Reports → „Match Characteristic Names" (1500 raportów, 2664 metryk) | **764 s zamrożenia GUI** (n=1) | 1 + 2664 zapytań, każde skanuje cały widok pomiarów (N+1), w wątku GUI | jedno zapytanie z funkcją okna: **2,3 s**, wynik identyczny (PoC) |
-| 2 | Export „Extended plots" (50 raportów, 216 grup) | **552 s**, RSS 944 MB (n=1) | ok. 2,5 s/grupę: render matplotlib (tekst, PNG), pula 2 procesów odtwarzana per referencja | 48 grup: 220 s szeregowo → 96 s przy 4, 88 s przy 8 procesach, wynik identyczny |
-| 3 | CSV Summary → „Create analytics" (100k wierszy) | **228 s**, RSS 642 MB (n=1) | etapy szeregowo w jednym wątku; na końcu zastoje GUI 1,9 s / 1,3 s | do rozbicia w PR (sekcja 8) |
-| 4 | Reports → „Review reports" (1500 PDF) | **≈104 s** w UI (88 s w samym kodzie) | skan i odczyt metadanych ściśle szeregowo, 3 hashe i 2 otwarcia PDF na plik | pula 8 procesów: **23,7 s (3,7×)**, 4 procesy 30,2 s, wynik identyczny (PoC) |
-| 5 | Import 1500 raportów | **68 s** (45 ms/raport), RSS 397 MB (n=1) | pula prepare 3 procesy + jeden zapisujący | sekcja 6 |
-| 6 | Industrial Data → „CSV Summary…" (cache 50k rekordów × 20 metryk) | **43,6 s zamrożenia GUI** (n=1) | przeliczenie metadanych i facetów EAV + 4× ten sam COUNT (4,6 s każdy) w wątku GUI | do wdrożenia (sekcja 8) |
-| 7 | Start aplikacji z cache (Windows) | **0,9–1,4 s bez żadnego okna**, okno główne 1,2–1,6 s (n=12) | launcher → supervisor (0,43 s startu procesu + 0,2 s hash/importy) → aplikacja | PoC: splash po **44–129 ms**, okno główne bez zmian |
-| 8 | Pierwszy start / nowa wersja (Windows) | okno postępu, potem **1,7–1,9 s pustego ekranu**, okno 6,7–9,3 s (n=8) | rozpakowanie 538 MB, start supervisora i aplikacji z nowo zapisanych DLL | PoC: kaczucha bez przerwy od 50 ms po starcie kodu do okna głównego |
-| 9 | Export → Grouping „Edit…" (1500 raportów) | **5,8 s zamrożenia GUI** (n=1) | pandas `groupby.agg` z lambdą Pythona dla 36 000 grup | wektoryzacja (sekcja 8) |
-| 10 | Export → Filter „Edit…" (216k wierszy) | 5,6 s do kompletu wartości (n=1) | DISTINCT-y w workerze, wypełnianie 13 list w GUI | sekcja 8 |
-| 11 | Pierwsze kliknięcie „Export" w sesji | **6,8 s zamrożenia GUI** przed pokazaniem kaczuchy (n=1) | import modułu eksportu (matplotlib, numpy, …) w wątku GUI | import w tle / w rozgrzewce |
-| 12 | Okno główne tuż po starcie (Linux) | GUI blokowane łącznie 1,56 s, najdłużej 0,64 s (n=5) | rozgrzewka 8 modułów w wątku GUI po pierwszym malowaniu | PoC wątku tła: 0,43 s / 0,17 s (n=5) |
+| 1 | Reports → „Match Characteristic Names" (1500 raportów, 2664 metryk) | **764 s zamrożenia GUI** (n=1) | 1 + 2664 zapytań, każde skanuje widok pomiarów, w wątku GUI | jedno zapytanie (funkcja okna): **2,19 s** [2,18–2,35] (n=3); próbka 30 metryk identyczna, mała baza w pełni identyczna |
+| 2 | Export „Extended plots" (50 raportów, 216 grup) | **552 s**, RSS 944 MB (n=1) | ok. 2,5 s/grupę renderu matplotlib; pula 2 procesów tworzona od nowa dla każdej referencji; z dashboardem HTML render zawsze szeregowo | 48 grup: 220 s (1 proces) → 149 s (2, dziś) → 99 s (4) → 88 s (8), ta sama treść XLSX; z dashboardem przy 4: **209 s szeregowo** |
+| 3 | CSV Summary → „Create analytics" (100k wierszy) | **206,5 s** [203,1–207,7] (n=3), RSS 644 MB | dopasowania rozkładów scipy (MLE, Nelder–Mead) na pełnych danych, liczone osobno dla histogramu i tabeli statystyk; konwersje liczb w pętli Pythona | plan D2 (§9) |
+| 4 | Export „Main plots" (1500 raportów, 216k wierszy) | **109,5 s** [109,2–110,7] (n=3), RSS 764 MB | eksport + przy 1. kliknięciu 6,1 s importu modułu w GUI | plan A2/D1 |
+| 5 | Reports → „Review reports" (1500 PDF) | **105,6 s** [99,8–106,7] (n=3) | skan i odczyt metadanych ściśle szeregowo (sam kod: 87,8 s); reszta to GUI: sygnał i restyle na każdy plik, 1,2 s zamrożenia przy wypełnianiu tabeli | pula procesów (sam kod): **30,2 s przy 4, 23,7 s przy 8**, wynik identyczny; zysk w UI wymaga też strumieniowania i throttlingu |
+| 6 | Import 1500 raportów | **54,3 s** [53,7–54,3] (n=3), RSS 399 MB | jeden zapisujący; ≈17% to sprawdzanie gotowości schematu 2× na raport, ≈6–8% odświeżanie rejestru parserów na raport (profil) | plan C4 |
+| 7 | Industrial Data → „CSV Summary…" (cache 50k × 20 metryk) | **46,4 s zamrożenia GUI** [45,3–46,8] (n=3) | przeliczanie metadanych i facetów EAV + 4 identyczne COUNT-y w wątku GUI | plan B2 |
+| 8 | Start aplikacji z cache (Windows) | **1068 ms bez żadnego okna** [954–1378] (n=14); okno główne 1341 ms | launcher → supervisor (≈0,4 s startu procesu + ≈0,2 s importów i hasha) → aplikacja | PoC: splash po **66 ms** [44–89]; okno główne 1298 ms; fokus 12/12 (dziś 6/14) |
+| 9 | Pierwszy start / nowa wersja (Windows) | po oknie postępu **1954 ms pustki** [1599–3877] (n=7); nowa wersja 2081 ms [1643–4428] | rozpakowanie 538 MB, potem start supervisora i aplikacji z nowo zapisanych DLL | PoC: 0 ms pustki; pierwsze okno nie wcześniej (opóźnienie przed kodem launchera, §5.5) |
+| 10 | Export → Grouping „Edit…" (1500 raportów) | **4,9 s zamrożenia GUI** [4,4–5,2] (n=3) | pandas `groupby.agg` z lambdą Pythona dla 36 000 grup | plan B3 |
+| 11 | Export → Filter „Edit…" (216k wierszy) | 4,4 s [4,4–5,4] (n=3) do kompletu wartości | DISTINCT-y w workerze, wypełnianie 13 list w GUI | plan A3 |
+| 12 | Pierwsze kliknięcie „Export" w sesji | **6,1 s zamrożenia GUI** [6,05–6,41] (n=3), kaczucha od 7,1 s | import modułu eksportu (matplotlib, numpy, …) w wątku GUI przed `show()` | plan A2 |
+| 13 | Okno główne tuż po starcie (Linux) | GUI blokowane łącznie 1562 ms, najdłużej 636 ms (n=5) | rozgrzewka 8 modułów w wątku GUI po pierwszym malowaniu | PoC wątku: 431 ms / 171 ms (n=5); gotowość o 9% później |
 
-Pozostałe zmierzone: Industrial Data open 2,9 s (1,8 s to import pakietu `oznak`), Realtime open
-1,5 s, Modify DB open 0,9 s (okno widoczne puste od 0,42 s), rekordy Modify DB 216k w 12,6 s,
-wczytanie CSV 100k w 24,7 s, przełączenie motywu 0,58 s zamrożenia. Pełna tabela: §4.
+Pozostałe (n=3): Industrial Data open 2,87 s (1,8 s to import pakietu `oznak` dla etykiety statusu),
+Realtime open 1,17 s, rekordy Modify DB 216k 10,2 s, wczytanie CSV 100k 20,4 s, Modify DB open 0,65 s,
+przełączenie motywu 0,65 s, Export open 0,37 s. Wszystkie z zamrożeniem GUI przez cały czas otwierania.
 
 ### 1.2 Kaczucha: co jest nie tak
 
-- Kaczucha jest podpięta w **8 z 58 flow UI**. **13 zmierzonych operacji >1 s nie ma żadnego
-  wskaźnika** (§7). Najdłuższe: Characteristic Mapping (764 s), Industrial → CSV Summary (43,6 s),
-  Grouping (5,8 s), Industrial Data (2,9 s), Realtime (1,5 s).
-- Tam, gdzie jest, ma cztery wady wspólnego mechanizmu (`worker_progress_dialog.py`):
-  1. próg 1 s liczy się od `show()`, a nie od kliknięcia; praca przed `show()` (plan importu,
-     import modułu eksportu) nie jest liczona;
-  2. animacja i opóźnione pokazanie działają w wątku GUI, więc nie ruszą, gdy GUI jest zajęte —
-     pierwszy eksport pokazuje kaczuchę po 7,8 s; przy skanie 50 PDF namalowała 4 z 10 klatek;
-  3. `QMovie` startuje przy tworzeniu (także gdy dialog nigdy się nie pokaże) i działa dalej po
-     zamknięciu (24 klatki w tle przy jednym skanie); dialog nie jest zwalniany (żywy po zakończeniu);
-  4. część flow zamyka kaczuchę przed końcowym nakładaniem wyniku w GUI (CSV-03).
-- Start aplikacji: obecny Qt splash pojawia się dopiero po imporcie PyQt i w trakcie budowy okna
-  głównego stoi (na Windows zmiana w 0–1 z 1–4 klatek). Szczegóły: §5.
+- Kaczucha jest podpięta w **8 z 60 flow UI** (8 wywołań fabryki). **10 zmierzonych operacji >1 s nie ma
+  żadnego animowanego wskaźnika** (§7): Characteristic Mapping 764 s, Industrial → CSV Summary 46 s,
+  szybki odczyt metadanych po Review 61 s (tylko licznik), rekordy Modify DB 10,2 s (baner bez animacji),
+  Grouping 4,9 s, Filter 4,4 s (tekst), Industrial Data 2,9 s, zamrożenie po Review 1,2 s (kaczucha już
+  zamknięta), Realtime 1,2 s, start na Windows (1,1 s bez okna przy starcie z cache, 2 s pustki przy
+  pierwszym). Modify DB open (0,65 s na Linuksie) może przekraczać 1 s na wolniejszym laptopie — nie
+  zweryfikowano.
+- Tam, gdzie jest, wspólny mechanizm (`worker_progress_dialog.py`) ma cztery wady:
+  1. próg 1 s liczy się od `show()`, nie od kliknięcia — pierwszy eksport: `show()` po 6,1 s, kaczucha po 7,1 s;
+  2. pokazanie i animacja zależą od wątku GUI — skan 1500: 61–63% klatek, przerwy do 261 ms; wczytanie CSV:
+     69–71%, do 436 ms; Create analytics: przerwa 1,95 s; import 97–98% (dobrze);
+  3. `QMovie` startuje przy tworzeniu dialogu (wszystkie wywołania) i tam, gdzie nie jest zatrzymywany,
+     działa po ukryciu (skan: ok. 500 klatek w tle); dialog nie jest zwalniany w Reports (skan, import) i w
+     podglądzie wartości CSV-06; w Export i CSV-03/07/09 jest zwalniany;
+  4. zamknięcie przed nałożeniem wyniku w GUI: CSV-03 i Review (1,2 s zamrożenia po zamknięciu kaczuchy).
+- Start: obecny Qt splash pojawia się dopiero po imporcie PyQt i stoi w trakcie budowy okna — na Windows
+  tylko 17 z 58 par zrzutów (co 200 ms, 40 prób) różniło się w obszarze kaczuchy, bezruch do 1,28 s
+  (PoC: 1087 z 1088 par).
 
 ### 1.3 Wyniki PoC
 
 | PoC | Wynik | Zgodność | Decyzja |
 |---|---|---|---|
-| Natywny splash z kaczuchą w launcherze + przekazanie do aplikacji (Windows) | splash 44–129 ms po starcie launchera; brak pustych okresów; brak podwójnego splasha; fokus w oknie głównym 100%; animacja zmienia się w 95–97% klatek | ten sam onedir, okno główne w tym samym czasie (warm) | **PRZYJĘTY** (do produkcyjnego PR, z warunkiem w §5.6) |
-| Characteristic Mapping jednym zapytaniem | 654–764 s → 2,3 s | identyczny wynik (mała baza: pełne porównanie; duża: próbka 30 metryk) | **PRZYJĘTY** |
-| Review reports w puli procesów | 87,8 s → 30,2 s (4) / 23,7 s (8) | identyczne wpisy i odczyty metadanych | **PRZYJĘTY** |
-| Rozgrzewka w wątku tła | najdłuższy zastój 636 → 171 ms; blokada 1562 → 431 ms | te same moduły, ten sam czas gotowości | **PRZYJĘTY** (z testem bezpieczeństwa importów) |
-| Więcej procesów renderu Extended plots | 48 grup: 220 s (1) → 96 s (4) → 88 s (8) | identyczny XLSX (hash treści) | **PRZYJĘTY** jako kierunek: liczba procesów z budżetu zasobów + jedna pula na eksport |
-| `PRAGMA cache_size`/`mmap_size` dla zapytań odczytu | −30%…+11%, w granicach szumu | — | **ODRZUCONY** |
-| BLAS=1 w procesach renderu | pomiar nieważny (błąd harnessu, §3.4); nie powtórzono | — | **NIEROZSTRZYGNIĘTY** |
+| Natywny splash z kaczuchą w launcherze + przekazanie do aplikacji (Windows) | splash 44–166 ms przy starcie z cache (≈100 ms od startu kodu przy pierwszym); 0 ms pustki we wszystkich scenariuszach; brak podwójnego splasha; fokus w oknie głównym we wszystkich próbach; animacja: 1087 z 1088 par zrzutów różnych | ten sam onedir; okno główne w tym samym czasie przy starcie z cache | **PRZYJĘTY WARUNKOWO** — warunki w §5.6 (fallback okna postępu, naprawa po kodzie 75, kwalifikacja, ≥6 prób drugiego startu na czystym laptopie) |
+| Characteristic Mapping jednym zapytaniem | 681 s (szacunek) / 764 s (UI) → 2,19 s | mała baza: pełna identyczność; duża: 30 metryk identycznych | **PRZYJĘTY** |
+| Review reports w puli procesów | sam kod: 87,8 s → 30,2 s (4) / 23,7 s (8) | identyczne wpisy i odczyty metadanych | **PRZYJĘTY** (pełny zysk w UI wymaga też C2: strumieniowanie, throttling) |
+| Rozgrzewka w wątku tła | najdłuższy zastój 636 → 171 ms; blokada 1562 → 431 ms | te same moduły; gotowość +9% | **PRZYJĘTY WARUNKOWO** (warunki A2, §9) |
+| Więcej procesów renderu Extended plots | 48 grup: 220 → 149 → 99 → 88 s (1/2/4/8) | identyczny XLSX przy automatycznej gęstości „reduced" (aktywnej we wszystkich próbach) | **PRZYJĘTY jako kierunek** (C3; zależy od decyzji E1) |
+| `PRAGMA cache_size`/`mmap_size` dla zapytań odczytu | −30%…+11% | — | **ODRZUCONY** (szum) |
+| BLAS=1 w procesach renderu | pomiar nieważny (§3.4), nie powtórzono | — | **NIEROZSTRZYGNIĘTY** |
 
-### 1.4 Rekomendowana pierwsza partia (PR-y 1–4, §9)
+### 1.4 Rekomendowana pierwsza partia
 
-1. **Splash i responsywność startu** — natywny splash z kaczuchą, przekazanie do aplikacji,
-   rozgrzewka poza GUI (PO zgłoszenie „brak splasha przy pierwszym uruchomieniu").
-2. **Wspólny mechanizm „operacji z kaczuchą"** — próg od kliknięcia, praca przygotowawcza poza GUI,
-   leniwe tworzenie, zwalnianie, throttling postępu; podpięcie do wszystkich 13 brakujących flow.
-3. **Szybkie duże zyski bez zmiany architektury** — Characteristic Mapping (1 zapytanie),
-   Grouping (wektoryzacja), Industrial → CSV Summary (bez powtórnych COUNT-ów, facet-y w SQL, worker),
-   Industrial Data (status `oznak` bez importu), import modułu eksportu poza GUI.
-4. **Review reports w puli procesów** (skan + metadane w jednym przebiegu na plik).
+1. **A1 splash launchera** (zgłoszenie PO) z warunkami z §5.6, razem z **A2 rozgrzewką poza GUI**.
+2. **A3 wspólny mechanizm operacji z kaczuchą** i podpięcie 10 brakujących operacji.
+3. **B1–B4 szybkie duże zyski bez zmiany architektury:** Characteristic Mapping, Industrial → CSV Summary,
+   Grouping, Industrial Data.
+4. **C2 Review w puli procesów** i **C4 import** (cache gotowości schematu, rejestr raz na import).
+5. Decyzje PO dla partii E (gęstość wykresów, supervisor, weryfikacja drugiego startu, payload).
 
 ## 2. Baza audytu i stan repozytorium (2026-10-19/20)
 
-- `develop` = `784e44b2` (bez zmian od RC1). Gałąź referencyjna #1142 jest **604 commity przed**
-  `develop` i zawiera go (`develop` jest przodkiem).
+- `develop` = `784e44b2`. Gałąź referencyjna #1142 jest **604 commity przed** `develop` i go zawiera.
 - **#1109** (`integrate/2026.09-rc1-into-develop` → `develop`): OPEN, head `82f8f576`, CLEAN.
-- **#1142** (`integrate/2026.09-rc1-build-261018` → `develop`): OPEN, head **`78d5d775`**,
-  MERGEABLE/BLOCKED. Opis PR (plan v5) wskazuje head `15ddbeb7` — jest **nieaktualny**: po nim weszły
-  `ff851c3d` (BUG-001/002 CSV Summary, #1145), `f4cac9a6` (etykieta 261020), `e4a739b8` (PyMuPDF <2)
-  i `78d5d775` (naprawa spawn launchera).
-- Audyt STEP2 dotyczy więc `78d5d775`, a nie `develop` (inaczej proponowałby ponownie wdrożone już
-  optymalizacje #1121/#1129–#1133/#1137/#1138).
-- **Baza przyszłych PR-ów STEP2:** gałąź referencyjna #1142 do czasu landowania #1109 i #1142;
-  potem `develop`. Draft PR PoC celuje w `integrate/2026.09-rc1-build-261018`, żeby diff pokazywał
-  tylko STEP2; po landowaniu trzeba go przestawić na `develop`.
-- Stan obszarów regresji wskazanych w poleceniu (na `78d5d775`):
-  - **granice stron (#1143):** naprawione dla nowych importów (`d87c5801`); dane RC1 nadal czekają na
-    decyzję PO; harness STEP2 nie zmienia parsowania;
-  - **metadane workerów:** prepare workers otrzymują i odsyłają zatwierdzony override (`c476b7f2`);
-    PoC puli „Review" używa tych samych funkcji per plik i daje identyczne odczyty;
-  - **checkpointy WAL (#1137):** kadencja ≥25 commitów / ≥2 s, ponawianie przy busy; import 1500
-    raportów przeszedł z identycznymi wierszami (fixture wszystkich scenariuszy DB).
+- **#1142** (`integrate/2026.09-rc1-build-261018` → `develop`): OPEN, head **`78d5d775`**, MERGEABLE/BLOCKED.
+  Opis PR (plan v5) wskazuje head `15ddbeb7` — **nieaktualny**: później weszły `ff851c3d` (BUG-001/002 CSV
+  Summary, #1145), `f4cac9a6` (etykieta 261020), `e4a739b8` (PyMuPDF <2) i `78d5d775` (naprawa spawn).
+- Audyt dotyczy `78d5d775`, nie `develop` — inaczej proponowałby wdrożone już #1121/#1129–#1133/#1137/#1138.
+- **Baza przyszłych PR-ów:** gałąź referencyjna #1142 do czasu landowania #1109 i #1142, potem `develop`.
+  Draft PR PoC celuje w `integrate/2026.09-rc1-build-261018` (diff tylko STEP2); po landowaniu — `develop`.
+- Obszary regresji z polecenia (stan na `78d5d775`): granice stron #1143 — naprawione dla nowych importów
+  (`d87c5801`), dane RC1 czekają na decyzję PO; metadane workerów — override przekazywany i odsyłany
+  (`c476b7f2`), PoC puli Review daje identyczne odczyty; checkpointy WAL #1137 — import 1500 raportów
+  z identycznymi wierszami (fixture wszystkich scenariuszy DB).
 
 ## 3. Metoda, środowisko i procedura odtworzenia
 
-### 3.1 Narzędzia (w repo, gałąź PoC)
+### 3.1 Narzędzia (gałąź PoC)
 
-- `scripts/benchmark_ui_flows.py` — steruje prawdziwymi oknami tak jak użytkownik (handlery
-  przycisków w wątku GUI), każdy scenariusz w osobnym procesie, prywatny `HOME`, Qt offscreen.
-  Mierzy: czas do pierwszej informacji zwrotnej (pierwsze nowe okno), czas do wyniku (warunek
-  scenariusza), zastoje GUI (QTimer 5 ms — przerwa między tyknięciami = czas, w którym okno nie
-  mogło się odmalować ani przyjąć wejścia), kaczuchę (koszt utworzenia, `show()`, faktyczne
-  pokazanie, klatki animacji w czasie widoczności, klatki w tle, czy dialog żyje po zakończeniu),
-  peak RSS całego drzewa procesów, CPU własne i dzieci. `--profile N` profiluje wątek GUI,
-  `--profile-thread modul:Klasa` profiluje `run()` QThreada.
+- `scripts/benchmark_ui_flows.py` — prawdziwe okna i handlery przycisków w wątku GUI, każdy scenariusz
+  w osobnym procesie, prywatny `HOME`, Qt offscreen. Mierzy czas do pierwszej informacji zwrotnej
+  (pierwsze nowe okno), czas do wyniku, zastoje GUI (QTimer 5 ms: przerwa między tyknięciami = czas bez
+  odmalowania i bez wejścia), kaczuchę (koszt utworzenia, `show()`, faktyczne pokazanie, klatki w czasie
+  widoczności i w tle, czy dialog żyje po zakończeniu), peak RSS drzewa procesów, CPU własne i dzieci.
+  `--profile N` profiluje wątek GUI, `--profile-thread modul:Klasa` profiluje `run()` QThreada.
 - `scripts/measure_windows_first_run_timeline.py` + job CI `windows-first-run-timeline`
-  (`run_windows_first_run_timeline=1`) — buduje onedir raz i pakuje go launcherem bazowym
-  (`78d5d775`) i PoC; scenariusze cold / verified / warm ×2 / warmup / corrupt / new_version,
-  rundy naprzemienne; próbkowanie okien co 20 ms, zrzuty ekranu co 200 ms, znaczniki launchera,
-  supervisora i aplikacji na wspólnym zegarze.
+  (`run_windows_first_run_timeline=1`) — onedir budowany raz i pakowany launcherem bazowym i PoC;
+  scenariusze cold / verified / warm ×2 / warmup / corrupt / new_version w rundach naprzemiennych;
+  okna co 20 ms, zrzuty co 200 ms, znaczniki launchera, supervisora i aplikacji na wspólnym zegarze;
+  opcje `--settle-seconds` i wariant z `METROLIZA_LAUNCHER_SPLASH=0`.
 - Instrumentacja opcjonalna (domyślnie wyłączona): `METROLIZA_STARTUP_STALL_PROBE=1`,
   `METROLIZA_STARTUP_EXIT_AFTER_WARMUP=1`, `METROLIZA_WARMUP_IN_THREAD=1` (PoC), znaczniki
-  `timing event=… epoch_ms=…` w logu launchera.
+  `timing event=… epoch_ms=…` w logu launchera i `supervisor_*` w profilu startu.
 
 ### 3.2 Dane (wyłącznie syntetyczne)
 
-- 1500 PDF CMM (≈150 pomiarów, 37 referencji; generator z audytu #1120), import do bazy 90,8 MB /
-  216 000 wierszy pomiarów, 2664 metryk (nagłówek × oś); 50 PDF (7200 wierszy, 216 grup Extended);
-  30 PDF (960 wierszy, 48 grup Extended); CSV 100 000 × 11 kolumn (9,1 MB); cache przemysłowy
-  50 000 rekordów × 20 metryk (1 000 000 wartości EAV) w kopii bazy 1500.
-- Brak danych klientów, sekretów i profili ujawniających treść raportów.
+1500 PDF CMM (≈150 pomiarów, 37 referencji) → baza 90,8 MB / 216 000 wierszy / 2664 metryk; 50 PDF
+(7200 wierszy, 216 grup Extended); 30 PDF (960 wierszy, 48 grup); CSV 100 000 × 11 kolumn (9,1 MB);
+cache przemysłowy 50 000 rekordów × 20 metryk (1 000 000 wartości EAV) w kopii bazy 1500.
 
 ### 3.3 Środowisko
 
-- Linux: Xeon W-10855M (6C/12T), 62 GB RAM, kernel 7.2.5; Python 3.11.16, PyQt6/Qt 6.6.1,
-  PyMuPDF 1.28.2, pandas 3.0.6, numpy 2.4.6, matplotlib 3.11.2, SQLite 3.53.1, XlsxWriter 3.2.9
-  (venv deweloperski; `requirements.txt` ma zakresy wersji, CI instaluje najnowsze zgodne).
-  Dane na tmpfs (zimny dysk niemierzony). Obciążenie tła zapisane przy każdej próbie (loadavg 3–5;
-  przez pierwsze ~2 h audytu na maszynie działała gra — wtedy wykonywano tylko analizę statyczną).
-- Windows: hostowany runner GitHub (windows-latest, 4 vCPU, Defender), EXE zbudowane w CI z gałęzi
-  PoC. To nie jest czysty laptop z antywirusem użytkownika (#1101 A5).
+- Linux: Xeon W-10855M (6C/12T), 62 GB RAM; Python 3.11.16, PyQt6/Qt 6.6.1, PyMuPDF 1.28.2, pandas 3.0.6,
+  numpy 2.4.6, matplotlib 3.11.2, SQLite 3.53.1, XlsxWriter 3.2.9 (venv deweloperski; `requirements.txt`
+  ma zakresy, CI instaluje najnowsze zgodne). Dane na tmpfs (zimny dysk niemierzony). loadavg zapisany przy
+  każdej próbie (2–6). Przez pierwsze ~2 h na maszynie działała gra — wtedy tylko analiza statyczna.
+- Windows: hostowany runner GitHub (windows-latest, 4 vCPU, Defender). To nie jest czysty laptop (#1101 A5).
 
-### 3.4 Zastrzeżenia do pomiarów
+### 3.4 Zastrzeżenia
 
-- Wyniki n=1 pochodzą z przebiegu „smoke" każdego scenariusza; gdzie dostępne są mediany z 3 prób,
-  podano je w §4 z rozrzutem.
-- Unieważnione przeze mnie i powtórzone: (a) pierwszy pomiar skalowania Extended plots i test BLAS=1 —
-  skrypty pomocnicze nie miały strażnika `__main__`, więc workery spawn ponownie uruchamiały cały
-  eksport (ok. 40 min nieważnych pomiarów); powtórzono ze strażnikiem; test BLAS=1 nie został
-  powtórzony; (b) pierwszy przebieg osi czasu Windows bez logów (ścieżki względne) — powtórzony.
-- Profilery (cProfile) wydłużają czasy 1,3–2×; liczby z profili służą tylko do proporcji.
+- n=1 tam, gdzie zaznaczono; pozostałe mediany z 3 prób (Linux) lub 7/14 (Windows).
+- Unieważnione i powtórzone: (a) pierwszy pomiar skalowania Extended plots i test BLAS=1 — skrypty bez
+  strażnika `__main__`, więc workery spawn uruchamiały cały eksport ponownie (≈40 min nieważnych
+  pomiarów); skalowanie powtórzone (`scale3`: 1/2/4; `scale2`: 8 — oba ze strażnikiem), BLAS=1 nie;
+  (b) pierwszy przebieg osi czasu Windows bez logów (ścieżki względne); (c) w serii 3-krotnej po jednej
+  próbie Industrial skończyło się SIGSEGV przy niszczeniu obiektów Qt po zakończeniu pomiaru (stos
+  faulthandlera: powrót z `run_scenario`); harness trzyma teraz obiekty do `os._exit`, powtórka 6/6 bez
+  błędu — artefakt harnessu, nie przepływ produktu.
+  Dwie udane próby serii 3-krotnej dały 40,2 i 41,9 s dla Industrial → CSV Summary; raport podaje
+  powtórkę (45,3–46,8 s) — rozrzut między seriami ≈12%.
+- Profile (cProfile) wydłużają czasy 1,3–2×; liczby z profili tylko jako proporcje.
+- Windows: w 3 próbach próbnik okien nie zarejestrował okna głównego (PoC warm ×2, obecny verified po
+  20 s ×1), choć profil aplikacji ma `main_window_show_called`, a harness zamknął aplikację ≈0,5 s
+  później — to przeoczenia próbnika; czasy okna głównego i fokus liczone z pozostałych prób.
 
 ### 3.5 Odtworzenie
 
 ```bash
-# Linux, w worktree PoC (synthetic data only)
-python scripts/benchmark_ui_flows.py prepare --data-dir DATA        # CSV + cache (po imporcie 1500)
+# Linux, worktree PoC, dane syntetyczne
 python scripts/benchmark_ui_flows.py run --scenario reports_import --data-dir DATA \
     --pdf-set pdf_1500 --keep-db DATA/db_1500.sqlite --out import.json
+python scripts/benchmark_ui_flows.py prepare --data-dir DATA        # CSV + cache przemysłowy
 python scripts/benchmark_ui_flows.py suite --data-dir DATA --runs 3 --out-dir OUT
 # Windows (CI)
 gh workflow run ci.yml --ref perf/step2-audit -f run_windows_first_run_timeline=1
@@ -163,327 +161,355 @@ gh workflow run ci.yml --ref perf/step2-audit -f run_windows_first_run_timeline=
 
 ## 4. Tabela pomiarów
 
-Mediana i rozrzut z 3 prób, gdzie podano; inaczej n=1. Czasy od akcji użytkownika.
-„Pierwsza informacja" = pierwsze nowe okno (dialog lub kaczucha). „Zastój" = najdłuższa przerwa
-pętli zdarzeń GUI.
+Linux, od akcji użytkownika; mediana [min–max] z 3 prób, jeśli nie zaznaczono n.
 
-| Flow | Scenariusz (dane) | Wynik [s] | Pierwsza informacja [s] | Najdłuższy zastój GUI [s] | Peak RSS [MB] | CPU [s] (proces + dzieci) | n |
-|---|---|---:|---:|---:|---:|---:|---:|
-| IMP-SCAN+META | Review 50 PDF | 4,53 | 1,13 (kaczucha) | 0,38 | 159 | 5,1 | 1 |
-| IMP-SCAN+META | Review 1500 PDF (UI, setup importu) | ≈104 | — | — | — | — | 1 |
-| IMP-RUN | import 50 PDF | 4,77 | 1,07 (kaczucha) | 0,11 | 166 | 6,8 | 1 |
-| IMP-RUN | import 1500 PDF | 68,3 | 1,20 (kaczucha) | 0,25 | 397 | 99 + 87 | 1 |
-| DB-OPEN | Modify DB, baza 1500 | 0,96 | 0,42 (puste okno) | 0,96 | 123 | 1,6 | 1 |
-| DB-RECORDS | zakładka pomiarów 216k + 1 znak filtra | 13,1 (wiersze 12,6) | baner | 0,39 | 273 | 18,1 | 1 |
-| DB-APPLY | 1 zmiana nazwy | 0,11 | — | 0,11 | 123 | — | 1 |
-| EXP-OPEN | okno eksportu | 0,38 | 0,36 | 0,38 | 118 | 0,5 | 1 |
-| FLT-OPEN | filtr, 216k wierszy | 5,56 | 0,49 | 0,49 | 130 | 8,2 | 1 |
-| GRP-OPEN | grouping, 1500 raportów | 5,82 | 5,82 | **5,82** | 173 | — | 1 |
-| GRP-MAP | dopasowanie nazw, 2664 metryk | **764,3** | 764,3 | **764,3** | 134 | — | 1 |
-| SHELL-THEME | motyw ciemny, tabela 50 | 0,58 | — | 0,58 | 160 | 0,8 | 1 |
-| CSV-02/03 | wczytanie CSV 100k | 24,7 | 1,12 (kaczucha) | 0,40 | 218 | 28,1 | 1 |
-| CSV-09 | Create analytics 100k | **228,1** | 0,99 (kaczucha) | 1,91 | 642 | 346 | 1 |
-| IND-01 | Industrial Data, cache 50k | 2,92 | 2,91 | **2,92** | 185 | 4,3 | 1 |
-| IND-05 | Industrial → CSV Summary | **43,6** | 43,6 | **43,6** | 208 | 62 | 1 |
-| RT-01 | Realtime, pierwsze otwarcie | 1,48 | 1,46 | **1,48** | 138 | 2,6 | 1 |
-| EXP-RUN | Extended plots, 50 raportów / 216 grup, 2 procesy | **551,9** | 7,76 (kaczucha) | **6,82** (1. klik) | 944 | 335 + 1312 | 1 |
-| EXP-RUN (PoC) | Extended plots, 48 grup, procesy 1 / 2 / 4 / 8 | 220 / ‹2› / 96 / 88 | — | — | — | 304 / ‹2› / 27+359 / 27+555 | 1 |
-| SHELL-START | start (Linux), okno → gotowość | 0,52 → 1,86 | splash | 0,64 (rozgrzewka) | — | — | 5 |
-| SHELL-START (PoC) | rozgrzewka w wątku | 0,56 → 2,02 | splash | 0,17 | — | — | 5 |
+| Flow | Scenariusz | Wynik [s] | Pierwsza informacja [s] | Najdłuższy zastój GUI [s] | Peak RSS [MB] | n |
+|---|---|---:|---:|---:|---:|---:|
+| IMP-SCAN+META | Review 1500 PDF | 105,6 [99,8–106,7] | 1,13 (kaczucha) | 1,17 [1,14–1,25] (wypełnianie tabeli) | 173 | 3 |
+| IMP-RUN | import 1500 PDF | 54,3 [53,7–54,3] | 1,17 (kaczucha) | 0,23 | 399 | 3 |
+| DB-OPEN | Modify DB, baza 1500 | 0,65 [0,59–0,66] | 0,29 (puste okno) | 0,65 | 123 | 3 |
+| DB-RECORDS | pomiary 216k + 1 znak filtra | 10,2 [9,8–10,2] | baner | 0,28 | 273 | 3 |
+| DB-APPLY | 1 zmiana nazwy | 0,10 | — | 0,10 | 123 | 3 |
+| EXP-OPEN | okno eksportu | 0,37 [0,33–0,39] | 0,36 | 0,37 | 119 | 3 |
+| FLT-OPEN | filtr, 216k | 4,43 [4,37–5,41] | 0,43 | 0,45 | 130 | 3 |
+| GRP-OPEN | grouping, 1500 | 4,90 [4,44–5,21] | 4,88 | **4,90** | 173 | 3 |
+| GRP-MAP | dopasowanie nazw, 2664 metryk | **764,3** | 764,3 | **764,3** | 134 | 1 |
+| EXP-RUN | Main plots, 1500 raportów | **109,5** [109,2–110,7] | 7,09 (kaczucha) | **6,12** (1. klik) | 764 | 3 |
+| EXP-RUN | Extended, 50 raportów / 216 grup, 2 procesy | **551,9** | 7,76 | 6,82 (1. klik) | 944 | 1 |
+| SHELL-THEME | motyw ciemny, tabela 1500 | 0,65 [0,64–0,73] | — | 0,65 | 173 | 3 |
+| CSV-02/03 | wczytanie CSV 100k | 20,4 [20,0–22,1] | 1,09 (kaczucha) | 0,42 | 217 | 3 |
+| CSV-09 | Create analytics 100k | **206,5** [203,1–207,7] | 1,08 (kaczucha) | 1,61 | 644 | 3 |
+| IND-01 | Industrial Data, cache 50k | 2,87 [2,85–3,07] | 2,87 | **2,87** | 185 | 3 |
+| IND-05 | Industrial → CSV Summary | **46,4** [45,3–46,8] | 46,4 | **46,4** | 208 | 3 |
+| RT-01 | Realtime, pierwsze otwarcie | 1,17 [1,07–1,41] | 1,17 | **1,17** | 138 | 3 |
+| SHELL-START | start, okno → gotowość | 0,52 → 1,86 | splash | 0,64 (rozgrzewka) | — | 5 |
 
-Windows (EXE, hostowany runner, ms od utworzenia procesu; mediana [min–max]):
+PoC (Linux): Characteristic Mapping 2,19 s [2,18–2,35] (n=3); Review w puli 2/4/8 procesów: 51,0 / 30,2 /
+23,7 s (n=1, sam kod); Extended 48 grup 1/2/4/8 procesów: 219,8 / 149,2 / 98,6 / 88,0 s (n=1 każdy, CPU
+304 / 29+320 / 28+367 / 27+555 s); Extended 48 grup + dashboard HTML przy 4 procesach: 209,2 s, tryb
+`serial_output_mode`; rozgrzewka w wątku: zastój 171 ms, gotowość 1,46 s po malowaniu (n=5).
 
-| Scenariusz | Wariant | Kod launchera rusza | Pierwsze okno | Pusty ekran po 1. oknie | Okno główne | Fokus w oknie głównym | n |
+Windows (EXE, hostowany runner; ms od utworzenia procesu; mediana [min–max]; runy 39318835183,
+39322360692, 39332127323 — drugie uruchomienie natychmiast po pierwszym):
+
+| Scenariusz | Wariant | Kod launchera rusza | Pierwsze okno | Pustka po 1. oknie | Okno główne | Fokus | n |
 |---|---|---:|---:|---:|---:|---|---:|
-| cold | obecny | — | 2460 [2045–2968] (okno postępu) | 1925 [1709–1948] | 7964 [6671–9273] | 4/4 | 4 |
-| cold | PoC | 3191 [2212–3829] | 3249 [2257–3883] (splash) | **0** | 8185 [7687–9262] | 4/4 | 4 |
-| verified | obecny | — | 123 [97–155] | 935–1209 | 4592 [3965–8763] | 1/4 | 4 |
-| verified | PoC | 14 | 89 [73–166] | **0** | 7235 [6402–7391] | 4/4 | 4 |
-| warm | obecny | — | 1100 [913–1378] (Qt splash) | 0 | 1347 [1199–1629] | 4/12 | 12 |
-| warm | PoC | 15 | 75 [44–103] | **0** | 1347 [1148–1427] | 11/11 | 12 |
-| new_version | obecny | — | 2436 [2266–3507] | 1879 [1709–4206] | 6955 [6561–8292] | 4/4 | 4 |
-| new_version | PoC | 2223 [2177–8935] | 2257 [2202–3775] | **0** | 6934 [6314–13869] | 4/4 | 4 |
+| cold | obecny | — | 2636 [1934–3609] (okno postępu) | 1954 [1599–3877] | 8162 [5903–10157] | 6/7 | 7 |
+| cold | PoC | 3208 [2390–3729] | 3313 [2421–3883] (splash) | **0** | 8115 [6864–9960] | 7/7 | 7 |
+| warm | obecny | — | 1068 [954–1378] (Qt splash) | 0 | 1341 [1218–1629] | 6/14 | 14 |
+| warm | PoC | 15 | **66** [44–89] | **0** | 1298 [1148–1489] (n=12) | 12/12 | 14 |
+| new_version | obecny | — | 2436 [2099–3507] | 2081 [1643–4428] | 7491 [6561–10517] | 6/7 | 7 |
+| new_version | PoC | 2468 [2177–3740] | 2601 [2202–3775] | **0** | 7734 [6084–13869] | 7/7 | 7 |
+| corrupt | obecny | — | 86 [64–106] | 1700 [0–1866] | 5776 [5381–6341] | 6/6 | 7 (1 błąd: kod 102) |
+| corrupt | PoC | 15 | 79 [71–99] | **0** | 5982 [5499–19702] | 7/7 | 7 |
+| verified (od razu) | obecny | — | 136 [97–155] | 1051 [935–1232] | 4906 [3965–8763] | 1/7 | 7 |
+| verified (od razu) | PoC | 15 | 92 [66–166] | **0** | 7161 [5620–7739] | 7/7 | 7 |
+| verified (po 20 s) | obecny | — | 116 [95–137] | 981 [923–1039] | 1841 (n=1) | 1/1 | 2 |
+| verified (po 20 s) | PoC | 14 | 130 [121–139] | **0** | 2720 [1768–3673] | 2/2 | 2 |
+| verified (po 20 s) | PoC bez okna | 14 | 2316 [1551–3080] (Qt splash) | 0 | 2580 [1823–3337] | 0/2 | 2 |
 
-(Dane: runy 39318835183 i 39322360692 po 2 rundy; run 39332127323 z 3 rundami po poprawce
-odświeżania splasha — §5.6. „verified" PoC jest wolniejszy w medianie — wyjaśnienie w §5.6.)
+Run A/B 39349370988 (pauza 20 s przed drugim startem): weryfikacja SHA-256 + flush — obecny 394 i
+426 ms, PoC 450 i 2235 ms; wariant bez okna nie loguje etapu weryfikacji. Jedna próba PoC corrupt
+(run 39332127323): odbudowa runtime 17,9 s (pozostałe ≈3,6 s), splash widoczny przez cały czas —
+przyczyna po stronie runnera niezbadana; obecny launcher nie loguje etapów, więc nie da się porównać.
 
 ## 5. Pierwsze uruchomienie i wczesny splash (zgłoszenie PO)
 
 ### 5.1 Odtworzenie
 
-Odtworzone na Windows (hostowany runner, Defender, EXE z CI): pierwsze uruchomienie z pustym
-cache, drugie uruchomienie, kolejne, pierwsze uruchomienie nowej wersji przy starym cache,
-odbudowa uszkodzonego cache (obcięty `_internal/python311.dll`). Próbkowanie okien co 20 ms
-i zrzuty ekranu co 200 ms (filmstripy w artefakcie CI `windows-first-run-timeline`).
+Odtworzone na Windows (hostowany runner, Defender, EXE z CI): pierwsze uruchomienie z pustym cache,
+drugie, kolejne, pierwsze uruchomienie nowej wersji przy starym cache, odbudowa uszkodzonego cache
+(obcięty `_internal/python311.dll`). Okna co 20 ms, zrzuty ekranu co 200 ms; filmstripy w artefakcie CI
+`windows-first-run-timeline` (katalogi `runs/*/frames`).
 
-### 5.2 Oś czasu obecnego launchera (pierwsze uruchomienie, mediana z 4)
+### 5.2 Oś czasu obecnego launchera (pierwsze uruchomienie, mediany z 7)
 
 | Od – do [ms od podwójnego kliknięcia] | Co widzi użytkownik | Co się dzieje |
 |---|---|---|
-| 0 – ≈2000…3000 | **nic** | system i antywirus skanują nowy plik EXE 334 MB, zanim wykona się jakikolwiek kod launchera |
-| ≈2000 – ≈4000 | szare okno „Preparing Metroliza for first use…" z paskiem | rozpakowanie 538 MB / 2156 plików (LZ4, 4 wątki) |
-| ≈4000 – ≈6000 | **nic (1,7–1,9 s)** | start `metroliza.exe` (supervisor, PyInstaller) z nowo zapisanych DLL, hash ≈94 MB komponentów, start `metroliza_application.exe`, import PyQt |
-| ≈6000 – ≈6700 | Qt splash z kaczuchą — **kaczucha stoi** | import i budowa okna głównego w wątku GUI blokują `QMovie` |
-| ≈6700 | okno główne | — |
+| 0 – ≈2600 | **nic** | system i antywirus sprawdzają nowy plik EXE 334 MB, zanim wykona się kod launchera |
+| ≈2600 – ≈4600 | szare okno „Preparing Metroliza for first use…" z paskiem | rozpakowanie 538 MB / 2156 plików (LZ4, wątki) |
+| ≈4600 – ≈6600 | **nic (1954 ms [1599–3877])** | start `metroliza.exe` (supervisor) z nowych DLL, hash ≈94 MB komponentów, start aplikacji, import PyQt |
+| ≈6600 – ≈8200 | Qt splash z kaczuchą — **kaczucha zwykle stoi** (29% par zrzutów zmienionych) | import i budowa okna głównego w wątku GUI |
+| ≈8200 | okno główne | — |
 
-Drugie uruchomienie: okno postępu pokazuje „Preparing… for first use" z pustym paskiem przez całą
-weryfikację (SHA-256 + flush 2156 plików, 2,6–7,0 s), potem 0,9–1,2 s pustki. Kolejne uruchomienia:
-**0,9–1,4 s bez żadnego okna**, potem krótko Qt splash; w 8 z 12 prób okno główne nie dostało fokusu.
+Drugie uruchomienie: okno „Preparing… for first use" z pustym paskiem przez całą weryfikację
+(SHA-256 + flush 2156 plików), potem ≈1 s pustki. Kolejne uruchomienia: **≈1,1 s bez żadnego okna**;
+okno główne dostało fokus w 6 z 14 prób.
 
-### 5.3 Rozbicie startu z cache (PoC, Windows, n=8)
+### 5.3 Rozbicie startu z cache (PoC, Windows, run 39322360692, n=8)
 
 | Etap | Czas |
 |---|---:|
 | launcher: payload, blokada instancji, splash, kontrola rozmiarów 2156 plików | ≈0,12 s |
 | start procesu supervisora (bootloader PyInstaller + interpreter) | ≈0,43 s |
-| importy supervisora + hash komponentów pakietu (≈94 MB) | ≈0,1 + 0,1 s |
-| start procesu aplikacji (Popen + bootloader + interpreter) | ≈0,27 s |
-| aplikacja: PyQt, okno główne, `show()` | ≈0,33 s |
+| importy supervisora + hash komponentów pakietu (≈94 MB) | ≈0,04–0,2 s + ≈0,1 s |
+| start procesu aplikacji (Popen + bootloader + interpreter) | ≈0,25–0,30 s |
+| aplikacja: PyQt, okno główne, `show()` | ≈0,31–0,36 s |
 
-Warstwa supervisora to ≈0,65–0,9 s z ≈1,3 s ciepłego startu — największa pojedyncza pozycja.
+Warstwa supervisora to ≈0,65–0,9 s z ≈1,3 s ciepłego startu — największa pojedyncza pozycja (decyzja E2).
 
 ### 5.4 Projekt i PoC: splash w launcherze
 
-- **Gdzie:** natywny launcher (Rust, Win32/GDI), od razu po kontroli pojedynczej instancji —
-  przed rozwiązaniem katalogu cache, kontrolą „warm", weryfikacją i rozpakowaniem. Nie zależy od
-  Pythona, Qt ani rozpakowanego runtime.
-- **Animacja:** istniejący asset kaczuchy (`encoded_loading_gif`) zapisany w launcherze jako GIF
-  (test pilnuje identyczności z assetem aplikacji), dekodowany raz do klatek i animowany na
-  własnym wątku z własną pętlą komunikatów — tańczy niezależnie od rozpakowywania, hashowania,
-  startu supervisora i od zajętego wątku GUI aplikacji.
-- **Etap i postęp:** „Preparing Metroliza for first use…" z postępem rozpakowania, „Checking
-  Metroliza files…" z postępem weryfikacji (dotąd pasek stał), „Repairing Metroliza…", potem etapy
-  aplikacji („Starting Metroliza interface…", „Loading main window…") wysyłane przez `WM_COPYDATA`.
-- **Przekazanie bez przerwy i bez dwóch splashy:** launcher przekazuje uchwyt okna w
-  `METROLIZA_LAUNCHER_SPLASH_HWND`; aplikacja sprawdza klasę okna, nie tworzy własnego Qt splasha,
-  po pierwszym malowaniu okna głównego wysyła `MSG_HANDOFF` z uchwytem okna głównego; launcher,
-  który ma prawo do pierwszego planu, przenosi fokus na okno główne i zamyka splash. Supervisor
-  zamyka splash przed własnym komunikatem błędu; launcher zamyka go przed swoim błędem, po wyjściu
-  aplikacji i po 120 s bez przekazania.
-- **DPI:** proces launchera per-monitor-v2 (dynamicznie, starsze systemy startują), rozmiar ze
-  skalą systemu.
+- **Gdzie:** natywny launcher (Rust, Win32/GDI), zaraz po kontroli pojedynczej instancji — przed
+  rozwiązaniem katalogu cache, kontrolą „warm", weryfikacją i rozpakowaniem. Nie zależy od Pythona, Qt
+  ani rozpakowanego runtime.
+- **Animacja:** istniejący asset kaczuchy (`encoded_loading_gif`) zapisany w launcherze jako GIF (test
+  pilnuje identyczności), dekodowany raz do klatek i animowany na własnym wątku z własną pętlą komunikatów
+  (10 Hz, zgodnie z klatkami GIF) — niezależnie od rozpakowywania, hashowania, startu supervisora i od
+  zajętego wątku GUI aplikacji.
+- **Etap i postęp:** „Preparing Metroliza for first use…" z postępem rozpakowania, „Checking Metroliza
+  files…" z postępem weryfikacji (dotąd pasek stał), potem etapy aplikacji przez `WM_COPYDATA`.
+- **Przekazanie:** launcher przekazuje uchwyt w `METROLIZA_LAUNCHER_SPLASH_HWND`; aplikacja sprawdza klasę
+  okna, nie tworzy własnego Qt splasha, po pierwszym malowaniu okna głównego wysyła `MSG_HANDOFF` z jego
+  uchwytem; launcher (ma prawo do pierwszego planu) przenosi fokus i zamyka splash. Zamknięcie także:
+  przed komunikatem supervisora, przed błędem launchera, przy błędzie/smoke aplikacji, po wyjściu
+  aplikacji i po 120 s.
+- **DPI:** system-aware (rozmiar ze skalą systemu); per-monitor wymaga obsługi `WM_DPICHANGED` (A1).
 
-### 5.5 Wynik PoC (Windows)
+### 5.5 Wynik PoC
 
-- Splash widoczny **44–129 ms** od utworzenia procesu przy starcie z cache i ≈50 ms od startu kodu
-  przy pierwszym uruchomieniu (wcześniej nic nie da się pokazać — patrz §5.2, pierwszy wiersz).
-- **Zero pustych okresów** po pierwszym oknie we wszystkich scenariuszach (obecnie 0,9–4,2 s).
-- **Zero nakładających się splashy**; fokus w oknie głównym we wszystkich próbach PoC.
-- Animacja: zrzuty co 200 ms różnią się w obszarze kaczuchy w 95–97% par (obecny Qt splash: 0–25%).
-- Okno główne przy starcie z cache: bez zmian (1347 vs 1347 ms mediana).
-- Odbudowa uszkodzonego cache: PoC 2/2; obecny launcher 1 z 2 prób zakończył kodem 102
-  „cannot replace a runtime still in use" (osobne ryzyko niezawodności, §10).
+- Splash widoczny **44–166 ms** od utworzenia procesu przy starcie z cache i ≈100–130 ms od startu kodu
+  przy pierwszym uruchomieniu.
+- **Zero pustych okresów** po pierwszym oknie we wszystkich scenariuszach (obecnie 1,0–3,9 s).
+- **Zero nakładających się splashy**; fokus w oknie głównym we wszystkich próbach, w których próbnik
+  zarejestrował okno główne (obecnie 6/14 przy starcie z cache, 1/7 przy drugim).
+- Animacja: 1087 z 1088 par zrzutów różni się w obszarze kaczuchy (54 próby); obecny Qt splash 17 z 58
+  par (40 prób), bezruch do 1,28 s.
+- Okno główne: bez zmian przy starcie z cache (1298 vs 1341 ms) i przy pierwszym (8115 vs 8162 ms).
+- Wariant PoC z wyłączonym splashem: pierwszy start **7,4 s bez żadnego okna** (run A/B) — tyle daje splash.
+- **Nie wykazano:** wcześniejszego pierwszego okna przy pierwszym uruchomieniu. Kod launchera PoC rusza po
+  3208 ms [2390–3729] od kliknięcia, a pierwsze okno obecnego launchera pojawia się po 2636 ms; obecny
+  launcher nie loguje startu kodu, więc nie da się rozdzielić skanu AV od pracy launchera. Do sprawdzenia
+  na czystym laptopie.
 
-### 5.6 Warunki przed produkcyjnym PR
+### 5.6 Warunki przed produkcyjnym PR (A1)
 
-- **Drugie uruchomienie (verified):** mediana okna głównego PoC 7,2 s vs 4,6 s obecnie (n=4, obecny
-  wariant dwumodalny 2,6–7,0 s). Pierwsza wersja PoC odświeżała całe okno co 50 ms i tworzyła fonty
-  przy każdym malowaniu; poprawiono (10 Hz, fonty raz) i zmierzono ponownie w 3 rundach
-  (run 39332127323) — wynik w §4. Kryterium odbioru: weryfikacja PoC nie wolniejsza niż obecna
-  (mediana z ≥6 prób), narzut splasha <1% CPU.
-- Testy jednostkowe launchera (Linux) i `cargo check` dla Windows przechodzą; kwalifikacja
-  `qualify_windows_launcher.py` i `qualify_windows_portable_onefile.py` wymaga uruchomienia z nowym
-  launcherem (nie uruchomiono).
-- Opóźnienie przed startem kodu (2,2–3,9 s na świeżym pliku) zależy od rozmiaru EXE i skanera.
-  Zmniejsza je tylko mniejszy payload (np. cv2 75 MB, dwie kopie OpenBLAS po 20 MB) lub reputacja
-  podpisu — osobna decyzja (#1097/#1101, brak certyfikatu).
+1. **Fallback:** przy `METROLIZA_LAUNCHER_SPLASH=0` albo nieudanym utworzeniu splasha PoC nie pokazuje
+   żadnego okna (stare okno postępu usunięto) — przywrócić okno postępu jako fallback.
+2. **Naprawa po kodzie 75:** splash jest już zwykle zamknięty przez aplikację/supervisora, więc ponowne
+   rozpakowanie idzie bez okna — pokazać splash/okno postępu ponownie; dodać scenariusz exit-75.
+3. **Drugie uruchomienie:** natychmiast po pierwszym oba warianty płacą za strony niezapisane jeszcze
+   na dysk (SHA-256 + `FlushFileBuffers` 2156 plików): weryfikacja obecnie 3,4 s, w PoC 5,8 s (n=7). Po
+   20 s pauzy: 0,39/0,43 s vs 0,45/2,24 s (n=2). Okno główne: obecny 1,84 s (n=1), PoC 2,72 s
+   [1,77–3,67], PoC bez okna 2,58 s [1,82–3,34] — samo okno splasha nie wyjaśnia różnicy, a przy n≤2 nie
+   da się jej odróżnić od szumu. Kryterium: ≥6 prób z pauzą na czystym laptopie, mediana PoC nie gorsza.
+4. **Kwalifikacja:** `qualify_windows_launcher.py` i `qualify_windows_portable_onefile.py` z nowym launcherem
+   (nie uruchomiono); licencja crate `gif` (MIT/Apache-2.0) w THIRD_PARTY_NOTICES.
+5. **Opóźnienie przed startem kodu** (2,2–3,9 s na świeżym pliku) zależy od rozmiaru EXE i skanera —
+   zmniejsza je tylko mniejszy payload lub reputacja podpisu (E4; brak certyfikatu).
 
 ## 6. Mapa batchingu i współbieżności
 
 **etap → batching → model wykonania → workery → ograniczenia → zmierzony zysk → decyzja**
 
-| Etap | Batching dziś | Model dziś | Workery dziś | Ograniczenia | Zmierzony zysk | Decyzja |
+| Etap | Batching dziś | Model dziś | Workery | Ograniczenia | Zmierzony zysk | Decyzja |
 |---|---|---|---|---|---|---|
-| Review: inspekcja pliku (hash, probe parsera) | brak, plik po pliku | QThread szeregowo | 1 | PyMuPDF nie w wielu wątkach → procesy; generacja rejestru parserów per proces | 38 s → 11,6 s (4) / 9,4 s (8) | **równolegle w procesach**, paczki ≈24 pliki, kolejność wyników deterministyczna |
-| Review: szybki odczyt metadanych | brak | QThread szeregowo, ponowny hash i PDF | 1 | jw.; odczyty nakładane na tabelę w GUI | 50 s → 18,5 s (4) / 14 s (8) | **równolegle**, docelowo jeden przebieg na plik (inspekcja + metadane) |
-| Import: filtr planu (ponowna weryfikacja plików) | brak | szeregowo przed pulą | 1 | musi wykryć zmianę pliku | niezmierzone osobno | połączyć z prepare w puli |
-| Import: prepare (parse) | okno 3×workery | pula spawn | min(3, cpu−1), EXE: 0 | spawn na Windows (#1138: 0,73–1,98×) | #1132 | zostawić; próg i liczba z budżetu (§6.1) |
-| Import: zapis SQLite | commit per raport, checkpoint co ≥25 commitów/2 s | jeden pisarz | 1 | jeden pisarz na plik, WAL | #1137 | **szeregowo — właściwe** (SQLite: jeden pisarz) |
-| Characteristic Mapping: metryki | N+1 zapytań | GUI | — | — | 764 s → 2,3 s | jedno zapytanie + worker + kaczucha |
-| Grouping: budowa grup | pandas `agg` z lambdą | GUI | — | — | — (do pomiaru w PR) | wektoryzacja + worker |
-| Filter: DISTINCT (14 list) | cache LRU | QThread, zapytania kolejno | 1 | odczyty SQLite mogą iść równolegle na osobnych połączeniach | — | 2–4 połączenia tylko do odczytu, wypełnianie list partiami |
-| Export Main plots: zapis XLSX | bulk + stream (#1131) | QThread | 1 | XlsxWriter jednowątkowy | #1131 | zostawić |
-| Export Extended: render grup | kolejka 2×workery | pula spawn **odtwarzana per referencja**, 1. grupa szeregowo, próg 8/40 grup per referencja | 2 (max 4) | wynik odrzucany przy zmianie przełączników gęstości | 220 → 96 s (4) → 88 s (8) | **jedna pula na eksport**, workery z budżetu, próg na cały eksport |
-| Export z dashboardem HTML: render | brak | **zawsze szeregowo** (`serial_output_mode`) | 1 | dashboard zbiera wyniki w procesie głównym | — | równoległy render + zbieranie w kolejności |
-| CSV Summary: wczytanie | 50 000 wierszy na `executemany` | QThread, pętla Pythona | 1 | parsowanie CSV w Pythonie | — | szybszy parser (np. moduł `csv` → `executemany` partiami już jest; rozważyć wczytanie kolumnowe/Arrow) |
-| CSV Summary: analityka | etapy szeregowo | QThread + wątki statystyk (#1133) | ≤ rdzenie | workbook i dashboard niezależne po kohortach | — | dashboard i workbook równolegle; profil w PR |
-| Industrial → CSV Summary | — | GUI | — | EAV, facety | — | worker + SQL `INSERT…SELECT`, cache COUNT |
-| Realtime: cykl polla | paczki 500, limit 5000/cykl | QThread na cykl, źródła szeregowo | 1 | źródło zewnętrzne | niezmierzone (brak źródła) | źródła równolegle po zmierzeniu |
-| Start: rozpakowanie / weryfikacja | pliki od największych | wątki Rust | clamp(cpu, 2, 8) | dysk, AV | — | zostawić; weryfikację rozważyć w tle (decyzja §9) |
-| Start: rozgrzewka modułów | moduł po module | **wątek GUI** | — | importy pod GIL | zastój 636 → 171 ms | **wątek tła** |
+| Review: inspekcja pliku (hash, probe parsera) | plik po pliku | QThread szeregowo | 1 | PyMuPDF nie w wielu wątkach → procesy; rejestr parserów per proces | 38 s → 11,6 s (4) / 9,4 s (8) | **procesy**, paczki ≈24 pliki, wyniki w kolejności |
+| Review: szybki odczyt metadanych | brak | QThread szeregowo, ponowny hash i PDF | 1 | wyniki nakładane na tabelę w GUI | 50 s → 18,5 s (4) / 14 s (8) | **procesy**, docelowo jeden przebieg na plik |
+| Review: wypełnienie tabeli | cały wynik naraz | GUI | — | model w Pythonie | — (1,2 s zastoju) | strumieniowanie partiami |
+| Import: filtr planu | brak | szeregowo przed pulą | 1 | wykrycie zmiany pliku (fail closed) | — | w puli razem z prepare |
+| Import: prepare | okno 3×workery | pula spawn | min(3, cpu−1), EXE: 0 | spawn na Windows (#1138) | #1132 | liczba z budżetu (§6.1) |
+| Import: zapis SQLite | commit per raport, checkpoint ≥25 commitów/2 s | jeden pisarz | 1 | SQLite: jeden pisarz na plik | #1137 | **szeregowo — właściwe**; cache gotowości schematu (−≈17%), rejestr raz (−≈6%) |
+| Characteristic Mapping | N+1 | GUI | — | — | 764 s → 2,2 s | jedno zapytanie + worker |
+| Grouping | pandas `agg` z lambdą | GUI | — | — | — | wektoryzacja + worker |
+| Filter: DISTINCT ×14 | cache LRU | QThread kolejno | 1 | odczyty na osobnych połączeniach mogą iść równolegle | — | 2–4 połączenia `query_only`, listy partiami |
+| Export Main plots: XLSX | bulk + stream (#1131) | QThread | 1 | XlsxWriter jednowątkowy | #1131 | zostawić; import modułu poza GUI (A2) |
+| Export Extended: render grup | kolejka 2×workery | pula spawn **per referencja**, 1. grupa szeregowo, próg 8/40 grup per referencja | 2 (max 4) | wyniki odrzucane przy zmianie gęstości | 149 → 99 s (4) → 88 s (8) | **jedna pula na eksport**, workery z budżetu (C3, po E1) |
+| Export z dashboardem HTML | brak | **zawsze szeregowo** (`serial_output_mode`) | 0 | dashboard zbiera wyniki w procesie głównym | 209 s vs 99 s bez dashboardu (4) | równoległy render + zbieranie w kolejności |
+| CSV Summary: wczytanie | 50 000 wierszy na `executemany` | QThread, pętla Pythona | 1 | parsowanie CSV w Pythonie | — | D2 |
+| CSV Summary: analityka/dashboard | metryki po kolei | QThread + wątki statystyk | — | fity scipy na pełnych danych, powtórzone dla tabeli | — | jeden fit na serię, metryki w procesach (D2) |
+| Industrial → CSV Summary | — | GUI | — | EAV, facety | — | worker + SQL, COUNT raz (B2) |
+| Realtime: cykl polla | paczki 500, ≤5000/cykl | QThread na cykl, źródła szeregowo | 1 | źródło zewnętrzne | niezmierzone | źródła równolegle po pomiarze |
+| Start: rozpakowanie / weryfikacja | pliki od największych | wątki Rust | clamp(cpu, 2, 8) | dysk, AV | — | zostawić; weryfikacja w tle (E3) |
+| Start: rozgrzewka modułów | moduł po module | **wątek GUI** | — | importy pod GIL | zastój 636 → 171 ms | wątek tła (A2) |
 
-### 6.1 Wspólny budżet zasobów (propozycja)
+### 6.1 Wspólny budżet zasobów (propozycja C1)
 
-- **CPU:** jeden „budżet rdzeni" dla aplikacji = `max(1, rdzenie_fizyczne − 1)`; pule (prepare,
-  render, review) pobierają z niego tokeny; równoległe operacje (import + eksport) dzielą budżet,
-  a GUI zawsze ma jeden rdzeń. Dziś każda pula liczy osobno (prepare do 3, render 2, ONNX
-  `min(4, cpu−1)`, rayon wszystkie rdzenie, BLAS w każdym procesie wszystkie rdzenie).
-- **BLAS/OpenMP/ONNX/rayon w workerach:** w initializerze puli ustawić 1 wątek (`OMP_NUM_THREADS`,
-  `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, ONNX intra-op) i `RAYON_NUM_THREADS`; w procesie
-  głównym limit = budżet. Zmierzyć w PR (test BLAS=1 z tego audytu jest nieważny).
-- **RAM:** limit kolejki = 2× workery (już), plus próg pamięci na proces renderu (≈280 MB RSS na
-  worker zmierzone) — liczba workerów = min(budżet CPU, wolna_RAM / 300 MB).
-- **I/O:** jeden pisarz SQLite na plik; odczyty równoległe tylko na osobnych połączeniach
-  `query_only`.
-- **Próg opłacalności:** pula dopiero, gdy praca > koszt startu (spawn + import ≈0,4–0,8 s/proces na
-  Windows); progi liczone na cały eksport/import, nie per referencję.
+- **CPU:** budżet = `max(1, rdzenie_fizyczne − 1)`; pule (prepare, render, review) pobierają tokeny; operacje
+  równoległe dzielą budżet; GUI zawsze ma rdzeń. Dziś każda pula liczy osobno (prepare do 3, render 2,
+  ONNX `min(4, cpu−1)`, rayon i BLAS w każdym procesie — wszystkie rdzenie).
+- **Wątki bibliotek w workerach:** w initializerze 1 wątek `OMP/OPENBLAS/MKL_NUM_THREADS`, ONNX intra-op,
+  `RAYON_NUM_THREADS`; w procesie głównym limit = budżet. Do zmierzenia (test BLAS=1 nieważny).
+- **RAM:** ≈280 MB RSS na worker renderu (zmierzone) → workery = min(budżet CPU, wolna RAM / 300 MB).
+- **I/O:** jeden pisarz SQLite na plik; odczyty równoległe tylko na osobnych połączeniach `query_only`.
+- **Próg opłacalności:** pula, gdy praca > koszt startu (spawn + import ≈0,4–0,8 s/proces na Windows);
+  progi na cały eksport/import, nie per referencję.
 
 ### 6.2 Kontrakty współbieżności (zweryfikowane w kodzie)
 
-- **Qt:** widgety tylko w wątku GUI; workery to QThread z sygnałami (połączenia kolejkowane);
-  postęp importu deduplikowany do całych procentów, skanu — **nie** (2 sygnały na plik i
-  restyle przycisków na każdy); `ExportDataThread` woła `QCoreApplication.processEvents()` z wątku
-  workera (do usunięcia).
-- **GIL:** CPython 3.11 z GIL; jedyny kod natywny zwalniający GIL to `distribution_fit_ad` (rayon);
-  pozostałe crate'y trzymają GIL → dla CPU tylko procesy.
-- **PyMuPDF:** kod nie uruchamia go w dwóch wątkach (kolejkowanie metadanych za skanem); PoC puli
-  procesów (każdy proces ma własne dokumenty) dał identyczne wyniki.
-- **Matplotlib:** backend Agg; render w procesach (pula) lub w workerze; brak rysowania w GUI.
-- **SQLite:** WAL + `synchronous=NORMAL`, `busy_timeout` 5 s, jeden pisarz importu z kadencją
-  checkpointów; połączenia nie są współdzielone między wątkami (brak `check_same_thread=False`);
-  `ensure_report_schema` (≈32 ms, transakcja zapisu) wołane w GUI przy otwieraniu okien — ryzyko
-  blokady przy aktywnym imporcie.
-- **Blokujące oczekiwania w GUI:** `ModifyDB` zamykanie: `wait(3000)` + nieograniczony `wait()`;
-  w pozostałych flow brak `join()/wait()/result()` w GUI podczas pracy.
+- **Qt:** widgety tylko w GUI; workery to QThread z sygnałami; postęp importu deduplikowany do procentów,
+  skanu — nie (2 sygnały i restyle przycisków na plik); `ExportDataThread` woła
+  `QCoreApplication.processEvents()` z wątku workera (do usunięcia).
+- **GIL:** CPython 3.11 z GIL; natywnie zwalnia GIL tylko `distribution_fit_ad` (rayon) → dla CPU procesy.
+- **PyMuPDF:** kod nie uruchamia go w dwóch wątkach; PoC puli procesów dał identyczne wyniki.
+- **Matplotlib:** Agg; render w procesach lub workerze. Import `pyplot` poza głównym wątkiem tylko z
+  wymuszonym Agg (A2).
+- **SQLite:** WAL + `synchronous=NORMAL`, `busy_timeout` 5 s, jeden pisarz importu, checkpointy wg #1137;
+  połączenia nie są współdzielone; `ensure_report_schema` (≈32 ms, transakcja zapisu) w GUI przy otwieraniu
+  okien — ryzyko blokady przy aktywnym imporcie.
+- **Blokujące oczekiwania w GUI:** zamykanie `ModifyDB`: `wait(3000)` + nieograniczony `wait()`.
 
 ## 7. Kaczucha: pełna lista luk (operacje >1 s)
 
-Rodzaje luk: **BRAK** wskaźnika; **SPÓŹN.** (pokazuje się później niż ≈1 s od kliknięcia);
-**STOI** (animacja zamrożona przez zajęte GUI); **LIFECYCLE** (zły cykl życia).
+**BRAK** wskaźnika; **SPÓŹN.** (później niż ≈1 s od kliknięcia); **STOI** (zamrożona animacja);
+**LIFECYCLE** (zły cykl życia). Czasy: mediany n=3 (Linux), jeśli nie zaznaczono.
 
 | Flow | Operacja | Czas | Obecny loading | Luka | Przyczyna | Miejsce poprawki | Kryterium odbioru |
 |---|---|---:|---|---|---|---|---|
-| GRP-MAP | otwarcie dopasowania nazw | 764 s | brak | BRAK, STOI | N+1 w wątku GUI | `characteristic_mapping_service.py:166`, dialog `:590` | ładowanie w workerze; kaczucha ≤1,1 s od kliknięcia; animacja ≥90% klatek |
-| IND-05 | Industrial → CSV Summary | 43,6 s | brak | BRAK, STOI | bridge + 4× COUNT w GUI | `industrial_data_dialog.py:883`, `industrial_tabular_bridge.py:104`, `industrial_analytics_dialog.py:2267` | jw. |
-| GRP-OPEN | otwarcie grouping | 5,8 s | brak | BRAK, STOI | pandas w GUI | `data_grouping.py:148-716`, `data_grouping_service.py:116` | jw. |
-| FLT-OPEN | ładowanie wartości filtra | 5,6 s | tekst | BRAK (tekst zamiast kaczuchy) | — | `filter_dialog.py:894-966` | kaczucha nieblokująca w dialogu od 1 s |
-| DB-RECORDS | ładowanie rekordów 216k | 12,6 s | baner | BRAK (baner bez animacji) | — | `modify_db.py:641-760` | kaczucha nieblokująca |
-| IND-01 | otwarcie Industrial Data | 2,9 s | brak | BRAK, STOI | import `oznak`, COUNT-y w GUI | `industrial_data_dialog.py:678-718` | otwarcie <0,5 s lub worker + kaczucha |
-| RT-01 | pierwsze otwarcie Realtime | 1,5 s | brak | BRAK, STOI | import modułu i stan bazy w GUI | `main_window.py:1160`, rozgrzewka | rozgrzewka w tle obejmuje moduł; otwarcie <0,5 s |
-| DB-OPEN | otwarcie Modify DB | 0,9 s (Linux; Windows wolniej) | brak; puste okno | BRAK, STOI | wypełnianie tabel w GUI | `modify_db.py:490-571` | puste okno nie dłużej niż 100 ms; dane w workerze |
-| IMP-META | szybki odczyt metadanych (1500) | ≈50 s | licznik w tabeli | BRAK (dla operacji w tle) | — | `parsing_dialog.py:977-1040` | nieblokująca kaczucha w pasku statusu Reports |
-| IMP-SCAN | Review reports | 2–38 s | kaczucha-op. | SPÓŹN., STOI | timer od `show()` po starcie wątku; restyle przy każdym pliku | `parsing_dialog.py:841-875`, `ui_foundation.py:680` | kaczucha ≤1,1 s od kliknięcia; ≥90% klatek |
-| IMP-RUN | import | 4,8–68 s | kaczucha-op. | SPÓŹN. (plan ×3 w GUI przed timerem); etykieta 15% nieaktualna | — | `parsing_dialog.py:1127-1226` | jw.; etykieta etapu „Checking selected files" |
-| EXP-RUN | 1. eksport w sesji | 6,8 s + eksport | kaczucha-op. od 7,8 s | SPÓŹN., STOI | import modułu eksportu w GUI przed `show()` | `export_dialog.py:98-102, 1318-1393` | kaczucha ≤1,1 s także przy 1. kliknięciu |
-| EXP-RUN (dashboard) | eksport HTML | — | kaczucha-op. | ApplicationModal blokuje inne okna | — | `export_dialog.py:1368` | NonModal jak w Reports |
-| CSV-03 | wczytanie CSV | 24,7 s | kaczucha-op. | STOI (przerwa 0,40 s); zamknięta przed nałożeniem wyniku | `_close_worker_progress` przed `_apply_tabular_load_result` | `industrial_analytics_dialog.py:2457-2489` | kaczucha do końca nakładania wyniku |
-| CSV-09 | Create analytics | 228 s | kaczucha-op. | STOI na końcu (1,9 s, 1,3 s) | składanie wyniku w GUI | `industrial_analytics_dialog.py:2618` + workflow | zastój <100 ms |
-| CSV-06 | podgląd wartości | — | kaczucha-op. tworzona na każde zaznaczenie | LIFECYCLE (dialog i QMovie nie zwalniane) | — | `tabular_analytics_filter_dialog.py:787-793` | dialog zwalniany, QMovie zatrzymany |
-| IND-07 | eksport cache | — | kaczucha-nat. | miganie przy krótkich; pasek stoi na 0 | brak opóźnienia i postępu | `industrial_export_dialog.py:457-488` | wspólny mechanizm z progiem 1 s; postęp per paczka |
-| IND-04 | pobieranie Oznak | sieć | tekst | BRAK | — | `industrial_sync_dialog.py:1052-1298` | nieblokująca kaczucha + postęp paczek (nie zmierzono: brak źródła) |
-| SHELL-START | start aplikacji | 1,2–9 s (Windows) | Qt splash od ≈1 s (warm) | BRAK (0,9–1,9 s pustki), STOI | splash dopiero po PyQt, w wątku GUI | launcher (PoC) | PoC: splash ≤150 ms, 0 ms pustki |
-| SHELL-START | gotowość po pierwszym malowaniu | 1,3–3,3 s | status bar | STOI GUI (0,64 s) | rozgrzewka w GUI | `main_window.py:263-291` | zastój <200 ms (PoC 171 ms) |
-| Wszystkie z kaczuchą | — | — | — | LIFECYCLE | `QMovie.start()` przy tworzeniu, brak `deleteLater` | `worker_progress_dialog.py:57, 103-128` | movie tylko gdy widoczny; dialog zwolniony po zakończeniu |
-| SHELL-THEME, GRP-EDIT, GRP-MAPEDIT, DB-APPLY (wiele zmian), VIS-01, TOOL-PLUGIN | — | czas niezweryfikowany (>0,5 s przy małych danych) | brak | BRAK (gdy >1 s) | praca w GUI | jw. w macierzy | pomiar w PR; przy >1 s — worker + kaczucha |
+| GRP-MAP | otwarcie dopasowania nazw | 764 s (n=1) | brak | BRAK, STOI | N+1 w GUI | `characteristic_mapping_service.py:166`, dialog `:590` | worker; kaczucha ≤1,1 s od kliknięcia; ≥90% klatek |
+| IND-05 | Industrial → CSV Summary | 46,4 s | brak | BRAK, STOI | bridge + 4× COUNT w GUI | `industrial_data_dialog.py:883`, `industrial_tabular_bridge.py:104`, `industrial_analytics_dialog.py:2267` | jw. |
+| IMP-META | szybki odczyt metadanych (1500) | ≈61 s | licznik w tabeli | BRAK (praca w tle bez animacji) | — | `parsing_dialog.py:977-1040` | nieblokująca kaczucha w pasku Reports |
+| DB-RECORDS | ładowanie rekordów 216k | 10,2 s | baner | BRAK (bez animacji) | — | `modify_db.py:641-760` | nieblokująca kaczucha |
+| GRP-OPEN | otwarcie grouping | 4,9 s | brak | BRAK, STOI | pandas w GUI | `data_grouping.py:148-716`, `data_grouping_service.py:116` | worker + kaczucha lub otwarcie <0,5 s |
+| FLT-OPEN | ładowanie wartości filtra | 4,4 s | tekst | BRAK | — | `filter_dialog.py:894-966` | kaczucha nieblokująca od 1 s |
+| IND-01 | otwarcie Industrial Data | 2,9 s | brak | BRAK, STOI | import `oznak`, COUNT-y w GUI | `industrial_data_dialog.py:678-718` | otwarcie <0,5 s |
+| IMP-REVIEW | wypełnienie tabeli po Review (1500) | 1,2 s zamrożenia | kaczucha już zamknięta | BRAK, STOI | `dismiss` przed `set_review` | `parsing_dialog.py:911-929` | kaczucha do końca nałożenia; model partiami |
+| RT-01 | pierwsze otwarcie Realtime | 1,2 s | brak | BRAK, STOI | import i stan bazy w GUI | `main_window.py:1160`, rozgrzewka | moduł w rozgrzewce; otwarcie <0,5 s |
+| DB-OPEN | otwarcie Modify DB | 0,65 s (Linux), Windows niezweryfikowane | puste okno | STOI | tabele w GUI | `modify_db.py:490-571` | dane w workerze; puste okno ≤100 ms |
+| IMP-SCAN | Review reports | 1,1–45 s | kaczucha-op. | SPÓŹN. (od `show()`), STOI (62% klatek) | sygnał i restyle na plik | `parsing_dialog.py:841-875`, `ui_foundation.py:680` | ≤1,1 s od kliknięcia; ≥90% klatek |
+| IMP-RUN | import | 54 s | kaczucha-op. (97% klatek) | SPÓŹN. (plan ×3 w GUI, 0,23 s) | — | `parsing_dialog.py:1127-1226` | jw.; etykieta etapu zamiast stałych 15% |
+| EXP-RUN | 1. eksport w sesji | 6,1 s + eksport | kaczucha-op. od 7,1 s | SPÓŹN., STOI (przerwa 557 ms) | import modułu w GUI przed `show()` | `export_dialog.py:98-102, 1318-1393` | ≤1,1 s także przy 1. kliknięciu |
+| EXP-RUN (dashboard) | eksport HTML | 209 s (48 grup) | kaczucha-op., ApplicationModal | blokuje inne okna | — | `export_dialog.py:1368` | NonModal jak w Reports |
+| CSV-03 | wczytanie CSV | 20,4 s | kaczucha-op. (70%, przerwa 436 ms) | STOI; zamknięta przed nałożeniem wyniku | `_close_worker_progress` przed `_apply_tabular_load_result` | `industrial_analytics_dialog.py:2457-2489` | kaczucha do końca nakładania |
+| CSV-09 | Create analytics | 206,5 s | kaczucha-op. (90%) | STOI na końcu (1,95 s) | składanie wyniku w GUI | `industrial_analytics_dialog.py:2618` + workflow | zastój <100 ms |
+| CSV-06 | podgląd wartości | — | kaczucha-op. na każde zaznaczenie | LIFECYCLE (dialog i QMovie nie zwalniane) | `close()` bez `stop`/`deleteLater` | `tabular_analytics_filter_dialog.py:787-793` | dialog zwolniony, QMovie zatrzymany |
+| IND-07 | eksport cache (i tryb live Oznak) | — | kaczucha-nat. | miganie przy krótkich; pasek stoi na 0 | brak opóźnienia i postępu | `industrial_export_dialog.py:457-488` | próg 1 s; postęp per paczka |
+| IND-04 | pobieranie Oznak | sieć | tekst | BRAK | — | `industrial_sync_dialog.py:1052-1298` | nieblokująca kaczucha (nie zmierzono: brak źródła) |
+| SHELL-START | start na Windows | warm 1,1 s bez okna; cold 2 s pustki | Qt splash po imporcie PyQt | BRAK, STOI | splash dopiero w aplikacji | launcher (PoC A1) | splash ≤150 ms, 0 ms pustki |
+| SHELL-START | gotowość po pierwszym malowaniu | 1,3 s | status bar | STOI GUI (0,64 s) | rozgrzewka w GUI | `main_window.py:263-291` | zastój <200 ms |
+| Wszystkie z kaczuchą | — | — | — | LIFECYCLE | `QMovie.start()` przy tworzeniu; w Reports i CSV-06 brak zwolnienia | `worker_progress_dialog.py:57`, `parsing_dialog.py` | movie tylko gdy widoczny; dialog zwolniony |
+| SHELL-THEME, GRP-EDIT, GRP-MAPEDIT, DB-APPLY (wiele zmian), VIS-01, TOOL-PLUGIN | — | czas niezweryfikowany | brak | BRAK, jeśli >1 s | praca w GUI | macierz | pomiar w PR |
 
-Realtime: ciągły monitoring ma chip stanu (właściwe — to nie jest skończona operacja); skończone
-etapy (pierwsze otwarcie, przebudowa po zmianie bazy) potrzebują kaczuchy.
+Realtime: ciągły monitoring ma chip stanu (właściwe — to nie jest skończona operacja); skończone etapy
+(pierwsze otwarcie, przebudowa po zmianie bazy) potrzebują kaczuchy.
 
 ## 8. Ranking optymalizacji
 
-Zysk = zmierzony (Z) albo szacowany (S, z udziałem hotspotu w całym flow). Pewność: W/Ś/N.
+Zysk: Z = zmierzony, S = szacowany (z udziałem hotspotu w całym flow). Pewność: W/Ś/N. Koszt: M/Ś/D.
 
 | # | Optymalizacja | Przyczyna | Wpływ na użytkownika | Zysk | Pewność | Koszt | Ryzyko | Zależności | Sprawdzenie |
 |---:|---|---|---|---|---|---|---|---|---|
-| 1 | Characteristic Mapping: jedno zapytanie + worker | N+1 | 12,7 min → ≈3 s, bez zawieszenia | Z: 330× | W | S (1 dzień) | niskie | — | test równoważności (pełny na małej, próbka na dużej) |
-| 2 | Natywny splash + przekazanie | brak okna przed Pythonem/Qt | widoczny start zawsze <150 ms; brak pustki | Z | W | Ś (PoC gotowy) | średnie (Win32) | kwalifikacja launchera | job `windows-first-run-timeline`, ≥6 prób |
-| 3 | Review reports w puli procesów, 1 przebieg na plik | szeregowo + powtórzone hashe/PDF | 104 s → ≈30 s (1500) | Z: 2,9–3,7× | W | Ś | średnie (rejestr parserów w procesach) | budżet CPU | identyczne wpisy i odczyty |
-| 4 | Industrial → CSV Summary: COUNT raz, facety w SQL, worker | 4× COUNT, pętle Pythona po 1M wartości | 43,6 s zamrożenia → kilka s w tle | S: ≥4× | Ś | Ś | średnie | — | zgodność facetów i metadanych |
-| 5 | Extended plots: jedna pula na eksport, workery z budżetu, równoległy dashboard | pula per referencja, max 2/4, dashboard szeregowo | 552 s → ≈200 s (S, 4 workery) | Z (48 grup): 2,3–2,5× | Ś | Ś | średnie (pamięć ≈280 MB/worker) | budżet RAM | hash treści XLSX/HTML |
-| 6 | Grouping: wektoryzacja + worker | lambda per grupa | 5,8 s → <1 s (S) | S | Ś | M | niskie | — | identyczne grupy |
-| 7 | Wspólny mechanizm kaczuchy | timer od `show()`, GUI blokowane, lifecycle | kaczucha zawsze ≈1 s od kliknięcia | Z (pomiar luk) | W | Ś | niskie | 1–6 | harness: `visible_ms` ≤1100, klatki ≥90% |
-| 8 | Rozgrzewka w tle + moduł eksportu i realtime w rozgrzewce | importy w GUI | zastój 0,64 → 0,17 s; 1. eksport bez 6,8 s blokady | Z | W | M | niskie (importy z obiektami Qt) | — | stall probe; test importu w wątku |
-| 9 | Industrial Data: status `oznak` bez importu | import 1,8 s | 2,9 → ≈1 s | Z (profil) | W | M | niskie | — | profil |
-| 10 | Wyłączyć automatyczne obniżanie gęstości wykresów albo uczynić je decyzją użytkownika | `_apply_bottleneck_optimizations` | wynik nie zależy od szybkości maszyny | — (jakość) | W | M | niskie | decyzja PO | test deterministyczności |
-| 11 | Supervisor: krótszy start (bez drugiego pełnego hasha przy ciepłym, zweryfikowanym cache) | 2 procesy PyInstaller + hash | −0,1…−0,6 s na każdy start | S | Ś | Ś–D | średnie (integralność) | decyzja PO | oś czasu Windows |
-| 12 | Weryfikacja drugiego startu w tle | 2,6–7 s blokady | −2,6…−7 s przy 2. starcie | S | N | Ś | wysokie (trwałość) | decyzja PO | test przerwania zasilania |
-| 13 | Modify DB: model/view i ładowanie w workerze dla tabel normalizacji | 6609 itemów w GUI | 0,9 s → <0,2 s | S | Ś | M | niskie | — | golden #1121 |
-| 14 | Import: filtr planu w puli; plan bez potrójnej walidacji w GUI | szeregowo przed pulą; GUI 249 ms | −5…10% importu; brak zastoju | S | Ś | Ś | średnie | 3 | identyczne wiersze |
-| 15 | OCR w EXE: trwały worker zamiast procesu na wywołanie | spawn + model na raport | tryb Complete: duży (niezmierzony) | S | N | D | średnie | Windows | pomiar z prawdziwym OCR |
-| 16 | Kod natywny w EXE (`auto` = Python) | polityka frozen | statystyki porównawcze: #1120 pkt 10 | S | N | D | średnie | #908, parytet | benchmarki natywne w EXE |
-| 17 | Budżet wątków BLAS/ONNX/rayon w workerach | nadsubskrypcja | do zmierzenia | S | N | M | niskie | 5 | test BLAS=1 ponownie |
-| 18 | `ensure_report_schema` szybka ścieżka (wersja schematu) | DDL + transakcja przy każdym otwarciu | −30 ms/okno; brak blokady pisarza | Z (32 ms) | W | M | niskie | — | migracje |
-| 19 | CSV Summary: profil i równoległy dashboard/workbook | etapy szeregowo | 228 s → ? | S | N | Ś | średnie | 7 | profil w PR |
-| 20 | Motyw: odświeżanie tylko aktywnych okien, bez `findChildren` per okno | pełny restyle | 0,58 s → ? | S | N | M | niskie | — | pomiar |
+| 1 | Characteristic Mapping: jedno zapytanie + worker | N+1 | 12,7 min → ≈3 s, bez zawieszenia | Z: ≈300× | W | M | niskie | — | test równoważności (pełny: mała baza; próbka: duża) |
+| 2 | Natywny splash + przekazanie | brak okna przed Pythonem/Qt | widoczny start <150 ms (cache); brak pustki | Z | W (warm) / Ś (cold) | Ś (PoC) | średnie (Win32) | warunki §5.6 | job osi czasu, ≥6 prób |
+| 3 | Review w puli procesów + strumieniowanie do tabeli | szeregowo, powtórzone hashe/PDF, sygnał na plik | 105 s → ≈30 s kodu + narzut UI do usunięcia | Z (kod): 2,9–3,7× | W (kod) / Ś (UI) | Ś | średnie (rejestr w procesach) | C1 | identyczne wpisy i odczyty |
+| 4 | Industrial → CSV Summary: COUNT raz, facety w SQL, worker | 4× COUNT, pętle Pythona po 1M wartości | 46 s zamrożenia → kilka s w tle | S: ≥4× | Ś | Ś | średnie | — | zgodność facetów i metadanych |
+| 5 | Extended: jedna pula na eksport, workery z budżetu, równoległy dashboard | pula per referencja, max 2/4, dashboard szeregowo | 552 s → ≈250 s (S, 4 workery) | Z (48 grup): 1,5–1,7× vs dziś | Ś | Ś | średnie (≈280 MB/worker) | C1, **E1** | hash treści XLSX/HTML |
+| 6 | CSV analytics: jeden fit rozkładu na serię, wektoryzacja konwersji, metryki w procesach | fity scipy na pełnych danych ×2, pętle Pythona | 206 s → <80 s (S) | S | Ś | Ś | średnie (statystyki identyczne) | C1 | statystyki i dashboard identyczne |
+| 7 | Grouping: wektoryzacja + worker | lambda per grupa | 4,9 s → <1 s (S) | S | Ś | M | niskie | — | identyczne grupy |
+| 8 | Wspólny mechanizm kaczuchy | timer od `show()`, GUI blokowane, lifecycle | kaczucha zawsze ≈1 s od kliknięcia | Z (luki) | W | Ś | **średnie** (8 miejsc z logiką zamykania/anulowania) | 1–7 | harness: `visible_ms` ≤1100, ≥90% klatek |
+| 9 | Rozgrzewka w tle + moduł eksportu i realtime | importy w GUI | zastój 0,64 → 0,17 s; 1. eksport bez 6,1 s blokady | Z | W | M | średnie (importy równoległe) | warunki A2 | stall probe; test importu |
+| 10 | Import: cache gotowości schematu, rejestr raz na import | 2× sprawdzenie schematu na raport, rejestr na raport | −≈20% importu (S z profilu) | S | Ś | M | niskie | — | identyczne wiersze |
+| 11 | Industrial Data: status `oznak` bez importu | import 1,8 s | 2,9 → ≈1 s | Z (profil) | W | M | niskie | — | profil |
+| 12 | Gęstość wykresów: decyzja użytkownika zamiast automatu | `_apply_bottleneck_optimizations` | wynik nie zależy od szybkości maszyny | — (jakość) | W | M | niskie | **decyzja PO** | test deterministyczności |
+| 13 | Supervisor: krótszy start | 2 procesy PyInstaller + hash | −0,1…−0,6 s na start | S | Ś | Ś–D | średnie (integralność) | decyzja PO | oś czasu Windows |
+| 14 | Weryfikacja 2. startu w tle | blokada przy 2. starcie | −0,4…−7 s przy 2. starcie (zależnie od stanu dysku) | S | N | Ś | wysokie (trwałość) | decyzja PO | test przerwania zasilania |
+| 15 | Modify DB: normalizacja w model/view + szybszy loader rekordów | itemy w GUI; loader 10 s | 0,65 → <0,2 s; 10 → ? s | S | Ś | M–Ś | niskie | — | golden #1121 |
+| 16 | OCR w EXE: trwały worker | proces + model na wywołanie | tryb Complete: duży (niezmierzony) | S | N | D | średnie | Windows | pomiar z OCR |
+| 17 | Kod natywny w EXE | `auto` = Python w EXE | statystyki porównawcze (#1120 pkt 10) | S | N | D | średnie | #908 | parytet |
+| 18 | Budżet wątków BLAS/ONNX/rayon | nadsubskrypcja | do zmierzenia | S | N | M | niskie | 5 | BLAS=1 ponownie |
+| 19 | `ensure_report_schema`: szybka ścieżka wersji | DDL + transakcja przy otwarciu okna | −32 ms/okno; brak blokady pisarza | Z | W | M | niskie | — | migracje |
+| 20 | Motyw: odświeżanie tylko potrzebnych okien | pełny restyle | 0,65 s → ? | S | N | M | niskie | — | pomiar |
 
 ## 9. Plan PR-ów
 
-**Baza wszystkich PR-ów:** gałąź referencyjna #1142 (`integrate/2026.09-rc1-build-261018`) do czasu
-landowania #1109 i #1142, potem `develop`. **Baseline:** `scripts/benchmark_ui_flows.py` (Linux, te same dane
-syntetyczne, mediana z 3) i `windows-first-run-timeline` (Windows) na bazie PR-a; pomiar „po" na tej samej
-maszynie i w tym samym stanie cache. Każdy PR zachowuje semantykę danych; zmiana jakości/zakresu wymaga
-osobnej decyzji (partia E).
+**Baza:** gałąź referencyjna #1142 (`integrate/2026.09-rc1-build-261018`) do landowania #1109/#1142, potem
+`develop`. **Baseline:** `benchmark_ui_flows.py` (mediana z 3, te same dane) i `windows-first-run-timeline`
+na bazie PR-a, ta sama maszyna i stan cache. Semantyka danych bez zmian; zmiana jakości/zakresu tylko
+po decyzji (partia E).
 
 ### Partia A — splash i responsywność
 
 | PR | Zakres | Baseline → cel | Warunki poprawności | Loading/UX | Regresja |
 |---|---|---|---|---|---|
-| A1 Splash launchera | `packaging/launcher/**` (splash, Progress, log), `app/launcher_splash.py`, `app/startup_splash.py`, supervisor (zamknięcie przed komunikatem), THIRD_PARTY_NOTICES (`gif`) | warm: 1,1 s bez okna → splash ≤150 ms; cold: 1,9–3,9 s pustki → 0; fokus 3/8 → 100% | maszyna stanów cache bez zmian (cold/verified/warm/repair, kod 75); błąd launchera: splash zamknięty przed MessageBoxem; brak splasha dla drugiej instancji; weryfikacja nie wolniejsza (§5.6) | kaczucha od ≤100 ms po starcie kodu do okna głównego; jeden splash; etap i postęp | `cargo test`, `qualify_windows_launcher.py`, `qualify_windows_portable_onefile.py`, `test_launcher_splash.py`, job osi czasu (≥6 prób) |
-| A2 Rozgrzewka poza GUI | `ui/main_window.py` (wątek tła), lista modułów + eksport i realtime | zastój po 1. malowaniu 0,64 s → <0,2 s; 1. eksport 6,8 s blokady → 0 | żaden moduł nie tworzy obiektów Qt przy imporcie (test importu w wątku); błędy importu jak dziś | status bar „Loading tools…" bez zamrożenia | stall probe, `test_main_window_*`, test importu w wątku |
-| A3 Wspólna operacja z kaczuchą | `ui/worker_progress_dialog.py` + 13 flow z §7 | `visible_ms` 1,07–7,76 s od kliknięcia → ≤1,1 s; klatki 40–97% → ≥90%; dialogi żywe po końcu → zwolnione | anulowanie, błąd, zamknięcie okna, ponowienie i spóźnione sygnały nie zostawiają dialogu; brak migania <1 s | próg od kliknięcia, etap, postęp lub tryb nieokreślony, throttling 20 Hz, wariant nieblokujący | harness (kryteria z kolumny), testy cyklu życia dialogu |
+| A1 Splash launchera | `packaging/launcher/**`, `app/launcher_splash.py`, `app/startup_splash.py`, supervisor; THIRD_PARTY_NOTICES (`gif`) | warm: 1068 ms bez okna → ≤150 ms; cold: 1,95 s pustki → 0; fokus 6/14 → 100% | maszyna stanów cache bez zmian (kod 75 itd.); **fallback okna postępu** przy wyłączonym/nieudanym splashu; splash przy naprawie po kodzie 75; brak splasha dla drugiej instancji; 2. start nie wolniejszy (§5.6) | kaczucha od ≤100 ms po starcie kodu do okna głównego; jeden splash; etap i postęp | `cargo test`, kwalifikacja launchera i portable, `test_launcher_splash.py`, oś czasu ≥6 prób z pauzą |
+| A2 Rozgrzewka poza GUI | `ui/main_window.py` + moduły eksportu i realtime | zastój 0,64 → <0,2 s; 1. eksport 6,1 s → 0 | otwarcie narzędzia w trakcie rozgrzewki czeka na import tego modułu (brak równoległego importu tego samego pakietu); wątek nie-daemon, dołączany przy zamknięciu; Agg przed importem `pyplot` poza GUI; żaden moduł nie tworzy obiektów Qt przy imporcie | status bar bez zamrożenia | stall probe; test importu w wątku, w tym równoczesnego |
+| A3 Operacja z kaczuchą | `ui/worker_progress_dialog.py` + 10 operacji z §7 | `visible_ms` 1,08–7,1 s → ≤1,1 s od kliknięcia; klatki 61–98% → ≥90% | anulowanie, błąd, zamknięcie, ponowienie, spóźnione sygnały bez osieroconych dialogów; brak migania <1 s; logika `reject`/`finish` zachowana | próg od kliknięcia, etap, postęp lub tryb nieokreślony, throttling 20 Hz, wariant nieblokujący | harness (kryteria z kolumn), testy cyklu życia |
 
 ### Partia B — szybkie duże zyski
 
 | PR | Zakres | Baseline → cel | Warunki poprawności | Loading/UX | Regresja |
 |---|---|---|---|---|---|
-| B1 Characteristic Mapping | `reports/characteristic_mapping_service.py` (jedno zapytanie), dialog w workerze | 764 s → <5 s (1500 raportów) | identyczna lista metryk, liczności i próbki referencji (porządek `LOWER(reference), reference`) na schemacie bieżącym i legacy | kaczucha przy otwarciu | test równoważności z PoC, testy serwisu |
-| B2 Industrial → CSV Summary | `industrial_tabular_bridge.py`, `industrial_analytics_dialog.py` (`_sync_ui_state`) | 43,6 s zamrożenia → otwarcie <1 s + praca w tle ≤10 s | identyczne metadane pól, facety i liczności; COUNT liczony raz na zmianę filtra | kaczucha z etapem „Preparing cached data" | testy bridge, `test_industrial_*`, harness `industrial_bridge` |
-| B3 Grouping | `tabular/data_grouping_service.py`, `ui/data_grouping.py` | 5,8 s → <1 s | identyczne grupy, klucze, kolejność i zapisany stan | kaczucha, jeśli >1 s | testy grouping, harness `grouping_open` |
-| B4 Industrial Data | `ui/industrial_data_dialog.py`, `oznak_adapter.get_oznak_adapter_status` | 2,9 s → <1 s | ten sam tekst statusu (dostępność pakietu bez importu; pełny import przy pierwszym użyciu) | — | testy dialogu |
-| B5 Modify DB | tabele normalizacji jako model/view + ładowanie w workerze | 0,96 s (puste okno 0,54 s) → okno z treścią <0,3 s | golden #1121, zmiany i undo jak dziś | baner/kaczucha | `test_modify_db*`, harness |
+| B1 Characteristic Mapping | jedno zapytanie + worker | 764 s → <5 s | identyczne metryki, liczności, próbki referencji (porządek `LOWER(reference), reference`), schemat bieżący i legacy | kaczucha | PoC jako test równoważności |
+| B2 Industrial → CSV Summary | `industrial_tabular_bridge.py`, `_sync_ui_state` | 46,4 s zamrożenia → otwarcie <1 s, praca w tle | identyczne metadane, facety, liczności; COUNT raz na zmianę filtra | kaczucha z etapem | testy bridge, harness |
+| B3 Grouping | `data_grouping_service.py`, `data_grouping.py` | 4,9 s → <1 s | identyczne grupy, klucze, kolejność, zapis stanu | kaczucha >1 s | testy grouping, harness |
+| B4 Industrial Data | `get_oznak_adapter_status` bez importu | 2,87 s → <1 s | ten sam tekst statusu | — | testy dialogu |
+| B5 Modify DB | normalizacja w model/view + worker; szybszy loader rekordów | 0,65 s / 10,2 s → <0,3 s / ? | golden #1121, zmiany i undo | baner/kaczucha | `test_modify_db*`, harness |
 
 ### Partia C — batcher, pipeline, współbieżność
 
 | PR | Zakres | Baseline → cel | Warunki poprawności | Loading/UX | Regresja |
 |---|---|---|---|---|---|
-| C1 Budżet zasobów | nowy moduł `shared/compute_budget.py`; pule prepare/render/review; env wątków w initializerach | brak → jedna liczba workerów z budżetu; BLAS/ONNX/rayon=1 w workerach | wyniki identyczne przy 1/2/4/8; GUI <100 ms zastoju przy pełnym CPU | — | testy pul, pomiar 1/2/4/8 |
-| C2 Review w puli | `parsing/preflight.py`, `parsing/metadata_review.py`, `ui/parsing_dialog.py` | 1500 PDF: 104 s → ≤35 s (4 workery) | identyczne wpisy preflight (z deduplikacją w kolejności), odczyty i zatwierdzone override'y; wykrycie zmiany pliku jak dziś; generacja rejestru parserów zgodna | postęp per paczka, wyniki strumieniowo do tabeli | PoC `poc_review_parallel.py` jako test, `test_parsing_dialog_*`, #1143 regresje stron |
-| C3 Extended plots | `exporting/export_summary_render_pool.py`, `export_data_thread.py` | 48 grup: 149 s (2) → ≤100 s (4); 216 grup: 552 s → ≤250 s; dashboard dziś szeregowo → równolegle | identyczny XLSX/HTML (hash treści); kolejność zapisu; brak odrzucania wyników przy zmianie przełączników; anulowanie | postęp per grupa | `scale_export.py` jako test, `test_export_*`, #1130 parytet PNG |
-| C4 Import | `parse_reports_thread.py` (filtr planu w puli), `parsing_dialog.py` (plan raz) | zastój startu 249 ms → <50 ms; −5…10% czasu (S) | identyczne wiersze DB, wykrycie zmiany pliku, kolejność commitów | etykieta etapu zamiast stałych 15% | `test_import_*`, #1132/#1137 testy |
+| C1 Budżet zasobów | `shared/compute_budget.py`; pule; env wątków w initializerach | brak → jedna liczba workerów z budżetu | wyniki identyczne przy 1/2/4/8; GUI <100 ms zastoju przy pełnym CPU | — | testy pul, 1/2/4/8 |
+| C2 Review w puli | `preflight.py`, `metadata_review.py`, `parsing_dialog.py` | 105,6 s → ≤35 s (4) | identyczne wpisy (deduplikacja w kolejności), odczyty, override'y; wykrycie zmiany pliku; zgodna generacja rejestru; wyniki strumieniowo, sygnały throttlowane | postęp per paczka | `poc_review_parallel` jako test, `test_parsing_dialog_*`, regresje #1143 |
+| C3 Extended plots | `export_summary_render_pool.py`, `export_data_thread.py` | 48 grup 149 → ≤100 s (4); dashboard szeregowo → równolegle | identyczny XLSX/HTML przy **ustalonej gęstości** (wymaga E1: dziś odrzucanie wyników przy zmianie gęstości chroni zgodność z trybem szeregowym); kolejność zapisu; anulowanie | postęp per grupa | `scale_export` jako test, parytet PNG #1130 |
+| C4 Import | `parse_reports_thread.py`, `report_repository.py`, `parsing_dialog.py` | 54,3 s → −≈20% (S); zastój 0,23 s → <0,05 s | identyczne wiersze; ponowna weryfikacja w puli kończy się błędem przed zapisem (fail closed); kolejność commitów | etykieta etapu | `test_import_*`, testy #1132/#1137 |
 
 ### Partia D — głębsze hotspoty
 
 | PR | Zakres | Baseline → cel | Warunki poprawności | Regresja |
 |---|---|---|---|---|
-| D1 Render wykresów | matplotlib: cache fontów, jeden `draw` na wykres, kompresja PNG | 2,5–6,8 s/grupę → −30% (S) | parytet PNG/obrazów wg #1126 | `test_export_*`, porównanie obrazów |
-| D2 CSV Summary | profil 228 s; dashboard i workbook równolegle; wczytanie CSV | 228 s / 24,7 s → do ustalenia z profilu | statystyki identyczne (#1133) | `benchmark_csv_pipeline.py`, testy CSV |
-| D3 OCR w EXE | trwały worker OCR zamiast procesu na wywołanie | niezmierzone (Windows + OCR) | identyczne wyniki OCR, izolacja Job object | kwalifikacja OCR Windows |
-| D4 Kod natywny w EXE | `METROLIZA_ENABLE_NATIVE_IN_FROZEN` / promocja per most | #1120 pkt 10 | parytet Python/native (#908) | testy parytetu, benchmarki |
+| D1 Render wykresów | cache fontów, jeden `draw` na wykres, kompresja PNG | 2,5–6,8 s/grupę → −30% (S) | parytet obrazów wg #1126 | porównanie obrazów |
+| D2 CSV analytics | jeden fit na serię współdzielony przez histogram/tabelę/PNG; wektoryzacja konwersji; metryki w procesach; szybsze wczytanie CSV | 206,5 s / 20,4 s → <80 s (S) | statystyki identyczne (#1133); bez próbkowania fitów (to decyzja) | `benchmark_csv_pipeline.py`, testy CSV |
+| D3 OCR w EXE | trwały worker OCR | niezmierzone | identyczne wyniki, Job object | kwalifikacja OCR |
+| D4 Kod natywny w EXE | promocja per most | #1120 pkt 10 | parytet (#908) | testy parytetu |
 
-### Partia E — zmiany strukturalne wymagające decyzji PO
+### Partia E — decyzje PO
 
 | PR | Decyzja | Szacowany zysk | Ryzyko |
 |---|---|---|---|
-| E1 Gęstość wykresów | czy automatyczne „reduced" zależne od szybkości maszyny zostaje, staje się opcją, czy znika | determinizm wyniku; brak odrzucania pracy workerów | jakość vs czas |
-| E2 Supervisor | pominąć drugi hash przy zweryfikowanym ciepłym cache / scalić rolę z launcherem | −0,1…−0,6 s na każdy start | integralność, nadzór awarii |
-| E3 Weryfikacja 2. startu w tle | start aplikacji przed końcem SHA-256 + flush | −2,6…−7 s przy 2. starcie | trwałość po utracie zasilania |
-| E4 Mniejszy payload | cv2 (75 MB), dwie kopie OpenBLAS (2× 20 MB), inne | krótszy skan AV i rozpakowanie (proporcjonalnie do bajtów) | funkcje OCR, zależności |
+| E1 Gęstość wykresów | automatyczne „reduced" zależne od szybkości maszyny: zostaje, opcja, czy znika | determinizm; warunek C3 | jakość vs czas |
+| E2 Supervisor | pominąć drugi hash przy zweryfikowanym cache / scalić rolę z launcherem | −0,1…−0,6 s na start | integralność, nadzór awarii |
+| E3 Weryfikacja 2. startu w tle | start aplikacji przed końcem SHA-256 + flush | −0,4…−7 s przy 2. starcie | trwałość po utracie zasilania |
+| E4 Mniejszy payload | cv2 75 MB, dwie kopie OpenBLAS (2× 20 MB) | krótszy skan AV i rozpakowanie | OCR, zależności |
 
 ## 10. Obszary nieweryfikowane
 
 | Obszar | Czego brakuje |
 |---|---|
-| Czysty laptop Windows z antywirusem użytkownika (#1101 A5) | fizyczny sprzęt; tu tylko hostowany runner |
-| Realne raporty klientów, realny OCR (tryb Complete), PDF wielostronicowe z prawdziwymi układami | dane klienta (poufne) i środowisko z OCR na Windows |
-| Industrial Data: pobieranie Oznak (IND-04), realtime z prawdziwym źródłem (RT-03), Google Sheets | źródło produkcyjne, konto Google |
-| QWebEngine (VIS-01) | środowisko z GPU/okienkowe |
-| Zimny dysk / dysk sieciowy | dane były na tmpfs |
-| Kwalifikacja launchera PoC (`qualify_windows_launcher.py`, portable) | nie uruchomiono z PoC |
-| Test BLAS=1 w workerach | pomiar unieważniony, nie powtórzono |
-| Wersje bibliotek w EXE vs venv deweloperski | `requirements.txt` ma zakresy; CI instaluje najnowsze zgodne |
-| Odbudowa cache: „cannot replace a runtime still in use" (1 z 2 prób obecnego launchera) | powtarzalność i przyczyna (proces, AV czy Restart Manager) |
-| Scenariusze n=1 w §4 | brak powtórzeń dla części flow (seria 3-krotna opisana w §4) |
+| Czysty laptop Windows z AV użytkownika (#1101 A5) | sprzęt; tu tylko hostowany runner |
+| Pierwsze okno przy pierwszym uruchomieniu (PoC później o mediany ≈0,6 s, przed kodem launchera) | znaczniki startu kodu w obecnym launcherze; pomiar na czystym laptopie |
+| Drugie uruchomienie z pauzą (n=2) | ≥6 prób na czystym laptopie |
+| Realne raporty klientów, realny OCR (tryb Complete), układy wielostronicowe klientów | dane klienta (poufne), Windows z OCR |
+| Oznak (IND-04), realtime ze źródłem (RT-03), Google Sheets | źródła produkcyjne, konto Google |
+| QWebEngine (VIS-01), DPI per-monitor | środowisko okienkowe / wiele monitorów |
+| Zimny dysk / dysk sieciowy | dane na tmpfs |
+| Kwalifikacja launchera PoC (`qualify_windows_launcher.py`, portable) | nie uruchomiono |
+| Test BLAS=1 w workerach | pomiar unieważniony |
+| Wersje bibliotek w EXE vs venv | `requirements.txt` ma zakresy |
+| Naprawa cache „cannot replace a runtime still in use" (1/7 prób obecnego launchera, kod 102) | przyczyna (proces, AV, Restart Manager) |
+| Modify DB open na Windows (0,65 s na Linuksie) | pomiar na wolniejszym sprzęcie |
 
 ## 11. Modele i delegacja (faktycznie użyte)
 
-- Koordynator: **Claude Opus 5.5** (`claude-opus-5-5`), effort **max** (ustawiony przez użytkownika).
-- Inwentaryzacja (tylko odczyt, równolegle maks. 2): 3 × **Claude Sonnet 5.5** (`bounded_worker`,
-  effort high): A1 rdzeń UI, A2 dane UI, B nie-UI i mapa współbieżności. Trzeci przerwał na limicie
-  sesji i został wznowiony.
-- Niezależna weryfikacja kompletności i propozycji: §12.
-- GPT (Codex) nie był użyty do implementacji: tygodniowy limit Codex był wykorzystany w 79%
-  (obserwacja 2026-10-19 17:52 UTC, reset 2026-10-25); zachowano go dla innych prac.
+- Koordynator: **Claude Opus 5.5** (`claude-opus-5-5`), effort **max** (ustawienie użytkownika).
+- Inwentaryzacja (tylko odczyt, maks. 2 równolegle): 3 × **Claude Sonnet 5.5** (`bounded_worker`, effort
+  high) — A1 rdzeń UI, A2 dane UI, B nie-UI i mapa współbieżności. B przerwał na limicie sesji i został
+  wznowiony.
+- Niezależna weryfikacja: **Claude Opus 5.5** (`independent_reviewer`, effort high, świeży kontekst, tylko
+  odczyt) — §12. Wysiłek rozumowania w odpowiedziach: niewidoczny.
+- GPT (Codex) nie był użyty: tygodniowy limit Codex wykorzystany w 79% (obserwacja 2026-10-19 17:52 UTC,
+  reset 2026-10-25), później status nieznany — polityka wyłącza wtedy opcjonalną pracę drugiego dostawcy.
 
 ## 12. Niezależna weryfikacja
 
-(Wynik przeglądu niezależnego — uzupełniony po jego zakończeniu.)
+Werdykt: **ACCEPT WITH CHANGES** — bez P0/P1; główne wnioski potwierdzone w kodzie i dowodach (N+1 w
+Characteristic Mapping, zamrożenia Industrial → CSV Summary i Grouping, import modułu eksportu przy 1.
+kliknięciu, szeregowy Review, wady mechanizmu kaczuchy). Rozliczenie uwag:
+
+| Uwaga | Rozliczenie |
+|---|---|
+| P2: brak fallbacku okna postępu (splash wyłączony/nieudany) | warunek A1 (§5.6 p.1); komentarz w kodzie sprostowany; wariant A/B opisany jako „bez okna", nie „stare zachowanie" |
+| P2: naprawa po kodzie 75 bez okna | warunek A1 (§5.6 p.2) |
+| P2: splash nie zamykany na ścieżce błędu aplikacji | **poprawione** w PoC: `close_bootloader_splash` zamyka też splash launchera dla faz błędu/smoke |
+| P2: ryzyka rozgrzewki w wątku | warunki A2 (§9) |
+| P2: „PRZYJĘTY" zbyt mocne; §4 nieaktualne | §1.3 „PRZYJĘTY WARUNKOWO"; §4 z 3 runów + A/B; §5.5 „nie wykazano" dla pierwszego okna |
+| P2: liczby skalowania bez dowodu | powiązane z `scale3` (1/2/4) i `scale2` (8), gęstość „reduced" opisana; plik pomiarów w repo |
+| P2: brak luki IMP-REVIEW (1,2 s po zamknięciu kaczuchy) | dodane do §7 i macierzy |
+| P2: zysk Review zawyżony | §1.1/§8: zysk kodu, narzut UI osobno (C2) |
+| P2: C3 bez odrzucania wyników zmieszałoby gęstości | C3 zależy od E1 |
+| P2: SIGSEGV w scenariuszach Industrial | zbadane: crash przy niszczeniu obiektów Qt po pomiarze (faulthandler), harness poprawiony, 6/6 bez błędu (§3.4) |
+| P3: wyścig `recv_timeout`, DPI per-monitor, `cbData` spoza BMP | **poprawione** w PoC (uchwyt z `WINDOW`, system-aware DPI, długość UTF-16 w bajtach) |
+| P3: niespójne zakresy, brak logu PoC mapowania, n=1 vs mediany, Main plots 1500, loader rekordów | poprawione: mediany, log PoC (`followup2`), Main plots w §1.1/§4/§9, B5 rozszerzone |
+| P3: wada 3 uogólniona | zawężone (Reports, CSV-06) |
+| P3: ryzyko A3 „niskie" | „średnie" |
+| P3: brak podokien filtra/grupowania Industrial, tryb live IND-07 | dodane do macierzy |

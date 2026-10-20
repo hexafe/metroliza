@@ -80,8 +80,18 @@ def update_bootloader_splash(message: str, *, phase: str) -> None:
         )
 
 
+# Phases after which no main window will be handed the launcher splash: close it as well.
+_LAUNCHER_SPLASH_TERMINAL_PHASES = frozenset({"top_level_exception", "startup_smoke", "pdf_parser_smoke"})
+
+
 def close_bootloader_splash(*, phase: str) -> None:
-    """Close PyInstaller's pre-Python splash when Metroliza UI feedback has taken over."""
+    """Close the pre-Qt splash when Metroliza UI feedback has taken over or startup ended."""
+    if phase in _LAUNCHER_SPLASH_TERMINAL_PHASES:
+        from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+        launcher_splash = launcher_splash_from_environment()
+        if launcher_splash is not None:
+            launcher_splash.close()
     pyi_splash = _load_bootloader_splash_module()
     if pyi_splash is None:
         return

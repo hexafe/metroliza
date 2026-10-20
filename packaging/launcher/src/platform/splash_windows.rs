@@ -48,7 +48,9 @@ use crate::splash_frames::{self, pixel, Frames};
 
 /// Environment variable carrying the splash window handle (decimal) to the entry process.
 pub const SPLASH_HWND_ENV: &str = "METROLIZA_LAUNCHER_SPLASH_HWND";
-/// `METROLIZA_LAUNCHER_SPLASH=0` disables the splash (qualification of the old behaviour).
+/// `METROLIZA_LAUNCHER_SPLASH=0` disables the splash: the PoC then shows NO window at all during
+/// extraction or verification (the old progress window is not restored; a production version
+/// must keep a progress-window fallback for a disabled or failed splash).
 pub const SPLASH_ENV: &str = "METROLIZA_LAUNCHER_SPLASH";
 /// Window class the application checks before it talks to a handle from the environment.
 pub const SPLASH_CLASS: &str = "MetrolizaLauncherSplash";
@@ -153,14 +155,15 @@ fn user32_proc(name: &[u8]) -> Option<unsafe extern "system" fn() -> isize> {
     }
 }
 
-/// Per-monitor-v2 DPI awareness when the system supports it (Windows 10 1703+), so the splash is
-/// drawn sharp at 125–200 %; looked up at run time so older systems still start.
+/// System DPI awareness when the system supports it (Windows 10 1607+), matching the sizing,
+/// which uses the system DPI; looked up at run time so older systems still start. (Per-monitor
+/// awareness would need WM_DPICHANGED handling for a secondary monitor.)
 fn enable_dpi_awareness() {
     if let Some(function) = user32_proc(b"SetProcessDpiAwarenessContext\0") {
-        // SAFETY: the symbol has this signature; -4 is DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2.
+        // SAFETY: the symbol has this signature; -2 is DPI_AWARENESS_CONTEXT_SYSTEM_AWARE.
         unsafe {
             let set: DpiAwarenessFn = std::mem::transmute(function);
-            set(-4);
+            set(-2);
         }
     }
 }
@@ -564,7 +567,6 @@ fn window_thread(ready: mpsc::Sender<isize>, log: Log) {
 /// The launcher splash. Closing (explicitly or by drop) is idempotent and joins its thread.
 pub struct Splash {
     thread: Mutex<Option<JoinHandle<()>>>,
-    hwnd: isize,
 }
 
 impl Splash {
@@ -573,7 +575,7 @@ impl Splash {
     pub fn show(log: &Log) -> Self {
         if std::env::var_os(SPLASH_ENV).is_some_and(|v| v == "0") {
             log.mark("splash_disabled");
-            return Self { thread: Mutex::new(None), hwnd: 0 };
+            return Self { thread: Mutex::new(None) };
         }
         enable_dpi_awareness();
         set_status(STARTING, "");
@@ -581,14 +583,19 @@ impl Splash {
         let thread_log = log.clone();
         let handle = std::thread::spawn(move || window_thread(sender, thread_log));
         let hwnd = receiver.recv_timeout(Duration::from_secs(2)).unwrap_or(0);
-        log.mark(if hwnd != 0 { "splash_shown" } else { "splash_failed" });
-        Self { thread: Mutex::new(Some(handle)), hwnd }
+        log.mark(if hwnd != 0 { "splash_shown" } else { "splash_failed_or_late" });
+        Self { thread: Mutex::new(Some(handle)) }
     }
 
-    /// Value for [`SPLASH_HWND_ENV`] while the window is still open.
+    /// Value for [`SPLASH_HWND_ENV`] while the window is still open (also if it appeared only
+    /// after `show` stopped waiting for it).
     pub fn handle_for_entry(&self) -> Option<String> {
         let current = WINDOW.load(Ordering::Acquire);
-        (self.hwnd != 0 && current == self.hwnd).then(|| current.to_string())
+        (self.thread_started() && current != 0).then(|| current.to_string())
+    }
+
+    fn thread_started(&self) -> bool {
+        self.thread.lock().unwrap_or_else(|p| p.into_inner()).is_some()
     }
 
     /// Replace the status text (launcher-side phases such as a repair).
@@ -599,7 +606,7 @@ impl Splash {
     /// Close the window if it is still open and wait for its thread.
     pub fn close(&self) {
         let hwnd = WINDOW.load(Ordering::Acquire);
-        if hwnd != 0 && hwnd == self.hwnd {
+        if hwnd != 0 && self.thread_started() {
             // SAFETY: posting to a window owned by another thread is allowed from any thread.
             unsafe { PostMessageW(hwnd as HWND, MSG_CLOSE, 0, 0) };
         }

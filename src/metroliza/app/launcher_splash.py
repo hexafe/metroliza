@@ -60,8 +60,9 @@ class LauncherSplash:
             ]
 
         text = (message or "Metroliza is loading...")[:MAX_STATUS_CHARS]
-        buffer = ctypes.create_unicode_buffer(text)
-        data = COPYDATASTRUCT(STATUS_MAGIC, len(text) * 2, ctypes.cast(buffer, ctypes.c_void_p))
+        encoded = text.encode("utf-16-le")  # bytes, also for characters outside the BMP
+        buffer = ctypes.create_string_buffer(encoded, len(encoded) + 2)
+        data = COPYDATASTRUCT(STATUS_MAGIC, len(encoded), ctypes.cast(buffer, ctypes.c_void_p))
         result = ctypes.c_size_t(0)
         try:
             self._user32.SendMessageTimeoutW(

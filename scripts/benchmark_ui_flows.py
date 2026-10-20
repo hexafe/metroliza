@@ -40,6 +40,7 @@ from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_TIMEOUT_S = 900.0
+_KEEP_ALIVE: list[Any] = []
 STALL_TICK_MS = 5
 
 
@@ -1000,6 +1001,9 @@ def run_scenario(args) -> dict[str, Any]:
     app.exec()
     result = run.finish()
     shutil.rmtree(ctx.work, ignore_errors=True)
+    # Keep every window, worker and probe alive until os._exit: destroying Qt objects from Python
+    # in arbitrary order after the measurement crashed (SIGSEGV) in teardown, not in the scenario.
+    _KEEP_ALIVE.extend((app, ctx, scenario, run))
     return result
 
 
