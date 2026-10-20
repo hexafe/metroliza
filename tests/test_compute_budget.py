@@ -183,12 +183,12 @@ def test_review_is_opt_in_in_the_packaged_windows_app(monkeypatch):
 @pytest.mark.parametrize("requested,entries,expected", [
     (2, 48, 2), (4, 48, 4), (99, 48, 4), (4, 3, 2), (2, 2, 1), (1, 48, 1),
 ])
-def test_render_default_is_requested_count_capped_and_independent_of_cpus(
+def test_render_request_is_capped_by_cpu_budget(
     monkeypatch, requested, entries, expected,
 ):
     assert budget.render_workers(requested, entries) == expected
-    monkeypatch.setattr(os, "cpu_count", lambda: 2)  # unchanged until the budgeted default lands
-    assert budget.render_workers(requested, entries) == expected
+    monkeypatch.setattr(os, "cpu_count", lambda: 2)
+    assert budget.render_workers(requested, entries) == 1
 
 
 def test_render_cap_can_be_lifted_by_the_caller_and_lowered_by_the_global_override(monkeypatch):

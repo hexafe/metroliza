@@ -19,6 +19,9 @@ def test_large_real_import_and_extended_export_match_with_workers_on_and_off(tmp
         trial.mkdir()
         monkeypatch.setenv('METROLIZA_IMPORT_PREPARE_WORKERS', '2' if enabled else '0')
         monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '1' if enabled else '0')
+        # validate_usage() expects the packaged Windows render limit of two workers; this
+        # unfrozen process would otherwise use the source default of up to four.
+        monkeypatch.setenv('METROLIZA_COMPUTE_WORKERS', '2')
         imported = workload.run_import(tmp_path / 'reports', trial / 'result.sqlite3')
         assert set(imported['stage_seconds']) == {'preflight', 'prepare', 'persist', 'other_pipeline'}
         assert all(value >= 0 for value in imported['stage_seconds'].values())

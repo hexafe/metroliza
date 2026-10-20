@@ -181,9 +181,9 @@ def render_min_groups() -> int:
 def render_workers(requested: int, entry_count: int, *, cap: int = RENDER_MAX_WORKERS) -> int:
     """Worker processes for Extended plots: the requested count, the cap and one group less
     than the entries (the first group is rendered by the caller), plus the packaged Windows
-    limit and the optional global override as upper bounds."""
+    limit and the CPU budget (or its global override) as upper bounds."""
 
-    workers = min(cap, requested, entry_count - 1)
+    workers = max(1, min(cap, requested, worker_budget(), entry_count - 1))
     if frozen_windows():
         try:
             configured = env_int(RENDER_FROZEN_WORKERS_ENV, default=RENDER_FROZEN_DEFAULT_WORKERS)

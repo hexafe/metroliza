@@ -40,6 +40,7 @@ from metroliza.workers.export_thread_runtime import QCoreApplication, QThread, p
 
 from metroliza.exporting.contracts import ExportRequest, validate_export_request
 from metroliza.exporting.export_summary_render_pool import (
+    SummaryRenderPool,
     apply_summary_render_result,
     iter_summary_render_results,
 )
@@ -5074,10 +5075,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         summary_results = None
+        render_pool = None
         try:
             partition_header_counts = self._partition_header_counts()
             total_references = len(partition_header_counts)
             total_header_units = sum(partition_header_counts.values())
+            render_pool = SummaryRenderPool(self, total_header_units)
             if total_references == 0 or total_header_units == 0:
                 if len(self._build_export_filtered_dataframe()) > 0:
                     raise ValueError(
@@ -5155,7 +5158,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     precomputed_header_entries.append((header, header_group, write_bundle))
                 self._record_stage_timing('transform_grouping', time.perf_counter() - precompute_start)
 
-                summary_results = iter_summary_render_results(self, precomputed_header_entries)
+                summary_results = iter_summary_render_results(
+                    self, precomputed_header_entries, render_pool=render_pool,
+                )
                 for (header, header_group, write_bundle), rendered_summary in summary_results:
                     if self._check_canceled():
                         return
@@ -5269,6 +5274,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         finally:
             if summary_results is not None:
                 summary_results.close()
+            if render_pool is not None:
+                render_pool.close()
 
     def _write_group_analysis_message_sheet(self, worksheet, message):
         from metroliza.exporting.group_analysis_writer import (
