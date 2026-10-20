@@ -6,12 +6,15 @@
   harnesses, opt-in instrumentation and PoC code). One commit series per packet; no merge, release or branch cleanup.
 - **Coordinator:** Claude Opus 5.5 (Claude Code). Owns slicing, integration, verification, benchmarks, CI dispatch
   and reporting. Product decisions: PO.
-- **Routing:** development-routing v1.1 (`SKILL.md` sha256 `fabf1230…`), model map v1.0 (`6dd04ecc…`). OpenAI
-  capacity UNKNOWN (last observation 2026-10-19 17:52 UTC, 79% used), so the CLAUDE_ONLY route applies: one
-  implementation packet at a time, `bounded_worker` (Claude Sonnet 5.5, high) for bounded slices,
-  `claude_coordinator` (Claude Opus 5.5, high) for the launcher and the process-pool slices, a fresh
-  `independent_reviewer` (Claude Opus 5.5, high) per review batch plus at most one delta review. At most two
-  auxiliary contexts at once (one writer and one reviewer).
+- **Routing:** development-routing v1.1 (`SKILL.md` sha256 `fabf1230…`), model map v1.0 (`6dd04ecc…`).
+  P01–P07: OpenAI capacity UNKNOWN (last observation 2026-10-19 17:52 UTC, 79% used), so the CLAUDE_ONLY route
+  applied: one implementation packet at a time, `bounded_worker` (Claude Sonnet 5.5, high) for bounded slices,
+  `claude_coordinator` (Claude Opus 5.5, high) for the launcher and the process-pool slices.
+  From 2026-10-20 ≈18:45 CEST the user confirmed Codex capacity, so mode BOTH applies to P08–P13: `implementer`
+  (Codex `gpt-6.1-sol`, high) in a detached worktree per packet, without commits (sandbox); the coordinator
+  reviews, commits and cherry-picks. Usage is observed before and after every dispatch. Throughout: a fresh
+  `independent_reviewer` (Claude Opus 5.5, high) per review batch plus at most one delta review, and at most
+  two auxiliary contexts at once.
 
 ## 1. Scope
 
@@ -77,7 +80,8 @@ machine and profile as the baseline.
 | P13 | B5 Modify DB | FEATURE / bounded_worker | `ui/modify_db.py`, `ui/modify_db_records.py` | open 0.18 s, records 2.67 s → no GUI freeze, records faster | model/view for the open table; faster record loader; golden tests of #1121, edits and undo |
 
 Review batches (fresh `independent_reviewer`, one full review plus at most one delta each): R1 = P01;
-R2 = P02–P05; R3 = P06–P10; R4 = P11–P13.
+R2 = P02–P05; R3 = P06–P09 with the R2 fixes and the detached-thread/QApplication fixes; R4 = P10–P13
+(P10 moved from R3 to R4 so that R3 can start while P10 and P11 run in parallel).
 
 ## 4. Before/after protocol
 
