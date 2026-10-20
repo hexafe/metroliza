@@ -175,6 +175,10 @@ def test_timeline_launch_errors_become_failed_records_and_still_render(tmp_path,
     assert "| poc#1 | warm1 | warm |" in markdown
     assert "Failed launches:" in markdown and "poc#6 new_version" in markdown
     assert (tmp_path / "timeline.json").is_file()
+    # Failed samples have their own exit code (the CI step tolerates only that one); a crash of
+    # the script exits 1 and fails the step.
+    assert timeline_script.exit_code([ok]) == 0
+    assert timeline_script.exit_code([ok, record]) == timeline_script.SAMPLES_FAILED_EXIT == 3
 
 
 def test_bridge_posts_handoff_with_the_main_window_handle_once():

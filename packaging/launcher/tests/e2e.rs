@@ -648,7 +648,8 @@ fn a_disabled_splash_falls_back_to_the_progress_window() {
 
 /// Each way the splash can fail (debug-build fault injection, see `splash_windows::fault`) ends
 /// in the progress window covering the runtime work; a late window thread never shows its window.
-#[cfg(windows)]
+/// Debug builds only: release builds compile the fault injection out.
+#[cfg(all(windows, debug_assertions))]
 #[test]
 fn every_splash_failure_falls_back_to_the_progress_window() {
     let faults = [

@@ -138,8 +138,14 @@ static DONE: AtomicU64 = AtomicU64::new(0);
 static TOTAL: AtomicU64 = AtomicU64::new(0);
 /// 0: indeterminate bar, 1: determinate (DONE/TOTAL).
 static BAR_MODE: AtomicU8 = AtomicU8::new(0);
-/// Extraction or verification is running: the deadline must not close the splash.
-static RUNTIME_WORK: AtomicBool = AtomicBool::new(false);
+/// Hold protocol between `Progress::begin`/`finish` and the window thread, one atomic so every
+/// transition is a single compare-and-swap: [`HOLD_FREE`] (no runtime work), [`HOLD_HELD`]
+/// (extraction or verification runs; the deadline must not close the splash) or
+/// [`HOLD_CLOSED`] (the window is closing, closed or abandoned; a hold is refused).
+static HOLD: AtomicU8 = AtomicU8::new(HOLD_FREE);
+const HOLD_FREE: u8 = 0;
+const HOLD_HELD: u8 = 1;
+const HOLD_CLOSED: u8 = 2;
 static PAINTED: AtomicBool = AtomicBool::new(false);
 static STATUS: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
 /// State of the live (claimed) window; installed only after the claim, cleared on destroy.
@@ -473,7 +479,12 @@ unsafe fn activate(target: WPARAM) {
 
 /// Destroy the splash for `reason`. A hand-off already queued behind this close is honoured
 /// first, so a close that races with the hand-off never loses the focus transfer.
+///
+/// The hold is refused first: `PeekMessageW` also delivers messages sent from other threads
+/// (whatever its filter), so a `MSG_HOLD` from `Progress::begin` may run inside it; it then
+/// returns 0 and the launcher uses the progress window instead of a splash about to vanish.
 unsafe fn close_window(hwnd: HWND, reason: &'static str) {
+    HOLD.store(HOLD_CLOSED, Ordering::Release);
     let mut pending: MSG = std::mem::zeroed();
     let reason = if PeekMessageW(&mut pending, hwnd, MSG_HANDOFF, MSG_HANDOFF, PM_REMOVE) != 0 {
         activate(pending.wParam);
@@ -523,7 +534,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam == TIMER_DEADLINE => {
             // The timer repeats; while the launcher still extracts or verifies it is ignored.
-            if !RUNTIME_WORK.load(Ordering::Acquire) {
+            if HOLD.load(Ordering::Acquire) != HOLD_HELD {
                 close_window(hwnd, "deadline");
             }
             0
@@ -553,10 +564,14 @@ unsafe extern "system" fn window_proc(
             0
         }
         MSG_HOLD => {
-            // Sent (not posted) by `Progress::begin`: handled on this thread, so it is ordered
-            // with the deadline above; once it returns 1 the deadline cannot close the window.
-            RUNTIME_WORK.store(true, Ordering::Release);
-            1
+            // Sent (not posted) by `Progress::begin` and handled on this thread, so it is ordered
+            // with the deadline check above. Granted only from FREE: a window that is closing
+            // (see `close_window`) or was abandoned after a timed-out hold (a late delivery of
+            // this message) refuses, and `begin` uses the progress window.
+            let granted = HOLD
+                .compare_exchange(HOLD_FREE, HOLD_HELD, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+            LRESULT::from(granted)
         }
         MSG_REARM => {
             // Same id: replaces the running deadline timer.
@@ -568,6 +583,9 @@ unsafe extern "system" fn window_proc(
             KillTimer(hwnd, TIMER_DEADLINE);
             // Only the claimed window owns the shared state; a window destroyed because its
             // thread was abandoned leaves it alone.
+            if WINDOW.load(Ordering::Acquire) == hwnd as isize {
+                HOLD.store(HOLD_CLOSED, Ordering::Release);
+            }
             if WINDOW
                 .compare_exchange(hwnd as isize, 0, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
@@ -700,6 +718,9 @@ fn window_thread(ready: mpsc::Sender<isize>, claim: Arc<AtomicU8>, log: Log) {
             close_reason: "exit",
         });
         PAINTED.store(false, Ordering::Release);
+        // A new window: holds are accepted again (the previous thread was joined, and none is
+        // started after an abandoned one).
+        HOLD.store(HOLD_FREE, Ordering::Release);
         WINDOW.store(hwnd as isize, Ordering::Release);
         ShowWindow(hwnd, SW_SHOWNORMAL);
         UpdateWindow(hwnd);
@@ -905,17 +926,37 @@ impl Splash {
         close_splash(&mut lock(&self.inner));
     }
 
-    /// Whether the splash window is open and now held open for runtime work: the hold is a
-    /// synchronous message, so it is ordered with the deadline on the window thread, and a
-    /// window that closed meanwhile is reported as not open.
+    /// Whether the splash window is open and now held open for runtime work. The hold is a
+    /// synchronous message handled on the window thread, ordered with the deadline there; it is
+    /// refused while the window closes. When it is not granted, the splash is never left beside
+    /// the progress window: a refused hold means the window is closing (its thread is joined);
+    /// a hold that timed out (window thread stalled) abandons the splash: holds are refused from
+    /// then on (also the late delivery of this one), a close is posted for when the thread
+    /// recovers, the thread is detached and no splash is shown again in this process.
     fn hold_splash_for_work(&self) -> bool {
-        let inner = lock(&self.inner);
+        let mut inner = lock(&self.inner);
         let hwnd = WINDOW.load(Ordering::Acquire);
-        inner.mode == Mode::Shown
-            && inner.thread.is_some()
-            && hwnd != 0
-            // SAFETY: bounded synchronous message to a window of this process.
-            && unsafe { send(hwnd, MSG_HOLD) } == Some(1)
+        if inner.mode != Mode::Shown || inner.thread.is_none() || hwnd == 0 {
+            return false;
+        }
+        // SAFETY: bounded synchronous message to a window of this process.
+        match unsafe { send(hwnd, MSG_HOLD) } {
+            Some(1) => true,
+            Some(_) => {
+                self.log.mark("splash_hold_refused");
+                close_splash(&mut inner);
+                false
+            }
+            None => {
+                HOLD.store(HOLD_CLOSED, Ordering::Release);
+                // SAFETY: posting to a window owned by another thread is allowed.
+                unsafe { PostMessageW(hwnd as HWND, MSG_CLOSE, 0, 0) };
+                drop(inner.thread.take());
+                inner.mode = Mode::Failed;
+                self.log.mark("splash_hold_timed_out");
+                false
+            }
+        }
     }
 }
 
@@ -960,7 +1001,13 @@ impl Progress for Splash {
             TARGET_SPLASH => {
                 BAR_MODE.store(0, Ordering::Relaxed);
                 set_status(STARTING, "");
-                RUNTIME_WORK.store(false, Ordering::Release);
+                // Only a granted hold is released; CLOSED stays CLOSED.
+                let _ = HOLD.compare_exchange(
+                    HOLD_HELD,
+                    HOLD_FREE,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 let hwnd = WINDOW.load(Ordering::Acquire);
                 if hwnd != 0 {
                     // SAFETY: posting to a window owned by another thread is allowed.

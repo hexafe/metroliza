@@ -607,8 +607,16 @@ def main(argv: list[str] | None = None) -> int:
         timeline.close()
         # Always written, also after failures, so the CI summary step has a file to show.
         write_outputs(args.output_dir, records)
-    failed = [r for r in records if r["status"] != "ok"]
-    return 1 if failed else 0
+    return exit_code(records)
+
+
+# Exit code when the run completed but some samples (launches or round setups) failed; any other
+# non-zero exit means the script itself failed.
+SAMPLES_FAILED_EXIT = 3
+
+
+def exit_code(records: list[dict[str, Any]]) -> int:
+    return SAMPLES_FAILED_EXIT if any(r.get("status") != "ok" for r in records) else 0
 
 
 # A round of one variant needs about 1.5 GB (EXE copies plus one or two extracted runtimes).
