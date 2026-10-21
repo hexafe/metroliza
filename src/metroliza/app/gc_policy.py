@@ -98,14 +98,16 @@ class GuiGcPolicy:
 
 def install(app) -> GuiGcPolicy:
     """Install once for a real GUI application with a running Qt event loop."""
+    existing = getattr(app, _APP_ATTRIBUTE, None)
+    if existing is not None:
+        # No import here: callers re-check after every test, possibly while a test
+        # blocks or stubs PyQt6 imports.
+        return existing
     from PyQt6.QtWidgets import QApplication
 
     if not isinstance(app, QApplication):
         raise TypeError("Cyclic GC policy requires QApplication")
     _require_gui_thread(app)
-    existing = getattr(app, _APP_ATTRIBUTE, None)
-    if existing is not None:
-        return existing
     policy = GuiGcPolicy(app)
     setattr(app, _APP_ATTRIBUTE, policy)
     return policy
