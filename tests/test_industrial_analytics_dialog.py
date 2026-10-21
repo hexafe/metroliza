@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import sys
 import time
 import types
@@ -1699,4 +1701,27 @@ def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path)
     finally:
         if hasattr(dialog, "loading_dialog"):
             dialog.loading_dialog.close()
+        _dispose_dialog(dialog)
+
+
+def test_csv_result_is_applied_before_progress_is_dismissed(monkeypatch):
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    events = []
+    monkeypatch.setattr(dialog, "_apply_tabular_load_result", lambda loaded: events.append(("apply", loaded)))
+    monkeypatch.setattr(dialog, "_close_worker_progress", lambda: events.append(("dismiss", None)))
+    try:
+        dialog.on_tabular_load_finished("result")
+        assert events == [("apply", "result"), ("dismiss", None)]
+        events.clear()
+
+        def fail(_loaded):
+            events.append(("apply", None))
+            raise ValueError("synthetic application failure")
+
+        monkeypatch.setattr(dialog, "_apply_tabular_load_result", fail)
+        with pytest.raises(ValueError, match="synthetic application failure"):
+            dialog.on_tabular_load_finished(None)
+        assert events == [("apply", None), ("dismiss", None)]
+    finally:
         _dispose_dialog(dialog)

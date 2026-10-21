@@ -34,11 +34,13 @@ import weakref
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 try:
     from metroliza.ui.worker_progress_dialog import (
+        create_delayed_worker_progress_dialog,
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
         dismiss_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
     from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+    create_delayed_worker_progress_dialog = create_worker_progress_dialog
 
     def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
         if dialog is None:
@@ -862,14 +864,17 @@ class _ReportOperations:
             self.log_and_exit(e)
 
     @pyqtSlot()
-    def scan_reports(self):
+    def scan_reports(self, *, action_started_at=None):
         """Start a non-mutating content/parser recognition pass."""
 
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.preflight_thread is not None or self.parse_thread is not None:
             return
         if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return
-        if self._defer_until_metadata_idle(self.scan_reports, user_started=True):
+        if self._defer_until_metadata_idle(
+            partial(self.scan_reports, action_started_at=action_started_at), user_started=True
+        ):
             return
         self._operation_progress = 0
         try:
@@ -899,6 +904,7 @@ class _ReportOperations:
                     "No database changes are being made",
                 ),
                 on_cancel=self.stop_scanning,
+                action_started_at=action_started_at,
             )
             if self._external_context:
                 self.scan_loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
@@ -926,7 +932,7 @@ class _ReportOperations:
             self._sync_readiness_state()
             self.scan_loading_dialog.show()
         except Exception as exc:
-            dismiss_worker_progress_dialog(getattr(self, "scan_loading_dialog", None), rejected=True)
+            self._dismiss_progress("scan_loading", rejected=True)
             self._recover_worker_start_failure("preflight_thread", "stop_scan")
             self._invalidate_preflight("Review could not start. Review reports again to retry.")
             self._sync_readiness_state()
@@ -986,10 +992,17 @@ class _ReportOperations:
         try:
             self._apply_preflight_result(result)
         finally:
-            dismiss_worker_progress_dialog(
-                getattr(self, "scan_loading_dialog", None),
+            self._dismiss_progress(
+                "scan_loading",
                 rejected=bool(result.cancelled),
             )
+
+    def _dismiss_progress(self, prefix, *, rejected=False):
+        dialog = getattr(self, prefix + "_dialog", None)
+        dismiss_worker_progress_dialog(dialog, rejected=rejected)
+        if callable(getattr(dialog, "deleteLater", None)):
+            for suffix in ("dialog", "label", "bar", "gif"):
+                setattr(self, prefix + "_" + suffix, None)
 
     def _apply_preflight_result(self, result):
         if result.cancelled:
@@ -1012,7 +1025,7 @@ class _ReportOperations:
     def on_preflight_failed(self, detail):
         self._scan_feedback_throttle.cancel()
         self._scan_feedback = {}
-        dismiss_worker_progress_dialog(getattr(self, "scan_loading_dialog", None), rejected=True)
+        self._dismiss_progress("scan_loading", rejected=True)
         # Arbitrary exception strings can contain confidential document content.
         self._invalidate_preflight("Review failed. Check the source and destination, then retry.")
         self._sync_readiness_state()
@@ -1079,6 +1092,7 @@ class _ReportOperations:
         return self._start_metadata_read(MODE_OCR, ordered)
 
     def _start_metadata_read(self, mode, occurrence_ids):
+        action_started_at = monotonic()
         ids = tuple(occurrence_ids)
         if not ids or self._preflight_result is None or self.metadata_thread is not None:
             return False
@@ -1094,6 +1108,16 @@ class _ReportOperations:
             logger.warning("Metadata reader could not be created.")
             self.report_planner.set_metadata_status("Metadata could not be read.", "warning")
             return False
+        if mode == MODE_FAST:
+            dialog, _label, bar, _movie = create_delayed_worker_progress_dialog(
+                self, window_title="Reading report metadata...",
+                initial_status_text="Reading report metadata...\nFilling the review table\nETA --",
+                on_cancel=lambda: None, cancellable=False, action_started_at=action_started_at,
+            )
+            dialog.setWindowModality(Qt.WindowModality.NonModal)
+            bar.setRange(0, 0)
+            self._metadata_loading_dialog = dialog
+            dialog.show()
         self._metadata_ocr_notes = set()
         self.metadata_thread = thread
         self._metadata_threads.append(thread)
@@ -1186,6 +1210,8 @@ class _ReportOperations:
         self._complete_deferred_close_if_idle()
 
     def _release_metadata_thread(self, thread):
+        if thread is self.metadata_thread:
+            self._dismiss_progress("_metadata_loading")
         if thread in self._metadata_threads:
             self._metadata_threads.remove(thread)
             thread.deleteLater()
@@ -1221,6 +1247,7 @@ class _ReportOperations:
         if thread is None:
             return
         self.metadata_thread = None
+        self._dismiss_progress("_metadata_loading")
         self._drop_metadata_feedback()
         if self._thread_is_running(thread):
             thread.stop_reading()
@@ -1237,6 +1264,7 @@ class _ReportOperations:
     @pyqtSlot()
     def _import_reviewed_reports(self):
         """Dispatch the exact global selection through the accepted import contract."""
+        action_started_at = monotonic()
         self._sync_readiness_state(refresh_registry=True)
         if not self.parse_button.isEnabled():
             return
@@ -1258,17 +1286,18 @@ class _ReportOperations:
             self._invalidate_preflight("Changed since review. Review reports again before importing.")
             self._sync_readiness_state()
             return
-        self.show_loading_screen(import_plan=plan)
+        self.show_loading_screen(import_plan=plan, action_started_at=action_started_at)
 
     @pyqtSlot()
-    def show_loading_screen(self, *, import_plan=None):
+    def show_loading_screen(self, *, import_plan=None, action_started_at=None):
         """Start a plan; direct legacy callers retain the atomic compatibility adapter."""
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.preflight_thread is not None or self.parse_thread is not None:
             return
         if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return
         if self._defer_until_metadata_idle(
-            lambda: self.show_loading_screen(import_plan=import_plan), user_started=True
+            lambda: self.show_loading_screen(import_plan=import_plan, action_started_at=action_started_at), user_started=True
         ):
             return
         self._operation_progress = 0
@@ -1298,6 +1327,7 @@ class _ReportOperations:
                     "ETA --",
                 ),
                 on_cancel=self.stop_parsing,
+                action_started_at=action_started_at,
             )
             if self._external_context:
                 self.loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
@@ -1328,7 +1358,7 @@ class _ReportOperations:
             self._sync_readiness_state()
             self.loading_dialog.show()
         except Exception as e:
-            dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None), rejected=True)
+            self._dismiss_progress("loading", rejected=True)
             self._recover_worker_start_failure("parse_thread", "stop_parsing")
             self._invalidate_preflight("Import could not start. Review reports again before retrying.")
             self._sync_readiness_state()
@@ -1419,7 +1449,7 @@ class _ReportOperations:
                 and self._pending_modeless_metadata_enrichment
                 and not enrichment_requested
             )
-            dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
+            self._dismiss_progress("loading")
 
             outcome_title, outcome_message = feedback[1:]
             if result is None:

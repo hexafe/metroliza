@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic
 
 from dataclasses import replace
 import inspect
@@ -92,6 +93,7 @@ from metroliza.ui.ui_foundation import (
 )
 try:
     from metroliza.ui.worker_progress_dialog import (
+        dismiss_worker_progress_dialog,
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
@@ -1650,6 +1652,7 @@ class IndustrialAnalyticsDialog(QDialog):
         return f"Cached production rows: {counts.records}; sources: {counts.source_profiles}"
 
     def select_input_file(self) -> None:
+        action_started_at = monotonic()
         filenames, _ = QFileDialog.getOpenFileNames(
             self,
             "Open CSV or Excel data",
@@ -1686,7 +1689,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._populate_tabular_sheet_options()
         self._reset_tabular_column_options()
         self._reset_group_options(())
-        self.show_tabular_load_screen()
+        self.show_tabular_load_screen(action_started_at=action_started_at)
 
     def _confirm_auto_group_selected_files(self, selected_files: tuple[str, ...]) -> bool:
         if len(selected_files) <= 1:
@@ -1802,6 +1805,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self._sync_ui_state()
 
     def load_metrics(self) -> None:
+        action_started_at = monotonic()
         try:
             if self.is_production_source:
                 if not self.db_file:
@@ -1825,7 +1829,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 self.source_label.setText(self._cache_summary())
                 self._sync_filter_summary()
             else:
-                self.show_tabular_load_screen()
+                self.show_tabular_load_screen(action_started_at=action_started_at)
                 return
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not load metrics: {exc}")
@@ -2415,14 +2419,20 @@ class IndustrialAnalyticsDialog(QDialog):
             set_status_variant(self.readiness_label, "warning")
 
     def handle_start_button(self) -> None:
+        action_started_at = monotonic()
         if not self.metric_candidates:
             self.load_metrics()
         self._sync_ui_state()
         if not self.start_button.isEnabled():
             return
-        self.show_loading_screen()
+        self._analytics_action_started_at = action_started_at
+        try:
+            self.show_loading_screen()
+        finally:
+            self._analytics_action_started_at = None
 
-    def show_tabular_load_screen(self) -> None:
+    def show_tabular_load_screen(self, *, action_started_at=None) -> None:
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.is_production_source:
             self.load_metrics()
             return
@@ -2448,6 +2458,7 @@ class IndustrialAnalyticsDialog(QDialog):
                     "ETA --",
                 ),
                 on_cancel=self.cancel_tabular_load,
+                action_started_at=action_started_at,
             )
         )
         self.loading_bar.setRange(0, 0)
@@ -2484,8 +2495,10 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_tabular_load_finished(self, loaded) -> None:
-        self._close_worker_progress()
-        self._apply_tabular_load_result(loaded)
+        try:
+            self._apply_tabular_load_result(loaded)
+        finally:
+            self._close_worker_progress()
 
     def on_tabular_load_error(self, message: str) -> None:
         self._close_worker_progress()
@@ -2512,20 +2525,17 @@ class IndustrialAnalyticsDialog(QDialog):
         thread = self.sender()
         progress = self._worker_progress.get(thread)
         if progress is not None:
-            progress[0].close()
+            self._dispose_worker_progress(thread)
         elif thread is None and hasattr(self, "loading_dialog"):
             # Direct handler calls have no signal sender.
-            self.loading_dialog.close()
+            dismiss_worker_progress_dialog(self.loading_dialog)
 
     def _dispose_worker_progress(self, thread) -> None:
         progress = self._worker_progress.pop(thread, None)
         if progress is None:
             return
         dialog, _label, _bar, movie = progress
-        # Closing only hides the dialog; its parent still owns the running movie.
-        movie.stop()
-        dialog.close()
-        dialog.deleteLater()
+        dismiss_worker_progress_dialog(dialog)
         for name, widget in zip(
             ("loading_dialog", "loading_label", "loading_bar", "loading_gif"), progress
         ):
@@ -2596,6 +2606,8 @@ class IndustrialAnalyticsDialog(QDialog):
         )
 
     def show_loading_screen(self) -> None:
+        action_started_at = getattr(self, "_analytics_action_started_at", None)
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.tabular_load_thread is not None or self.analytics_thread is not None:
             return
         try:
@@ -2617,6 +2629,7 @@ class IndustrialAnalyticsDialog(QDialog):
                     "ETA --",
                 ),
                 on_cancel=self.cancel_analytics,
+                action_started_at=action_started_at,
             )
         )
         self.loading_bar.setRange(0, 0)

@@ -872,5 +872,6 @@ def set_status_variant(widget, variant):
     """Update a status chip's semantic variant and refresh its QSS state."""
     if widget is None or not isinstance(widget, QWidget):
         return
-    widget.setProperty("statusVariant", variant)
-    _refresh_widget_style(widget)
+    if widget.property("statusVariant") != variant:
+        widget.setProperty("statusVariant", variant)
+        _refresh_widget_style(widget)

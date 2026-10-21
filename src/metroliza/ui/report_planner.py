@@ -260,6 +260,24 @@ class ReportPlanner(QWidget):
 
     def set_review(self, result, *, carry=None):
         self._remember_column_widths()
+        # Reset and clear the previous filters before sorting the replacement once.
+        # Sorting during endResetModel otherwise rebuilds the proxy repeatedly as
+        # the filter controls and metadata counts catch up with the new review.
+        column, order = self.proxy.sortColumn(), self.proxy.sortOrder()
+        dynamic = self.proxy.dynamicSortFilter()
+        self.proxy.setDynamicSortFilter(False)
+        self.proxy.sort(-1)
+        try:
+            self._set_review_contents(result, carry=carry)
+        finally:
+            self.proxy.setDynamicSortFilter(dynamic)
+            self.proxy.sort(column, order)
+        if self.proxy.rowCount():
+            self.table.setCurrentIndex(self.proxy.index(0, 1))
+        self._update_counts()
+        self._update_metadata_actions()
+
+    def _set_review_contents(self, result, *, carry):
         self.model.set_review(result, carry=carry)
         # Resetting an initially empty proxy also resets Qt's header sections.
         # Apply the review's starting widths after the columns actually exist.
@@ -273,10 +291,6 @@ class ReportPlanner(QWidget):
         self.search.clear()
         self.status_filter.setCurrentIndex(0)
         self.attention_filter.setChecked(False)
-        if self.proxy.rowCount():
-            self.table.setCurrentIndex(self.proxy.index(0, 1))
-        self._update_counts()
-        self._update_metadata_actions()
 
     def invalidate(self):
         self._remember_column_widths()
