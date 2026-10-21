@@ -416,3 +416,4 @@ class RecordTableSlot:
     generation: int = 0
     thread: RecordLoadThread | None = None
     pending_specs: list[dict[str, Any]] | None = None
+    progress_dialog: Any = None

@@ -438,3 +438,72 @@ def test_metadata_rows_follow_selectable_reports_and_carry_only_unchanged_identi
 
     model.invalidate()
     assert model.metadata_rows == {} and model.counts["attention"] == 0
+
+
+def test_large_review_reset_preserves_order_selection_checks_and_metadata(qapp):
+    """Golden behaviour for the 1500-row reset, including a second carried review."""
+    from dataclasses import replace
+    from metroliza.ui.report_planner import ReportPlanner
+
+    base = _review()
+    result = replace(base, files=tuple(
+        replace(base.files[i % 3], display_name=f"report-{1500-i:04}.pdf", occurrence_id=f"item-{i}")
+        for i in range(1500)
+    ))
+    planner = ReportPlanner()
+    try:
+        carry = None
+        for _pass in range(2):
+            planner.set_review(result, carry=carry)
+            model = planner.model
+            assert model.selected_ids == tuple(f"item-{i}" for i in range(0, 1500, 3))
+            assert [planner.proxy.data(planner.proxy.index(i, model.LOCATION_COLUMN))
+                    for i in range(1500)] == sorted(item.display_name for item in result.files)
+            for i in range(1500):
+                assert model.data(model.index(i, 0), Qt.ItemDataRole.CheckStateRole) == (
+                    Qt.CheckState.Checked if i % 3 == 0 else Qt.CheckState.Unchecked
+                )
+            assert planner.table.currentIndex().row() == 0
+            assert len(model.metadata_rows) == 500
+            if carry is not None:
+                assert all(model.metadata_row(key) is value for key, value in carry.items())
+            carry = model.metadata_rows
+        model.clear_selection()
+        planner.search.setText("report-0001")
+        assert planner.proxy.rowCount() == 1
+        assert model.selected_ids == ()
+    finally:
+        planner.close()
+
+
+@pytest.mark.parametrize("case_sensitive,locale_aware", [(True, False), (False, False), (True, True)])
+def test_cached_location_sort_matches_qt_for_unicode_ties_and_both_directions(qapp, case_sensitive, locale_aware):
+    from dataclasses import replace
+    from PyQt6.QtCore import QSortFilterProxyModel
+    from metroliza.ui.report_planner_model import ReportPlannerModel, ReportPlannerFilterModel
+
+    base = _review()
+    names = ("A", "a", "é", "e", "😀", "\ue000", "a", "Z", "10", "2")
+    model = ReportPlannerModel()
+    model.set_review(replace(base, files=tuple(
+        replace(base.files[0], display_name=name, occurrence_id=str(i))
+        for i, name in enumerate(names)
+    )))
+    reference = QSortFilterProxyModel()
+    optimized = ReportPlannerFilterModel()
+    for proxy in (reference, optimized):
+        proxy.setSourceModel(model)
+        proxy.setSortRole(model.SORT_ROLE)
+        proxy.setSortCaseSensitivity(
+            Qt.CaseSensitivity.CaseSensitive if case_sensitive else Qt.CaseSensitivity.CaseInsensitive
+        )
+        proxy.setSortLocaleAware(locale_aware)
+    for order in (Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder):
+        for column in (model.LOCATION_COLUMN, model.STATUS_COLUMN, model.CONFIDENCE_COLUMN):
+            for proxy in (reference, optimized):
+                proxy.sort(column, order)
+            assert [optimized.data(optimized.index(i, 0), Qt.ItemDataRole.UserRole)
+                    for i in range(len(names))] == [
+                        reference.data(reference.index(i, 0), Qt.ItemDataRole.UserRole)
+                        for i in range(len(names))
+                    ]

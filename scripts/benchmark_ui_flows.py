@@ -354,6 +354,12 @@ def _main_window(ctx: Context):
     window = MainWindow("STEP2 benchmark", None)
     window.show()
     ctx.app.processEvents()
+    if getattr(ctx.args, "wait_warmup", False):
+        window.schedule_feature_import_warmup(delay_ms=0)
+        ctx.pump(lambda: window._feature_import_warmup_completed)
+        if window._feature_import_warmup_failures:
+            raise RuntimeError("Feature warm-up failed")
+        ctx.extra["wait_warmup"] = True
     return window
 
 
@@ -568,7 +574,13 @@ class GroupingOpen(Scenario):
 
     def done(self, ctx):
         dialog = getattr(self.export, "grouping_window", None)
-        return dialog is not None and dialog.isVisible() and "handler_returned" in ctx.marks
+        if dialog is None or not dialog.isVisible() or "handler_returned" not in ctx.marks:
+            return False
+        # The data loads in a worker thread; wait for the populated dialog (older builds load synchronously).
+        if getattr(dialog, "is_loading_grouping", lambda: False)():
+            return False
+        ctx.mark("dialog_populated")
+        return True
 
 
 class CharacteristicMappingOpen(Scenario):
@@ -590,6 +602,16 @@ class CharacteristicMappingOpen(Scenario):
         modal = QApplication.activeModalWidget()
         if modal is not None and type(modal).__name__ == "CharacteristicMappingDialog":
             ctx.mark("dialog_visible")
+            # The names load in a worker thread: finish when that load has completed, whether or not the
+            # database holds any names. Older builds load synchronously and have no loading flag; there the
+            # populated table is the completion signal.
+            is_loading = getattr(modal, "is_loading_source_options", None)
+            if is_loading is not None:
+                if is_loading():
+                    return False
+            elif modal.metric_table.rowCount() == 0:
+                return False
+            ctx.mark("dialog_populated")
             modal.reject()
             return True
         return False
@@ -738,6 +760,17 @@ class IndustrialOpen(Scenario):
     def done(self, ctx):
         dialog = getattr(self.window, "industrial_data_dialog", None)
         return dialog is not None and dialog.isVisible() and "handler_returned" in ctx.marks
+
+    def finish(self, ctx):
+        # The Oznak status is computed in a background thread after the dialog is shown; let it finish
+        # (not timed) so no worker is still running when the measurement ends. Older builds set it at once.
+        dialog = getattr(self.window, "industrial_data_dialog", None)
+        label = getattr(dialog, "oznak_label", None)
+        deadline = time.monotonic() + 10
+        while label is not None and "checking" in label.text().lower() and time.monotonic() < deadline:
+            ctx.app.processEvents()
+            time.sleep(0.005)
+        return {"oznak_status": label.text() if label is not None else None}
 
 
 class IndustrialBridge(Scenario):
@@ -989,6 +1022,13 @@ def run_scenario(args) -> dict[str, Any]:
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
+    try:
+        from metroliza.app.gc_policy import install
+    except ImportError:
+        gc_policy = "absent"
+    else:
+        install(app)
+        gc_policy = "installed"
     ctx = Context(app, args)
     scenario = SCENARIOS[args.scenario]()
     auto_answer_message_boxes(ctx.messages)
@@ -997,6 +1037,7 @@ def run_scenario(args) -> dict[str, Any]:
     setup_ms = round((time.perf_counter() - setup_started) * 1000, 1)
     run = _Run(app, ctx, scenario, args)
     run.result["setup_ms"] = setup_ms
+    run.result["gc_policy"] = gc_policy
     QTimer.singleShot(300, run.start)
     app.exec()
     result = run.finish()
@@ -1130,6 +1171,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
+    run.add_argument("--wait-warmup", action="store_true",
+                     help="finish feature warm-up during setup, before timing the first action")
     run.add_argument("--scenario", choices=sorted(SCENARIOS), required=True)
     run.add_argument("--data-dir", required=True)
     run.add_argument("--out", required=True)

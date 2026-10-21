@@ -32,10 +32,13 @@ impl Log {
     }
 
     /// Append one line; failures are ignored (logging must never affect launching).
+    ///
+    /// The line and its newline go out in one append write: the splash thread logs too, and
+    /// separate writes of two threads could interleave into one unparseable line.
     pub fn line(&self, text: &str) {
         let Some(path) = &self.path else { return };
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "{text}");
+            let _ = file.write_all(format!("{text}\n").as_bytes());
         }
     }
 

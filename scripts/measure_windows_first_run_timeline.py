@@ -23,6 +23,11 @@ Sources of truth per launch, all on the same wall clock (epoch milliseconds):
 * optional screenshots (``--frames``) for a frame chronology, and a per-frame signature of the
   splash animation area, so a frozen animation is visible as identical consecutive frames.
 
+Every launch that extracts or verifies (cache ``cold``, ``verified`` or ``repair``) must show a
+launcher window: the splash, or the plain progress window (the current launcher, and the splash
+launcher's fallback when ``METROLIZA_LAUNCHER_SPLASH=0`` or the splash cannot be shown). A launch
+without one, or a splash-disabled launch without the progress window, gets a warning.
+
 Derived metrics: time to the first visible Metroliza window, the longest interval without any
 Metroliza window before the main window, overlap of two splash windows, main window visible,
 foreground owner when the main window appeared, launcher ``main`` relative to process creation
@@ -273,6 +278,33 @@ def window_timeline(samples: list[dict[str, Any]], launched_ms: float) -> dict[s
     }
 
 
+LAUNCHER_WINDOW_KINDS = ("launcher_splash", "launcher_progress")
+# Cache outcomes for which the launcher extracts or verifies before it starts the entry.
+RUNTIME_WORK_CACHES = {"cold", "verified", "repair"}
+
+
+def launcher_window_check(cache: str | None, first_visible: dict[str, Any],
+                          splash_disabled: bool) -> tuple[list[str], str | None]:
+    """Launcher windows seen in a launch, and a warning when its runtime work had the wrong one.
+
+    Extraction and verification must always show a launcher window: the splash, or the plain
+    progress window (the current launcher, and the splash launcher's fallback). With the splash
+    disabled the fallback progress window is expected and the splash must not appear.
+    """
+    seen = [kind for kind in LAUNCHER_WINDOW_KINDS if kind in first_visible]
+    if cache not in RUNTIME_WORK_CACHES:
+        return seen, None
+    if splash_disabled:
+        if "launcher_progress" not in seen:
+            return seen, "splash disabled: expected the fallback progress window during runtime work"
+        if "launcher_splash" in seen:
+            return seen, "splash disabled, but the launcher splash was shown"
+        return seen, None
+    if not seen:
+        return seen, "runtime work without any launcher window"
+    return seen, None
+
+
 def animation_summary(frames: list[dict[str, Any]], launched_ms: float) -> dict[str, Any]:
     """Count consecutive identical animation-area frames while a splash was visible."""
     runs: dict[str, dict[str, Any]] = {}
@@ -323,10 +355,39 @@ def profile_points(events: list[dict[str, Any]], launched_ms: float) -> dict[str
 # ---------------------------------------------------------------- scenarios
 
 
+def failed_record(variant: str, scenario: str, exe_name: str, error: str) -> dict[str, Any]:
+    """A launch (or round setup) that could not be measured, shaped like a measured record."""
+    return {
+        "variant": variant, "scenario": scenario, "exe": exe_name, "status": "failed",
+        "error": error, "cache": None, "launcher_windows": [], "app": {}, "animation": {},
+        "windows": {"first_visible_ms": {}},
+    }
+
+
+def remove_tree(path: Path) -> None:
+    """Best-effort removal (a process killed after a timeout may still hold a file briefly)."""
+    for attempt in range(3):
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            return
+        time.sleep(1 + attempt)
+
+
+def clear_directory(path: Path) -> None:
+    for child in path.iterdir() if path.is_dir() else ():
+        if child.is_dir() and not child.is_symlink():
+            remove_tree(child)
+        else:
+            child.unlink(missing_ok=True)
+
+
 class Timeline:
     def __init__(self, out: Path, *, frames: bool, frame_every_ms: int) -> None:
         self.out = out
         self.frames = frames
+        # PNG files are kept only while this is set (the first rounds); later rounds still
+        # sample the animation area, but keep no screenshots, so disk use stays bounded.
+        self.save_frames = frames
         self.frame_every_ms = frame_every_ms
         self.work = Path(tempfile.mkdtemp(prefix="metroliza-timeline-"))
         self.state = self.work / "state"
@@ -336,11 +397,23 @@ class Timeline:
             directory.mkdir(parents=True, exist_ok=True)
 
     def close(self) -> None:
-        shutil.rmtree(self.work, ignore_errors=True)
+        remove_tree(self.work)
 
     def launch(self, variant: str, scenario: str, exe: Path, root: Path, *, smoke: bool,
                expect_cache: str | None, frames: bool,
                extra_env: dict[str, str] | None = None) -> dict[str, Any]:
+        """Measure one launch; any error (also a full disk) yields a failed record instead."""
+        try:
+            return self._launch(variant, scenario, exe, root, smoke=smoke,
+                                expect_cache=expect_cache, frames=frames, extra_env=extra_env)
+        except Exception as error:  # noqa: BLE001 - one failed launch must not end the run
+            record = failed_record(variant, scenario, exe.name, f"{type(error).__name__}: {error}")
+            print(f"  {variant}-{scenario}: failed ({record['error']})", flush=True)
+            return record
+
+    def _launch(self, variant: str, scenario: str, exe: Path, root: Path, *, smoke: bool,
+                expect_cache: str | None, frames: bool,
+                extra_env: dict[str, str] | None = None) -> dict[str, Any]:
         tag = f"{variant}-{scenario}"
         run_dir = self.out / "runs" / tag
         if run_dir.exists():
@@ -358,29 +431,32 @@ class Timeline:
         if not smoke:
             env.pop("METROLIZA_STARTUP_UI_SMOKE", None)
             env["METROLIZA_STARTUP_EXIT_AFTER_WARMUP"] = "1"
-        frames_dir = run_dir / "frames" if frames and self.frames else None
+        sample_frames = frames and self.frames
+        frames_dir = run_dir / "frames" if sample_frames and self.save_frames else None
         if frames_dir is not None:
             frames_dir.mkdir()
-        sampler = WindowSampler(exe.name, frames_dir, self.frame_every_ms if frames_dir else 0)
+        sampler = WindowSampler(exe.name, frames_dir, self.frame_every_ms if sample_frames else 0)
         record: dict[str, Any] = {"variant": variant, "scenario": scenario, "exe": exe.name,
                                   "status": "ok"}
         sampler.start()
-        launched = time.time() * 1000
-        started = time.perf_counter()
-        process = subprocess.Popen([str(exe)], env=env, cwd=self.cwd, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            code = process.wait(timeout=LAUNCH_TIMEOUT_S)
-            record["exit_code"] = code
-            if code != 0:
-                record["status"] = "failed"
-        except subprocess.TimeoutExpired:
-            _kill_tree(process)
-            process.wait(timeout=60)
-            record.update(status="failed", error="timeout")
-        record["wall_ms"] = round((time.perf_counter() - started) * 1000)
-        time.sleep(0.3)
-        sampler.stop()
+            launched = time.time() * 1000
+            started = time.perf_counter()
+            process = subprocess.Popen([str(exe)], env=env, cwd=self.cwd, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                code = process.wait(timeout=LAUNCH_TIMEOUT_S)
+                record["exit_code"] = code
+                if code != 0:
+                    record["status"] = "failed"
+            except subprocess.TimeoutExpired:
+                _kill_tree(process)
+                process.wait(timeout=60)
+                record.update(status="failed", error="timeout")
+            record["wall_ms"] = round((time.perf_counter() - started) * 1000)
+            time.sleep(0.3)
+        finally:
+            sampler.stop()
         record["cache"] = launcher_cache_outcome(log)
         if expect_cache is not None and record["cache"] != expect_cache:
             record.setdefault("warnings", []).append(f"expected cache={expect_cache}, got {record['cache']}")
@@ -390,6 +466,11 @@ class Timeline:
             record["pre_launcher_code_ms"] = round(marks["main"] - launched)
         record["app"] = profile_points(load_events(profile), launched)
         record["windows"] = window_timeline(sampler.samples, launched)
+        splash_disabled = (extra_env or {}).get("METROLIZA_LAUNCHER_SPLASH") == "0"
+        record["launcher_windows"], window_warning = launcher_window_check(
+            record["cache"], record["windows"]["first_visible_ms"], splash_disabled)
+        if window_warning is not None:
+            record.setdefault("warnings", []).append(window_warning)
         record["animation"] = animation_summary(sampler.frames, launched)
         (run_dir / "window_samples.json").write_text(
             json.dumps([s for s in sampler.samples if s.get("windows")], indent=0), encoding="utf-8")
@@ -403,8 +484,26 @@ class Timeline:
 def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | None,
                 round_index: int = 1, extra_env: dict[str, str] | None = None,
                 settle_s: float = 0.0) -> list[dict[str, Any]]:
-    records = []
+    """One round of one variant. Its EXE copies, runtime cache and temporary files (≈1.5 GB for
+    the product) are deleted when the round ends, also after a failure; only the small per-launch
+    logs, samples and the kept frames stay in the output directory."""
+    records: list[dict[str, Any]] = []
     home = timeline.work / f"{variant}-r{round_index}"
+    try:
+        _run_round(timeline, home, records, variant, exe, next_exe, round_index, extra_env, settle_s)
+    except Exception as error:  # noqa: BLE001 - recorded; the next round still runs
+        records.append(failed_record(f"{variant}#{round_index}", "setup", exe.name,
+                                     f"{type(error).__name__}: {error}"))
+        print(f"{variant} round {round_index}: failed ({records[-1]['error']})", flush=True)
+    finally:
+        remove_tree(home)
+        clear_directory(timeline.temp)
+    return records
+
+
+def _run_round(timeline: Timeline, home: Path, records: list[dict[str, Any]], variant: str,
+               exe: Path, next_exe: Path | None, round_index: int,
+               extra_env: dict[str, str] | None, settle_s: float) -> None:
     home.mkdir()
     fresh = home / "fresh"
     fresh.mkdir()
@@ -424,7 +523,8 @@ def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | No
                                        expect_cache="warm", frames=index == 1, extra_env=extra_env))
     records.append(timeline.launch(variant, "warmup", cold_exe, root, smoke=False, expect_cache="warm", frames=True, extra_env=extra_env))
     # Damage: truncate one runtime file of the current version (size check catches it).
-    versions = [p for p in root.iterdir() if p.is_dir() and "_" in p.name and not p.name.endswith(".staging")]
+    versions = [p for p in root.iterdir() if p.is_dir() and "_" in p.name and not p.name.endswith(".staging")] \
+        if root.is_dir() else []
     if versions:
         target = max(versions, key=lambda p: p.stat().st_mtime) / CORRUPT_TARGET
         if target.is_file():
@@ -437,7 +537,6 @@ def run_variant(timeline: Timeline, variant: str, exe: Path, next_exe: Path | No
         shutil.copy2(next_exe, next_copy)
         records.append(timeline.launch(variant, "new_version", next_copy, root, smoke=True,
                                        expect_cache="cold", frames=True, extra_env=extra_env))
-    return records
 
 
 def render_markdown(records: list[dict[str, Any]]) -> str:
@@ -446,24 +545,36 @@ def render_markdown(records: list[dict[str, Any]]) -> str:
         "",
         "Times in ms from process creation. `blank` = no Metroliza window visible. Hosted runner: indicative only.",
         "",
-        "| Variant | Scenario | Cache | Launcher code starts | First window (kind) | Blank before it | Longest blank after it | Splash overlap | Main window visible | Main window foreground | Usable (warmup done) | Longest GUI stall | Splash animation frames changed/total, longest static |",
-        "|---|---|---|---:|---|---:|---:|---:|---:|---|---:|---:|---|",
+        "| Variant | Scenario | Cache | Launcher code starts | First window (kind) | Launcher windows | Blank before it | Longest blank after it | Splash overlap | Main window visible | Main window foreground | Usable (warmup done) | Longest GUI stall | Splash animation frames changed/total, longest static |",
+        "|---|---|---|---:|---|---|---:|---:|---:|---:|---|---:|---:|---|",
+    ]
+    warnings = [f"- {r['variant']} {r['scenario']}: {w}" for r in records for w in r.get("warnings", [])]
+    failures = [
+        f"- {r['variant']} {r['scenario']}: exit={r.get('exit_code')} {r.get('error', '')}".rstrip()
+        for r in records if r.get("status") != "ok"
     ]
     for r in records:
-        w = r["windows"]
-        first = w["first_visible_ms"]
+        w = r.get("windows") or {}
+        first = w.get("first_visible_ms") or {}
         first_kind = min(first, key=first.get) if first else "none"
-        stalls = r["app"].get("gui_stall") or [{}]
+        app = r.get("app") or {}
+        stalls = app.get("gui_stall") or [{}]
         anim = "; ".join(
-            f"{kind}: {a['changed']}/{a['frames']}, {a['longest_static_ms']} ms" for kind, a in r["animation"].items()
+            f"{kind}: {a['changed']}/{a['frames']}, {a['longest_static_ms']} ms"
+            for kind, a in (r.get("animation") or {}).items()
         ) or "n/a"
         lines.append(
             f"| {r['variant']} | {r['scenario']} | {r.get('cache')} | {r.get('pre_launcher_code_ms', 'n/a')} "
-            f"| {first.get(first_kind, 'n/a')} ({first_kind}) | {w.get('initial_blank_ms')} "
+            f"| {first.get(first_kind, 'n/a')} ({first_kind}) | {', '.join(r.get('launcher_windows', [])) or 'none'} "
+            f"| {w.get('initial_blank_ms')} "
             f"| {w.get('longest_blank_after_first_window_ms')} | {w.get('splash_overlap_ms')} "
             f"| {first.get('main_window', 'n/a')} | {w.get('main_window_foreground_when_shown')} "
-            f"| {r['app'].get('launch_ui_warmup_finished', 'n/a')} | {stalls[-1].get('max_gap_ms', 'n/a')} | {anim} |"
+            f"| {app.get('launch_ui_warmup_finished', 'n/a')} | {stalls[-1].get('max_gap_ms', 'n/a')} | {anim} |"
         )
+    if failures:
+        lines += ["", "Failed launches:", "", *failures]
+    if warnings:
+        lines += ["", "Warnings:", "", *warnings]
     return "\n".join(lines) + "\n"
 
 
@@ -478,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="pause before the second (verified) launch of each cache")
     parser.add_argument("--rounds", type=int, default=1,
                         help="repeat the whole sequence, alternating the variants each round")
+    parser.add_argument("--frame-rounds", type=int, default=2,
+                        help="keep screenshot files for the first N rounds only (with --frames)")
     args = parser.parse_args(argv)
     if os.name != "nt":
         print("Windows only", file=sys.stderr)
@@ -489,26 +602,59 @@ def main(argv: list[str] | None = None) -> int:
     timeline = Timeline(args.output_dir, frames=args.frames, frame_every_ms=args.frame_every_ms)
     records: list[dict[str, Any]] = []
     try:
-        specs = list(args.variant)
-        for round_index in range(1, args.rounds + 1):
-            # Alternate the order so neither variant always runs first on a fresh runner.
-            ordered = specs if round_index % 2 == 1 else list(reversed(specs))
-            for spec in ordered:
-                spec, _, env_text = spec.partition(";")
-                name, _, paths = spec.partition("=")
-                exe_text, _, next_text = paths.partition(",")
-                extra_env = dict(item.split("=", 1) for item in env_text.split(",") if "=" in item)
-                records.extend(run_variant(timeline, name, Path(exe_text),
-                                           Path(next_text) if next_text else None, round_index,
-                                           extra_env, args.settle_seconds))
+        run_rounds(timeline, args, records)
     finally:
         timeline.close()
-    (args.output_dir / "timeline.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
+        # Always written, also after failures, so the CI summary step has a file to show.
+        write_outputs(args.output_dir, records)
+    return exit_code(records)
+
+
+# Exit code when the run completed but some samples (launches or round setups) failed; any other
+# non-zero exit means the script itself failed.
+SAMPLES_FAILED_EXIT = 3
+
+
+def exit_code(records: list[dict[str, Any]]) -> int:
+    return SAMPLES_FAILED_EXIT if any(r.get("status") != "ok" for r in records) else 0
+
+
+# A round of one variant needs about 1.5 GB (EXE copies plus one or two extracted runtimes).
+MIN_FREE_BYTES = 4 * 1024**3
+
+
+def parse_variant(spec: str) -> tuple[str, Path, Path | None, dict[str, str]]:
+    spec, _, env_text = spec.partition(";")
+    name, _, paths = spec.partition("=")
+    exe_text, _, next_text = paths.partition(",")
+    extra_env = dict(item.split("=", 1) for item in env_text.split(",") if "=" in item)
+    return name, Path(exe_text), Path(next_text) if next_text else None, extra_env
+
+
+def run_rounds(timeline: Timeline, args: argparse.Namespace, records: list[dict[str, Any]]) -> None:
+    specs = [parse_variant(spec) for spec in args.variant]
+    for round_index in range(1, args.rounds + 1):
+        timeline.save_frames = timeline.frames and round_index <= args.frame_rounds
+        # Alternate the order so neither variant always runs first on a fresh runner.
+        ordered = specs if round_index % 2 == 1 else list(reversed(specs))
+        for name, exe, next_exe, extra_env in ordered:
+            free = shutil.disk_usage(timeline.work).free
+            if free < MIN_FREE_BYTES:
+                records.append(failed_record(f"{name}#{round_index}", "setup", exe.name,
+                                             f"stopped: {free / 1024**3:.1f} GB free"))
+                print(f"stopping: only {free / 1024**3:.1f} GB free", flush=True)
+                return
+            records.extend(run_variant(timeline, name, exe, next_exe, round_index,
+                                       extra_env, args.settle_seconds))
+        write_outputs(timeline.out, records, quiet=True)  # partial results survive a crash
+
+
+def write_outputs(out: Path, records: list[dict[str, Any]], *, quiet: bool = False) -> None:
+    (out / "timeline.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
     markdown = render_markdown(records)
-    (args.output_dir / "timeline.md").write_text(markdown, encoding="utf-8")
-    print(markdown)
-    failed = [r for r in records if r["status"] != "ok"]
-    return 1 if failed else 0
+    (out / "timeline.md").write_text(markdown, encoding="utf-8")
+    if not quiet:
+        print(markdown)
 
 
 if __name__ == "__main__":

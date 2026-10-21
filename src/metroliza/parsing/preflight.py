@@ -7,9 +7,10 @@ never parser-selection inputs beyond identifying the source container format.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass, replace
 from enum import Enum
-from functools import lru_cache
+from functools import lru_cache, partial
 import hashlib
 from io import BytesIO
 import json
@@ -20,7 +21,7 @@ import sqlite3
 import stat
 import tarfile
 from tempfile import TemporaryDirectory
-from typing import BinaryIO, Callable, Iterable
+from typing import BinaryIO, Callable, Iterable, Iterator
 import zipfile
 
 from metroliza.parsing import report_parser_factory
@@ -960,7 +961,15 @@ class ParsePreflightService:
         metadata_parsing_mode: str,
         should_cancel: Callable[[], bool] = lambda: False,
         on_progress: Callable[[int, int, str], None] | None = None,
+        workers: int | None = None,
     ) -> ParsePreflightResult:
+        """Classify every report below ``source_path`` without writing anything.
+
+        ``workers`` is the review-pool size; ``None`` lets the compute budget decide
+        (``metroliza.shared.compute_budget.review_workers``) and 0 or 1 keeps the
+        inspection in-process.  Results are identical either way.
+        """
+
         source = Path(source_path).resolve(strict=False)
         database = Path(database_path).resolve(strict=False)
         existing_fingerprints = load_existing_report_fingerprints(
@@ -992,42 +1001,28 @@ class ParsePreflightService:
             if on_progress and discovery_failures:
                 on_progress(processed, total, discovery_failures[-1].display_name)
 
-            for path, display_name in discovered:
-                if should_cancel():
-                    return ParsePreflightResult(
-                        source_path=str(source),
-                        database_path=str(database),
-                        metadata_parsing_mode=str(metadata_parsing_mode),
-                        files=tuple(results),
-                        cancelled=True,
-                    )
-                inspected = self._inspect_file(
-                    path,
-                    display_name=display_name,
-                    existing_fingerprints=existing_fingerprints,
-                )
-                if (
-                    inspected.fingerprint in seen_fingerprints
-                    and inspected.status in {
-                        ParsePreflightStatus.READY,
-                        ParsePreflightStatus.DUPLICATE,
-                    }
-                ):
-                    inspected = replace(
-                        inspected,
-                        status=ParsePreflightStatus.DUPLICATE,
-                        reason_codes=tuple(
-                            dict.fromkeys(
-                                (*inspected.reason_codes, "duplicate_in_selected_source")
-                            )
-                        ),
-                    )
-                if inspected.fingerprint:
-                    seen_fingerprints.add(inspected.fingerprint)
-                results.append(inspected)
-                processed += 1
-                if on_progress:
-                    on_progress(processed, total, display_name)
+            inspections = self._inspections_in_order(
+                discovered,
+                existing_fingerprints=existing_fingerprints,
+                should_cancel=should_cancel,
+                workers=workers,
+            )
+            with closing(inspections):
+                for display_name, inspect_next in inspections:
+                    inspected = None if should_cancel() else inspect_next()
+                    if inspected is None:  # cancelled (a pool ends early only on cancel)
+                        return ParsePreflightResult(
+                            source_path=str(source),
+                            database_path=str(database),
+                            metadata_parsing_mode=str(metadata_parsing_mode),
+                            files=tuple(results),
+                            cancelled=True,
+                        )
+                    inspected = self._mark_duplicate_in_source(inspected, seen_fingerprints)
+                    results.append(inspected)
+                    processed += 1
+                    if on_progress:
+                        on_progress(processed, total, display_name)
 
             return ParsePreflightResult(
                 source_path=str(source),
@@ -1039,6 +1034,82 @@ class ParsePreflightService:
         finally:
             if temporary_directory is not None:
                 temporary_directory.cleanup()
+
+    def _inspections_in_order(
+        self,
+        discovered: list[tuple[Path, str]],
+        *,
+        existing_fingerprints: frozenset[str],
+        should_cancel: Callable[[], bool],
+        workers: int | None,
+    ) -> Iterator[tuple[str, Callable[[], ParseFilePreflight | None]]]:
+        """Yield ``(display_name, inspect_next)`` in discovery order.
+
+        ``inspect_next()`` returns the file's inspection (``None`` once a pool stopped on
+        cancellation).  The caller checks cancellation before each call, exactly as the
+        in-process loop always did.  The pool (``review_pool``) runs the same
+        ``_inspect_file`` in worker processes; only the plain service is pooled, so a
+        subclass or a patched inspection stays in-process.
+        """
+
+        def inspect(path: Path, display_name: str) -> ParseFilePreflight:
+            return self._inspect_file(
+                path,
+                display_name=display_name,
+                existing_fingerprints=existing_fingerprints,
+            )
+
+        count = 0
+        if (
+            discovered
+            and type(self) is ParsePreflightService
+            and self._inspect_file is _IN_PROCESS_INSPECT_FILE
+        ):
+            from metroliza.parsing import review_pool
+
+            count = (
+                review_pool.resolve_review_worker_count(len(discovered))
+                if workers is None else max(0, int(workers))
+            )
+        if count < 2:
+            for path, display_name in discovered:
+                yield display_name, partial(inspect, path, display_name)
+            return
+        pooled = review_pool.inspect_in_order(
+            discovered,
+            existing_fingerprints=existing_fingerprints,
+            workers=count,
+            should_cancel=should_cancel,
+            inspect_serial=inspect,
+        )
+        with closing(pooled):
+            for _path, display_name in discovered:
+                yield display_name, partial(next, pooled, None)
+            next(pooled, None)  # let a complete run shut its workers down gracefully
+
+    @staticmethod
+    def _mark_duplicate_in_source(
+        inspected: ParseFilePreflight, seen_fingerprints: set[str]
+    ) -> ParseFilePreflight:
+        """Apply the in-order duplicate rule of one selected source (mutates ``seen``)."""
+
+        if (
+            inspected.fingerprint in seen_fingerprints
+            and inspected.status in {
+                ParsePreflightStatus.READY,
+                ParsePreflightStatus.DUPLICATE,
+            }
+        ):
+            inspected = replace(
+                inspected,
+                status=ParsePreflightStatus.DUPLICATE,
+                reason_codes=tuple(
+                    dict.fromkeys((*inspected.reason_codes, "duplicate_in_selected_source"))
+                ),
+            )
+        if inspected.fingerprint:
+            seen_fingerprints.add(inspected.fingerprint)
+        return inspected
 
     @staticmethod
     def _discover_files(
@@ -1165,3 +1236,7 @@ class ParsePreflightService:
             registry_generation_id=diagnostics.registry_generation_id,
             occurrence_id=_normalize_occurrence_id(display_name),
         )
+
+
+# The inspection the review pool runs in its workers; anything else stays in-process.
+_IN_PROCESS_INSPECT_FILE = ParsePreflightService._inspect_file

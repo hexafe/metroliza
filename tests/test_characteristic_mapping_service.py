@@ -3,6 +3,10 @@ import sqlite3
 
 import pytest
 
+import random
+
+from metroliza.reports import characteristic_mapping_service as service_module
+from metroliza.reports.db import execute_with_retry
 from modules.characteristic_mapping_service import (
     fetch_distinct_references,
     fetch_distinct_report_metric_names,
@@ -217,3 +221,292 @@ def test_service_falls_back_to_legacy_reports_measurements_schema(tmp_path):
         'reference_count': 2,
         'sample_references': ['R-A', 'R-B'],
     }
+
+
+# ---------------------------------------------------------------------------
+# Equivalence of fetch_distinct_report_metric_names with the per-metric
+# reference implementation it replaced (1 aggregate query + 1 query per metric).
+# ---------------------------------------------------------------------------
+
+
+def _oracle_fetch_sample_references(db_path, source_sql, metric_name, *, sample_reference_limit, connection=None):
+    limit = max(0, int(sample_reference_limit or 0))
+    if limit == 0:
+        return []
+
+    try:
+        rows = execute_with_retry(
+            db_path,
+            f"""
+            {service_module._metric_source_cte(source_sql)}
+            SELECT reference
+            FROM metric_source
+            WHERE metric_name = ?
+              AND reference IS NOT NULL
+            GROUP BY reference
+            ORDER BY LOWER(reference), reference
+            LIMIT ?
+            """,
+            params=(metric_name, limit),
+            connection=connection,
+        )
+    except sqlite3.OperationalError as exc:
+        if service_module._is_missing_measurement_source_error(exc):
+            return []
+        raise
+    return [str(row[0]) for row in rows]
+
+
+def _oracle_fetch_distinct_report_metric_names(db_path, *, sample_reference_limit=3, connection=None):
+    source_sql = service_module._measurement_source_sql(db_path, connection=connection)
+    if source_sql is None:
+        return []
+
+    try:
+        rows = execute_with_retry(
+            db_path,
+            f"""
+            {service_module._metric_source_cte(source_sql)}
+            SELECT
+                metric_name,
+                COUNT(*) AS measurement_count,
+                COUNT(DISTINCT report_id) AS report_count,
+                COUNT(DISTINCT reference) AS reference_count
+            FROM metric_source
+            WHERE metric_name <> ''
+            GROUP BY metric_name
+            ORDER BY LOWER(metric_name), metric_name
+            """,
+            connection=connection,
+        )
+    except sqlite3.OperationalError as exc:
+        if service_module._is_missing_measurement_source_error(exc):
+            return []
+        raise
+
+    return [
+        {
+            'metric_name': str(metric_name),
+            'measurement_count': int(measurement_count or 0),
+            'report_count': int(report_count or 0),
+            'reference_count': int(reference_count or 0),
+            'sample_references': _oracle_fetch_sample_references(
+                db_path,
+                source_sql,
+                str(metric_name),
+                sample_reference_limit=sample_reference_limit,
+                connection=connection,
+            ),
+        }
+        for metric_name, measurement_count, report_count, reference_count in rows
+    ]
+
+
+_EQUIVALENCE_LIMITS = [0, 1, 2, 3, 4, 100, -2, None, '2']
+
+# (reference, header, ax) variants covering NULL/blank/whitespace/mixed-case/numeric/duplicate values.
+_TRICKY_ROWS = [
+    ('REF-b', 'DIA', 'X'),
+    ('ref-B', 'DIA', 'X'),
+    ('Ref-a', 'DIA', 'X'),
+    ('REF-A', 'DIA', 'X'),
+    ('REF-A', 'DIA', 'X'),
+    ('  REF-A  ', 'DIA', 'X'),
+    (None, 'DIA', 'X'),
+    ('', 'DIA', 'X'),
+    ('   ', 'DIA', 'X'),
+    (None, 'ONLY-NULL', ''),
+    ('', 'ONLY-NULL', None),
+    (12, 'NUM', 'Z'),
+    (7, 'NUM', 'Z'),
+    ('7', 'NUM', 'Z'),
+    ('\u00c4REF', 'UNI', ''),
+    ('\u00e4ref', 'UNI', ''),
+    ('zref', 'UNI', ''),
+    ('ZREF', 'UNI', ''),
+    ('REF-1', '   ', 'IGNORED'),
+    ('REF-1', None, 'IGNORED'),
+    ('REF-1', ' mixed ', ' Case '),
+    ('REF-2', 'Mixed', 'case'),
+    ('REF-3', 'MIXED', 'CASE'),
+]
+
+
+def _build_view_db(db_path, rows):
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        connection.execute(
+            'CREATE TABLE vw_measurement_export '
+            '(report_id INTEGER, measurement_id INTEGER, reference, header, ax)'
+        )
+        connection.executemany(
+            'INSERT INTO vw_measurement_export(report_id, measurement_id, reference, header, ax) '
+            'VALUES (?, ?, ?, ?, ?)',
+            [(index // 3 + 1, index + 1, ref, header, ax) for index, (ref, header, ax) in enumerate(rows)],
+        )
+
+
+def _random_rows(seed, count=600):
+    rng = random.Random(seed)
+    headers = [f'H{i:02d}' for i in range(40)] + ['h00', ' H01 ', '', None]
+    axes = ['X', 'Y', '', None, ' Z ', 'x']
+    references = (
+        [f'REF-{i:02d}' for i in range(15)]
+        + [f'ref-{i:02d}' for i in range(5)]
+        + [None, '', '  ', 3, '\u00c4B', '\u00e4b']
+    )
+    return [(rng.choice(references), rng.choice(headers), rng.choice(axes)) for _ in range(count)]
+
+
+def _assert_equivalent(db_path, **kwargs):
+    for limit in _EQUIVALENCE_LIMITS:
+        expected = _oracle_fetch_distinct_report_metric_names(db_path, sample_reference_limit=limit, **kwargs)
+        actual = fetch_distinct_report_metric_names(db_path, sample_reference_limit=limit, **kwargs)
+        assert actual == expected, f'limit={limit!r}'
+        assert [list(row) for row in actual] == [list(row) for row in expected]
+    default = _oracle_fetch_distinct_report_metric_names(db_path, **kwargs)
+    assert fetch_distinct_report_metric_names(db_path, **kwargs) == default
+    return default
+
+
+def test_metric_names_equivalent_to_per_metric_reference_on_tricky_values(tmp_path):
+    db_path = str(tmp_path / 'tricky.db')
+    _build_view_db(db_path, _TRICKY_ROWS)
+
+    expected = _assert_equivalent(db_path)
+
+    by_metric = {row['metric_name']: row for row in expected}
+    assert 'ONLY-NULL' in by_metric and by_metric['ONLY-NULL']['sample_references'] == []
+    assert by_metric['DIA - X']['sample_references'] == ['REF-A', 'Ref-a', 'REF-b']
+    assert all(row['metric_name'] for row in expected)
+
+
+def test_metric_names_equivalent_on_randomised_database(tmp_path):
+    for seed in (1, 2, 3):
+        db_path = str(tmp_path / f'random_{seed}.db')
+        _build_view_db(db_path, _random_rows(seed))
+        expected = _assert_equivalent(db_path)
+        assert len(expected) > 20
+
+
+def test_metric_names_equivalent_with_explicit_connection(tmp_path):
+    db_path = str(tmp_path / 'with_connection.db')
+    _build_view_db(db_path, _TRICKY_ROWS + _random_rows(9, 200))
+
+    with closing(sqlite3.connect(db_path)) as connection:
+        _assert_equivalent(db_path, connection=connection)
+        assert fetch_distinct_report_metric_names(db_path, connection=connection) == (
+            fetch_distinct_report_metric_names(db_path)
+        )
+
+
+def test_metric_names_equivalent_on_current_report_tables(tmp_path):
+    db_path = str(tmp_path / 'current_tables.db')
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        connection.execute('CREATE TABLE parsed_reports (id INTEGER PRIMARY KEY)')
+        connection.execute('CREATE TABLE report_metadata (report_id INTEGER, reference TEXT)')
+        connection.execute(
+            'CREATE TABLE report_measurements (id INTEGER PRIMARY KEY, report_id INTEGER, header TEXT, ax TEXT)'
+        )
+        references = ['b-ref', 'B-ref', 'A-ref', None, '', 'a-REF']
+        for report_id, reference in enumerate(references, start=1):
+            connection.execute('INSERT INTO parsed_reports(id) VALUES (?)', (report_id,))
+            if report_id != 4:  # report 4 has no metadata row: LEFT JOIN yields NULL reference
+                connection.execute(
+                    'INSERT INTO report_metadata(report_id, reference) VALUES (?, ?)', (report_id, reference)
+                )
+        # report 7 has measurements but no parsed_reports row: dropped by the JOIN
+        for index in range(60):
+            connection.execute(
+                'INSERT INTO report_measurements(report_id, header, ax) VALUES (?, ?, ?)',
+                (index % 7 + 1, f'M{index % 5}', 'X' if index % 2 else ''),
+            )
+
+    expected = _assert_equivalent(db_path)
+    assert {row['metric_name'] for row in expected} >= {'M0', 'M0 - X', 'M1', 'M1 - X'}
+
+
+def test_metric_names_equivalent_on_legacy_schema(tmp_path):
+    db_path = str(tmp_path / 'legacy_equivalence.db')
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        connection.execute('CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT)')
+        connection.execute('CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY, REPORT_ID INTEGER, HEADER TEXT, AX TEXT)')
+        references = ['R-b', 'r-B', 'R-A', None, '', ' R-A ', 'r-a']
+        connection.executemany(
+            'INSERT INTO REPORTS(ID, REFERENCE) VALUES (?, ?)',
+            list(enumerate(references, start=1)),
+        )
+        connection.executemany(
+            'INSERT INTO MEASUREMENTS(ID, REPORT_ID, HEADER, AX) VALUES (?, ?, ?, ?)',
+            [(i, i % 7 + 1, f'W{i % 4}', ('Y', '', None)[i % 3]) for i in range(1, 50)],
+        )
+
+    expected = _assert_equivalent(db_path)
+    assert expected
+
+
+def test_metric_names_equivalent_when_source_is_missing_or_malformed(tmp_path):
+    empty_db = str(tmp_path / 'empty.db')
+    with closing(sqlite3.connect(empty_db)):
+        pass
+    assert fetch_distinct_report_metric_names(empty_db) == _oracle_fetch_distinct_report_metric_names(empty_db) == []
+
+    only_reports = str(tmp_path / 'only_reports.db')
+    with closing(sqlite3.connect(only_reports)) as connection, connection:
+        connection.execute('CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT)')
+    assert (
+        fetch_distinct_report_metric_names(only_reports)
+        == _oracle_fetch_distinct_report_metric_names(only_reports)
+        == []
+    )
+
+    malformed = str(tmp_path / 'malformed.db')
+    with closing(sqlite3.connect(malformed)) as connection, connection:
+        connection.execute('CREATE TABLE vw_measurement_export (reference TEXT)')
+        connection.execute("INSERT INTO vw_measurement_export(reference) VALUES ('REF-1')")
+    assert (
+        fetch_distinct_report_metric_names(malformed)
+        == _oracle_fetch_distinct_report_metric_names(malformed)
+        == []
+    )
+
+    blank_only = str(tmp_path / 'blank_only.db')
+    _build_view_db(blank_only, [('REF-1', '  ', 'X'), ('REF-2', None, 'Y')])
+    assert fetch_distinct_report_metric_names(blank_only) == _oracle_fetch_distinct_report_metric_names(blank_only) == []
+
+
+def test_metric_names_sample_limit_semantics(tmp_path):
+    db_path = str(tmp_path / 'limits.db')
+    _create_measurement_export_db(db_path)
+
+    def samples(limit):
+        return {
+            row['metric_name']: row['sample_references']
+            for row in fetch_distinct_report_metric_names(db_path, sample_reference_limit=limit)
+        }
+
+    assert samples(0) == {'DIA': [], 'DIA - X': [], 'LENGTH - Y': []}
+    assert samples(-1) == samples(None) == samples(0)
+    assert samples(1)['DIA - X'] == ['REF-1']
+    assert samples(2)['DIA - X'] == ['REF-1', 'REF-2']
+    assert samples(1000)['DIA - X'] == ['REF-1', 'REF-2']
+    # reference_count is independent of the sample limit
+    assert {r['reference_count'] for r in fetch_distinct_report_metric_names(db_path, sample_reference_limit=0)} == {1, 2}
+
+
+def test_metric_names_use_a_single_data_query_regardless_of_metric_count(tmp_path, monkeypatch):
+    db_path = str(tmp_path / 'single_query.db')
+    _build_view_db(db_path, _random_rows(5))
+    metric_queries = []
+    real_execute = service_module.execute_with_retry
+
+    def counting_execute(db, query, *args, **kwargs):
+        if 'metric_source' in query:
+            metric_queries.append(query)
+        return real_execute(db, query, *args, **kwargs)
+
+    monkeypatch.setattr(service_module, 'execute_with_retry', counting_execute)
+
+    rows = fetch_distinct_report_metric_names(db_path)
+
+    assert len(rows) > 20
+    assert len(metric_queries) == 1

@@ -43,6 +43,44 @@ def _decode_png_shape(payload: bytes) -> tuple[int, int]:
     return int(arr.shape[0]), int(arr.shape[1])
 
 
+@pytest.mark.parametrize('families', [['DejaVu Sans'], ['DejaVu Sans', 'DejaVu Serif']])
+def test_resolved_font_cache_preserves_files_and_fallback_order(families):
+    from matplotlib import font_manager
+    from modules.chart_renderer import _resolved_font_properties, _text_render_context
+
+    properties = font_manager.FontProperties(family=families, size=8.4, weight='bold')
+    manager = font_manager.fontManager
+    expected = manager._find_fonts_by_props(properties)
+    context = _text_render_context()
+    _resolved_font_properties.cache_clear()
+    with mock.patch.object(manager, '_find_fonts_by_props', wraps=manager._find_fonts_by_props) as find:
+        first = _resolved_font_properties(properties.copy(), context)
+        second = _resolved_font_properties(properties.copy(), context)
+        assert find.call_count == 1
+    assert first is second
+    assert manager._find_fonts_by_props(first) == expected
+    assert properties.get_file() is None  # The caller's mutable properties stay independent.
+    if len(families) > 1:
+        assert first.get_file() is None
+
+
+@pytest.mark.parametrize('mode', ['workbook', 'clipped'])
+def test_savefig_optimization_preserves_exact_rgba(mode):
+    from modules.chart_renderer import _savefig_bytes
+
+    fig, ax = plt.subplots(figsize=(3, 2))
+    try:
+        ax.plot([0, 1, 2], [0, 1, 0])
+        ax.set_title('Synthetic μ / two\nlines')
+        expected = BytesIO()
+        kwargs = {'bbox_inches': 'tight'} if mode == 'clipped' else {}
+        fig.savefig(expected, format='png', dpi=150, **kwargs)
+        actual = _savefig_bytes(fig, mode=mode)
+        assert np.array_equal(plt.imread(BytesIO(actual)), plt.imread(BytesIO(expected.getvalue())))
+    finally:
+        plt.close(fig)
+
+
 def _attach_histogram_resolved_spec(payload):
     payload["resolved_render_spec"] = histogram_spec_to_mapping(build_resolved_histogram_spec(payload))
     return payload

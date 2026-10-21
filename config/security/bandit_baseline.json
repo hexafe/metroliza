@@ -67,7 +67,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "af5bfce0513532256ac7bd20f2c94ca3940b8fcd54a46afea778b18b55b383da",
+      "fingerprint": "101cf41185ee039979ac0680f790b1264c03964466fabd84647e393621b9d7ea",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -76,7 +76,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "bda540c8b3c6cdcbc7a42112be3552ed810798ea2499b03f6ea61713f3140909",
+      "fingerprint": "38336be3dbf1b8f86cf1641fa2d4155bd8b3bca1c80d6fc82f2f41a7bff4830c",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -382,7 +382,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "b5d67e9a807b9667a99765fa41723268e458b0f2fa3a003c2cb9b357b703e6d1",
+      "fingerprint": "5c722bf8bcd93dfde0a1b96dbd091584641f73b7c6e94e19121fbefcb2cd96b8",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -391,7 +391,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1ab920c12fa6b4e6b56c1e6f3a5b326fe11472f3d92422c51f98f78c97eff870",
+      "fingerprint": "67366044f8ca23b6fd6f621064b291f3a262d971d4fa0be165822c59cd86118c",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -400,7 +400,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "368ae60951bb8f2fa90fc2c72f854652696d45f2e5b4c939adad4193a53fcdb1",
+      "fingerprint": "ec60a40a51d1873e7738029cb36713934c4d2c90a1b70058cda1db303d2f1a5a",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -409,7 +409,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "bbd8e0b8e16aa5bf93d00b3fae9f289768d28b2585ff5ec16cf0f22075bbf9b5",
+      "fingerprint": "7ddbb6d3e6e99aa9ed303386cdbd5e8904f927746cc69bd6f28e62f862c061c5",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -418,7 +418,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "b0eb8d50c1c10f773607ae2c18e28df222dc8d0c774d8a49218f394e7b1bda36",
+      "fingerprint": "7b40bd7e9f054ed88d50c3edfc06185957375574286a9474b19fd1d6f5e4c3c4",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -427,7 +427,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "fcec25e57f40e9ae931edc944bd9194b0ab1ed84d27a5a3f562206891407a42c",
+      "fingerprint": "c69243709050d96cbceca0a5cf6c18982f78f9e3d3c12c5c0b1193ec2d577adf",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -436,7 +436,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "585b9d9922b9a05dfefd7c7f5d29e60bf5419164025cebb19d87a854e61d16c4",
+      "fingerprint": "95f9c6367a4c9153927065e8ce7bac4004dd563061283c5cce01e13fd0731ef5",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -445,16 +445,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "28760c4406549c0c96cacaa3c8552608421df708c0196e32ba21b2a1ebd86399",
+      "fingerprint": "6b799d0a036c0802b89a0279f50e17bb4fb10eb43a17df6116b63b3d9525b5c7",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "_dynamic_field_metadata: value_expr is a local constant TRIM/COALESCE expression over values_row fields. where_sql is the generated fixed source-profile/source-alias scope with ? lists, and all profile IDs/aliases are supplied separately in params.",
+      "rationale": "_dynamic_field_metadata: value_expr and _NUMERIC_VALUE_SQL are local constants (TRIM/COALESCE and the numeric-text CASE over field_value). where_sql is the generated fixed source-profile/source-alias scope with ? lists, and all profile IDs/aliases are supplied separately in params.",
       "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8613c498f5c2b0248716536d580064ce0ad9dad2ee13b382c69f840097f6936e",
+      "fingerprint": "296839e53e5769a51d0981cea1f7d526c58341d5542fbc4e8c9f4ef37d296537",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -463,7 +463,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "aad580a0b709631f041ba1c63bfbb1d6fc5b0bf62196eea66ce777d2398cdf58",
+      "fingerprint": "ba3fe205a63651c9b2ff73da0f4809dd0572c9987168174201bfba1ae37c5ed2",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -472,7 +472,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "610df24c2909ec1732285f2c51fce93e81667b2249735dac7482211e38de332b",
+      "fingerprint": "d4598af11c7e6b5c747e392d0d64391fe22295070b522c36cf252b38d6e427a5",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -481,7 +481,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "35eb803e46bc51161892edd1db454a6e5b6759e1f0231a63acdf796f10704c5c",
+      "fingerprint": "cdac8119a2d4bf2f40bb6b4d84971891877ce92884e767d4ac21a49282922685",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -490,16 +490,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "680d12295480ad855a5f438bd30b7f66a82aa2d8031e71ac371733a61152af32",
+      "fingerprint": "1002b01aaf9b987a0fd261d034f7535b2591b52ca48394beedc0caf2c7d208c1",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
-      "rationale": "_insert_dynamic_value_facets: _INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE is module-owned and quoted by _quote_identifier. normalized_expr wraps the local constant COALESCE(NULLIF(values_row.field_value_text, empty string), values_row.field_value_json) through _normalized_value_sql. scope_key, output_column and field_name are bound.",
+      "rationale": "_insert_dynamic_value_facets: _INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE is module-owned and quoted by _quote_identifier. normalized_expr wraps the local constant COALESCE(NULLIF(values_row.field_value_text, empty string), values_row.field_value_json) through _normalized_value_sql. Output columns come from a TEMP mapping table filled with bound parameters (field name, output column), never from SQL text; scope_key is bound as ?.",
       "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "019719b41d63342586a0b8f05760438609d143e17e2bc15348b85f44b86803dc",
+      "fingerprint": "c36c754c5f31b3507b58c1d5946ba291263b17b0e4edccdd681c30148b099f01",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -508,7 +508,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ed9bbaec7a83a0f4d79b9d0603e466483773cf9fa7f626d8bc32004c8fc284a6",
+      "fingerprint": "c6db70b8c1891cbef5d827b7e7a5ca6ab27eb118aea16de810ebca551be47f16",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -670,20 +670,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "08370fbd7511a1a4518e6f7b9a85cdefdace3bdc1e68b076aed1545137e73b65",
+      "fingerprint": "395214477af19f8927a0edbbe2091a6023a55a8173b1fad7b1587f24a0ca662f",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
       "rationale": "fetch_distinct_references: source_sql is a fixed SELECT chosen by _measurement_source_sql after view/table existence checks. _REFERENCE_SQL is a module expression constant; reference strings are evaluated as data and never interpolated.",
-      "expires_on": "2027-04-30"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "238e4f98ae4bd4e7c212929b588c6c09b8867784835bf67d28dac180977b2cb9",
-      "test_id": "B608",
-      "path": "src/metroliza/reports/characteristic_mapping_service.py",
-      "owner": "Security review",
-      "rationale": "_fetch_sample_references: _metric_source_cte(source_sql) uses only _measurement_source_sql fixed schema-dependent SELECT shapes and _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. metric_name and sample-reference limit are bound in params.",
       "expires_on": "2027-04-30"
     },
     {
@@ -697,7 +688,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "de90df7ba450f918db38e1454fbf3d492ded8c6e12687338338cda8aeff980c2",
+      "fingerprint": "90ec8329d57446ceda792539d6eb45a601466115811331d8988b204b3c7daa25",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -706,11 +697,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e2a793d0213e381f49b256a6a9ae32eb1ec0f3e15027e3831fda6f36bfd2bb46",
+      "fingerprint": "aa4d0add76256565b8b79f39da37a80f7e0f2f11e494678aec426c382d8cc5dc",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "fetch_distinct_report_metric_names: _metric_source_cte(source_sql) composes a source chosen by _measurement_source_sql from fixed view/current/legacy SELECT shapes plus _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. Metric and reference contents remain database values.",
+      "rationale": "fetch_distinct_report_metric_names: _metric_source_cte(source_sql) composes a source chosen by _measurement_source_sql from fixed view/current/legacy SELECT shapes plus _METRIC_IDENTITY_SQL/_REFERENCE_SQL constants. The sample-reference limit is bound as a parameter; metric and reference contents remain database values.",
       "expires_on": "2027-04-30"
     },
     {
@@ -850,7 +841,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "7e2aced08e046594e0991a78c34d98aaa296297230fc248f9451696ce89c710e",
+      "fingerprint": "92620805b6afcaf2b97549b2b2425a1e2f38675d9025a80cde2e3accfa627265",
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
@@ -859,7 +850,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "b177f40f30ce707e7687891849b56ce5fd860a6ff14086eced237c2df241d64d",
+      "fingerprint": "9e2cc70bcd578460121a818e5a7cc01e0324c69796f225dcd30b4be1ff00b451",
       "test_id": "B608",
       "path": "src/metroliza/tabular/data_grouping_service.py",
       "owner": "Security review",
@@ -1291,7 +1282,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6b34fe93c0f64c85cd8ff10010ccb63e566be34fb8624873c60d7845797fe6fc",
+      "fingerprint": "5414c122d10228ed1ec9a161fe2880ef2334c1a8f22d33aa8a572418200c87e8",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1300,7 +1291,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "85bcf7ccd0d6dd0357e248523d5c9b980e70599bd40b3bd65b910be4f5f529ff",
+      "fingerprint": "ca3f13df95704e650d364d099976fee4edfa93ceb682743ab2b7de99419f7dc0",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1309,7 +1300,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "d53bd2c057b8f0b24e0c0622847326639dbb2c6562ae421c3b5db8ea6aaf963e",
+      "fingerprint": "be157e0bb36cc8fc1abc1a9c7103e4b441ae29036fcf0823488e98fa1b7e7dd6",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1318,7 +1309,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ebf4588e094770c5c119636ce7919e21876cb86b404fa19e0c1695dbc24c62fd",
+      "fingerprint": "102d33b05293f1ff866b0c51b86c3247f57016cbce18df1184e23223eb812753",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1327,7 +1318,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6df172d864567914b817b93d81a53c04a87454d9c312c8e7b72927b6b1f61be8",
+      "fingerprint": "eddab7f119c3622175ec90919c3f70103dd15a3789306b3df8666a8aba38d4ec",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1336,7 +1327,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "dc3e0019db7074e44e89d597cb29c117702c5e2c5ac3112696e82a4a9146743c",
+      "fingerprint": "340ea35e1b1c14ef8c2f7c97107b257189f001f6e4f44649797d04639dc0669c",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from metroliza.ui.worker_progress_dialog import dismiss_worker_progress_dialog
+
 from PyQt6.QtCore import QDate, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -786,7 +788,7 @@ class TabularAnalyticsFilterDialog(QDialog):
 
     def _close_preview_loading_dialog(self) -> None:
         if self._preview_loading_dialog is not None:
-            self._preview_loading_dialog.close()
+            dismiss_worker_progress_dialog(self._preview_loading_dialog)
         self._preview_loading_dialog = None
         self._preview_loading_label = None
         self._preview_loading_bar = None

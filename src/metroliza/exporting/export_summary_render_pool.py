@@ -13,12 +13,13 @@ import sys
 import time
 
 from metroliza.exporting.contracts import AppPaths, ExportRequest
-from metroliza.shared.env_utils import env_bool, env_int
-from metroliza.shared.compute_worker import compute_workers_available, frozen_windows, spawn_context
+from metroliza.shared.compute_budget import RENDER_MAX_WORKERS, RENDER_MIN_GROUPS, render_min_groups, render_workers
+from metroliza.shared.env_utils import env_bool
+from metroliza.shared.compute_worker import compute_workers_available, spawn_context
 
 
-MIN_PARALLEL_GROUPS = 8
-MAX_RENDER_WORKERS = 4
+MIN_PARALLEL_GROUPS = RENDER_MIN_GROUPS
+MAX_RENDER_WORKERS = RENDER_MAX_WORKERS
 RESULT_POLL_SECONDS = 0.1
 WORKER_EXIT_GRACE_SECONDS = 2.0
 WORKER_STOP_GRACE_SECONDS = 0.5
@@ -30,14 +31,16 @@ class RecordingWorksheet:
 
     def __init__(self):
         self.commands = []
+        self.image_commands = {}
 
     def write(self, *args):
         self.commands.append(('write', args))
 
     def insert_image(self, row, col, _filename, options):
         options = dict(options)
-        payload = options.pop('image_data').getvalue()
-        self.commands.append(('image', (row, col, options, payload)))
+        buffer = options.pop('image_data')
+        self.image_commands[id(buffer)] = len(self.commands)
+        self.commands.append(('image', (row, col, options, buffer.getvalue())))
 
 
 def _initialize_render_worker(cancel_event=None):
@@ -59,8 +62,8 @@ def render_summary_group(task):
     from metroliza.exporting.export_data_thread import ExportDataThread
 
     request = ExportRequest(
-        paths=AppPaths(db_file='unused.sqlite', excel_file='unused.xlsx'),
-        options=replace(task['options'], generate_html_dashboard=False, chart_worker_count=1),
+        paths=AppPaths(db_file='unused.sqlite', excel_file='unused.xlsx', html_dashboard_file='unused.html'),
+        options=replace(task['options'], chart_worker_count=1),
     )
     thread = ExportDataThread(request)
     if _worker_cancel_event is not None:
@@ -70,13 +73,22 @@ def render_summary_group(task):
     thread._prepared_grouping_df = task['grouping_df']
     thread._optimization_toggles = dict(task['toggles'])
     thread._lookup_sql_measurement_summary = lambda **_kwargs: task['sql_summary']
-    sheet = RecordingWorksheet()
+    sheet = RecordingWorksheet() if task['options'].generate_summary_sheet else None
     labels = []
     thread.update_label.connect(labels.append)
     if not thread._check_canceled():
         thread.summary_sheet_fill(sheet, task['header'], task['group'], task['col'])
+    for section in thread._html_dashboard_sections:
+        for chart in section['charts']:
+            # Reuse the worksheet payload across the process boundary as well as
+            # its registered parent buffer. HTML-only charts still carry bytes.
+            buffer = chart['image_buffer']
+            command = sheet.image_commands.get(id(buffer)) if sheet is not None else None
+            chart['image_buffer'] = (('worksheet_image', command) if command is not None
+                                     else buffer.getvalue())
     return {
-        'commands': sheet.commands,
+        'dashboard_sections': thread._html_dashboard_sections,
+        'commands': sheet.commands if sheet is not None else [],
         'stage_timings': thread._stage_timings,
         'chart_timings': thread._chart_render_timings_by_type,
         'backend_counts': thread._chart_render_backend_counts,
@@ -113,10 +125,11 @@ def _render_task(owner, entry):
 
 
 def _pool_policy(owner, group_count):
-    if not owner.generate_summary_sheet or owner.generate_html_dashboard:
+    if not (owner.generate_summary_sheet or owner.generate_html_dashboard):
         return 'serial_output_mode'
     minimum = _minimum_groups()
-    if owner.chart_worker_count <= 1 or group_count < max(2, minimum or 40):
+    if (render_workers(owner.chart_worker_count, group_count, cap=MAX_RENDER_WORKERS) <= 1
+            or group_count < max(2, minimum or 40)):
         return 'serial_small_export'
     if not env_bool('METROLIZA_EXPORT_GROUP_MP', default=True):
         return 'serial_disabled'
@@ -127,12 +140,7 @@ def _pool_policy(owner, group_count):
 
 
 def _minimum_groups():
-    if not frozen_windows():
-        return MIN_PARALLEL_GROUPS
-    try:
-        return env_int('METROLIZA_EXPORT_GROUP_MIN_GROUPS', default=40)
-    except ValueError:
-        return 40
+    return render_min_groups()
 
 
 def _render_canceled(owner, cancel_event):
@@ -183,60 +191,86 @@ def _shutdown_render_pool(executor, pending, cancel_event):
         manager.join(timeout=WORKER_STOP_GRACE_SECONDS)
 
 
-def iter_summary_render_results(owner, entries):
-    """Yield entries in input order with at most queue_size outstanding groups.
+class SummaryRenderPool:
+    """Own one lazy, bounded render pool for all reference partitions in an export."""
 
-    The first group follows the original serial path. Its timing-driven density
-    policy is then known. A queued group is discarded if that policy changes.
-    Pool startup, submission, or worker failure degrades the remaining work to
-    the original serial path, without duplicating workbook writes.
-    """
-    policy = _pool_policy(owner, len(entries))
-    telemetry = owner.completion_metadata.setdefault('summary_render_pool', {})
-    telemetry.update(mode=policy, workers=0, max_pending=0, completed=0)
-    if policy != 'spawn':
-        for entry in entries:
-            yield entry, None
-        return
+    def __init__(self, owner, group_count):
+        self.owner = owner
+        self.policy = _pool_policy(owner, group_count)
+        self.workers = render_workers(owner.chart_worker_count, group_count, cap=MAX_RENDER_WORKERS)
+        self.bound = max(1, min(owner.chart_worker_queue_size, self.workers * 2))
+        self.pending = deque()
+        self.executor = None
+        self.cancel_event = None
+        self.closed = False
+        self.telemetry = owner.completion_metadata.setdefault('summary_render_pool', {})
+        self.telemetry.update(mode=self.policy, workers=0, max_pending=0, completed=0)
 
-    yield entries[0], None
-    workers = min(MAX_RENDER_WORKERS, owner.chart_worker_count, len(entries) - 1)
-    workers = _windows_worker_limit(workers)
-    bound = max(1, min(owner.chart_worker_queue_size, workers * 2))
-    pending = deque()
-    remaining = iter(entries[1:])
-    executor = None
-    try:
-        context = spawn_context()
-        cancel_event = context.Event()
-        executor = ProcessPoolExecutor(
-            max_workers=workers, mp_context=context,
-            initializer=_initialize_render_worker, initargs=(cancel_event,),
-        )
-        telemetry['workers'] = workers
-        yield from _collect_ordered(owner, remaining, pending, executor, bound, telemetry, cancel_event)
-    except Exception as exc:
-        if executor is not None:
-            _shutdown_render_pool(executor, pending, cancel_event)
-            executor = None
-        telemetry.update(mode='serial_pool_failure', exception_class=type(exc).__name__)
-        for entry in chain((entry for entry, _future, _toggles in pending), remaining):
-            if owner._check_canceled():
+    def close(self):
+        """Release only this export's workers, including stuck native chart calls."""
+        self.closed = True
+        if self.executor is not None:
+            executor, self.executor = self.executor, None
+            _shutdown_render_pool(executor, self.pending, self.cancel_event)
+        self.pending.clear()
+
+    def _ensure_executor(self):
+        if self.executor is None:
+            context = spawn_context()
+            self.cancel_event = context.Event()
+            self.executor = ProcessPoolExecutor(
+                max_workers=self.workers, mp_context=context,
+                initializer=_initialize_render_worker, initargs=(self.cancel_event,),
+            )
+            self.telemetry['workers'] = self.workers
+        return self.executor
+
+    def iter_results(self, entries):
+        """Keep each reference's first group serial and replay remaining results in order.
+
+        The parent applies the timing-driven density policy after every result.
+        Results queued under an older policy are discarded by the collector.
+        A failed pool stays serial for the rest of this export.
+        """
+        if self.closed or not entries:
+            return
+        if self.policy != 'spawn':
+            for entry in entries:
+                if self.owner._check_canceled():
+                    return
+                yield entry, None
+            return
+        yield entries[0], None
+        remaining = iter(entries[1:])
+        try:
+            if self.owner._check_canceled() or len(entries) < 2:
                 return
-            yield entry, None
-    finally:
-        if executor is not None:
-            _shutdown_render_pool(executor, pending, cancel_event)
+            executor = self._ensure_executor()
+            yield from _collect_ordered(
+                self.owner, remaining, self.pending, executor, self.bound,
+                self.telemetry, self.cancel_event,
+            )
+        except Exception as exc:
+            # Retain the uncollected entries before shutdown clears the queue.
+            replay = [entry for entry, _future, _toggles in self.pending]
+            self.close()
+            self.closed = False
+            self.policy = 'serial_pool_failure'
+            self.telemetry.update(mode=self.policy, exception_class=type(exc).__name__)
+            for entry in chain(replay, remaining):
+                if self.owner._check_canceled():
+                    return
+                yield entry, None
 
 
-def _windows_worker_limit(workers):
-    if not frozen_windows():
-        return workers
+def iter_summary_render_results(owner, entries, *, render_pool=None):
+    """Use an export-owned pool, or a bounded standalone pool for direct callers."""
+    session = render_pool if render_pool is not None else SummaryRenderPool(owner, len(entries))
     try:
-        configured = env_int('METROLIZA_EXPORT_GROUP_WORKERS', default=2)
-    except ValueError:
-        configured = 2
-    return min(workers, max(1, configured or 2))
+        yield from session.iter_results(entries)
+    finally:
+        if render_pool is None:
+            session.close()
 
 
 def _collect_ordered(owner, remaining, pending, executor, bound, telemetry, cancel_event):
@@ -272,14 +306,23 @@ def _collect_ordered(owner, remaining, pending, executor, bound, telemetry, canc
 
 def apply_summary_render_result(owner, worksheet, result):
     """Replay ordered writes and account worker telemetry in the parent only."""
-    for operation, args in result['commands']:
+    image_buffers = {}
+    for index, (operation, args) in enumerate(result['commands']):
         if operation == 'write':
             worksheet.write(*args)
         else:
             row, col, options, payload = args
+            image_buffers[index] = owner._register_chart_image(payload)
             worksheet.insert_image(row, col, '', {
-                **options, 'image_data': owner._register_chart_image(payload),
+                **options, 'image_data': image_buffers[index],
             })
+    for section in result.get('dashboard_sections', []):
+        for chart in section['charts']:
+            payload = chart['image_buffer']
+            chart['image_buffer'] = (image_buffers[payload[1]] if isinstance(payload, tuple)
+                                     and payload[0] == 'worksheet_image'
+                                     else owner._register_chart_image(payload))
+        owner._html_dashboard_sections.append(section)
     for stage, elapsed in result['stage_timings'].items():
         owner._record_stage_timing(stage, elapsed)
     for chart, samples in result['chart_timings'].items():

@@ -176,7 +176,7 @@ class TestValidateExportOptions(unittest.TestCase):
         self.assertFalse(options.generate_summary_sheet)
         self.assertTrue(options.generate_html_dashboard)
         self.assertFalse(options.allow_non_essential_chart_skipping)
-        self.assertEqual(options.chart_worker_count, 2)
+        self.assertEqual(options.chart_worker_count, 4)
         self.assertEqual(options.chart_worker_queue_size, 4)
 
     def test_normalizes_allow_non_essential_chart_skipping_flag(self):

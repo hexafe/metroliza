@@ -15,8 +15,9 @@ thread.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass
+from functools import partial
 import os
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -145,8 +146,14 @@ class MetadataReviewReader:
         should_cancel: Callable[[], bool] = lambda: False,
         on_reading: Callable[[MetadataReading], None] | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
+        workers: int | None = None,
     ) -> MetadataReadSummary:
-        """Read each occurrence in order; cancellation is checked between reports."""
+        """Read each occurrence in order; cancellation is checked between reports.
+
+        ``workers`` is the review-pool size for the quick read; ``None`` lets the compute
+        budget decide and 0 or 1 reads in-process.  OCR reads always run in-process.
+        Readings and their order are identical either way.
+        """
 
         if mode not in (MODE_FAST, MODE_OCR):
             raise ValueError(f"Unsupported metadata review mode: {mode}")
@@ -164,12 +171,12 @@ class MetadataReviewReader:
                 )
 
         if ordered:
-            self._read_batch(ordered, mode, should_cancel, emit)
+            self._read_batch(ordered, mode, should_cancel, emit, workers=workers)
         return MetadataReadSummary(
             len(ordered), counts["read"], counts["failed"], len(ordered) - counts["processed"]
         )
 
-    def _read_batch(self, ordered, mode, should_cancel, emit) -> None:
+    def _read_batch(self, ordered, mode, should_cancel, emit, *, workers=None) -> None:
         with ExitStack() as stack:
             try:
                 paths = stack.enter_context(self._resolved_paths(ordered))
@@ -177,10 +184,58 @@ class MetadataReviewReader:
                 for occurrence_id in ordered:
                     emit(MetadataReading(occurrence_id, ROW_FAILED, mode, note=NOTE_ARCHIVE_FAILED))
                 return
-            for occurrence_id in ordered:
+            readings = stack.enter_context(
+                closing(self._readings_in_order(ordered, paths, mode, should_cancel, workers))
+            )
+            for _occurrence_id, read_next in readings:
                 if should_cancel():
                     break
-                emit(self._read_one(self._items[occurrence_id], paths.get(occurrence_id), mode))
+                reading = read_next()
+                if reading is None:  # the pool stopped on cancellation
+                    break
+                emit(reading)
+
+    def _pool_size(self, count: int, mode: str, workers: int | None) -> int:
+        if (
+            mode != MODE_FAST
+            or self._parser_factory is not _IN_PROCESS_PARSER_FACTORY
+            or getattr(self._read_one, "__func__", None) is not _IN_PROCESS_READ_ONE
+        ):
+            return 0
+        from metroliza.parsing import review_pool
+
+        if workers is None:
+            return review_pool.resolve_review_worker_count(count)
+        return max(0, int(workers))
+
+    def _readings_in_order(self, ordered, paths, mode, should_cancel, workers):
+        """Yield ``(occurrence_id, read_next)`` in order; ``read_next()`` reads (or takes) one.
+
+        The quick read of a large batch runs ``read_metadata_one`` in the review pool
+        (``review_pool``); the caller still checks cancellation before each report.
+        """
+
+        count = self._pool_size(len(ordered), mode, workers)
+        if count < 2:
+            for occurrence_id in ordered:
+                yield occurrence_id, partial(
+                    self._read_one, self._items[occurrence_id], paths.get(occurrence_id), mode
+                )
+            return
+        from metroliza.parsing import review_pool
+
+        pooled = review_pool.read_metadata_in_order(
+            [(self._items[occ], paths.get(occ)) for occ in ordered],
+            mode=mode,
+            database_path=self._preflight.database_path,
+            workers=count,
+            should_cancel=should_cancel,
+            read_serial=lambda item, path: self._read_one(item, path, mode),
+        )
+        with closing(pooled):
+            for occurrence_id in ordered:
+                yield occurrence_id, partial(next, pooled, None)
+            next(pooled, None)  # let a complete run shut its workers down gracefully
 
     # -- internals ---------------------------------------------------------
 
@@ -203,50 +258,74 @@ class MetadataReviewReader:
     def _read_one(
         self, item: ParseFilePreflight, path: Path | None, mode: str
     ) -> MetadataReading:
-        occurrence_id = item.stable_occurrence_id
-        if path is None or not path.is_file() or not item.fingerprint or not item.parser_id:
-            return MetadataReading(occurrence_id, ROW_CHANGED, mode, note=NOTE_SOURCE_CHANGED)
-        try:
-            inspection = SourceInspectionContext.from_path(
-                path, source_format=infer_source_format(path)
-            )
-            sha256_value = inspection.sha256
-            if not sha256_value or f"sha256:{sha256_value}" != item.fingerprint:
-                return MetadataReading(occurrence_id, ROW_CHANGED, mode, note=NOTE_SOURCE_CHANGED)
-            parser = report_parser_factory.invoke_parser_factory(
-                self._parser_factory,
-                str(path),
-                self._preflight.database_path,
-                source_inspection=inspection,
-                expected_plugin_id=item.parser_id,
-                expected_registry_generation_id=item.registry_generation_id,
-                metadata_parsing_mode=mode,
-            )
-            if not getattr(parser, "supports_metadata_review_override", False):
-                return MetadataReading(occurrence_id, ROW_UNSUPPORTED, mode, note=NOTE_UNSUPPORTED)
-            if hasattr(parser, "metadata_parsing_mode"):
-                parser.metadata_parsing_mode = mode
-            parser.open_report()
-            selection = parser.extract_metadata()
-            inspection.verified_sha256()
-        except (
-            SourceChangedAfterInspectionError,
-            report_parser_factory.ParserApprovalMismatchError,
-            report_parser_factory.ParserAmbiguityError,
-            report_parser_factory.UnsupportedReportFormatError,
-        ):
-            return MetadataReading(occurrence_id, ROW_CHANGED, mode, note=NOTE_SOURCE_CHANGED)
-        except Exception:  # noqa: BLE001 - one unreadable report must not stop the batch
-            return MetadataReading(occurrence_id, ROW_FAILED, mode, note=NOTE_FAILED)
-        if not isinstance(selection, MetadataSelectionResult):
-            return MetadataReading(occurrence_id, ROW_FAILED, mode, note=NOTE_FAILED)
-        return MetadataReading(
-            occurrence_id,
-            READING_OK,
+        return read_metadata_one(
+            item,
+            path,
             mode,
-            selection=selection,
-            ocr_note=_safe_ocr_note(selection.metadata.metadata_json) if mode == MODE_OCR else "",
+            database_path=self._preflight.database_path,
+            parser_factory=self._parser_factory,
         )
+
+
+def read_metadata_one(
+    item: ParseFilePreflight,
+    path: Path | None,
+    mode: str,
+    *,
+    database_path: str,
+    parser_factory: Callable | None = None,
+) -> MetadataReading:
+    """Read one reviewed report's metadata (the review pool's workers run this as well)."""
+
+    occurrence_id = item.stable_occurrence_id
+    if path is None or not path.is_file() or not item.fingerprint or not item.parser_id:
+        return MetadataReading(occurrence_id, ROW_CHANGED, mode, note=NOTE_SOURCE_CHANGED)
+    try:
+        inspection = SourceInspectionContext.from_path(
+            path, source_format=infer_source_format(path)
+        )
+        sha256_value = inspection.sha256
+        if not sha256_value or f"sha256:{sha256_value}" != item.fingerprint:
+            return MetadataReading(occurrence_id, ROW_CHANGED, mode, note=NOTE_SOURCE_CHANGED)
+        parser = report_parser_factory.invoke_parser_factory(
+            parser_factory or report_parser_factory.get_parser,
+            str(path),
+            database_path,
+            source_inspection=inspection,
+            expected_plugin_id=item.parser_id,
+            expected_registry_generation_id=item.registry_generation_id,
+            metadata_parsing_mode=mode,
+        )
+        if not getattr(parser, "supports_metadata_review_override", False):
+            return MetadataReading(occurrence_id, ROW_UNSUPPORTED, mode, note=NOTE_UNSUPPORTED)
+        if hasattr(parser, "metadata_parsing_mode"):
+            parser.metadata_parsing_mode = mode
+        parser.open_report()
+        selection = parser.extract_metadata()
+        inspection.verified_sha256()
+    except (
+        SourceChangedAfterInspectionError,
+        report_parser_factory.ParserApprovalMismatchError,
+        report_parser_factory.ParserAmbiguityError,
+        report_parser_factory.UnsupportedReportFormatError,
+    ):
+        return MetadataReading(occurrence_id, ROW_CHANGED, mode, note=NOTE_SOURCE_CHANGED)
+    except Exception:  # noqa: BLE001 - one unreadable report must not stop the batch
+        return MetadataReading(occurrence_id, ROW_FAILED, mode, note=NOTE_FAILED)
+    if not isinstance(selection, MetadataSelectionResult):
+        return MetadataReading(occurrence_id, ROW_FAILED, mode, note=NOTE_FAILED)
+    return MetadataReading(
+        occurrence_id,
+        READING_OK,
+        mode,
+        selection=selection,
+        ocr_note=_safe_ocr_note(selection.metadata.metadata_json) if mode == MODE_OCR else "",
+    )
+
+
+# The reader the review pool reproduces in its workers; anything else stays in-process.
+_IN_PROCESS_PARSER_FACTORY = report_parser_factory.get_parser
+_IN_PROCESS_READ_ONE = MetadataReviewReader._read_one
 
 
 __all__ = [
@@ -257,4 +336,5 @@ __all__ = [
     "MetadataReading",
     "MetadataReviewReader",
     "ocr_unavailable_reason",
+    "read_metadata_one",
 ]

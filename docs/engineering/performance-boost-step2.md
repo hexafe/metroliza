@@ -1,7 +1,9 @@
 # Metroliza — Performance Boost STEP2: audyt, pomiary, PoC i plan wdrożenia
 
-- **Status:** audyt zakończony; PoC na gałęzi `perf/step2-audit` (draft PR #1149); nic nie zostało zmergowane.
-  Pomiary Linux w profilu energii `balanced` (2026-10-20); porównanie z poprzednią wersją (build 261019) w
+- **Status:** audyt zakończony; PoC na gałęzi `perf/step2-audit` (draft PR #1149). Pakiet wdrożeniowy P01–P14
+  na gałęzi `perf/step2-boost` (2026-10-21); porównanie przed STEP1 / po STEP1 / po STEP2: §4.2; build testowy
+  2026.09 RC1 261021 dla PO. Nic nie zostało zmergowane.
+  Pomiary Linux w profilu energii `balanced` (2026-10-20/21); porównanie z poprzednią wersją (build 261019) w
   tym samym profilu: §4.1.
 - **Właściciel:** koordynator audytu wydajności (Claude Opus 5.5, Claude Code). Decyzje produktowe: PO.
 - **Data:** 2026-10-20 (czasy: Warszawa, UTC+2, jeśli nie zaznaczono UTC); liczby z Linuksa pochodzą z
@@ -287,6 +289,108 @@ Run A/B 39349370988 (pauza 20 s przed drugim startem): weryfikacja SHA-256 + flu
 (run 39332127323): odbudowa runtime 17,9 s (pozostałe ≈3,6 s), splash widoczny przez cały czas —
 przyczyna po stronie runnera niezbadana; obecny launcher nie loguje etapów, więc nie da się porównać.
 
+### 4.2 Wyniki pakietu STEP2: przed STEP1, po STEP1, po STEP2 (2026-10-21)
+
+Pakiet wdrożeniowy: gałąź `perf/step2-boost` (P01–P14 i poprawki z przeglądów R1–R4, plan:
+[`performance-boost-step2-implementation.md`](performance-boost-step2-implementation.md)). Trzy wersje na tym
+samym laptopie, w profilu `balanced` (przed i po pomiarze: `balanced`, zasilanie sieciowe), na tych samych
+danych syntetycznych i z tym samym plikiem harnessu skopiowanym do każdego drzewa (SHA-256 `a71e7496…`);
+czyste worktree ze skompilowanym bajtkodem, kolejność wersji rotowana w każdym scenariuszu i w każdej rundzie,
+mediana [min–max] z 3 prób (długie scenariusze n=1). Run 2026-10-21 04:17–05:56.
+
+- **przed STEP1** = `fb72a42e` — commit zmierzony w audycie #1120 (2026-10-17);
+- **po STEP1** = `15ddbeb7` — 2026.09 RC1 build 261019;
+- **po STEP2** = `a176139d` (head pakietu w chwili pomiaru); wiersze Review/import ponownie zmierzone na
+  `a58b693f` po poprawce P07b (niżej).
+- Harness instaluje politykę GC (§4.3) tylko w drzewach, które ją mają; każda wersja działa więc tak jak jej
+  produkt. **N/A** = funkcja albo mierzony etap nie istniały w tej wersji (Review przed importem, osobne
+  wczytanie rekordów Modify DB), nie zero.
+
+| Flow | Scenariusz | przed STEP1 [s] | po STEP1 [s] | po STEP2 [s] | STEP2 vs 261019 | łącznie |
+|---|---|---:|---:|---:|---:|---:|
+| IMP-SCAN | Review 1500 PDF | N/A | 22,40 [21,64–22,86] | **8,40** [8,16–8,42] | **−62%** | — |
+| IMP-RUN | import 1500 PDF po Review | N/A | 12,89 [12,77–13,39] | **9,4–9,8** (P07b, n=2) | ok. −25% | — |
+| DB-OPEN | Modify DB, baza 1500 | 19,25 | 0,19 | 0,18 | bez zmian | **−99%** |
+| DB-RECORDS | rekordy 216k | N/A | 2,44 | 2,39 + animowana kaczucha | bez zmian | — |
+| DB-APPLY | 1 zmiana nazwy | 8,95 | 0,05 | 0,05 | bez zmian | **−99%** |
+| FLT-OPEN | filtr, 216k | 1,56 | 1,19 | 1,29 ¹ | brak potw. zmiany | −17% |
+| GRP-OPEN | grouping, 1500 | 1,26 | 1,50 | **0,62** | **−58%** | −51% |
+| GRP-MAP | dopasowanie nazw, 2664 metryk (n=1) | 170,0 | 163,3 | **0,8** | **−99,5%** | −99,5% |
+| EXP-RUN | Main plots, 1500 raportów | 58,47 | 28,83 | 27,68 | −4% | **−53%** |
+| EXP-RUN | Extended, 216 grup (n=1) ² | 409,0 | 134,6 | **68,8** | **−49%** | −83% |
+| SHELL-THEME | motyw, tabela 1500 | N/A | 0,21 | 0,17 | −17% | — |
+| CSV-03 | wczytanie CSV 100k | 4,96 | 4,94 | 4,71 | −5% | −5% |
+| CSV-09 | Create analytics 100k | 51,44 | 52,02 | **35,39** | **−32%** | −31% |
+| IND-01 | Industrial Data, cache 50k | 1,58 | 0,85 | **0,33** | **−62%** | −79% |
+| IND-05 | Industrial → CSV Summary | 10,27 | 10,51 | **5,73** | **−45%** | −44% |
+| RT-01 | Realtime, pierwsze otwarcie | 1,19 | 0,38 | 0,40 | w szumie | −66% |
+| EXP-OPEN | okno eksportu | 0,12 | 0,13 | 0,12 | bez zmian | — |
+| — | `benchmark_paths` CSV Summary 100k×8 (n=2) | 93,4 | 65,6 | 64,9 | bez zmian | −31% |
+
+¹ Ponowny pomiar naprzemienny (n=4, ta sama sesja): 261019 1,34 [1,24–1,39] s, po STEP2 1,38 [1,28–1,52] s,
+po STEP2 bez polityki GC 1,32 [1,30–1,37] s — zakresy się nakładają; różnicy z głównej tabeli nie potwierdzono.
+² Linux, źródła: do 4 procesów renderujących (domyślne źródłowe 4). W Windows EXE limit renderu to nadal 2
+procesy — tam zysk jest mniejszy (niezmierzony).
+
+**Responsywność (najdłuższy zastój GUI [s], mediany):** dopasowanie nazw 170,0 → 163,3 → **0,08**;
+Industrial → CSV Summary 10,26 → 10,51 → **0,10**; Grouping 1,26 → 1,50 → **0,20**; Industrial Data 1,58 → 0,85
+→ **0,33**; Modify DB 19,25 → 0,19 → 0,18; Review — → 0,24 → **0,12**. Start (P11, n=5, ta sama miara po obu
+stronach): najdłuższy zastój po pierwszym malowaniu 201 → **50 ms**; pierwszy klik Export po rozgrzewce:
+zastój 1,40 → **0,12 s**. Harness `export_run` klika eksport przed końcem rozgrzewki, więc w tabeli wyżej
+zastój pierwszego eksportu (~1,8 s) pozostaje we wszystkich wersjach.
+**Kaczucha (P12, harness):** Review — widoczna 1,00 s od kliknięcia (było 1,02–1,08), klatki 95 → 100%,
+klatki w tle 62 → 0, okno zwalniane; import 1,05–1,15 → 1,01 s; wczytanie CSV 65 → 66–70% klatek.
+**Koszt zasobów (szczyt RSS drzewa procesów):** Review 174 → 460 MB (procesy puli); Extended 956 → 1369 MB
+(4 procesy na Linuksie); pozostałe bez istotnej zmiany.
+
+**Regresja wykryta w tym porównaniu i naprawiona (P07b):** na `a176139d` import po Review trwał 18,3 s
+(261019: 12,9 s). Profil wątku importu: po Review w puli procesów cache sond parserów w procesie głównym był
+pusty, więc filtr planu importu sondował od nowa wszystkie 1500 PDF (18,1 s, w tym odczyt tekstu PDF i
+parsowanie bloków). Przy Review w procesie (`METROLIZA_REVIEW_WORKERS=0`) import trwał 10,4–11,1 s. Poprawka
+`a58b693f`: procesy robocze zwracają wyniki sond, proces główny zasiewa nimi swój cache tylko przy zgodnej
+generacji i odcisku rejestru oraz niezmienionym pliku (digest). Wynik: 18,8–19,5 → **9,4–9,8 s**, Review bez
+zmian (8,3 → 8,5 s), zrzut logiczny bazy identyczny (1500 raportów / 216 000 pomiarów). Pomiar uzupełniający
+w jednej sesji, naprzemiennie, ale przy wyższym obciążeniu laptopa (loadavg 3,6–5,6): Review 29,8 → 8,7 s,
+import 16,0 → 13,2 s.
+
+Surowe wyniki: [`performance-boost-step2-measurements.json`](performance-boost-step2-measurements.json),
+klucz `linux.three_version_comparison`.
+
+### 4.3 Stabilność: przyczyna losowych crashy (P14)
+
+W trakcie pakietu testy Qt losowo kończyły się SIGSEGV (lokalnie i w CI, run 39499366212: crash w
+`processEvents()`), a podproces kwalifikacji „fresh reopen” na Windows padał co kilka przebiegów. Przyczyna,
+odtworzona deterministycznie (3/3): **automatyczny cykliczny GC Pythona uruchamia się w tym wątku, który
+akurat alokuje** — także w wątkach roboczych (eksport, import, CSV, ładowanie w tle, rozgrzewka). Zbiera tam
+wrappery obiektów Qt trzymane tylko przez cykle referencji (np. lambda podpięta do sygnału, która przechwytuje
+okno); PyQt odkłada usunięcie obiektu C++ do jego wątku, a wątek GUI wykonuje je później na zwolnionym już
+stanie Pythona. Gdy zbieranie odbywa się w wątku GUI, wszystkie obiekty usuwają się poprawnie (20/20).
+
+Poprawka: polityka `metroliza.app.gc_policy` wyłącza automatyczny GC i zbiera pokoleniami na timerze w wątku
+GUI (500 ms; najdłuższa zbiórka zmierzona w ciężkich scenariuszach: 42 ms). Instalują ją `launch_ui` i każdy
+`get_or_create_qapplication()` (także ścieżki kwalifikacji Windows); tryb smoke startu i procesy robocze spawn
+zostają przy domyślnym GC; testy używają tej samej polityki. Dowody: podproces fresh reopen 2/12 i 3/11
+crashy → **0/12** (baza 78d5d775: 0/8); zestaw 10 plików Qt pod obciążeniem 2/5 → **0/3**; CI na `3e5fe523`
+i `a176139d` w pełni zielone; 20 startów i zamknięć aplikacji bez błędu. **Na Windows problem nie jest w pełni
+rozwiązany:** test fresh reopen padł ponownie w runie 39545859603 (`a0d37690`, już z polityką GC) po zielonych
+39529010183 i 39532176909; przyczyna na Windows nieustalona. Ograniczenie: dowody z Linuksa (offscreen) i z
+Windows CI; spakowany EXE na czystej maszynie — w teście PO (build 261021).
+
+### 4.4 Czego nie osiągnięto i co zostaje otwarte
+
+- **D1 render wykresów (P10):** −5% na wykres zamiast −30%; zysk Extended daje głównie pula procesów (P08).
+- **Zimny pierwszy eksport** kliknięty przed końcem rozgrzewki (~1,7 s po pokazaniu okna) nadal ma przestój
+  ~1,8 s; po rozgrzewce 0,12 s.
+- **Płynność kaczuchy przy wczytywaniu CSV:** 66–70% klatek (praca obliczeniowa w tle konkuruje o GIL).
+- **Modify DB:** asynchroniczne otwarcie i cache tekstu liczb wycofane (zmiana kontraktu synchronicznego
+  otwarcia; zysk 1,8%); zostało animowane ładowanie rekordów.
+- **Koszt pamięci** Review w puli (+~290 MB chwilowo) i Extended przy 4 procesach (Linux).
+- **Decyzje PO (partia E)** i D3/D4 — bez zmian, odłożone.
+- **Windows:** CI (Windows core smoke, smoke pakowania) zielone; pełna akceptacja kandydata Windows w CI nie
+  była uruchamiana (wymaga osobnej zgody); EXE testowy 261021 dla PO.
+- Uwagi P3 z przeglądu delta R4 (utwardzenie, w tym cykl aplikacja ↔ polityka GC) poprawiane po buildzie 261021;
+  nie były już niezależnie przeglądane (budżet przeglądu partii R4 wykorzystany).
+
 ## 5. Pierwsze uruchomienie i wczesny splash (zgłoszenie PO)
 
 ### 5.1 Odtworzenie
@@ -337,8 +441,9 @@ Warstwa supervisora to ≈0,65–0,9 s z ≈1,3 s ciepłego startu — najwięks
   okna, nie tworzy własnego Qt splasha, po pierwszym malowaniu okna głównego wysyła `MSG_HANDOFF` z jego
   uchwytem; launcher (ma prawo do pierwszego planu) przenosi fokus i zamyka splash. Zamknięcie także:
   przed komunikatem supervisora, przed błędem launchera, przy błędzie/smoke aplikacji, po wyjściu
-  aplikacji i po 120 s.
-- **DPI:** system-aware (rozmiar ze skalą systemu); per-monitor wymaga obsługi `WM_DPICHANGED` (A1).
+  aplikacji i po 120 s (w A1: 120 s od końca rozpakowania/weryfikacji, nigdy w ich trakcie).
+- **DPI:** system-aware (rozmiar ze skalą systemu); per-monitor wymaga obsługi `WM_DPICHANGED` —
+  w A1 odłożone.
 
 ### 5.5 Wynik PoC
 
@@ -573,6 +678,18 @@ po decyzji (partia E).
   reset 2026-10-25), później status nieznany — polityka wyłącza wtedy opcjonalną pracę drugiego dostawcy.
 - Pomiary w profilu `balanced` (2026-10-20), porównanie z poprzednią wersją (261019) i profile:
   koordynator (Claude Opus 5.5, effort max), bez nowych agentów.
+- **Wdrożenie pakietu (2026-10-20/21)**, według trailerów commitów i logów sesji:
+  - koordynator: Claude Opus 5.5 (effort max) — plan, integracja, weryfikacja, benchmarki, diagnoza crashy,
+    poprawki `a64f81f4`, `f0b45bef`, `d65bd744`, `3e5fe523`, `174c2f48`;
+  - P01 (A1, launcher) i P07 (C2, pula Review): Claude Opus 5.5 (`claude_coordinator`, high);
+  - P02–P06, poprawki R2 i rejestru wątków: Claude Sonnet 5.5 (`bounded_worker`, high);
+  - od 2026-10-20 ≈18:45 (Codex dostępny, tryb BOTH): P08–P14, P09b, P13b, P07b oraz poprawki R3F/R4F —
+    Codex `gpt-6.1-sol` (`implementer`, high; tożsamość modelu po stronie serwera: niewidoczna), w osobnych
+    worktree, bez commitów; commity i integracja — koordynator;
+  - przeglądy: R1–R4 i R4Δ — Claude Opus 5.5 (`independent_reviewer`, high, świeży kontekst, tylko odczyt).
+- **Zużycie Codex** (okno tygodniowe planu `prolite`, odczyty z logów sesji): 0% przed P09 → 26% po P07b/P12b,
+  w tym prace użytkownika poza pakietem; pakiety FEATURE: mediana ≈1 p.p. i ≈9,5 mln tokenów (głównie cache)
+  na pakiet. Przyrosty przebiegów równoległych nie są przypisywalne pojedynczo.
 
 ## 12. Niezależna weryfikacja
 

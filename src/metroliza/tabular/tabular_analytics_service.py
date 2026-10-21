@@ -1888,17 +1888,16 @@ def _load_tabular_files_into_sqlite(
                     rows_loaded=row_number,
                 )
                 batch: list[tuple[Any, ...]] = []
-                chunk_started_at = time.perf_counter()
-                for raw_row in _iter_tabular_source_rows(
-                    path,
-                    csv_config=csv_config,
-                    sheet_name=spec["sheet_name"],
+                for normalized_row, parsed_numeric_values in _iter_normalized_numeric_rows(
+                    _iter_tabular_source_rows(
+                        path, csv_config=csv_config, sheet_name=spec["sheet_name"],
+                    ),
+                    normalized_columns=spec["normalized_columns"],
+                    decimal=str(csv_config.get("decimal") or "."),
+                    cancel_check=cancel_check,
+                    record_timing=_record_load_timing,
                 ):
-                    _record_load_timing("chunk_read", chunk_started_at)
                     _raise_if_tabular_load_cancelled(cancel_check)
-                    normalize_started_at = time.perf_counter()
-                    normalized_row = _normalize_raw_row(spec["normalized_columns"], raw_row)
-                    _record_load_timing("chunk_normalize", normalize_started_at)
                     row_started_at = time.perf_counter()
                     row_number += 1
                     file_row_count += 1
@@ -1923,13 +1922,9 @@ def _load_tabular_files_into_sqlite(
                     if include_source_sheet:
                         row_data["source_sheet"] = str(spec["sheet_name"] or "")
                     decimal = str(csv_config.get("decimal") or ".")
-                    parsed_numeric_values: dict[str, float | None] = {}
                     for column in source_columns:
                         raw_text = _display_cell_text(normalized_row.get(column))
-                        parsed_number = (
-                            _parse_tabular_number(raw_text, decimal=decimal) if raw_text else None
-                        )
-                        parsed_numeric_values[column] = parsed_number
+                        parsed_number = parsed_numeric_values.get(column)
                         row_data[column] = raw_text or None
                         numeric_storage_column = numeric_filter_columns.get(column)
                         if numeric_storage_column is not None:
@@ -1970,7 +1965,6 @@ def _load_tabular_files_into_sqlite(
                             rows_loaded=row_number,
                         )
                         batch = []
-                    chunk_started_at = time.perf_counter()
                 if batch:
                     write_started_at = time.perf_counter()
                     connection.executemany(insert_sql, batch)
@@ -2469,6 +2463,65 @@ def _parse_tabular_number(value: Any, *, decimal: str = ".") -> float | None:
     except ValueError:
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _parse_tabular_numbers(texts: list[str | None], *, decimal: str) -> list[float | None]:
+    """Convert normalized cells with NumPy's float64 parser, retaining scalar fallback.
+
+    NumPy uses the same binary64 string conversion as float; pandas.to_numeric
+    can round the last bit differently. Mixed/invalid columns keep the original
+    parser, including its locale, blank and non-finite rules.
+    """
+    import numpy as np
+
+    original_texts = texts
+    # Keep Python strings: fixed-width NumPy strings discard trailing NULs,
+    # which float() must reject just as the scalar parser does.
+    if decimal == ",":
+        texts = [value.replace(".", "").replace(",", ".") if value is not None else None
+                 for value in texts]
+    elif any("," in value for value in texts if value is not None):
+        texts = [value.replace(",", "") if value is not None else None for value in texts]
+    text = np.asarray(texts, dtype=object)
+    try:
+        with np.errstate(over="ignore", invalid="ignore"):
+            numbers = text.astype(np.float64)
+    except ValueError:
+        return [_parse_tabular_number(value, decimal=decimal) for value in original_texts]
+    result = numbers.astype(object)
+    result[~np.isfinite(numbers)] = None
+    return result.tolist()
+
+
+def _iter_normalized_numeric_rows(
+    rows: Iterable[tuple[Any, ...]], *, normalized_columns: tuple[str, ...],
+    decimal: str, cancel_check: TabularCancelCheck | None,
+    record_timing: Callable[[str, float], None],
+):
+    """Bound conversion memory independently of source size and SQLite batches."""
+    from itertools import islice
+
+    iterator = iter(rows)
+    while True:
+        _raise_if_tabular_load_cancelled(cancel_check)
+        read_started_at = time.perf_counter()
+        chunk = list(islice(iterator, min(TABULAR_SQLITE_CHUNK_ROWS, 4096)))
+        record_timing("chunk_read", read_started_at)
+        if not chunk:
+            return
+        normalize_started_at = time.perf_counter()
+        normalized = [_normalize_raw_row(normalized_columns, row) for row in chunk]
+        numeric_columns = [
+            _parse_tabular_numbers([row[column] for row in normalized], decimal=decimal)
+            for column in normalized_columns
+        ]
+        record_timing("chunk_normalize", normalize_started_at)
+        if not normalized_columns:
+            for row in normalized:
+                yield row, {}
+            continue
+        for row, numbers in zip(normalized, zip(*numeric_columns), strict=True):
+            yield row, dict(zip(normalized_columns, numbers, strict=True))
 
 
 def _looks_like_identifier_number(value: str) -> bool:

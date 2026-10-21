@@ -758,3 +758,28 @@ def test_filter_dialog_sqlite_lifecycle_handlers_ignore_stale_results_and_report
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
+
+
+def test_preview_terminal_cleanup_deletes_dialog_and_drops_all_widgets(tmp_path):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog
+
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+    dialog = TabularAnalyticsFilterDialog(dataframe=loaded.dataframe, column_mapping=loaded.column_mapping)
+    try:
+        progress = create_delayed_worker_progress_dialog(
+            dialog, window_title="Preview", initial_status_text="Loading", on_cancel=lambda: None,
+        )
+        for suffix, widget in zip(("dialog", "label", "bar", "gif"), progress):
+            setattr(dialog, "_preview_loading_" + suffix, widget)
+        progress[0].show()
+        dialog._close_preview_loading_dialog()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(progress[0])
+        assert all(getattr(dialog, "_preview_loading_" + suffix) is None
+                   for suffix in ("dialog", "label", "bar", "gif"))
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)

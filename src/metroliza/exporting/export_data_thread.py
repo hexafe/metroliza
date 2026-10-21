@@ -36,10 +36,12 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter
 from matplotlib.text import Text
+from matplotlib.font_manager import FontProperties
 from metroliza.workers.export_thread_runtime import QCoreApplication, QThread, pyqtSignal
 
 from metroliza.exporting.contracts import ExportRequest, validate_export_request
 from metroliza.exporting.export_summary_render_pool import (
+    SummaryRenderPool,
     apply_summary_render_result,
     iter_summary_render_results,
 )
@@ -230,6 +232,9 @@ from metroliza.charts.chart_render_service import (
     deterministic_downsample_frame,
 )
 from metroliza.charts.chart_renderer import (
+    _resolve_figure_fonts,
+    _resolved_font_properties,
+    _text_render_context,
     build_chart_renderer,
     build_distribution_native_payload,
     build_histogram_native_payload,
@@ -1020,7 +1025,8 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
     # Resolve axes transforms once. Text/Annotation.get_window_extent updates
     # candidate geometry (including leader lines) without drawing the figure.
-    figure.canvas.draw()
+    _resolve_figure_fonts(figure)
+    figure.draw_without_rendering()
     renderer = figure.canvas.get_renderer()
     title_bbox = None
     if title_artist is not None:
@@ -2286,7 +2292,8 @@ def annotate_violin_group_stats(
         return style
 
     if use_dynamic_offsets:
-        ax.figure.canvas.draw()
+        _resolve_figure_fonts(ax.figure)
+        ax.figure.draw_without_rendering()
         renderer = ax.figure.canvas.get_renderer()
         preview_text = ax.text(0, 0, '', alpha=0)
 
@@ -2507,7 +2514,8 @@ def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
         strategy_bottom_margin = float(strategy['bottom_margin'])
         fig.subplots_adjust(bottom=strategy_bottom_margin)
 
-    fig.canvas.draw()
+    _resolve_figure_fonts(fig)
+    fig.draw_without_rendering()
     renderer = fig.canvas.get_renderer()
 
     artists = []
@@ -3132,21 +3140,39 @@ def apply_explicit_table_row_heights(table, *, row_heights, ncols):
             cell.set_height(float(row_height))
 
 
+_TEXT_EXTENT_CACHE_SIZE = 512
+
+
+@lru_cache(maxsize=128)
+def _probe_font_properties(fontsize, fontweight, symbol_fallback, context):
+    properties = FontProperties(
+        size=fontsize, weight=fontweight,
+        family='DejaVu Sans' if symbol_fallback else None,
+    )
+    return _resolved_font_properties(properties, context)
+
+
 def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
-    """Measure text extents in display pixels for sizing-aware panel layout."""
+    """Cache exact, unrotated probe extents on one renderer, bounded to 512."""
+    text = str(text)
+    context = _text_render_context()
+    properties = _probe_font_properties(fontsize, fontweight, _uses_symbol_font_fallback(text), context)
+    key = (text, properties, fig.dpi, getattr(renderer, 'dpi', None), renderer.points_to_pixels(1.0), context)
+    cache = getattr(renderer, '_metroliza_text_extents', None)
+    if cache is None:
+        cache = renderer._metroliza_text_extents = OrderedDict()
+    if key in cache:
+        cache.move_to_end(key)
+        return cache[key]
 
-    probe_kwargs = {
-        'fontsize': fontsize,
-        'fontweight': fontweight,
-        'alpha': 0.0,
-    }
-    if _uses_symbol_font_fallback(text):
-        probe_kwargs['fontfamily'] = 'DejaVu Sans'
-
-    probe = Text(0.0, 0.0, str(text), **probe_kwargs)
+    probe = Text(0.0, 0.0, text, fontproperties=properties, alpha=0.0)
     probe.set_figure(fig)
     extent = probe.get_window_extent(renderer=renderer)
-    return extent.width, extent.height
+    result = (extent.width, extent.height)
+    cache[key] = result
+    if len(cache) > _TEXT_EXTENT_CACHE_SIZE:
+        cache.popitem(last=False)
+    return result
 
 
 def _wrap_table_value_text(value_text, *, width):
@@ -3926,7 +3952,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
             return None
         if self._chart_executor is None:
-            self._chart_executor = ProcessPoolExecutor(max_workers=self.chart_worker_count)
+            self._chart_executor = self._new_chart_executor()
         return self._chart_executor
 
     def _shutdown_chart_executor(self):
@@ -4038,6 +4064,18 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._cached_export_filtered_df = None
             self._partition_header_counts_cache = None
             self._sql_measurement_summary_cache.clear()
+
+    def _new_chart_executor(self):
+        """Create the chart pool on the shared spawn context; None keeps the charts serial."""
+
+        from metroliza.shared.compute_budget import chart_workers
+        from metroliza.shared.compute_worker import compute_workers_available, spawn_context
+
+        if not compute_workers_available():
+            return None
+        return ProcessPoolExecutor(
+            max_workers=chart_workers(self.chart_worker_count), mp_context=spawn_context(),
+        )
 
     def _iter_reference_partitions(self):
         partition_query = build_analytical_partition_query(self._active_export_query)
@@ -5062,10 +5100,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         summary_results = None
+        render_pool = None
         try:
             partition_header_counts = self._partition_header_counts()
             total_references = len(partition_header_counts)
             total_header_units = sum(partition_header_counts.values())
+            render_pool = SummaryRenderPool(self, total_header_units)
             if total_references == 0 or total_header_units == 0:
                 if len(self._build_export_filtered_dataframe()) > 0:
                     raise ValueError(
@@ -5143,7 +5183,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     precomputed_header_entries.append((header, header_group, write_bundle))
                 self._record_stage_timing('transform_grouping', time.perf_counter() - precompute_start)
 
-                summary_results = iter_summary_render_results(self, precomputed_header_entries)
+                summary_results = iter_summary_render_results(
+                    self, precomputed_header_entries, render_pool=render_pool,
+                )
                 for (header, header_group, write_bundle), rendered_summary in summary_results:
                     if self._check_canceled():
                         return
@@ -5257,6 +5299,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         finally:
             if summary_results is not None:
                 summary_results.close()
+            if render_pool is not None:
+                render_pool.close()
 
     def _write_group_analysis_message_sheet(self, worksheet, message):
         from metroliza.exporting.group_analysis_writer import (
@@ -5675,7 +5719,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             ax.grid(axis='y', alpha=0.25)
             fig.tight_layout()
             image_data = BytesIO()
-            fig.savefig(image_data, format='png', dpi=120)
+            fig.savefig(image_data, format='png', dpi=120, pil_kwargs={'compress_level': 4})
             image_data.seek(0)
             return {'image_data': image_data, 'row_span': 16, 'description': description}
         except Exception:

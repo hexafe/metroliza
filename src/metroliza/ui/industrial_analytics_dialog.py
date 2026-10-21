@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic
 
 from dataclasses import replace
 import inspect
@@ -92,10 +93,27 @@ from metroliza.ui.ui_foundation import (
 )
 try:
     from metroliza.ui.worker_progress_dialog import (
+        dismiss_worker_progress_dialog,
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
-    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog as _create_worker_progress_dialog
+
+    def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel, **_kwargs):
+        return _create_worker_progress_dialog(
+            parent, window_title=window_title, initial_status_text=initial_status_text, on_cancel=on_cancel,
+        )
+
+    def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
+        if dialog is None:
+            return
+        close_method = getattr(dialog, "reject" if rejected else "accept", None)
+        if callable(close_method):
+            close_method()
+            return
+        close = getattr(dialog, "close", None)
+        if callable(close):
+            close()
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
@@ -663,6 +681,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
         self.tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
         self.tabular_filter_expression = ""
+        self._tabular_row_count_cache: tuple[object, tuple, int] | None = None
         self.df_for_grouping = None
         self.grouping_applied = False
         self._auto_group_selected_files = False
@@ -1504,6 +1523,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if current is not None and current is not loaded:
             cleanup_tabular_load_result(current)
         self.tabular_load_result = loaded
+        self._tabular_row_count_cache = None
 
     def _selected_input_files(self) -> tuple[str, ...]:
         if self.input_files:
@@ -1522,16 +1542,43 @@ class IndustrialAnalyticsDialog(QDialog):
             preview = f"{preview}, +{len(names) - 3} more"
         return f"{len(names)} CSV files: {preview}"
 
-    def _tabular_filtered_row_count(self) -> int:
-        if self.tabular_load_result is None:
-            return 0
-        return count_tabular_materialized_rows(
-            self.tabular_load_result,
-            filter_columns=self.tabular_filter_columns,
-            selected_filter_keys=self.tabular_filter_keys,
-            column_filters=self.tabular_column_filters,
-            row_filter_expression=self.tabular_filter_expression,
+    def _tabular_filter_state_key(self) -> tuple:
+        return (
+            tuple(self.tabular_filter_columns or ()),
+            tuple(tuple(keys) for keys in (self.tabular_filter_keys or ())),
+            tuple(self.tabular_column_filters or ()),
+            str(self.tabular_filter_expression or ""),
         )
+
+    def _tabular_filtered_row_count(self) -> int:
+        """Return the filtered row count, computed once per load result and filter state."""
+
+        loaded = self.tabular_load_result
+        if loaded is None:
+            return 0
+        state = self._tabular_filter_state_key()
+        cached = self._tabular_row_count_cache
+        if cached is not None and cached[0] is loaded and cached[1] == state:
+            return cached[2]
+        if (
+            self.is_industrial_cache_presentation
+            and not any(state)
+            and loaded.sqlite_store is not None
+            and loaded.row_count is not None
+        ):
+            # The industrial bridge counted this exact scope while it built the view; an
+            # unfiltered state needs no second pass over the wide view.
+            count = int(loaded.row_count)
+        else:
+            count = count_tabular_materialized_rows(
+                loaded,
+                filter_columns=self.tabular_filter_columns,
+                selected_filter_keys=self.tabular_filter_keys,
+                column_filters=self.tabular_column_filters,
+                row_filter_expression=self.tabular_filter_expression,
+            )
+        self._tabular_row_count_cache = (loaded, state, count)
+        return count
 
     def clear_tabular_filter_and_groups(self) -> None:
         if self.is_production_source:
@@ -1621,6 +1668,7 @@ class IndustrialAnalyticsDialog(QDialog):
         return f"Cached production rows: {counts.records}; sources: {counts.source_profiles}"
 
     def select_input_file(self) -> None:
+        action_started_at = monotonic()
         filenames, _ = QFileDialog.getOpenFileNames(
             self,
             "Open CSV or Excel data",
@@ -1657,7 +1705,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._populate_tabular_sheet_options()
         self._reset_tabular_column_options()
         self._reset_group_options(())
-        self.show_tabular_load_screen()
+        self.show_tabular_load_screen(action_started_at=action_started_at)
 
     def _confirm_auto_group_selected_files(self, selected_files: tuple[str, ...]) -> bool:
         if len(selected_files) <= 1:
@@ -1773,6 +1821,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self._sync_ui_state()
 
     def load_metrics(self) -> None:
+        action_started_at = monotonic()
         try:
             if self.is_production_source:
                 if not self.db_file:
@@ -1796,7 +1845,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 self.source_label.setText(self._cache_summary())
                 self._sync_filter_summary()
             else:
-                self.show_tabular_load_screen()
+                self.show_tabular_load_screen(action_started_at=action_started_at)
                 return
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not load metrics: {exc}")
@@ -2079,13 +2128,13 @@ class IndustrialAnalyticsDialog(QDialog):
     def _tabular_filter_summary(self) -> tuple[str, str]:
         if self.tabular_load_result is None:
             return "No row filter", "neutral"
-        row_count = self._tabular_filtered_row_count()
         if (
             not self.tabular_column_filters
             and not self.tabular_filter_expression
             and (not self.tabular_filter_columns or not self.tabular_filter_keys)
         ):
             return f"All rows ({tabular_load_result_row_count(self.tabular_load_result)})", "neutral"
+        row_count = self._tabular_filtered_row_count()
         label_lookup = {
             normalized: original
             for original, normalized in self.tabular_load_result.column_mapping.items()
@@ -2386,14 +2435,20 @@ class IndustrialAnalyticsDialog(QDialog):
             set_status_variant(self.readiness_label, "warning")
 
     def handle_start_button(self) -> None:
+        action_started_at = monotonic()
         if not self.metric_candidates:
             self.load_metrics()
         self._sync_ui_state()
         if not self.start_button.isEnabled():
             return
-        self.show_loading_screen()
+        self._analytics_action_started_at = action_started_at
+        try:
+            self.show_loading_screen()
+        finally:
+            self._analytics_action_started_at = None
 
-    def show_tabular_load_screen(self) -> None:
+    def show_tabular_load_screen(self, *, action_started_at=None) -> None:
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.is_production_source:
             self.load_metrics()
             return
@@ -2419,6 +2474,7 @@ class IndustrialAnalyticsDialog(QDialog):
                     "ETA --",
                 ),
                 on_cancel=self.cancel_tabular_load,
+                action_started_at=action_started_at,
             )
         )
         self.loading_bar.setRange(0, 0)
@@ -2455,8 +2511,10 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_tabular_load_finished(self, loaded) -> None:
-        self._close_worker_progress()
-        self._apply_tabular_load_result(loaded)
+        try:
+            self._apply_tabular_load_result(loaded)
+        finally:
+            self._close_worker_progress()
 
     def on_tabular_load_error(self, message: str) -> None:
         self._close_worker_progress()
@@ -2483,20 +2541,17 @@ class IndustrialAnalyticsDialog(QDialog):
         thread = self.sender()
         progress = self._worker_progress.get(thread)
         if progress is not None:
-            progress[0].close()
+            self._dispose_worker_progress(thread)
         elif thread is None and hasattr(self, "loading_dialog"):
             # Direct handler calls have no signal sender.
-            self.loading_dialog.close()
+            dismiss_worker_progress_dialog(self.loading_dialog)
 
     def _dispose_worker_progress(self, thread) -> None:
         progress = self._worker_progress.pop(thread, None)
         if progress is None:
             return
         dialog, _label, _bar, movie = progress
-        # Closing only hides the dialog; its parent still owns the running movie.
-        movie.stop()
-        dialog.close()
-        dialog.deleteLater()
+        dismiss_worker_progress_dialog(dialog)
         for name, widget in zip(
             ("loading_dialog", "loading_label", "loading_bar", "loading_gif"), progress
         ):
@@ -2567,6 +2622,8 @@ class IndustrialAnalyticsDialog(QDialog):
         )
 
     def show_loading_screen(self) -> None:
+        action_started_at = getattr(self, "_analytics_action_started_at", None)
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.tabular_load_thread is not None or self.analytics_thread is not None:
             return
         try:
@@ -2588,6 +2645,7 @@ class IndustrialAnalyticsDialog(QDialog):
                     "ETA --",
                 ),
                 on_cancel=self.cancel_analytics,
+                action_started_at=action_started_at,
             )
         )
         self.loading_bar.setRange(0, 0)

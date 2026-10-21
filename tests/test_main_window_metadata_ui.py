@@ -70,8 +70,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 on_finished=lambda: callback_calls.append("finished"),
                 status_callback=status_messages.append,
             )
-            for _ in range(len(FEATURE_IMPORT_WARMUP_MODULES) + 2):
-                self.app.processEvents()
+            _wait_for_filter_shutdown(lambda: window._feature_import_warmup_completed)
             expected_modules = [module_name for _label, module_name in FEATURE_IMPORT_WARMUP_MODULES]
             self.assertEqual(imported_modules, expected_modules)
             self.assertTrue(window._feature_import_warmup_completed)
@@ -1633,3 +1632,104 @@ def test_filter_load_can_retry_if_another_shutdown_guard_keeps_main_open(tmp_pat
         window.close()
         app.processEvents()
         assert not qt_errors, "Unhandled exception in Qt callback"
+
+
+def test_feature_warmup_thread_lifecycle_and_failure_reporting(qapplication_session, monkeypatch):
+    import threading
+    from PyQt6.QtCore import QTimer
+    from metroliza.ui import main_window as module
+
+    monkeypatch.delenv(module.WARMUP_IN_THREAD_ENV, raising=False)
+    modules = (("first", "synthetic.first"), ("last", "synthetic.last"))
+    monkeypatch.setattr(module, "FEATURE_IMPORT_WARMUP_MODULES", modules)
+    events, calls, callbacks, ticks = [], [], [], []
+    monkeypatch.setattr(module, "record_event", lambda name, **kw: events.append((name, kw)))
+    monkeypatch.setattr(module, "CustomLogger", lambda *a, **kw: None)
+    entered, release = threading.Event(), threading.Event()
+    window = MainWindow("test", None)
+
+    def importer(name):
+        calls.append((name, threading.get_ident()))
+        if name == "synthetic.first":
+            entered.set()
+            assert release.wait(5)
+            raise ValueError("synthetic failure")
+
+    window._feature_import_warmup_importer = importer
+    window.schedule_feature_import_warmup(delay_ms=0, on_finished=lambda: callbacks.append(1))
+    try:
+        _wait_for_filter_shutdown(entered.is_set)
+        assert window._feature_import_warmup_thread.daemon is False
+        QTimer.singleShot(0, lambda: ticks.append(1))
+        _wait_for_filter_shutdown(lambda: bool(ticks))
+        assert not window._feature_import_warmup_completed
+        release.set()
+        _wait_for_filter_shutdown(lambda: window._feature_import_warmup_completed)
+        window._finish_feature_import_warmup()
+        assert callbacks == [1]
+        assert [name for name, _ in calls] == [name for _, name in modules]
+        assert all(ident != threading.get_ident() for _, ident in calls)
+        assert window._feature_import_warmup_failures == [
+            {"module": "synthetic.first", "error_type": "ValueError", "message": "synthetic failure"}
+        ]
+        assert [kw["status"] for name, kw in events if name == "feature_warmup_module_done"] == ["failed", "loaded"]
+        assert window.statusBar().currentMessage() == "Some tools will finish loading when opened."
+    finally:
+        release.set()
+        window.close()
+    assert not any(t.name == "metroliza-feature-warmup" for t in threading.enumerate())
+
+
+def test_feature_warmup_close_cancels_queue_and_bounds_join(qapplication_session, monkeypatch):
+    import threading
+    import time
+    from metroliza.ui import main_window as module
+
+    monkeypatch.delenv(module.WARMUP_IN_THREAD_ENV, raising=False)
+    monkeypatch.setattr(module, "FEATURE_IMPORT_WARMUP_MODULES", (("one", "one"), ("two", "two")))
+    entered, release = threading.Event(), threading.Event()
+    calls, callbacks = [], []
+    window = MainWindow("test", None)
+
+    def importer(name):
+        calls.append(name)
+        entered.set()
+        assert release.wait(5)
+
+    window._feature_import_warmup_importer = importer
+    window.schedule_feature_import_warmup(delay_ms=0, on_finished=lambda: callbacks.append(1))
+    try:
+        _wait_for_filter_shutdown(entered.is_set)
+        thread = window._feature_import_warmup_thread
+        started = time.monotonic()
+        window.close()
+        assert time.monotonic() - started < module.FEATURE_WARMUP_JOIN_TIMEOUT_S + 0.2
+        assert thread.is_alive()
+    finally:
+        release.set()
+        thread.join(5)
+        window.close()
+    assert not thread.is_alive()
+    assert calls == ["one"]
+    assert callbacks == []
+
+
+def test_feature_warmup_diagnostic_opt_out_and_close_before_start(qapplication_session, monkeypatch):
+    import threading
+    from metroliza.ui import main_window as module
+
+    monkeypatch.setenv(module.WARMUP_IN_THREAD_ENV, "0")
+    monkeypatch.setattr(module, "FEATURE_IMPORT_WARMUP_MODULES", (("one", "one"),))
+    calls = []
+    window = MainWindow("test", None)
+    window._feature_import_warmup_importer = lambda name: calls.append(threading.get_ident())
+    window.schedule_feature_import_warmup(delay_ms=0)
+    _wait_for_filter_shutdown(lambda: window._feature_import_warmup_completed)
+    assert calls == [threading.get_ident()]
+    window.close()
+    window = MainWindow("test", None)
+    window._feature_import_warmup_importer = lambda name: calls.append(name)
+    window.schedule_feature_import_warmup(delay_ms=0)
+    window.close()
+    qapplication_session.processEvents()
+    assert calls == [threading.get_ident()]
