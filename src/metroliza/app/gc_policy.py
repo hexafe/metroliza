@@ -46,28 +46,8 @@ class GuiGcPolicy:
         self.timer = QTimer(app)
         self.timer.setInterval(INTERVAL_MS)
         self.timer.timeout.connect(self.collect_due)
-        # Windows released between ticks would otherwise keep their widget cycles
-        # until interpreter teardown, after the application is gone.
-        app.lastWindowClosed.connect(self.collect_all)
-        app.aboutToQuit.connect(self.collect_all)
         gc.disable()
         self.timer.start()
-
-    def collect_all(self) -> None:
-        """Full collection on the GUI thread while the application still exists."""
-        _require_gui_thread(self.app)
-        if not self.active or self._collecting:
-            return
-        self._collecting = True
-        try:
-            started = time.perf_counter()
-            gc.collect()
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            self.collections[2] += 1
-            self.total_ms += elapsed_ms
-            self.max_ms = max(self.max_ms, elapsed_ms)
-        finally:
-            self._collecting = False
 
     def collect_due(self, *, force_young: bool = False) -> None:
         """Check fresh counters after each generation; never force a full sweep.
@@ -106,8 +86,6 @@ class GuiGcPolicy:
             return
         self.timer.stop()
         self.timer.timeout.disconnect(self.collect_due)
-        self.app.lastWindowClosed.disconnect(self.collect_all)
-        self.app.aboutToQuit.disconnect(self.collect_all)
         self.timer.deleteLater()
         self.active = False
         delattr(self.app, _APP_ATTRIBUTE)
