@@ -1,0 +1,273 @@
+{
+ "rows": [
+  {
+   "flow": "Review 1500 PDF",
+   "base": 8.4,
+   "best": 6.4,
+   "exp": 7.2,
+   "worst": 7.9,
+   "evidence": "W",
+   "exp_pct": -14,
+   "range_pct": [
+    -24,
+    -6
+   ]
+  },
+  {
+   "flow": "Import po Review",
+   "base": 9.6,
+   "best": 7.2,
+   "exp": 8.2,
+   "worst": 9.0,
+   "evidence": "K/W",
+   "exp_pct": -15,
+   "range_pct": [
+    -25,
+    -6
+   ]
+  },
+  {
+   "flow": "Modify DB — otwarcie",
+   "base": 0.18,
+   "best": 0.1,
+   "exp": 0.13,
+   "worst": 0.16,
+   "evidence": "W",
+   "exp_pct": -28,
+   "range_pct": [
+    -44,
+    -11
+   ]
+  },
+  {
+   "flow": "Modify DB — rekordy 216k",
+   "base": 2.39,
+   "best": 1.8,
+   "exp": 1.95,
+   "worst": 2.2,
+   "evidence": "K",
+   "exp_pct": -18,
+   "range_pct": [
+    -25,
+    -8
+   ]
+  },
+  {
+   "flow": "Modify DB — zapis",
+   "base": 0.05,
+   "best": 0.04,
+   "exp": 0.05,
+   "worst": 0.05,
+   "evidence": "—",
+   "exp_pct": 0,
+   "range_pct": [
+    -20,
+    0
+   ]
+  },
+  {
+   "flow": "Okno eksportu",
+   "base": 0.12,
+   "best": 0.12,
+   "exp": 0.12,
+   "worst": 0.12,
+   "evidence": "—",
+   "exp_pct": 0,
+   "range_pct": [
+    0,
+    0
+   ]
+  },
+  {
+   "flow": "Filtr — otwarcie",
+   "base": 1.29,
+   "best": 0.45,
+   "exp": 0.55,
+   "worst": 0.75,
+   "evidence": "Z",
+   "exp_pct": -57,
+   "range_pct": [
+    -65,
+    -42
+   ]
+  },
+  {
+   "flow": "Grouping — otwarcie",
+   "base": 0.62,
+   "best": 0.35,
+   "exp": 0.45,
+   "worst": 0.55,
+   "evidence": "W",
+   "exp_pct": -27,
+   "range_pct": [
+    -44,
+    -11
+   ]
+  },
+  {
+   "flow": "Characteristic Mapping",
+   "base": 0.8,
+   "best": 0.45,
+   "exp": 0.55,
+   "worst": 0.65,
+   "evidence": "W",
+   "exp_pct": -31,
+   "range_pct": [
+    -44,
+    -19
+   ]
+  },
+  {
+   "flow": "Eksport Main plots 1500",
+   "base": 27.68,
+   "best": 18.7,
+   "exp": 20.8,
+   "worst": 22.8,
+   "evidence": "Z/D",
+   "exp_pct": -25,
+   "range_pct": [
+    -32,
+    -18
+   ]
+  },
+  {
+   "flow": "Extended 216 grup",
+   "base": 68.8,
+   "best": 39.5,
+   "exp": 42.5,
+   "worst": 46.5,
+   "evidence": "Z",
+   "exp_pct": -38,
+   "range_pct": [
+    -43,
+    -32
+   ]
+  },
+  {
+   "flow": "Zmiana motywu",
+   "base": 0.17,
+   "best": 0.12,
+   "exp": 0.14,
+   "worst": 0.16,
+   "evidence": "W",
+   "exp_pct": -18,
+   "range_pct": [
+    -29,
+    -6
+   ]
+  },
+  {
+   "flow": "CSV — wczytanie 100k",
+   "base": 4.71,
+   "best": 3.3,
+   "exp": 3.7,
+   "worst": 4.2,
+   "evidence": "K",
+   "exp_pct": -21,
+   "range_pct": [
+    -30,
+    -11
+   ]
+  },
+  {
+   "flow": "CSV analytics 100k",
+   "base": 35.39,
+   "best": 22.0,
+   "exp": 26.5,
+   "worst": 30.5,
+   "evidence": "Z/W",
+   "exp_pct": -25,
+   "range_pct": [
+    -38,
+    -14
+   ]
+  },
+  {
+   "flow": "Industrial Data — otwarcie",
+   "base": 0.33,
+   "best": 0.29,
+   "exp": 0.3,
+   "worst": 0.32,
+   "evidence": "W",
+   "exp_pct": -9,
+   "range_pct": [
+    -12,
+    -3
+   ]
+  },
+  {
+   "flow": "Industrial → CSV Summary",
+   "base": 5.73,
+   "best": 3.0,
+   "exp": 3.8,
+   "worst": 4.6,
+   "evidence": "K/W",
+   "exp_pct": -34,
+   "range_pct": [
+    -48,
+    -20
+   ]
+  },
+  {
+   "flow": "Realtime — pierwsze otwarcie",
+   "base": 0.4,
+   "best": 0.25,
+   "exp": 0.3,
+   "worst": 0.36,
+   "evidence": "W",
+   "exp_pct": -25,
+   "range_pct": [
+    -38,
+    -10
+   ]
+  },
+  {
+   "flow": "benchmark_paths CSV Summary",
+   "base": 64.9,
+   "best": 39.4,
+   "exp": 44.9,
+   "worst": 52.9,
+   "evidence": "K/W",
+   "exp_pct": -31,
+   "range_pct": [
+    -39,
+    -18
+   ]
+  }
+ ],
+ "sums": {
+  "18 przepływów": {
+   "base": 231.6,
+   "best": 143.5,
+   "exp": 162.1,
+   "worst": 183.7,
+   "exp_pct": -30,
+   "range_pct": [
+    -38,
+    -21
+   ]
+  },
+  "17 przepływów UI (bez benchmark_paths)": {
+   "base": 166.7,
+   "best": 104.1,
+   "exp": 117.2,
+   "worst": 130.8,
+   "exp_pct": -30,
+   "range_pct": [
+    -38,
+    -22
+   ]
+  },
+  "bez 3 najdłuższych": {
+   "base": 62.5,
+   "best": 42.6,
+   "exp": 48.2,
+   "worst": 53.8,
+   "exp_pct": -23,
+   "range_pct": [
+    -32,
+    -14
+   ]
+  }
+ }
+}

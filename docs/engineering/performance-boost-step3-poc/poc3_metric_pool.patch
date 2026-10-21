@@ -1,0 +1,147 @@
+diff --git i/src/metroliza/industrial/industrial_analytics_dashboard.py w/src/metroliza/industrial/industrial_analytics_dashboard.py
+index 3bfca9b1..dd7dd01d 100644
+--- i/src/metroliza/industrial/industrial_analytics_dashboard.py
++++ w/src/metroliza/industrial/industrial_analytics_dashboard.py
+@@ -142,6 +142,65 @@ def _metric_population_source_frame(
+     return source_frame.loc[source_frame[metric_field_name].notna(), required_columns].copy()
+ 
+ 
++def _step3_metric_chart_specs(task):
++    """STEP3 PoC: one metric's chart specs in the serial loop's order (runs in-process or in a worker)."""
++    (metric, metric_frame, metric_population_source_frame, aggregate_frame, aggregation,
++     chart_group_columns, charts, plotly_visual_settings, include_plotly_specs, population_layer_mode) = task
++    specs_out: list[dict[str, Any]] = []
++    if charts.time_series:
++        specs = _build_time_series_charts(
++            metric,
++            raw_frame=metric_frame,
++            static_population_source_frame=metric_population_source_frame,
++            aggregate_frame=aggregate_frame,
++            aggregation=aggregation,
++            group_columns=chart_group_columns,
++            plotly_visual_settings=plotly_visual_settings,
++            include_plotly_specs=include_plotly_specs,
++            population_layer_mode=population_layer_mode,
++        )
++        specs_out.extend(spec for spec in specs if spec)
++    if charts.histogram:
++        spec = _build_histogram_chart(
++            metric,
++            metric_frame,
++            group_columns=chart_group_columns,
++            plotly_visual_settings=plotly_visual_settings,
++            include_plotly_specs=include_plotly_specs,
++        )
++        if spec:
++            specs_out.append(spec)
++    for chart_type, enabled in (("violin", charts.violin), ("box", charts.box)):
++        if not enabled:
++            continue
++        spec = _build_distribution_chart(
++            metric,
++            metric_frame,
++            chart_type=chart_type,
++            group_columns=chart_group_columns,
++            plotly_visual_settings=plotly_visual_settings,
++            include_plotly_specs=include_plotly_specs,
++        )
++        if spec:
++            specs_out.append(spec)
++    return specs_out
++
++
++def _step3_map_metric_tasks(tasks):
++    """STEP3 PoC: ordered per-metric results; spawn pool when STEP3_POC_METRIC_WORKERS > 0."""
++    import os
++
++    workers = int(os.environ.get("STEP3_POC_METRIC_WORKERS", "0") or 0)
++    if workers <= 0 or len(tasks) < 2:
++        return [_step3_metric_chart_specs(task) for task in tasks]
++    from concurrent.futures import ProcessPoolExecutor
++
++    from metroliza.shared.compute_worker import spawn_context
++
++    with ProcessPoolExecutor(max_workers=min(workers, len(tasks)), mp_context=spawn_context()) as executor:
++        return list(executor.map(_step3_metric_chart_specs, tasks))
++
++
+ def build_production_dashboard_manifest(
+     *,
+     frame: pd.DataFrame,
+@@ -184,6 +243,7 @@ def build_production_dashboard_manifest(
+     )
+ 
+     chart_specs: list[dict[str, Any]] = []
++    metric_tasks = []
+     for metric in metric_selection:
+         if metric.field_name not in frame.columns:
+             continue
+@@ -191,57 +251,22 @@ def build_production_dashboard_manifest(
+         if metric_frame.empty:
+             continue
+         chart_group_columns = _chart_group_columns(metric_frame, aggregation)
+-        if charts.time_series:
+-            metric_population_source_frame = _metric_population_source_frame(
++        metric_population_source_frame = (
++            _metric_population_source_frame(
+                 static_population_source_frame,
+                 metric.field_name,
+                 chart_group_columns,
+                 default_name=metric.display_label,
+             )
+-            specs = _build_time_series_charts(
+-                metric,
+-                raw_frame=metric_frame,
+-                static_population_source_frame=metric_population_source_frame,
+-                aggregate_frame=aggregate_frame,
+-                aggregation=aggregation,
+-                group_columns=chart_group_columns,
+-                plotly_visual_settings=plotly_visual_settings,
+-                include_plotly_specs=include_plotly_specs,
+-                population_layer_mode=population_layer_mode,
+-            )
+-            chart_specs.extend(spec for spec in specs if spec)
+-        if charts.histogram:
+-            spec = _build_histogram_chart(
+-                metric,
+-                metric_frame,
+-                group_columns=chart_group_columns,
+-                plotly_visual_settings=plotly_visual_settings,
+-                include_plotly_specs=include_plotly_specs,
+-            )
+-            if spec:
+-                chart_specs.append(spec)
+-        if charts.violin:
+-            spec = _build_distribution_chart(
+-                metric,
+-                metric_frame,
+-                chart_type="violin",
+-                group_columns=chart_group_columns,
+-                plotly_visual_settings=plotly_visual_settings,
+-                include_plotly_specs=include_plotly_specs,
+-            )
+-            if spec:
+-                chart_specs.append(spec)
+-        if charts.box:
+-            spec = _build_distribution_chart(
+-                metric,
+-                metric_frame,
+-                chart_type="box",
+-                group_columns=chart_group_columns,
+-                plotly_visual_settings=plotly_visual_settings,
+-                include_plotly_specs=include_plotly_specs,
+-            )
+-            if spec:
+-                chart_specs.append(spec)
++            if charts.time_series
++            else None
++        )
++        metric_tasks.append((
++            metric, metric_frame, metric_population_source_frame, aggregate_frame, aggregation,
++            chart_group_columns, charts, plotly_visual_settings, include_plotly_specs, population_layer_mode,
++        ))
++    for specs in _step3_map_metric_tasks(metric_tasks):
++        chart_specs.extend(specs)
+ 
+     summary = {
+         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
