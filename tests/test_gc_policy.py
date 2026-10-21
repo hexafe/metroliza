@@ -197,7 +197,7 @@ def test_bootstrap_installs_before_main_window_but_smoke_keeps_gc_state():
         from unittest.mock import patch
         from PyQt6.QtCore import QTimer
         from metroliza.app import bootstrap
-        app = bootstrap.get_or_create_qapplication()
+        app = bootstrap.get_or_create_qapplication(gui_gc=False)
         enabled = gc.isenabled()
         with patch('metroliza.app.license_key_manager.LicenseKeyManager.generate_hardware_id'):
             bootstrap.run_startup_smoke_mode(logging.getLogger('test'))
@@ -217,4 +217,19 @@ def test_bootstrap_installs_before_main_window_but_smoke_keeps_gc_state():
              patch.object(bootstrap, '_schedule_splash_finish_then_warmup'):
             assert bootstrap.launch_ui(config, main_window_factory=Window) == 0
         app._metroliza_gc_policy.uninstall()
+    ''')
+
+
+def test_shared_application_factory_installs_policy_for_gui_qualification_flows():
+    # Qualification flows (fresh reopen, candidate UI checks, diagnostics) create their
+    # application through get_or_create_qapplication() rather than launch_ui().
+    run_python('''
+        import gc
+        from metroliza.app import bootstrap
+        app = bootstrap.get_or_create_qapplication()
+        policy = app._metroliza_gc_policy
+        assert not gc.isenabled() and policy.timer.isActive()
+        assert bootstrap.get_or_create_qapplication() is app
+        assert app._metroliza_gc_policy is policy
+        policy.uninstall()
     ''')

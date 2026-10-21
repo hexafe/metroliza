@@ -421,7 +421,7 @@ def startup_trace(tmp_path, monkeypatch):
             kwargs["on_finished"]()
 
     app = Application()
-    monkeypatch.setattr(bootstrap, "get_or_create_qapplication", lambda: app)
+    monkeypatch.setattr(bootstrap, "get_or_create_qapplication", lambda **_kwargs: app)
     monkeypatch.setattr(bootstrap, "load_main_window_factory", lambda: Window)
     monkeypatch.setattr(bootstrap, "create_startup_splash", lambda *args, **kwargs: types.SimpleNamespace(
         show_message=lambda *args, **kwargs: None,

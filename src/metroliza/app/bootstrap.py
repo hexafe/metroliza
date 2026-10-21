@@ -267,8 +267,13 @@ def log_runtime_provenance(logger: logging.Logger) -> None:
         pass
 
 
-def get_or_create_qapplication():
-    """Return the active QApplication, creating it when startup has not done so yet."""
+def get_or_create_qapplication(*, gui_gc: bool = True):
+    """Return the active QApplication, creating it when startup has not done so yet.
+
+    GUI flows (the application and the qualification flows that open windows and start
+    workers) get the GUI-thread garbage-collection policy of ``metroliza.app.gc_policy``.
+    Modes without a Qt event loop, such as the startup smoke, pass ``gui_gc=False``.
+    """
     record_event("qapplication_import_start")
     from PyQt6.QtWidgets import QApplication
 
@@ -276,11 +281,15 @@ def get_or_create_qapplication():
     existing_app = QApplication.instance()
     if existing_app is not None:
         record_event("qapplication_reused")
-        return existing_app
+        app = existing_app
+    else:
+        record_event("qapplication_create_start")
+        app = QApplication(sys.argv)
+        record_event("qapplication_create_done")
+    if gui_gc:
+        from metroliza.app.gc_policy import install as install_gui_gc
 
-    record_event("qapplication_create_start")
-    app = QApplication(sys.argv)
-    record_event("qapplication_create_done")
+        install_gui_gc(app)
     return app
 
 
@@ -362,7 +371,7 @@ def run_startup_smoke_mode(logger: logging.Logger) -> int:
 
     logger.info("Startup smoke mode enabled (%s): beginning non-interactive init", STARTUP_SMOKE_ENV)
     _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
-    app = get_or_create_qapplication()
+    app = get_or_create_qapplication(gui_gc=False)
     _startup_event(StartupCallsite.QAPPLICATION_READY)
     _startup_event(StartupCallsite.SMOKE_WORK)
     _ = LicenseKeyManager.generate_hardware_id()
