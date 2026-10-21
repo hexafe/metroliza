@@ -113,11 +113,13 @@ total collection time and maximum individual collection time. Uninstallation sto
 the timer and restores the original enabled state and thresholds; workers must first
 be stopped. Normal GUI shutdown keeps automatic GC disabled through interpreter exit.
 
-Installation is in `bootstrap.launch_ui`, immediately after obtaining QApplication
-and before license/UI imports or worker startup. Headless imports, spawn compute
-workers, synchronous diagnostic/compute qualification and startup/parser smoke modes
-retain their existing policy: those paths do not enter a Qt event loop. The benchmark
-harness remains unchanged. Tests install the policy on first application retention;
+`bootstrap.launch_ui` and every caller of `get_or_create_qapplication()` install the
+policy, including diagnostic qualification, which processes events between stages
+and therefore runs due collections. Startup smoke explicitly passes `gui_gc=False`.
+Compute-worker qualification creates its own application and keeps default GC;
+spawn workers also keep default GC. The benchmark harness installs the policy when
+the measured tree provides it and records `gc_policy` as `installed` or `absent`.
+Tests install the policy on first application retention;
 after fixture teardown they force only a young sweep, promoting older generations
 only when due. The single-QApplication lifetime rule (#1119) remains required.
 

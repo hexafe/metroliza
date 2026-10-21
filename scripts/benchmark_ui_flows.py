@@ -1022,6 +1022,13 @@ def run_scenario(args) -> dict[str, Any]:
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
+    try:
+        from metroliza.app.gc_policy import install
+    except ImportError:
+        gc_policy = "absent"
+    else:
+        install(app)
+        gc_policy = "installed"
     ctx = Context(app, args)
     scenario = SCENARIOS[args.scenario]()
     auto_answer_message_boxes(ctx.messages)
@@ -1030,6 +1037,7 @@ def run_scenario(args) -> dict[str, Any]:
     setup_ms = round((time.perf_counter() - setup_started) * 1000, 1)
     run = _Run(app, ctx, scenario, args)
     run.result["setup_ms"] = setup_ms
+    run.result["gc_policy"] = gc_policy
     QTimer.singleShot(300, run.start)
     app.exec()
     result = run.finish()

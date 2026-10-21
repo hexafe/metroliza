@@ -110,6 +110,8 @@ def _resolved_font_properties(properties, context):
 
 
 def _resolve_figure_fonts(fig):
+    # Resolution pins a file. After changing an existing artist's family, weight
+    # or style, clear that file and re-resolve before the next layout/render.
     context = _text_render_context()
     for artist in fig.findobj(match=Text):
         properties = artist.get_fontproperties()
@@ -119,6 +121,8 @@ def _resolve_figure_fonts(fig):
 
 
 def _savefig_bytes(fig: Any, *, mode: str = "workbook", dpi: int = 150) -> bytes:
+    # Font-property changes on existing artists require clearing the pinned file
+    # and re-resolving here (also before any earlier layout pass).
     _resolve_figure_fonts(fig)
     save_kwargs = {"format": "png", "dpi": dpi, "pil_kwargs": {"compress_level": 4}}
     if mode == "clipped":

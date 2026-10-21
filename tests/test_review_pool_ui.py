@@ -142,6 +142,7 @@ def test_finished_preflight_is_released_on_gui_thread(app, make_host, readers, m
     monkeypatch.setattr(host, 'on_preflight_completed', lambda result: None)
     TrackedPreflight.result = None
     gc.collect()
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         host.scan_reports()
@@ -154,6 +155,9 @@ def test_finished_preflight_is_released_on_gui_thread(app, make_host, readers, m
         released_without_gc = reference() is None
         _collect_in_another_thread()
     finally:
-        gc.enable()
+        if gc_was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
     assert released_without_gc, 'preflight signals retain the finished thread in a cycle'
     assert finalized_in == [threading.current_thread()]

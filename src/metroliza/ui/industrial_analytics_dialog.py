@@ -97,7 +97,12 @@ try:
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
-    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog as _create_worker_progress_dialog
+
+    def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel, **_kwargs):
+        return _create_worker_progress_dialog(
+            parent, window_title=window_title, initial_status_text=initial_status_text, on_cancel=on_cancel,
+        )
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"

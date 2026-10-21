@@ -63,7 +63,12 @@ try:
         dismiss_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
-    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog as _create_worker_progress_dialog
+
+    def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel, **_kwargs):
+        return _create_worker_progress_dialog(
+            parent, window_title=window_title, initial_status_text=initial_status_text, on_cancel=on_cancel,
+        )
 
     def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
         if dialog is None:
@@ -1422,7 +1427,8 @@ class ExportDialog(QDialog):
                 self._cancel_requested = True
                 self._set_loading_cancel_enabled(False)
                 self.export_thread.stop_exporting()
-                self.loading_label.setText(build_three_line_status("Cancel requested...", "Waiting for export thread to confirm cancellation", "ETA --"))
+                if self.loading_label is not None:
+                    self.loading_label.setText(build_three_line_status("Cancel requested...", "Waiting for export thread to confirm cancellation", "ETA --"))
                 return
 
             self._dismiss_loading_progress(rejected=True)
@@ -1437,7 +1443,8 @@ class ExportDialog(QDialog):
     def on_export_error(self, message):
         """Store export error details for finalization once the worker stops."""
         self.export_error_message = message
-        self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
+        if self.loading_label is not None:
+            self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
 
     def on_export_canceled(self):
         """Handle explicit worker cancelation and restore dialog state."""

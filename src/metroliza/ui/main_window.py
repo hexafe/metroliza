@@ -344,6 +344,8 @@ class MainWindow(QMainWindow):
                         loaded.append(loaded_module)
                     if failed_module is not None:
                         failed.append(failed_module)
+            except Exception as exc:
+                failed.append({"module": "<warmup>", "error_type": type(exc).__name__, "message": str(exc)})
             finally:
                 done.set()
 

@@ -62,6 +62,11 @@ class GuiGcPolicy:
         self._collecting = True
         try:
             for generation in range(3):
+                # Generation 2 deliberately uses the promotion threshold without
+                # CPython's long-lived ratio heuristic, so promotion pressure
+                # still triggers full sweeps with automatic GC disabled.
+                # The measured maximum GUI sweep was 42 ms
+                # (STEP2 synthetic CSV qualification; see implementation plan).
                 threshold = gc.get_threshold()[generation]
                 due = threshold > 0 and gc.get_count()[generation] > threshold
                 if not due and not (generation == 0 and force_young):

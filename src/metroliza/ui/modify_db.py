@@ -707,6 +707,8 @@ class ModifyDB(QDialog):
             self._install_record_rows(slot, slot.pending_specs or [], rows)
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            self._release_record_progress(slot)
 
     def _on_record_load_failed(self, kind, generation, error):
         slot = self._current_record_slot(kind, generation)
@@ -754,7 +756,6 @@ class ModifyDB(QDialog):
         slot.state = "loaded"
         slot.pending_specs = None
         slot.banner.setVisible(False)
-        self._release_record_progress(slot)
 
     def _apply_record_filter(self, slot):
         try:

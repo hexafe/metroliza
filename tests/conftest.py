@@ -93,4 +93,9 @@ def pytest_runtest_teardown(item):
         # Use the installed policy directly: a test may still have stubbed PyQt6 modules.
         policy = getattr(_RETAINED_QT_APPLICATIONS[0], "_metroliza_gc_policy", None)
         if policy is not None:
+            import gc
+
+            if gc.isenabled():
+                gc.disable()
+                pytest.fail(f"{item.nodeid} re-enabled automatic GC while the GUI GC policy is installed")
             policy.collect_due(force_young=True)
