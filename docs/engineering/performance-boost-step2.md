@@ -371,8 +371,10 @@ GUI (500 ms; najdłuższa zbiórka zmierzona w ciężkich scenariuszach: 42 ms).
 `get_or_create_qapplication()` (także ścieżki kwalifikacji Windows); tryb smoke startu i procesy robocze spawn
 zostają przy domyślnym GC; testy używają tej samej polityki. Dowody: podproces fresh reopen 2/12 i 3/11
 crashy → **0/12** (baza 78d5d775: 0/8); zestaw 10 plików Qt pod obciążeniem 2/5 → **0/3**; CI na `3e5fe523`
-i `a176139d` w pełni zielone; 20 startów i zamknięć aplikacji bez błędu. Ograniczenie: dowody z Linuksa
-(offscreen) i z Windows CI; spakowany EXE na czystej maszynie — w teście PO (build 261021).
+i `a176139d` w pełni zielone; 20 startów i zamknięć aplikacji bez błędu. **Na Windows problem nie jest w pełni
+rozwiązany:** test fresh reopen padł ponownie w runie 39545859603 (`a0d37690`, już z polityką GC) po zielonych
+39529010183 i 39532176909; przyczyna na Windows nieustalona. Ograniczenie: dowody z Linuksa (offscreen) i z
+Windows CI; spakowany EXE na czystej maszynie — w teście PO (build 261021).
 
 ### 4.4 Czego nie osiągnięto i co zostaje otwarte
 
