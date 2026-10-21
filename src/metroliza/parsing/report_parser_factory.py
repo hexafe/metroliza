@@ -800,13 +800,16 @@ def seed_probe_cache_entries(
 ) -> None:
     """Rebind accepted review evidence to this process's registry and unchanged sources.
 
-    Source identities include the content digest, not just stat hints. Recheck the
-    registry under its publication lock after IO so a concurrent reload cannot seed
-    an old approval into a new generation. Use the normal cache bound/error policy.
+    Check only stat hints here, retaining the worker's full digest in the key. Import
+    computes its own content identity before looking up that key. Skip oversized
+    batches, whose entries would be evicted by import's own probing.
     """
 
+    with _PROBE_RESULT_CACHE_LOCK:
+        cache_epoch = _PROBE_RESULT_CACHE_EPOCH
     snapshot = get_registry_snapshot()
-    if (snapshot.generation_id != generation_id
+    if (len(entries) > PROBE_RESULT_CACHE_MAX_ENTRIES
+            or snapshot.generation_id != generation_id
             or registry_configuration_fingerprint(snapshot) != fingerprint):
         return
     registrations = {item.plugin_id: item for item in snapshot.registrations}
@@ -819,8 +822,9 @@ def seed_probe_cache_entries(
             continue
         path = entry.normalized_path
         if path not in identities:
-            identities[path] = SourceInspectionContext.from_path(path).cache_identity
-        if identities[path] != entry.source_identity:
+            source = SourceInspectionContext.from_path(path)
+            identities[path] = (source.file_modified_ns, source.file_size_bytes)
+        if identities[path] != entry.source_identity[:2]:
             continue
         key = (entry.plugin_id, path, entry.source_identity,
                id(registration.parser_cls), id(registration.detector), generation_id)
@@ -829,6 +833,8 @@ def seed_probe_cache_entries(
         if _synchronize_compatibility_maps_locked().generation_id != generation_id:
             return
         with _PROBE_RESULT_CACHE_LOCK:
+            if cache_epoch != _PROBE_RESULT_CACHE_EPOCH:
+                return
             for key, result in verified:
                 PROBE_RESULT_CACHE[key] = result
                 PROBE_RESULT_CACHE.move_to_end(key)

@@ -337,9 +337,12 @@ def _accepted(value, fingerprint: str, generation: int, pool: OrderedChunkPool):
     ):
         pool._record_fallback("worker_registry_generation_mismatch")
         return None
-    report_parser_factory.seed_probe_cache_entries(
-        probes, generation_id=generation, fingerprint=fingerprint,
-    )
+    try:
+        report_parser_factory.seed_probe_cache_entries(
+            probes, generation_id=generation, fingerprint=fingerprint,
+        )
+    except Exception as error:
+        logger.debug("Review probe cache seeding skipped (%s)", type(error).__name__)
     return items
 
 

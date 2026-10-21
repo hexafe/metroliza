@@ -180,7 +180,8 @@ def test_modify_db_releases_record_indicator_when_install_raises(monkeypatch):
     module = importlib.import_module("metroliza.ui.modify_db")
 
     released, errors = [], []
-    slot = SimpleNamespace(thread=object(), pending_specs=[], progress_dialog=object())
+    slot = SimpleNamespace(thread=object(), pending_specs=[], progress_dialog=object(),
+                           state="loading", banner=SimpleNamespace(setVisible=lambda _visible: None))
 
     def fail_install(*args):
         raise ValueError("synthetic record install failure")
@@ -199,7 +200,7 @@ def test_modify_db_releases_record_indicator_when_install_raises(monkeypatch):
 
 
 @pytest.mark.parametrize("available", [True, False])
-def test_benchmark_records_gc_policy_before_scenario_setup(monkeypatch, tmp_path, available):
+def test_benchmark_records_gc_policy_before_scenario_setup(qapplication_session, monkeypatch, tmp_path, available):
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication
     from metroliza.app import gc_policy
@@ -238,7 +239,7 @@ def test_benchmark_records_gc_policy_before_scenario_setup(monkeypatch, tmp_path
 @pytest.mark.parametrize("module_name", ["export_dialog", "industrial_analytics_dialog", "parsing_dialog"])
 def test_lightweight_progress_fallback_ignores_delayed_keywords(monkeypatch, module_name):
     # Execute the real fallback import block against the lightweight module it supports.
-    path = Path("src/metroliza/ui") / f"{module_name}.py"
+    path = Path(__file__).resolve().parents[1] / "src/metroliza/ui" / f"{module_name}.py"
     tree = ast.parse(path.read_text())
     block = next(node for node in tree.body if isinstance(node, ast.Try) and any(
         isinstance(child, ast.ImportFrom) and child.module == "metroliza.ui.worker_progress_dialog"

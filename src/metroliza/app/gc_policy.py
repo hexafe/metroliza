@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gc
 import time
+import weakref
 
 INTERVAL_MS = 500
 _APP_ATTRIBUTE = "_metroliza_gc_policy"
@@ -35,7 +36,7 @@ class GuiGcPolicy:
     def __init__(self, app) -> None:
         from PyQt6.QtCore import QTimer
 
-        self.app = app
+        self._app = weakref.ref(app)
         self.previous_enabled = gc.isenabled()
         self.previous_thresholds = gc.get_threshold()
         self.collections = [0, 0, 0]
@@ -48,6 +49,11 @@ class GuiGcPolicy:
         self.timer.timeout.connect(self.collect_due)
         gc.disable()
         self.timer.start()
+
+    @property
+    def app(self):
+        """Resolve the application without keeping its Python wrapper alive."""
+        return self._app()
 
     def collect_due(self, *, force_young: bool = False) -> None:
         """Check fresh counters after each generation; never force a full sweep.
@@ -104,7 +110,7 @@ class GuiGcPolicy:
 def install(app) -> GuiGcPolicy:
     """Install once for a real GUI application with a running Qt event loop."""
     existing = getattr(app, _APP_ATTRIBUTE, None)
-    if existing is not None:
+    if isinstance(existing, GuiGcPolicy):
         # No import here: callers re-check after every test, possibly while a test
         # blocks or stubs PyQt6 imports.
         return existing

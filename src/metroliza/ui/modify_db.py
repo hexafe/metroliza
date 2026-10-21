@@ -706,8 +706,11 @@ class ModifyDB(QDialog):
             slot.thread = None
             self._install_record_rows(slot, slot.pending_specs or [], rows)
         except Exception as e:
+            slot.state = "idle"
+            slot.banner.setVisible(False)
+            self._release_record_progress(slot)
             self.log_and_exit(e)
-        finally:
+        else:
             self._release_record_progress(slot)
 
     def _on_record_load_failed(self, kind, generation, error):

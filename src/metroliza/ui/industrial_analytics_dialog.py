@@ -104,6 +104,17 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
             parent, window_title=window_title, initial_status_text=initial_status_text, on_cancel=on_cancel,
         )
 
+    def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
+        if dialog is None:
+            return
+        close_method = getattr(dialog, "reject" if rejected else "accept", None)
+        if callable(close_method):
+            close_method()
+            return
+        close = getattr(dialog, "close", None)
+        if callable(close):
+            close()
+
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
 PRESENTATION_INDUSTRIAL_CACHE = "industrial_cache"

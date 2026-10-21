@@ -442,7 +442,13 @@ def test_portable_probe_evidence_is_rejected_when_invalid(tmp_path, invalid):
         entries = (replace(entries[0], result=replace(
             entries[0].result, outcome=ProbeOutcome.INSPECTION_ERROR)),)
     factory.seed_probe_cache_entries(entries, generation_id=generation, fingerprint=fingerprint)
-    assert not factory.PROBE_RESULT_CACHE
+    if invalid == "source":
+        # Seeding checks only the stat part (R4 delta N1); the entry stays keyed by the reviewed
+        # digest, so the import's own identity of the changed file can never hit it.
+        current = SourceInspectionContext.from_path(path).cache_identity
+        assert all(key[2] != current for key in factory.PROBE_RESULT_CACHE)
+    else:
+        assert not factory.PROBE_RESULT_CACHE
 
 
 def test_portable_probe_cache_rebinds_local_ids_and_respects_bound(tmp_path, monkeypatch):
@@ -459,8 +465,11 @@ def test_portable_probe_cache_rebinds_local_ids_and_respects_bound(tmp_path, mon
     factory.reset_probe_cache()
     monkeypatch.setattr(factory, "PROBE_RESULT_CACHE_MAX_ENTRIES", 2)
     factory.seed_probe_cache_entries(entries, generation_id=generation, fingerprint=fingerprint)
-    assert len(factory.PROBE_RESULT_CACHE) == 2
-    assert [key[1] for key in factory.PROBE_RESULT_CACHE] == list(map(str, paths[1:]))
+    # A batch that cannot fit is skipped whole (R4 delta N1): the import's own probing would evict it.
+    assert not factory.PROBE_RESULT_CACHE
+    monkeypatch.setattr(factory, "PROBE_RESULT_CACHE_MAX_ENTRIES", 3)
+    factory.seed_probe_cache_entries(entries, generation_id=generation, fingerprint=fingerprint)
+    assert [key[1] for key in factory.PROBE_RESULT_CACHE] == list(map(str, paths))
     registration = factory.get_registry_snapshot().registrations[0]
     assert all(key[3:] == (id(registration.parser_cls), id(registration.detector), generation)
                for key in factory.PROBE_RESULT_CACHE)
