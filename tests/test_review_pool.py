@@ -356,3 +356,170 @@ def test_callable_path_plugin_identity_ignores_process_local_module_counter(monk
         detector = type('Detector', (), {'__module__': name, '__call__': lambda self: None})()
         identities.append((factory._code_identity(detector), factory._code_identity(partial(detector))))
     assert identities[0] == identities[1]
+
+
+@pytest.mark.parametrize("change_generation", [False, True])
+def test_pooled_review_warms_import_probes_only_for_its_generation(
+    review_source, monkeypatch, change_generation
+):
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+
+    source, database = review_source
+    with _preserved_factory_state():
+        factory.reset_probe_cache()
+        reviewed = _scan(source, database, workers=2)
+        assert {key[1] for key in factory.PROBE_RESULT_CACHE} >= {
+            item.source_path for item in reviewed.ready_files
+        }
+        request = ParseRequest(source_directory=str(source), db_file=str(database),
+                               metadata_parsing_mode="light")
+        plan = ImportPlan.all_atomic_candidates(request, reviewed)
+        if change_generation:
+            with factory._PARSER_REGISTRY_LOCK:
+                snapshot = factory.get_registry_snapshot(refresh=False)
+                factory._publish_registry_locked(snapshot.registrations, load_errors=snapshot.load_errors)
+        calls = []
+        original = factory._safe_probe
+
+        def probe(*args, **kwargs):
+            calls.append(args[:3])
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(factory, "_safe_probe", probe)
+        thread = ParseReportsThread(plan)
+        thread._resolved_report_root = source
+        paths, _failures = ParsePreflightService._discover_files(source)
+        filtered = thread._filter_reports_for_import_plan([path for path, _name in paths], plan)
+        if change_generation:
+            assert calls
+            assert not filtered.approved_reports
+        else:
+            assert len(filtered.approved_reports) == len(plan.selected_reports) > 0
+            assert calls == []
+            monkeypatch.setenv("METROLIZA_PARSE_PREPARE_WORKERS", "0")
+            thread.run()
+            assert calls == []
+
+
+def test_pooled_metadata_read_warms_parent_cache(review_source):
+    source, database = review_source
+    result = _scan(source, database, workers=0)
+    factory.reset_probe_cache()
+    _read_all(result, workers=2)
+    cached = factory.export_probe_cache_entries(
+        tuple(item.source_path for item in result.files),
+        generation_id=factory.get_registry_snapshot().generation_id,
+    )
+    assert {entry.normalized_path for entry in cached} >= {
+        item.source_path for item in result.files if item.parser_id
+    }
+
+
+@pytest.mark.parametrize("invalid", ["fingerprint", "generation", "plugin", "source", "error"])
+def test_portable_probe_evidence_is_rejected_when_invalid(tmp_path, invalid):
+    from dataclasses import replace
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+
+    path, = _write_synthetic_reports(tmp_path / "reports", 1)
+    factory.resolve_parser_with_diagnostics(path)
+    generation, fingerprint = review_pool.registry_state()
+    entries = factory.export_probe_cache_entries((str(path),), generation_id=generation)
+    assert len(entries) == 1
+    factory.reset_probe_cache()
+    if invalid == "fingerprint":
+        fingerprint = "different"
+    elif invalid == "generation":
+        generation -= 1
+    elif invalid == "plugin":
+        entries = (replace(entries[0], plugin_id="unknown"),)
+    elif invalid == "source":
+        stat = path.stat()
+        data = path.read_bytes()
+        path.write_bytes(data.replace(b"PDF", b"XXX", 1))
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        assert SourceInspectionContext.from_path(path).cache_identity != entries[0].source_identity
+    else:
+        entries = (replace(entries[0], result=replace(
+            entries[0].result, outcome=ProbeOutcome.INSPECTION_ERROR)),)
+    factory.seed_probe_cache_entries(entries, generation_id=generation, fingerprint=fingerprint)
+    assert not factory.PROBE_RESULT_CACHE
+
+
+def test_portable_probe_cache_rebinds_local_ids_and_respects_bound(tmp_path, monkeypatch):
+    import pickle
+
+    paths = _write_synthetic_reports(tmp_path / "reports", 3)
+    factory.reset_probe_cache()
+    for path in paths:
+        factory.resolve_parser_with_diagnostics(path)
+    generation, fingerprint = review_pool.registry_state()
+    entries = pickle.loads(pickle.dumps(factory.export_probe_cache_entries(
+        tuple(map(str, paths)), generation_id=generation,
+    )))
+    factory.reset_probe_cache()
+    monkeypatch.setattr(factory, "PROBE_RESULT_CACHE_MAX_ENTRIES", 2)
+    factory.seed_probe_cache_entries(entries, generation_id=generation, fingerprint=fingerprint)
+    assert len(factory.PROBE_RESULT_CACHE) == 2
+    assert [key[1] for key in factory.PROBE_RESULT_CACHE] == list(map(str, paths[1:]))
+    registration = factory.get_registry_snapshot().registrations[0]
+    assert all(key[3:] == (id(registration.parser_cls), id(registration.detector), generation)
+               for key in factory.PROBE_RESULT_CACHE)
+
+
+def test_pooled_review_import_has_identical_plan_decisions_and_database(review_source, monkeypatch):
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+    from tests.test_import_prepare_pool import _dump_database
+
+    source, database = review_source
+    monkeypatch.setenv("METROLIZA_PARSE_PREPARE_WORKERS", "0")
+    outcomes = []
+    for workers in (0, 2):
+        factory.reset_probe_cache()
+        target = database.with_name(f"import-{workers}.sqlite")
+        reviewed = _scan(source, target, workers=workers)
+        request = ParseRequest(source_directory=str(source), db_file=str(target),
+                               metadata_parsing_mode="light")
+        plan = ImportPlan.all_atomic_candidates(request, reviewed)
+        decisions = [factory.resolve_parser_with_diagnostics(item.source_path)
+                     for item in reviewed.ready_files]
+        thread = ParseReportsThread(plan)
+        thread.run()
+        outcomes.append((reviewed.files, plan.selected_reports, decisions, _dump_database(target)))
+    assert outcomes[0] == outcomes[1]
+
+
+@pytest.mark.parametrize("invalid", ["fingerprint", "parent_generation", "worker_generation"])
+def test_rejected_chunk_never_seeds_probe_evidence(tmp_path, monkeypatch, invalid):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    path, = _write_synthetic_reports(tmp_path / "reports", 1)
+    item = ParsePreflightService._inspect_file(path, display_name=path.name,
+                                              existing_fingerprints=frozenset())
+    generation, fingerprint = review_pool.registry_state()
+    entries = factory.export_probe_cache_entries((str(path),), generation_id=generation)
+    factory.reset_probe_cache()
+    value = (fingerprint, generation, (item,), entries)
+    if invalid == "fingerprint":
+        value = ("wrong", generation, (item,), entries)
+    elif invalid == "parent_generation":
+        generation -= 1
+    else:
+        value = (fingerprint, generation, (replace(item, registry_generation_id=-1),), entries)
+    pool = SimpleNamespace(_record_fallback=lambda *_args: None, abandon=lambda: None)
+    assert review_pool._accepted(value, fingerprint, generation, pool) is None
+    assert not factory.PROBE_RESULT_CACHE
+
+
+def test_pooled_review_seeds_the_same_probe_data_as_serial(review_source):
+    source, database = review_source
+    paths, _failures = ParsePreflightService._discover_files(source)
+    entries = []
+    for workers in (0, 2):
+        factory.reset_probe_cache()
+        _scan(source, database, workers=workers)
+        generation, _fingerprint = review_pool.registry_state()
+        entries.append(set(factory.export_probe_cache_entries(
+            tuple(str(path) for path, _name in paths), generation_id=generation,
+        )))
+    assert entries[0] and entries[0] == entries[1]

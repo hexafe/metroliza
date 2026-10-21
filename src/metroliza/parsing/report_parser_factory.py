@@ -771,6 +771,71 @@ def _probe_with_cache(
             completed.set()
 
 
+@dataclass(frozen=True)
+class ProbeCacheEntry:
+    """Portable cached probe evidence; process-local registration ids are omitted."""
+
+    plugin_id: str
+    normalized_path: str
+    source_identity: tuple[object, ...]
+    result: ProbeResult
+
+
+def export_probe_cache_entries(
+    paths: tuple[str, ...], *, generation_id: int,
+) -> tuple[ProbeCacheEntry, ...]:
+    """Copy cacheable evidence for one review chunk, in cache insertion/LRU order."""
+
+    selected = frozenset(paths)
+    with _PROBE_RESULT_CACHE_LOCK:
+        return tuple(
+            ProbeCacheEntry(key[0], key[1], key[2], result)
+            for key, result in PROBE_RESULT_CACHE.items()
+            if key[1] in selected and key[5] == generation_id
+        )
+
+
+def seed_probe_cache_entries(
+    entries: tuple[ProbeCacheEntry, ...], *, generation_id: int, fingerprint: str,
+) -> None:
+    """Rebind accepted review evidence to this process's registry and unchanged sources.
+
+    Source identities include the content digest, not just stat hints. Recheck the
+    registry under its publication lock after IO so a concurrent reload cannot seed
+    an old approval into a new generation. Use the normal cache bound/error policy.
+    """
+
+    snapshot = get_registry_snapshot()
+    if (snapshot.generation_id != generation_id
+            or registry_configuration_fingerprint(snapshot) != fingerprint):
+        return
+    registrations = {item.plugin_id: item for item in snapshot.registrations}
+    identities = {}
+    verified = []
+    for entry in entries:
+        registration = registrations.get(entry.plugin_id)
+        if (registration is None or entry.result.plugin_id != entry.plugin_id
+                or entry.result.outcome is ProbeOutcome.INSPECTION_ERROR):
+            continue
+        path = entry.normalized_path
+        if path not in identities:
+            identities[path] = SourceInspectionContext.from_path(path).cache_identity
+        if identities[path] != entry.source_identity:
+            continue
+        key = (entry.plugin_id, path, entry.source_identity,
+               id(registration.parser_cls), id(registration.detector), generation_id)
+        verified.append((key, entry.result))
+    with _PARSER_REGISTRY_LOCK:
+        if _synchronize_compatibility_maps_locked().generation_id != generation_id:
+            return
+        with _PROBE_RESULT_CACHE_LOCK:
+            for key, result in verified:
+                PROBE_RESULT_CACHE[key] = result
+                PROBE_RESULT_CACHE.move_to_end(key)
+            while len(PROBE_RESULT_CACHE) > PROBE_RESULT_CACHE_MAX_ENTRIES:
+                PROBE_RESULT_CACHE.popitem(last=False)
+
+
 def _iter_external_plugin_candidate_files(path_entry: str) -> list[Path]:
     path = Path(path_entry)
     if not path.exists():

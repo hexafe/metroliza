@@ -86,7 +86,7 @@ def initialize_review_worker(existing_fingerprints: frozenset[str] = frozenset()
 
 
 def inspect_chunk_in_worker(task):
-    """Inspect ``(path, display_name)`` entries; returns ``(fingerprint, generation, items)``.
+    """Inspect ``(path, display_name)`` entries; returns ``(fingerprint, generation, items, probes)``.
 
     ``items`` is ``None`` when the worker's registry does not match the expected
     fingerprint or changed while the chunk ran.
@@ -97,7 +97,7 @@ def inspect_chunk_in_worker(task):
     expected_fingerprint, entries = task
     generation, fingerprint = registry_state()
     if fingerprint != expected_fingerprint:
-        return fingerprint, generation, None
+        return fingerprint, generation, None, ()
     items = tuple(
         ParsePreflightService._inspect_file(
             Path(path),
@@ -107,12 +107,14 @@ def inspect_chunk_in_worker(task):
         for path, display_name in entries
     )
     if registry_state() != (generation, fingerprint):
-        return "", generation, None
-    return fingerprint, generation, items
+        return "", generation, None, ()
+    return fingerprint, generation, items, report_parser_factory.export_probe_cache_entries(
+        tuple(path for path, _name in entries), generation_id=generation,
+    )
 
 
 def read_metadata_chunk_in_worker(task):
-    """Read quick metadata for ``(item, path)`` entries; returns ``(fingerprint, generation, readings)``.
+    """Read quick metadata for ``(item, path)`` entries; returns ``(fingerprint, generation, readings, probes)``.
 
     The parent sends only items approved at its own generation; they are re-bound to this
     worker's generation (same fingerprint, so the same registry) before parser resolution.
@@ -123,7 +125,7 @@ def read_metadata_chunk_in_worker(task):
     expected_fingerprint, database_path, mode, entries = task
     generation, fingerprint = registry_state()
     if fingerprint != expected_fingerprint:
-        return fingerprint, generation, None
+        return fingerprint, generation, None, ()
     readings = tuple(
         read_metadata_one(
             replace(item, registry_generation_id=generation),
@@ -134,8 +136,10 @@ def read_metadata_chunk_in_worker(task):
         for item, path in entries
     )
     if registry_state() != (generation, fingerprint):
-        return "", generation, None
-    return fingerprint, generation, readings
+        return "", generation, None, ()
+    return fingerprint, generation, readings, report_parser_factory.export_probe_cache_entries(
+        tuple(path for _item, path in entries if path is not None), generation_id=generation,
+    )
 
 
 def _stop_executor(executor) -> None:
@@ -317,7 +321,7 @@ def _accepted(value, fingerprint: str, generation: int, pool: OrderedChunkPool):
 
     if value is None:
         return None
-    worker_fingerprint, worker_generation, items = value
+    worker_fingerprint, worker_generation, items, probes = value
     if items is None or worker_fingerprint != fingerprint:
         pool._record_fallback("registry_fingerprint_mismatch")
         pool.abandon()
@@ -333,6 +337,9 @@ def _accepted(value, fingerprint: str, generation: int, pool: OrderedChunkPool):
     ):
         pool._record_fallback("worker_registry_generation_mismatch")
         return None
+    report_parser_factory.seed_probe_cache_entries(
+        probes, generation_id=generation, fingerprint=fingerprint,
+    )
     return items
 
 
