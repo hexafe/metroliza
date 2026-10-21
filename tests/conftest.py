@@ -90,6 +90,7 @@ def pytest_runtest_teardown(item):
     # when due; a full collection after every test would stall large Qt suites.
     retain_qapplication()
     if _RETAINED_QT_APPLICATIONS:
-        from metroliza.app.gc_policy import install
-
-        install(_RETAINED_QT_APPLICATIONS[0]).collect_due(force_young=True)
+        # Use the installed policy directly: a test may still have stubbed PyQt6 modules.
+        policy = getattr(_RETAINED_QT_APPLICATIONS[0], "_metroliza_gc_policy", None)
+        if policy is not None:
+            policy.collect_due(force_young=True)

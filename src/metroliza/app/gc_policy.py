@@ -14,12 +14,18 @@ import time
 
 INTERVAL_MS = 500
 _APP_ATTRIBUTE = "_metroliza_gc_policy"
+# Resolved once at installation: later checks run inside timer slots, where an
+# import could see a test's stubbed PyQt6 module or fail during shutdown.
+_QTHREAD = None
 
 
 def _require_gui_thread(app) -> None:
-    from PyQt6.QtCore import QThread
+    global _QTHREAD
+    if _QTHREAD is None:
+        from PyQt6.QtCore import QThread
 
-    if QThread.currentThread() != app.thread():
+        _QTHREAD = QThread
+    if _QTHREAD.currentThread() != app.thread():
         raise RuntimeError("Cyclic GC policy must run on the GUI thread")
 
 
