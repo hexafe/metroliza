@@ -1,6 +1,7 @@
 # Metroliza — audyt wydajności po STEP2 i szacunek STEP3
 
 Poprzedni etap: [performance-boost-step2.md](performance-boost-step2.md).
+Plan wdrożenia (EN, dla Codex): [performance-boost-step3-implementation.md](performance-boost-step3-implementation.md). Tracker: Issue #1151.
 
 Rewizja audytowana: `101e5a44` (gałąź `perf/step2-boost`, czyli kod po STEP2). Data: 2026-10-21.
 Maszyna: laptop Linux, Xeon W-10855M (6 rdzeni / 12 wątków), profil zasilania `balanced`.
@@ -89,7 +90,7 @@ Oznaczenia dowodu:
 - **K — A06-F01/A10-F01** — to samo grupowanie (100 tys. przypisań) jest walidowane 3–4 razy, w tym na wątku GUI. W profilu repo-benchmarku `validate_industrial_analytics_request` zajmuje 6,9 s (z narzutem cProfile). Rozwiązanie: jeden zwalidowany, niezmienny snapshot.
 
 ### S3-6 Import i Review (17)
-- **K — A07-F02/A08b-F02** — `get_registry_snapshot()` domyślnie odświeża rejestr pluginów: 6001 razy na import 1500 raportów, czyli około 10% profilu importu. Rozwiązanie: jeden snapshot na operację, −0,4…−0,8 s.
+- **K — A07-F02/A08b-F02** — `get_registry_snapshot()` domyślnie odświeża rejestr pluginów: 6001 razy na import 1500 raportów, czyli około 10% profilu importu. **Uwaga: to celowa decyzja STEP2** (P05, `585a33d0`: brak taniego, dokładnego sygnału zmiany, który zachowałby kontrolę generacji w trakcie importu jako fail-closed). Zmiana jest możliwa tylko wtedy, gdy znajdzie się taki sygnał (np. stat plików konfiguracji), −0,4…−0,8 s; w przeciwnym razie pozycja odpada. Szacunek importu poniżej to uwzględnia.
 - **W — A09a-F01** — zapis ponownie przelicza wiersze, które przygotowanie w procesach już zbudowało, −0,4…−1,2 s. Dotyczy tylko sytuacji, gdy pula przygotowania jest włączona; w spakowanej aplikacji jest opt-in.
 - **W — A07-F03** — tożsamości do wzbogacania metadanych mają koszt O(n²): 0,26 s przy 1500 raportach i 3,5–4,4 s przy 6000.
 - **W — A08a-F03, A09b-F01** — Review: normalizacja statusu dla liczb typu float, NFKD dla tekstu ASCII, −0,5…−1,4 s.
@@ -150,7 +151,7 @@ Zakres to najlepszy i najgorszy przypadek.
 | Przepływ | Po STEP2 | Po STEP3 (spodziewane) | Zakres | Dowód |
 | --- | ---: | ---: | --- | --- |
 | Review 1500 PDF | 8,40 s | 7,2 s (−14%) | 6,4–7,9 | W |
-| Import po Review | 9,6 s | 8,2 s (−15%) | 7,2–9,0 | K/W |
+| Import po Review | 9,6 s | 8,4 s (−12%) | 7,2–9,2 | K/W |
 | Modify DB — otwarcie | 0,18 s | 0,13 s | 0,10–0,16 | W |
 | Modify DB — rekordy 216k | 2,39 s | 1,95 s (−18%) | 1,8–2,2 | K |
 | Modify DB — zapis | 0,05 s | 0,05 s | — | — |
@@ -167,9 +168,9 @@ Zakres to najlepszy i najgorszy przypadek.
 | Industrial → CSV Summary | 5,73 s | 3,8 s (−34%) | 3,0–4,6 | K/W |
 | Realtime — pierwsze otwarcie | 0,40 s | 0,30 s | 0,25–0,36 | W |
 | benchmark_paths CSV Summary | 64,9 s | 44,9 s (−31%) | 39,4–52,9 | K/W |
-| **Suma 18 przepływów** | **231,6 s** | **162,1 s (−30%)** | **143,5–183,7 (−38…−21%)** | |
-| Suma 17 przepływów UI | 166,7 s | 117,2 s (−30%) | 104,1–130,8 | |
-| Bez 3 najdłuższych | 62,5 s | 48,2 s (−23%) | 42,6–53,8 | |
+| **Suma 18 przepływów** | **231,6 s** | **162,3 s (−30%)** | **143,5–183,9 (−38…−21%)** | |
+| Suma 17 przepływów UI | 166,7 s | 117,4 s (−30%) | 104,1–131,0 | |
+| Bez 3 najdłuższych | 62,5 s | 48,4 s (−23%) | 42,6–54,0 | |
 
 Start aplikacji (zamrożenie po pierwszym malowaniu 50 ms, rozgrzewka 1,7 s) się nie zmienia. Dla porównania: STEP2 zszedł z 502,0 s do 231,5 s na tych samych 18 przepływach.
 

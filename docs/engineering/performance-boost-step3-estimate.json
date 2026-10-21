@@ -17,13 +17,13 @@
    "flow": "Import po Review",
    "base": 9.6,
    "best": 7.2,
-   "exp": 8.2,
-   "worst": 9.0,
+   "exp": 8.4,
+   "worst": 9.2,
    "evidence": "K/W",
-   "exp_pct": -15,
+   "exp_pct": -12,
    "range_pct": [
     -25,
-    -6
+    -4
    ]
   },
   {
@@ -239,8 +239,8 @@
   "18 przepływów": {
    "base": 231.6,
    "best": 143.5,
-   "exp": 162.1,
-   "worst": 183.7,
+   "exp": 162.3,
+   "worst": 183.9,
    "exp_pct": -30,
    "range_pct": [
     -38,
@@ -250,19 +250,19 @@
   "17 przepływów UI (bez benchmark_paths)": {
    "base": 166.7,
    "best": 104.1,
-   "exp": 117.2,
-   "worst": 130.8,
+   "exp": 117.4,
+   "worst": 131.0,
    "exp_pct": -30,
    "range_pct": [
     -38,
-    -22
+    -21
    ]
   },
   "bez 3 najdłuższych": {
    "base": 62.5,
    "best": 42.6,
-   "exp": 48.2,
-   "worst": 53.8,
+   "exp": 48.4,
+   "worst": 54.0,
    "exp_pct": -23,
    "range_pct": [
     -32,
