@@ -1,6 +1,17 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261020) — current version
+## 2026.09 RC1 (build 261021) — current version
+- Review reports checks large batches in several processes and is about 2.5 times faster for 1500 reports.
+- Import right after review is faster.
+- Match Characteristic Names opens in about a second instead of minutes on large databases.
+- Industrial Data and its CSV Summary open faster and keep the window responsive while data loads.
+- Grouping in Export opens without freezing the window.
+- CSV Summary analysis is about a third faster, with identical results.
+- Extended plots export reuses its worker processes for the whole export and also renders the HTML dashboard in parallel.
+- The main window stays responsive while tools load after start; the first export opens without a pause once start-up has finished.
+- Loading indicators appear about one second after you start an operation, animate smoothly and are shown for more operations (metadata reading, filter values, database records, industrial export).
+- A splash screen shows progress while a new version is unpacked on first start.
+- Fixed rare crashes when windows were closed while background work was running.
 - Much faster start on Windows: the app unpacks once per version into the local app data folder; later starts open the main window in about a second.
 - Smaller download: unused OCR acceleration (OpenVINO), video and software-OpenGL components are no longer bundled.
 - Fast report import is about 2.5 times faster.

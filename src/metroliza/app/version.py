@@ -1,11 +1,22 @@
 RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "261020"
+VERSION_DATE = "261021"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import."
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261020)"
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261021)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Review reports checks large batches in several processes and is about 2.5 times faster for 1500 reports<br>
+    - Import right after review is faster<br>
+    - Match Characteristic Names opens in about a second instead of minutes on large databases<br>
+    - Industrial Data and its CSV Summary open faster and keep the window responsive while data loads<br>
+    - Grouping in Export opens without freezing the window<br>
+    - CSV Summary analysis is about a third faster, with identical results<br>
+    - Extended plots export reuses its worker processes for the whole export and also renders the HTML dashboard in parallel<br>
+    - The main window stays responsive while tools load after start; the first export opens without a pause once start-up has finished<br>
+    - Loading indicators appear about one second after you start an operation, animate smoothly and are shown for more operations (metadata reading, filter values, database records, industrial export)<br>
+    - A splash screen shows progress while a new version is unpacked on first start<br>
+    - Fixed rare crashes when windows were closed while background work was running<br>
     - Much faster start on Windows: the app unpacks once per version, and later starts open the main window in about a second<br>
     - A smaller download: unused OCR acceleration and video components are no longer bundled<br>
     - Fast report import is about 2.5 times faster<br>
