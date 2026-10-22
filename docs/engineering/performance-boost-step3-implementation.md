@@ -176,6 +176,34 @@ The correction spans ten files because the six requirement files, two existing r
 policy tests and two authority/policy documents form one consistent dependency-selection change;
 no new package is added. The security test retains an exact assertion for the selected Pillow pin.
 
+### PO amendment — necessary correctness fixes and continuing authority (2026-10-22)
+
+Authority: [PO instruction on #1151](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6346416141).
+The PO authorizes the prepared workbook-format cache correction and further technical fixes necessary
+to deliver STEP3 with measured performance improvement and unchanged correct output. Routine corrective
+scope and justified follow-up attempts do not require repeated PO approval. After unsuccessful attempts,
+preserve the evidence, stop the unchanged approach, obtain a new discriminator and consult Opus 5.5 high
+for uncertainty or problems absent in STEP2. This supersedes the earlier requirement to wait for another
+attempt/scope grant; it does not authorize retrying unchanged failures until green.
+
+T00 may correct `exporting/export_sheet_writer.py` with regressions in its existing test file before
+T01. This advances only T27 item A03-F06 as a prerequisite of wave 0; record it once in the handbacks
+and do not repeat the implementation or mark the rest of T27 complete. The global cache keyed only
+by an ephemeral adapter's numeric ID can return formats belonging to
+a previous workbook. A controlled experiment on unmodified `101e5a44` with XlsxWriter 3.2.9 reproduced
+foreign-format ownership, an invalid style reference and an openpyxl error; the isolated-cache control
+and identity comparison between correct outputs passed. Preserve the malformed baseline evidence.
+Correcting this defect need not reproduce a malformed workbook. Valid exports must retain literal
+member/order/CRC/byte identity under the existing narrow timestamp/generation exceptions, with all data,
+styles, layout and charts preserved. Do not mask invalid styles or weaken the comparator.
+
+Each further correction must name its concrete defect, regression test and output evidence. Full-suite,
+CI, resource coordination and existing formal review budgets remain required. The PO's broader fix
+authority does not authorize reducing computation/quality/integrity/durability, GC/launcher changes,
+new dependencies or installs, machine changes, other pushes, merge/rebase/force-push, or Windows
+candidate acceptance. E5/E6/E7 remain PO decisions under the original plan. A correction is not a new
+output exception unless it addresses a demonstrated invalid baseline result while preserving valid ones.
+
 ## 4. Packets
 
 | ID | Wave | Packet | Files (main) | Class / role | Expected gain | After |
@@ -619,7 +647,8 @@ Paths are relative to `src/metroliza/` unless they start with `scripts/` or `doc
 - A13-F02: application theme applied twice per open window on a theme switch.
 - A10-F06: Realtime monitor imports the analytics workflow eagerly through `industrial/industrial_workers.py`.
 - A16-F03: the splash `QMovie` is not stopped or deleted.
-- A03-F06: workbook format cache keyed by `id(workbook)` without eviction.
+- A03-F06: workbook format cache keyed by `id(workbook)` without eviction. Advanced to the T00
+  correctness prerequisite by the PO continuing-authority amendment; acceptance remains evidence-gated.
 - A15a-F07: analytics dialogs retained as children on every reopen.
 - A15a-F05: status refresh re-imports profiles on every refresh.
 
