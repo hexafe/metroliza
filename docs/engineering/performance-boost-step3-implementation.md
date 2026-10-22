@@ -330,6 +330,11 @@ Paths are relative to `src/metroliza/` unless they start with `scripts/` or `doc
     on first use in `_resolve_violin_density_shape` (1299).
 - **Tests:** PNG identity for every chart kind; numeric helpers exactly equal (NaN, ±inf, None, Decimal, strings).
 - **Done when:** Extended identical; drop any sub-item that changes pixels and report it.
+- **T03 implementation disposition (2026-10-22):** A01-F02 is dropped: preparing only the annotation axes
+  changed the literal PNG for a `layout='tight'` scene containing a table when compared with the frozen
+  original function. The existing whole-figure preparation and its regression assertions remain unchanged;
+  the failed prototype and independent captures are retained in the packet evidence. Other T03 sub-items
+  still require their own equivalence and complete Extended validation before packet completion.
 
 ### T04 — Main partitions on indexed columns (A02-F02, B04-F01, verified)
 - **What:** each of the 37 partitions filters the snapshot on the computed `EXPORT_PARTITION_KEY`, so the
@@ -683,6 +688,14 @@ Each item lands only with its focused test and no output change.
 - **Report:** results section (Polish, PO) in `docs/engineering/performance-boost-step3.md`, linked from the audit,
   and one results comment on the tracker. List each packet with its measured gain, identity evidence and anything
   NOT_APPLICABLE or dropped.
+- **PO reporting addition (2026-10-22):** compare before STEP1, after STEP1, after STEP2 and after STEP3,
+  broken down by modules/user flows and in aggregate. Show elapsed seconds and percentage time reduction
+  against both the preceding stage and the before-STEP1 baseline. Bind historical measurements to their
+  revisions, harness, fixture and conditions; obtain matching measurements where needed for a valid comparison,
+  and explicitly mark unavailable or incomparable cells. State the common flow set and weights behind each
+  sum; new scenarios stay separate from a sum that lacks earlier counterparts. This adds reporting without
+  waiving the required final `101e5a44` versus STEP3 benchmark or any output/resource gate.
+  Recorded with the [T02 handback](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6351520064).
 - **Windows:** CI only. A packaged test EXE or Windows candidate acceptance only on the user's request.
 
 ## 8. Budget and stop rules

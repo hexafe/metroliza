@@ -6,6 +6,7 @@ import tempfile
 import threading
 import types
 import unittest
+import warnings
 
 import pytest
 from contextlib import closing
@@ -35,6 +36,8 @@ from metroliza.exporting.export_logging_service import (
 from metroliza.exporting.google_drive_export import GoogleDriveConversionResult
 from metroliza.parsing.cmm_report_parser import CMMReportParser, EmptyCMMReportError
 from metroliza.parsing.base_report_parser import BaseReportParser
+
+
 from metroliza.parsing.parse_reports_thread import (
     build_report_fingerprints_from_rows,
     build_source_file_fingerprint,
@@ -6016,3 +6019,54 @@ def test_summary_primary_attempt_restores_only_failed_speculation(outcome, qappl
         else:
             assert result is None
             assert matplotlib.rcParams == before
+
+def test_numeric_array_literal_conversion_and_copy_contract():
+    from decimal import Decimal
+    import numpy as np
+    from metroliza.exporting.export_data_thread import _coerce_float_or_nan, _numeric_array
+
+    cases = [[], [None, ' ', 'bad', '0.30000000000000004', Decimal('1.25'), -0., np.inf],
+             np.array(1.), np.array([[1., 2.], [3., np.nan]]),
+             np.array([0x7ff0000000000001, 0xfff8000000000001], dtype=np.uint64).view(np.float64),
+             np.array([0x7f800001, 0xffc00001], dtype=np.uint32).view(np.float32),
+             np.array([True, False]), np.array([1, 2]),
+             np.array(['1.5\x00', 'nan', '1.25']), np.array([None, Decimal('2')], dtype=object)]
+    for dtype in (np.float16, np.float32, np.float64, np.longdouble):
+        cases.extend([np.array([1., -0., np.nan, np.inf, -np.inf], dtype=dtype),
+                      np.array([1., 2., 3., 4.], dtype=dtype)[::2],
+                      np.array([], dtype=dtype)])
+    for values in cases:
+        for dropna in (False, True):
+            results = []
+            for reference in (True, False):
+                with warnings.catch_warnings(record=True) as emitted:
+                    warnings.simplefilter('always')
+                    try:
+                        if reference:
+                            array = np.asarray([_coerce_float_or_nan(v) for v in values], dtype=float)
+                            result = array[np.isfinite(array)] if dropna else array
+                        else:
+                            result = _numeric_array(values, dropna=dropna)
+                        assert not isinstance(values, np.ndarray) or not np.shares_memory(result, values)
+                        outcome = (result.dtype.str, result.shape, result.tobytes())
+                    except (TypeError, ValueError) as exc:
+                        outcome = (type(exc), str(exc))
+                    results.append((outcome, [(type(w.message), str(w.message)) for w in emitted]))
+            assert results[0] == results[1]
+
+
+def test_numeric_array_fast_path_and_scalar_fallback():
+    import numpy as np
+    from metroliza.exporting import export_data_thread as module
+
+    for dtype in (np.float16, np.float32, np.float64):
+        values = np.array([1., -0., np.inf, -np.inf], dtype=dtype)
+        values.flags.writeable = False
+        with mock.patch.object(module, '_coerce_float_or_nan', side_effect=AssertionError('scalar conversion')):
+            assert module._numeric_array(values, dropna=True).tobytes() == np.array([1., -0.]).tobytes()
+            assert module._numeric_array(values).tobytes() == values.astype(float).tobytes()
+    with mock.patch.object(module, '_coerce_float_or_nan', wraps=module._coerce_float_or_nan) as scalar:
+        module._numeric_array(np.array([1., np.nan], dtype=np.float32))
+        module._numeric_array(np.array([1., 2.], dtype=np.longdouble))
+        module._numeric_array([None, '2'])
+        assert scalar.call_count == 6

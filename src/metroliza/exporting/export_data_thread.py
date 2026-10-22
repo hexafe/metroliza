@@ -461,6 +461,15 @@ def _coerce_float_or_nan(value):
 
 
 def _numeric_array(values, *, dropna=False):
+    # Casting narrow signaling NaNs emits a warning that scalar float() does
+    # not emit. Keep their conversion (and unsupported dtypes) on the old path.
+    if (
+        type(values) is np.ndarray and values.ndim == 1
+        and values.dtype in (np.dtype('float16'), np.dtype('float32'), np.dtype('float64'))
+        and (values.dtype.itemsize == 8 or not np.isnan(values).any())
+    ):
+        array = values.astype(float, copy=True)
+        return array[np.isfinite(array)] if dropna else array
     array = np.asarray([_coerce_float_or_nan(value) for value in values], dtype=float)
     if dropna:
         return array[np.isfinite(array)]
@@ -2932,7 +2941,20 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
         return None
 
     line_color = color or SUMMARY_PLOT_PALETTE['density_line']
-    if _HAS_SEABORN:
+    # Generated model curves need no seaborn sorting/aggregation on ordinary
+    # numeric axes. Other inputs retain its conversion and scale semantics.
+    direct_curve = False
+    if _HAS_SEABORN and type(x) is np.ndarray and type(p) is np.ndarray:
+        direct_curve = (
+            x.ndim == p.ndim == 1 and x.size == p.size and x.size >= 2
+            and x.dtype == p.dtype == np.dtype('float64')
+            and ax.get_xscale() == ax.get_yscale() == 'linear'
+            and all(axis.get_units() is None and axis.get_converter() is None
+                    for axis in (ax.xaxis, ax.yaxis))
+            and np.all(np.isfinite(x)) and np.all(np.isfinite(p))
+            and np.all(x[1:] > x[:-1])
+        )
+    if _HAS_SEABORN and not direct_curve:
         sns.lineplot(
             x=x,
             y=p,
