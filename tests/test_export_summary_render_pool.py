@@ -303,21 +303,32 @@ def _pause_chart_worker(initializer, initargs, started, release_path, trace_dir)
     from metroliza.exporting.export_data_thread import ExportDataThread
 
     save = ExportDataThread._save_summary_chart
+    primary = ExportDataThread._try_summary_plotstats_chart
 
-    def save_chart(self, *args, **kwargs):
-        result = save(self, *args, **kwargs)
+    def pause_after_render(chart_type):
         import os
 
         with (Path(trace_dir) / f'{os.getpid()}.charts').open('a') as trace:
-            trace.write(kwargs['chart_type'] + '\n')
+            trace.write(chart_type + '\n')
         started.set()
         deadline = time.monotonic() + 30
         while not Path(release_path).exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert Path(release_path).exists(), 'Test did not release the active chart'
+
+    def save_chart(self, *args, **kwargs):
+        result = save(self, *args, **kwargs)
+        pause_after_render(kwargs['chart_type'])
+        return result
+
+    def primary_chart(self, payload):
+        result = primary(self, payload)
+        if result is not None:
+            pause_after_render(payload['type'])
         return result
 
     ExportDataThread._save_summary_chart = save_chart
+    ExportDataThread._try_summary_plotstats_chart = primary_chart
 
 
 @pytest.mark.parametrize('release_chart', [True, False], ids=['chart-boundary', 'stuck-chart'])

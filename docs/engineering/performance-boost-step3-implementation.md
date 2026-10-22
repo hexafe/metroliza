@@ -119,6 +119,12 @@ therefore have different generation names. Do not change the product's publicati
   mechanism in baseline code; and (c) it has a narrow, named pattern with a negative test proving that the
   same pattern elsewhere still causes FAIL. Record each exception and its evidence in the packet handback.
   Every other difference, especially one absent from baseline-versus-baseline, still means STOP.
+  **Named T02 application:** the HTML-only harness destination `export.html` deliberately produces
+  `export_assets.generation-<32 lowercase hex>` through the same baseline publication mechanism.
+  Independent `101e5a44` HTML-only outputs reproduce the original comparator's filename failure.
+  Admit this second named asset base under the three conditions above, with the same literal asset,
+  reference-location and negative controls as `export_dashboard_assets`. Pair exactly one generation
+  overall on each side, and keep the asset base name itself literal: mixed bases still fail.
 - **T00 baseline-versus-baseline control:** independently generate XLSX, HTML with its assets, and SQLite
   outputs on `101e5a44`; the comparator must return 0 for each type. Preserve the earlier failed receipt.
 - **T00 review corrections:** reject an empty Group Analysis result (require more than zero metrics); compare
@@ -294,11 +300,13 @@ Paths are relative to `src/metroliza/` unless they start with `scripts/` or `doc
 - **How:**
   1. Add a public `PlotstatsChartRenderer` method that returns the Plotstats result or `None` (wrapping the private
      one).
-  2. In each non-native branch: keep `apply_summary_plot_theme()` first (global rcParams), try the payload render;
+  2. Preserve each baseline branch's theme timing and rcParams side effects: distribution and trend call
+     `apply_summary_plot_theme()` first; IQR inherits ambient rcParams. Try the payload render;
      on success use its PNG and backend, and reserve the slot from the declared figure size without creating
      axes. Prove equality of the slot from a figure and from the size in a unit test.
   3. On `None` or an exception, run the existing legacy path unchanged (figure, geometry,
-     `_save_summary_chart(fig, …)`).
+     `_save_summary_chart(fig, …)`). Restore only a failed speculative attempt's input rcParams before
+     this unchanged legacy retry; preserve successful-render and legacy-retry side effects.
   4. `resolved_render_spec` is read only by `charts/native_chart_compositor.py`; check that the HTML dashboard
      output stays identical and set it from the payload-only builders if any consumer needs it.
 

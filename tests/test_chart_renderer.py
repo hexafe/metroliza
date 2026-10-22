@@ -939,3 +939,26 @@ def test_native_histogram_renderer_uses_real_extension_when_available():
         assert result.backend == "native"
         assert isinstance(result.png_bytes, bytes)
         assert len(result.png_bytes) > 0
+
+
+@pytest.mark.parametrize('failure', ['none', 'exception'])
+def test_plotstats_public_payload_attempt_returns_none_on_failure(failure):
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    with mock.patch.object(
+        adapter, 'render_chart_artifact_png', return_value=None,
+        side_effect=RuntimeError('unavailable') if failure == 'exception' else None,
+    ):
+        assert PlotstatsChartRenderer().try_render_payload_png({'type': 'trend'}) is None
+
+
+def test_plotstats_public_payload_attempt_preserves_png_and_backend():
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    rendered = type('Artifact', (), {'png_bytes': b'literal-png'})()
+    payload = {'type': 'iqr'}
+    with mock.patch.object(adapter, 'render_chart_artifact_png', return_value=rendered) as render:
+        result = PlotstatsChartRenderer().try_render_payload_png(payload)
+    assert result.png_bytes == b'literal-png'
+    assert result.backend == 'plotstats'
+    render.assert_called_once_with(payload, target='workbook_image', backend='auto')

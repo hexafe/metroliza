@@ -25,7 +25,8 @@ HTML_GENERATED = re.compile(
 CORE_TIME = re.compile(
     rb"(<dcterms:(created|modified)\b[^>]*>)([^<]*)(</dcterms:\2>)"
 )
-GENERATION_NAME = re.compile(r"export_dashboard_assets\.generation-[0-9a-f]{32}\Z")
+GENERATION_ASSET_BASES = ("export_dashboard_assets", "export_assets")
+GENERATION_NAME = re.compile(r"(?P<asset_base>export(?:_dashboard)?_assets)\.generation-[0-9a-f]{32}\Z")
 HTML_ATTRIBUTE = re.compile(r'''(?<!\S)([^\s/=>]+)\s*=\s*(["'])(.*?)\2''', re.DOTALL)
 
 
@@ -143,7 +144,7 @@ def _sqlite_difference(left: Path, right: Path) -> str | None:
 
 
 def _generation_directory(root):
-    candidates = [path for path in root.rglob("export_dashboard_assets.generation-*")
+    candidates = [path for base in GENERATION_ASSET_BASES for path in root.rglob(base + ".generation-*")
                   if path.is_dir() or path.is_symlink()]
     if not candidates:
         return None
@@ -160,6 +161,8 @@ def _generation_pair(left, right):
         raise ValueError("dashboard generation directory missing on one side")
     if a is not None and a.relative_to(left).parent != b.relative_to(right).parent:
         raise ValueError("dashboard generation directory location differs")
+    if a is not None and a.name.rsplit(".generation-", 1)[0] != b.name.rsplit(".generation-", 1)[0]:
+        raise ValueError("dashboard generation asset base name differs")
     return (a, b) if a is not None else None
 
 
@@ -202,7 +205,7 @@ class _DashboardReferences(HTMLParser):
 
     def _reference(self, value):
         decoded = html.unescape(value)
-        if "export_dashboard_assets.generation-" not in decoded:
+        if not any(base + ".generation-" in decoded for base in GENERATION_ASSET_BASES):
             return value
         generation = self.generation
         if generation is None or generation.name not in decoded.split("/"):
@@ -211,7 +214,7 @@ class _DashboardReferences(HTMLParser):
         if not target.is_relative_to(generation.resolve()) or not target.is_file():
             raise ValueError("HTML dashboard asset reference is missing or escapes its generation")
         # Replace the exact directory token once. A UUID in a filename or any other location stays literal.
-        return value.replace(generation.name + "/", "export_dashboard_assets.generation-PAIRED/", 1)
+        return value.replace(generation.name + "/", generation.name[:-32] + "PAIRED/", 1)
 
     def handle_starttag(self, tag, attrs):
         raw = self.get_starttag_text()

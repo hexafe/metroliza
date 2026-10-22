@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import time
 from concurrent.futures import ProcessPoolExecutor
+from copy import deepcopy
 from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 
 configure_headless_matplotlib()
@@ -232,6 +233,7 @@ from metroliza.charts.chart_render_service import (
     deterministic_downsample_frame,
 )
 from metroliza.charts.chart_renderer import (
+    PlotstatsChartRenderer,
     _resolve_figure_fonts,
     _resolved_font_properties,
     _text_render_context,
@@ -4296,6 +4298,22 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             connection=self._db_connection,
         )
 
+    def _try_summary_plotstats_chart(self, payload):
+        """Try the primary renderer without changing the legacy fallback's inputs."""
+        if not isinstance(self._chart_renderer, PlotstatsChartRenderer):
+            return None
+        previous_rc = deepcopy(plt.rcParams)
+        try:
+            result = self._chart_renderer.try_render_payload_png(payload)
+        except Exception:
+            result = None
+        if result is None:
+            # The unchanged _save_summary_chart retries after building the
+            # legacy figure. Keep that retry's mutations, as the old path did,
+            # rather than applying this speculative attempt's mutations twice.
+            plt.rcParams.update(previous_rc)
+        return result
+
     def _save_summary_chart(self, fig, mode='workbook', *, chart_type=None, native_payload=None):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
         def _normalize_render_result(raw_result, *, default_backend='matplotlib'):
@@ -6478,17 +6496,27 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         )
 
                     distribution_backend_native = resolve_distribution_renderer_backend() == 'native'
-                    if distribution_backend_native:
-                        distribution_native_payload['resolved_render_spec'] = build_resolved_distribution_spec(
-                            distribution_native_payload,
-                        )
-                        distribution_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='distribution',
-                            native_payload=distribution_native_payload,
-                        )
+                    distribution_render_result = None
+                    if not distribution_backend_native:
+                        apply_summary_plot_theme()
+                        distribution_render_result = self._try_summary_plotstats_chart(distribution_native_payload)
+                    if distribution_backend_native or distribution_render_result is not None:
+                        if distribution_backend_native:
+                            distribution_native_payload['resolved_render_spec'] = build_resolved_distribution_spec(
+                                distribution_native_payload,
+                            )
+                            distribution_render_result = self._save_summary_chart(
+                                None,
+                                chart_type='distribution',
+                                native_payload=distribution_native_payload,
+                            )
                         image_data = self._register_chart_image(distribution_render_result.png_bytes)
-                        distribution_slot = _reserve_summary_image_slot('distribution', distribution_canvas)
+                        distribution_slot = _reserve_summary_image_slot(
+                            'distribution', distribution_canvas if distribution_backend_native else {
+                                'width_px': float(categorical_strategy['recommended_fig_width']) * 150.0,
+                                'height_px': 600.0,
+                            },
+                        )
                         if self._check_canceled():
                             return
                     else:
@@ -6633,15 +6661,24 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         ),
                     }
                     iqr_backend_native = resolve_iqr_renderer_backend() == 'native'
-                    if iqr_backend_native:
-                        iqr_native_payload['resolved_render_spec'] = build_resolved_iqr_spec(iqr_native_payload)
-                        iqr_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='iqr',
-                            native_payload=iqr_native_payload,
-                        )
+                    # IQR intentionally inherits ambient rcParams, including a
+                    # preceding distribution chart's theme, just as the legacy path.
+                    iqr_render_result = None if iqr_backend_native else self._try_summary_plotstats_chart(iqr_native_payload)
+                    if iqr_backend_native or iqr_render_result is not None:
+                        if iqr_backend_native:
+                            iqr_native_payload['resolved_render_spec'] = build_resolved_iqr_spec(iqr_native_payload)
+                            iqr_render_result = self._save_summary_chart(
+                                None,
+                                chart_type='iqr',
+                                native_payload=iqr_native_payload,
+                            )
                         image_data = self._register_chart_image(iqr_render_result.png_bytes)
-                        iqr_slot = _reserve_summary_image_slot('iqr', iqr_native_payload['canvas'])
+                        iqr_slot = _reserve_summary_image_slot(
+                            'iqr', iqr_native_payload['canvas'] if iqr_backend_native else {
+                                'width_px': float(iqr_strategy['recommended_fig_width']) * 150.0,
+                                'height_px': 600.0,
+                            },
+                        )
                         if self._check_canceled():
                             return
                     else:
@@ -7188,14 +7225,24 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         'y_limits': trend_y_limits,
                     }
                     trend_native_payload['resolved_render_spec'] = build_resolved_trend_spec(trend_native_payload)
-                    if trend_backend_native:
-                        trend_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='trend',
-                            native_payload=trend_native_payload,
-                        )
+                    trend_render_result = None
+                    if not trend_backend_native:
+                        apply_summary_plot_theme()
+                        trend_render_result = self._try_summary_plotstats_chart(trend_native_payload)
+                    if trend_backend_native or trend_render_result is not None:
+                        if trend_backend_native:
+                            trend_render_result = self._save_summary_chart(
+                                None,
+                                chart_type='trend',
+                                native_payload=trend_native_payload,
+                            )
                         image_data = self._register_chart_image(trend_render_result.png_bytes)
-                        trend_slot = _reserve_summary_image_slot('trend', trend_canvas)
+                        trend_slot = _reserve_summary_image_slot(
+                            'trend', trend_canvas if trend_backend_native else {
+                                'width_px': float(trend_figure_width) * 150.0,
+                                'height_px': 600.0,
+                            },
+                        )
                         if self._check_canceled():
                             return
                     else:

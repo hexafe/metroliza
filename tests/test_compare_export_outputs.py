@@ -175,16 +175,16 @@ def test_sqlite_catalog_identifiers_cannot_change_query_structure(tmp_path):
             assert connection.execute("SELECT * FROM guard").fetchall() == [(42,)]
 
 
-def _dashboard_pair(tmp_path):
+def _dashboard_pair(tmp_path, stem="export_dashboard"):
     outputs = []
     for side, token in (("a", "a" * 32), ("b", "b" * 32)):
         root = tmp_path / side
         root.mkdir()
-        directory = root / ("export_dashboard_assets.generation-" + token)
+        directory = root / (f"{stem}_assets.generation-" + token)
         directory.mkdir()
         (directory / "chart.png").write_bytes(b"exact PNG bytes")
         (directory / "plotly.js").write_bytes(b"exact bundled JavaScript bytes")
-        html = root / "export_dashboard.html"
+        html = root / f"{stem}.html"
         html.write_text(f'<script src="{directory.name}/plotly.js" defer></script>'
                         f'<button data-image-src="{directory.name}/chart.png">'
                         f'<img src="{directory.name}/chart.png"></button>')
@@ -192,16 +192,18 @@ def _dashboard_pair(tmp_path):
     return outputs
 
 
-def test_paired_dashboard_generations_compare_with_exact_assets(tmp_path):
-    a, b = _dashboard_pair(tmp_path)
+@pytest.mark.parametrize("stem", ["export_dashboard", "export"])
+def test_paired_dashboard_generations_compare_with_exact_assets(tmp_path, stem):
+    a, b = _dashboard_pair(tmp_path, stem)
     assert compare_outputs(a[0], b[0]) is None
     assert compare_outputs(a[1], b[1]) is None
 
 
 @pytest.mark.parametrize("attribute", ["data.src", ".src", "other:src", "data-src", "src.extra"])
 @pytest.mark.parametrize("genuine_src", [False, True])
-def test_unsupported_attribute_names_remain_literal(tmp_path, attribute, genuine_src):
-    a, b = _dashboard_pair(tmp_path)
+@pytest.mark.parametrize("stem", ["export_dashboard", "export"])
+def test_unsupported_attribute_names_remain_literal(tmp_path, attribute, genuine_src, stem):
+    a, b = _dashboard_pair(tmp_path, stem)
     for _root, document, generation in (a, b):
         reference = f'{generation.name}/plotly.js'
         accepted = f' src="{reference}"' if genuine_src else ""
@@ -236,12 +238,14 @@ def test_sqlite_removed_integrity_schema_object_is_a_difference(tmp_path, object
 @pytest.mark.parametrize("change", [
     "text", "other_attribute", "script", "comment", "wrong_tag", "link", "asset_bytes", "asset_token",
     "missing_asset", "extra_asset", "renamed_asset", "extra_generation", "both_extra_generations",
+    "alternate_generation", "both_alternate_generations",
     "missing_generation", "both_missing_generations", "moved_generation", "wrong_reference", "empty_assets",
 ])
-def test_dashboard_generation_exception_is_location_and_content_bound(tmp_path, change):
+@pytest.mark.parametrize("stem", ["export_dashboard", "export"])
+def test_dashboard_generation_exception_is_location_and_content_bound(tmp_path, change, stem):
     import shutil
 
-    a, b = _dashboard_pair(tmp_path)
+    a, b = _dashboard_pair(tmp_path, stem)
     if change in {"text", "other_attribute", "script", "comment", "wrong_tag", "link"}:
         templates = {"text": "<p>{}</p>", "other_attribute": '<div data-note="{}"></div>',
                      "script": '<script>const diagnostic="{}";</script>', "comment": "<!-- {} -->",
@@ -260,9 +264,14 @@ def test_dashboard_generation_exception_is_location_and_content_bound(tmp_path, 
     elif change == "renamed_asset":
         (b[2] / "chart.png").rename(b[2] / "renamed.png")
         b[1].write_text(b[1].read_text().replace("chart.png", "renamed.png"))
-    elif change in {"extra_generation", "both_extra_generations"}:
-        for root, _document, _generation in ((a, b) if change == "both_extra_generations" else (b,)):
-            extra = root / ("export_dashboard_assets.generation-" + "c" * 32)
+    elif change in {"extra_generation", "both_extra_generations",
+                    "alternate_generation", "both_alternate_generations"}:
+        both = change in {"both_extra_generations", "both_alternate_generations"}
+        extra_stem = ("export" if stem == "export_dashboard" else "export_dashboard") if (
+            change in {"alternate_generation", "both_alternate_generations"}
+        ) else stem
+        for root, _document, _generation in ((a, b) if both else (b,)):
+            extra = root / (f"{extra_stem}_assets.generation-" + "c" * 32)
             extra.mkdir()
             (extra / "chart.png").write_bytes(b"extra")
     elif change in {"missing_generation", "both_missing_generations"}:
@@ -273,7 +282,7 @@ def test_dashboard_generation_exception_is_location_and_content_bound(tmp_path, 
         b[2].rename(b[0] / "nested" / b[2].name)
         b[1].write_text(b[1].read_text().replace(b[2].name, "nested/" + b[2].name))
     elif change == "wrong_reference":
-        b[1].write_text(b[1].read_text().replace(b[2].name, "export_dashboard_assets.generation-" + "d" * 32))
+        b[1].write_text(b[1].read_text().replace(b[2].name, f"{stem}_assets.generation-" + "d" * 32))
     else:
         for _root, _document, generation in (a, b):
             for path in generation.iterdir():
@@ -281,14 +290,16 @@ def test_dashboard_generation_exception_is_location_and_content_bound(tmp_path, 
     assert main([str(a[0]), str(b[0])]) != 0
 
 
-def test_html_file_comparison_also_checks_asset_bytes(tmp_path):
-    a, b = _dashboard_pair(tmp_path)
+@pytest.mark.parametrize("stem", ["export_dashboard", "export"])
+def test_html_file_comparison_also_checks_asset_bytes(tmp_path, stem):
+    a, b = _dashboard_pair(tmp_path, stem)
     (b[2] / "chart.png").write_bytes(b"different")
     assert compare_outputs(a[1], b[1])
 
 
-def test_generation_pattern_elsewhere_is_compared_literally(tmp_path):
-    a, b = _dashboard_pair(tmp_path)
+@pytest.mark.parametrize("stem", ["export_dashboard", "export"])
+def test_generation_pattern_elsewhere_is_compared_literally(tmp_path, stem):
+    a, b = _dashboard_pair(tmp_path, stem)
     suffix = '<p>generation-' + "c" * 32 + '</p><div data-note="generation-' + "c" * 32 + '"></div>'
     for _root, document, _generation in (a, b):
         document.write_text(document.read_text() + suffix)
@@ -297,10 +308,19 @@ def test_generation_pattern_elsewhere_is_compared_literally(tmp_path):
     assert compare_outputs(a[0], b[0])
 
 
-@pytest.mark.parametrize("kind", ["xlsx", "html", "sqlite"])
+def test_dashboard_asset_base_name_remains_literal_across_paired_generations(tmp_path):
+    a, b = _dashboard_pair(tmp_path)
+    other = b[2].with_name(b[2].name.replace("export_dashboard_assets", "export_assets"))
+    b[2].rename(other)
+    b[1].write_text(b[1].read_text().replace(b[2].name, other.name))
+    assert main([str(a[0]), str(b[0])]) != 0
+    assert main([str(a[1]), str(b[1])]) != 0
+
+
+@pytest.mark.parametrize("kind", ["xlsx", "html", "html_only", "sqlite"])
 def test_independently_generated_baseline_controls_use_the_same_oracle(tmp_path, kind, capsys):
-    if kind == "html":
-        left, right = _dashboard_pair(tmp_path)
+    if kind in {"html", "html_only"}:
+        left, right = _dashboard_pair(tmp_path, "export" if kind == "html_only" else "export_dashboard")
         paths = (left[0], right[0])
     elif kind == "xlsx":
         paths = (tmp_path / "a.xlsx", tmp_path / "b.xlsx")
@@ -316,7 +336,7 @@ def test_independently_generated_baseline_controls_use_the_same_oracle(tmp_path,
     arguments = [str(path) for path in paths] + ["--baseline-control", "--sqlite"]
     assert main(arguments) == 0
     assert "baseline control: outputs equal" in capsys.readouterr().out
-    if kind == "html":
+    if kind in {"html", "html_only"}:
         (right[2] / "chart.png").write_bytes(b"different")
     elif kind == "xlsx":
         _xlsx(paths[1], value=b"different")

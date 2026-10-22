@@ -12,6 +12,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
+from metroliza.charts.chart_renderer import MatplotlibChartRenderer
 from metroliza.exporting.export_data_thread import (
     ExportDataThread,
     classify_normality_status,
@@ -3061,6 +3062,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
 
         observed_ylims = []
@@ -3899,6 +3901,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread.violin_plot_min_samplesize = 2
         chart_calls = []
 
@@ -3971,6 +3974,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread.violin_plot_min_samplesize = 2
         chart_calls = []
 
@@ -4058,6 +4062,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 3
 
@@ -4113,6 +4118,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 10
 
@@ -4343,6 +4349,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
 
         header_group = pd.DataFrame(
@@ -4392,6 +4399,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
 
         label_count = 40
@@ -4443,6 +4451,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 10
 
@@ -5291,6 +5300,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
         thread.violin_plot_min_samplesize = 2
 
@@ -5761,3 +5771,248 @@ def test_preflight_approval_preserves_source_occurrence(tmp_path, container, cha
     finally:
         if thread._extracted_archive_dir is not None:
             thread._extracted_archive_dir.cleanup()
+
+
+class _LegacySummaryRenderer:
+    """Keep the pre-T02 caller path as an independent rendering oracle."""
+
+    def __init__(self, renderer):
+        self.renderer = renderer
+
+    def render_distribution_png(self, *args, **kwargs):
+        return self.renderer.render_distribution_png(*args, **kwargs)
+
+    def render_iqr_png(self, *args, **kwargs):
+        return self.renderer.render_iqr_png(*args, **kwargs)
+
+    def render_trend_png(self, *args, **kwargs):
+        return self.renderer.render_trend_png(*args, **kwargs)
+
+
+def _capture_summary_plotstats(*, legacy=False, scenario='scatter', forbid_legacy=False):
+    import copy
+    import matplotlib
+    import pandas as pd
+    import metroliza.exporting.export_data_thread as module
+    from metroliza.charts.chart_renderer import PlotstatsChartRenderer
+
+    labels = ['1', '2', '3', '4', '5', '6']
+    if scenario == 'violin':
+        labels = ['1'] * 6 + ['2'] * 6
+    elif scenario == 'wide':
+        labels = [str(index) for index in range(1, 33)]
+    count = len(labels)
+    group = pd.DataFrame({
+        'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95] * (count // 6)
+                + [10.0] * (count % 6),
+        'NOM': [10.0] * count, '+TOL': [0.2] * count, '-TOL': [-0.2] * count,
+        'SAMPLE_NUMBER': labels, 'DATE': ['2024-01-01'] * count,
+    })
+    thread = ExportDataThread(ExportRequest(
+        paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+        options=ExportOptions(generate_summary_sheet=True, generate_html_dashboard=True),
+    ))
+    chart_names = {
+        'iqr-only': ['iqr'], 'iqr-default': ['iqr'],
+        'distribution-only': ['distribution'], 'trend-only': ['trend'],
+        'distribution-iqr': ['distribution', 'iqr'],
+    }.get(scenario, ['distribution', 'iqr', 'trend'])
+    thread._optimization_toggles['summary_sheet_minimum_charts'] = set(chart_names)
+    renderer = PlotstatsChartRenderer()
+    thread._chart_renderer = _LegacySummaryRenderer(renderer) if legacy else renderer
+    inserted = []
+
+    class Worksheet:
+        def write(self, *_args, **_kwargs):
+            pass
+
+        def insert_image(self, row, col, _filename, options):
+            inserted.append((row, col, {key: value for key, value in options.items() if key != 'image_data'}))
+
+    # Replace only this caller's pyplot reference. Plotstats may legitimately
+    # construct its own matplotlib figures while producing the primary PNG.
+    real_pyplot = module.plt
+
+    class CallerPyplot:
+        def __getattr__(self, name):
+            return getattr(real_pyplot, name)
+
+    pyplot = CallerPyplot()
+    if forbid_legacy:
+        pyplot.subplots = mock.Mock(side_effect=AssertionError('legacy summary figure created'))
+    warnings = []
+    thread._record_summary_sheet_warning = lambda *args: warnings.append(args)
+    rc = ({} if scenario == 'iqr-default' else
+          {'font.size': 17, 'axes.labelsize': 19, 'axes.linewidth': 2.75})
+    with (
+        matplotlib.rc_context(),
+        mock.patch.object(module, 'plt', pyplot),
+        mock.patch.object(module, 'resolve_distribution_renderer_backend', return_value='matplotlib'),
+        mock.patch.object(module, 'resolve_iqr_renderer_backend', return_value='matplotlib'),
+        mock.patch.object(module, 'resolve_trend_renderer_backend', return_value='matplotlib'),
+    ):
+        matplotlib.rcdefaults()
+        matplotlib.rcParams.update(rc)
+        rc_before = matplotlib.rcParams.copy()
+        figures_before = real_pyplot.get_fignums()
+        thread.summary_sheet_fill(Worksheet(), 'Synthetic H1', group, col=5)
+        rc_after = matplotlib.rcParams.copy()
+        figures_after = real_pyplot.get_fignums()
+    assert not warnings, warnings
+    if forbid_legacy:
+        pyplot.subplots.assert_not_called()
+    sections = copy.deepcopy(thread._html_dashboard_sections)
+    assert len(sections) == 1
+    charts = sections[0]['charts']
+    assert [chart['chart_type'] for chart in charts] == chart_names
+    pngs = [chart.pop('image_buffer').getvalue() for chart in charts]
+    # Finalized legacy geometry is consumed by the native compositor only;
+    # Plotstats and the HTML dashboard derive their views from the payload.
+    payloads = [copy.deepcopy(chart['payload']) for chart in charts]
+    for chart in charts:
+        chart['payload'].pop('resolved_render_spec', None)
+    return {'pngs': pngs, 'slots': inserted, 'sections': sections, 'payloads': payloads,
+            'rc_before': rc_before, 'rc_after': rc_after,
+            'figures_before': figures_before, 'figures_after': figures_after}
+
+
+def _summary_plotstats_failure(failure):
+    from contextlib import nullcontext
+    import matplotlib
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    if failure is None:
+        return nullcontext()
+    render = adapter.render_chart_artifact_png
+
+    def fail(*_args, **_kwargs):
+        if failure.startswith('mutating-'):
+            matplotlib.rcParams.update({'font.size': 31, 'axes.edgecolor': 'red', 'axes.linewidth': 3.5})
+        if failure.endswith('exception'):
+            raise RuntimeError('forced Plotstats failure')
+        if failure.endswith('success'):
+            return render(*_args, **_kwargs)
+        return None
+
+    return mock.patch.object(adapter, 'render_chart_artifact_png', side_effect=fail)
+
+
+@pytest.mark.parametrize('scenario', [
+    'scatter', 'violin', 'wide', 'iqr-only', 'iqr-default',
+    'distribution-only', 'trend-only', 'distribution-iqr',
+])
+@pytest.mark.parametrize('failure', [None, 'none', 'exception', 'mutating-none', 'mutating-exception', 'mutating-success'])
+def test_summary_plotstats_literal_png_slot_and_dashboard_equivalence(scenario, failure, qapplication_session):
+    with _summary_plotstats_failure(failure):
+        expected = _capture_summary_plotstats(legacy=True, scenario=scenario)
+        actual = _capture_summary_plotstats(scenario=scenario)
+    for key in ('pngs', 'slots', 'sections', 'rc_before', 'rc_after', 'figures_before', 'figures_after'):
+        assert actual[key] == expected[key], key
+    assert actual['figures_after'] == actual['figures_before']
+    if scenario == 'violin':
+        assert actual['payloads'][0]['render_mode'] == 'violin'
+    assert [chart['backend'] for chart in actual['sections'][0]['charts']] == [
+        'plotstats' if failure in (None, 'mutating-success') else 'matplotlib'
+    ] * len(actual['pngs'])
+
+
+@pytest.mark.parametrize('scenario', ['scatter', 'violin', 'wide', 'iqr-only', 'iqr-default', 'distribution-iqr'])
+def test_summary_plotstats_success_creates_no_legacy_figure(scenario, qapplication_session):
+    _capture_summary_plotstats(scenario=scenario, forbid_legacy=True)
+
+
+@pytest.mark.parametrize('chart_name', ['distribution', 'iqr', 'trend'])
+@pytest.mark.parametrize('width', [6.0, 8.8, 10.0, 17.3, 32.0])
+def test_summary_declared_size_has_exact_figure_slot_and_span(chart_name, width):
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=(width, 4.0))
+    # Keep the exact declared inches through the worksheet scale calculation;
+    # rounded integer PNG dimensions are a separate rendering concern.
+    size = {'width_px': width * 150.0, 'height_px': 4.0 * 150.0}
+    slot = {'row': 1, 'col': 5}
+    expected = ExportDataThread._summary_image_slot_with_scale(chart_name, slot, figure)
+    actual = ExportDataThread._summary_image_slot_with_scale(chart_name, slot, size)
+    assert actual == expected
+    assert ExportDataThread._resolve_scaled_summary_image_cell_span(size, actual) == (
+        ExportDataThread._resolve_scaled_summary_image_cell_span(figure, expected)
+    )
+
+
+def _serialize_summary_plotstats_capture(capture, directory, mode):
+    import copy
+    from datetime import datetime, timezone
+    from io import BytesIO
+    import metroliza.charts.export_html_dashboard as dashboard
+
+    sections = copy.deepcopy(capture['sections'])
+    for chart, png, payload in zip(sections[0]['charts'], capture['pngs'], capture['payloads'], strict=True):
+        chart['image_buffer'] = BytesIO(png)
+        chart['payload'] = payload
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2024, 1, 1, tzinfo=timezone.utc)
+
+    # Control generation entropy at its source; compare every produced byte.
+    with (
+        mock.patch.object(dashboard, 'datetime', FixedDatetime),
+        mock.patch.object(dashboard, 'uuid4', return_value=types.SimpleNamespace(hex='a' * 32)),
+    ):
+        dashboard.write_export_html_dashboard(
+            excel_file='out.xlsx', output_path=directory / 'dashboard.html',
+            assets_dir=directory / 'dashboard_assets', sections=sections,
+            source_label='Synthetic dashboard', dashboard_mode=mode,
+        )
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in directory.rglob('*') if path.is_file() and not path.name.endswith('.lock')
+    }
+
+
+@pytest.mark.parametrize('mode', ['workbook_sidecar', 'html_only'])
+@pytest.mark.parametrize('failure', [None, 'none', 'exception'])
+def test_summary_plotstats_serialized_html_and_assets_are_literal(mode, failure, tmp_path, qapplication_session):
+    with _summary_plotstats_failure(failure):
+        expected = _capture_summary_plotstats(legacy=True)
+        actual = _capture_summary_plotstats()
+    assert _serialize_summary_plotstats_capture(actual, tmp_path / 'actual', mode) == (
+        _serialize_summary_plotstats_capture(expected, tmp_path / 'expected', mode)
+    )
+
+
+@pytest.mark.parametrize('outcome', ['success', 'none', 'exception'])
+def test_summary_primary_attempt_restores_only_failed_speculation(outcome, qapplication_session):
+    import copy
+    import matplotlib
+    from metroliza.charts.chart_renderer import ChartRenderResult, PlotstatsChartRenderer
+
+    thread = ExportDataThread(ExportRequest(
+        paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+        options=ExportOptions(generate_summary_sheet=True),
+    ))
+    renderer = PlotstatsChartRenderer()
+    thread._chart_renderer = renderer
+    success = ChartRenderResult(b'primary-png', 'plotstats')
+
+    def attempt(_payload):
+        matplotlib.rcParams['font.size'] = 31
+        matplotlib.rcParams['font.family'].append('Synthetic family')
+        if outcome == 'exception':
+            raise RuntimeError('partial renderer failure')
+        return success if outcome == 'success' else None
+
+    with matplotlib.rc_context():
+        # Own a separate mutable list so this observer cannot leak its mutation.
+        matplotlib.rcParams['font.family'] = list(matplotlib.rcParams['font.family'])
+        before = copy.deepcopy(matplotlib.rcParams)
+        with mock.patch.object(renderer, 'try_render_payload_png', side_effect=attempt):
+            result = thread._try_summary_plotstats_chart({'type': 'iqr'})
+        if outcome == 'success':
+            assert result is success
+            assert matplotlib.rcParams['font.size'] == 31
+            assert matplotlib.rcParams['font.family'][-1] == 'Synthetic family'
+        else:
+            assert result is None
+            assert matplotlib.rcParams == before
