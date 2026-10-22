@@ -121,6 +121,7 @@ from metroliza.exporting.export_query_service import (
     fetch_sql_measurement_summary,
     fetch_sql_measurement_summaries,
     load_measurement_export_partition_dataframe,
+    prepare_snapshot_partition_source,
     RowTable,
 )
 from metroliza.reports.report_query_service import (
@@ -3722,6 +3723,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._summary_sheet_skip_warning_emitted = False
         self._db_connection = None
         self._snapshot_table_name = None
+        self._snapshot_partition_source = None
         self._active_export_query = self.filter_query
         self._cached_export_filtered_df = None
         self._sql_measurement_summary_cache = {}
@@ -4013,6 +4015,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
 
     def _prepare_export_snapshot(self):
+        if self._snapshot_partition_source is not None:
+            self._snapshot_partition_source.invalidate()
+        self._snapshot_partition_source = None
         if self._db_connection is None:
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
@@ -4029,11 +4034,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             with self._db_connection:
                 self._db_connection.execute(create_snapshot_query)
                 self._index_export_snapshot(snapshot_table_name)
+                snapshot_source = prepare_snapshot_partition_source(self._db_connection, snapshot_table_name)
         except Exception:
             logger.warning(
                 'Export snapshot materialization failed; falling back to live query scope.',
                 exc_info=True,
             )
+            try:
+                self._db_connection.execute(f'DROP TABLE IF EXISTS temp."{snapshot_table_name}"')
+            except sqlite3.Error:
+                logger.debug('Unable to discard failed export snapshot.', exc_info=True)
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
@@ -4042,7 +4052,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
 
         self._snapshot_table_name = snapshot_table_name
-        self._active_export_query = f'SELECT * FROM "{snapshot_table_name}"'
+        self._snapshot_partition_source = snapshot_source
+        self._active_export_query = f'SELECT * FROM temp."{snapshot_table_name}"'
         self._cached_export_filtered_df = None
         self._partition_header_counts_cache = None
         self._sql_measurement_summary_cache.clear()
@@ -4051,6 +4062,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if self._db_connection is None:
             return
         index_specs = (
+            (
+                f'{snapshot_table_name}_report_idx',
+                '("REPORT_ID")',
+            ),
             (
                 f'{snapshot_table_name}_ref_idx',
                 '("REFERENCE")',
@@ -4074,6 +4089,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 )
 
     def _cleanup_export_snapshot(self):
+        if self._snapshot_partition_source is not None:
+            self._snapshot_partition_source.invalidate()
+        self._snapshot_partition_source = None
         if self._db_connection is None or not self._snapshot_table_name:
             self._active_export_query = self.filter_query
             self._snapshot_table_name = None
@@ -4084,7 +4102,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         try:
             with self._db_connection:
-                self._db_connection.execute(f'DROP TABLE IF EXISTS "{self._snapshot_table_name}"')
+                self._db_connection.execute(f'DROP TABLE IF EXISTS temp."{self._snapshot_table_name}"')
         except sqlite3.ProgrammingError:
             logger.debug(
                 'Skipping export snapshot cleanup because database connection is already closed.',
@@ -4131,6 +4149,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 partition_value,
                 partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
+                snapshot_source=self._snapshot_partition_source,
             )
             if not partition_df.empty:
                 yield partition_df['EXPORT_PARTITION_LABEL'].iloc[0], partition_df

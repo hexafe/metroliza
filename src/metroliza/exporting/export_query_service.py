@@ -8,6 +8,7 @@ partition-based value/header summaries and measurement-specific export shapes.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass, field
 
 from metroliza.analytics.row_table import (
     RowColumn as RowColumn,
@@ -114,17 +115,111 @@ def build_analytical_partition_query(filter_query):
     business REFERENCE column and database remain untouched. The typed key keeps
     a real reference from colliding with a report fallback label.
     """
-    missing_reference = "NULLIF(TRIM(REFERENCE), '') IS NULL"
     return f'''
-        SELECT export_scope.*,
-            CASE WHEN {missing_reference}
-                THEN 'report:' || CAST(REPORT_ID AS TEXT)
-                ELSE 'reference:' || REFERENCE END AS EXPORT_PARTITION_KEY,
-            CASE WHEN {missing_reference}
-                THEN 'Report ' || CAST(REPORT_ID AS TEXT) || ' (no reference)'
-                ELSE REFERENCE END AS EXPORT_PARTITION_LABEL
+        SELECT export_scope.*, {_analytical_partition_columns()}
         FROM ({filter_query}) AS export_scope
     '''
+
+
+def _analytical_partition_columns():
+    missing_reference = "NULLIF(TRIM(REFERENCE), '') IS NULL"
+    return f'''
+        CASE WHEN {missing_reference}
+            THEN 'report:' || CAST(REPORT_ID AS TEXT)
+            ELSE 'reference:' || REFERENCE END AS EXPORT_PARTITION_KEY,
+        CASE WHEN {missing_reference}
+            THEN 'Report ' || CAST(REPORT_ID AS TEXT) || ' (no reference)'
+            ELSE REFERENCE END AS EXPORT_PARTITION_LABEL
+    '''
+
+
+@dataclass
+class _SnapshotPartitionLifetime:
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class SnapshotPartitionSource:
+    """Storage proof bound to one immutable, connection-owned TEMP snapshot."""
+
+    table_name: str
+    rowid_column: str
+    indexed_columns: frozenset[str]
+    owner_connection: sqlite3.Connection
+    _lifetime: _SnapshotPartitionLifetime = field(default_factory=_SnapshotPartitionLifetime)
+
+    def invalidate(self):
+        """Revoke this snapshot generation when its owner replaces or cleans it."""
+        self._lifetime.active = False
+
+
+def prepare_snapshot_partition_source(connection, table_name):
+    """Admit only source comparisons equivalent to the computed text identity.
+
+    CTAS affinity alone is insufficient: a TEXT column can still hold a BLOB.
+    Inspect storage once for this snapshot, rather than coercing arbitrary values
+    on every partition read. Unsupported columns keep the general query path.
+    """
+    columns = {
+        row[1].upper(): row[2].upper()
+        for row in connection.execute(f'PRAGMA temp.table_info({quote_identifier(table_name)})')
+    }
+    rowid_column = next((name for name in ('_rowid_', 'rowid', 'oid') if name.upper() not in columns), None)
+    if rowid_column is None:
+        return None
+    candidates = {
+        name: storage for name, affinity, storage in (
+            ('REFERENCE', 'TEXT', 'text'), ('REPORT_ID', 'INT', 'integer'),
+        ) if columns.get(name) == affinity
+    }
+    if not candidates:
+        return None
+    checks = ', '.join(
+        f"MAX(typeof({quote_identifier(name)}) NOT IN ('null', '{storage}'))"
+        for name, storage in candidates.items()
+    )
+    unsupported = connection.execute(
+        f'SELECT {checks} FROM temp.{quote_identifier(table_name)}'
+    ).fetchone()
+    supported = frozenset(name for name, invalid in zip(candidates, unsupported) if not invalid)
+    return SnapshotPartitionSource(table_name, rowid_column, supported, connection)
+
+
+def _snapshot_partition_query(source, partition_value, filter_query, connection):
+    if type(partition_value) is not str or type(filter_query) is not str:
+        return None
+    canonical_query = build_analytical_partition_query(
+        f'SELECT * FROM temp.{quote_identifier(source.table_name)}'
+    )
+    if (
+        not source._lifetime.active
+        or connection is not source.owner_connection
+        or filter_query != canonical_query
+    ):
+        return None
+    kind, separator, value = partition_value.partition(':')
+    if not separator or not value:
+        return None
+    if kind == 'reference' and 'REFERENCE' in source.indexed_columns:
+        predicate = "REFERENCE = ? AND NULLIF(TRIM(REFERENCE), '') IS NOT NULL"
+        parameter = value
+    elif kind == 'report' and 'REPORT_ID' in source.indexed_columns:
+        try:
+            parameter = int(value)
+        except ValueError:
+            return None
+        if str(parameter) != value or not -(2 ** 63) <= parameter < 2 ** 63:
+            return None
+        predicate = "REPORT_ID = ? AND NULLIF(TRIM(REFERENCE), '') IS NULL"
+    else:
+        return None
+    query = f'''
+        SELECT export_scope.*, {_analytical_partition_columns()}
+        FROM temp.{quote_identifier(source.table_name)} AS export_scope
+        WHERE {predicate}
+        ORDER BY export_scope.{quote_identifier(source.rowid_column)}
+    '''
+    return query, (parameter,)
 
 
 def _validated_partition_header_expression(header_expr: str) -> str:
@@ -222,6 +317,7 @@ def load_export_partition_dataframe(
     *,
     partition_column='REFERENCE',
     connection: sqlite3.Connection | None = None,
+    snapshot_source: SnapshotPartitionSource | None = None,
 ):
     """Load rows for a single partition value from a scoped export query.
 
@@ -231,6 +327,8 @@ def load_export_partition_dataframe(
         partition_value: Value matched against ``partition_column``.
         partition_column: Column name used to partition export rows.
         connection: Optional active SQLite connection to reuse.
+        snapshot_source: Owner-issued storage proof for the exact canonical TEMP
+            scope on this connection; other scopes retain the general path.
 
     Returns:
         A row table whose rows have ``partition_column`` equal to
@@ -239,6 +337,15 @@ def load_export_partition_dataframe(
     Notes:
         ``partition_column`` must exist in ``filter_query`` output.
     """
+    if (
+        snapshot_source is not None
+        and type(partition_column) is str
+        and partition_column == 'EXPORT_PARTITION_KEY'
+    ):
+        snapshot_query = _snapshot_partition_query(snapshot_source, partition_value, filter_query, connection)
+        if snapshot_query is not None:
+            query, params = snapshot_query
+            return _read_sql_query(db_file, query, params=params, connection=connection)
     scoped_query = _build_scoped_export_query(filter_query)
     quoted_partition = quote_identifier(partition_column)
     query = (
@@ -257,6 +364,7 @@ def load_measurement_export_partition_dataframe(
     *,
     partition_column='REFERENCE',
     connection: sqlite3.Connection | None = None,
+    snapshot_source: SnapshotPartitionSource | None = None,
 ):
     """Load partitioned rows and convert them to measurement export format.
 
@@ -266,6 +374,7 @@ def load_measurement_export_partition_dataframe(
         partition_value: Value matched against ``partition_column``.
         partition_column: Column name used to partition export rows.
         connection: Optional active SQLite connection to reuse.
+        snapshot_source: Optional live storage proof for this snapshot and connection.
 
     Returns:
         A measurement export row table for the requested partition.
@@ -276,6 +385,7 @@ def load_measurement_export_partition_dataframe(
         partition_value,
         partition_column=partition_column,
         connection=connection,
+        snapshot_source=snapshot_source,
     )
     return build_measurement_export_dataframe(partition_df)
 

@@ -67,7 +67,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "dfe095dd5fbb2f28def784645b8bab72ff08cd2ae3d55d61ea9416cfa082eaed",
+      "fingerprint": "98090479081c2766b9caa38e94a0c38eae2f0a0f679a893b4d477fa8bc79799e",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -76,7 +76,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "3d5041ec7a86bff01d8d84fa6f55a44bf6008528ab37f0d3b7f0779d4a82045f",
+      "fingerprint": "2ecd2be713af38886302879f8f71c2c968759d5e9e2fdfd7825ebedc8b950a3b",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -85,7 +85,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "06318a5d9409fde97a6c14197e7adff3c9689e5fc21a976ba1803f952d10b37e",
+      "fingerprint": "fcb5b6ef24e5bbdb1c2f6db9a2116105acd7bd4c168868b7a964dbb26cb5f0e0",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -94,7 +94,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "5af1daeb963bd15e6f3d7c27cc987d7b6bcbc2a0abeb99392f961bbac5e281d8",
+      "fingerprint": "ece21931328ea207796941ea734aaac1d3e7d3bbc51a1aa5fb178706fc18d49d",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -103,7 +103,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "bac0da658b7c49896a95b80d7d86900aeda2954c2f0fefc9f7e6ad46d6c3e80c",
+      "fingerprint": "0cf5c8eec3dc4469e8a1baee595f7e7daa708ad021105c56510f6f8d1feca9a2",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -112,7 +112,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "5dec3e79b9b1b67d5e44f424a8af11e3ff05179689fb04e2bc7c04ca80ee990b",
+      "fingerprint": "a7650df32978d382d14f3c18a48825facc7e939c063e55bdb23be62fb6bc96dc",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -121,7 +121,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "12a20d90383c8428b427eca34147e0dae6b32d27cee3220a467bc2a95356bff6",
+      "fingerprint": "f8b100176f7408fc28d059f00405735cd573cec7bea019ae15a88ad4a16597e3",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -130,7 +130,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "098274bd3925ee94eb97724024a0bb80f85dd38add220a2978019152327fde17",
+      "fingerprint": "484ea464292c0b0ea930cbaa11c71e11c216d8cf31088f8d58aaf854d45288b3",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -139,7 +139,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c50dc92b1f9493f45ba56dfbbfcb8c03d73355f1d85b96c31496b8400dd4837c",
+      "fingerprint": "73e7189b6ef9484188e80c1523762a291e0e64d3096bcbc45d3743bfbf321017",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "Security review",
@@ -1360,6 +1360,33 @@
       "owner": "Security review",
       "rationale": "_sqlite_numeric_dispatch: fast_guard and number are local fixed SQL expressions. predicate/fast_predicate come only from sqlite_numeric_filter/sqlite_numeric_membership with _OPERATORS allowlisting and _required_literal/_exact_sql_number numeric validation (or bound numeric params). _sqlite_normalized_source uses the constant _nf_value alias; column_sql comes from quoted/allowlisted report or tabular column helpers. No raw filter expression is accepted as a predicate.",
       "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "a18a200dfd44f698c867e8ef8e2e4c81341d6fb4479496ae9373df60b9c1b91e",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/export_query_service.py",
+      "owner": "STEP3 coordinator (#1151)",
+      "rationale": "prepare_snapshot_partition_source: table_name is quoted by quote_identifier in the explicit TEMP schema. checks is composed only from the fixed REFERENCE/REPORT_ID candidates and literal text/integer storage labels, with quoted fixed column names; no report/file/key value enters this SQL. The sole product caller supplies an owner-generated TEMP snapshot name. Synthetic quoted-identifier and SQL-shaped bound-value controls preserve the main catalog. Reviewed in STEP3 #1151 by the coordinator; independent wave review remains required before push.",
+      "expires_on": "2026-11-23"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "255424ebfa31d86ec44207ff615cfc89ef286a5f542de4c0dd472e9860afe195",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/export_query_service.py",
+      "owner": "STEP3 coordinator (#1151)",
+      "rationale": "_snapshot_partition_query canonical scope: source.table_name is quote_identifier-escaped and TEMP-qualified. The descriptor is created from the immutable owner-managed snapshot and checked against its actual connection, live lifetime token and exact canonical scope before fast execution; noncanonical scopes and unsupported string subclasses use the existing general loader. No raw report/file/key data is interpolated. Reviewed in STEP3 #1151 by the coordinator; independent wave review remains required before push.",
+      "expires_on": "2026-11-23"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "7a58cc60480c422a9fa01154031b20409bee9e5c32e16278f5095956d8b76eb4",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/export_query_service.py",
+      "owner": "STEP3 coordinator (#1151)",
+      "rationale": "_snapshot_partition_query indexed SELECT: table_name and the proven unshadowed rowid alias are quote_identifier-escaped under TEMP; analytical columns and predicate are fixed source-code fragments. REFERENCE and canonical signed-int64 REPORT_ID values are passed separately as bound parameters. Actual owning connection, live generation and exact canonical scope are required; all unsupported inputs retain the original query. SQL-shaped parameter/identifier controls preserve literal rows and the main catalog. Reviewed in STEP3 #1151 by the coordinator; independent wave review remains required before push.",
+      "expires_on": "2026-11-23"
     }
   ]
 }

@@ -2267,6 +2267,130 @@ class TestExportHelpers(unittest.TestCase):
         self.assertTrue(any('ref_idx' in str(row[0]) for row in indexes))
         self.assertTrue(any('SEARCH' in str(row).upper() for row in query_plan))
 
+    def test_snapshot_partition_flow_preserves_source_catalog_rows_and_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, 'partition-source.db')
+            with closing(sqlite3.connect(db_path)) as connection, connection:
+                connection.execute(
+                    'CREATE TABLE source_rows (REPORT_ID INTEGER, REFERENCE TEXT, '
+                    'HEADER TEXT, AX TEXT, MEAS REAL, OCCURRENCE INTEGER)'
+                )
+                connection.executemany('INSERT INTO source_rows VALUES (?, ?, ?, ?, ?, ?)', [
+                    (1, 'shared', 'H2', 'X', 2.0, 3), (2, None, 'H1', 'X', 1.0, 1),
+                    (3, 'shared', 'H1', 'X', 3.0, 2), (2, '   ', 'H1', 'X', 1.0, 1),
+                    (4, 'Report 2 (no reference)', 'H0', 'X', 0.0, 0),
+                ])
+                catalog_before = connection.execute('SELECT * FROM sqlite_master ORDER BY name').fetchall()
+                rows_before = connection.execute('SELECT * FROM source_rows ORDER BY rowid').fetchall()
+            bytes_before = Path(db_path).read_bytes()
+            thread = ExportDataThread(ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file='dummy.xlsx'), options=ExportOptions(),
+            ))
+            thread.filter_query = 'SELECT * FROM source_rows ORDER BY OCCURRENCE, MEAS'
+            with closing(sqlite3.connect(db_path)) as connection:
+                thread._db_connection = connection
+                thread._prepare_export_snapshot()
+                snapshot_name = thread._snapshot_table_name
+                self.assertIsNotNone(thread._snapshot_partition_source)
+                queries = []
+                connection.set_trace_callback(queries.append)
+                actual = list(thread._iter_reference_partitions())
+                connection.set_trace_callback(None)
+                self.assertEqual([label for label, _ in actual], ['Report 2 (no reference)', 'shared', 'Report 2 (no reference)'])
+                self.assertEqual(
+                    [[row['OCCURRENCE'] for row in table.iter_rows(as_dict=True)] for _, table in actual],
+                    [[0], [2, 3], [1, 1]],
+                )
+                self.assertEqual(
+                    [table['SAMPLE_NUMBER'].tolist() for _, table in actual], [['1'], ['1', '2'], ['1', '2']],
+                )
+                fast_queries = [query for query in queries if 'ORDER BY export_scope.' in query]
+                self.assertEqual(len(fast_queries), 3)
+                for query in fast_queries:
+                    plan = connection.execute('EXPLAIN QUERY PLAN ' + query).fetchall()
+                    self.assertTrue(any('SEARCH' in row[3] and '_idx' in row[3] for row in plan), plan)
+                    self.assertFalse(any('TEMP B-TREE' in row[3] for row in plan), plan)
+                with mock.patch.object(thread, '_partition_header_counts', side_effect=RuntimeError('count failed')):
+                    discovered = list(thread._iter_reference_partitions())
+                self.assertEqual(
+                    {table['EXPORT_PARTITION_KEY'].iloc[0]: list(table.iter_rows()) for _, table in discovered},
+                    {table['EXPORT_PARTITION_KEY'].iloc[0]: list(table.iter_rows()) for _, table in actual},
+                )
+                thread._cleanup_export_snapshot()
+                self.assertIsNone(thread._snapshot_partition_source)
+                self.assertEqual(connection.execute('SELECT name FROM sqlite_temp_master WHERE tbl_name = ?', (snapshot_name,)).fetchall(), [])
+                live = list(thread._iter_reference_partitions())
+                self.assertEqual([(label, list(table.iter_rows())) for label, table in live],
+                                 [(label, list(table.iter_rows())) for label, table in actual])
+                with mock.patch('metroliza.exporting.export_data_thread.prepare_snapshot_partition_source', side_effect=RuntimeError('snapshot failed')):
+                    thread._prepare_export_snapshot()
+                self.assertIsNone(thread._snapshot_table_name)
+                self.assertIsNone(thread._snapshot_partition_source)
+                self.assertEqual(thread._active_export_query, thread.filter_query)
+                self.assertEqual(connection.execute('SELECT name FROM sqlite_temp_master').fetchall(), [])
+                self.assertEqual([(label, list(table.iter_rows())) for label, table in thread._iter_reference_partitions()],
+                                 [(label, list(table.iter_rows())) for label, table in actual])
+                thread._cleanup_export_snapshot()
+                self.assertEqual(connection.execute('SELECT * FROM sqlite_master ORDER BY name').fetchall(), catalog_before)
+                self.assertEqual(connection.execute('SELECT * FROM source_rows ORDER BY rowid').fetchall(), rows_before)
+            self.assertEqual(Path(db_path).read_bytes(), bytes_before)
+
+    def test_snapshot_owner_revokes_previous_and_cleaned_generations(self):
+        from metroliza.exporting import export_query_service as service
+
+        thread = ExportDataThread(ExportRequest(
+            paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions(),
+        ))
+        # Casts give the CTAS snapshot the canonical TEXT/INT affinities.
+        thread.filter_query = (
+            "SELECT CAST(2 AS INTEGER) AS REPORT_ID, CAST('shared' AS TEXT) AS REFERENCE, "
+            "'H1' AS HEADER, 'X' AS AX"
+        )
+        with closing(sqlite3.connect(':memory:')) as connection:
+            thread._db_connection = connection
+            with mock.patch('metroliza.exporting.export_data_thread.time.time', return_value=1.0):
+                thread._prepare_export_snapshot()
+            first_source = thread._snapshot_partition_source
+            first_query = service.build_analytical_partition_query(thread._active_export_query)
+            with mock.patch('metroliza.exporting.export_data_thread.time.time', return_value=2.0):
+                thread._prepare_export_snapshot()
+            second_source = thread._snapshot_partition_source
+            second_query = service.build_analytical_partition_query(thread._active_export_query)
+            self.assertIsNot(first_source, second_source)
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                rows = service.load_export_partition_dataframe(
+                    ':memory:', first_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=first_source,
+                )
+                self.assertEqual(len(rows), 1)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+            thread._cleanup_export_snapshot()
+            connection.execute(
+                f'CREATE TABLE main."{second_source.table_name}" AS '
+                "SELECT 2 AS REPORT_ID, 'wrong-main' AS REFERENCE, 'H1' AS HEADER, 'X' AS AX"
+            )
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                with self.assertRaisesRegex(sqlite3.OperationalError, 'no such table: temp'):
+                    service.load_export_partition_dataframe(
+                        ':memory:', second_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                        connection=connection, snapshot_source=second_source,
+                    )
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+            # Recreate the same TEMP name: the old generation must still be refused.
+            connection.execute(
+                f'CREATE TEMP TABLE "{second_source.table_name}" AS {thread.filter_query}'
+            )
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                result = service.load_export_partition_dataframe(
+                    ':memory:', second_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=second_source,
+                )
+                self.assertEqual(len(result), 1)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+
     def test_google_stage_message_builder_matches_existing_semantics(self):
         self.assertEqual(
             build_google_stage_message('completed', 'https://docs.google.com/spreadsheets/d/sheet-id/edit'),
