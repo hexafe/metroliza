@@ -57,7 +57,7 @@ def test_public_audit_requirements_exclude_internal_git_pins():
     assert "hexafe-groupstats" not in joined
     assert "hexafe-plotstats" not in joined
     assert "oznak" not in joined
-    assert "Pillow>=12.2.0" in lines
+    assert "Pillow==13.0.0" in lines
     assert warnings
 
 

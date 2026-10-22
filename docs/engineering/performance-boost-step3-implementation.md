@@ -135,6 +135,47 @@ therefore have different generation names. Do not change the product's publicati
   for nonempty metrics, every other gate and the one remaining delta review stay unchanged. This does
   not extend the attempt budget of another packet.
 
+### PO amendment — dependency versions and T00 CI correction (2026-10-22)
+
+Authority: [PO decision on #1151](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6345338339).
+CI installs the requirement files; their open ranges selected XlsxWriter 3.3.0 while local T00
+validation and measurements used 3.2.9. The original product source and XLSX tests are unchanged
+from `101e5a44`. Preserve the failed CI receipts and fix dependency selection without changing the
+exporter's version guard, workbook output or test tolerances.
+
+- Freeze existing direct dependencies in all seven `requirements*.txt` to exact versions, retaining
+  immutable Git commit pins. Runtime/development pins use the environment validated for STEP3;
+  build/optional pins record separate provenance and unverified execution where applicable.
+  No new dependencies, local installs or workflow changes are authorized by this amendment.
+- This explicitly admits the T00 dependency correction after the prior attempts, with a limit of
+  two unsuccessful correction attempts. It does not reset full1/delta1 review consumption, another
+  packet's budget, or any output, full-suite, CI, resource and Windows-acceptance gate.
+- After the stale Pillow requirement assertion and the security-audit failure consumed those attempts,
+  the PO [authorized one further correction attempt](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6345655315)
+  to select setuptools 84.2.1 and finish the unchanged gates. The PO also requested Opus 5.5 high
+  diagnostic consultation for uncertainty or problems absent in STEP2. This advisory is distinct from
+  formal review; existing review consumption and other restrictions remain unchanged.
+- Adopt the [dependency update policy](../project/development_workflow.md#dependency-versions-and-updates):
+  periodically review release notes, security, useful features and compatibility before a separate
+  update PR, validation and package rebuild/qualification. Direct pins do not lock all transitive
+  dependencies or the complete toolchain. T01 remains gated on T00/wave-0 completion.
+
+Pin provenance for this correction: runtime/dev versions match the installed environment used for
+the existing successful output comparisons and measurements, including XlsxWriter 3.2.9 and pandas
+3.0.6. Build versions come from the successful native-wheel job in
+[run 39805759494](https://github.com/hexafe/metroliza/actions/runs/39805759494/job/119918504136),
+with duplicate development/build entries aligned to that validated environment, except setuptools.
+The job's already-satisfied setuptools 79.0.1 fails the current advisory audit; select published
+84.2.1 for its security fixes, then require the same security/build gates. Existing exact
+pins and Git SHAs remain unchanged. Four optional packages lacked execution evidence: scikit-learn
+1.9.1, river 0.26.1, opencv-python 4.14.0.94 and openvino 2026.4.1 were selected from non-yanked stable
+PyPI releases within their previous ranges. Their published metadata was checked for Python 3.11
+and direct-dependency constraints; installation, full resolution, optional execution and Windows
+package qualification remain unverified. These metadata checks do not establish runtime compatibility.
+The correction spans ten files because the six requirement files, two existing requirement/security
+policy tests and two authority/policy documents form one consistent dependency-selection change;
+no new package is added. The security test retains an exact assertion for the selected Pillow pin.
+
 ## 4. Packets
 
 | ID | Wave | Packet | Files (main) | Class / role | Expected gain | After |
