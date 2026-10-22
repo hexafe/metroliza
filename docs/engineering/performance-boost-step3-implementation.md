@@ -1,6 +1,6 @@
 # Performance Boost STEP3 — implementation plan
 
-- **Status:** planned 2026-10-21, not started. Tracker: Issue #1151. Audit (Polish, PO):
+- **Status:** implementation in progress since 2026-10-22; packet acceptance and evidence are tracked in Issue #1151. Audit (Polish, PO):
   [`performance-boost-step3-audit.md`](performance-boost-step3-audit.md); all 126 findings with packet and
   verdict: [`performance-boost-step3-findings.md`](performance-boost-step3-findings.md)
   ([JSON](performance-boost-step3-findings.json)); per-flow estimate:
@@ -88,8 +88,10 @@ configured model/effort of every worker and reviewer.
 - **Workbooks:** compare XLSX packages member by member: same member names and order, CRC32 and bytes. The only
   allowed difference is the creation/modification timestamp in `docProps/core.xml`; two runs of the same code also
   differ there, and `output_bytes` can differ by one byte for that reason.
-- **HTML dashboards:** compare after masking ISO timestamps (`generated_at` and similar).
-- **Databases:** dump and compare tables row by row in primary-key order (import, CSV load).
+- **HTML dashboards:** compare after masking ISO timestamps (`generated_at` and similar), subject to the named,
+  narrowly scoped generation-directory exception below. All asset contents remain byte-identical.
+- **Databases:** compare `sqlite_master` definitions (tables, indexes, views and triggers), then dump and compare
+  tables row by row in primary-key order (import, CSV load).
 - **SQL rewrites:** identical result sets in identical order on the harness DB and on edge fixtures (NULL, blank,
   whitespace, numeric-looking text, orphans, duplicates).
 - **Images:** PNG bytes identical. A pixel change drops that sub-item (report it); it is not reviewed away.
@@ -99,6 +101,39 @@ configured model/effort of every worker and reviewer.
   Report ratios from one session; profiling runs are diagnostics, not results.
 - **Platform:** Windows is not measured locally. Record which claims only Windows CI or the packaged EXE can
   prove; packaged Windows keeps 2 render workers and opt-in import-prepare/review pools.
+
+### PO amendment — intentional nondeterminism (2026-10-22)
+
+Authority: [PO decision on #1151](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6340146427).
+The previous T00 stop followed the original contract. Dashboard publication deliberately names its asset
+generation directory with `uuid.uuid4()` for atomic publication; independently generated baseline outputs
+therefore have different generation names. Do not change the product's publication code.
+
+- **Named exception — dashboard asset generation:** pair exactly one generation directory on each side
+  (`export_dashboard_assets.generation-<32 lowercase hex>`). Compare every relative asset name and every byte.
+  In HTML, mask only the exact `generation-[0-9a-f]{32}` token naming that paired directory in its asset
+  references. The same pattern elsewhere must still cause FAIL. Missing, extra or ambiguous generations,
+  changed relative names or changed asset bytes remain failures. All other output differences stay literal.
+- **Further intentional nondeterminism:** an exception may be admitted without waiting for the PO only when
+  all three conditions hold: (a) it reproduces in `101e5a44` versus `101e5a44`; (b) it comes from a deliberate
+  mechanism in baseline code; and (c) it has a narrow, named pattern with a negative test proving that the
+  same pattern elsewhere still causes FAIL. Record each exception and its evidence in the packet handback.
+  Every other difference, especially one absent from baseline-versus-baseline, still means STOP.
+- **T00 baseline-versus-baseline control:** independently generate XLSX, HTML with its assets, and SQLite
+  outputs on `101e5a44`; the comparator must return 0 for each type. Preserve the earlier failed receipt.
+- **T00 review corrections:** reject an empty Group Analysis result (require more than zero metrics); compare
+  indexes, views and triggers as well as table definitions and rows; request cancellation only after an
+  observed marker of actual processing, rather than the first progress label.
+- **Resume order:** tests with captured exit codes, the one remaining delta review, MUST-7, T00 commit,
+  push `perf/step3-boost`, one draft PR to `perf/step2-boost` marked do not merge, then packet handback.
+  Proceed to T01 under the existing wave and file-ownership rules after refreshing quota, power profile,
+  the shared heavy-job lock and TupTup load. The amendment does not reset the review budget or waive any
+  other validation, resource, publication or Windows-acceptance gate.
+- **T00 attempt-budget exception:** after the two failed resume attempts, the PO explicitly authorized
+  [one additional T00 attempt](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6341046406)
+  on 2026-10-22 to correct observation of Group Analysis metrics before payload cleanup. The requirement
+  for nonempty metrics, every other gate and the one remaining delta review stay unchanged. This does
+  not extend the attempt budget of another packet.
 
 ## 4. Packets
 
@@ -152,7 +187,9 @@ Paths are relative to `src/metroliza/` unless they start with `scripts/` or `doc
   3. New scenarios with deterministic synthetic fixtures from `prepare`:
      - `csv_grouping_open`: CSV Summary 100k with a saved 216-group / 100k-row assignment; open the grouping dialog
        until it is populated; report the longest GUI stall;
-     - `csv_grouped_analytics`: the same grouping through "Create analytics";
+     - `csv_grouped_analytics`: the same grouping through "Create analytics". Its observation deadline is
+       3600 s (suite supervisor: 3720 s); the full 100k-row/216-group reference requires longer than the
+       ordinary 900 s. Every other scenario keeps its 900 s deadline (suite: 1020 s);
      - `export_cancel` and `csv_analytics_cancel`: request cancel at a fixed mark after work starts; result =
        time from the request to an idle GUI with the thread finished and no output left behind;
      - `group_analysis_export`: an export with Group Analysis enabled (use the dialog option the product exposes).
