@@ -3242,16 +3242,24 @@ def render_panel_table(
     def _measure(text, fontsize, fontweight='normal'):
         return _measure_text_extent(fig, renderer, text, fontsize=fontsize, fontweight=fontweight)
 
-    def _measure_layout(candidate_rows, candidate_fontsize):
-        label_header_w, header_h = _measure(title, candidate_fontsize, header_fontweight)
-        value_header_w, _ = _measure('Value', candidate_fontsize, header_fontweight)
-        line_h = _measure('Ag', candidate_fontsize)[1]
+    layout_needs_text_metrics = not (
+        explicit_label_fraction is not None and explicit_value_fraction is not None and shared_row_metrics
+    )
 
-        label_max = label_header_w
-        value_max = value_header_w
-        for label, value in candidate_rows:
-            label_max = max(label_max, _measure(label, candidate_fontsize)[0])
-            value_max = max(value_max, _measure(value, candidate_fontsize)[0])
+    def _measure_layout(candidate_rows, candidate_fontsize):
+        # Explicit widths and shared row metrics override every measured extent.
+        if layout_needs_text_metrics:
+            label_header_w, header_h = _measure(title, candidate_fontsize, header_fontweight)
+            value_header_w, _ = _measure('Value', candidate_fontsize, header_fontweight)
+            line_h = _measure('Ag', candidate_fontsize)[1]
+
+            label_max = label_header_w
+            value_max = value_header_w
+            for label, value in candidate_rows:
+                label_max = max(label_max, _measure(label, candidate_fontsize)[0])
+                value_max = max(value_max, _measure(value, candidate_fontsize)[0])
+        else:
+            label_max = value_max = header_h = line_h = 0.0
 
         required_total_w = label_max + value_max + (4.0 * cell_padding_px)
         dynamic_label_fraction = (label_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
