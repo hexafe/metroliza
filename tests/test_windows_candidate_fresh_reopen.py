@@ -43,35 +43,246 @@ def retained_reopen_application():
     return get_or_create_qapplication()
 
 
-def test_actual_separate_source_process_reopens_completed_import_without_data_changes(tmp_path, retained_reopen_application):
-    app = retained_reopen_application
-    first = tmp_path / "core scenario" / ("core-" + "a" * 32)
-    first.mkdir(parents=True)
-    database, reports, hashes = _seed_completed_import(app, first)
-    prior = reopen.run_reopen_checks(database, reports, hashes)
-    assert prior["status"] == "passed"
-    root = tmp_path / "fresh reopen"
-    root.mkdir()
-    state = tmp_path / "isolated state"
-    state.mkdir()
+def _emit_fresh_reopen_failure(stage, error):
+    # Fixed fields only: never serialize the exception's message or attributes.
+    sys.__stderr__.write(json.dumps({
+        "schema_version": 1, "test": "fresh_reopen", "event": "failure",
+        "stage": stage, "exception_type": type(error).__name__[:80],
+    }) + "\n")
+    sys.__stderr__.flush()
+
+
+def test_actual_separate_source_process_reopens_completed_import_without_data_changes(tmp_path, retained_reopen_application, capfd):
+    stage = "seed_import"
+    try:
+        app = retained_reopen_application
+        first = tmp_path / "core scenario" / ("core-" + "a" * 32)
+        first.mkdir(parents=True)
+        database, reports, hashes = _seed_completed_import(app, first)
+        stage = "prior_validation"
+        prior = reopen.run_reopen_checks(database, reports, hashes)
+        assert prior["status"] == "passed"
+        stage = "child_prepare"
+        root = tmp_path / "fresh reopen"
+        root.mkdir()
+        state = tmp_path / "isolated state"
+        state.mkdir()
+        checkout = Path(__file__).resolve().parents[1]
+        env = {k: v for k, v in os.environ.items() if not k.startswith("METROLIZA_")}
+        env.update({name: "1" for name in application.GATES})
+        env.update({application.ROOT_ENV: str(root), "METROLIZA_WINDOWS_CANDIDATE_PHASE": "reopen",
+                    "METROLIZA_WINDOWS_CANDIDATE_REOPEN_INPUT": str(first),
+                    "METROLIZA_WINDOWS_CANDIDATE_REOPEN_SHA256": core._hash(database),
+                    "PYTHONPATH": str(checkout / "src"), "GSETTINGS_BACKEND": "memory",
+                    "QT_QPA_PLATFORM": app.platformName(), "QT_STYLE_OVERRIDE": "Fusion",
+                    "XDG_STATE_HOME": str(state), "XDG_CONFIG_HOME": str(state), "XDG_CACHE_HOME": str(state),
+                    "LOCALAPPDATA": str(state), "APPDATA": str(state)})
+        stage = "child_run"
+        result = subprocess.run([sys.executable, str(checkout / "packaging/metroliza_package_entry.py")],
+                                cwd=state, env=env, capture_output=True, timeout=45)
+        stage = "receipt_read"
+        payload = json.loads((root / "fresh-reopen-result.json").read_bytes())
+        stage = "receipt_assertions"
+        assert result.returncode == 0, payload
+        assert payload["status"] == "passed" and payload["packaged"] is False
+        assert payload["qpa"] == app.platformName()
+        assert payload["observation"]["database"] == dict(prior["database"], before_sha256=prior["database"]["sha256"], sha256=core._hash(database))
+        assert payload["observation"]["source_hashes"] == hashes
+    except BaseException as error:
+        try:
+            with capfd.disabled():
+                _emit_fresh_reopen_failure(stage, error)
+        except BaseException:
+            pass  # Even a secondary logger interrupt must preserve the active primary.
+        raise
+
+
+@pytest.fixture
+def reopen_diagnostic_control(tmp_path, monkeypatch, capfd):
+    """Reach the real test body with synthetic input and a controlled child seam."""
+    import io
+
+    calls = []
+    primary = RuntimeError("PRIVATE_MESSAGE")
+    primary.filename = "PRIVATE_FILENAME"
+    primary.stdout = "PRIVATE_STDOUT"
+    primary.stderr = "PRIVATE_STDERR"
+    primary.payload = {"PRIVATE_PAYLOAD": "PRIVATE_VALUE"}
+    stream = io.StringIO()
+    monkeypatch.setattr(sys, "__stderr__", stream)
+
+    def invoke(fault):
+        def seed(app, first):
+            calls.append("seed")
+            if fault == "seed":
+                raise primary
+            database = first / "synthetic.sqlite"
+            database.write_bytes(b"synthetic")
+            return database, first, {"public": "hash"}
+
+        def validate(*args):
+            calls.append("validate")
+            if fault == "prior":
+                raise primary
+            return {"status": "passed", "database": {"sha256": "old"}}
+
+        def run(*args, **kwargs):
+            calls.append("child")
+            if fault == "child":
+                raise primary
+            payload = {"status": "passed", "packaged": False, "qpa": "offscreen",
+                       "observation": {"database": {"sha256": "hash", "before_sha256": "old"},
+                                       "source_hashes": {"public": "hash"}}}
+            if fault != "receipt":
+                (tmp_path / "fresh reopen" / "fresh-reopen-result.json").write_text(json.dumps(payload))
+            return SimpleNamespace(returncode=1 if fault == "assert" else 0)
+
+        monkeypatch.setattr(sys.modules[__name__], "_seed_completed_import", seed)
+        monkeypatch.setattr(reopen, "run_reopen_checks", validate)
+        monkeypatch.setattr(core, "_hash", lambda _: "hash")
+        monkeypatch.setattr(subprocess, "run", run)
+        return test_actual_separate_source_process_reopens_completed_import_without_data_changes(
+            tmp_path, SimpleNamespace(platformName=lambda: "offscreen"), capfd,
+        )
+
+    return invoke, calls, primary, stream
+
+
+@pytest.mark.parametrize("fault,stage,exception_type", [
+    ("seed", "seed_import", "RuntimeError"),
+    ("prior", "prior_validation", "RuntimeError"),
+    ("child", "child_run", "RuntimeError"),
+    ("receipt", "receipt_read", "FileNotFoundError"),
+    ("assert", "receipt_assertions", "AssertionError"),
+])
+def test_fresh_reopen_diagnostic_reaches_actual_failure_stage(reopen_diagnostic_control, fault, stage, exception_type):
+    invoke, calls, primary, stream = reopen_diagnostic_control
+    with pytest.raises(BaseException) as caught:
+        invoke(fault)
+    if exception_type == "RuntimeError":
+        assert caught.value is primary
+    assert calls == (["seed"] if fault == "seed" else ["seed", "validate"] if fault == "prior"
+                     else ["seed", "validate", "child"])
+    event = json.loads(stream.getvalue())
+    assert event == {"schema_version": 1, "test": "fresh_reopen", "event": "failure",
+                     "stage": stage, "exception_type": exception_type}
+    assert len(stream.getvalue().splitlines()) == 1
+    for sentinel in ("PRIVATE_MESSAGE", "PRIVATE_FILENAME", "PRIVATE_STDOUT", "PRIVATE_STDERR",
+                     "PRIVATE_PAYLOAD", "PRIVATE_VALUE"):
+        assert sentinel not in stream.getvalue()
+
+
+@pytest.mark.parametrize("secondary", [RuntimeError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("operation", ["write", "flush"])
+def test_fresh_reopen_diagnostic_preserves_primary_when_stream_fails(
+    reopen_diagnostic_control, monkeypatch, secondary, operation,
+):
+    invoke, calls, primary, stream = reopen_diagnostic_control
+
+    def fail(*args):
+        raise secondary("PRIVATE_LOGGER")
+
+    monkeypatch.setattr(stream, operation, fail)
+    with pytest.raises(RuntimeError) as caught:
+        invoke("child")
+    assert caught.value is primary
+    traceback = caught.value.__traceback__
+    while traceback.tb_next:
+        traceback = traceback.tb_next
+    assert traceback.tb_frame.f_code.co_name == "run"
+    assert calls == ["seed", "validate", "child"]
+
+
+def test_fresh_reopen_diagnostic_success_has_no_failure_event(reopen_diagnostic_control):
+    invoke, calls, _, stream = reopen_diagnostic_control
+    assert invoke("success") is None
+    assert calls == ["seed", "validate", "child"]
+    assert stream.getvalue() == ""
+
+
+@pytest.mark.parametrize("failure", ["missing", "closed", "format"])
+def test_fresh_reopen_diagnostic_unavailable_output_preserves_failure(reopen_diagnostic_control, monkeypatch, failure):
+    invoke, _, primary, stream = reopen_diagnostic_control
+    if failure == "missing":
+        monkeypatch.setattr(sys, "__stderr__", None)
+    elif failure == "closed":
+        stream.close()
+    else:
+        def fail(*args):
+            raise SystemExit("PRIVATE_FORMAT")
+
+        monkeypatch.setattr(json, "dumps", fail)
+    with pytest.raises(RuntimeError) as caught:
+        invoke("child")
+    assert caught.value is primary
+
+
+def test_fresh_reopen_diagnostic_flushes_before_reraise(reopen_diagnostic_control, monkeypatch):
+    invoke, _, primary, stream = reopen_diagnostic_control
+    flushed = []
+    monkeypatch.setattr(stream, "flush", lambda: flushed.append(stream.getvalue()))
+    with pytest.raises(RuntimeError) as caught:
+        invoke("child")
+    assert caught.value is primary
+    assert len(flushed) == 1
+    assert json.loads(flushed[0])["stage"] == "child_run"
+
+
+@pytest.mark.parametrize("secondary", [RuntimeError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("operation", ["enter", "exit"])
+def test_fresh_reopen_capture_context_failure_preserves_primary(
+    reopen_diagnostic_control, monkeypatch, capfd, secondary, operation,
+):
+    invoke, _, primary, _ = reopen_diagnostic_control
+
+    class BrokenCapture:
+        def __enter__(self):
+            if operation == "enter":
+                raise secondary("PRIVATE_CONTEXT_ENTER")
+
+        def __exit__(self, *args):
+            raise secondary("PRIVATE_CONTEXT_EXIT")
+
+    monkeypatch.setattr(capfd, "disabled", BrokenCapture)
+    with pytest.raises(RuntimeError) as caught:
+        invoke("child")
+    assert caught.value is primary
+    traceback = caught.value.__traceback__
+    while traceback.tb_next:
+        traceback = traceback.tb_next
+    assert traceback.tb_frame.f_code.co_name == "run"
+
+
+def test_fresh_reopen_diagnostic_survives_default_fd_capture_and_abrupt_child_exit(tmp_path):
+    probe = tmp_path / "test_capture_probe.py"
+    probe.write_text('''import os
+import sys
+from tests.test_windows_candidate_fresh_reopen import reopen_diagnostic_control
+ORIGINAL_STDERR = sys.__stderr__
+
+def test_probe(reopen_diagnostic_control, monkeypatch):
+    invoke, _, _, _ = reopen_diagnostic_control
+    monkeypatch.setattr(sys, "__stderr__", ORIGINAL_STDERR)
+    print("PRIVATE_CAPTURED_STDOUT")
+    sys.stderr.write("PRIVATE_CAPTURED_STDERR")
+    try:
+        invoke("child")
+    except RuntimeError:
+        os._exit(23)  # Only this controlled synthetic subprocess exits.
+    raise AssertionError("controlled primary was not raised")
+''')
     checkout = Path(__file__).resolve().parents[1]
-    env = {k: v for k, v in os.environ.items() if not k.startswith("METROLIZA_")}
-    env.update({name: "1" for name in application.GATES})
-    env.update({application.ROOT_ENV: str(root), "METROLIZA_WINDOWS_CANDIDATE_PHASE": "reopen",
-                "METROLIZA_WINDOWS_CANDIDATE_REOPEN_INPUT": str(first),
-                "METROLIZA_WINDOWS_CANDIDATE_REOPEN_SHA256": core._hash(database),
-                "PYTHONPATH": str(checkout / "src"), "GSETTINGS_BACKEND": "memory",
-                "QT_QPA_PLATFORM": app.platformName(), "QT_STYLE_OVERRIDE": "Fusion",
-                "XDG_STATE_HOME": str(state), "XDG_CONFIG_HOME": str(state), "XDG_CACHE_HOME": str(state),
-                "LOCALAPPDATA": str(state), "APPDATA": str(state)})
-    result = subprocess.run([sys.executable, str(checkout / "packaging/metroliza_package_entry.py")],
-                            cwd=state, env=env, capture_output=True, timeout=45)
-    payload = json.loads((root / "fresh-reopen-result.json").read_bytes())
-    assert result.returncode == 0, payload
-    assert payload["status"] == "passed" and payload["packaged"] is False
-    assert payload["qpa"] == app.platformName()
-    assert payload["observation"]["database"] == dict(prior["database"], before_sha256=prior["database"]["sha256"], sha256=core._hash(database))
-    assert payload["observation"]["source_hashes"] == hashes
+    environment = dict(os.environ, PYTHONPATH=os.pathsep.join((str(checkout / "src"), str(checkout))))
+    environment.pop("PYTEST_ADDOPTS", None)
+    result = subprocess.run([sys.executable, "-m", "pytest", "-v", str(probe)],
+                            env=environment, cwd=tmp_path, capture_output=True, timeout=45)
+    assert result.returncode == 23
+    events = [json.loads(line) for line in result.stderr.decode().splitlines() if line.startswith('{"schema_version"')]
+    assert events == [{"schema_version": 1, "test": "fresh_reopen", "event": "failure",
+                       "stage": "child_run", "exception_type": "RuntimeError"}]
+    output = result.stdout + result.stderr
+    assert b"PRIVATE_CAPTURED_STDOUT" not in output
+    assert b"PRIVATE_CAPTURED_STDERR" not in output
 
 
 @pytest.mark.parametrize("fault", ["source", "qpa", "head", "database", "source_files", "not_completed"])
