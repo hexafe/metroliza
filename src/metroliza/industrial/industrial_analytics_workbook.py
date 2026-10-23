@@ -17,13 +17,7 @@ from metroliza.industrial.industrial_analytics_helpers import diagnostics_datafr
 from metroliza.industrial.industrial_analytics_state import ProductionMetricSelection
 from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
 from metroliza.industrial.industrial_analytics_workbook_charts import add_analytics_workbook_charts
-
-
-class _LazyPandas:
-    def __getattr__(self, name: str) -> Any:
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 pd = _LazyPandas()

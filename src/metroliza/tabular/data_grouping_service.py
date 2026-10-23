@@ -3,6 +3,9 @@
 import hashlib
 import json
 
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
+from metroliza.shared.lazy_modules import LazyNumpy as _LazyNumpy
+
 try:
     from metroliza.reports.report_query_service import (
         build_grouping_query as _shared_build_grouping_query,
@@ -47,20 +50,6 @@ _GROUPING_INDEX_DISPLAY_COLUMNS = (
     "GROUP",
     "GROUP_COLOR",
 )
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
-
-
-class _LazyNumpy:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("numpy"), name)
 
 
 pd = _LazyPandas()

@@ -15,6 +15,7 @@ from typing import Any, Iterable, Literal, Mapping, Protocol
 
 from metroliza.shared.datetime_parsing import parse_datetime_literal
 from metroliza.shared.finite_numeric import finite_numeric_source, parse_numeric_literal
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 FilterMatchMode = Literal["and", "or"]
@@ -22,13 +23,6 @@ FilterMatchMode = Literal["and", "or"]
 _BLANK_GROUP_VALUE = "(blank)"
 
 FilterAliases = Mapping[str, str] | Iterable[tuple[str, str]]
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()

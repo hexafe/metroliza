@@ -25,13 +25,7 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularSqliteStore,
     discover_tabular_metric_candidates,
 )
-
-
-class _LazyPandas:
-    def __getattr__(self, name: str) -> Any:
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 pd = _LazyPandas()

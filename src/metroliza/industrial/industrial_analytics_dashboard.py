@@ -82,13 +82,7 @@ from metroliza.shared.dashboard_interactivity import (
     dashboard_size_limit_bytes,
     normalize_dashboard_interactivity_mapping,
 )
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 pd = _LazyPandas()

@@ -38,6 +38,7 @@ from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
     ProductionMetricSelection,
 )
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 try:
     from metroliza.shared.grouping_filter_core import (
@@ -135,13 +136,6 @@ _COMPILED_SQLITE_FILTER_COLUMN_ATTRS = ("columns", "referenced_columns", "source
 TabularProgressCallback = Callable[[dict[str, Any]], None]
 TabularCancelCheck = Callable[[], bool]
 _HeaderIdentity = tuple[str, int]
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()
