@@ -160,3 +160,133 @@ def test_scalar_oracle_rejects_narrow_signaling_nan_cast():
         return converted[np.isfinite(converted)].tolist()
 
     assert _observation(_scalar_reference, values) != _observation(bad_cast, values)
+
+
+def _raw_series_observation(function, mode, behavior):
+    series = pd.Series([-0.0, 2.0, np.nan])
+    manager = series._mgr
+    events = []
+    armed = False
+
+    def record(operation):
+        if not armed:
+            return
+        events.append(operation)
+        warnings.warn(operation, UserWarning)
+        if behavior == "raising" and len(events) > 1:
+            raise RuntimeError("manager-second-read")
+
+    def observed(read):
+        record("internal_values")
+        if behavior == "changing":
+            return np.array([float(len(events)), -0.0, np.nan])
+        return read()
+
+    if mode == "manager_instance":
+        read = manager.internal_values
+        manager.internal_values = lambda: observed(read)
+    elif mode == "manager_subclass":
+        class Manager(type(manager)):
+            def internal_values(self):
+                return observed(super().internal_values)
+
+        object.__setattr__(series, "_mgr", Manager(manager.blocks[0], manager.axes[0]))
+    else:
+        class State(dict):
+            def get(self, *args):
+                record("get")
+                return super().get(*args)
+
+            def keys(self):
+                record("keys")
+                return super().keys()
+
+            def __contains__(self, key):
+                record("contains")
+                return super().__contains__(key)
+
+            def __getitem__(self, key):
+                record("getitem")
+                return super().__getitem__(key)
+
+            def values(self):
+                record("values")
+                return super().values()
+
+        class Key(str):
+            def __hash__(self):
+                record("hash")
+                return super().__hash__()
+
+            def __eq__(self, other):
+                record("eq")
+                return super().__eq__(other)
+
+        class Axes(list):
+            def __len__(self):
+                record("axes-length")
+                return super().__len__()
+
+        class Blocks(tuple):
+            def __getitem__(self, key):
+                record("blocks-lookup")
+                return super().__getitem__(key)
+
+        class Axis:
+            def __len__(self):
+                record("axis-length")
+                if behavior == "raising":
+                    raise RuntimeError("axis-length")
+                return 3
+
+        owner = series if mode.startswith("series") else manager
+        if mode.startswith("axis_"):
+            owner = manager.axes[0]
+        if mode.endswith("state"):
+            object.__setattr__(owner, "__dict__", State(owner.__dict__))
+        elif mode.endswith("key"):
+            owner.__dict__[Key("raw_metadata")] = True
+        elif mode == "axes":
+            manager.axes = Axes(manager.axes)
+        elif mode == "blocks":
+            manager.blocks = Blocks(manager.blocks)
+        elif mode == "cached_block":
+            manager.__dict__["_block"] = pd.Series([9.0, -0.0, np.nan])._mgr.blocks[0]
+        elif mode == "axis_object":
+            manager.axes = [Axis()]
+        elif mode == "axis_range":
+            owner.__dict__["_range"] = Axis()
+        events.clear()
+    armed = True
+    observation = _observation(function, series)
+    return observation, events
+
+
+@pytest.mark.parametrize("name", ["finite_float_list", "finite_array"])
+@pytest.mark.parametrize("mode", ["manager_instance", "manager_subclass", "series_state", "manager_state",
+                                  "series_key", "manager_key", "axes", "blocks", "cached_block",
+                                  "axis_object", "axis_range", "axis_state", "axis_key"])
+@pytest.mark.parametrize("behavior", ["observe", "changing", "raising"])
+def test_raw_series_preserves_original_observation(name, mode, behavior):
+    def reference(value):
+        result = _scalar_reference(value)
+        return np.asarray(result, dtype=float) if name == "finite_array" else result
+
+    expected = _raw_series_observation(reference, mode, behavior)
+    assert _raw_series_observation(getattr(helpers, name), mode, behavior) == expected
+
+
+@pytest.mark.parametrize("name", ["finite_float_list", "finite_array"])
+@pytest.mark.parametrize("series", [False, True, "native_index"])
+def test_native_numeric_storage_activates_without_scalar_fallback(monkeypatch, name, series):
+    values = np.array([-0.0, 2.0, np.nan, np.inf])
+    if series:
+        index = pd.Index([4, 3, 2, 1]) if series == "native_index" else None
+        values = pd.Series(values, index=index)
+
+    def fail(_values):
+        raise AssertionError("native storage unexpectedly declined")
+
+    monkeypatch.setattr(helpers, "_raw_numeric_items", fail)
+    result = getattr(helpers, name)(values)
+    assert np.asarray(result).tobytes() == np.array([-0.0, 2.0]).tobytes()
