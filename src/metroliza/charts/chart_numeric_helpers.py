@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 import math
+import sys
 
 import numpy as np
 
@@ -50,7 +51,32 @@ def _raw_numeric_items(values: Any) -> list[Any]:
         return [values]
 
 
+def _finite_float64_array(values: Any) -> np.ndarray | None:
+    # Check eligibility before conversion: narrower/extended floats, extension
+    # dtypes and subclasses retain scalar warnings and conversion callbacks.
+    if type(values) is np.ndarray:
+        if values.dtype != np.dtype(float):
+            return None
+        array = values
+    else:
+        pandas = sys.modules.get("pandas")
+        if pandas is None or type(values) is not getattr(pandas, "Series", None):
+            return None
+        if type(values.dtype) is not type(np.dtype(float)) or values.dtype != np.dtype(float):
+            return None
+        # Series iteration reads this backing array too; avoid newly invoking
+        # a caller's per-instance to_numpy override.
+        array = values._values
+        if type(array) is not np.ndarray:
+            return None
+    flat = array.reshape(-1)
+    return flat[np.isfinite(flat)]
+
+
 def finite_float_list(values: Any) -> list[float]:
+    array = _finite_float64_array(values)
+    if array is not None:
+        return array.tolist()
     output: list[float] = []
     for value in _raw_numeric_items(values):
         number = as_finite_float(value)
@@ -60,6 +86,9 @@ def finite_float_list(values: Any) -> list[float]:
 
 
 def finite_array(values: Iterable[Any] | Any) -> np.ndarray:
+    array = _finite_float64_array(values)
+    if array is not None:
+        return array
     return np.asarray(finite_float_list(values), dtype=float)
 
 

@@ -102,6 +102,26 @@ configured model/effort of every worker and reviewer.
 - **Platform:** Windows is not measured locally. Record which claims only Windows CI or the packaged EXE can
   prove; packaged Windows keeps 2 render workers and opt-in import-prepare/review pools.
 
+### PO amendment — technical-report publication (2026-10-23)
+
+Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).
+Publish the approved T08 review and analogous STEP3 technical reports on #1151/PR1152,
+including findings, tests, source hashes and model routing for unpublished candidates.
+Omit local filesystem paths, user/customer data and secrets. This standing consent
+preserves all source/review/test/CI gates; earlier automatic publication rejections
+remain recorded and do not authorize an alternate-tool bypass before consent.
+
+### PO amendment — temporary measurement widget exception (2026-10-23)
+
+Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6358316138).
+The machine-change ban has one narrow exception: temporarily disable only `omarchy.agents`
+during reserved STEP3 measurement sessions and restore its exact prior entry, settings and
+position after each session, including failure or interruption. If initially disabled, leave
+it disabled. Preserve parallel user edits; private configuration backups must not be published.
+Before admission, confirm the disabled state and termination of existing collectors, then all
+unchanged balanced/AC, CPU, quota, TupTup and shared-lock guards. This grants no power-profile,
+service or other machine changes, and does not establish quietness or waive output checks.
+
 ### PO amendment — intentional nondeterminism (2026-10-22)
 
 Authority: [PO decision on #1151](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6340146427).
@@ -125,6 +145,34 @@ therefore have different generation names. Do not change the product's publicati
   Admit this second named asset base under the three conditions above, with the same literal asset,
   reference-location and negative controls as `export_dashboard_assets`. Pair exactly one generation
   overall on each side, and keep the asset base name itself literal: mixed bases still fail.
+**Named T08 application — CSV Summary temporary SQLite diagnostic:** independently
+generated `101e5a44` `benchmark_paths` CSV Summary workbooks differ in the deliberately
+random basename created by `NamedTemporaryFile(prefix="metroliza_csv_summary_",
+suffix=".sqlite")`. The basename is stored in the `sqlite_path` field of the
+`tabular_sqlite_store_created` diagnostic's context on the `Diagnostics` sheet.
+Admit this exception only with the comparator's explicit `--csv-summary-temp-root`
+argument, bound to the same recorded actual temporary directory for both exports.
+The default comparison remains strict.
+
+Locate the unique diagnostic row and its plain shared-string context through the
+workbook relationships and exact headers. The context has exactly the original
+`row_count`, `source_file_count` and `sqlite_path` fields with unchanged types and
+values outside the basename. Both literal parent paths must equal the recorded
+root. Permit only the eight-character `[a-z0-9_]` nonce in
+`metroliza_csv_summary_<nonce>.sqlite`. Prove that this shared-string entry is
+referenced only by that context cell across all worksheets. Substitute only the
+paired basename's raw ASCII bytes, without XML reserialization; the resulting
+whole member must match bytes, length and CRC. All other package members, names,
+order, worksheet bytes, strings, diagnostics, charts, images and asset bytes remain
+literal under the existing core-timestamp rule.
+
+Wrong roots, malformed/ambiguous scope, changed sibling context fields, extra
+uses of the shared-string entry, the same differing token elsewhere, changed
+serialization or invalid CRC must fail. Retain the original strict baseline
+failure and the negative controls in the T08 handback. Lexical POSIX/Windows-root
+test coverage does not establish native Windows runtime or packaged acceptance.
+Do not change the product's temporary-file allocation, publication or randomness.
+
 - **T00 baseline-versus-baseline control:** independently generate XLSX, HTML with its assets, and SQLite
   outputs on `101e5a44`; the comparator must return 0 for each type. Preserve the earlier failed receipt.
 - **T00 review corrections:** reject an empty Group Analysis result (require more than zero metrics); compare
@@ -222,7 +270,7 @@ output exception unless it addresses a demonstrated invalid baseline result whil
 | T05 | 1 | Header-group sort without helper columns (A02-F03, A18-F02) | `exporting/export_data_thread.py`, `analytics/row_table.py` | BOUNDED | −0.6…−1.5 s | T04 |
 | T06 | 1 | XLSX packaging: parallel deflate, no packaging on cancel (C-04, A03-F01 a, A03-F03) | `exporting/export_backends.py`, new `exporting/xlsx_parallel_package.py` | FEATURE / + reviewer | Main −3…−4 s, Extended −1 s | T00 |
 | T07 | 2 | Caching lazy pandas proxies (C-02) | 12 modules with `_LazyPandas`, new `shared/lazy_modules.py` | BOUNDED (mechanical, >8 files: reasoned exception) | −0.5…−1.5 s CSV | — |
-| T08 | 2 | Plotstats adapter numeric fast paths (A04-F03, A04-F04, A04-F05, A04-F02) | `charts/chart_numeric_helpers.py`, `charts/hexafe_plotstats_adapter.py` | BOUNDED | −2…−5 s CPU CSV | — |
+| T08 | 2 | Plotstats adapter numeric fast paths (A04-F03, A04-F04, A04-F05, A04-F02) | `charts/chart_numeric_helpers.py`, `charts/hexafe_plotstats_adapter.py`, explicit preview caller in `charts/dashboard_visual_options.py` | BOUNDED | −2…−5 s CPU CSV | — |
 | T09 | 2 | Dashboard writer and time-series traces (A11-F02, A11-F01, A11-F07, A11-F04, `_json_values`) | `industrial/industrial_analytics_dashboard.py` | BOUNDED | −2…−4 s CSV | T07 |
 | T10 | 2 | CSV Summary workbook on the bulk sheet writer (C-03) | `tabular/tabular_xlsx_writer.py`, `tabular/tabular_analytics_service.py` | FEATURE / + reviewer | −8…−12 s `benchmark_paths` | T13 |
 | T11 | 2 | One validated grouping snapshot (A06-F01, A10-F01) | `tabular/contracts.py`, `industrial/contracts.py`, `industrial/industrial_workers.py`, `ui/industrial_analytics_dialog.py`, workflow | FEATURE / + reviewer | −1…−3 s; GUI −2…−5 s at 100k | T00 |
@@ -417,6 +465,10 @@ Paths are relative to `src/metroliza/` unless they start with `scripts/` or `doc
   `finite_float_list` (53), `finite_array` (62). `charts/hexafe_plotstats_adapter.py`: `_finite_values` (1080),
   `_canonical_legend_key` (2532), `_constant_line_axis_and_value` (2815),
   `_payload_with_resolved_histogram_bin_count` (1530), `build_plotstats_dashboard_spec` (562).
+  The narrow caller amendment adds an explicit `preview_only=True` only in
+  `charts/dashboard_visual_options.py::build_dashboard_visual_preview_spec`; ordinary adapter callers
+  retain the default full-artifact computation. The shared wrapper also serves full industrial analytics,
+  so a wrapper-wide or title-inferred preview optimization is excluded.
 - **How:**
   - finite masks for real float ndarray/Series, returning arrays to array consumers and lists only at JSON
     boundaries;

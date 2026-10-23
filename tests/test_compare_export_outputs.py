@@ -2,7 +2,7 @@
 
 from contextlib import closing
 import sqlite3
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 import pytest
 
@@ -318,7 +318,8 @@ def test_dashboard_asset_base_name_remains_literal_across_paired_generations(tmp
 
 
 @pytest.mark.parametrize("kind", ["xlsx", "html", "html_only", "sqlite"])
-def test_independently_generated_baseline_controls_use_the_same_oracle(tmp_path, kind, capsys):
+@pytest.mark.parametrize("temp_scope", [False, True])
+def test_independently_generated_baseline_controls_use_the_same_oracle(tmp_path, kind, capsys, temp_scope):
     if kind in {"html", "html_only"}:
         left, right = _dashboard_pair(tmp_path, "export" if kind == "html_only" else "export_dashboard")
         paths = (left[0], right[0])
@@ -334,6 +335,8 @@ def test_independently_generated_baseline_controls_use_the_same_oracle(tmp_path,
                 connection.execute("INSERT INTO data VALUES (1, 'independent')")
                 connection.commit()
     arguments = [str(path) for path in paths] + ["--baseline-control", "--sqlite"]
+    if temp_scope:
+        arguments += ["--csv-summary-temp-root", "/recorded/temp"]
     assert main(arguments) == 0
     assert "baseline control: outputs equal" in capsys.readouterr().out
     if kind in {"html", "html_only"}:
@@ -345,3 +348,216 @@ def test_independently_generated_baseline_controls_use_the_same_oracle(tmp_path,
             connection.execute("UPDATE data SET value='different'")
             connection.commit()
     assert main(arguments) == 1
+
+
+SHEET_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+
+
+def _csv_summary_members(root, nonce='a1b2c3d4', *, separator='/'):
+    from html import escape
+
+    context = {'row_count': 3, 'source_file_count': 1,
+               'sqlite_path': f'{root}{separator}metroliza_csv_summary_{nonce}.sqlite'}
+    strings = ['severity', 'code', 'message', 'context', 'info',
+               'tabular_sqlite_store_created', 'Loaded rows.', repr(context)]
+    shared = (f'<sst xmlns="{SHEET_NS}" count="8" uniqueCount="8">' + ''.join(
+        '<si><t>' + escape(text, quote=False) + '</t></si>' for text in strings) + '</sst>')
+    rows = ''.join(f'<row r="{row}">' + ''.join(
+        f'<c r="{column}{row}" t="s"><v>{index}</v></c>'
+        for column, index in zip('ABCD', indices)) + '</row>'
+        for row, indices in ((1, range(4)), (3, range(4, 8))))
+    return {
+        'xl/workbook.xml': (f'<workbook xmlns="{SHEET_NS}" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="Diagnostics" sheetId="1" r:id="rId1"/></sheets></workbook>').encode(),
+        'xl/_rels/workbook.xml.rels': (
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Target="worksheets/sheet1.xml" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>'
+            '</Relationships>').encode(),
+        'xl/worksheets/sheet1.xml': f'<worksheet xmlns="{SHEET_NS}"><sheetData>{rows}</sheetData></worksheet>'.encode(),
+        'xl/worksheets/sheet2.xml': f'<worksheet xmlns="{SHEET_NS}"><sheetData/></worksheet>'.encode(),
+        'xl/sharedStrings.xml': shared.encode(),
+        'xl/charts/chart1.xml': b'<chart>literal</chart>',
+        'docProps/core.xml': CORE.replace(b'TIME', b'2026-01-01T00:00:00Z'),
+    }
+
+
+def _write_csv_summary(path, members):
+    with ZipFile(path, 'w', compression=ZIP_DEFLATED) as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+
+
+@pytest.mark.parametrize('change', ['same', 'nonce', 'root', 'context', 'chart'])
+def test_csv_summary_default_remains_literal(tmp_path, change):
+    left, right = tmp_path / 'a.xlsx', tmp_path / 'b.xlsx'
+    a = _csv_summary_members('/recorded/temp')
+    b = _csv_summary_members('/different/temp' if change == 'root' else '/recorded/temp',
+                             'd4c3b2a1' if change == 'nonce' else 'a1b2c3d4')
+    if change == 'context':
+        b['xl/sharedStrings.xml'] = b['xl/sharedStrings.xml'].replace(b"'row_count': 3", b"'row_count': 4")
+    if change == 'chart':
+        b['xl/charts/chart1.xml'] = b'<chart>changed</chart>'
+    _write_csv_summary(left, a)
+    _write_csv_summary(right, b)
+    assert (compare_outputs(left, right) is None) == (change == 'same')
+
+
+def test_csv_summary_temp_scope_is_opt_in_and_directory_cli_propagates(tmp_path, capsys):
+    roots = [tmp_path / side for side in ('a', 'b')]
+    for root, nonce in zip(roots, ('a1b2c3d4', 'd4c3b2a1')):
+        root.mkdir()
+        _write_csv_summary(root / 'summary.xlsx', _csv_summary_members('/recorded/temp', nonce))
+    assert compare_outputs(*roots)
+    assert compare_outputs(*roots, csv_summary_temp_root=tmp_path)
+    assert compare_outputs(*roots, csv_summary_temp_root='/recorded/temp') is None
+    assert main([str(root) for root in roots] + ['--csv-summary-temp-root', '/recorded/temp']) == 0
+    assert 'outputs equal' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('change', [
+    'wrong_code', 'wrong_sheet', 'wrong_header', 'duplicate_header', 'duplicate_code', 'duplicate_sheet',
+    'duplicate_relationship', 'duplicate_cell', 'rich', 'inline', 'reuse_same_sheet', 'reuse_other_sheet',
+    'row_count', 'source_count', 'extra_field', 'field_type', 'duplicate_field', 'count', 'index',
+    'sheet_bytes', 'other_entry', 'other_diagnostic', 'chart', 'core', 'root', 'prefix', 'suffix', 'nonce_short', 'nonce_long',
+    'nonce_upper', 'nonce_punctuation', 'two_tokens', 'order', 'renamed', 'outside_worksheet_target',
+])
+def test_csv_summary_exception_rejects_outside_named_scope(tmp_path, change):
+    a = _csv_summary_members('/recorded/temp')
+    b = _csv_summary_members('/recorded/temp', 'd4c3b2a1')
+    sst, sheet = 'xl/sharedStrings.xml', 'xl/worksheets/sheet1.xml'
+    scope_changes = {
+        'wrong_code': (sst, b'tabular_sqlite_store_created', b'other_diagnostic'),
+        'wrong_sheet': ('xl/workbook.xml', b'name="Diagnostics"', b'name="Other"'),
+        'wrong_header': (sst, b'<t>code</t>', b'<t>Code</t>'),
+        'duplicate_header': (sheet, b'</row>', b'<c r="E1" t="s"><v>1</v></c></row>'),
+        'duplicate_code': (sheet, b'</sheetData>', b'<row r="4"><c r="B4" t="s"><v>5</v></c>'
+                           b'<c r="D4" t="s"><v>7</v></c></row></sheetData>'),
+        'duplicate_sheet': ('xl/workbook.xml', b'</sheets>', b'<sheet name="Diagnostics" '
+                            b'sheetId="2" r:id="rId1"/></sheets>'),
+        'duplicate_relationship': ('xl/_rels/workbook.xml.rels', b'</Relationships>',
+            b'<Relationship Id="rId1" Target="worksheets/sheet2.xml"/></Relationships>'),
+        'duplicate_cell': (sheet, b'</sheetData>', b'<row r="3"><c r="D3" t="s"><v>7</v></c></row></sheetData>'),
+        'rich': (sst, b'<si><t>{', b'<si><r><t>{'),
+        'inline': (sheet, b'<c r="D3" t="s"><v>7</v></c>', b'<c r="D3" t="inlineStr"><is><t>context</t></is></c>'),
+        'reuse_same_sheet': (sheet, b'</sheetData>', b'<row r="4"><c r="D4" t="s"><v>7</v></c></row></sheetData>'),
+        'reuse_other_sheet': ('xl/worksheets/sheet2.xml', b'<sheetData/>',
+                             b'<sheetData><row r="1"><c r="A1" t="s"><v>7</v></c></row></sheetData>'),
+        'extra_field': (sst, b"'row_count': 3", b"'extra': 1, 'row_count': 3"),
+        'field_type': (sst, b"'row_count': 3", b"'row_count': True"),
+        'duplicate_field': (sst, b"'row_count': 3", b"'row_count': 3, 'row_count': 3"),
+        'prefix': (sst, b'metroliza_csv_summary_', b'other_csv_summary_'),
+        'suffix': (sst, b'.sqlite', b'.db'),
+    }
+    if change in scope_changes:
+        name, old, new = scope_changes[change]
+        for members in (a, b):
+            members[name] = members[name].replace(old, new, 1)
+            if change == 'rich':
+                members[sst] = members[sst].replace(b"}</t></si>", b"}</t></r></si>", 1)
+    differences = {
+        'row_count': (sst, b"'row_count': 3", b"'row_count': 4"),
+        'source_count': (sst, b"'source_file_count': 1", b"'source_file_count': 2"),
+        'count': (sst, b'count="8"', b'count="9"'),
+        'index': (sheet, b'<v>7</v>', b'<v>6</v>'),
+        'sheet_bytes': (sheet, b'<sheetData>', b'<sheetData >'),
+        'root': (sst, b'/recorded/temp/', b'/recorded/sibling/'),
+        'nonce_short': (sst, b'd4c3b2a1', b'd4c3b2a'),
+        'nonce_long': (sst, b'd4c3b2a1', b'd4c3b2a10'),
+        'nonce_upper': (sst, b'd4c3b2a1', b'D4c3b2a1'),
+        'nonce_punctuation': (sst, b'd4c3b2a1', b'd4c3-2a1'),
+        'two_tokens': (sst, b'd4c3b2a1.sqlite', b'd4c3b2a1.sqlite/metroliza_csv_summary_abcdefgh.sqlite'),
+    }
+    if change in differences:
+        name, old, new = differences[change]
+        b[name] = b[name].replace(old, new, 1)
+    if change == 'other_entry':
+        for members, nonce in ((a, b'a1b2c3d4'), (b, b'd4c3b2a1')):
+            members[sst] = members[sst].replace(b'</sst>', b'<si><t>metroliza_csv_summary_' + nonce + b'.sqlite</t></si></sst>')
+    if change == 'other_diagnostic':
+        for members in (a, b):
+            entry = members[sst][members[sst].index(b'<si><t>{'):-len(b'</sst>')]
+            members[sst] = members[sst].replace(b'</sst>', entry + b'<si><t>other_code</t></si></sst>')
+            members[sheet] = members[sheet].replace(b'</sheetData>', b'<row r="4"><c r="B4" t="s"><v>9</v></c><c r="D4" t="s"><v>8</v></c></row></sheetData>')
+    if change in {'chart', 'core'}:
+        name = 'xl/charts/chart1.xml' if change == 'chart' else 'docProps/core.xml'
+        ending = b'</chart>' if change == 'chart' else b'</cp:coreProperties>'
+        a[name] = a[name].replace(ending, b'metroliza_csv_summary_a1b2c3d4.sqlite' + ending)
+        b[name] = b[name].replace(ending, b'metroliza_csv_summary_d4c3b2a1.sqlite' + ending)
+    if change == 'order':
+        b = dict(reversed(list(b.items())))
+    if change == 'renamed':
+        b['xl/charts/other.xml'] = b.pop('xl/charts/chart1.xml')
+    if change == 'outside_worksheet_target':
+        for members in (a, b):
+            members['xl/workbook.xml'] = members['xl/workbook.xml'].replace(b'</sheets>', b'<sheet name="Other" sheetId="2" r:id="rId2"/></sheets>')
+            name = 'xl/_rels/workbook.xml.rels'
+            members[name] = members[name].replace(b'</Relationships>', b'<Relationship Id="rId2" Target="custom/sheet2.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>')
+            members['xl/custom/sheet2.xml'] = members.pop('xl/worksheets/sheet2.xml').replace(b'<sheetData/>', b'<sheetData><row r="1"><c r="A1" t="s"><v>7</v></c></row></sheetData>')
+    paths = tmp_path / 'a.xlsx', tmp_path / 'b.xlsx'
+    for path, members in zip(paths, (a, b)):
+        _write_csv_summary(path, members)
+    assert compare_outputs(*paths, csv_summary_temp_root='/recorded/temp')
+
+
+def test_csv_summary_scope_keeps_unchanged_matching_benign_string_literal(tmp_path):
+    paths = tmp_path / 'a.xlsx', tmp_path / 'b.xlsx'
+    for path, nonce in zip(paths, ('a1b2c3d4', 'd4c3b2a1')):
+        members = _csv_summary_members('/recorded/temp', nonce)
+        name = 'xl/sharedStrings.xml'
+        members[name] = members[name].replace(b'<si><t>Loaded rows.',
+            b'<si><t>metroliza_csv_summary_a1b2c3d4.sqlite</t></si><si><t>Loaded rows.')
+        members[name] = members[name].replace(b'count="8"', b'count="9"').replace(b'uniqueCount="8"', b'uniqueCount="9"')
+        name = 'xl/worksheets/sheet1.xml'
+        members[name] = members[name].replace(b'<v>6</v>', b'<v>7</v>').replace(b'<v>7</v></c></row>', b'<v>8</v></c><c r="E3" t="s"><v>6</v></c></row>')
+        _write_csv_summary(path, members)
+    assert compare_outputs(*paths, csv_summary_temp_root='/recorded/temp') is None
+    assert compare_outputs(*paths)
+
+
+def test_csv_summary_opt_in_preserves_unchanged_unsupported_strings_and_crc_failure(tmp_path):
+
+    a, b = tmp_path / 'a.xlsx', tmp_path / 'b.xlsx'
+    members = _csv_summary_members('/unrecorded/temp')
+    _write_csv_summary(a, members)
+    _write_csv_summary(b, members)
+    assert compare_outputs(a, b, csv_summary_temp_root='/recorded/temp') is None
+    raw = bytearray(b.read_bytes())
+    entry = raw.rfind(b'xl/sharedStrings.xml') - 46
+    assert raw[entry:entry + 4] == b'PK\x01\x02'
+    raw[entry + 16] ^= 1  # Corrupt the recorded CRC, leaving compressed data intact.
+    b.write_bytes(raw)
+    with pytest.raises(BadZipFile, match='Bad CRC'):
+        compare_outputs(a, b, csv_summary_temp_root='/unrecorded/temp')
+    assert main([str(a), str(b), '--csv-summary-temp-root', '/unrecorded/temp']) == 2
+
+
+def test_csv_summary_opt_in_rejects_duplicate_zip_member(tmp_path):
+    a, b = tmp_path / 'a.xlsx', tmp_path / 'b.xlsx'
+    for path, nonce in ((a, 'a1b2c3d4'), (b, 'd4c3b2a1')):
+        _write_csv_summary(path, _csv_summary_members('/recorded/temp', nonce))
+    with ZipFile(b, 'a') as archive, pytest.warns(UserWarning, match='Duplicate name'):
+        archive.writestr('xl/sharedStrings.xml', b'duplicate')
+    assert main([str(a), str(b), '--csv-summary-temp-root', '/recorded/temp']) == 2
+
+
+@pytest.mark.parametrize('root,separator', [('/recorded/temp', '/'), ('C:/recorded/temp', '/'),
+    (r'C:\recorded\temp', '\\'), (r'\\server\share\temp', '\\')])
+def test_recorded_temp_root_is_lexical_across_hosts(tmp_path, root, separator):
+    paths = tmp_path / 'a.xlsx', tmp_path / 'b.xlsx'
+    for path, nonce in zip(paths, ('a1b2c3d4', 'd4c3b2a1')):
+        _write_csv_summary(path, _csv_summary_members(root, nonce, separator=separator))
+    assert compare_outputs(*paths, csv_summary_temp_root=root) is None
+    assert compare_outputs(*paths, csv_summary_temp_root=root + separator + 'other')
+    assert main([str(path) for path in paths] + ['--csv-summary-temp-root', root]) == 0
+    for ambiguous in ('relative', 'C:', r'\recorded\temp', r'C:\mixed/root'):
+        assert compare_outputs(*paths, csv_summary_temp_root=ambiguous)
+
+
+def test_recorded_temp_root_accepts_explicit_host_path_object(tmp_path):
+    from os import sep
+    root, paths = tmp_path / 'recorded', (tmp_path / 'a.xlsx', tmp_path / 'b.xlsx')
+    for path, nonce in zip(paths, ('a1b2c3d4', 'd4c3b2a1')):
+        _write_csv_summary(path, _csv_summary_members(root, nonce, separator=sep))
+    assert compare_outputs(*paths, csv_summary_temp_root=root) is None

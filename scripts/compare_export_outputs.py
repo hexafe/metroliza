@@ -1,13 +1,14 @@
-"""Compare exports exactly except documented timestamps and the paired dashboard generation token."""
+"""Compare exports with documented timestamps/generations and opt-in scoped CSV diagnostics."""
 
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import closing, contextmanager
 import html
 from html.parser import HTMLParser
 from itertools import zip_longest
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import sqlite3
@@ -28,6 +29,159 @@ CORE_TIME = re.compile(
 GENERATION_ASSET_BASES = ("export_dashboard_assets", "export_assets")
 GENERATION_NAME = re.compile(r"(?P<asset_base>export(?:_dashboard)?_assets)\.generation-[0-9a-f]{32}\Z")
 HTML_ATTRIBUTE = re.compile(r'''(?<!\S)([^\s/=>]+)\s*=\s*(["'])(.*?)\2''', re.DOTALL)
+SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+CSV_SUMMARY_CODE = "tabular_sqlite_store_created"
+
+
+def _plain_shared_text(strings, index):
+    node = strings[index]
+    if (node.tag != SHEET_NS + "si" or len(node) != 1 or node[0].tag != SHEET_NS + "t"
+            or len(node[0]) or node[0].text is None):
+        raise ValueError("unsupported diagnostic shared string")
+    return node[0].text
+
+
+def _diagnostics_part(archive):
+    workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+    if workbook.tag != SHEET_NS + "workbook" or len(workbook.findall(SHEET_NS + "sheets")) != 1:
+        raise ValueError("unsupported workbook sheets")
+    sheets = workbook.findall(SHEET_NS + "sheets/" + SHEET_NS + "sheet")
+    matches = [sheet for sheet in sheets if sheet.get("name") == "Diagnostics"]
+    sheet_ids = [sheet.get("{" + OFFICE_REL[:-1] + "}id") for sheet in sheets]
+    if (len(matches) != 1 or len({sheet.get("name") for sheet in sheets}) != len(sheets)
+            or len(sheet_ids) != len(set(sheet_ids))):
+        raise ValueError("ambiguous Diagnostics worksheet")
+    relationship_root = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+    if relationship_root.tag != REL_NS + "Relationships":
+        raise ValueError("unsupported workbook relationships")
+    relationships = list(relationship_root)
+    ids = [item.get("Id") for item in relationships]
+    targets = [item.get("Target") for item in relationships if item.get("Type") == OFFICE_REL + "worksheet"]
+    if any(not re.fullmatch(r"worksheets/[A-Za-z0-9_.-]+\.xml", target or "") for target in targets):
+        raise ValueError("unsupported worksheet relationship target")
+    if None in ids or len(ids) != len(set(ids)) or len(targets) != len(set(targets)):
+        raise ValueError("ambiguous workbook relationship")
+    rid = matches[0].get("{" + OFFICE_REL[:-1] + "}id")
+    links = [item for item in relationships if item.tag == REL_NS + "Relationship" and item.get("Id") == rid]
+    if (len(links) != 1 or links[0].get("Type") != OFFICE_REL + "worksheet"
+            or links[0].get("TargetMode") is not None
+            or not re.fullmatch(r"worksheets/[A-Za-z0-9_.-]+\.xml", links[0].get("Target") or "")):
+        raise ValueError("unsupported Diagnostics relationship")
+    return "xl/" + links[0].get("Target")
+
+
+def _diagnostic_cell(archive, part, strings):
+    rows, addresses = [], set()
+    sheet = ET.fromstring(archive.read(part))
+    if sheet.tag != SHEET_NS + "worksheet" or len(sheet.findall(SHEET_NS + "sheetData")) != 1:
+        raise ValueError("unsupported Diagnostics sheet data")
+    for row in sheet.findall(SHEET_NS + "sheetData/" + SHEET_NS + "row"):
+        cells = {}
+        for cell in row.findall(SHEET_NS + "c"):
+            address = cell.get("r") or ""
+            match = re.fullmatch(r"([A-Z]+)([1-9][0-9]*)", address)
+            if (match is None or address in addresses or match[2] != row.get("r")
+                    or cell.get("t") != "s" or len(cell) != 1 or cell[0].tag != SHEET_NS + "v"):
+                raise ValueError("unsupported diagnostic cell")
+            addresses.add(address)
+            index = int(cell[0].text)
+            if index < 0:
+                raise ValueError("invalid shared string index")
+            cells[match[1]] = (index, _plain_shared_text(strings, index), address)
+        rows.append(cells)
+    headers = [row for row in rows if any(value[1] in {"code", "context"} for value in row.values())]
+    if len(headers) != 1:
+        raise ValueError("ambiguous diagnostic headers")
+    columns = [[key for key, value in headers[0].items() if value[1] == name] for name in ("code", "context")]
+    if any(len(values) != 1 for values in columns):
+        raise ValueError("ambiguous diagnostic columns")
+    matches = [row for row in rows if row.get(columns[0][0], (None, None))[1] == CSV_SUMMARY_CODE]
+    if len(matches) != 1:
+        raise ValueError("ambiguous diagnostic code")
+    return matches[0][columns[1][0]]
+
+
+def _sole_shared_reference(archive, index, expected):
+    count, location = 0, None
+    for name in archive.namelist():
+        if not (name.startswith("xl/worksheets/") and name.endswith(".xml")):
+            continue
+        with archive.open(name) as stream:
+            stack = []
+            for event, node in ET.iterparse(stream, events=("start", "end")):
+                if event == "start":
+                    if not stack and node.tag != SHEET_NS + "worksheet":
+                        raise ValueError("unsupported worksheet root")
+                    stack.append(node)
+                    continue
+                if node.tag == SHEET_NS + "c" and node.get("t") == "s":
+                    values = node.findall(SHEET_NS + "v")
+                    if len(values) != 1:
+                        raise ValueError("ambiguous shared string reference")
+                    if int(values[0].text) == index:
+                        count, location = count + 1, (name, node.get("r"))
+                if node.tag == SHEET_NS + "row":
+                    stack[-2].remove(node)
+                    node.clear()
+                stack.pop()
+    return count == 1 and location == expected
+
+
+def _recorded_temp_prefix(temp_root):
+    root = str(temp_root)
+    if PurePosixPath(root).is_absolute():
+        separator = "/"
+    elif PureWindowsPath(root).is_absolute() and not ("/" in root and "\\" in root):
+        separator = "\\" if "\\" in root else "/"
+    else:
+        raise ValueError("recorded temporary root must be unambiguous and absolute")
+    return root if root.endswith(separator) else root + separator
+
+
+def _csv_summary_token(archive, data, temp_root):
+    """Prove one plain diagnostic SST entry; keep its original raw byte offset."""
+    strings = ET.fromstring(data)
+    if strings.tag != SHEET_NS + "sst":
+        raise ValueError("unsupported shared string table")
+    part = _diagnostics_part(archive)
+    index, text, address = _diagnostic_cell(archive, part, strings)
+    literal = ast.parse(text, mode="eval").body
+    fields = ("row_count", "source_file_count", "sqlite_path")
+    if (not isinstance(literal, ast.Dict) or len(literal.keys) != 3
+            or any(not isinstance(key, ast.Constant) or type(key.value) is not str for key in literal.keys)
+            or {key.value for key in literal.keys} != set(fields)):
+        raise ValueError("unsupported diagnostic context fields")
+    context = ast.literal_eval(literal)
+    if (type(context["row_count"]) is not int or type(context["source_file_count"]) is not int
+            or type(context["sqlite_path"]) is not str):
+        raise ValueError("unsupported diagnostic context types/root")
+    match = re.fullmatch(re.escape(_recorded_temp_prefix(temp_root)) + r"(metroliza_csv_summary_[a-z0-9_]{8}\.sqlite)", context["sqlite_path"])
+    if match is None or not _sole_shared_reference(archive, index, (part, address)):
+        raise ValueError("diagnostic path/root/reference outside named scope")
+    token = match[1].encode("ascii")
+    entries = list(re.finditer(rb"<si(?:\s[^>]*)?>.*?</si>", data, re.DOTALL))
+    if len(entries) != len(strings):
+        raise ValueError("unsupported shared string serialization")
+    entry = entries[index]
+    if (entry[0] != b"<si><t>" + html.escape(text, quote=False).encode() + b"</t></si>"
+            or entry[0].count(token) != 1):
+        raise ValueError("unsupported plain context serialization")
+    return token, (part, index, address), entry.start() + entry[0].index(token)
+
+
+def _csv_summary_shared_pair(a, b, x, y, temp_root):
+    try:
+        left, scope_a, _offset = _csv_summary_token(a, x, temp_root)
+        right, scope_b, offset = _csv_summary_token(b, y, temp_root)
+    except (ValueError, TypeError, KeyError, IndexError, SyntaxError, ET.ParseError, RecursionError):
+        return x, y  # Unsupported scope keeps the original literal comparison.
+    normalized = y[:offset] + left + y[offset + len(right):]
+    if (scope_a == scope_b and normalized == x and len(normalized) == len(x)
+            and zlib.crc32(normalized) == a.getinfo("xl/sharedStrings.xml").CRC):
+        return x, normalized
+    return x, y
 
 
 def _html_without_times(data: bytes) -> bytes:
@@ -55,7 +209,7 @@ def _bytes_difference(left: bytes, right: bytes) -> str | None:
     return f"bytes differ at offset {offset} (sizes {len(left)}, {len(right)})"
 
 
-def _xlsx_difference(left: Path, right: Path) -> str | None:
+def _xlsx_difference(left: Path, right: Path, *, csv_summary_temp_root=None) -> str | None:
     with ZipFile(left) as a, ZipFile(right) as b:
         names = a.namelist()
         if not names or not b.namelist():
@@ -66,11 +220,14 @@ def _xlsx_difference(left: Path, right: Path) -> str | None:
             return "XLSX member names/order differ"
         for name in names:
             x, y = a.read(name), b.read(name)  # Reading verifies each stored CRC too.
+            if name == "xl/sharedStrings.xml" and x != y and csv_summary_temp_root is not None:
+                x, y = _csv_summary_shared_pair(a, b, x, y, csv_summary_temp_root)
             if name == "docProps/core.xml":
                 x, y = _core_without_times(x), _core_without_times(y)
                 crc_equal = zlib.crc32(x) == zlib.crc32(y)
             else:
-                crc_equal = a.getinfo(name).CRC == b.getinfo(name).CRC
+                crc_equal = (zlib.crc32(x) == zlib.crc32(y) if name == "xl/sharedStrings.xml"
+                             and csv_summary_temp_root is not None else a.getinfo(name).CRC == b.getinfo(name).CRC)
             difference = _bytes_difference(x, y)
             if not crc_equal or difference:
                 return f"XLSX member {name}: {difference or 'CRC differs'}"
@@ -249,7 +406,7 @@ def _html_difference(left, right, pair):
     return _bytes_difference(*(_html_without_times(value) for value in values))
 
 
-def _directory_difference(left, right, *, sqlite):
+def _directory_difference(left, right, *, sqlite, csv_summary_temp_root=None):
     pair = _generation_pair(left, right)
     difference = _asset_difference(pair)
     if difference:
@@ -261,7 +418,8 @@ def _directory_difference(left, right, *, sqlite):
     if not a:
         raise ValueError("no outputs to compare")
     for name in a:
-        difference = _file_difference(left / name, right / name, sqlite=sqlite, pair=pair)
+        difference = _file_difference(left / name, right / name, sqlite=sqlite, pair=pair,
+                                      csv_summary_temp_root=csv_summary_temp_root)
         if difference:
             return f"{name}: {difference}"
     return None
@@ -272,25 +430,27 @@ def _ordinary_files(root, generation):
                   if path.is_file() and (generation is None or not path.is_relative_to(generation)))
 
 
-def compare_outputs(left: Path, right: Path, *, sqlite: bool = False) -> str | None:
+def compare_outputs(left: Path, right: Path, *, sqlite: bool = False,
+                    csv_summary_temp_root: str | Path | None = None) -> str | None:
     """Return the first difference; errors propagate to the fail-closed CLI."""
     if not left.exists() or not right.exists():
         raise FileNotFoundError("both comparison inputs must exist")
     if left.is_dir() != right.is_dir():
         return "input types differ"
     if left.is_dir():
-        return _directory_difference(left, right, sqlite=sqlite)
+        return _directory_difference(left, right, sqlite=sqlite, csv_summary_temp_root=csv_summary_temp_root)
     pair = _generation_pair(left.parent, right.parent) if left.suffix.lower() in {".html", ".htm"} else None
     difference = _asset_difference(pair)
-    return difference or _file_difference(left, right, sqlite=sqlite, pair=pair)
+    return difference or _file_difference(left, right, sqlite=sqlite, pair=pair,
+                                          csv_summary_temp_root=csv_summary_temp_root)
 
 
-def _file_difference(left, right, *, sqlite, pair):
+def _file_difference(left, right, *, sqlite, pair, csv_summary_temp_root=None):
     if left.suffix.lower() != right.suffix.lower():
         return "output formats differ"
     suffix = left.suffix.lower()
     if suffix == ".xlsx":
-        return _xlsx_difference(left, right)
+        return _xlsx_difference(left, right, csv_summary_temp_root=csv_summary_temp_root)
     if sqlite and suffix in {".sqlite", ".sqlite3", ".db"}:
         return _sqlite_difference(left, right)
     if suffix in {".html", ".htm"}:
@@ -304,11 +464,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("right", type=Path)
     parser.add_argument("--sqlite", action="store_true",
                         help="compare SQLite schema objects and table rows in primary-key order")
+    parser.add_argument("--csv-summary-temp-root",
+                        help="recorded common temp root for the single CSV Summary Diagnostics context basename")
     parser.add_argument("--baseline-control", action="store_true",
                         help="label only: independently generated baseline pair; source identity is caller-owned")
     args = parser.parse_args(argv)
     try:
-        difference = compare_outputs(args.left, args.right, sqlite=args.sqlite)
+        difference = compare_outputs(args.left, args.right, sqlite=args.sqlite,
+                                     csv_summary_temp_root=args.csv_summary_temp_root)
     except Exception as error:  # noqa: BLE001 - comparison errors are failures, never equality
         print(f"comparison failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 2
