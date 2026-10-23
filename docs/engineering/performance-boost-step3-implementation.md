@@ -122,6 +122,32 @@ Before admission, confirm the disabled state and termination of existing collect
 unchanged balanced/AC, CPU, quota, TupTup and shared-lock guards. This grants no power-profile,
 service or other machine changes, and does not establish quietness or waive output checks.
 
+### PO amendment — matched CPU partition during browser use (2026-10-23)
+
+Authority: [PO resource steering and scoped verification](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6369451625).
+The PO holds TupTup until Metroliza finishes, permits continued Firefox use and requests
+the remaining CPU capacity for measurements. Do not repeat reservation questions under
+that continuing instruction. Temporarily assign disjoint sets of complete physical cores
+and their SMT siblings to the browser and benchmark; both A and B use the same fixed mask.
+This adds only scoped process/thread affinity to the machine-change exception. Preserve
+prior policies and parallel user changes, and restore after success, failure or interruption.
+Other heavy jobs remain held; power, services, cgroups and global scheduling stay unchanged.
+
+Record actual topology, masks, native math-thread policy, balanced/AC, load, temperature
+and applicable storage headroom. Affinity can change native numerical defaults: generate
+fresh baseline/A-A controls in the same condition, retain earlier-condition evidence separately
+and keep every number and output literal. No numerical mask is admitted. Capture each
+algorithm's complete original-consumed population, including any deliberate existing
+selection, without introducing new sampling or changing aggregate/workbook scope.
+
+Settle before a recorded measurement epoch; preserve all setup and cleanup observations.
+New unrestricted browser tasks, escaped benchmark threads or monitor failures after the
+epoch exclude the complete series. Keep the shared lock across all gaps and the separately
+authorized widget lifecycle. Affinity is not global exclusivity: RAM, caches, I/O and
+thermal/power limits remain shared. Report polling/identity/lifecycle limits and actual
+restoration; do not claim atomic or continuously isolated process trees. This changes the
+measurement condition, not computation, output-comparison rules or E5/E6/E7 authority.
+
 ### PO amendment — intentional nondeterminism (2026-10-22)
 
 Authority: [PO decision on #1151](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6340146427).
@@ -539,6 +565,47 @@ Paths are relative to `src/metroliza/` unless they start with `scripts/` or `doc
 - **Output:** wall, RSS and total CPU for `csv_analytics` and `benchmark_paths` with 4 workers and with 2 workers
   (`METROLIZA_COMPUTE_WORKERS=2`, the packaged Windows cap), posted on the tracker; no merge-ready code until the PO
   decides.
+
+**Measured decision input (2026-10-23):** the fits-only pool did not improve either scenario in the
+matched resource/native-math condition defined in §3. E6 remains undecided; no pool code is adopted.
+Each row is an independent serial/pool ABBA block, two observations per arm. Scenario time starts
+after parent imports and pool readiness; cold-command time also includes process/import/startup and
+shutdown costs. Positive time reduction means faster; the negative values below mean slower.
+
+| Flow | Workers | Scenario serial / pool (s) | Time reduction | Cold command serial / pool (s) |
+| --- | ---: | ---: | ---: | ---: |
+| CSV analytics | 2 | 35.003 / 40.810 | −16.59% | 40.993 / 47.932 |
+| CSV analytics | 4 | 35.000 / 39.078 | −11.65% | 40.864 / 46.236 |
+| Paths CSV Summary | 2 | 64.509 / 68.864 | −6.75% | 66.717 / 72.411 |
+| Paths CSV Summary | 4 | 62.129 / 62.448 | −0.51% | 64.470 / 65.880 |
+
+| Flow | Workers | Whole-command total CPU serial / pool (s) | Peak RSS serial / pool (MiB) | Peak PSS serial / pool (MiB) |
+| --- | ---: | ---: | ---: | ---: |
+| CSV analytics | 2 | 57.468 / 66.725 | 654.953 / 896.223 | 616.216 / 760.895 |
+| CSV analytics | 4 | 57.148 / 66.587 | 647.338 / 1129.533 | 608.412 / 904.265 |
+| Paths CSV Summary | 2 | 114.002 / 116.194 | 1013.686 / 1262.600 | 1002.572 / 1155.032 |
+| Paths CSV Summary | 4 | 111.367 / 115.727 | 1018.840 / 1503.920 | 1007.844 / 1305.749 |
+
+All 16 measured commands and 16 strict output comparisons exited 0. Independent original
+`101e5a44` A/A and accepted-stock controls passed first, followed by all six serial/2/4-worker
+functional flows and six full-output comparisons. No numerical comparison exception was added.
+Full workflow input remains 100k rows; fits retain the exact original-consumed 30 Paths populations
+and eight GUI populations of 50k values, including limits/configuration. Concurrent internal fit-entry
+arrival differs even in original Paths A/A; its trace is diagnostic, while population multiplicity,
+complete fit results, published row/order and output bytes remain gates.
+
+The first pool variant failed complete-fit identity on KDE bits and is excluded. The second keeps
+canonical KDE in the parent and delegates only non-KDE fits; six complete-result qualifications
+passed in each separately recorded native-math condition. Earlier-condition results are not pooled.
+The recorded [diagnostic and disposition](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6369314193)
+remain evidence rather than a review or adoption decision.
+
+Total CPU counts the owned process tree once; import, task, KDE and harness counters are descriptive
+components and are not added again. RSS/PSS are sampled process-tree peaks (shared pages count in
+each RSS; PSS apportions them); finite sampling may miss transients. These medians are limited
+observations, not a statistical or platform-wide claim. Source/output rechecks, process termination,
+resource guards and exact CPU/widget restoration passed. Shared memory/cache/thermal effects remain;
+Windows and packaged-candidate behavior were not measured.
 
 ### T13 — CSV load row loop (A05-F01, A05-F03, A05-F04)
 - **Where:** `tabular/tabular_analytics_service.py`: `_load_tabular_files_into_sqlite` (1709),
