@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 
 
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
+_IDENTIFIER_INTEGER_RE = re.compile(r"[+-]?\d+")
 _TIMESTAMP_HINTS = (
     "timestamp",
     "time_stamp",
@@ -1871,6 +1872,15 @@ def _load_tabular_files_into_sqlite(
                 _raise_if_tabular_load_cancelled(cancel_check)
                 path = spec["path"]
                 csv_config = spec["csv_config"]
+                decimal = str(csv_config.get("decimal") or ".")
+                reserved = {
+                    "source_row_number", "source_file", "source_sheet", "process_datetime", "reference",
+                    spec["timestamp_field"], spec["reference_field"],
+                }
+                prepared_metric_stats = [
+                    (column, metric_stats.get(column))
+                    for column in source_columns if column not in reserved
+                ]
                 file_row_count = 0
                 _emit_tabular_load_progress(
                     progress_callback,
@@ -1887,7 +1897,7 @@ def _load_tabular_files_into_sqlite(
                         path, csv_config=csv_config, sheet_name=spec["sheet_name"],
                     ),
                     normalized_columns=spec["normalized_columns"],
-                    decimal=str(csv_config.get("decimal") or "."),
+                    decimal=decimal,
                     cancel_check=cancel_check,
                     record_timing=_record_load_timing,
                 ):
@@ -1907,7 +1917,7 @@ def _load_tabular_files_into_sqlite(
                         "source_row_number": row_number,
                         "source_file": path.name,
                         "process_datetime": _sqlite_datetime_text_value(parsed_timestamp),
-                        "reference": _display_cell_text(
+                        "reference": _normalized_cell_text(
                             normalized_row.get(spec["reference_field"])
                             if spec["reference_field"] is not None
                             else ""
@@ -1915,29 +1925,25 @@ def _load_tabular_files_into_sqlite(
                     }
                     if include_source_sheet:
                         row_data["source_sheet"] = str(spec["sheet_name"] or "")
-                    decimal = str(csv_config.get("decimal") or ".")
                     for column in source_columns:
-                        raw_text = _display_cell_text(normalized_row.get(column))
+                        raw_text = _normalized_cell_text(normalized_row.get(column))
                         parsed_number = parsed_numeric_values.get(column)
                         row_data[column] = raw_text or None
                         numeric_storage_column = numeric_filter_columns.get(column)
                         if numeric_storage_column is not None:
                             row_data[numeric_storage_column] = parsed_number
                     for column, storage_column in date_filter_columns.items():
+                        value = normalized_row.get(column)
                         row_data[storage_column] = _sqlite_datetime_text_value(
-                            _parse_tabular_datetime(normalized_row.get(column))
+                            parsed_timestamp
+                            if column == spec["timestamp_field"] and (type(value) is str or value is None)
+                            else _parse_tabular_datetime(value)
                         )
                     metric_stats_started_at = time.perf_counter()
-                    _update_metric_stats_from_row(
+                    _update_prepared_metric_stats(
+                        prepared_metric_stats,
                         metric_stats,
                         row_data,
-                        source_columns=tuple(source_columns),
-                        reserved_columns=tuple(
-                            column
-                            for column in (spec["timestamp_field"], spec["reference_field"])
-                            if column is not None
-                        ),
-                        decimal=decimal,
                         numeric_values=parsed_numeric_values,
                     )
                     _record_load_timing("metric_stats", metric_stats_started_at)
@@ -2387,6 +2393,11 @@ def _display_cell_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _normalized_cell_text(value: Any) -> str:
+    """Reuse plain text already normalized by the row reader; retain other coercions."""
+    return value if type(value) is str else _display_cell_text(value)
+
+
 def _infer_timestamp_column_from_rows(
     rows: Iterable[Mapping[str, Any]],
     columns: Iterable[str],
@@ -2460,13 +2471,18 @@ def _parse_tabular_number(value: Any, *, decimal: str = ".") -> float | None:
 
 
 def _parse_tabular_numbers(texts: list[str | None], *, decimal: str) -> list[float | None]:
-    """Convert normalized cells with NumPy's float64 parser, retaining scalar fallback.
+    """Parse primitive cells once; retain NumPy/scalar dispatch for other inputs.
 
-    NumPy uses the same binary64 string conversion as float; pandas.to_numeric
-    can round the last bit differently. Mixed/invalid columns keep the original
-    parser, including its locale, blank and non-finite rules.
+    Primitive strings retain float's binary64, locale, blank and non-finite
+    rules without restarting a mixed column. Other input types keep the original
+    NumPy attempt and scalar fallback, including their callback/error order.
     """
     import numpy as np
+
+    if type(texts) is list and type(decimal) is str and all(
+        value is None or type(value) is str for value in texts
+    ):
+        return _parse_normalized_number_texts(texts, decimal=decimal)
 
     original_texts = texts
     # Keep Python strings: fixed-width NumPy strings discard trailing NULs,
@@ -2485,6 +2501,24 @@ def _parse_tabular_numbers(texts: list[str | None], *, decimal: str) -> list[flo
     result = numbers.astype(object)
     result[~np.isfinite(numbers)] = None
     return result.tolist()
+
+
+def _parse_normalized_number_texts(texts: list[str | None], *, decimal: str) -> list[float | None]:
+    """A bad primitive cell does not restart conversion of the complete column."""
+    if decimal == ",":
+        texts = [value.replace(".", "").replace(",", ".") if value is not None else None
+                 for value in texts]
+    else:
+        texts = [value.replace(",", "") if value is not None else None for value in texts]
+    result: list[float | None] = []
+    for text in texts:
+        try:
+            number = float(text) if text is not None else math.nan
+        except ValueError:
+            result.append(None)
+        else:
+            result.append(number if math.isfinite(number) else None)
+    return result
 
 
 def _iter_normalized_numeric_rows(
@@ -2520,10 +2554,42 @@ def _iter_normalized_numeric_rows(
 
 def _looks_like_identifier_number(value: str) -> bool:
     text = str(value or "").strip()
-    if not re.fullmatch(r"[+-]?\d+", text):
-        return False
+    if type(text) is not str:
+        if not _IDENTIFIER_INTEGER_RE.fullmatch(text):
+            return False
+        digits = text.lstrip("+-")
+        return (len(digits) > 1 and digits.startswith("0")) or len(digits) > 15
+    return _normalized_text_looks_like_identifier(text)
+
+
+def _normalized_text_looks_like_identifier(text: str) -> bool:
     digits = text.lstrip("+-")
-    return (len(digits) > 1 and digits.startswith("0")) or len(digits) > 15
+    if not ((len(digits) > 1 and digits.startswith("0")) or len(digits) > 15):
+        return False
+    return _IDENTIFIER_INTEGER_RE.fullmatch(text) is not None
+
+
+def _update_prepared_metric_stats(
+    prepared: list[tuple[str, dict[str, Any] | None]],
+    metric_stats: dict[str, dict[str, Any]],
+    row: Mapping[str, Any],
+    *,
+    numeric_values: Mapping[str, float | None],
+) -> None:
+    """Keep row/sample order while reusing each file's metric columns and counters."""
+    for index, (column, stats) in enumerate(prepared):
+        text = _normalized_cell_text(row.get(column))
+        if not text:
+            continue
+        if stats is None:
+            stats = {"non_null_count": 0, "numeric_count": 0, "sample_values": [], "sample_value_set": set()}
+            metric_stats[column] = stats
+            prepared[index] = (column, stats)
+        stats["non_null_count"] += 1
+        identifier = (_normalized_text_looks_like_identifier if type(text) is str else _looks_like_identifier_number)
+        if numeric_values.get(column) is not None and not identifier(text):
+            stats["numeric_count"] += 1
+        _append_metric_sample_text(stats, text)
 
 
 def _update_metric_stats_from_row(
