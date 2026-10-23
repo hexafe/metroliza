@@ -512,6 +512,50 @@ def _coerce_datetime_or_none(value):
         return None
 
 
+def _can_sort_header_rows(table):
+    # Generic/pandas tables, subclasses, helper-column collisions and unusual
+    # row layouts retain the copy/assign/sort/drop compatibility path.
+    if type(table) is not RowTable or type(table.columns) is not tuple:
+        return False
+    if not all(type(column) is str for column in table.columns):
+        return False
+    if len(set(table.columns)) != len(table.columns):
+        return False
+    if '_sample_numeric' in table.columns or '_date_sort' in table.columns:
+        return False
+    return type(table.rows) is tuple and all(
+        type(row) is tuple and len(row) == len(table.columns) for row in table.rows
+    )
+
+
+def _header_date_sort_values(values):
+    parsed_strings = {}
+    parsed_values = []
+    for value in values:
+        # Exact strings have no user-defined hash/equality callbacks. Other
+        # accepted date objects and string subclasses keep scalar parsing.
+        if type(value) is str:
+            if value not in parsed_strings:
+                parsed_strings[value] = _coerce_datetime_or_none(value)
+            parsed_values.append(parsed_strings[value])
+        else:
+            parsed_values.append(_coerce_datetime_or_none(value))
+    return parsed_values
+
+
+def _sort_header_row_table(table, *, sample_sort):
+    if sample_sort:
+        primary_values = _numeric_array(table['SAMPLE_NUMBER'])
+        if not np.isfinite(primary_values).any():
+            return table.sort_values(by='SAMPLE_NUMBER', kind='mergesort')
+    else:
+        primary_values = _header_date_sort_values(table['DATE'])
+        if not any(value is not None for value in primary_values):
+            return table.sort_values(by=['DATE', 'SAMPLE_NUMBER'], kind='mergesort')
+    indices = table._sort_indices((primary_values, table['SAMPLE_NUMBER']))
+    return table.take_rows(indices)
+
+
 def _table_records(table):
     if table is None:
         return []
@@ -4721,6 +4765,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
+        if _can_sort_header_rows(header_group):
+            return _sort_header_row_table(
+                header_group, sample_sort=self._is_sample_sort_mode(sort_mode),
+            )
         sorted_group = header_group.copy()
 
         if self._is_sample_sort_mode(sort_mode):
