@@ -14,6 +14,9 @@ from modules.characteristic_mapping_service import (
 )
 
 
+_NATIVE_SQLITE_VERSION = tuple(int(part) for part in sqlite3.sqlite_version.split('.'))
+
+
 def _create_measurement_export_db(db_path):
     with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute(
@@ -229,6 +232,36 @@ def test_service_falls_back_to_legacy_reports_measurements_schema(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+_METRIC_IDENTITY_SQL = """
+    CASE
+        WHEN TRIM(COALESCE(CAST(header AS TEXT), '')) <> ''
+          AND TRIM(COALESCE(CAST(ax AS TEXT), '')) <> ''
+        THEN TRIM(CAST(header AS TEXT)) || ' - ' || TRIM(CAST(ax AS TEXT))
+        WHEN TRIM(COALESCE(CAST(header AS TEXT), '')) <> ''
+        THEN TRIM(CAST(header AS TEXT))
+        ELSE ''
+    END
+"""
+
+_REFERENCE_SQL = "NULLIF(TRIM(COALESCE(CAST(reference AS TEXT), '')), '')"
+
+
+def _original_metric_source_cte(source_sql: str) -> str:
+    return f"""
+        WITH measurement_source AS (
+            {source_sql}
+        ),
+        metric_source AS (
+            SELECT
+                {_METRIC_IDENTITY_SQL} AS metric_name,
+                {_REFERENCE_SQL} AS reference,
+                report_id,
+                measurement_id
+            FROM measurement_source
+        )
+    """
+
+
 def _oracle_fetch_sample_references(db_path, source_sql, metric_name, *, sample_reference_limit, connection=None):
     limit = max(0, int(sample_reference_limit or 0))
     if limit == 0:
@@ -238,7 +271,7 @@ def _oracle_fetch_sample_references(db_path, source_sql, metric_name, *, sample_
         rows = execute_with_retry(
             db_path,
             f"""
-            {service_module._metric_source_cte(source_sql)}
+            {_original_metric_source_cte(source_sql)}
             SELECT reference
             FROM metric_source
             WHERE metric_name = ?
@@ -266,7 +299,7 @@ def _oracle_fetch_distinct_report_metric_names(db_path, *, sample_reference_limi
         rows = execute_with_retry(
             db_path,
             f"""
-            {service_module._metric_source_cte(source_sql)}
+            {_original_metric_source_cte(source_sql)}
             SELECT
                 metric_name,
                 COUNT(*) AS measurement_count,
@@ -362,6 +395,11 @@ def _assert_equivalent(db_path, **kwargs):
         expected = _oracle_fetch_distinct_report_metric_names(db_path, sample_reference_limit=limit, **kwargs)
         actual = fetch_distinct_report_metric_names(db_path, sample_reference_limit=limit, **kwargs)
         assert actual == expected, f'limit={limit!r}'
+        for row in actual:
+            assert type(row['metric_name']) is str
+            assert all(type(row[key]) is int for key in ('measurement_count', 'report_count', 'reference_count'))
+            assert type(row['sample_references']) is list
+            assert all(type(reference) is str for reference in row['sample_references'])
         assert [list(row) for row in actual] == [list(row) for row in expected]
     default = _oracle_fetch_distinct_report_metric_names(db_path, **kwargs)
     assert fetch_distinct_report_metric_names(db_path, **kwargs) == default
@@ -373,6 +411,16 @@ def test_metric_names_equivalent_to_per_metric_reference_on_tricky_values(tmp_pa
     _build_view_db(db_path, _TRICKY_ROWS)
 
     expected = _assert_equivalent(db_path)
+
+    assert [tuple(row.values()) for row in expected] == [
+        ('DIA - X', 9, 3, 4, ['REF-A', 'Ref-a', 'REF-b']),
+        ('MIXED - CASE', 1, 1, 1, ['REF-3']),
+        ('Mixed - case', 1, 1, 1, ['REF-2']),
+        ('mixed - Case', 1, 1, 1, ['REF-1']),
+        ('NUM - Z', 3, 2, 2, ['12', '7']),
+        ('ONLY-NULL', 2, 1, 0, []),
+        ('UNI', 4, 2, 4, ['ZREF', 'zref', '\u00c4REF']),
+    ]
 
     by_metric = {row['metric_name']: row for row in expected}
     assert 'ONLY-NULL' in by_metric and by_metric['ONLY-NULL']['sample_references'] == []
@@ -510,3 +558,70 @@ def test_metric_names_use_a_single_data_query_regardless_of_metric_count(tmp_pat
 
     assert len(rows) > 20
     assert len(metric_queries) == 1
+
+
+@pytest.mark.parametrize('version', [(3, 34, 9), (3, 35, 0), sqlite3.sqlite_version_info])
+def test_metric_source_materialization_version_guard_preserves_ordered_results(tmp_path, monkeypatch, version):
+    db_path = str(tmp_path / 'version_guard.db')
+    _build_view_db(db_path, _TRICKY_ROWS)
+    monkeypatch.setattr(service_module.sqlite3, 'sqlite_version_info', version)
+    source_sql = service_module._measurement_source_sql(db_path)
+    cte = service_module._metric_source_cte(source_sql)
+    original = _original_metric_source_cte(source_sql)
+    if version < (3, 35, 0):
+        assert cte == original
+    else:
+        assert cte == original.replace('metric_source AS (', 'metric_source AS MATERIALIZED (')
+        if _NATIVE_SQLITE_VERSION < (3, 35, 0):
+            pytest.skip('Generated SQL checked; native SQLite cannot execute materialization hints before 3.35')
+    _assert_equivalent(db_path)
+
+
+def test_metric_names_materialized_plan_scans_measurement_source_once(tmp_path, monkeypatch):
+    if _NATIVE_SQLITE_VERSION < (3, 35, 0):
+        pytest.skip('SQLite materialization hints require 3.35+')
+    db_path = str(tmp_path / 'materialized_plan.db')
+    _build_view_db(db_path, _TRICKY_ROWS + _random_rows(13))
+    metric_queries = []
+    real_execute = service_module.execute_with_retry
+
+    def capture_execute(db, query, *args, **kwargs):
+        if 'ranked_references AS' in query:
+            metric_queries.append(query)
+        return real_execute(db, query, *args, **kwargs)
+
+    monkeypatch.setattr(service_module, 'execute_with_retry', capture_execute)
+    actual = fetch_distinct_report_metric_names(db_path)
+    assert actual == _oracle_fetch_distinct_report_metric_names(db_path)
+    assert len(metric_queries) == 1
+    with closing(sqlite3.connect(db_path)) as connection:
+        plan = connection.execute('EXPLAIN QUERY PLAN ' + metric_queries[0], (3,)).fetchall()
+    details = [row[3].split() for row in plan]
+    assert ['MATERIALIZE', 'metric_source'] in details, plan
+    assert sum(tokens[:2] == ['SCAN', 'vw_measurement_export'] for tokens in details) == 1, plan
+    assert sum(tokens[:2] == ['SCAN', 'metric_source'] for tokens in details) == 2, plan
+
+
+@pytest.mark.parametrize('version', [(3, 34, 9), sqlite3.sqlite_version_info])
+def test_metric_names_equivalent_on_unmigrated_legacy_fallback(tmp_path, monkeypatch, version):
+    from metroliza.reports import report_schema
+
+    db_path = str(tmp_path / 'legacy_fallback.db')
+    with closing(sqlite3.connect(db_path)) as connection, connection:
+        connection.execute('CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE)')
+        connection.execute('CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY, REPORT_ID INTEGER, HEADER, AX)')
+        connection.executemany(
+            'INSERT INTO REPORTS(ID, REFERENCE) VALUES (?, ?)',
+            [(index + 1, row[0]) for index, row in enumerate(_TRICKY_ROWS)],
+        )
+        connection.executemany(
+            'INSERT INTO MEASUREMENTS(ID, REPORT_ID, HEADER, AX) VALUES (?, ?, ?, ?)',
+            [(index + 1, index + 1, row[1], row[2]) for index, row in enumerate(_TRICKY_ROWS)],
+        )
+    monkeypatch.setattr(report_schema, 'ensure_report_schema', lambda *args, **kwargs: None)
+    monkeypatch.setattr(service_module.sqlite3, 'sqlite_version_info', version)
+    assert 'FROM MEASUREMENTS' in service_module._measurement_source_sql(db_path)
+    expected = _assert_equivalent(db_path)
+    assert [row['metric_name'] for row in expected] == [
+        'DIA - X', 'MIXED - CASE', 'Mixed - case', 'mixed - Case', 'NUM - Z', 'ONLY-NULL', 'UNI',
+    ]

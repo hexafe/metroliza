@@ -670,7 +670,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "395214477af19f8927a0edbbe2091a6023a55a8173b1fad7b1587f24a0ca662f",
+      "fingerprint": "19d06eb210135385ee67be9e687dcb8e775e4f2831d59a892cd11210784ddb6b",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -679,16 +679,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "3303966a1829d987c4aa69958a0e9f8257124f119ff015f4abdc39fce1cc9ed3",
+      "fingerprint": "fc443905d91887cd9fe56c950ef8b4d7e5d930fc7661c4df33161375753f148c",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
-      "rationale": "_metric_source_cte: source_sql is selected by _measurement_source_sql from three fixed view/current-table/legacy-table SELECT shapes after schema probes. _METRIC_IDENTITY_SQL and _REFERENCE_SQL are module constants; measurement/reference data is evaluated by SQL, not inserted as SQL text.",
+      "rationale": "_metric_source_cte: source_sql is selected by _measurement_source_sql from three fixed view/current-table/legacy-table SELECT shapes after schema probes. _METRIC_IDENTITY_SQL and _REFERENCE_SQL are module constants; measurement/reference data is evaluated by SQL, not inserted as SQL text. STEP3 T15 adds only a runtime-selected literal MATERIALIZED keyword (or empty string) from the SQLite version check; no data-derived syntax is introduced. Owner and expiry are unchanged.",
       "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "90ec8329d57446ceda792539d6eb45a601466115811331d8988b204b3c7daa25",
+      "fingerprint": "e1217a429d01cb4d758e97fa77b215a8b50dc7c58d96f5f79e6c264918563595",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -697,7 +697,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "aa4d0add76256565b8b79f39da37a80f7e0f2f11e494678aec426c382d8cc5dc",
+      "fingerprint": "95c772c1800016acf3a068bc624e787470d14f05c9d7f5e88e4620d1804d0896",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
