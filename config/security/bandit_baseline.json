@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_on": "2026-10-19",
+  "generated_on": "2026-10-24",
   "entries": [
     {
       "repository": "hexafe-plotstats",
@@ -742,7 +742,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "91c9859e96888813aac63cc79f3dc23b0b3cce39bf2f73da0ebd85fb8b466e87",
+      "fingerprint": "831ff2fd0a2da3fc3cc79cdb363c8b81f4c838724fa18eb6295c85b978d11fe7",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
@@ -1387,6 +1387,15 @@
       "owner": "STEP3 coordinator (#1151)",
       "rationale": "_snapshot_partition_query indexed SELECT: table_name and the proven unshadowed rowid alias are quote_identifier-escaped under TEMP; analytical columns and predicate are fixed source-code fragments. REFERENCE and canonical signed-int64 REPORT_ID values are passed separately as bound parameters. Actual owning connection, live generation and exact canonical scope are required; all unsupported inputs retain the original query. SQL-shaped parameter/identifier controls preserve literal rows and the main catalog. Reviewed in STEP3 #1151 by the coordinator; independent wave review remains required before push.",
       "expires_on": "2026-11-23"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "711875b465e12fe8a0bb62071f4c0e79f1dcbe57651a518a61880ec69734d821",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_query_service.py",
+      "owner": "Security review",
+      "rationale": "_canonical_report_choice_source (STEP3 T14, #1151/#906): raw native strings and exact canonical export equality guard a fixed report-column whitelist; projection is quote_identifier(column_name) or the literal file_name AS FILENAME, and source view is a module constant. EXISTS uses only the fixed report_id join; no report/filter data is interpolated as SQL. This exception is limited to that guarded internal source builder.",
+      "expires_on": "2027-04-30"
     }
   ]
 }
