@@ -25,7 +25,9 @@ class _FakeDialog(_FakeWidget):
 
 def _build_qt_stubs():
     qtcore = types.ModuleType('PyQt6.QtCore')
-    qtcore.Qt = types.SimpleNamespace(ItemDataRole=types.SimpleNamespace(UserRole=0))
+    qtcore.Qt = types.SimpleNamespace(
+        ItemDataRole=types.SimpleNamespace(UserRole=0, DisplayRole=0, EditRole=2)
+    )
     qtcore.QUrl = _FakeWidget
     qtcore.QDate = _FakeWidget
 
