@@ -13,6 +13,7 @@ import metroliza.shared.custom_logger as custom_logger
 from metroliza.reports.db import read_sql_dataframe
 from metroliza.tabular.data_grouping_service import (
     build_grouping_row_index,
+    native_group_color_assignment,
     build_grouping_query as _build_grouping_query,
     build_grouping_scope_query_from_filter_state,
     compute_group_key_for_df as _compute_group_key_for_df,
@@ -1073,6 +1074,14 @@ class DataGrouping(QDialog):
         self.df[self.group_color_column] = self.df[self.group_color_column].fillna(self.default_group_color)
         self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = self.default_group_color
 
+        assigned = native_group_color_assignment(
+            self.df, default_group=self.default_group, default_color=self.default_group_color,
+            color_column=self.group_color_column,
+        )
+        if assigned is not None:
+            self.df[self.group_color_column] = assigned
+            return
+
         for group_name in self.df['GROUP'].dropna().astype(str).unique():
             if group_name == self.default_group:
                 continue
@@ -1407,10 +1416,15 @@ class DataGrouping(QDialog):
         cached = getattr(self, "_cached_grouping_row_index", None)
         if isinstance(cached, pd.DataFrame):
             return cached
-        row_index = build_grouping_row_index(
-            self._filtered_grouping_dataframe(),
-            group_color_column=self.group_color_column,
-        )
+        filtered = self._filtered_grouping_dataframe()
+        if filtered is self.df and type(filtered) is pd.DataFrame:
+            # Reuse only this revision's exact full input; keep independent result mutation.
+            row_index = self._current_full_grouping_row_index().copy(deep=True)
+        else:
+            row_index = build_grouping_row_index(
+                filtered,
+                group_color_column=self.group_color_column,
+            )
         self._cached_grouping_row_index = row_index
         return row_index
 
@@ -1592,7 +1606,21 @@ class DataGrouping(QDialog):
             May update UI state, database rows, or in-memory export context.
         """
 
+        signal_blockers = []
         try:
+            widgets = [self._safe_attr(self, name) for name in (
+                'reference_list', 'part_list', 'all_parts_list', 'groups_list', 'part_group_list',
+            )]
+            if QListWidget.__module__ == 'PyQt6.QtWidgets' and all(
+                isinstance(widget, QListWidget) for widget in widgets
+            ):
+                try:
+                    from PyQt6.QtCore import QSignalBlocker
+                except ImportError:
+                    pass  # Preserve the general population path when the binding lacks it.
+                else:
+                    for widget in widgets:
+                        signal_blockers.append(QSignalBlocker(widget))
             self._apply_list_theme_styles()
             self._ensure_group_color_integrity()
             row_index = self._with_reference_selection(self._grouping_row_index())
@@ -1638,11 +1666,12 @@ class DataGrouping(QDialog):
                 self.reference_list.setCurrentRow(preferred_reference_index)
 
             # Use clear and addItems for the rest of the lists
-            selected_reference = self._selected_reference_name()
-            try:
-                self._populate_part_list(selected_reference, row_index=row_index)
-            except TypeError:
-                self._populate_part_list(selected_reference)
+            if not signal_blockers:
+                selected_reference = self._selected_reference_name()
+                try:
+                    self._populate_part_list(selected_reference, row_index=row_index)
+                except TypeError:
+                    self._populate_part_list(selected_reference)
 
             self.all_parts_list.clear()
             if 'SAMPLE_NUMBER' in row_index.columns:
@@ -1685,14 +1714,21 @@ class DataGrouping(QDialog):
                 if preferred_group_name in group_names:
                     preferred_group_index = group_names.index(preferred_group_name)
                 self.groups_list.setCurrentRow(preferred_group_index)
-            selected_group = self._selected_group_name()
-            try:
-                self._populate_part_group_list(selected_group, row_index=group_row_index)
-            except TypeError:
-                self._populate_part_group_list(selected_group)
+            if signal_blockers:
+                self.on_reference_selection_changed()
+                self.on_group_selection_changed()
+            else:
+                selected_group = self._selected_group_name()
+                try:
+                    self._populate_part_group_list(selected_group, row_index=group_row_index)
+                except TypeError:
+                    self._populate_part_group_list(selected_group)
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            for blocker in reversed(signal_blockers):
+                blocker.unblock()
 
     def search_list_widgets(self, list_widget, search_text):
         """Handle `search_list_widgets` for `DataGrouping`.

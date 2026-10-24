@@ -1258,7 +1258,8 @@ def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> 
         thread = dialog.create_analytics_thread()
 
         assert thread.grouping_df is not grouping_df
-        assert thread.grouping_df.equals(grouping_df)
+        from metroliza.tabular.contracts import validate_grouping_df
+        assert thread.grouping_df == validate_grouping_df(grouping_df)
         assert thread.aggregation_state.group_fields == ("GROUP",)
         assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
     finally:
@@ -1724,4 +1725,119 @@ def test_csv_result_is_applied_before_progress_is_dismissed(monkeypatch):
             dialog.on_tabular_load_finished(None)
         assert events == [("apply", None), ("dismiss", None)]
     finally:
+        _dispose_dialog(dialog)
+
+
+def test_loading_action_validates_grouping_once_and_revokes_on_replace(monkeypatch, tmp_path):
+    from metroliza.tabular import contracts
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    source = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
+    calls = []
+    original = contracts._validate_grouping_assignments
+    def validate(value, provenance=None):
+        calls.append(value)
+        return original(value, provenance)
+    monkeypatch.setattr(contracts, '_validate_grouping_assignments', validate)
+    monkeypatch.setattr(IndustrialAnalyticsThread, 'start', lambda self: None)
+    dialog.input_file = 'table.csv'
+    dialog.output_dashboard_file = str(tmp_path / 'result.html')
+    dialog.set_df_for_grouping(source)
+    dialog.set_grouping_applied(True)
+    try:
+        dialog.show_loading_screen()
+        thread = dialog.analytics_thread
+        snapshot = thread.request._grouping_snapshot
+        assert len(calls) == 1
+        assert snapshot.source_id == id(source)
+        assert thread.grouping_df is snapshot.assignments
+        source.loc[0, 'GROUP'] = 'changed'
+        assert snapshot.resolve(thread.grouping_df)[0].group == 'A'
+        dialog.show_loading_screen()  # double-click cannot replace the worker
+        assert dialog.analytics_thread is thread
+        assert len(calls) == 1
+        dialog.cancel_analytics()
+        assert thread._is_cancelled()
+        dialog.set_df_for_grouping(source.copy())
+        with pytest.raises(ValueError, match='stale'):
+            snapshot.resolve(thread.grouping_df)
+        thread.finished.emit()
+        assert dialog.analytics_thread is None
+        dialog.show_loading_screen()
+        assert len(calls) == 2
+        assert dialog.analytics_thread.grouping_df[0].group == 'changed'
+        dialog.analytics_thread.finished.emit()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_stale_grouping_handoff_closes_progress_and_reports_error(monkeypatch, tmp_path):
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    dialog.input_file = 'table.csv'
+    dialog.output_dashboard_file = str(tmp_path / 'result.html')
+    source = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
+    dialog.set_df_for_grouping(source)
+    dialog.set_grouping_applied(True)
+    create = dialog.create_analytics_thread
+    def replace_source():
+        dialog.set_df_for_grouping(source.copy())
+        return create()
+    warnings = []
+    monkeypatch.setattr(dialog, 'create_analytics_thread', replace_source)
+    monkeypatch.setattr(QMessageBox, 'warning', lambda *args: warnings.append(args[-1]))
+    try:
+        dialog.show_loading_screen()
+        assert dialog.analytics_thread is None
+        assert dialog._pending_grouping_snapshot is None
+        assert not dialog.loading_dialog.isVisible()
+        assert len(warnings) == 1 and 'stale' in warnings[0]
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize('callback', ['reference', 'label'])
+def test_declined_snapshot_keeps_actual_raw_thread_workflow_handoff(monkeypatch, callback):
+    from metroliza.industrial import industrial_analytics_workflow as workflow
+    _app()
+    events, observed = [], []
+    source = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
+    class Value:
+        def __str__(self):
+            events.append(callback)
+            if callback == 'reference':
+                source.loc[0, 'GROUP'] = 'B'
+                return 'reference'
+            return f'Rest{len(events)}'
+    if callback == 'reference':
+        source['REFERENCE'] = [Value()]
+    else:
+        source.attrs['default_group_label'] = Value()
+    real_thread, validate = IndustrialAnalyticsThread, workflow.validate_industrial_analytics_request
+    def create(**kwargs):
+        assert kwargs['grouping_df'] is source
+        assert 'grouping_default_group_label' not in kwargs
+        return real_thread(**kwargs)
+    class Boundary(BaseException):
+        pass
+    def capture(*args, **kwargs):
+        request = validate(*args, **kwargs)
+        observed.append((request.grouping_df[0].group, request.grouping_default_group_label))
+        raise Boundary()
+    monkeypatch.setitem(IndustrialAnalyticsDialog.create_analytics_thread.__globals__, 'IndustrialAnalyticsThread', create)
+    monkeypatch.setattr(workflow, 'validate_industrial_analytics_request', capture)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file='table.csv')
+    thread = None
+    try:
+        dialog.set_df_for_grouping(source)
+        dialog.set_grouping_applied(True)
+        thread = dialog.create_analytics_thread()
+        with pytest.raises(Boundary):
+            thread.run()
+        assert observed == [('B', 'POPULATION') if callback == 'reference' else ('A', 'Rest2')]
+        assert events == [callback] * 3
+    finally:
+        if thread is not None:
+            thread.deleteLater()
+            QCoreApplication.sendPostedEvents(thread, QEvent.Type.DeferredDelete)
         _dispose_dialog(dialog)

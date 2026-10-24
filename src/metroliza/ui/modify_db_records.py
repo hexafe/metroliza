@@ -3,7 +3,7 @@
 The report and measurement record tables can hold hundreds of thousands of rows. Rows are kept as
 plain tuples inside a :class:`RecordTableModel` (no per-cell ``QTableWidgetItem``), edits are tracked
 as a sparse ``{row: {column: text}}`` dict on top of the untouched original values, and filtering is a
-substring test against one precomputed lowercase haystack per row. :func:`load_record_rows` builds
+substring test against one cached lowercase haystack per row. :func:`load_record_rows` builds
 those structures from batched SQL fetches and is safe to run in a worker thread
 (:class:`RecordLoadThread`).
 """
@@ -41,16 +41,16 @@ def row_haystack(values: Sequence[Any]) -> str:
 
 @dataclass(frozen=True)
 class RecordRows:
-    """Rows aligned with the record specs plus their precomputed filter haystack."""
+    """Rows aligned with the record specs plus an optional precomputed filter haystack."""
 
     rows: list[tuple[Any, ...]]
-    haystack: list[str]
+    haystack: list[str] | None
 
 
 class _RecordRowBuilder:
     """Align fetched batches with the record specs and keep memory small."""
 
-    def __init__(self, specs: Sequence[dict[str, Any]]) -> None:
+    def __init__(self, specs: Sequence[dict[str, Any]], *, defer_haystack: bool = False) -> None:
         self._fields = [spec["field"].lower() for spec in specs]
         # Repeated text (section names, labels, status codes) is stored once per column. Key and float
         # columns are skipped: ids are unique and floats would only grow the lookup tables.
@@ -61,7 +61,7 @@ class _RecordRowBuilder:
         }
         self._positions: list[int | None] | None = None
         self.rows: list[tuple[Any, ...]] = []
-        self.haystack: list[str] = []
+        self.haystack: list[str] | None = None if defer_haystack else []
 
     def add_batch(self, columns: Sequence[str], batch_rows: Sequence[tuple[Any, ...]]) -> None:
         if not batch_rows:
@@ -81,6 +81,8 @@ class _RecordRowBuilder:
             aligned.append(column)
 
         self.rows.extend(zip(*aligned))
+        if self.haystack is None:
+            return
         displayed = [
             ["" if value is None else value if value.__class__ is str else str(value) for value in column]
             for column in aligned
@@ -95,10 +97,14 @@ def load_record_rows(
     *,
     should_cancel: Callable[[], bool] | None = None,
     batch_size: int = FETCH_BATCH_SIZE,
+    defer_haystack: bool = False,
 ) -> RecordRows | None:
-    """Fetch ``query`` in batches and build model rows; return ``None`` when cancelled."""
+    """Fetch model rows; the dialog may defer search text until the first filter.
 
-    builder = _RecordRowBuilder(specs)
+    Public callers retain eager haystacks by default. Return ``None`` when cancelled.
+    """
+
+    builder = _RecordRowBuilder(specs, defer_haystack=defer_haystack)
     batches = iter_sql_query_batches(db_file, query, batch_size=batch_size, should_cancel=should_cancel)
     try:
         for batch in batches:
@@ -338,13 +344,15 @@ class RecordLoadThread(QThread):
     loaded = pyqtSignal(str, int, object)
     failed = pyqtSignal(str, int, object)
 
-    def __init__(self, kind: str, generation: int, db_file: str, query: str, specs: Sequence[dict[str, Any]]):
+    def __init__(self, kind: str, generation: int, db_file: str, query: str, specs: Sequence[dict[str, Any]],
+                 *, defer_haystack: bool = False):
         super().__init__()
         self._kind = kind
         self._generation = generation
         self._db_file = db_file
         self._query = query
         self._specs = list(specs)
+        self._defer_haystack = defer_haystack
 
     def run(self) -> None:
         try:
@@ -353,6 +361,7 @@ class RecordLoadThread(QThread):
                 self._query,
                 self._specs,
                 should_cancel=self.isInterruptionRequested,
+                defer_haystack=self._defer_haystack,
             )
         except Exception as exc:  # worker boundary: report instead of killing the thread
             self.failed.emit(self._kind, self._generation, exc)

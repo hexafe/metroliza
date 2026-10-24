@@ -113,11 +113,12 @@ def _is_missing_measurement_source_error(exc: sqlite3.OperationalError) -> bool:
 
 
 def _metric_source_cte(source_sql: str) -> str:
+    materialization = ' MATERIALIZED' if sqlite3.sqlite_version_info >= (3, 35, 0) else ''
     return f"""
         WITH measurement_source AS (
             {source_sql}
         ),
-        metric_source AS (
+        metric_source AS{materialization} (
             SELECT
                 {_METRIC_IDENTITY_SQL} AS metric_name,
                 {_REFERENCE_SQL} AS reference,
@@ -142,7 +143,8 @@ def fetch_distinct_report_metric_names(
 
     Counts and the first ``sample_reference_limit`` references per metric (ordered
     by ``LOWER(reference), reference``) are read in one statement, so the
-    measurement source is scanned once regardless of the number of metrics.
+    metric source is materialized once on SQLite 3.35+, regardless of the number
+    of metrics. Older SQLite versions retain the general query plan.
     """
     source_sql = _measurement_source_sql(db_path, connection=connection)
     if source_sql is None:

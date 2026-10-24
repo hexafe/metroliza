@@ -6,12 +6,14 @@ import tempfile
 import threading
 import types
 import unittest
+import warnings
 
 import pytest
 from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
+from metroliza.charts.chart_renderer import MatplotlibChartRenderer
 from metroliza.exporting.export_data_thread import (
     ExportDataThread,
     classify_normality_status,
@@ -34,6 +36,8 @@ from metroliza.exporting.export_logging_service import (
 from metroliza.exporting.google_drive_export import GoogleDriveConversionResult
 from metroliza.parsing.cmm_report_parser import CMMReportParser, EmptyCMMReportError
 from metroliza.parsing.base_report_parser import BaseReportParser
+
+
 from metroliza.parsing.parse_reports_thread import (
     build_report_fingerprints_from_rows,
     build_source_file_fingerprint,
@@ -2263,6 +2267,130 @@ class TestExportHelpers(unittest.TestCase):
         self.assertTrue(any('ref_idx' in str(row[0]) for row in indexes))
         self.assertTrue(any('SEARCH' in str(row).upper() for row in query_plan))
 
+    def test_snapshot_partition_flow_preserves_source_catalog_rows_and_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, 'partition-source.db')
+            with closing(sqlite3.connect(db_path)) as connection, connection:
+                connection.execute(
+                    'CREATE TABLE source_rows (REPORT_ID INTEGER, REFERENCE TEXT, '
+                    'HEADER TEXT, AX TEXT, MEAS REAL, OCCURRENCE INTEGER)'
+                )
+                connection.executemany('INSERT INTO source_rows VALUES (?, ?, ?, ?, ?, ?)', [
+                    (1, 'shared', 'H2', 'X', 2.0, 3), (2, None, 'H1', 'X', 1.0, 1),
+                    (3, 'shared', 'H1', 'X', 3.0, 2), (2, '   ', 'H1', 'X', 1.0, 1),
+                    (4, 'Report 2 (no reference)', 'H0', 'X', 0.0, 0),
+                ])
+                catalog_before = connection.execute('SELECT * FROM sqlite_master ORDER BY name').fetchall()
+                rows_before = connection.execute('SELECT * FROM source_rows ORDER BY rowid').fetchall()
+            bytes_before = Path(db_path).read_bytes()
+            thread = ExportDataThread(ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file='dummy.xlsx'), options=ExportOptions(),
+            ))
+            thread.filter_query = 'SELECT * FROM source_rows ORDER BY OCCURRENCE, MEAS'
+            with closing(sqlite3.connect(db_path)) as connection:
+                thread._db_connection = connection
+                thread._prepare_export_snapshot()
+                snapshot_name = thread._snapshot_table_name
+                self.assertIsNotNone(thread._snapshot_partition_source)
+                queries = []
+                connection.set_trace_callback(queries.append)
+                actual = list(thread._iter_reference_partitions())
+                connection.set_trace_callback(None)
+                self.assertEqual([label for label, _ in actual], ['Report 2 (no reference)', 'shared', 'Report 2 (no reference)'])
+                self.assertEqual(
+                    [[row['OCCURRENCE'] for row in table.iter_rows(as_dict=True)] for _, table in actual],
+                    [[0], [2, 3], [1, 1]],
+                )
+                self.assertEqual(
+                    [table['SAMPLE_NUMBER'].tolist() for _, table in actual], [['1'], ['1', '2'], ['1', '2']],
+                )
+                fast_queries = [query for query in queries if 'ORDER BY export_scope.' in query]
+                self.assertEqual(len(fast_queries), 3)
+                for query in fast_queries:
+                    plan = connection.execute('EXPLAIN QUERY PLAN ' + query).fetchall()
+                    self.assertTrue(any('SEARCH' in row[3] and '_idx' in row[3] for row in plan), plan)
+                    self.assertFalse(any('TEMP B-TREE' in row[3] for row in plan), plan)
+                with mock.patch.object(thread, '_partition_header_counts', side_effect=RuntimeError('count failed')):
+                    discovered = list(thread._iter_reference_partitions())
+                self.assertEqual(
+                    {table['EXPORT_PARTITION_KEY'].iloc[0]: list(table.iter_rows()) for _, table in discovered},
+                    {table['EXPORT_PARTITION_KEY'].iloc[0]: list(table.iter_rows()) for _, table in actual},
+                )
+                thread._cleanup_export_snapshot()
+                self.assertIsNone(thread._snapshot_partition_source)
+                self.assertEqual(connection.execute('SELECT name FROM sqlite_temp_master WHERE tbl_name = ?', (snapshot_name,)).fetchall(), [])
+                live = list(thread._iter_reference_partitions())
+                self.assertEqual([(label, list(table.iter_rows())) for label, table in live],
+                                 [(label, list(table.iter_rows())) for label, table in actual])
+                with mock.patch('metroliza.exporting.export_data_thread.prepare_snapshot_partition_source', side_effect=RuntimeError('snapshot failed')):
+                    thread._prepare_export_snapshot()
+                self.assertIsNone(thread._snapshot_table_name)
+                self.assertIsNone(thread._snapshot_partition_source)
+                self.assertEqual(thread._active_export_query, thread.filter_query)
+                self.assertEqual(connection.execute('SELECT name FROM sqlite_temp_master').fetchall(), [])
+                self.assertEqual([(label, list(table.iter_rows())) for label, table in thread._iter_reference_partitions()],
+                                 [(label, list(table.iter_rows())) for label, table in actual])
+                thread._cleanup_export_snapshot()
+                self.assertEqual(connection.execute('SELECT * FROM sqlite_master ORDER BY name').fetchall(), catalog_before)
+                self.assertEqual(connection.execute('SELECT * FROM source_rows ORDER BY rowid').fetchall(), rows_before)
+            self.assertEqual(Path(db_path).read_bytes(), bytes_before)
+
+    def test_snapshot_owner_revokes_previous_and_cleaned_generations(self):
+        from metroliza.exporting import export_query_service as service
+
+        thread = ExportDataThread(ExportRequest(
+            paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions(),
+        ))
+        # Casts give the CTAS snapshot the canonical TEXT/INT affinities.
+        thread.filter_query = (
+            "SELECT CAST(2 AS INTEGER) AS REPORT_ID, CAST('shared' AS TEXT) AS REFERENCE, "
+            "'H1' AS HEADER, 'X' AS AX"
+        )
+        with closing(sqlite3.connect(':memory:')) as connection:
+            thread._db_connection = connection
+            with mock.patch('metroliza.exporting.export_data_thread.time.time', return_value=1.0):
+                thread._prepare_export_snapshot()
+            first_source = thread._snapshot_partition_source
+            first_query = service.build_analytical_partition_query(thread._active_export_query)
+            with mock.patch('metroliza.exporting.export_data_thread.time.time', return_value=2.0):
+                thread._prepare_export_snapshot()
+            second_source = thread._snapshot_partition_source
+            second_query = service.build_analytical_partition_query(thread._active_export_query)
+            self.assertIsNot(first_source, second_source)
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                rows = service.load_export_partition_dataframe(
+                    ':memory:', first_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=first_source,
+                )
+                self.assertEqual(len(rows), 1)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+            thread._cleanup_export_snapshot()
+            connection.execute(
+                f'CREATE TABLE main."{second_source.table_name}" AS '
+                "SELECT 2 AS REPORT_ID, 'wrong-main' AS REFERENCE, 'H1' AS HEADER, 'X' AS AX"
+            )
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                with self.assertRaisesRegex(sqlite3.OperationalError, 'no such table: temp'):
+                    service.load_export_partition_dataframe(
+                        ':memory:', second_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                        connection=connection, snapshot_source=second_source,
+                    )
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+            # Recreate the same TEMP name: the old generation must still be refused.
+            connection.execute(
+                f'CREATE TEMP TABLE "{second_source.table_name}" AS {thread.filter_query}'
+            )
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                result = service.load_export_partition_dataframe(
+                    ':memory:', second_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=second_source,
+                )
+                self.assertEqual(len(result), 1)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+
     def test_google_stage_message_builder_matches_existing_semantics(self):
         self.assertEqual(
             build_google_stage_message('completed', 'https://docs.google.com/spreadsheets/d/sheet-id/edit'),
@@ -3061,6 +3189,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
 
         observed_ylims = []
@@ -3899,6 +4028,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread.violin_plot_min_samplesize = 2
         chart_calls = []
 
@@ -3971,6 +4101,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread.violin_plot_min_samplesize = 2
         chart_calls = []
 
@@ -4058,6 +4189,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 3
 
@@ -4113,6 +4245,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 10
 
@@ -4343,6 +4476,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
 
         header_group = pd.DataFrame(
@@ -4392,6 +4526,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
 
         label_count = 40
@@ -4443,6 +4578,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 10
 
@@ -5291,6 +5427,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
         thread.violin_plot_min_samplesize = 2
 
@@ -5761,3 +5898,299 @@ def test_preflight_approval_preserves_source_occurrence(tmp_path, container, cha
     finally:
         if thread._extracted_archive_dir is not None:
             thread._extracted_archive_dir.cleanup()
+
+
+class _LegacySummaryRenderer:
+    """Keep the pre-T02 caller path as an independent rendering oracle."""
+
+    def __init__(self, renderer):
+        self.renderer = renderer
+
+    def render_distribution_png(self, *args, **kwargs):
+        return self.renderer.render_distribution_png(*args, **kwargs)
+
+    def render_iqr_png(self, *args, **kwargs):
+        return self.renderer.render_iqr_png(*args, **kwargs)
+
+    def render_trend_png(self, *args, **kwargs):
+        return self.renderer.render_trend_png(*args, **kwargs)
+
+
+def _capture_summary_plotstats(*, legacy=False, scenario='scatter', forbid_legacy=False):
+    import copy
+    import matplotlib
+    import pandas as pd
+    import metroliza.exporting.export_data_thread as module
+    from metroliza.charts.chart_renderer import PlotstatsChartRenderer
+
+    labels = ['1', '2', '3', '4', '5', '6']
+    if scenario == 'violin':
+        labels = ['1'] * 6 + ['2'] * 6
+    elif scenario == 'wide':
+        labels = [str(index) for index in range(1, 33)]
+    count = len(labels)
+    group = pd.DataFrame({
+        'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95] * (count // 6)
+                + [10.0] * (count % 6),
+        'NOM': [10.0] * count, '+TOL': [0.2] * count, '-TOL': [-0.2] * count,
+        'SAMPLE_NUMBER': labels, 'DATE': ['2024-01-01'] * count,
+    })
+    thread = ExportDataThread(ExportRequest(
+        paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+        options=ExportOptions(generate_summary_sheet=True, generate_html_dashboard=True),
+    ))
+    chart_names = {
+        'iqr-only': ['iqr'], 'iqr-default': ['iqr'],
+        'distribution-only': ['distribution'], 'trend-only': ['trend'],
+        'distribution-iqr': ['distribution', 'iqr'],
+    }.get(scenario, ['distribution', 'iqr', 'trend'])
+    thread._optimization_toggles['summary_sheet_minimum_charts'] = set(chart_names)
+    renderer = PlotstatsChartRenderer()
+    thread._chart_renderer = _LegacySummaryRenderer(renderer) if legacy else renderer
+    inserted = []
+
+    class Worksheet:
+        def write(self, *_args, **_kwargs):
+            pass
+
+        def insert_image(self, row, col, _filename, options):
+            inserted.append((row, col, {key: value for key, value in options.items() if key != 'image_data'}))
+
+    # Replace only this caller's pyplot reference. Plotstats may legitimately
+    # construct its own matplotlib figures while producing the primary PNG.
+    real_pyplot = module.plt
+
+    class CallerPyplot:
+        def __getattr__(self, name):
+            return getattr(real_pyplot, name)
+
+    pyplot = CallerPyplot()
+    if forbid_legacy:
+        pyplot.subplots = mock.Mock(side_effect=AssertionError('legacy summary figure created'))
+    warnings = []
+    thread._record_summary_sheet_warning = lambda *args: warnings.append(args)
+    rc = ({} if scenario == 'iqr-default' else
+          {'font.size': 17, 'axes.labelsize': 19, 'axes.linewidth': 2.75})
+    with (
+        matplotlib.rc_context(),
+        mock.patch.object(module, 'plt', pyplot),
+        mock.patch.object(module, 'resolve_distribution_renderer_backend', return_value='matplotlib'),
+        mock.patch.object(module, 'resolve_iqr_renderer_backend', return_value='matplotlib'),
+        mock.patch.object(module, 'resolve_trend_renderer_backend', return_value='matplotlib'),
+    ):
+        matplotlib.rcdefaults()
+        matplotlib.rcParams.update(rc)
+        rc_before = matplotlib.rcParams.copy()
+        figures_before = real_pyplot.get_fignums()
+        thread.summary_sheet_fill(Worksheet(), 'Synthetic H1', group, col=5)
+        rc_after = matplotlib.rcParams.copy()
+        figures_after = real_pyplot.get_fignums()
+    assert not warnings, warnings
+    if forbid_legacy:
+        pyplot.subplots.assert_not_called()
+    sections = copy.deepcopy(thread._html_dashboard_sections)
+    assert len(sections) == 1
+    charts = sections[0]['charts']
+    assert [chart['chart_type'] for chart in charts] == chart_names
+    pngs = [chart.pop('image_buffer').getvalue() for chart in charts]
+    # Finalized legacy geometry is consumed by the native compositor only;
+    # Plotstats and the HTML dashboard derive their views from the payload.
+    payloads = [copy.deepcopy(chart['payload']) for chart in charts]
+    for chart in charts:
+        chart['payload'].pop('resolved_render_spec', None)
+    return {'pngs': pngs, 'slots': inserted, 'sections': sections, 'payloads': payloads,
+            'rc_before': rc_before, 'rc_after': rc_after,
+            'figures_before': figures_before, 'figures_after': figures_after}
+
+
+def _summary_plotstats_failure(failure):
+    from contextlib import nullcontext
+    import matplotlib
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    if failure is None:
+        return nullcontext()
+    render = adapter.render_chart_artifact_png
+
+    def fail(*_args, **_kwargs):
+        if failure.startswith('mutating-'):
+            matplotlib.rcParams.update({'font.size': 31, 'axes.edgecolor': 'red', 'axes.linewidth': 3.5})
+        if failure.endswith('exception'):
+            raise RuntimeError('forced Plotstats failure')
+        if failure.endswith('success'):
+            return render(*_args, **_kwargs)
+        return None
+
+    return mock.patch.object(adapter, 'render_chart_artifact_png', side_effect=fail)
+
+
+@pytest.mark.parametrize('scenario', [
+    'scatter', 'violin', 'wide', 'iqr-only', 'iqr-default',
+    'distribution-only', 'trend-only', 'distribution-iqr',
+])
+@pytest.mark.parametrize('failure', [None, 'none', 'exception', 'mutating-none', 'mutating-exception', 'mutating-success'])
+def test_summary_plotstats_literal_png_slot_and_dashboard_equivalence(scenario, failure, qapplication_session):
+    with _summary_plotstats_failure(failure):
+        expected = _capture_summary_plotstats(legacy=True, scenario=scenario)
+        actual = _capture_summary_plotstats(scenario=scenario)
+    for key in ('pngs', 'slots', 'sections', 'rc_before', 'rc_after', 'figures_before', 'figures_after'):
+        assert actual[key] == expected[key], key
+    assert actual['figures_after'] == actual['figures_before']
+    if scenario == 'violin':
+        assert actual['payloads'][0]['render_mode'] == 'violin'
+    assert [chart['backend'] for chart in actual['sections'][0]['charts']] == [
+        'plotstats' if failure in (None, 'mutating-success') else 'matplotlib'
+    ] * len(actual['pngs'])
+
+
+@pytest.mark.parametrize('scenario', ['scatter', 'violin', 'wide', 'iqr-only', 'iqr-default', 'distribution-iqr'])
+def test_summary_plotstats_success_creates_no_legacy_figure(scenario, qapplication_session):
+    _capture_summary_plotstats(scenario=scenario, forbid_legacy=True)
+
+
+@pytest.mark.parametrize('chart_name', ['distribution', 'iqr', 'trend'])
+@pytest.mark.parametrize('width', [6.0, 8.8, 10.0, 17.3, 32.0])
+def test_summary_declared_size_has_exact_figure_slot_and_span(chart_name, width):
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=(width, 4.0))
+    # Keep the exact declared inches through the worksheet scale calculation;
+    # rounded integer PNG dimensions are a separate rendering concern.
+    size = {'width_px': width * 150.0, 'height_px': 4.0 * 150.0}
+    slot = {'row': 1, 'col': 5}
+    expected = ExportDataThread._summary_image_slot_with_scale(chart_name, slot, figure)
+    actual = ExportDataThread._summary_image_slot_with_scale(chart_name, slot, size)
+    assert actual == expected
+    assert ExportDataThread._resolve_scaled_summary_image_cell_span(size, actual) == (
+        ExportDataThread._resolve_scaled_summary_image_cell_span(figure, expected)
+    )
+
+
+def _serialize_summary_plotstats_capture(capture, directory, mode):
+    import copy
+    from datetime import datetime, timezone
+    from io import BytesIO
+    import metroliza.charts.export_html_dashboard as dashboard
+
+    sections = copy.deepcopy(capture['sections'])
+    for chart, png, payload in zip(sections[0]['charts'], capture['pngs'], capture['payloads'], strict=True):
+        chart['image_buffer'] = BytesIO(png)
+        chart['payload'] = payload
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2024, 1, 1, tzinfo=timezone.utc)
+
+    # Control generation entropy at its source; compare every produced byte.
+    with (
+        mock.patch.object(dashboard, 'datetime', FixedDatetime),
+        mock.patch.object(dashboard, 'uuid4', return_value=types.SimpleNamespace(hex='a' * 32)),
+    ):
+        dashboard.write_export_html_dashboard(
+            excel_file='out.xlsx', output_path=directory / 'dashboard.html',
+            assets_dir=directory / 'dashboard_assets', sections=sections,
+            source_label='Synthetic dashboard', dashboard_mode=mode,
+        )
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in directory.rglob('*') if path.is_file() and not path.name.endswith('.lock')
+    }
+
+
+@pytest.mark.parametrize('mode', ['workbook_sidecar', 'html_only'])
+@pytest.mark.parametrize('failure', [None, 'none', 'exception'])
+def test_summary_plotstats_serialized_html_and_assets_are_literal(mode, failure, tmp_path, qapplication_session):
+    with _summary_plotstats_failure(failure):
+        expected = _capture_summary_plotstats(legacy=True)
+        actual = _capture_summary_plotstats()
+    assert _serialize_summary_plotstats_capture(actual, tmp_path / 'actual', mode) == (
+        _serialize_summary_plotstats_capture(expected, tmp_path / 'expected', mode)
+    )
+
+
+@pytest.mark.parametrize('outcome', ['success', 'none', 'exception'])
+def test_summary_primary_attempt_restores_only_failed_speculation(outcome, qapplication_session):
+    import copy
+    import matplotlib
+    from metroliza.charts.chart_renderer import ChartRenderResult, PlotstatsChartRenderer
+
+    thread = ExportDataThread(ExportRequest(
+        paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+        options=ExportOptions(generate_summary_sheet=True),
+    ))
+    renderer = PlotstatsChartRenderer()
+    thread._chart_renderer = renderer
+    success = ChartRenderResult(b'primary-png', 'plotstats')
+
+    def attempt(_payload):
+        matplotlib.rcParams['font.size'] = 31
+        matplotlib.rcParams['font.family'].append('Synthetic family')
+        if outcome == 'exception':
+            raise RuntimeError('partial renderer failure')
+        return success if outcome == 'success' else None
+
+    with matplotlib.rc_context():
+        # Own a separate mutable list so this observer cannot leak its mutation.
+        matplotlib.rcParams['font.family'] = list(matplotlib.rcParams['font.family'])
+        before = copy.deepcopy(matplotlib.rcParams)
+        with mock.patch.object(renderer, 'try_render_payload_png', side_effect=attempt):
+            result = thread._try_summary_plotstats_chart({'type': 'iqr'})
+        if outcome == 'success':
+            assert result is success
+            assert matplotlib.rcParams['font.size'] == 31
+            assert matplotlib.rcParams['font.family'][-1] == 'Synthetic family'
+        else:
+            assert result is None
+            assert matplotlib.rcParams == before
+
+def test_numeric_array_literal_conversion_and_copy_contract():
+    from decimal import Decimal
+    import numpy as np
+    from metroliza.exporting.export_data_thread import _coerce_float_or_nan, _numeric_array
+
+    cases = [[], [None, ' ', 'bad', '0.30000000000000004', Decimal('1.25'), -0., np.inf],
+             np.array(1.), np.array([[1., 2.], [3., np.nan]]),
+             np.array([0x7ff0000000000001, 0xfff8000000000001], dtype=np.uint64).view(np.float64),
+             np.array([0x7f800001, 0xffc00001], dtype=np.uint32).view(np.float32),
+             np.array([True, False]), np.array([1, 2]),
+             np.array(['1.5\x00', 'nan', '1.25']), np.array([None, Decimal('2')], dtype=object)]
+    for dtype in (np.float16, np.float32, np.float64, np.longdouble):
+        cases.extend([np.array([1., -0., np.nan, np.inf, -np.inf], dtype=dtype),
+                      np.array([1., 2., 3., 4.], dtype=dtype)[::2],
+                      np.array([], dtype=dtype)])
+    for values in cases:
+        for dropna in (False, True):
+            results = []
+            for reference in (True, False):
+                with warnings.catch_warnings(record=True) as emitted:
+                    warnings.simplefilter('always')
+                    try:
+                        if reference:
+                            array = np.asarray([_coerce_float_or_nan(v) for v in values], dtype=float)
+                            result = array[np.isfinite(array)] if dropna else array
+                        else:
+                            result = _numeric_array(values, dropna=dropna)
+                        assert not isinstance(values, np.ndarray) or not np.shares_memory(result, values)
+                        outcome = (result.dtype.str, result.shape, result.tobytes())
+                    except (TypeError, ValueError) as exc:
+                        outcome = (type(exc), str(exc))
+                    results.append((outcome, [(type(w.message), str(w.message)) for w in emitted]))
+            assert results[0] == results[1]
+
+
+def test_numeric_array_fast_path_and_scalar_fallback():
+    import numpy as np
+    from metroliza.exporting import export_data_thread as module
+
+    for dtype in (np.float16, np.float32, np.float64):
+        values = np.array([1., -0., np.inf, -np.inf], dtype=dtype)
+        values.flags.writeable = False
+        with mock.patch.object(module, '_coerce_float_or_nan', side_effect=AssertionError('scalar conversion')):
+            assert module._numeric_array(values, dropna=True).tobytes() == np.array([1., -0.]).tobytes()
+            assert module._numeric_array(values).tobytes() == values.astype(float).tobytes()
+    with mock.patch.object(module, '_coerce_float_or_nan', wraps=module._coerce_float_or_nan) as scalar:
+        module._numeric_array(np.array([1., np.nan], dtype=np.float32))
+        module._numeric_array(np.array([1., 2.], dtype=np.longdouble))
+        module._numeric_array([None, '2'])
+        assert scalar.call_count == 6

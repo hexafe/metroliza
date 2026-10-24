@@ -69,6 +69,8 @@ from metroliza.ui.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
+
 try:
     from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
@@ -135,13 +137,6 @@ _GROUPING_COLUMNS = (
     "GROUP_COLOR",
     "GROUP_KEY",
 )
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()

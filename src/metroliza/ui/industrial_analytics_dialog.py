@@ -68,6 +68,7 @@ from metroliza.exporting.export_dialog_service import build_export_artifact_link
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+from metroliza.tabular.contracts import _GroupingSnapshotOwner, _ValidatedGroupingSnapshot
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     TABULAR_GROUP_COLUMN,
@@ -684,6 +685,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self._tabular_row_count_cache: tuple[object, tuple, int] | None = None
         self.df_for_grouping = None
         self.grouping_applied = False
+        self._grouping_snapshot_owner = _GroupingSnapshotOwner()
+        self._pending_grouping_snapshot: _ValidatedGroupingSnapshot | None = None
         self._auto_group_selected_files = False
         self._tabular_reload_notice = ""
         self.dashboard_interactivity_options = DashboardInteractivityOptions()
@@ -1508,6 +1511,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
 
     def _clear_tabular_grouping(self) -> None:
+        self._grouping_snapshot_owner.invalidate()
         self.df_for_grouping = None
         self.grouping_applied = False
         self._set_groupstats_output_checked(False)
@@ -2008,10 +2012,12 @@ class IndustrialAnalyticsDialog(QDialog):
         return TabularAnalyticsGroupingDialog(parent, **kwargs)
 
     def set_df_for_grouping(self, df) -> None:
+        self._grouping_snapshot_owner.invalidate()
         self.df_for_grouping = df
         self._sync_grouping_summary()
 
     def set_grouping_applied(self, applied: bool) -> None:
+        self._grouping_snapshot_owner.invalidate()
         self.grouping_applied = bool(applied)
         if not self.grouping_applied:
             self.df_for_grouping = None
@@ -2559,6 +2565,11 @@ class IndustrialAnalyticsDialog(QDialog):
                 delattr(self, name)
 
     def _build_analytics_request(self, *, require_runnable: bool = False) -> IndustrialAnalyticsRequest:
+        snapshot = self._pending_grouping_snapshot
+        if snapshot is not None and snapshot.source_id != id(
+            self.df_for_grouping if self.grouping_applied else None
+        ):
+            raise ValueError("Grouping snapshot is stale or does not match its source.")
         return validate_industrial_analytics_request(
             IndustrialAnalyticsRequest(
                 source_kind=self.source_kind,
@@ -2586,7 +2597,10 @@ class IndustrialAnalyticsDialog(QDialog):
                 tabular_filter_keys=self.tabular_filter_keys,
                 tabular_column_filters=self.tabular_column_filters,
                 tabular_filter_expression=self.tabular_filter_expression,
-                grouping_df=self.df_for_grouping if self.grouping_applied else None,
+                grouping_df=(snapshot.assignments if snapshot is not None
+                             else self.df_for_grouping if self.grouping_applied else None),
+                _grouping_snapshot=snapshot,
+                _grouping_owner=self._grouping_snapshot_owner,
                 dashboard_visual_settings=self.dashboard_visual_settings,
                 dashboard_interactivity_options=self.dashboard_interactivity_options,
             ),
@@ -2595,6 +2609,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def create_analytics_thread(self) -> IndustrialAnalyticsThread:
         request = self._build_analytics_request()
+        snapshot = request._grouping_snapshot
         return IndustrialAnalyticsThread(
             source_kind=request.source_kind,
             db_file=request.db_file,
@@ -2616,7 +2631,11 @@ class IndustrialAnalyticsDialog(QDialog):
             tabular_column_filters=request.tabular_column_filters,
             tabular_filter_expression=request.tabular_filter_expression,
             dashboard_detail_mode=request.dashboard_detail_mode,
-            grouping_df=self.df_for_grouping if self.grouping_applied else None,
+            grouping_df=(request.grouping_df if snapshot is not None
+                         else self.df_for_grouping if self.grouping_applied else None),
+            _grouping_snapshot=snapshot,
+            **({"grouping_default_group_label": request.grouping_default_group_label}
+               if snapshot is not None else {}),
             dashboard_visual_settings=request.dashboard_visual_settings,
             dashboard_interactivity_options=request.dashboard_interactivity_options,
         )
@@ -2649,7 +2668,15 @@ class IndustrialAnalyticsDialog(QDialog):
             )
         )
         self.loading_bar.setRange(0, 0)
-        self.analytics_thread = self.create_analytics_thread()
+        self._pending_grouping_snapshot = request._grouping_snapshot
+        try:
+            self.analytics_thread = self.create_analytics_thread()
+        except ValueError as exc:
+            self._close_worker_progress()
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        finally:
+            self._pending_grouping_snapshot = None
         self._worker_progress[self.analytics_thread] = (
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
         )
@@ -2713,6 +2740,7 @@ class IndustrialAnalyticsDialog(QDialog):
             QMessageBox.information(self, self.windowTitle(), "Wait for analytics generation to finish.")
             return
         self._set_tabular_load_result(None)
+        self._grouping_snapshot_owner.invalidate()
         super().reject()
 
     def closeEvent(self, event) -> None:
@@ -2727,6 +2755,7 @@ class IndustrialAnalyticsDialog(QDialog):
             event.ignore()
             return
         self._set_tabular_load_result(None)
+        self._grouping_snapshot_owner.invalidate()
         super().closeEvent(event)
 
 

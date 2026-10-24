@@ -2364,3 +2364,163 @@ def test_numeric_chunk_conversion_matches_scalar_parser():
                 assert actual_value == expected_value, (decimal, repr(value))
                 if expected_value == 0:
                     assert np.signbit(actual_value) == np.signbit(expected_value)
+
+
+@pytest.mark.parametrize("decimal", [".", ","])
+def test_numeric_primitive_conversion_does_not_restart_a_bad_column(monkeypatch, decimal):
+    service = canonical_tabular_service
+    values = ["0.30000000000000004", "-0.0", "bad", None, "", "1,234.5", "1.5\x00", "１２", "1e309"]
+    expected = [service._parse_tabular_number(value, decimal=decimal) for value in values]
+
+    def unexpected_scalar_restart(*args, **kwargs):
+        raise AssertionError("primitive column restarted through the scalar fallback")
+
+    monkeypatch.setattr(service, "_parse_tabular_number", unexpected_scalar_restart)
+    actual = service._parse_tabular_numbers(values, decimal=decimal)
+    assert [value.hex() if value is not None else None for value in actual] == [
+        value.hex() if value is not None else None for value in expected
+    ]
+
+
+def test_numeric_conversion_retains_unsupported_string_callbacks():
+    service = canonical_tabular_service
+    events = []
+
+    class Text(str):
+        def __float__(self):
+            events.append("float")
+            raise ValueError("synthetic conversion refusal")
+
+        def __str__(self):
+            events.append("str")
+            return " 1.5 "
+
+    # NumPy attempts the original object before the scalar fallback coerces it.
+    assert service._parse_tabular_numbers([Text("1.5")], decimal=".") == [1.5]
+    assert events == ["float", "str"]
+
+
+def test_numeric_conversion_retains_list_and_decimal_subclass_dispatch(monkeypatch):
+    import numpy as np
+
+    service = canonical_tabular_service
+    calls = []
+    original = np.asarray
+
+    class TextList(list):
+        pass
+
+    class Decimal(str):
+        pass
+
+    def tracked_array(*args, **kwargs):
+        calls.append("array")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(np, "asarray", tracked_array)
+    for values, decimal in ((TextList(["1.5", "bad"]), "."), (["1.5", "bad"], Decimal("."))):
+        assert service._parse_tabular_numbers(values, decimal=decimal) == [1.5, None]
+    assert calls == ["array", "array"]
+
+
+@pytest.mark.parametrize("text", [
+    "", "0", "00", "+01", "-01", "++01", "--01", "+-01", "1.0", "1e3",
+    " 001 ", "１２３", "٠١", "000000000000000", "123456789012345", "1234567890123456",
+    "１２３４５６７８９０１２３４５６", "123456789012345x", "1234567890123456\n",
+])
+def test_identifier_precheck_retains_original_unicode_and_lexeme_rules(text):
+    import re
+
+    normalized = str(text or "").strip()
+    digits = normalized.lstrip("+-")
+    expected = bool(re.fullmatch(r"[+-]?\d+", normalized)) and (
+        (len(digits) > 1 and digits.startswith("0")) or len(digits) > 15
+    )
+    assert canonical_tabular_service._looks_like_identifier_number(text) is expected
+
+
+def test_normalized_text_keeps_object_coercion_callbacks():
+    service = canonical_tabular_service
+    events = []
+
+    class Cell:
+        def __str__(self):
+            events.append("str")
+            return " 1.5 "
+
+    value = Cell()
+    assert service._normalized_cell_text(value) == "1.5"
+    assert events == ["str"]
+    events.clear()
+    assert service._display_cell_text(value) == "1.5"
+    assert events == ["str"]
+    assert service._normalized_cell_text(None) == ""
+
+
+def test_prepared_metric_stats_preserve_first_seen_order_samples_and_file_reservations():
+    service = canonical_tabular_service
+    expected, actual = {}, {}
+    columns = ("a", "b", "code", "timestamp", "reference")
+    files = [
+        (("timestamp", "reference"), [
+            {"a": None, "b": "1", "code": "001", "timestamp": "2026-05-01", "reference": "R1"},
+            {"a": "bad", "b": "-0.0", "code": "1234567890123456"},
+            {"a": "2", "b": "1", "code": "12"},
+        ]),
+        (("a", "reference"), [
+            {"a": "3", "b": "2", "code": "13", "timestamp": "1"},
+            {"a": "4", "b": "3", "code": "14", "timestamp": "2"},
+            {"a": "5", "b": "4", "code": "15", "timestamp": "bad"},
+            {"a": "6", "b": "5", "code": "16", "timestamp": "3"},
+        ]),
+    ]
+    for reserved, rows in files:
+        prepared = [(column, actual.get(column)) for column in columns if column not in reserved]
+        for row in rows:
+            numbers = {column: service._parse_tabular_number(row.get(column)) for column in columns}
+            service._update_metric_stats_from_row(expected, row, source_columns=columns,
+                                                   reserved_columns=reserved, decimal=".", numeric_values=numbers)
+            service._update_prepared_metric_stats(prepared, actual, row, numeric_values=numbers)
+    assert list(actual) == list(expected) == ["b", "code", "a", "timestamp"]
+    assert actual == expected
+    assert actual["b"]["sample_values"] == ["1", "-0.0", "2", "3", "4"]
+    assert service._metric_candidates_from_stats(actual, numeric_threshold=0, min_numeric_count=0) == (
+        service._metric_candidates_from_stats(expected, numeric_threshold=0, min_numeric_count=0)
+    )
+
+
+def test_selected_timestamp_parse_is_reused_only_for_its_own_date_shadow(tmp_path, monkeypatch):
+    service = canonical_tabular_service
+    path = tmp_path / "date_sources.csv"
+    path.write_text("Date,Other Date,Metric\n2026-05-01,2026-06-01,1\n2026-05-02,2026-06-02,2\n", encoding="utf-8")
+    loading = False
+    parsed = []
+    original = service._parse_tabular_datetime
+
+    def progress(event):
+        nonlocal loading
+        if event["stage"] == "loading_file":
+            loading = True
+        elif event["stage"] == "indexing":
+            loading = False
+
+    def parse(value, *, dayfirst=False):
+        if loading:
+            parsed.append(value)
+        return original(value, dayfirst=dayfirst)
+
+    monkeypatch.setattr(service, "_parse_tabular_datetime", parse)
+    loaded = service.load_tabular_analytics_file(path, timestamp_column="Date", progress_callback=progress)
+    try:
+        assert parsed == ["2026-05-01", "2026-06-01", "2026-05-02", "2026-06-02"]
+        store = loaded.sqlite_store
+        with closing(sqlite3.connect(store.path)) as connection:
+            assert connection.execute(
+                'SELECT process_datetime, "__date_filter_date", "__date_filter_other_date" '
+                'FROM tabular_rows ORDER BY source_row_number'
+            ).fetchall() == [
+                ("2026-05-01 00:00:00", "2026-05-01 00:00:00", "2026-06-01 00:00:00"),
+                ("2026-05-02 00:00:00", "2026-05-02 00:00:00", "2026-06-02 00:00:00"),
+            ]
+    finally:
+        service.cleanup_tabular_load_result(loaded)

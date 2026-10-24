@@ -263,3 +263,27 @@ def test_tabular_worker_preserves_default_label_through_request_validation(monke
     assert not errors
     assert calls[0]["grouping_default_group_label"] == "Rest"
     assert calls[0]["grouping_df"].default_group_label == "Rest"
+
+
+def test_thread_hands_issued_grouping_to_workflow_without_revalidation(monkeypatch, tmp_path):
+    from metroliza.industrial import contracts
+    from metroliza.tabular.contracts import _GroupingSnapshotOwner
+    owner = _GroupingSnapshotOwner()
+    source = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
+    values, snapshot = owner.capture(source)
+    def unexpected(*args):
+        raise AssertionError('issued grouping was revalidated')
+    monkeypatch.setattr(contracts, 'validate_grouping_df', unexpected)
+    captured = {}
+    monkeypatch.setattr(industrial_workers, 'run_tabular_file_analytics',
+                        lambda **kwargs: captured.update(kwargs))
+    thread = IndustrialAnalyticsThread(
+        source_kind='tabular_file', input_file='table.csv',
+        output_dashboard_file=str(tmp_path / 'result.html'),
+        grouping_df=values, _grouping_snapshot=snapshot,
+    )
+    source.loc[0, 'GROUP'] = 'changed'
+    thread.run()
+    assert captured['grouping_df'] is values
+    assert captured['_grouping_snapshot'] is snapshot
+    assert values[0].group == 'A'

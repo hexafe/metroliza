@@ -399,3 +399,52 @@ def test_row_index_matches_oracle_for_other_column_dtypes(series):
     pd.testing.assert_frame_equal(
         service.build_grouping_row_index(df), _oracle_build_grouping_row_index(df), check_exact=True
     )
+
+
+def test_native_color_assignment_activation_and_original_fallbacks():
+    native = pd.DataFrame({'GROUP': ['POPULATION', 'A', 'A', 'B'],
+                           'GROUP_COLOR': ['#FFFFFF', '#123456', '#789ABC', '#654321']})
+    result = service.native_group_color_assignment(native, default_group='POPULATION',
+                                                    default_color='#FFFFFF', color_column='GROUP_COLOR')
+    assert result is not None
+    assert result.tolist() == ['#FFFFFF', '#123456', '#123456', '#654321']
+    pd.testing.assert_frame_equal(native, pd.DataFrame({'GROUP': ['POPULATION', 'A', 'A', 'B'],
+                                                       'GROUP_COLOR': ['#FFFFFF', '#123456', '#789ABC', '#654321']}))
+    for frame in (native.assign(GROUP_COLOR='#FFFFFF'), native.assign(GROUP=[None, 'A', 'A', 'B'])):
+        assert service.native_group_color_assignment(frame, default_group='POPULATION',
+                                                    default_color='#FFFFFF', color_column='GROUP_COLOR') is None
+
+
+def test_native_color_assignment_declines_overridden_manager_and_axis_before_callbacks():
+    from pandas.core.internals.managers import BlockManager
+
+    class CustomManager(BlockManager):
+        pass
+
+    class CustomIndex(pd.RangeIndex):
+        pass
+
+    for override in ('manager_subclass', 'manager_state', 'axis_subclass', 'axis_state', 'custom_value', 'metadata', 'block_cache'):
+        frame = pd.DataFrame({'GROUP': ['A', 'A'], 'GROUP_COLOR': ['#123456', '#789ABC']})
+        if override == 'manager_subclass':
+            frame._mgr = CustomManager(frame._mgr.blocks, frame._mgr.axes)
+        elif override == 'manager_state':
+            frame._mgr.__dict__['get_slice'] = lambda *args: pytest.fail('manager callback dispatched')
+        elif override == 'axis_subclass':
+            frame.index = CustomIndex(2)
+        elif override == 'axis_state':
+            frame.index.__dict__['__len__'] = lambda: pytest.fail('axis callback dispatched')
+        elif override == 'metadata':
+            class CustomAttrs:
+                def __bool__(self):
+                    pytest.fail('metadata callback dispatched')
+            frame.__dict__['_attrs'] = CustomAttrs()
+        elif override == 'block_cache':
+            frame._mgr.blocks[0].__dict__['_cache'] = {'dtype': object()}
+        else:
+            class CustomText(str):
+                def __str__(self):
+                    pytest.fail('custom scalar callback dispatched')
+            frame['GROUP'] = pd.Series([CustomText('A'), 'A'], dtype=object)
+        assert service.native_group_color_assignment(frame, default_group='POPULATION',
+                                                    default_color='#FFFFFF', color_column='GROUP_COLOR') is None

@@ -339,6 +339,10 @@ class PlotstatsChartRenderer(ChartRenderer):
     def render_figure_png(self, fig: Any, *, mode: str = "workbook", chart_type: str | None = None) -> ChartRenderResult:
         return self._fallback.render_figure_png(fig, mode=mode, chart_type=chart_type)
 
+    def try_render_payload_png(self, payload: dict[str, Any]) -> ChartRenderResult | None:
+        """Try the primary artifact path before the caller builds a fallback figure."""
+        return self._render_plotstats_payload(payload)
+
     def render_histogram_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
         result = self._render_plotstats_payload(payload)
         if result is not None:

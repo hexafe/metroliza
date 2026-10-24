@@ -25,13 +25,7 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularSqliteStore,
     discover_tabular_metric_candidates,
 )
-
-
-class _LazyPandas:
-    def __getattr__(self, name: str) -> Any:
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 pd = _LazyPandas()
@@ -546,13 +540,42 @@ def _metadata_scope_fingerprint(
         """,
         params,
     ).fetchone()
+    profile_inputs = connection.execute(
+        f"""
+        SELECT DISTINCT records.source_profile_id, profiles.id,
+            typeof(profiles.profile_name), hex(profiles.profile_name)
+        FROM industrial_records records
+        LEFT JOIN industrial_source_profiles profiles
+            ON profiles.id = records.source_profile_id
+        {where_sql}
+        ORDER BY records.source_profile_id
+        """,
+        params,
+    ).fetchall()
+    # This derived-cache column is an opaque equality token, never a parsed timestamp.
+    # Include exact scoped label inputs (including missing profiles and embedded NULs)
+    # without changing the persisted cache schema or the public scope key.
+    label_token = "v2:" + hashlib.sha256(
+        json.dumps(
+            [str(row[2] or ""), profile_inputs], separators=(",", ":"),
+            default=_fingerprint_json_value,
+        ).encode("utf-8")
+    ).hexdigest()
     return (
         int(row[0] or 0),
         int(row[1] or 0),
-        str(row[2] or ""),
+        label_token,
         int(value_row[0] or 0),
         int(value_row[1] or 0),
     )
+
+
+def _fingerprint_json_value(value: Any) -> list[str]:
+    # SQLite scalar IDs may be orphan BLOBs. The tagged array cannot collide with
+    # a TEXT ID (JSON string); keep the encoding of every existing JSON scalar.
+    if type(value) is bytes:
+        return ["sqlite_blob", value.hex()]
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _ensure_table_column(
@@ -708,11 +731,7 @@ def _insert_dynamic_value_facets(
     scope_key: str,
     field_columns: tuple[tuple[str, str], ...],
 ) -> None:
-    """Insert the value facets of every dynamic column with one grouped statement.
-
-    Records that have no value for a field fall into that column's ``(blank)`` facet, exactly as
-    the per-field LEFT JOIN did.
-    """
+    """Group present values, then add missing rows to each column's blank facet."""
 
     if not field_columns:
         return
@@ -725,6 +744,48 @@ def _insert_dynamic_value_facets(
         "INSERT INTO temp_industrial_tabular_dynamic_fields (field_name, output_column) VALUES (?, ?)",
         field_columns,
     )
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        _insert_dynamic_value_facets_general(connection, scope_key=scope_key)
+        return
+    value_expr = "COALESCE(NULLIF(values_row.field_value_text, ''), values_row.field_value_json)"
+    normalized_expr = _normalized_value_sql(value_expr)
+    connection.execute(
+        f"""
+        WITH present AS MATERIALIZED (
+            SELECT dynamic_fields.output_column AS column_name,
+                {normalized_expr} AS normalized_value, COUNT(*) AS row_count
+            FROM industrial_record_values values_row
+            JOIN temp_industrial_tabular_scope_records scope_records
+                ON scope_records.record_id = values_row.record_id
+            JOIN temp_industrial_tabular_dynamic_fields dynamic_fields
+                ON dynamic_fields.field_name = values_row.field_name
+            GROUP BY dynamic_fields.output_column, normalized_value
+        ), missing AS (
+            SELECT dynamic_fields.output_column AS column_name,
+                (SELECT COUNT(*) FROM temp_industrial_tabular_scope_records)
+                    - COALESCE(SUM(present.row_count), 0) AS missing_count
+            FROM temp_industrial_tabular_dynamic_fields dynamic_fields
+            LEFT JOIN present ON present.column_name = dynamic_fields.output_column
+            GROUP BY dynamic_fields.output_column
+            HAVING missing_count > 0
+        )
+        INSERT OR REPLACE INTO {_quote_identifier(_INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE)} (
+            scope_key, column_name, normalized_value, display_value, row_count, updated_at
+        )
+        SELECT ?, column_name, normalized_value, normalized_value, SUM(row_count), CURRENT_TIMESTAMP
+        FROM (
+            SELECT column_name, normalized_value, row_count FROM present
+            UNION ALL
+            SELECT column_name, '(blank)', missing_count FROM missing
+        )
+        GROUP BY column_name, normalized_value
+        """,
+        (scope_key,),
+    )
+
+
+def _insert_dynamic_value_facets_general(connection, *, scope_key: str) -> None:
+    """Original record-by-field query for SQLite without materialized CTE support."""
     value_expr = "COALESCE(NULLIF(values_row.field_value_text, ''), values_row.field_value_json)"
     normalized_expr = _normalized_value_sql(value_expr)
     connection.execute(
@@ -763,6 +824,57 @@ def _dynamic_field_metadata(
 ) -> tuple[tuple[str, ...], dict[str, dict[str, Any]]]:
     connection.create_function("metroliza_is_numeric_text", 1, _is_numeric_text)
     value_expr = "TRIM(COALESCE(NULLIF(values_row.field_value_text, ''), values_row.field_value_json, ''))"
+    if sqlite3.sqlite_version_info >= (3, 35, 0):
+        rows = _distinct_dynamic_metadata_rows(
+            connection, value_expr=value_expr, where_sql=where_sql, params=params,
+        )
+    else:
+        rows = _general_dynamic_metadata_rows(
+            connection, value_expr=value_expr, where_sql=where_sql, params=params,
+        )
+    dynamic_fields: list[str] = []
+    dynamic_stats: dict[str, dict[str, Any]] = {}
+    for field_name_raw, non_null_count, numeric_count, sample_value in rows:
+        field_name = str(field_name_raw or "").strip()
+        if not field_name:
+            continue
+        dynamic_fields.append(field_name)
+        sample_values = [str(sample_value)] if sample_value not in (None, "") else []
+        dynamic_stats[field_name] = {
+            "non_null_count": int(non_null_count or 0),
+            "numeric_count": int(numeric_count or 0),
+            "sample_values": sample_values,
+        }
+    return tuple(dynamic_fields), dynamic_stats
+
+
+def _distinct_dynamic_metadata_rows(connection, *, value_expr, where_sql, params):
+    return connection.execute(
+        f"""
+        WITH value_counts AS MATERIALIZED (
+            SELECT values_row.field_name AS field_name, {value_expr} AS field_value,
+                COUNT(*) AS frequency
+            FROM industrial_record_values values_row
+            JOIN industrial_records records ON records.id = values_row.record_id
+            {where_sql}
+            GROUP BY values_row.field_name, field_value
+        ), numeric_values AS MATERIALIZED (
+            SELECT field_value, {_NUMERIC_VALUE_SQL} AS is_numeric
+            FROM (SELECT DISTINCT field_value FROM value_counts)
+        )
+        SELECT field_name,
+            SUM(CASE WHEN field_value <> '' THEN frequency ELSE 0 END) AS non_null_count,
+            SUM(frequency * is_numeric) AS numeric_count,
+            MIN(NULLIF(field_value, '')) AS sample_value
+        FROM value_counts JOIN numeric_values USING (field_value)
+        GROUP BY field_name
+        ORDER BY field_name COLLATE NOCASE
+        """,
+        params,
+    ).fetchall()
+
+
+def _general_dynamic_metadata_rows(connection, *, value_expr, where_sql, params):
     rows = connection.execute(
         f"""
         WITH field_values AS (
@@ -785,20 +897,7 @@ def _dynamic_field_metadata(
         """,
         params,
     ).fetchall()
-    dynamic_fields: list[str] = []
-    dynamic_stats: dict[str, dict[str, Any]] = {}
-    for field_name_raw, non_null_count, numeric_count, sample_value in rows:
-        field_name = str(field_name_raw or "").strip()
-        if not field_name:
-            continue
-        dynamic_fields.append(field_name)
-        sample_values = [str(sample_value)] if sample_value not in (None, "") else []
-        dynamic_stats[field_name] = {
-            "non_null_count": int(non_null_count or 0),
-            "numeric_count": int(numeric_count or 0),
-            "sample_values": sample_values,
-        }
-    return tuple(dynamic_fields), dynamic_stats
+    return rows
 
 
 def _is_numeric_text(value: Any) -> int:

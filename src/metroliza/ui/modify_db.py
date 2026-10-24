@@ -184,7 +184,7 @@ class ModifyDB(QDialog):
             self.connect_signals()
             apply_metroliza_theme(self)
             if self.db_file:
-                self.populate_tables()
+                ModifyDB._refresh_tables_for_view(self)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -351,6 +351,9 @@ class ModifyDB(QDialog):
             self._connect_shift_range_for_table(self.report_records_table)
             self._connect_shift_range_for_table(self.measurement_records_table)
             self.tab_widget.currentChanged.connect(self._on_main_tab_changed)
+            normalize_changed = getattr(self.normalize_tab_widget, "currentChanged", None)
+            if hasattr(normalize_changed, "connect"):
+                normalize_changed.connect(lambda _index: ModifyDB._load_visible_normalize_table(self))
             for slot in self._record_slots:
                 slot.filter_edit.textChanged.connect(lambda _text, timer=slot.filter_timer: timer.start())
                 slot.filter_timer.timeout.connect(lambda slot=slot: self._apply_record_filter(slot))
@@ -486,18 +489,32 @@ class ModifyDB(QDialog):
                     filename += ".db"
                 logger.info("Selected DB file: %s", filename)
                 self.db_file = filename
-                self.populate_tables()
+                ModifyDB._refresh_tables_for_view(self)
                 self.apply_button.setEnabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
-    def populate_tables(self):
+    def _refresh_tables_for_view(self):
+        # Preserve eager public/subclass/fake-widget behavior. Only the native dialog's
+        # own UI entry points opt in to deferring tables until their tab is shown.
+        tabs = self.normalize_tab_widget
+        if type(self) is ModifyDB and type(tabs).__module__ == "PyQt6.QtWidgets" and type(tabs) is QtWidgets.QTabWidget:
+            self.populate_tables(defer_hidden=True)
+        else:
+            self.populate_tables()
+
+    def populate_tables(self, *, defer_hidden=False):
         """Refresh the normalization tables and reset the lazily loaded record tables."""
         try:
             # Clear existing items in table widgets and undo data
             self.reference_table.clearContents()
             self.part_number_table.clearContents()
             self.header_table.clearContents()
+            self._defer_normalize_tables = defer_hidden
+            if defer_hidden:
+                for table in (self.reference_table, self.part_number_table, self.header_table):
+                    table.setRowCount(0)
+            self._pending_normalize_sources = {}
             self._reset_record_tables()
             self.undo_data.clear()
             self._changes_committed = False
@@ -510,14 +527,46 @@ class ModifyDB(QDialog):
             )
             header_source = ("MEASUREMENTS", "HEADER") if self._uses_legacy_schema() else ("report_measurements", "header")
 
-            self.populate_table(self.reference_table, self._distinct_value_counts(*reference_source))
-            self.populate_table(self.part_number_table, self._distinct_value_counts(*sample_number_source))
-            self.populate_table(self.header_table, self._distinct_value_counts(*header_source))
+            self._pending_normalize_sources = {
+                self.reference_table: reference_source,
+                self.part_number_table: sample_number_source,
+                self.header_table: header_source,
+            }
+            if defer_hidden:
+                ModifyDB._load_visible_normalize_table(self)
+            else:
+                for table in tuple(self._pending_normalize_sources):
+                    ModifyDB._load_normalize_table(self, table)
 
             # Report/measurement records load the first time their tab is shown.
             self._load_visible_record_table()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _load_normalize_table(self, table):
+        pending = getattr(self, "_pending_normalize_sources", {})
+        source = pending.get(table)
+        if source is not None:
+            self.populate_table(table, self._distinct_value_counts(*source))
+            del pending[table]
+            if self._defer_normalize_tables:
+                filters = {self.reference_table: self.reference_filter_edit,
+                           self.part_number_table: self.part_number_filter_edit,
+                           self.header_table: self.header_filter_edit}
+                self._filter_table_rows(table, filters[table].text())
+
+    def _load_visible_normalize_table(self):
+        if not getattr(self, "_pending_normalize_sources", None):
+            return
+        if not self.db_file or self.tab_widget.currentWidget() is not self.normalize_tab:
+            return
+        tables = (self.reference_table, self.part_number_table, self.header_table)
+        index = self.normalize_tab_widget.currentIndex()
+        if 0 <= index < len(tables):
+            try:
+                ModifyDB._load_normalize_table(self, tables[index])
+            except Exception as e:
+                self.log_and_exit(e)
 
     def _prepare_database_for_loading(self):
         """Resolve current vs legacy storage before querying schema-specific tables."""
@@ -644,6 +693,7 @@ class ModifyDB(QDialog):
 
     def _on_main_tab_changed(self, _index):
         try:
+            ModifyDB._load_visible_normalize_table(self)
             self._load_visible_record_table()
         except Exception as e:
             self.log_and_exit(e)
@@ -667,7 +717,7 @@ class ModifyDB(QDialog):
         slot.state = "loading"
         slot.pending_specs = specs
         slot.banner.setVisible(True)
-        thread = RecordLoadThread(slot.kind, slot.generation, self.db_file, query, specs)
+        thread = RecordLoadThread(slot.kind, slot.generation, self.db_file, query, specs, defer_haystack=True)
         thread.loaded.connect(self._on_record_rows_loaded)
         thread.failed.connect(self._on_record_load_failed)
         slot.thread = thread
@@ -738,6 +788,8 @@ class ModifyDB(QDialog):
         try:
             if not self.db_file:
                 return
+            for table in tuple(getattr(self, "_pending_normalize_sources", {})):
+                ModifyDB._load_normalize_table(self, table)
             for slot in self._record_slots:
                 if slot.state != "loaded":
                     self._cancel_record_load(slot)
@@ -747,7 +799,7 @@ class ModifyDB(QDialog):
 
     def _load_record_table_now(self, slot):
         specs, query = self._record_load_plan(slot.kind)
-        rows = load_record_rows(self.db_file, query, specs) if specs else RecordRows([], [])
+        rows = load_record_rows(self.db_file, query, specs, defer_haystack=True) if specs else RecordRows([], [])
         self._install_record_rows(slot, specs, rows)
 
     def _install_record_rows(self, slot, specs, record_rows):

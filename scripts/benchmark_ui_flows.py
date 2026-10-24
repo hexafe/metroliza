@@ -743,6 +743,329 @@ class CsvAnalytics(Scenario):
         return {"outputs": outputs, "output_bytes": sum((ctx.work / n).stat().st_size for n in outputs)}
 
 
+def _restore_csv_groups(ctx, dialog):
+    import pandas as pd
+
+    path = ctx.data / (Path(ctx.args.csv).stem + "_groups.csv")
+    frame = pd.read_csv(path, keep_default_na=False)
+    from metroliza.tabular.tabular_analytics_service import tabular_load_result_row_count
+
+    rows = tabular_load_result_row_count(dialog.tabular_load_result)
+    if frame["REPORT_ID"].tolist() != list(range(1, rows + 1)):
+        raise ValueError("saved grouping does not cover the CSV fixture")
+    dialog.set_df_for_grouping(frame)
+    dialog.set_grouping_applied(True)
+    ctx.extra.update(assigned_rows=len(frame), saved_groups=frame["GROUP"].nunique())
+
+
+class CsvGroupedAnalytics(CsvAnalytics):
+    name = "csv_grouped_analytics"
+    flows = ("CSV-07", "CSV-09")
+
+    def setup(self, ctx):
+        super().setup(ctx)
+        _restore_csv_groups(ctx, self.dialog)
+
+
+class CsvGroupingOpen(CsvGroupedAnalytics):
+    name = "csv_grouping_open"
+    flows = ("CSV-07",)
+
+    def action(self, ctx):
+        self.dialog.edit_groups_button.click()
+
+    def done(self, ctx):
+        modal = ctx.app.activeModalWidget()
+        if modal is None or type(modal).__name__ != "TabularAnalyticsGroupingDialog":
+            return False
+        if getattr(modal, "_selector_preview_threads", ()):
+            return False
+        counts = getattr(modal, "_last_group_counts", {})
+        if sum(counts.values()) != ctx.extra["assigned_rows"]:
+            return False
+        if sum(name != modal.default_group for name in counts) != ctx.extra["saved_groups"]:
+            return False
+        ctx.mark("dialog_populated")
+        ctx.extra["populated_groups"] = modal.groups_list.count()
+        modal.reject()
+        return True
+
+    def finish(self, ctx):
+        return {}
+
+
+class GroupAnalysisExport(ExportRun):
+    name = "group_analysis_export"
+    flows = ("EXP-RUN", "GRP-ANALYSIS")
+
+    def setup(self, ctx):
+        super().setup(ctx)
+        self.export.open_grouping_window()
+        grouping = self.export.grouping_window
+        ctx.pump(lambda: not grouping.is_loading_grouping())
+        # Prepare a synthetic saved assignment, then apply through the exposed grouping option.
+        grouping.df["GROUP"] = _balanced_reference_groups(grouping.df["REFERENCE"])
+        grouping.populate_list_widgets()
+        grouping.use_grouping_button.click()
+        level = self.export._selected_group_analysis_level()
+        if level != "standard":
+            raise RuntimeError("applying grouping did not enable Group Analysis")
+        ctx.extra["group_analysis_level"] = level
+        self.analysis_summary = self.analysis_result = None
+        self.required_analysis_paths = (self.output,)
+        if self.output.suffix == ".xlsx":
+            from metroliza.charts.export_html_dashboard import resolve_html_dashboard_path
+
+            self.required_analysis_paths += (resolve_html_dashboard_path(self.output),)
+        original = self.export.on_export_finished
+
+        def finished():
+            worker = self.export.export_thread
+            self.analysis_result = getattr(worker, "export_run_result", None)
+            original()
+
+        self.export.on_export_finished = finished
+
+    def action(self, ctx):
+        import metroliza.ui.export_dialog as module
+
+        original = module.create_export_data_thread
+
+        def create(*args, **kwargs):
+            worker = original(*args, **kwargs)
+            self.analysis_summary = _observe_group_analysis_cleanup(worker)
+            return worker
+
+        module.create_export_data_thread = create
+        try:
+            super().action(ctx)
+        finally:
+            module.create_export_data_thread = original
+
+    def done(self, ctx):
+        if not super().done(ctx):
+            return False
+        ctx.extra["group_analysis_metrics"] = _require_group_analysis(
+            self.analysis_summary, self.analysis_result, getattr(self, "required_analysis_paths", ()),
+        )
+        return True
+
+
+def _balanced_reference_groups(references):
+    counts, groups = {}, []
+    for reference in references:
+        index = counts.get(reference, 0)
+        groups.append(f"G-{index % 2:03d}")
+        counts[reference] = index + 1
+    if not counts or min(counts.values()) < 2:
+        raise RuntimeError("Group Analysis fixture needs two reports per reference")
+    return groups
+
+
+def _group_analysis_summary(payload):
+    rows = (payload or {}).get("metric_rows") or []
+    return {"status": (payload or {}).get("status"), "metric_count": len(rows),
+            "minimum_group_count": min((int(row.get("group_count", 0)) for row in rows), default=0)}
+
+
+def _observe_group_analysis_cleanup(worker):
+    """Keep scalar evidence before the real cleanup, without retaining its payload."""
+    summary = {}
+    original = worker._cleanup_dashboard_payloads
+    had_override = "_cleanup_dashboard_payloads" in vars(worker)
+
+    def cleanup():
+        try:
+            summary.update(_group_analysis_summary(worker._html_group_analysis_payload))
+        except Exception as error:
+            summary["capture_error"] = type(error).__name__
+        finally:
+            if had_override:
+                worker._cleanup_dashboard_payloads = original
+            else:
+                del worker._cleanup_dashboard_payloads
+        return original()
+
+    worker._cleanup_dashboard_payloads = cleanup
+    return summary
+
+
+def _require_group_analysis(summary, result, paths):
+    summary = summary or {}
+    if (summary.get("capture_error") or summary.get("metric_count", 0) <= 0
+            or summary.get("minimum_group_count", 0) < 2):
+        raise RuntimeError("Group Analysis has no eligible metrics with two populated groups")
+    if summary.get("status") != "ready" or result is None or result.status != "complete":
+        raise RuntimeError("Group Analysis export did not complete without omissions")
+    artifacts = {artifact.artifact_id: artifact for artifact in result.artifacts}
+    if "group_analysis" not in artifacts or artifacts["group_analysis"].status != "complete":
+        raise RuntimeError("required Group Analysis output is omitted or incomplete")
+    if any(artifact.required and artifact.status != "complete" for artifact in result.artifacts):
+        raise RuntimeError("required export output is omitted or incomplete")
+    if not paths or any(not path.is_file() or path.stat().st_size == 0 for path in paths):
+        raise RuntimeError("required Group Analysis output file is missing or empty")
+    return summary["metric_count"]
+
+
+class _CompletedProcessing:
+    """A thread-safe observation set only after the real processing call returns."""
+
+    def __init__(self, owner, name):
+        self.owner, self.name = owner, name
+        self.original = getattr(owner, name)
+        self.completed = threading.Event()
+        self.completed_at = None
+
+        def observed(*args, **kwargs):
+            result = self.original(*args, **kwargs)
+            if not self.completed.is_set():
+                self.completed_at = time.perf_counter()
+                self.completed.set()
+            return result
+
+        self.observed = observed
+        setattr(owner, name, observed)
+
+    def restore(self):
+        if getattr(self.owner, self.name) is self.observed:
+            setattr(self.owner, self.name, self.original)
+
+
+class _Cancellation:
+    """Cancel after a completed processing call, observed by the GUI poll loop."""
+
+    def _start_watched(self, ctx, owner, factory_name, action, cancel):
+        self.before = set(ctx.work.rglob("*"))
+        original = getattr(owner, factory_name)
+        self.thread = None
+
+        def factory(*args, **kwargs):
+            thread = original(*args, **kwargs)
+            self._watch(ctx, thread, cancel)
+            return thread
+
+        setattr(owner, factory_name, factory)
+        try:
+            action(ctx)
+        finally:
+            setattr(owner, factory_name, original)
+        if self.thread is None:
+            raise RuntimeError("operation did not start a worker")
+
+    def _watch(self, ctx, thread, cancel):
+        import importlib
+        from PyQt6.QtCore import QTimer, Qt
+
+        if thread is None:
+            raise RuntimeError("operation did not start a worker")
+        self.cancel_ctx, self.cancel_callback = ctx, cancel
+        self.worker_finished = self.cancelled = self.work_started = False
+        self.worker_error = None
+        module, name = self.processing_target
+        self.processing_probe = _CompletedProcessing(importlib.import_module(module), name)
+        connection = Qt.ConnectionType.QueuedConnection
+        thread.finished.connect(self._finished, type=connection)
+        thread.update_label.connect(self._progress, type=connection)
+        thread.error_occurred.connect(self._error, type=connection)
+        signal = getattr(thread, "cancelled", None)
+        (signal if signal is not None else thread.canceled).connect(self._cancelled, type=connection)
+        self.cancel_timer = QTimer(ctx.app)
+        self.cancel_timer.setSingleShot(True)
+        self.cancel_timer.timeout.connect(self._request_cancel)
+        self.thread = thread  # Keep the worker referenced through finished.
+
+    def _progress(self, message):
+        self.last_worker_progress = str(message)
+
+    def _arm_after_processing(self):
+        probe = self.processing_probe
+        if not self.work_started and not self.worker_finished and probe.completed.is_set():
+            self.work_started = True
+            self.cancel_ctx.mark("work_started")
+            self.cancel_ctx.marks["processing_completed"] = Clock.ms(probe.completed_at)
+            self.cancel_ctx.extra["cancel_processing_marker"] = ":".join(self.processing_target) + " returned"
+            self.cancel_timer.start(self.cancel_ctx.args.cancel_after_ms)
+
+    def _request_cancel(self):
+        if not self.processing_probe.completed.is_set():
+            self.worker_error = "cancellation mark precedes actual processing"
+            return
+        if self.worker_finished or not self._worker_running():
+            self.worker_error = "worker stopped before the cancellation mark"
+            return
+        self.cancel_ctx.extra["thread_running_at_cancel"] = True
+        self.cancel_ctx.mark("cancel_requested")
+        self.cancel_callback()
+
+    def _worker_running(self):
+        try:
+            return self.thread is not None and self.thread.isRunning()
+        except RuntimeError:
+            # The product may have delivered deleteLater before this queued timer.
+            return False
+
+    def _finished(self):
+        self.worker_finished = True
+        self.processing_probe.restore()
+        self.cancel_ctx.mark("worker_finished")
+
+    def _cancelled(self, *_args):
+        self.cancelled = True
+
+    def _error(self, message):
+        self.worker_error = str(message)
+
+    def _idle(self, ctx, dialog, button):
+        self._arm_after_processing()
+        if self.worker_error:
+            raise RuntimeError(self.worker_error)
+        if self.worker_finished and "cancel_requested" not in ctx.marks:
+            raise RuntimeError("worker finished without a cancellation request")
+        if self.worker_finished and not self.cancelled:
+            raise RuntimeError("worker finished without cancellation acknowledgement")
+        loading = getattr(dialog, "loading_dialog", None)
+        if not (self.worker_finished and self.cancelled and button.isEnabled()
+                and (loading is None or not loading.isVisible())):
+            return False
+        residues = set(ctx.work.rglob("*")) - self.before
+        if residues:
+            raise RuntimeError("cancellation left output residues: " + ", ".join(
+                str(path.relative_to(ctx.work)) for path in sorted(residues)))
+        ctx.mark("idle")
+        ctx.extra["cancel_latency_ms"] = round(ctx.marks["idle"] - ctx.marks["cancel_requested"], 1)
+        ctx.extra["worker_finished"] = True
+        ctx.extra["output_residues"] = []
+        return True
+
+
+class ExportCancel(_Cancellation, ExportRun):
+    name = "export_cancel"
+    flows = ("EXP-CANCEL",)
+    processing_target = ("metroliza.exporting.export_data_thread", "write_measurement_block")
+
+    def action(self, ctx):
+        import metroliza.ui.export_dialog as module
+
+        self._start_watched(ctx, module, "create_export_data_thread", super().action,
+                            self.export.stop_exporting)
+
+    def done(self, ctx):
+        return self._idle(ctx, self.export, self.export.export_button)
+
+
+class CsvAnalyticsCancel(_Cancellation, CsvAnalytics):
+    name = "csv_analytics_cancel"
+    flows = ("CSV-CANCEL",)
+    processing_target = ("metroliza.industrial.industrial_analytics_workflow", "materialize_tabular_dataframe")
+
+    def action(self, ctx):
+        self._start_watched(ctx, self.dialog, "create_analytics_thread", super().action,
+                            self.dialog.cancel_analytics)
+
+    def done(self, ctx):
+        return self._idle(ctx, self.dialog, self.dialog.start_button)
+
+
 class IndustrialOpen(Scenario):
     """IND-01: open Industrial Data on a database holding a synthetic production cache."""
 
@@ -873,11 +1196,16 @@ SCENARIOS: dict[str, type[Scenario]] = {
     cls.name: cls
     for cls in (ReportsScan, ReportsImport, ModifyDbOpen, ModifyDbApply, ModifyDbRecords, ExportOpen,
                 FilterOpen, GroupingOpen, CharacteristicMappingOpen, ExportRun, ThemeSwitch, CsvLoad,
-                CsvAnalytics, IndustrialOpen, IndustrialBridge, RealtimeOpen)
+                CsvAnalytics, CsvGroupingOpen, CsvGroupedAnalytics, ExportCancel, CsvAnalyticsCancel,
+                GroupAnalysisExport, IndustrialOpen, IndustrialBridge, RealtimeOpen)
 }
 
 
 # ---------------------------------------------------------------- runner
+
+
+def _scenario_timeout_s(name: str) -> float:
+    return 3600.0 if name == "csv_grouped_analytics" else SCENARIO_TIMEOUT_S
 
 
 def _profile_worker_class(spec: str, sink: list[str]) -> None:
@@ -973,7 +1301,7 @@ class _Run:
     def start(self) -> None:
         self.sampler.start()
         self.cpu0 = cpu_seconds()
-        self.deadline = time.monotonic() + SCENARIO_TIMEOUT_S
+        self.deadline = time.monotonic() + _scenario_timeout_s(self.scenario.name)
         Clock.start()
         self.stall.reset()
         self.ctx.mark("action")
@@ -1041,11 +1369,31 @@ def run_scenario(args) -> dict[str, Any]:
     QTimer.singleShot(300, run.start)
     app.exec()
     result = run.finish()
+    if getattr(args, "keep_output", ""):
+        _retain_outputs(ctx, scenario, result)
     shutil.rmtree(ctx.work, ignore_errors=True)
     # Keep every window, worker and probe alive until os._exit: destroying Qt objects from Python
     # in arbitrary order after the measurement crashed (SIGSEGV) in teardown, not in the scenario.
     _KEEP_ALIVE.extend((app, ctx, scenario, run))
     return result
+
+
+def _retain_outputs(ctx, scenario, result):
+    import sqlite3
+    from contextlib import closing
+    from urllib.parse import quote
+
+    loaded = getattr(getattr(scenario, "dialog", None), "tabular_load_result", None)
+    store = getattr(loaded, "sqlite_store", None)
+    if store is not None:
+        source = f"file:{quote(str(Path(store.path).resolve()))}?mode=ro"
+        with closing(sqlite3.connect(source, uri=True)) as reader, closing(
+            sqlite3.connect(ctx.work / "tabular.sqlite")
+        ) as writer:
+            reader.backup(writer)
+    target = Path(ctx.args.keep_output)
+    shutil.copytree(ctx.work, target)  # Refuse reuse rather than mixing evidence from different runs.
+    result["retained_outputs"] = sorted(str(p.relative_to(target)) for p in target.rglob("*") if p.is_file())
 
 
 def private_environment(home: Path) -> dict[str, str]:
@@ -1068,12 +1416,15 @@ def suite(args) -> int:
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     plan = json.loads(Path(args.plan).read_text()) if args.plan else DEFAULT_PLAN
+    scenario_parser = argparse.ArgumentParser(add_help=False)
+    scenario_parser.add_argument("--scenario", required=True)
     only = set(filter(None, (args.only or "").split(",")))
     records = []
     for entry in plan:
         label = entry["label"]
         if only and label not in only:
             continue
+        selected, _ = scenario_parser.parse_known_args(entry["args"])
         for run in range(1, args.runs + 1):
             home = Path(tempfile.mkdtemp(prefix="ui-flow-home-"))
             target = out / f"{label}-{run}.json"
@@ -1083,7 +1434,7 @@ def suite(args) -> int:
             started = time.perf_counter()
             completed = subprocess.run(command, env=private_environment(home), cwd=str(home),
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                       timeout=SCENARIO_TIMEOUT_S + 120)
+                                       timeout=_scenario_timeout_s(selected.scenario) + 120)
             wall = round((time.perf_counter() - started) * 1000)
             shutil.rmtree(home, ignore_errors=True)
             record = json.loads(target.read_text()) if target.exists() else {"status": "failed"}
@@ -1114,6 +1465,84 @@ DEFAULT_PLAN = [
 ]
 
 
+def _synthetic_report(index, reference_count, measurement_count):
+    """Fresh shape-equivalent data: 18 headers × four axes × two rows at the default scale."""
+    import numpy as np
+
+    reference = f"REF{index % reference_count + 1:03d}"
+    rng = np.random.default_rng(42 + index)
+    measurements = []
+    for number in range(measurement_count):
+        header = f"{reference}_FEATURE_{number // 8 + 1:02d}"
+        nominal = 10.0 + (number // 8 + 1) * 0.1
+        measured = round(float(nominal + rng.normal(0.0, 0.12)), 4)
+        deviation = measured - nominal
+        outtol = int(abs(deviation) > 0.5)
+        measurements.append({
+            "row_order": number + 1, "header": header, "section_name": header,
+            "feature_label": header, "characteristic_name": "LOC", "characteristic_family": "LOC",
+            "description": header, "ax": "XYZD"[(number // 2) % 4], "nominal": nominal,
+            "tol_plus": 0.5, "tol_minus": -0.5, "bonus": 0.0, "meas": measured,
+            "dev": deviation, "outtol": outtol, "is_nok": bool(outtol),
+            "status_code": "nok" if outtol else "ok",
+        })
+    return reference, measurements
+
+
+def _prepare_report_db(target, count, reference_count, measurement_count):
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    ensure_report_schema(str(target))
+    repository = ReportRepository(str(target))
+    for index in range(count):
+        reference, measurements = _synthetic_report(index, reference_count, measurement_count)
+        nok_count = sum(row["is_nok"] for row in measurements)
+        repository.persist_parsed_report(
+            source_path=Path("synthetic_reports") / f"{reference}_{index + 1:04d}.pdf",
+            parser_id="benchmark", parser_version="benchmark", template_family="cmm_pdf_header_box",
+            template_variant="synthetic", parse_status="parsed",
+            metadata={"reference": reference, "reference_raw": reference, "report_date": "2024-02-01",
+                      "sample_number": str(index + 1), "sample_number_kind": "explicit_sample_number",
+                      "metadata_json": {"benchmark_fixture": True}},
+            candidates=(), warnings=(), measurements=measurements, metadata_version="report_metadata_v1",
+            page_count=1, measurement_count=len(measurements), has_nok=bool(nok_count), nok_count=nok_count,
+            metadata_confidence=1.0, identity_hash=f"benchmark:{reference}:{index + 1}",
+        )
+
+
+def _prepare_reports(data, args):
+    from metroliza.parsing.pdf_backend import require_pdf_backend
+
+    targets = ("db_1500.sqlite", "db_small.sqlite", "pdf_1500", "pdf_small")
+    if any((data / name).exists() for name in targets):
+        raise FileExistsError("report fixtures require a fresh data directory")
+    for name, count, refs in (("db_1500.sqlite", args.report_count, 37), ("db_small.sqlite", args.small_count, 3)):
+        target = data / name
+        _prepare_report_db(target, count, refs, args.measurements_per_report)
+    backend = require_pdf_backend()
+    for name, count, refs in (("pdf_1500", args.pdf_count, 37), ("pdf_small", args.small_count, 3)):
+        directory = data / name
+        directory.mkdir(exist_ok=True)
+        for index in range(count):
+            reference, measurements = _synthetic_report(index, refs, args.measurements_per_report)
+            target = directory / f"{reference}_{index + 1:04d}.pdf"
+            lines = ["SYNTHETIC CMM MEASUREMENT REPORT", "CMM REPORT",
+                     f"REFERENCE: {reference}", "DATE: 2024-02-01", f"SAMPLE: {index + 1}"]
+            for row in measurements:
+                lines.extend(("#" + row["header"], "DIM",
+                              f"{row['ax']} {row['nominal']:.4f} 0.5 -0.5 {row['meas']:.4f} "
+                              f"{row['dev']:.4f} 0"))
+            lines.append("#END")
+            document = backend.open()
+            try:
+                for start in range(0, len(lines), 40):
+                    document.new_page().insert_text((40, 40), "\n".join(lines[start:start + 40]), fontsize=8)
+                document.save(str(target), no_new_id=True)
+            finally:
+                document.close()
+
+
 def prepare(args) -> int:
     """Synthetic fixtures: a CSV Summary input and a production cache inside a report DB copy."""
     for path in (str(ROOT), str(ROOT / "src")):
@@ -1122,6 +1551,9 @@ def prepare(args) -> int:
     import numpy as np
 
     data = Path(args.data_dir)
+    data.mkdir(parents=True, exist_ok=True)
+    if hasattr(args, "report_count"):
+        _prepare_reports(data, args)
     rng = np.random.default_rng(7)
     rows = int(args.csv_rows)
     csv = data / f"csv_{rows // 1000}k.csv"
@@ -1135,6 +1567,14 @@ def prepare(args) -> int:
             values = ",".join(f"{v:.4f}" for v in dims[index])
             handle.write(f"P-{index:06d},{days[index]},{lines[index]},{values}\n")
     print(f"wrote {csv} ({rows} rows)")
+    groups = min(rows, int(getattr(args, "groups", 216)))
+    if rows < 1 or groups < 1:
+        raise ValueError("CSV rows and groups must be positive")
+    with csv.with_name(csv.stem + "_groups.csv").open("w", encoding="utf-8", newline="") as handle:
+        handle.write("REPORT_ID,GROUP,GROUP_COLOR\n")
+        for index in range(rows):
+            group = index % groups
+            handle.write(f"{index + 1},G-{group:03d},#{(group * 65793 + 3294830) % 16777216:06x}\n")
 
     source_db = data / args.industrial_db
     if source_db.exists():
@@ -1179,6 +1619,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--db", default="db_1500.sqlite", help="fixture DB name in --data-dir (copied)")
     run.add_argument("--pdf-set", default="pdf_small")
     run.add_argument("--preset", default="fast_diagnostics")
+    run.add_argument("--keep-output", default="", help="retain scenario files in a new directory before cleanup")
+    run.add_argument("--cancel-after-ms", type=int, default=100,
+                     help="cancellation delay after a real processing call returns and the GUI observes it")
     run.add_argument("--keep-db", default="", help="reports_import: copy the resulting DB here")
     run.add_argument("--csv", default="csv_100k.csv", help="CSV fixture name in --data-dir")
     run.add_argument("--profile-thread", default="",
@@ -1189,6 +1632,12 @@ def main(argv: list[str] | None = None) -> int:
     prep.add_argument("--data-dir", required=True)
     prep.add_argument("--csv-rows", type=int, default=100_000)
     prep.add_argument("--industrial-rows", type=int, default=50_000)
+    prep.add_argument("--report-count", type=int, default=1500)
+    prep.add_argument("--small-count", type=int, default=50)
+    prep.add_argument("--measurements-per-report", type=int, default=144,
+                      help="measurement rows per report; default:18 headers ×4 axes ×2 repetitions")
+    prep.add_argument("--pdf-count", type=int, default=1500)
+    prep.add_argument("--groups", type=int, default=216)
     prep.add_argument("--industrial-db", default="db_1500.sqlite",
                       help="report DB that receives the synthetic production cache (copied)")
     many = sub.add_parser("suite")

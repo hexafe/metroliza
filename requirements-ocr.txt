@@ -2,4 +2,4 @@
 # OpenVINO is dev/benchmark only: see requirements-ocr-benchmark.txt.
 rapidocr==3.8.1
 onnxruntime==1.30.0
-opencv-python>=4.12,<5
+opencv-python==4.14.0.94

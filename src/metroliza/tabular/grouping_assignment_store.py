@@ -344,6 +344,10 @@ class TabularGroupingAssignmentStore:
             "group_name TEXT NOT NULL, "
             "color TEXT NOT NULL)"
         )
+        index_name = _quote_identifier(f"{self.table_name}_group_name")
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS temp.{index_name} ON {table_name} (group_name)"
+        )
         if replay_start == 0:
             connection.execute(f"DELETE FROM {table_name}")
         for index, command in enumerate(commands[replay_start:], replay_start):

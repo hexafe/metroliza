@@ -302,6 +302,7 @@ def run_tabular_file_analytics(
     dashboard_interactivity_options: object | None = None,
     _progress_started_at: float | None = None,
     _loading_progress_emitted: bool = False,
+    _grouping_snapshot=None,
 ) -> IndustrialAnalyticsRunResult:
     """Run analytics from a CSV or Excel file."""
 
@@ -327,6 +328,7 @@ def run_tabular_file_analytics(
             dashboard_detail_mode=dashboard_detail_mode,
             dashboard_interactivity_options=dashboard_interactivity_options,
             grouping_df=grouping_df,
+            _grouping_snapshot=_grouping_snapshot,
             grouping_default_group_label=grouping_default_group_label,
             dashboard_visual_settings=dashboard_visual_settings,
         ),
@@ -382,6 +384,7 @@ def run_tabular_file_analytics(
                 tabular_filter_expression=request.tabular_filter_expression,
                 dashboard_detail_mode=request.dashboard_detail_mode,
                 grouping_df=request.grouping_df,
+                _grouping_snapshot=request._grouping_snapshot,
                 grouping_default_group_label=request.grouping_default_group_label,
                 aggregation_state=request.aggregation_state,
                 cohort_state=request.cohort_state,
