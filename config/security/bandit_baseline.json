@@ -391,7 +391,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "86c6b2943c1d66e5793f7e982b216113625c64df3ee1ad5a554665634bad4746",
+      "fingerprint": "2e153d568cba0e6befad212f11f1b3086323eca826f48da819b4c07bc1d55963",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -400,7 +400,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4ebf4fd4b3fd555ed914f872ab8f910e9baf66cf27ea5238d8a0e7be1ce8aeea",
+      "fingerprint": "41d02788cdb88b86b345e7df24cb05fbb50a04053fc5f78f3571890e65d955e6",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -418,7 +418,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "9d32f735fb1826f687530bfa82d822cb745903624ad5eed1d2a574285f0cc210",
+      "fingerprint": "0bc78b3b3b9ccf634c3a5769d9e34e72f1e9c9fb57e0da4d1cabb1017d45e5cf",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -427,7 +427,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "74c99b641afd5884027d430a1eb1111ea3bf638e04158fc65c63cdb6c3b08de9",
+      "fingerprint": "6356052bed0db6c837e79e46fd6bbe6f68b0df874754a09e8bf0a9ca1e7debde",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -436,7 +436,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "27900ae8f3263166618bbb7fe96d83cbee155eb4c5fe567e39d794124110b0a4",
+      "fingerprint": "37c37975913bac7e4fb62ee0d76c353934dfde735d65354489072c42cb64ce52",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -445,7 +445,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "7a99a71ede789555c18118661d44b5815f52171dc01bd0aa397037f42e8e3044",
+      "fingerprint": "6b36083d4365795525a6b0e6719ad6a633e211ab4816eddea9b6c608a93da536",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -454,7 +454,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c57a9f11c5f0dba2cc6a9f83fe39edc7195d4655276a0253fb615f90b65df519",
+      "fingerprint": "b1ca6e429d0bacd1d87c2bcc79b7f032c7fc108252f8cc985724fa891992590b",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -472,7 +472,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "761e8a6a24cde4089d097fd409bb9ef91977b5dd80e7e9b3d8cb1a364442b9c7",
+      "fingerprint": "41fe75add3315ff2c4f7c55641dd22431de9f1c707f80ff76f5b10529fd7da6d",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -490,7 +490,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "70dc5b40ee09c7c174b9e699a494b7ef66ff28f2882f50a834e29924f6353528",
+      "fingerprint": "e32fd6e188fd1c61e6af799a16cca8994c8f8f5beee090071b76745fdd5549a1",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -508,7 +508,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8abbd506e20f46d70b9f744bca9851d1f7a87ef4e21d51830a67feb040f4e6a0",
+      "fingerprint": "aa8ebe2099af86968cc500789d41b4b0f66c0cd51922e9a811bf46ac41850ad8",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -1395,6 +1395,33 @@
       "path": "src/metroliza/reports/report_query_service.py",
       "owner": "Security review",
       "rationale": "_canonical_report_choice_source (STEP3 T14, #1151/#906): raw native strings and exact canonical export equality guard a fixed report-column whitelist; projection is quote_identifier(column_name) or the literal file_name AS FILENAME, and source view is a module constant. EXISTS uses only the fixed report_id join; no report/filter data is interpolated as SQL. This exception is limited to that guarded internal source builder.",
+      "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "4f6b65dc92f486e467b955c28cfc38a154a90068cc6520b9f54d764969b4f02f",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
+      "owner": "Security review",
+      "rationale": "_insert_dynamic_value_facets present-value query (STEP3 T16, #1151/#906): normalized_expr is composed by _normalized_value_sql from the fixed field_value_text/field_value_json expression, and the destination table is a quoted module constant. Field names/output columns come from TEMP table rows joined as data; scope_key is bound as ?. No dynamic field values or user selections become SQL syntax.",
+      "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "ce5550e6ea30842080f80eb51d343b987afb25eddda4767e6258e693b516d655",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
+      "owner": "Security review",
+      "rationale": "_distinct_dynamic_metadata_rows (STEP3 T16, #1151/#906): its only production caller supplies the fixed TRIM/COALESCE value expression; _NUMERIC_VALUE_SQL is a module constant. where_sql is the bridge fixed IN-template chain and all selection values remain separately bound params. Field text remains grouped SQL data/UDF input; this exception does not admit external arbitrary SQL fragments.",
+      "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "153430dc007cfa4290860146beee3fd6f6b7f8f6a14e224ecea9dcfe3b1e6fda",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
+      "owner": "Security review",
+      "rationale": "_metadata_scope_fingerprint profile-label inputs (STEP3 T16, #1151/#906): where_sql comes through the private bridge chain from fixed records.source_profile_id/source_db_alias IN templates in load_industrial_cache_tabular_result. Placeholder count is generated from normalized selections; actual IDs/aliases are supplied separately as params. Tables/columns/joins are literal; profile names are returned as data and hex-encoded for the cache token, never interpolated into SQL.",
       "expires_on": "2027-04-30"
     }
   ]
