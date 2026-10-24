@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from metroliza.parsing import report_parser_factory
+from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.header_ocr_backend import (
     DEFAULT_HEADER_OCR_BACKEND,
     default_rapidocr_latin_model_paths,
@@ -267,6 +268,35 @@ class MetadataReviewReader:
         )
 
 
+def _metadata_instance_keys(parser):
+    attributes = object.__getattribute__(parser, "__dict__")
+    if type(attributes) is not dict:
+        return None
+    try:
+        keys = tuple(attributes)
+    except RuntimeError:  # native dictionary changed during the key-only snapshot
+        return None
+    return keys if all(type(key) is str for key in keys) else None
+
+
+def _metadata_open_supported(parser, parser_factory):
+    # Plugins, subclasses and customized CMM instances keep their public full-open path.
+    if type(parser) is not CMMReportParser:
+        return False
+    keys = _metadata_instance_keys(parser)
+    if keys is None:
+        return False
+    return (
+        (parser_factory is None or parser_factory is _IN_PROCESS_PARSER_FACTORY)
+        and CMMReportParser.open_report is _CMM_FULL_OPEN
+        and CMMReportParser.extract_metadata is _CMM_EXTRACT_METADATA
+        and CMMReportParser._cached_embedded_lines_for_open_report is _CMM_CACHED_LINES
+        and "open_report" not in keys
+        and "extract_metadata" not in keys
+        and "_cached_embedded_lines_for_open_report" not in keys
+    )
+
+
 def read_metadata_one(
     item: ParseFilePreflight,
     path: Path | None,
@@ -300,7 +330,10 @@ def read_metadata_one(
             return MetadataReading(occurrence_id, ROW_UNSUPPORTED, mode, note=NOTE_UNSUPPORTED)
         if hasattr(parser, "metadata_parsing_mode"):
             parser.metadata_parsing_mode = mode
-        parser.open_report()
+        if _metadata_open_supported(parser, parser_factory):
+            CMMReportParser.open_metadata_report(parser)
+        else:
+            parser.open_report()
         selection = parser.extract_metadata()
         inspection.verified_sha256()
     except (
@@ -326,6 +359,9 @@ def read_metadata_one(
 # The reader the review pool reproduces in its workers; anything else stays in-process.
 _IN_PROCESS_PARSER_FACTORY = report_parser_factory.get_parser
 _IN_PROCESS_READ_ONE = MetadataReviewReader._read_one
+_CMM_FULL_OPEN = CMMReportParser.open_report
+_CMM_EXTRACT_METADATA = CMMReportParser.extract_metadata
+_CMM_CACHED_LINES = CMMReportParser._cached_embedded_lines_for_open_report
 
 
 __all__ = [

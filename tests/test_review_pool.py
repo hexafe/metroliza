@@ -532,3 +532,94 @@ def test_pooled_review_seeds_the_same_probe_data_as_serial(review_source):
             tuple(str(path) for path, _name in paths), generation_id=generation,
         )))
     assert entries[0] and entries[0] == entries[1]
+
+
+def test_legacy_metadata_worker_task_preserves_literal_order_and_generation(review_source):
+    from dataclasses import replace
+    from metroliza.parsing.metadata_review import read_metadata_one
+
+    source, database = review_source
+    result = _scan(source, database, workers=0)
+    items = result.ready_files[:3]
+    generation, fingerprint = review_pool.registry_state()
+    entries = tuple((item, str(source / item.stable_occurrence_id)) for item in items)
+    expected = tuple(read_metadata_one(replace(item, registry_generation_id=generation),
+                                     Path(path), MODE_FAST, database_path=str(database))
+                     for item, path in entries)
+    actual = review_pool.read_metadata_chunk_in_worker((fingerprint, str(database), MODE_FAST, entries))
+    assert actual[:3] == (fingerprint, generation, expected)
+    assert len(expected) == 3 and all(reading.status == "ok" for reading in expected)
+    assert tuple(reading.occurrence_id for reading in expected) == tuple(item.stable_occurrence_id for item in items)
+
+
+@pytest.mark.parametrize("seed", ["valid", "missing", "stale_digest", "wrong_fingerprint"])
+def test_metadata_worker_parent_probes_are_only_reused_with_exact_identity(review_source, monkeypatch, seed):
+    source, database = review_source
+    result = _scan(source, database, workers=0)
+    item = result.ready_files[0]
+    path = source / item.stable_occurrence_id
+    generation, fingerprint = review_pool.registry_state()
+    probes = factory.export_probe_cache_entries((str(path),), generation_id=generation)
+    assert probes
+    factory.reset_probe_cache()
+    if seed == "missing":
+        probes = ()
+    elif seed == "stale_digest":
+        stat = path.stat()
+        path.write_bytes(path.read_bytes() + b"\n% mutated\n")
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    elif seed == "wrong_fingerprint":
+        fingerprint = "unrelated registry"
+    calls = []
+    original = factory._safe_probe
+
+    def probe(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(factory, "_safe_probe", probe)
+    value = review_pool.read_metadata_chunk_in_worker(
+        (fingerprint, str(database), MODE_FAST, ((item, str(path)),), probes))
+    if seed == "wrong_fingerprint":
+        assert value[2] is None and not factory.PROBE_RESULT_CACHE and not calls
+    else:
+        reading, = value[2]
+        assert reading.occurrence_id == item.stable_occurrence_id
+        assert reading.status == ("changed" if seed == "stale_digest" else "ok")
+        assert bool(calls) is (seed == "missing")
+
+
+def test_metadata_parent_exports_only_generation_eligible_chunk_probes(review_source, monkeypatch):
+    from dataclasses import replace
+
+    source, database = review_source
+    result = _scan(source, database, workers=0)
+    items = result.ready_files[:2]
+    generation, fingerprint = review_pool.registry_state()
+    calls = []
+
+    class Pool:
+        def __init__(self, function, tasks, **kwargs):
+            calls.extend(tasks)
+
+        def results(self):
+            for index, task in enumerate(calls):
+                yield index, review_pool.read_metadata_chunk_in_worker(task)
+
+        def close(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(review_pool, "CHUNK_SIZE", 1)
+    monkeypatch.setattr(review_pool, "OrderedChunkPool", Pool)
+    stale = replace(items[1], registry_generation_id=generation - 1)
+    serial = []
+    readings = list(review_pool.read_metadata_in_order(
+        [(items[0], source / items[0].stable_occurrence_id),
+         (stale, source / stale.stable_occurrence_id)],
+        mode=MODE_FAST, database_path=str(database), workers=2, should_cancel=lambda: False,
+        read_serial=lambda item, path: serial.append(item) or "serial-stale"))
+    assert len(calls) == 1 and calls[0][:3] == (fingerprint, str(database), MODE_FAST)
+    assert calls[0][4] and all(probe.normalized_path == str(source / items[0].stable_occurrence_id)
+                             for probe in calls[0][4])
+    assert readings[0].status == "ok" and readings[1] == "serial-stale"
+    assert serial == [stale]

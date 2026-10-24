@@ -122,10 +122,20 @@ def read_metadata_chunk_in_worker(task):
 
     from metroliza.parsing.metadata_review import read_metadata_one
 
-    expected_fingerprint, database_path, mode, entries = task
+    if len(task) == 5:
+        expected_fingerprint, database_path, mode, entries, probes = task
+    else:
+        expected_fingerprint, database_path, mode, entries = task
+        probes = ()
     generation, fingerprint = registry_state()
     if fingerprint != expected_fingerprint:
         return fingerprint, generation, None, ()
+    try:
+        report_parser_factory.seed_probe_cache_entries(
+            probes, generation_id=generation, fingerprint=fingerprint,
+        )
+    except Exception as error:
+        logger.debug("Metadata probe cache seeding skipped (%s)", type(error).__name__)
     readings = tuple(
         read_metadata_one(
             replace(item, registry_generation_id=generation),
@@ -377,6 +387,10 @@ def read_metadata_in_order(
                 str(database_path),
                 mode,
                 tuple((item, None if path is None else str(path)) for item, path in chunks[index]),
+                report_parser_factory.export_probe_cache_entries(
+                    tuple(str(path) for _item, path in chunks[index] if path is not None),
+                    generation_id=generation,
+                ),
             )
             for index in pool_chunks
         ],

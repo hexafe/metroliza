@@ -15,7 +15,7 @@ from metroliza.shared.custom_logger import CustomLogger
 from metroliza.native_bridges.cmm_native_parser import (
     parse_blocks_with_backend_and_telemetry,
 )
-from metroliza.parsing.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
+from metroliza.parsing.pdf_backend import load_pdf_backend, require_pdf_backend, resolve_pdf_backend_module_name
 from metroliza.parsing.cmm_parsing import (
     MEASUREMENT_STATUS_TOKENS,
     add_tolerances_to_blocks,
@@ -81,6 +81,10 @@ def _supports_prepared_persistence_rows(parser):
         return False
     return dict.get(attributes, "_WORKER_PARSER_CLASS") is type(parser)
 
+
+_METADATA_PDF_BACKEND = load_pdf_backend()
+_METADATA_PDF_OPEN = getattr(_METADATA_PDF_BACKEND, "open", None)
+_METADATA_CACHE_UNSUPPORTED = object()
 
 logger = logging.getLogger(__name__)
 _REPORT_SCHEMA_OWNER = ensure_report_schema
@@ -777,6 +781,25 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         except Exception:
             return None
 
+    def _cached_metadata_text(self, pdf_backend, *, metadata_only):
+        if not metadata_only or type(pdf_backend) is not ModuleType:
+            return _METADATA_CACHE_UNSUPPORTED
+        if (pdf_backend is not _METADATA_PDF_BACKEND
+                or pdf_backend.open is not _METADATA_PDF_OPEN):
+            return _METADATA_CACHE_UNSUPPORTED
+        inspection = getattr(self, "source_inspection_context", None)
+        if type(inspection) is not SourceInspectionContext:
+            return _METADATA_CACHE_UNSUPPORTED
+        try:
+            texts = inspection.get_cached_pdf_page_texts(max_chars=CMM_PROBE_MAX_EXTRACTED_CHARS)
+            if texts is None:
+                return None
+            if type(texts) is tuple and all(type(text) is str for text in texts):
+                return []
+            return [line for text in texts for line in text.splitlines()]
+        except Exception:
+            return None
+
     def open_report(self):
         """Handle `cmm_open` for `CMMReportParser`.
 
@@ -789,6 +812,15 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             May update UI state, database rows, or in-memory export context.
         """
 
+        return CMMReportParser._open_report(self)
+
+    def open_metadata_report(self):
+        """Open metadata with full-open fallback unless native all-page text is cached."""
+        if type(self) is not CMMReportParser:
+            return self.open_report()
+        return CMMReportParser._open_report(self, metadata_only=True)
+
+    def _open_report(self, *, metadata_only=False):
         try:
             """
             Method to open the CMM PDF file and store the text inside the pdf_raw_text attribute.
@@ -796,7 +828,13 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             """
             pdf_backend = self._require_pdf_backend()
             pdf_path = Path(self.file_path) / self.file_name
-            cached_embedded_lines = self._cached_embedded_lines_for_open_report()
+            cached_metadata_text = CMMReportParser._cached_metadata_text(
+                self, pdf_backend, metadata_only=metadata_only,
+            )
+            cached_embedded_lines = (
+                self._cached_embedded_lines_for_open_report()
+                if cached_metadata_text is _METADATA_CACHE_UNSUPPORTED else cached_metadata_text
+            )
 
             with pdf_backend.open(str(pdf_path)) as pdf_report:
                 self._page_count = self._resolve_page_count(pdf_report)
