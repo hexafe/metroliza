@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 
@@ -23,8 +24,12 @@ from metroliza.reports.report_repository import (
 def _reference_rows(report_id, measurements):
     """The row builder as it was before the import fast path (frozen copy)."""
 
+    report_id = int(report_id)
     rows = []
     for row_order, measurement in enumerate(measurements, start=1):
+        if isinstance(measurement, dict):
+            rows.append(_frozen_mapping_row(report_id, row_order, measurement))
+            continue
         explicit_order = _get_value(measurement, "row_order")
         outtol = _coerce_float(_get_value(measurement, "outtol"))
         is_nok, status_code = _measurement_status_values(measurement, outtol)
@@ -285,3 +290,366 @@ def test_metadata_with_a_circular_json_reference_fails_like_the_generic_path():
         _reference_metadata_values(metadata)
     with pytest.raises(RecursionError):
         _metadata_persistence_values(metadata)
+
+
+_FROZEN_UNSET = repo._UNSET
+
+def _frozen_mapping_row(report_id: int, row_order: int, measurement: dict) -> tuple[Any, ...]:
+    """Row tuple for a dict measurement; same values as the generic attribute path."""
+
+    get = measurement.get
+    explicit_order = get("row_order")
+    outtol = _coerce_float(get("outtol"))
+    status_code = get("status_code")
+    if status_code not in (None, ""):
+        status_code = repo._coerce_status_code(status_code)
+        is_nok = 1 if status_code == "nok" else 0
+    else:
+        raw_is_nok = get("is_nok")
+        if raw_is_nok is not None:
+            is_nok = 1 if raw_is_nok else 0
+            status_code = "nok" if is_nok else "ok"
+        else:
+            is_nok, status_code = repo._status_from_outtol(outtol)
+    raw = get("raw_measurement_json", _FROZEN_UNSET)
+    return (
+        report_id,
+        _coerce_int(get("page_number")),
+        int(explicit_order if explicit_order is not None else row_order),
+        get("header"),
+        get("section_name"),
+        get("feature_label"),
+        get("characteristic_name"),
+        get("characteristic_family"),
+        get("description"),
+        get("ax"),
+        _coerce_float(get("nominal", get("nom"))),
+        _coerce_float(get("tol_plus")),
+        _coerce_float(get("tol_minus")),
+        _coerce_float(get("bonus")),
+        _coerce_float(get("meas")),
+        _coerce_float(get("dev")),
+        outtol,
+        is_nok,
+        status_code,
+        _to_json(_as_mapping(measurement) if raw is _FROZEN_UNSET else raw),
+    )
+
+
+@pytest.mark.parametrize("raw", [None, {"x": [None, float("inf"), -0.0, "ž"]}, "raw"])
+def test_prepared_public_rows_remain_mutable_and_repeatable(raw):
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
+
+    parser = CMMReportParser("synthetic.pdf", "unused.sqlite")
+    parser.blocks_text = [["#SYNTHETIC", [["X", "1", ".1", "-.1", "0", "1", "0", "0", "OK"]]]]
+    rows = parser.parse_measurements()
+    assert type(rows) is list and type(rows[0]) is dict
+    rows[0]["raw_measurement_json"] = raw
+    repository = ReportRepository("unused.sqlite")
+    for report_id in (3, "7", 3):
+        supplied = parser._normalized_rows_for_persistence()
+        assert repository._measurement_rows(report_id, supplied) == _reference_rows(report_id, rows)
+    rows[0]["nominal"] = "3.75"
+    assert repository._measurement_rows(8, parser._normalized_rows_for_persistence()) == _reference_rows(8, rows)
+
+
+def test_report_id_error_precedes_iteration_and_row_callbacks():
+    class ObservingRows:
+        def __iter__(self):
+            pytest.fail("report id conversion must precede iteration")
+
+    for build in (_reference_rows, ReportRepository("unused.sqlite")._measurement_rows):
+        with pytest.raises(ValueError):
+            build("invalid-id", ObservingRows())
+
+
+def test_dict_subclass_keeps_get_callback_order():
+    calls = []
+
+    class ObservingDict(dict):
+        def get(self, *args):
+            calls.append(args)
+            return super().get(*args)
+
+    row = ObservingDict(_parser_shaped(1))
+    expected = _reference_rows(9, [row])
+    expected_calls = list(calls)
+    calls.clear()
+    assert ReportRepository("unused.sqlite")._measurement_rows(9, [row]) == expected
+    assert calls == expected_calls
+
+
+def test_prepared_rows_activate_and_bind_only_the_owning_report_id(monkeypatch):
+    from copy import deepcopy
+
+    rows = [_parser_shaped(1), _parser_shaped(2)]
+    prepared = repo._prepare_measurement_rows(rows)
+    expected = {number: _reference_rows(number, deepcopy(rows)) for number in (4, 8)}
+    calls = []
+    original = repo._mapping_measurement_row
+
+    def observe(*args):
+        calls.append(args)
+        return original(*args)
+
+    monkeypatch.setattr(repo, "_mapping_measurement_row", observe)
+    repository = ReportRepository("unused.sqlite")
+    for number in (4, 8):
+        assert repository._measurement_rows(number, prepared) == expected[number]
+    assert not calls
+    rows[0]["raw_measurement_json"]["tokens"].append("mutated")
+    assert repository._measurement_rows(4, prepared) == _reference_rows(4, rows)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("change", ["version", "shape", "key", "custom"])
+def test_unsupported_prepared_rows_use_the_original_path(monkeypatch, change):
+    from dataclasses import replace
+
+    rows = [_parser_shaped(1)]
+    prepared = repo._prepare_measurement_rows(rows)
+    if change == "version":
+        prepared = replace(prepared, version=2)
+    elif change == "shape":
+        prepared = replace(prepared, rows=((1,),))
+    elif change == "key":
+        prepared = replace(prepared, source_key=object())
+    else:
+        class Custom(dict):
+            pass
+        rows[0] = Custom(rows[0])
+        assert repo._prepare_measurement_rows(rows) is None
+    calls = []
+    original = repo._mapping_measurement_row
+    monkeypatch.setattr(repo, "_mapping_measurement_row", lambda *args: calls.append(1) or original(*args))
+    assert ReportRepository("unused.sqlite")._measurement_rows(1, prepared) == _reference_rows(1, rows)
+    assert calls == [1]
+
+
+def test_prepared_row_snapshot_freezes_outer_membership_at_repository_entry():
+    rows = [_parser_shaped(1)]
+    prepared = repo._freeze_measurements(repo._prepare_measurement_rows(rows))
+    rows.append(_parser_shaped(2))
+    assert ReportRepository("unused.sqlite")._measurement_rows(1, prepared) == _reference_rows(1, rows[:1])
+    rows[0]["meas"] = 99
+    assert ReportRepository("unused.sqlite")._measurement_rows(1, prepared) == _reference_rows(1, rows[:1])
+
+
+@pytest.mark.parametrize("value", [None, -0.0, float("nan"), float("inf"), float("-inf")])
+def test_prepared_rows_keep_nonfinite_signed_zero_and_exact_json(value):
+    import struct
+
+    rows = [_parser_shaped(1)]
+    rows[0].update(nominal=value, outtol=value, status_code="unknown", raw_measurement_json={"value": value, "unicode": "ž"})
+    prepared = repo._prepare_measurement_rows(rows)
+    assert prepared is not None
+    expected = _reference_rows(11, rows)
+    actual = ReportRepository("unused.sqlite")._measurement_rows(11, prepared)
+    def typed(values):
+        return [(type(item), struct.pack("!d", item) if type(item) is float else item) for row in values for item in row]
+    assert typed(actual) == typed(expected)
+    assert actual[0][-1] == _to_json(rows[0]["raw_measurement_json"])
+
+
+def test_preparation_declines_callbacks_and_preserves_writer_errors():
+    calls = []
+    class Number:
+        def __eq__(self, other):
+            calls.append(("eq", other))
+            return False
+        def __float__(self):
+            calls.append(("float",))
+            return 1.25
+    rows = [{"nominal": Number(), "raw_measurement_json": None}]
+    assert repo._prepare_measurement_rows(rows) is None
+    assert calls == []
+    expected = _reference_rows(1, rows)
+    original_calls = list(calls)
+    calls.clear()
+    assert ReportRepository("unused.sqlite")._measurement_rows(1, rows) == expected
+    assert calls == original_calls
+    rows = [{"row_order": "invalid", "status_code": "bad"}]
+    assert repo._prepare_measurement_rows(rows) is None
+    with pytest.raises(ValueError, match="status_code must be"):
+        ReportRepository("unused.sqlite")._measurement_rows(1, rows)
+
+
+
+def test_preparation_uses_identity_checks_before_custom_metaclass_callbacks():
+    class ObservingMeta(type):
+        def __eq__(cls, other):
+            pytest.fail("eligibility called custom metaclass equality")
+        def __hash__(cls):
+            pytest.fail("eligibility called custom metaclass hashing")
+    class Number(metaclass=ObservingMeta):
+        def __float__(self):
+            return 1.25
+    rows = [{"nominal": Number(), "raw_measurement_json": None}]
+    assert repo._prepare_measurement_rows(rows) is None
+    assert ReportRepository("unused.sqlite")._measurement_rows(1, rows) == _reference_rows(1, rows)
+
+
+@pytest.mark.parametrize("shape", ["string", "dictionary"])
+def test_prepared_decline_preserves_custom_string_and_dictionary_observations(shape):
+    calls = []
+    class Text(str):
+        def __eq__(self, other):
+            calls.append(("eq", other))
+            return super().__eq__(other)
+    class Mapping(dict):
+        def items(self):
+            calls.append(("items",))
+            return super().items()
+    rows = ([{"nominal": Text("1.25"), "raw_measurement_json": None}] if shape == "string"
+            else [{"raw_measurement_json": Mapping(value=1)}])
+    assert repo._prepare_measurement_rows(rows) is None
+    assert calls == []
+    expected = _reference_rows(1, rows)
+    expected_calls = list(calls)
+    calls.clear()
+    assert ReportRepository("unused.sqlite")._measurement_rows(1, rows) == expected
+    assert calls == expected_calls
+
+
+@pytest.fixture
+def native_bigint_repr_limit():
+    import sys
+
+    if not hasattr(sys, "set_int_max_str_digits"):
+        pytest.skip("interpreter has no native integer repr limit")
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    try:
+        yield 10 ** 5000
+    finally:
+        sys.set_int_max_str_digits(previous)
+
+
+def test_ignored_bigint_after_preparation_falls_back_without_cached_emission(monkeypatch, native_bigint_repr_limit):
+    from dataclasses import replace
+
+    rows = [{"header": "GENERIC", "raw_measurement_json": {}}]
+    prepared = repo._prepare_measurement_rows(rows)
+    poison = list(prepared.rows[0])
+    poison[2] = "CACHED_MUST_NOT_BE_EMITTED"
+    prepared = replace(prepared, rows=(tuple(poison),))
+    rows[0]["ignored_native_bigint"] = native_bigint_repr_limit
+    expected = _reference_rows(17, rows)
+    calls, emissions = [], []
+    original = repo._mapping_measurement_row
+
+    def writer(*args):
+        calls.append(1)
+        row = original(*args)
+        emissions.append(row)
+        return row
+
+    monkeypatch.setattr(repo, "_mapping_measurement_row", writer)
+    actual = ReportRepository("unused.sqlite")._measurement_rows(17, prepared)
+    assert actual == expected == emissions
+    assert calls == [1]
+    assert actual[0][3] == "GENERIC" and actual[0][-1] == "{}"
+
+
+@pytest.mark.parametrize("field", ["nominal", "raw_measurement_json"])
+def test_used_bigint_keeps_original_writer_failure(monkeypatch, native_bigint_repr_limit, field):
+    rows = [{"raw_measurement_json": {}}]
+    prepared = repo._prepare_measurement_rows(rows)
+    rows[0][field] = ({"used": native_bigint_repr_limit} if field == "raw_measurement_json" else native_bigint_repr_limit)
+    with pytest.raises((ValueError, OverflowError)) as baseline:
+        _reference_rows(17, rows)
+    calls = []
+    original = repo._mapping_measurement_row
+    monkeypatch.setattr(repo, "_mapping_measurement_row", lambda *args: calls.append(1) or original(*args))
+    with pytest.raises(type(baseline.value)) as actual:
+        ReportRepository("unused.sqlite")._measurement_rows(17, prepared)
+    assert str(actual.value) == str(baseline.value)
+    assert calls == [1]
+
+
+@pytest.mark.parametrize("error_type", [ValueError, OverflowError, RuntimeError])
+def test_key_decline_does_not_catch_or_retry_generic_writer_error(monkeypatch, native_bigint_repr_limit, error_type):
+    rows = [{"raw_measurement_json": {}}]
+    prepared = repo._prepare_measurement_rows(rows)
+    rows[0]["ignored_native_bigint"] = native_bigint_repr_limit
+    calls = []
+    error = error_type("generic writer sentinel")
+
+    def writer(*args):
+        calls.append(1)
+        raise error
+
+    monkeypatch.setattr(repo, "_mapping_measurement_row", writer)
+    with pytest.raises(error_type) as actual:
+        ReportRepository("unused.sqlite")._measurement_rows(17, prepared)
+    assert actual.value is error
+    assert calls == [1]
+
+
+def test_prepared_decline_keeps_real_status_callback_error(monkeypatch, native_bigint_repr_limit):
+    rows = [{"raw_measurement_json": {}}]
+    prepared = repo._prepare_measurement_rows(rows)
+    calls, callbacks = [], []
+    error = ValueError("status callback sentinel")
+
+    class Status:
+        def __str__(self):
+            callbacks.append(1)
+            raise error
+
+    rows[0].update(status_code=Status(), ignored_native_bigint=native_bigint_repr_limit)
+    original = repo._mapping_measurement_row
+    monkeypatch.setattr(repo, "_mapping_measurement_row", lambda *args: calls.append(1) or original(*args))
+    with pytest.raises(ValueError) as actual:
+        ReportRepository("unused.sqlite")._measurement_rows(17, prepared)
+    assert actual.value is error
+    assert calls == callbacks == [1]
+
+
+@pytest.mark.parametrize("stage", ["producer", "consumer"])
+def test_native_dict_resize_declines_key_only(monkeypatch, stage):
+    import sys
+
+    rows = [{"header": "GENERIC", "raw_measurement_json": {}}]
+    prepared = repo._prepare_measurement_rows(rows)
+    fired, calls = [], []
+    previous = sys.gettrace()
+    original = repo._mapping_measurement_row
+    monkeypatch.setattr(repo, "_mapping_measurement_row", lambda *args: calls.append(1) or original(*args))
+
+    def trace(frame, event, arg):
+        if (not fired and event == "line" and frame.f_globals is vars(repo)
+                and frame.f_code.co_name == "<genexpr>"
+                and "key" in frame.f_locals and "item" in frame.f_locals):
+            assert type(rows[0]) is dict
+            rows[0]["ignored_resize"] = 1
+            fired.append(1)
+        return trace
+
+    try:
+        sys.settrace(trace)
+        if stage == "producer":
+            assert repo._prepare_measurement_rows(rows) is None
+            assert calls == []
+        else:
+            actual = ReportRepository("unused.sqlite")._measurement_rows(17, prepared)
+    finally:
+        sys.settrace(previous)
+    if stage == "producer":
+        actual = ReportRepository("unused.sqlite")._measurement_rows(17, rows)
+    assert sys.gettrace() is previous and fired == calls == [1]
+    assert actual == _reference_rows(17, rows)
+
+
+def test_successful_producer_key_does_not_catch_mapping_runtime_error(monkeypatch):
+    calls = []
+    error = RuntimeError("producer mapping sentinel")
+
+    def writer(*args):
+        calls.append(1)
+        raise error
+
+    monkeypatch.setattr(repo, "_mapping_measurement_row", writer)
+    with pytest.raises(RuntimeError) as actual:
+        repo._prepare_measurement_rows([{"raw_measurement_json": {}}])
+    assert actual.value is error and calls == [1]

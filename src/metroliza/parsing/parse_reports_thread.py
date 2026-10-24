@@ -1298,6 +1298,14 @@ def persist_complete_metadata_enrichment(
     return merged_metadata, merge_summary
 
 
+def _plain_selected_identity(identity):
+    return (type(identity) is SelectedReportIdentity
+            and type(identity.occurrence_id) is str
+            and type(identity.fingerprint) is str
+            and type(identity.parser_id) is str
+            and type(identity.registry_generation_id) is int)
+
+
 class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
     LOOKUP_BATCH_SIZE = 250
     PROGRESS_STAGE_RANGES = {
@@ -1364,6 +1372,15 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         """Build the legacy all-READY behavior through an explicit plan adapter."""
 
         return cls(ImportPlan.all_ready(parse_request, preflight_result))
+
+    @property
+    def import_plan(self):
+        return self._import_plan
+
+    @import_plan.setter
+    def import_plan(self, value):
+        self._import_plan = value
+        self._enrichment_index = None
 
     @property
     def preflight_result(self) -> ParsePreflightResult | None:
@@ -1749,10 +1766,27 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
     def _report_metadata_row(self, report_id, connection=None):
         return report_metadata_row_for_enrichment(self.db_file, report_id, connection=connection)
 
+    def _enrichment_plan_index(self):
+        if type(self) is not ParseReportsThread:
+            return None
+        plan = self.import_plan
+        cached = getattr(self, "_enrichment_index", None)
+        if cached is not None and cached[0] is plan:
+            return cached[1]
+        index = None
+        if (type(plan) is ImportPlan and type(plan.selected_reports) is tuple
+                and all(_plain_selected_identity(item) for item in plan.selected_reports)):
+            index = ({item.occurrence_id: item for item in plan.selected_reports},
+                     frozenset(plan.selected_reports))
+        self._enrichment_index = (plan, index)
+        return index
+
     def _selected_enrichment_identity(self, report, source_inspection):
         if self.import_plan is None:
             return None
-        identities = {item.occurrence_id: item for item in self.import_plan.selected_reports}
+        index = ParseReportsThread._enrichment_plan_index(self)
+        identities = (index[0] if index is not None else
+                      {item.occurrence_id: item for item in self.import_plan.selected_reports})
         identity = identities.get(self._occurrence_id_for_report(Path(report)))
         if identity is None:
             raise _SelectedReportApprovalDriftError("Enrichment report is not selected")
@@ -1876,9 +1910,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             # rejects missing plans before import or enrichment can start.
             return None
         identity = prepared.selected_identity
+        index = ParseReportsThread._enrichment_plan_index(self) if _plain_selected_identity(identity) else None
         if (
             identity is None
-            or identity not in self.import_plan.selected_reports
+            or identity not in (index[1] if index is not None else self.import_plan.selected_reports)
             or self._occurrence_id_for_report(Path(prepared.report_path)) != identity.occurrence_id
             or not isinstance(prepared.source_inspection, SourceInspectionContext)
         ):

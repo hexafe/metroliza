@@ -9,6 +9,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import struct
 from typing import Any, Callable, Iterable
 
 from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
@@ -401,6 +402,84 @@ def _mapping_measurement_row(report_id: int, row_order: int, measurement: dict) 
         status_code,
         _to_json(_as_mapping(measurement) if raw is _UNSET else raw),
     )
+
+
+@dataclass(frozen=True)
+class _PreparedMeasurementRows:
+    """Operation-local, picklable rows; the writer alone binds the report id."""
+
+    version: int
+    source: list | tuple
+    source_key: bytes
+    rows: tuple[tuple[Any, ...], ...]
+
+    def __iter__(self):
+        return iter(self.source)
+
+
+def _measurement_source_key(value):
+    """Decline custom values before invoking conversion, equality or JSON hooks."""
+    kind = type(value)
+    if kind is str or kind is int or kind is bool or kind is type(None):
+        return kind.__name__, value
+    if kind is float:
+        return "float", struct.pack("!d", value)
+    if kind is list or kind is tuple:
+        return kind.__name__, tuple(_measurement_source_key(item) for item in value)
+    if kind is dict and all(type(key) is str for key in value):
+        return "dict", tuple((key, _measurement_source_key(item)) for key, item in value.items())
+    raise TypeError("Measurement source is not a plain value tree")
+
+
+def _prepare_measurement_rows(measurements):
+    if type(measurements) is not list or any(type(row) is not dict for row in measurements):
+        return None
+    try:
+        key = _measurement_rows_key(measurements)
+    except (TypeError, ValueError, OverflowError, RecursionError, RuntimeError):
+        return None
+    try:
+        rows = tuple(_mapping_measurement_row(0, order, row)[1:]
+                     for order, row in enumerate(measurements, start=1))
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    if not all(_plain_persistence_row(row) for row in rows):
+        return None
+    return _PreparedMeasurementRows(1, measurements, key, rows)
+
+
+def _measurement_rows_key(measurements):
+    key = tuple(_measurement_source_key(row) for row in measurements)
+    return hashlib.sha256(repr(key).encode("utf-8")).digest()
+
+
+def _plain_persistence_row(row):
+    return (type(row) is tuple and len(row) == 19
+            and all(type(value) is str or type(value) is int or type(value) is float
+                    or value is None for value in row))
+
+
+def _current_prepared_measurement_rows(prepared):
+    if (type(prepared.version) is not int or prepared.version != 1
+            or (type(prepared.source) is not list and type(prepared.source) is not tuple)
+            or type(prepared.source_key) is not bytes):
+        return None
+    try:
+        current_key = _measurement_rows_key(prepared.source)
+    except (TypeError, ValueError, OverflowError, RecursionError, RuntimeError):
+        return None
+    if current_key != prepared.source_key:
+        return None
+    if type(prepared.rows) is not tuple or not all(_plain_persistence_row(row) for row in prepared.rows):
+        return None
+    return prepared.rows
+
+
+def _freeze_measurements(measurements):
+    if type(measurements) is _PreparedMeasurementRows:
+        return _PreparedMeasurementRows(measurements.version, tuple(measurements.source),
+                                        measurements.source_key, measurements.rows)
+    return tuple(measurements)
 
 
 class ReportRepository:
@@ -1058,6 +1137,11 @@ class ReportRepository:
     @persist_stage("row_building")
     def _measurement_rows(self, report_id: int, measurements: Iterable[Any]) -> list[tuple[Any, ...]]:
         report_id = int(report_id)
+        if type(measurements) is _PreparedMeasurementRows:
+            prepared_rows = _current_prepared_measurement_rows(measurements)
+            if prepared_rows is not None:
+                return [(report_id, *row) for row in prepared_rows]
+            measurements = measurements.source
         rows = []
         for row_order, measurement in enumerate(measurements, start=1):
             if isinstance(measurement, dict):
@@ -1680,7 +1764,7 @@ class ReportRepository:
                 )
         self._ensure_import_schema()
         now = utc_timestamp()
-        measurement_values = tuple(measurements)
+        measurement_values = _freeze_measurements(measurements)
         candidate_values = tuple(candidates)
         warning_values = tuple(warnings)
 
@@ -1776,7 +1860,7 @@ class ReportRepository:
         self.ensure_schema()
         source_record = self.upsert_source_file(source_path, sha256=source_sha256)
         now = utc_timestamp()
-        measurement_values = tuple(measurements)
+        measurement_values = _freeze_measurements(measurements)
         candidate_values = tuple(candidates)
         warning_values = tuple(warnings)
 
