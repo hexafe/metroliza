@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from difflib import get_close_matches
+from functools import lru_cache
 import re
 import unicodedata
 from typing import Iterable, Sequence
@@ -124,14 +125,48 @@ def collapse_spaces(value: str | None) -> str | None:
     return _SPACE_RE.sub(" ", text)
 
 
+# Cache only immutable transformations, never aliases or CorrectedText objects.
+# Input length and entry count jointly bound retained string storage.
+_NORMALIZATION_MAX_LENGTH = 512
+_ORIGINAL_NORMALIZE = unicodedata.normalize
+_ORIGINAL_COMBINING = unicodedata.combining
+_ORIGINAL_NON_ALNUM_RE = _NON_ALNUM_RE
+
+
+@lru_cache(maxsize=1024)
+def _strip_accents_cached(value: str) -> str:
+    if value.isascii():
+        return value
+    normalized = _ORIGINAL_NORMALIZE("NFKD", value)
+    return "".join(char for char in normalized if not _ORIGINAL_COMBINING(char))
+
+
+@lru_cache(maxsize=1024)
+def _compact_token_cached(text: str) -> str:
+    return _ORIGINAL_NON_ALNUM_RE.sub("", text.upper())
+
+
 def strip_accents(value: str) -> str:
+    if (
+        type(value) is str
+        and len(value) <= _NORMALIZATION_MAX_LENGTH
+        and unicodedata.normalize is _ORIGINAL_NORMALIZE
+        and unicodedata.combining is _ORIGINAL_COMBINING
+    ):
+        return _strip_accents_cached(value)
     normalized = unicodedata.normalize("NFKD", value)
     return "".join(char for char in normalized if not unicodedata.combining(char))
 
 
 def compact_token(value: str | None) -> str:
-    text = strip_accents(str(value or "")).upper()
-    return _NON_ALNUM_RE.sub("", text)
+    text = strip_accents(str(value or ""))
+    if (
+        type(text) is str
+        and len(text) <= _NORMALIZATION_MAX_LENGTH
+        and _NON_ALNUM_RE is _ORIGINAL_NON_ALNUM_RE
+    ):
+        return _compact_token_cached(text)
+    return _NON_ALNUM_RE.sub("", text.upper())
 
 
 def is_logo_noise_text(value: str | None, *, y0: float | None = None) -> bool:
