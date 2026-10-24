@@ -345,8 +345,10 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         tabular_filter_expression: str | None = None,
         dashboard_detail_mode: str = "full",
         grouping_df=None,
+        grouping_default_group_label: str | None = None,
         dashboard_visual_settings: dict | None = None,
         dashboard_interactivity_options: object | None = None,
+        _grouping_snapshot=None,
     ):
         super().__init__()
         validated_request = validate_industrial_analytics_request(
@@ -372,6 +374,8 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 tabular_filter_expression=tabular_filter_expression or "",
                 dashboard_detail_mode=dashboard_detail_mode,
                 grouping_df=grouping_df,
+                grouping_default_group_label=grouping_default_group_label,
+                _grouping_snapshot=_grouping_snapshot,
                 dashboard_visual_settings=dashboard_visual_settings,
                 dashboard_interactivity_options=dashboard_interactivity_options,
             )
@@ -398,7 +402,10 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.tabular_filter_expression = validated_request.tabular_filter_expression
         self.dashboard_detail_mode = validated_request.dashboard_detail_mode
         grouping_copy = getattr(grouping_df, "copy", None)
-        self.grouping_df = grouping_copy() if callable(grouping_copy) else validated_request.grouping_df
+        self.grouping_df = (
+            validated_request.grouping_df if validated_request._grouping_snapshot is not None
+            else grouping_copy() if callable(grouping_copy) else validated_request.grouping_df
+        )
         self.dashboard_visual_settings = validated_request.dashboard_visual_settings
         self.dashboard_interactivity_options = validated_request.dashboard_interactivity_options
         self._init_cancellation_state()
@@ -425,6 +432,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     dashboard_detail_mode=self.dashboard_detail_mode,
                     grouping_df=self.grouping_df,
                     grouping_default_group_label=self.request.grouping_default_group_label,
+                    _grouping_snapshot=self.request._grouping_snapshot,
                     aggregation_state=self.aggregation_state,
                     cohort_state=self.cohort_state,
                     chart_selection=self.chart_selection,

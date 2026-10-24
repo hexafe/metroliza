@@ -78,8 +78,8 @@ outside a packet, dependency installs, machine changes (power profile, services)
 job runs, and Windows candidate acceptance runs without the user's consent.
 
 **Handback per packet:** commits, test commands with exit status, equivalence evidence (which outputs, which
-fixtures, result), one A/B timing of the affected scenario with machine state, open risks, files changed, the
-configured model/effort of every worker and reviewer.
+fixtures, result), stage-focused A/B evidence or explicit performance PENDING under the delivery amendment below,
+machine state, open risks, files changed, the configured model/effort of every worker and reviewer.
 
 ## 3. Equivalence and measurement protocol
 
@@ -101,6 +101,41 @@ configured model/effort of every worker and reviewer.
   Report ratios from one session; profiling runs are diagnostics, not results.
 - **Platform:** Windows is not measured locally. Record which claims only Windows CI or the packaged EXE can
   prove; packaged Windows keeps 2 render workers and opt-in import-prepare/review pools.
+
+### PO amendment — product delivery and staged performance evidence (2026-10-24)
+
+Authority: [current PO delivery steering](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6381122991).
+This amendment supersedes the requirement to complete a full end-to-end timing series before
+every packet handback or subsequent product wave. It preserves all output, fallback, computation,
+chart-quality, integrity, durability, test, review and CI requirements.
+
+- Freeze the existing measurement orchestration, resource supervision, admission gates, probes and
+  comparator, retaining their source bindings and all adverse receipts. Further infrastructure fixes
+  are allowed only when necessary to restore the computer's settings safely. Do not expand the
+  tooling or repeat long series in response to the same unstable measurement conditions.
+- Measure each packet's changed stage on its complete representative input. For T11 this means
+  validation of all 100k assignments and GUI blocking. Stage boundaries, useful results, sample
+  counts and machine state remain explicit; a stage measurement never claims full-flow performance.
+  No work performed by the product may be removed or shortened. Use the existing infrastructure
+  for packet-specific test and benchmark cases, without a new resource-control framework.
+- Record code/output/review/test/CI verification separately from stage and end-to-end performance.
+  An unmeasured or unsuitable timing is **PENDING**, never zero, PASS or an inferred gain. Product
+  integration and subsequent optimizations may proceed with performance PENDING once their actual
+  correctness, review, tests and required wave CI pass. Review budgets and the wave integration
+  order remain unchanged. Push the authorized branch after local validation to obtain actual CI.
+- Reserve the complete rotated end-to-end campaign for T28 on a suitable, stable measurement
+  station. Keep its 18 audit flows plus T00, identical harness and output comparisons, balanced
+  profile and n=3 (n=2 for flows over 60 s). If suitable conditions are unavailable, record
+  **measurement pending** and retain the missing evidence explicitly; this does not block other
+  product packets or authorize repeated multi-hour attempts in the unchanged conditions.
+- Codex remains the coordinator. Opus has a bounded planning/advisory role when needed; do not
+  transfer the entire coordination context. The PO's continuing browser use and TupTup hold remain
+  in force; do not repeat browser-closing or quiet-window questions.
+
+Excluded or intentionally stopped series remain excluded. Available strict functional output
+comparisons remain useful correctness evidence, without turning their timings into accepted data.
+The final four-stage Polish report must distinguish measured seconds and reductions from PENDING
+or incomparable cells and preserve the stated common-flow set and aggregate weights.
 
 ### PO amendment — technical-report publication (2026-10-23)
 
@@ -147,6 +182,60 @@ authorized widget lifecycle. Affinity is not global exclusivity: RAM, caches, I/
 thermal/power limits remain shared. Report polling/identity/lifecycle limits and actual
 restoration; do not claim atomic or continuously isolated process trees. This changes the
 measurement condition, not computation, output-comparison rules or E5/E6/E7 authority.
+
+Implementation evidence: [scoped desktop reservation and restoration controls](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6376031359).
+The coordinator applies the existing CPU-reservation instruction to an exactly bound interactive
+desktop process and its descendants as well as the browser; this is not separately named PO consent
+for a desktop executable. Exclude the owned benchmark subtree, validate UID, process/thread start
+identities and the literal executable link/device/inode, and keep unrelated work subject to the
+unchanged load guard. Do not introduce process-name exemptions.
+
+Capture and journal all initial policies before the first affinity write. A newly observed,
+unrecorded task outside its assigned mask may be reconciled only during preparation, before the
+measurement epoch: at most three complete rescans under the same finite deadline. Known or reused
+identity slots, parallel edits, root/UID/executable, permission, asynchronous-monitor and deadline
+failures remain fatal. After the epoch, newly observed unrestricted work excludes the whole series.
+Cleanup must retain the primary error and terminate/reap owned work even when status reporting is
+broken. Independent restoration audits include live tasks absent from the journal; fallback recovery
+cannot turn failed supervisor cleanup into successful qualification. Keep failed qualification and
+restoration verdicts separate. These controls remain sampled, with observation/syscall races.
+
+Retain exact original process policies by PID, start time and UID after the last live thread record
+retires. Journal before mutation or retirement, deduplicate only exact masks, and fail closed on
+ambiguous, incomplete or capped history without eviction. Only an unknown process may inherit a
+unique policy from its verified current parent; never guess an orphan's target. Preserve diagnostics
+that distinguish absent from multiple candidates. Source and limits:
+[retained-history correction and requalification](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6377917914).
+
+Use finite direct-parent supervision for a long measurement session: launcher success means only
+STARTED. Retain the same OFD lock through bounded termination, reaping, exact journal recovery and
+independent audit; require the actual child outcome and coherent completion before accepting times.
+Missing terminals remain missing, and any recovery excludes the measurement. Individual-owner-loss
+controls do not establish automatic recovery after simultaneous loss of both owners or the cause of
+an earlier unexplained exit. Keep cleanup independent of reporting and lease health.
+
+A workload-ready marker may precede its next owned-token snapshot; wait for exact membership under
+the original deadline before a controlled signal. Only an identity-proved departed requester may be
+retired without assigning a policy or writing to a replacement. A still-live requester with an
+unverified parent, UID/permission/history error or parallel edit remains fatal. Rebind helper source
+pins and exercise the actual guarded constructor before host admission. Source and limits:
+[five controls and independent closure audit](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6379837103).
+Resource full1/delta1 remain exhausted REQUEST_CHANGES; subsequent corrections have execution proof,
+not a third formal review. Simultaneous-owner-loss/interrupted-recovery native controls remain NOT_RUN.
+
+An additional interactive browser outside the admitted trees remains competing load and excludes
+the complete series; completed output parity does not accept interrupted timing samples. Bind only
+the necessary additional exact tree under the existing CPU-reservation authority, with a finite
+task-specific cap of two explicit interactive roots and an exact ordered authority hash. Reject
+duplicates and identity/executable/UID drift; preserve independent restoration for both trees and
+partial admission. Do not widen to a whole desktop/session ancestor or use a process-name exemption.
+Unrelated heavy work retains the same guard. Source, authority interpretation and limitations:
+[two-root controls and independent audit](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6380891101).
+
+A private harness home also needs private Matplotlib and XDG home/search directories on both sides;
+inherited configuration paths can escape a home override. Record the selected environment and
+preserve the matched native-math policy. Do not change numerical thread settings to repair timing
+or output differences.
 
 ### PO amendment — intentional nondeterminism (2026-10-22)
 
@@ -555,7 +644,8 @@ Paths are relative to `src/metroliza/` unless they start with `scripts/` or `doc
   An immutable validated snapshot bound to the grouping revision travels from the dialog to the thread to the
   workflow; public entry points still validate untrusted input.
 - **Tests:** identical validation results and errors on the existing contract tests plus collision/alias cases;
-  GUI stall in `csv_grouped_analytics`.
+  GUI stall in `csv_grouped_analytics`. Under the delivery amendment, packet timing focuses on the full-input
+  validation and GUI-blocking stages; full-flow timing is separate T28 evidence and may remain PENDING.
 
 ### T12a — E6 decision input: fits-only compute pool
 - **What:** the per-metric pool PoC (`performance-boost-step3-poc/poc3_metric_pool.patch`) gave −17% wall at
