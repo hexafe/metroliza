@@ -2035,32 +2035,20 @@ def test_keyword_inspection_parallel_plain_functions():
         assert list(executor.map(query, range(128))) == [bool(index % 2) for index in range(128)]
 
 
-def test_keyword_cache_activation_invalidation_and_inspector_replacement(monkeypatch):
+def test_keyword_inspection_metadata_and_inspector_replacement(monkeypatch):
     import inspect
-
-    factory_module._KEYWORD_SIGNATURE_CACHE.clear()
-    original = inspect._signature_from_function
-    inspected = []
-
-    def observe(cls, callback, *args, **kwargs):
-        inspected.append(callback.__name__)
-        return original(cls, callback, *args, **kwargs)
-
-    monkeypatch.setattr(inspect, "_signature_from_function", observe)
 
     def callback(value=None, *, option=1):
         pass
 
     assert factory_module._callable_accepts_keyword(callback, "value") is True
     assert factory_module._callable_accepts_keyword(callback, "missing") is False
-    assert inspected == ["callback"]
     callback.__annotations__["value"] = "literal annotation"
     assert factory_module._callable_accepts_keyword(callback, "value") is True
     callback.__kwdefaults__["option"] = 2
     assert factory_module._callable_accepts_keyword(callback, "option") is True
     callback.__defaults__ = (3,)
     assert factory_module._callable_accepts_keyword(callback, "value") is True
-    assert inspected == ["callback"] * 4
     callback.__signature__ = inspect.Signature()
     assert factory_module._callable_accepts_keyword(callback, "value") is False
     del callback.__signature__
@@ -2073,7 +2061,6 @@ def test_keyword_cache_activation_invalidation_and_inspector_replacement(monkeyp
     callback.__kwdefaults__ = {"other": None}
     assert factory_module._callable_accepts_keyword(callback, "other") is True
     assert factory_module._callable_accepts_keyword(callback, "value") is False
-    assert inspected == ["callback"] * 5
 
     def failing_inspector(_callback):
         raise RuntimeError("replaced inspector")
@@ -2083,7 +2070,7 @@ def test_keyword_cache_activation_invalidation_and_inspector_replacement(monkeyp
         factory_module._callable_accepts_keyword(callback, "other")
 
 
-def test_keyword_cache_unsafe_metadata_keeps_exact_inspection_callbacks(monkeypatch):
+def test_keyword_inspection_unsafe_metadata_preserves_callbacks(monkeypatch):
     import inspect
 
     events = []
@@ -2106,13 +2093,11 @@ def test_keyword_cache_unsafe_metadata_keeps_exact_inspection_callbacks(monkeypa
         assert factory_module._callable_accepts_keyword(callback, "value") is True
         assert events == expected_events
         assert "value" in expected.parameters
-    assert callback not in factory_module._KEYWORD_SIGNATURE_CACHE
 
 
-def test_keyword_cache_reentrant_inspection_and_mutation_during_fill(monkeypatch):
+def test_keyword_inspection_reentrant_metadata_mutation(monkeypatch):
     import inspect
 
-    factory_module._KEYWORD_SIGNATURE_CACHE.clear()
     original = inspect._signature_from_function
     events = []
 
@@ -2133,15 +2118,13 @@ def test_keyword_cache_reentrant_inspection_and_mutation_during_fill(monkeypatch
 
     monkeypatch.setattr(inspect, "_signature_from_function", observe)
     assert factory_module._callable_accepts_keyword(outer, "outer") is True
-    assert outer not in factory_module._KEYWORD_SIGNATURE_CACHE
     assert factory_module._callable_accepts_keyword(outer, "outer") is False
     assert events == ["inner complete"]
 
 
-def test_keyword_cache_is_bounded_and_does_not_retain_plugin_closures():
+def test_keyword_inspection_does_not_retain_plugin_closures():
     import weakref
 
-    factory_module._KEYWORD_SIGNATURE_CACHE.clear()
 
     class Payload:
         pass
@@ -2157,25 +2140,15 @@ def test_keyword_cache_is_bounded_and_does_not_retain_plugin_closures():
     callback, payload_ref = make_callback()
     callback_ref = weakref.ref(callback)
     assert factory_module._callable_accepts_keyword(callback, "value") is True
-    assert callback in factory_module._KEYWORD_SIGNATURE_CACHE
     del callback
     # No forced GC: neither the function nor its closure forms a cycle.
     assert callback_ref() is None
     assert payload_ref() is None
-    callbacks = [make_callback()[0] for _ in range(factory_module._KEYWORD_SIGNATURE_CACHE_LIMIT + 3)]
-    for callback in callbacks:
-        assert factory_module._callable_accepts_keyword(callback, "value") is True
-    assert len(factory_module._KEYWORD_SIGNATURE_CACHE) == factory_module._KEYWORD_SIGNATURE_CACHE_LIMIT
-    assert callbacks[0] not in factory_module._KEYWORD_SIGNATURE_CACHE
-    assert factory_module._callable_accepts_keyword(callbacks[0], "value") is True
 
 
-def test_keyword_cache_code_swap_during_inspection_does_not_persist(monkeypatch):
+def test_keyword_inspection_code_swap_during_inspection(monkeypatch):
     import inspect
 
-    cache = getattr(factory_module, "_KEYWORD_SIGNATURE_CACHE", None)
-    if cache is not None:
-        cache.clear()
     original = inspect._signature_from_function
     swap_pending = True
 
@@ -2250,7 +2223,7 @@ def test_keyword_inspection_function_dictionary_subclass_keeps_fallback():
     ("mutation", "next_result"),
     [("signature", False), ("wrapped", False), ("annotation", True), ("dict", True)],
 )
-def test_keyword_inspection_thread_metadata_change_during_fill(monkeypatch, mutation, next_result):
+def test_keyword_inspection_thread_metadata_change(monkeypatch, mutation, next_result):
     import inspect
     from threading import Event
 
@@ -2299,86 +2272,15 @@ def test_keyword_inspection_thread_metadata_change_during_fill(monkeypatch, muta
         pending = executor.submit(change)
         assert factory_module._callable_accepts_keyword(callback, "value") is True
         pending.result(timeout=5)
-    cache = getattr(factory_module, "_KEYWORD_SIGNATURE_CACHE", None)
-    if cache is not None:
-        assert callback not in cache
     assert factory_module._callable_accepts_keyword(callback, "value") is next_result
     assert factory_module._callable_accepts_keyword(callback, "value") is next_result
     assert events == []
 
 
-def test_keyword_cache_capacity_allows_automatic_weak_retirement():
-    import inspect
-    from queue import SimpleQueue
-    import sys
-    from threading import Event, Thread
-    import weakref
-
-    cache = factory_module._KEYWORD_SIGNATURE_CACHE
-    assert type(cache) is weakref.WeakKeyDictionary
-    cache.clear()
-    callbacks = [lambda *, value=None: None for _ in range(128)]
-    for callback in callbacks:
-        assert factory_module._callable_accepts_keyword(callback, "value") is True
-    references = [weakref.ref(callback) for callback in callbacks]
-    del callback
-    handoff = SimpleQueue()
-    handoff.put(callbacks)
-    del callbacks
-    ready, retire, gone = Event(), Event(), Event()
-    errors, observations = [], []
-
-    def own():
-        owned = handoff.get()
-        ready.set()
-        try:
-            assert retire.wait(5)
-        except BaseException as error:
-            errors.append(type(error).__name__)
-        finally:
-            owned.clear()
-            gone.set()
-
-    owner = Thread(target=own)
-    function = factory_module._cached_keyword_signature
-    lines, first = inspect.getsourcelines(function)
-    edge = first + next(
-        index for index, line in enumerate(lines)
-        if "next(iter(_KEYWORD_SIGNATURE_CACHE)" in line
-    )
-
-    def trace(frame, event, _arg):
-        if (frame.f_code is function.__code__ and event == "line"
-                and frame.f_lineno == edge and not observations):
-            assert len(cache) == 128
-            retire.set()
-            assert gone.wait(5)
-            assert len(cache) == 0
-            assert all(reference() is None for reference in references)
-            observations.append("128 real keys automatically retired")
-        return trace
-
-    def fresh(*, value=None):
-        pass
-
-    prior_trace = sys.gettrace()
-    owner.start()
-    try:
-        assert ready.wait(5)
-        sys.settrace(trace)
-        assert factory_module._callable_accepts_keyword(fresh, "value") is True
-    finally:
-        sys.settrace(prior_trace)
-        retire.set()
-        owner.join(5)
-        assert not owner.is_alive()
-    assert not errors
-    assert observations == ["128 real keys automatically retired"]
-    assert sys.gettrace() is prior_trace
 
 
 @pytest.mark.parametrize("error", [StopIteration, RuntimeError])
-def test_keyword_cache_retirement_guard_preserves_external_errors(monkeypatch, error):
+def test_keyword_inspection_preserves_external_errors(monkeypatch, error):
     def fail(*args, **kwargs):
         raise error("external inspection or factory error")
 
@@ -2388,3 +2290,35 @@ def test_keyword_cache_retirement_guard_preserves_external_errors(monkeypatch, e
             factory_module._callable_accepts_keyword(lambda value: None, "value")
     with pytest.raises(error, match="external inspection or factory error"):
         factory_module.invoke_parser_factory(fail, "report.pdf", source_inspection=object())
+
+
+def test_keyword_inspection_sparse_kwdefaults_preserves_raw_key_callbacks():
+    events = []
+    armed = False
+    sentinel = RuntimeError("sparse copy callback sentinel")
+
+    class Key(str):
+        def __hash__(self):
+            return hash("progress_callback")
+
+        def __eq__(self, other):
+            events.append(type(other).__name__)
+            if armed:
+                raise sentinel
+            return False
+
+    def callback(*, progress_callback=None):
+        pass
+
+    assert factory_module._callable_accepts_keyword(callback, "progress_callback") is True
+    defaults = {"progress_callback": None}
+    defaults[Key("observer")] = None
+    for index in range(1000):
+        defaults["dummy-" + str(index)] = None
+    for index in range(1000):
+        del defaults["dummy-" + str(index)]
+    callback.__kwdefaults__ = defaults
+    events.clear()
+    armed = True
+    assert factory_module._callable_accepts_keyword(callback, "progress_callback") is True
+    assert events == []
