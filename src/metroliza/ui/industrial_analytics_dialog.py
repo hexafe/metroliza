@@ -68,11 +68,14 @@ from metroliza.exporting.export_dialog_service import build_export_artifact_link
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+from metroliza.analytics.row_table import RowTable
 from metroliza.tabular.contracts import _GroupingSnapshotOwner, _ValidatedGroupingSnapshot
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     TABULAR_GROUP_COLUMN,
+    TabularAnalyticsLoadResult,
     TabularColumnFilter,
+    TabularSqliteStore,
     build_tabular_file_grouping_dataframe,
     cleanup_tabular_load_result,
     count_tabular_materialized_rows,
@@ -1554,6 +1557,48 @@ class IndustrialAnalyticsDialog(QDialog):
             str(self.tabular_filter_expression or ""),
         )
 
+    def _tabular_scope_revision(self, *, include_filter: bool = True):
+        """Snapshot native scope metadata; custom inputs retain the general path."""
+        loaded = self.tabular_load_result
+        if type(loaded) is not TabularAnalyticsLoadResult or type(loaded.sqlite_store) is not TabularSqliteStore:
+            return None
+        if type(self.tabular_column_filters) is not tuple and type(self.tabular_column_filters) is not list:
+            return None
+        store = loaded.sqlite_store
+        if type(store.path) is not str or any(type(item) is not TabularColumnFilter for item in self.tabular_column_filters):
+            return None
+        token = _literal_cache_token((
+            (store.path, store.table_name, store.columns, store.date_filter_columns,
+             store.numeric_filter_columns, store.metric_columns, loaded.column_mapping),
+            (self.tabular_filter_columns, self.tabular_filter_keys,
+             tuple(vars(item) for item in self.tabular_column_filters), self.tabular_filter_expression),
+        ))
+        if token is None:
+            return None
+        if not include_filter:
+            # Row-count memoization keeps its original filter-state equality;
+            # population summaries use the full typed token and fresh counts.
+            token = token[0]
+        try:
+            family = []
+            for path in (Path(store.path), Path(f"{store.path}-wal")):
+                stat = path.stat() if path.exists() else None
+                family.append((stat.st_ino, stat.st_size, stat.st_mtime_ns) if stat else None)
+        except OSError:
+            return None
+        return token, tuple(family)
+
+    def _tabular_group_values(self):
+        grouping = self.df_for_grouping
+        revision = _native_grouping_revision(grouping)
+        cached = getattr(self, "_tabular_group_values_cache", None)
+        if revision is not None and cached is not None and cached[0] == revision:
+            return cached[1]
+        groups = grouping.get("GROUP", []) if hasattr(grouping, "get") else []
+        values = tuple(sorted({str(value).strip() for value in groups if str(value).strip()}))
+        self._tabular_group_values_cache = (revision, values) if revision is not None else None
+        return values
+
     def _tabular_filtered_row_count(self) -> int:
         """Return the filtered row count, computed once per load result and filter state."""
 
@@ -1561,8 +1606,9 @@ class IndustrialAnalyticsDialog(QDialog):
         if loaded is None:
             return 0
         state = self._tabular_filter_state_key()
+        revision = IndustrialAnalyticsDialog._tabular_scope_revision(self, include_filter=False)
         cached = self._tabular_row_count_cache
-        if cached is not None and cached[0] is loaded and cached[1] == state:
+        if cached is not None and cached[0] is loaded and cached[1] == (state, revision):
             return cached[2]
         if (
             self.is_industrial_cache_presentation
@@ -1581,7 +1627,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 column_filters=self.tabular_column_filters,
                 row_filter_expression=self.tabular_filter_expression,
             )
-        self._tabular_row_count_cache = (loaded, state, count)
+        self._tabular_row_count_cache = (loaded, (state, revision), count)
         return count
 
     def clear_tabular_filter_and_groups(self) -> None:
@@ -2052,12 +2098,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self.grouping_summary_label.setText("Groups: not applied")
             set_status_variant(self.grouping_summary_label, "neutral")
             return
-        groups = (
-            self.df_for_grouping.get("GROUP", [])
-            if hasattr(self.df_for_grouping, "get")
-            else []
-        )
-        group_values = sorted({str(value).strip() for value in groups if str(value).strip()})
+        group_values = IndustrialAnalyticsDialog._tabular_group_values(self)
         has_population = self._tabular_grouping_has_population(set(group_values))
         custom_groups = [value for value in group_values if value != TABULAR_DEFAULT_GROUP]
         if custom_groups:
@@ -2084,6 +2125,12 @@ class IndustrialAnalyticsDialog(QDialog):
             or "GROUP" not in self.df_for_grouping.columns
         ):
             return False
+        revision = _native_grouping_revision(self.df_for_grouping)
+        scope = IndustrialAnalyticsDialog._tabular_scope_revision(self)
+        key = (revision, scope) if revision is not None and scope is not None else None
+        cached = getattr(self, "_tabular_population_cache", None)
+        if key is not None and cached is not None and cached[0] == key:
+            return cached[1]
         total_rows = count_tabular_materialized_rows(
             self.tabular_load_result,
             filter_columns=self.tabular_filter_columns,
@@ -2118,7 +2165,9 @@ class IndustrialAnalyticsDialog(QDialog):
             grouping_filter_expression=self.tabular_filter_expression,
             grouping_filter_aliases=self.tabular_load_result.column_mapping,
         )
-        return assigned_count < total_rows
+        result = assigned_count < total_rows
+        self._tabular_population_cache = (key, result) if key is not None else None
+        return result
 
     def _filtered_tabular_dataframe(self):
         if self.tabular_load_result is None:
@@ -2265,8 +2314,11 @@ class IndustrialAnalyticsDialog(QDialog):
             return 0
         if not self.grouping_applied or self.df_for_grouping is None or self.df_for_grouping.empty:
             return 0
-        groups = self.df_for_grouping.get("GROUP", [])
-        values = {str(value).strip() for value in groups if str(value).strip()}
+        if type(self.df_for_grouping) is RowTable:
+            values = set(IndustrialAnalyticsDialog._tabular_group_values(self))
+        else:
+            groups = self.df_for_grouping.get("GROUP", [])
+            values = {str(value).strip() for value in groups if str(value).strip()}
         if self._tabular_grouping_has_population(values):
             values.add(TABULAR_DEFAULT_GROUP)
         return len(values)
@@ -2757,6 +2809,54 @@ class IndustrialAnalyticsDialog(QDialog):
         self._set_tabular_load_result(None)
         self._grouping_snapshot_owner.invalidate()
         super().closeEvent(event)
+
+
+def _literal_cache_token(value):
+    """Copy only exact native values without hashing or comparing custom keys."""
+    if type(value) is float:
+        return (float, float.hex(value))
+    if any(type(value) is native for native in (str, int, bool, type(None))):
+        return (type(value), value)
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            return None
+        value = tuple(value.items())
+    if type(value) is not tuple and type(value) is not list:
+        return None
+    parts = tuple(_literal_cache_token(item) for item in value)
+    return None if any(item is None for item in parts) else parts
+
+
+_NATIVE_GROUPING_PRODUCERS = tuple(
+    (name, vars(RowTable)[name]) for name in ("get", "__getitem__", "iter_rows", "row_mapping")
+)
+
+
+def _native_grouping_revision(grouping):
+    if type(grouping) is not RowTable:
+        return None
+    namespace = vars(RowTable)
+    if namespace.get("__getattribute__", object.__getattribute__) is not object.__getattribute__:
+        return None
+    if any(namespace.get(name) is not method for name, method in _NATIVE_GROUPING_PRODUCERS):
+        return None
+    raw = vars(grouping)
+    if type(raw) is not dict or any(type(name) is not str for name in raw):
+        return None
+    if any(name in raw for name, _ in _NATIVE_GROUPING_PRODUCERS):
+        return None
+    columns, rows = grouping.columns, grouping.rows
+    if type(columns) is not tuple or any(type(column) is not str for column in columns):
+        return None
+    if type(rows) is not tuple or any(
+        type(row) is not tuple
+        or any(not any(type(value) is native for native in (str, int, float, bool, type(None))) for value in row)
+        for row in rows
+    ):
+        return None
+    # Payload identity distinguishes equal-but-differently-rendered primitives
+    # (1/True, +0/-0). Retained tuple references prevent identity reuse.
+    return id(columns), id(rows), columns, rows
 
 
 def _tabular_load_columns(loaded) -> tuple[str, ...]:

@@ -2524,3 +2524,145 @@ def test_selected_timestamp_parse_is_reused_only_for_its_own_date_shadow(tmp_pat
             ]
     finally:
         service.cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_literal_count_search_and_date_oracle(tmp_path):
+    """Freeze typed outputs before changing SQLite query shapes."""
+    from datetime import date
+
+    path = tmp_path / "literal.csv"
+    pd.DataFrame({
+        "Line": [" A ", None, "Żółć", "100%", "a_b", "A"],
+        "Station": ["S1", "S2", "S3", "S4", "S5", "S1"],
+        "When": ["2025-01-01", "2025-01-03", "bad", "", "2025-01-02", "2025-01-04"],
+    }).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    store = loaded.sqlite_store
+    try:
+        assert store.count_source_row_numbers([6, 1, 1, None, 99]) == 2
+        assert store.count_source_row_numbers([], grouping_filter_expression="invalid") == 0
+        assert store.count_source_row_numbers([1, 2, 6], column_filters=(
+            TabularColumnFilter("line", selected_values=("A",)),
+        )) == 2
+        assert store.date_bounds("when") == (date(2025, 1, 1), date(2025, 1, 4))
+        assert store.date_bounds("absent") is None
+        for search, expected in [("a | s1", True), ("%", True), ("_", True), ("żółć", False), ("absent", False)]:
+            assert store.has_rows_for_group_search(("line", "station"), search_text=search) is expected
+        assert store.has_rows_for_group_search(("absent",), search_text="absent") is True
+        assert store.has_rows_for_group_search(("line",), search_text="A", grouping_filter_expression="station = 'S2'") is True
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_count_uses_one_source_scan_and_cleans_temp_tables(tmp_path, monkeypatch):
+    path = tmp_path / "count.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    original = canonical_tabular_service.sqlite_connection_scope
+    statements = []
+    connections = []
+    @contextmanager
+    def traced(*args, **kwargs):
+        with original(*args, **kwargs) as connection:
+            connection.set_trace_callback(statements.append)
+            connections.append(connection)
+            try:
+                yield connection
+            finally:
+                assert not connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'temp_source_rows_%'").fetchall()
+    monkeypatch.setattr(canonical_tabular_service, "sqlite_connection_scope", traced)
+    try:
+        assert loaded.sqlite_store.count_source_row_numbers([*range(1, 3001), 1]) == 3
+        assert sum(s.startswith('SELECT COUNT(*) FROM "tabular_rows"') for s in statements) == 1
+        with pytest.raises(OverflowError):
+            loaded.sqlite_store.count_source_row_numbers([2**80])
+        assert loaded.sqlite_store.count_source_row_numbers([3, 1]) == 2
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_search_existence_does_not_group_and_custom_store_keeps_hook(tmp_path, monkeypatch):
+    from dataclasses import fields
+    path = tmp_path / "search.csv"
+    pd.DataFrame({"Part": ["A", "A", "B"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    original = canonical_tabular_service.TabularSqliteStore._grouped_search_query
+    calls = []
+    def traced(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        calls.append(result[0])
+        return result
+    monkeypatch.setattr(canonical_tabular_service.TabularSqliteStore, "_grouped_search_query", traced)
+    class CustomStore(canonical_tabular_service.TabularSqliteStore):
+        pass
+    try:
+        assert loaded.sqlite_store.has_rows_for_group_search(("part",), search_text="A")
+        assert "GROUP BY" not in calls[-1]
+        custom = CustomStore(**{f.name: getattr(loaded.sqlite_store, f.name) for f in fields(loaded.sqlite_store) if f.init})
+        assert custom.has_rows_for_group_search(("part",), search_text="A")
+        assert "GROUP BY" in calls[-1]
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_date_and_count_custom_store_keep_general_path(tmp_path):
+    from dataclasses import fields
+    from datetime import date
+    path = tmp_path / "custom.csv"
+    pd.DataFrame({"When": ["2025-01-01", "2025-01-02"], "Value": [1, 2]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    calls = []
+    class Mapping(dict):
+        def get(self, *args):
+            calls.append(args)
+            return super().get(*args)
+    class CustomStore(canonical_tabular_service.TabularSqliteStore):
+        pass
+    kwargs = {f.name: getattr(loaded.sqlite_store, f.name) for f in fields(loaded.sqlite_store) if f.init}
+    kwargs['date_filter_columns'] = Mapping(kwargs['date_filter_columns'])
+    store = CustomStore(**kwargs)
+    try:
+        assert store.date_bounds("when") == (date(2025, 1, 1), date(2025, 1, 2))
+        assert calls == [("when", "when")]
+        assert store.count_source_row_numbers([*range(1, 3000), 2]) == 2
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("affinity, expected, filtered", [
+    ("TEXT", 4, 3), ("BLOB", 2, 1), ("INTEGER", 6, 4), ("NUMERIC", 6, 4),
+])
+def test_t23a_source_id_affinity_keeps_literal_parameter_semantics(tmp_path, monkeypatch, affinity, expected, filtered):
+    path = str(tmp_path / "affinity.sqlite")
+    scope = canonical_tabular_service.sqlite_connection_scope
+    with scope(path) as connection:
+        with connection:
+            connection.execute(f'CREATE TABLE source_rows (source_row_number {affinity}, label TEXT)')
+            connection.executemany('INSERT INTO source_rows VALUES (?,?)', zip(
+                ("001", "1.0", "1", 1, "2", None, "bad", 2),
+                ("KEEP", "DROP", "KEEP", "KEEP", "KEEP", "KEEP", "DROP", "DROP"),
+            ))
+            connection.execute('CREATE INDEX source_id_index ON source_rows(source_row_number)')
+    plans = []
+    class PlanConnection:
+        def __init__(self, connection):
+            self.connection = connection
+        def execute(self, query, params=()):
+            if query.startswith('SELECT COUNT(*) FROM "source_rows"'):
+                plans.append(self.connection.execute('EXPLAIN QUERY PLAN ' + query, params).fetchall())
+            return self.connection.execute(query, params)
+        def executemany(self, *args):
+            return self.connection.executemany(*args)
+    @contextmanager
+    def planned(*args, **kwargs):
+        with scope(*args, **kwargs) as connection:
+            yield PlanConnection(connection)
+            assert not connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'temp_source_rows_%'").fetchall()
+    store = canonical_tabular_service.TabularSqliteStore(
+        path=path, table_name="source_rows", columns=("source_row_number", "label"),
+        source_columns=("label",), row_count=8, owns_file=False,
+    )
+    monkeypatch.setattr(canonical_tabular_service, "sqlite_connection_scope", planned)
+    assert store.count_source_row_numbers([2, 1, 1]) == expected
+    assert any('USING COVERING INDEX source_id_index' in row[-1] for row in plans[0])
+    assert store.count_source_row_numbers([2, 1, 1], column_filters=(TabularColumnFilter("label", selected_values=("KEEP",)),)) == filtered

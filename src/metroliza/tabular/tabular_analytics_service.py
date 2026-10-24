@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from metroliza.exporting.export_grouping_utils import get_default_group_label
@@ -828,6 +829,7 @@ class TabularSqliteStore:
             grouping_filter=grouping_filter,
             grouping_filter_expression=grouping_filter_expression,
             grouping_filter_aliases=grouping_filter_aliases,
+            **({"_group_rows": False} if type(self) is TabularSqliteStore else {}),
         )
         search = str(search_text or "").strip().casefold()
         if not grouped_query or not search:
@@ -1055,21 +1057,31 @@ class TabularSqliteStore:
         )
         filter_clause = filter_where.removeprefix(" WHERE ")
         row_column = _quote_identifier("source_row_number")
-        total = 0
         with sqlite_connection_scope(self.path) as connection:
-            for start in range(0, len(normalized_ids), 900):
-                chunk = normalized_ids[start : start + 900]
-                placeholders = ", ".join("?" for _row_id in chunk)
-                row_clause = f"{row_column} IN ({placeholders})"
+            if type(self) is not TabularSqliteStore:
+                return _count_sqlite_source_id_chunks(
+                    connection, self.table_name, row_column, normalized_ids, filter_clause, filter_params,
+                )
+            # A keyed relation avoids repeating the source/filter scan for every
+            # parameter chunk, including wide industrial views without row indexes.
+            table = _quote_identifier(f"temp_source_rows_{uuid.uuid4().hex}")
+            try:
+                connection.execute(f"CREATE TEMP TABLE {table} (row_id INTEGER PRIMARY KEY)")
+                connection.executemany(
+                    f"INSERT INTO {table} (row_id) VALUES (?)",
+                    ((row_id,) for row_id in normalized_ids),
+                )
+                # IN-list parameters have no affinity. Unary + preserves that
+                # comparison contract for TEXT/BLOB-backed custom row scopes.
+                row_clause = f"{row_column} IN (SELECT +row_id FROM {table})"
                 where_parts = [part for part in (filter_clause, row_clause) if part]
                 query = (
                     f"SELECT COUNT(*) FROM {_quote_identifier(self.table_name)} "
                     f"WHERE {' AND '.join(where_parts)}"
                 )
-                total += int(
-                    connection.execute(query, [*filter_params, *chunk]).fetchone()[0] or 0
-                )
-        return total
+                return int(connection.execute(query, filter_params).fetchone()[0] or 0)
+            finally:
+                connection.execute(f"DROP TABLE IF EXISTS {table}")
 
     def _sqlite_column_filter_clause(
         self,
@@ -1141,10 +1153,17 @@ class TabularSqliteStore:
         if column not in self.columns:
             return None
         date_expr = self._sqlite_date_filter_expr(column)
+        raw_guard = ""
+        if (
+            type(self) is TabularSqliteStore and type(column) is str
+            and type(self.date_filter_columns) is dict
+            and all(type(key) is str and type(value) is str for key, value in self.date_filter_columns.items())
+        ):
+            raw_guard = f"{_quote_identifier(self.date_filter_columns.get(column, column))} IS NOT NULL AND "
         query = (
             f"SELECT MIN({date_expr}), MAX({date_expr}) "
             f"FROM {_quote_identifier(self.table_name)} "
-            f"WHERE {date_expr} IS NOT NULL"
+            f"WHERE {raw_guard}{date_expr} IS NOT NULL"
         )
         with sqlite_connection_scope(self.path) as connection:
             lower, upper = connection.execute(query).fetchone()
@@ -1275,6 +1294,7 @@ class TabularSqliteStore:
         grouping_filter: Any = None,
         grouping_filter_expression: str | None = None,
         grouping_filter_aliases: Mapping[str, str] | None = None,
+        _group_rows: bool = True,
     ) -> tuple[str, list[Any]]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         if not normalized_columns:
@@ -1300,6 +1320,8 @@ class TabularSqliteStore:
             f"FROM {_quote_identifier(self.table_name)}{where_sql}"
         )
         label_expr = " || ' | ' || ".join(_quote_identifier(alias) for alias in aliases)
+        if not _group_rows:
+            return f"SELECT {label_expr} AS label FROM ({inner_query})", params
         grouped_query = (
             f"SELECT {', '.join(_quote_identifier(alias) for alias in aliases)}, "
             f"COUNT(*) AS row_count, {label_expr} AS label "
@@ -3562,6 +3584,19 @@ def _legacy_preview_if_pandas_is_already_loaded(table: RowTable) -> Any:
         return table
     dataframe = pd.DataFrame(list(table.rows), columns=list(table.columns))
     return _restore_sqlite_dataframe(dataframe)
+
+
+def _count_sqlite_source_id_chunks(connection, table_name, row_column, row_ids, filter_clause, filter_params):
+    """Retain the parameterized count path for custom stores."""
+    total = 0
+    for start in range(0, len(row_ids), 900):
+        chunk = row_ids[start : start + 900]
+        placeholders = ", ".join("?" for _ in chunk)
+        row_clause = f"{row_column} IN ({placeholders})"
+        where_parts = [part for part in (filter_clause, row_clause) if part]
+        query = f"SELECT COUNT(*) FROM {_quote_identifier(table_name)} WHERE {' AND '.join(where_parts)}"
+        total += int(connection.execute(query, [*filter_params, *chunk]).fetchone()[0] or 0)
+    return total
 
 
 def _sqlite_like_pattern(

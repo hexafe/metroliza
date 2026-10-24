@@ -1841,3 +1841,342 @@ def test_declined_snapshot_keeps_actual_raw_thread_workflow_handoff(monkeypatch,
             thread.deleteLater()
             QCoreApplication.sendPostedEvents(thread, QEvent.Type.DeferredDelete)
         _dispose_dialog(dialog)
+
+
+def test_t23a_literal_population_filter_and_mutation_oracle(tmp_path):
+    _app()
+    path = tmp_path / "population.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    grouping = RowTable(rows=((1, "Żółć"), (2, "Żółć")), columns=("REPORT_ID", "GROUP"))
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(grouping)
+        dialog.set_grouping_applied(True)
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog._tabular_manual_group_count() == 2
+        grouping.rows = ((1, "Żółć"), (2, "Żółć"), (3, "Żółć"))
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom"
+        assert dialog._tabular_manual_group_count() == 1
+        dialog.tabular_column_filters = (TabularColumnFilter("part", selected_values=("A",)),)
+        assert dialog._tabular_filtered_row_count() == 1
+        grouping.rows = ((2, "Other"),)
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_population_cache_reuses_only_native_unchanged_scope(tmp_path, monkeypatch):
+    from metroliza.tabular.tabular_analytics_service import TabularSqliteStore
+    from metroliza.reports.db import sqlite_connection_scope
+    _app()
+    path = tmp_path / "revision.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    original = TabularSqliteStore.count_source_row_numbers
+    calls = []
+    def traced(self, *args, **kwargs):
+        calls.append(tuple(args[0]))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(TabularSqliteStore, "count_source_row_numbers", traced)
+    grouping = RowTable(rows=((1, "A"), (2, "A")), columns=("REPORT_ID", "GROUP"))
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(grouping)
+        dialog.set_grouping_applied(True)
+        dialog._sync_grouping_summary()
+        before = len(calls)
+        dialog._sync_grouping_summary()
+        assert dialog._tabular_manual_group_count() == 2
+        assert len(calls) == before
+        grouping.rows += ((3, "B"),)
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
+        assert len(calls) == before + 1
+        dialog.tabular_filter_expression = "part = A"
+        assert dialog._tabular_filtered_row_count() == 1
+        dialog.tabular_filter_expression = "part = absent"
+        assert dialog._tabular_filtered_row_count() == 0
+        dialog.tabular_filter_expression = ""
+        assert dialog._tabular_filtered_row_count() == 3
+        with sqlite_connection_scope(loaded.sqlite_store.path) as connection:
+            with connection:
+                connection.execute('DELETE FROM tabular_rows WHERE source_row_number = 3')
+        assert dialog._tabular_filtered_row_count() == 2
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_custom_group_cells_keep_observed_conversion_calls():
+    import metroliza.ui.industrial_analytics_dialog as module
+    calls = []
+    class Observed(str):
+        def __str__(self):
+            calls.append("str")
+            return "Observed"
+        def __eq__(self, other):
+            raise AssertionError("cache compared a raw custom cell")
+        __hash__ = str.__hash__
+    grouping = RowTable(rows=((1, Observed("A")),), columns=("REPORT_ID", "GROUP"))
+    assert module._native_grouping_revision(grouping) is None
+    assert calls == []
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.df_for_grouping = grouping
+        dialog.grouping_applied = True
+        for _ in range(2):
+            dialog._sync_grouping_summary()
+            assert dialog.grouping_summary_label.text() == "Groups: 1 custom"
+        assert calls == ["str"] * 4
+        mutable = pd.DataFrame({"REPORT_ID": [1], "GROUP": ["A"]})
+        dialog.df_for_grouping = mutable
+        dialog._sync_grouping_summary()
+        mutable.loc[0, "GROUP"] = "POPULATION"
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: POPULATION only"
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_t23a_cache_guard_does_not_hash_or_compare_raw_custom_keys():
+    import metroliza.ui.industrial_analytics_dialog as module
+    calls = []
+    class Observed(str):
+        def __hash__(self):
+            calls.append("hash")
+            return super().__hash__()
+        def __eq__(self, other):
+            calls.append("equal")
+            return super().__eq__(other)
+    raw = {Observed("REPORT_ID"): 1}
+    calls.clear()
+    assert module._literal_cache_token(raw) is None
+    assert calls == []
+
+
+def test_t23a_inherited_dialog_does_not_dispatch_new_helper_collisions(tmp_path):
+    _app()
+    class CustomDialog(IndustrialAnalyticsDialog):
+        def _tabular_scope_revision(self):
+            raise AssertionError("old subclass helper")
+        def _tabular_group_values(self):
+            raise AssertionError("old subclass helper")
+    path = tmp_path / "subclass.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = CustomDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(RowTable(rows=((1, "A"),), columns=("REPORT_ID", "GROUP")))
+        dialog.set_grouping_applied(True)
+        assert dialog._tabular_filtered_row_count() == 3
+        assert dialog._tabular_manual_group_count() == 2
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("before, after", [
+    (((1, 1), (2, True)), ((1, 1), (2, 1))),
+    (((1, 0.0), (2, -0.0)), ((1, 0.0), (2, 0.0))),
+])
+def test_t23a_group_cache_tracks_replaced_typed_payload(tmp_path, before, after):
+    _app()
+    path = tmp_path / "typed_groups.csv"
+    path.write_text("Part,Value\nA,1\nB,2\nC,3\n")
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    grouping = RowTable(rows=before, columns=("REPORT_ID", "GROUP"))
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(grouping)
+        dialog.set_grouping_applied(True)
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom + POPULATION"
+        assert dialog._tabular_manual_group_count() == 3
+        grouping.rows = after
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog._tabular_manual_group_count() == 2
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_signed_zero_filter_refreshes_population_with_original_row_memo(tmp_path):
+    _app()
+    path = tmp_path / "signed_filter.csv"
+    path.write_text("Tag,Value\n-0.0,1\n0.0,2\n-0.0,3\n")
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    negative = (TabularColumnFilter("tag", selected_values=(-0.0,)),)
+    positive = (TabularColumnFilter("tag", selected_values=(0.0,)),)
+    for filters in (negative, positive):
+        loaded.sqlite_store.count_rows(column_filters=filters)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.tabular_column_filters = negative
+        dialog.set_df_for_grouping(RowTable(rows=((2, "Assigned"),), columns=("REPORT_ID", "GROUP")))
+        dialog.set_grouping_applied(True)
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog._tabular_filtered_row_count() == 2
+        dialog.tabular_column_filters = positive
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom"
+        assert dialog._tabular_manual_group_count() == 1
+        assert dialog._tabular_grouping_has_population() is False
+        assert loaded.sqlite_store.count_rows(column_filters=positive) == 1
+        # Preserve the separately recorded original row-count memo limitation.
+        assert dialog._tabular_filtered_row_count() == 2
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize('custom', [False, True])
+def test_t23a_f1_filter_container_preserves_original_iteration(tmp_path, custom):
+    _app()
+    path = tmp_path / 'filters.csv'
+    path.write_text('Part,Value\nA,1\nB,2\nC,3\n')
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    events = []
+    class Filters(list):
+        def __iter__(self):
+            events.append('iter')
+            return super().__iter__()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.tabular_column_filters = Filters([TabularColumnFilter('part', selected_values=('A', 'B'))]) if custom else None
+        dialog.df_for_grouping = RowTable(((1, 'A'),), ('REPORT_ID', 'GROUP'))
+        assert [dialog._tabular_filtered_row_count() for _ in range(2)] == [2 if custom else 3] * 2
+        assert [dialog._tabular_grouping_has_population() for _ in range(2)] == [True, True]
+        assert events == (['iter'] * 7 if custom else [])
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize('mode', ['observe', 'raise', 'permissive'])
+@pytest.mark.parametrize('where', ['cell', 'literal'])
+def test_t23a_f1_metaclass_equality_keeps_public_fallback(tmp_path, mode, where):
+    _app()
+    path = tmp_path / 'metadata.csv'
+    path.write_text('Part,Value\nA,1\nB,2\nC,3\n')
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    events = []
+    class Meta(type):
+        def __eq__(cls, other):
+            events.append('equal')
+            if mode == 'raise':
+                raise RuntimeError('metaclass equality')
+            return mode == 'permissive'
+        __hash__ = type.__hash__
+    class Cell(metaclass=Meta):
+        def __str__(self):
+            events.append('str')
+            return 'A'
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.df_for_grouping = RowTable(((1, Cell() if where == 'cell' else 'A'),), ('REPORT_ID', 'GROUP'))
+        dialog.grouping_applied = True
+        if where == 'cell':
+            for _ in range(2):
+                dialog._sync_grouping_summary()
+                assert dialog.grouping_summary_label.text() == 'Groups: 1 custom'
+            assert events == ['str'] * 4
+        else:
+            dialog.tabular_load_result = loaded
+            class Literal(str, metaclass=Meta):
+                pass
+            loaded.column_mapping['unused'] = Literal('part')
+            assert dialog._tabular_filtered_row_count() == 3
+            assert dialog._tabular_grouping_has_population() is True
+            assert events == []
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize('instance', [False, True])
+@pytest.mark.parametrize('raises', [False, True])
+def test_t23a_f1_custom_get_keeps_refresh_and_exception(monkeypatch, instance, raises):
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    grouping = RowTable(((1, 'A'),), ('REPORT_ID', 'GROUP'))
+    state, events = [1], []
+    def get(*args):
+        events.append('get')
+        if raises and state[0] == 2:
+            raise RuntimeError('original producer')
+        return ['A'] if state[0] == 1 else ['A', 'B']
+    monkeypatch.setattr(grouping if instance else RowTable, 'get', get)
+    try:
+        dialog.set_df_for_grouping(grouping)
+        dialog.grouping_applied = True
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == 'Groups: 1 custom'
+        state[0] = 2
+        if raises:
+            with pytest.raises(RuntimeError, match='original producer'):
+                dialog._sync_grouping_summary()
+        else:
+            dialog._sync_grouping_summary()
+            assert dialog.grouping_summary_label.text() == 'Groups: 2 custom'
+        assert events == ['get'] * 2
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize('producer', ['__getitem__', 'iter_rows', 'row_mapping'])
+def test_t23a_f1_population_cache_keeps_custom_producers(tmp_path, monkeypatch, producer):
+    _app()
+    path = tmp_path / 'producers.csv'
+    path.write_text('Part,Value\nA,1\nB,2\nC,3\n')
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    native, state, events = RowTable.__getitem__, [1], []
+    def getitem(table, key):
+        if type(key) is list:
+            events.append(producer)
+            return RowTable(tuple((n, 'A') for n in range(1, state[0] + 1)), ('REPORT_ID', 'GROUP'))
+        return native(table, key)
+    def iter_rows(table, *, as_dict=False):
+        events.append(producer)
+        return iter([{'REPORT_ID': n, 'GROUP': 'A'} for n in range(1, state[0] + 1)])
+    def row_mapping(table, index):
+        events.append(producer)
+        return {'REPORT_ID': 1, 'GROUP': 'A' if state[0] == 1 else 'POPULATION'}
+    monkeypatch.setattr(RowTable, producer, {'__getitem__': getitem, 'iter_rows': iter_rows, 'row_mapping': row_mapping}[producer])
+    try:
+        dialog.tabular_load_result = loaded
+        rows = ((1, 'A'), (2, 'A'), (3, 'A')) if producer == 'row_mapping' else ((1, 'A'),)
+        dialog.df_for_grouping = RowTable(rows, ('REPORT_ID', 'GROUP'))
+        assert dialog._tabular_grouping_has_population() is True
+        state[0] = 3
+        assert dialog._tabular_grouping_has_population() is (producer == 'row_mapping')
+        assert events == [producer] * (6 if producer == 'row_mapping' else 2)
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_f1_native_group_cache_reuses_qualified_payload():
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.df_for_grouping = RowTable(((1, 'A'),), ('REPORT_ID', 'GROUP'))
+        first = dialog._tabular_group_values()
+        assert first == ('A',)
+        assert dialog._tabular_group_values() is first
+    finally:
+        _dispose_dialog(dialog)
