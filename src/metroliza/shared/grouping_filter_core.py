@@ -264,10 +264,12 @@ class DataFrameGroupingIndex:
             .size()
             .reset_index(name="_row_count")
         )
-        if grouped.empty:
-            grouped["_label"] = pd.Series(dtype="string")
-        else:
-            grouped["_label"] = grouped.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
+        if "_label" in grouped.columns:
+            # Preserve the original eager overwrite, including its grouping-key semantics.
+            if grouped.empty:
+                grouped["_label"] = pd.Series(dtype="string")
+            else:
+                grouped["_label"] = grouped.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
         self._grouped_preview = grouped
         return grouped
 
@@ -310,7 +312,7 @@ class DataFrameGroupingIndex:
             rows.append(
                 {
                     "key": key,
-                    "label": str(record["_label"]),
+                    "label": str(record["_label"]) if "_label" in record else " | ".join(key),
                     "row_count": int(record["_row_count"]),
                 }
             )
@@ -320,7 +322,12 @@ class DataFrameGroupingIndex:
         search = str(search_text or "").strip().casefold()
         if not search:
             return preview
-        labels = preview["_label"].astype("string").str.casefold()
+        if "_label" in preview.columns:
+            labels = preview["_label"]
+        else:
+            # Search still includes separators and cross-column substrings literally.
+            labels = preview.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
+        labels = labels.astype("string").str.casefold()
         return preview.loc[labels.str.contains(search, regex=False, na=False)]
 
     def _valid_selected_keys(

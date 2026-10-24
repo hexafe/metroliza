@@ -579,3 +579,221 @@ def test_record_indicator_released_on_every_terminal_path(current_dialog, monkey
     finally:
         release.set()
         records.cancel_load_thread(thread)
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_literal_search_equivalence_before_and_after_sparse_edits(cached):
+    rows = [(1, None, -0.0), (2, "", None), (3, "İßΣ\x00X", 1e100),
+            (4, "left\x1fright", 0.30000000000000004)]
+    model = RecordTableModel(SPECS, rows, [records.row_haystack(row) for row in rows] if cached else None)
+    assert [[model.text_at(r, c) for c in range(3)] for r in range(4)] == [
+        ["1", "", "-0.0"], ["2", "", ""], ["3", "İßΣ\x00X", "1e+100"],
+        ["4", "left\x1fright", "0.30000000000000004"],
+    ]
+    assert model.setData(model.index(1, 1), "new\x00İ")
+    for needle, expected in [("", [0, 1, 2, 3]), ("new\x00i̇", [1]), ("ς\x00", [2]),
+                             ("left\x1fright", [3]), ("1\x1f", []), ("1e+100", [2])]:
+        model.set_filter_text(needle)
+        assert [model.source_row(i) for i in range(model.rowCount())] == expected
+    model.set_filter_text("")
+    assert model.setData(model.index(1, 1), "")  # revert after the cache has been built
+    model.set_filter_text("new")
+    assert model.rowCount() == 0
+    assert list(model.edited_rows()) == []
+    assert model.original_value(0, 1) is None
+    assert type(model.original_value(0, 2)) is float
+
+
+@pytest.mark.parametrize("flavor", ["current", "legacy"])
+def test_literal_normalization_contents_after_each_tab_visit(tmp_path, flavor):
+    _app()
+    database = tmp_path / f"{flavor}.db"
+    (_build_current_database if flavor == "current" else _build_legacy_database)(database)
+    dialog = ModifyDB(parent=None, db_file=str(database), modal=False)
+    try:
+        expected = [
+            [["REF-A", "REF-A", "2"], ["REF-B", "REF-B", "1"], ["REF-C", "REF-C", "1"]]
+            if flavor == "current" else
+            [["REF-A", "REF-A", "1"], ["REF-B", "REF-B", "2"], ["REF-C", "REF-C", "1"]],
+            [["001", "001", "1"], ["002", "002", "2"], ["004", "004", "1"]],
+            [["DIAM", "DIAM", "2"], ["HEIGHT", "HEIGHT", "3"], ["WIDTH", "WIDTH", "4"]]
+            if flavor == "current" else
+            [["DIAM", "DIAM", "1"], ["HEIGHT", "HEIGHT", "1"], ["WIDTH", "WIDTH", "2"]],
+        ]
+        for index, table in enumerate((dialog.reference_table, dialog.part_number_table, dialog.header_table)):
+            dialog.normalize_tab_widget.setCurrentIndex(index)
+            assert [table.horizontalHeaderItem(c).text() for c in range(3)] == [
+                "Original value", "New value", "Occurrences",
+            ]
+            assert [[table.item(r, c).text() for c in range(3)] for r in range(table.rowCount())] == expected[index]
+            assert [table.item(r, 1).data(Qt.ItemDataRole.UserRole) for r in range(table.rowCount())] == [
+                row[0] for row in expected[index]
+            ]
+        assert not dialog.has_pending_changes()
+    finally:
+        dialog._changes_committed = True
+        dialog.close()
+
+
+def test_only_visible_normalization_populates_and_hidden_edits_survive_revisits(current_dialog):
+    dialog = current_dialog
+    assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 0, 0]
+    dialog.reference_table.item(0, 1).setText("pending reference")
+    dialog.header_filter_edit.setText("width")  # typed before the deferred table loads
+    dialog.normalize_tab_widget.setCurrentIndex(2)
+    assert dialog.header_table.rowCount() == 3 and dialog.part_number_table.rowCount() == 0
+    assert [dialog.header_table.isRowHidden(r) for r in range(3)] == [True, True, False]
+    dialog.header_table.item(2, 1).setText("pending header")
+    dialog.normalize_tab_widget.setCurrentIndex(0)
+    dialog.normalize_tab_widget.setCurrentIndex(2)
+    assert dialog.reference_table.item(0, 1).text() == "pending reference"
+    assert dialog.header_table.item(2, 1).text() == "pending header"
+    assert dialog.has_pending_changes()
+    assert dialog.collect_normalization_value_changes(dialog.header_table) == [("pending header", "WIDTH")]
+    dialog.populate_tables()  # public refresh stays eager and invalidates all old values/edits
+    assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 3, 3]
+    assert not dialog.has_pending_changes()
+
+
+def test_internal_record_load_displays_before_haystack_and_first_search_sees_edits(current_dialog):
+    dialog = current_dialog
+    slot = dialog._record_slots[1]
+    dialog.tab_widget.setCurrentWidget(slot.tab)
+    assert _pump(lambda: slot.state == "loaded")
+    model = slot.view.model()
+    assert model.total_row_count == 10 and model._haystack is None
+    assert model.setData(model.index(0, 2), "before search")
+    assert model._haystack is None
+    slot.filter_edit.setText("before search")
+    dialog.flush_record_filters()
+    assert model.rowCount() == 1 and model.source_row(0) == 0
+    assert model._haystack is not None
+    assert model.setData(model.index(0, 2), "after search")
+    slot.filter_edit.setText("after search")
+    dialog.flush_record_filters()
+    assert model.rowCount() == 1 and model.source_row(0) == 0
+
+
+def test_deferred_loader_opt_in_keeps_public_rows_and_eager_default(tmp_path):
+    database = tmp_path / "rows.db"
+    _write_database(database, [(1, "İ\x00\x1f", None), (2, None, 0.30000000000000004)])
+    query = "SELECT id AS report_id, reference, nominal FROM t ORDER BY id"
+    eager = load_record_rows(str(database), query, SPECS)
+    deferred = load_record_rows(str(database), query, SPECS, defer_haystack=True)
+    assert deferred.rows == eager.rows == [(1, "İ\x00\x1f", None), (2, None, 0.30000000000000004)]
+    assert eager.haystack == ["1\x1fi̇\x00\x1f\x1f", "2\x1f\x1f0.30000000000000004"]
+    assert deferred.haystack is None
+
+
+def test_subclass_keeps_eager_no_keyword_populate_hook_and_ignores_new_helper_collisions(tmp_path):
+    _app()
+    database = tmp_path / "subclass.db"
+    _build_current_database(database)
+
+    class CustomDialog(ModifyDB):
+        def populate_tables(self):
+            self.populated = True
+            return super().populate_tables()
+
+        def _refresh_tables_for_view(self):
+            raise AssertionError("new helper must not replace the old public hook")
+
+        def _load_normalize_table(self, table):
+            raise AssertionError("new helper must not dispatch to an existing subclass method")
+
+        def _load_visible_normalize_table(self):
+            raise AssertionError("new helper must not dispatch to an existing subclass method")
+
+        def _filter_table_rows(self, table, text):
+            raise AssertionError("eager refresh must not add a filter callback")
+
+    dialog = CustomDialog(parent=None, db_file=str(database), modal=False)
+    try:
+        assert dialog.populated
+        assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 3, 3]
+        dialog.normalize_tab_widget.setCurrentIndex(2)
+        assert dialog.header_table.rowCount() == 3
+    finally:
+        dialog._changes_committed = True
+        dialog.close()
+
+
+def test_unavailable_tab_interface_refresh_falls_back_to_public_eager_api():
+    class CustomOwner:
+        normalize_tab_widget = object()
+
+        def populate_tables(self):
+            self.populated = True
+
+    owner = CustomOwner()
+    ModifyDB._refresh_tables_for_view(owner)
+    assert owner.populated
+
+
+def test_public_eager_refresh_retains_existing_normalization_row_visibility(current_dialog):
+    dialog = current_dialog
+    dialog.populate_tables()
+    dialog.header_filter_edit.setText("width")
+    assert [dialog.header_table.isRowHidden(r) for r in range(3)] == [True, True, False]
+    dialog.populate_tables()
+    assert [dialog.header_table.isRowHidden(r) for r in range(3)] == [True, True, False]
+
+
+def test_fake_tab_without_signal_or_current_index_keeps_eager_refresh(current_dialog):
+    from types import SimpleNamespace
+
+    dialog = current_dialog
+    tabs = dialog.normalize_tab_widget
+    errors = []
+    try:
+        dialog.normalize_tab_widget = SimpleNamespace(currentChanged=object())
+        with patch.object(dialog, "log_and_exit", errors.append):
+            dialog.connect_signals()
+            ModifyDB._refresh_tables_for_view(dialog)
+        assert not errors
+        assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 3, 3]
+    finally:
+        dialog.normalize_tab_widget = tabs
+
+
+def test_database_switch_invalidates_hidden_tables_and_filtered_record_generation(current_dialog, tmp_path):
+    dialog = current_dialog
+    slot = dialog._record_slots[0]
+    dialog.tab_widget.setCurrentWidget(slot.tab)
+    assert _pump(lambda: slot.state == "loaded")
+    slot.filter_edit.setText("ref-b")
+    dialog.flush_record_filters()
+    assert slot.view.rowCount() == 1
+    database = tmp_path / "replacement.db"
+    _build_legacy_database(database)
+    with patch('metroliza.ui.modify_db.QFileDialog.getOpenFileName', return_value=(str(database), "")):
+        dialog.select_db_file()
+    assert dialog._storage_flavor == "legacy"
+    assert dialog.reference_table.rowCount() == dialog.part_number_table.rowCount() == dialog.header_table.rowCount() == 0
+    assert _pump(lambda: slot.state == "loaded")
+    assert slot.view.rowCount() == 2  # same needle, different database generation
+    dialog.tab_widget.setCurrentWidget(dialog.normalize_tab)
+    dialog.normalize_tab_widget.setCurrentIndex(2)
+    assert dialog.header_table.rowCount() == 3
+    assert dialog.part_number_table.rowCount() == 0
+
+
+@pytest.mark.parametrize("defer", [False, True])
+def test_public_thread_default_keeps_eager_haystacks_and_internal_opt_in_defers(tmp_path, defer):
+    _app()
+    database = tmp_path / "thread.db"
+    _write_database(database, [(1, "Thread\x00İ", 1.25)])
+    kwargs = {"defer_haystack": True} if defer else {}
+    thread = records.RecordLoadThread("report", 1, str(database),
+                                      "SELECT id AS report_id, reference, nominal FROM t", SPECS, **kwargs)
+    loaded = []
+    thread.loaded.connect(lambda kind, generation, rows: loaded.append((kind, generation, rows)))
+    records.start_load_thread(thread)
+    try:
+        assert _pump(lambda: bool(loaded))
+        assert loaded[0][:2] == ("report", 1)
+        assert loaded[0][2].rows == [(1, "Thread\x00İ", 1.25)]
+        assert loaded[0][2].haystack == (None if defer else ["1\x1fthread\x00i̇\x1f1.25"])
+    finally:
+        records.cancel_load_thread(thread)
+        assert _pump(lambda: thread not in records._ACTIVE_LOAD_THREADS)

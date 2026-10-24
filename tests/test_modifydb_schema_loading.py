@@ -160,6 +160,7 @@ def test_modifydb_applies_normalization_to_legacy_database(tmp_path):
         try:
             app.processEvents()
             dialog.reference_table.item(0, 1).setText("REF-A2")
+            dialog.normalize_tab_widget.setCurrentIndex(2)
             dialog.header_table.item(0, 1).setText("HEIGHT2")
             dialog.apply_changes()
 

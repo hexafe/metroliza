@@ -616,3 +616,148 @@ def test_parse_filter_expression_rejects_invalid_membership_lists() -> None:
 def test_finite_numeric_binary64_rounding_ids(spec, expected_ids):
     frame = pd.DataFrame({"reference": pd.Series(ROUNDING_VALUES, dtype=object)})
     assert (frame.index[spec.mask(frame)] + 1).tolist() == expected_ids
+
+
+def test_preview_page_literal_oracle_and_search_separators():
+    frame = pd.DataFrame({
+        'reference': [' A ', 'A', None, '', ' ', '001', '1', 'a | b', 'a'],
+        'shift': ['B', 'B', None, '', ' ', '2', '2', 'c', 'b | c'],
+    })
+    index = DataFrameGroupingIndex(frame, ['reference', 'shift'])
+    expected = [
+        {'key': ('A', 'B'), 'label': 'A | B', 'row_count': 2},
+        {'key': ('(blank)', '(blank)'), 'label': '(blank) | (blank)', 'row_count': 3},
+        {'key': ('001', '2'), 'label': '001 | 2', 'row_count': 1},
+        {'key': ('1', '2'), 'label': '1 | 2', 'row_count': 1},
+        {'key': ('a | b', 'c'), 'label': 'a | b | c', 'row_count': 1},
+        {'key': ('a', 'b | c'), 'label': 'a | b | c', 'row_count': 1},
+    ]
+    assert index.preview_rows() == (expected, 6)
+    for offset in (0, 1, 3, 8):
+        for limit in (0, 1, 3, None):
+            assert index.preview_rows(offset=offset, limit=limit) == (
+                expected[offset:] if limit is None else expected[offset:offset + limit], 6
+            )
+    assert index.preview_rows(search_text=' B | C ', offset=1, limit=1) == (expected[5:], 2)
+    assert index.matching_keys(search_text=' | ') == tuple(row['key'] for row in expected)
+    assert index.count_rows({('(blank)', '(blank)'), ('A', 'B')}) == 5
+    pd.testing.assert_frame_equal(index.filter_rows({('001', '2')}), frame.iloc[[5]])
+    assert DataFrameGroupingIndex(frame.iloc[:0], ['reference']).preview_rows(limit=1) == ([], 0)
+
+
+def test_preview_frame_defers_labels_and_keeps_custom_label_extension():
+    index = DataFrameGroupingIndex(pd.DataFrame({'key': [str(i) for i in range(2000)]}), ['key'])
+    assert '_label' not in index._preview_frame().columns
+    assert index.preview_rows(offset=1900, limit=2) == ([
+        {'key': ('1900',), 'label': '1900', 'row_count': 1},
+        {'key': ('1901',), 'label': '1901', 'row_count': 1},
+    ], 2000)
+    index._grouped_preview = pd.DataFrame({'key': ['a'], '_row_count': [2], '_label': ['custom label']})
+    assert index.preview_rows(search_text='CUSTOM') == ([{'key': ('a',), 'label': 'custom label', 'row_count': 2}], 1)
+
+
+class _OriginalLabelPreparation(DataFrameGroupingIndex):
+    # Frozen e700 preparation: the _label overwrite is part of the literal contract.
+    def _preview_frame(self) -> pd.DataFrame:
+        if self._grouped_preview is not None:
+            return self._grouped_preview
+        if not self.active:
+            self._grouped_preview = pd.DataFrame()
+            return self._grouped_preview
+        grouped = (
+            self.key_frame.groupby(list(self.grouping_columns), dropna=False, sort=False)
+            .size()
+            .reset_index(name="_row_count")
+        )
+        if grouped.empty:
+            grouped["_label"] = pd.Series(dtype="string")
+        else:
+            grouped["_label"] = grouped.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
+        self._grouped_preview = grouped
+        return grouped
+
+
+def _label_collision_frame(dtype):
+    values = ['A', 'A', None, '', '  ', '001', '1']
+    label = pd.Series(values, dtype=dtype)
+    return pd.DataFrame({'_label': label, 'shift': ['B', 'B', 'E', ' F ', 'F', '2', '2'],
+                         'reference': ['R1', 'R1', 'R2', 'R3', 'R3', 'R4', 'R5']})
+
+
+def _label_preview_observations(index):
+    rows, total = index.preview_rows()
+    selected = {row['key'] for row in rows}
+    raw_keys = {tuple(row) for row in index.key_frame.itertuples(index=False, name=None)}
+    return {
+        'preview': (rows, total),
+        'pages': [index.preview_rows(offset=offset, limit=limit)
+                  for offset in (0, 1, 8) for limit in (0, 1, 3, None)],
+        'search': [(text, index.preview_rows(search_text=text, offset=0, limit=2),
+                    index.matching_keys(search_text=text))
+                   for text in ('', 'B', ' | B', 'blank', 'F', '001', 'not-found')],
+        'counts': (index.count_rows(selected), index.count_rows(raw_keys)),
+    }
+
+
+@pytest.mark.parametrize('dtype', [object, 'string', 'category'])
+@pytest.mark.parametrize('columns', [['_label', 'shift'], ['shift', '_label'], ['_label'],
+                                     ['reference', 'shift']])
+@pytest.mark.parametrize('first_access', ['preview', 'count'])
+def test_label_collision_matches_frozen_original(dtype, columns, first_access):
+    frame = _label_collision_frame(dtype)
+    before = frame.copy(deep=True)
+    actual, original = DataFrameGroupingIndex(frame, columns), _OriginalLabelPreparation(frame, columns)
+    if first_access == 'count':
+        keys = {tuple(row) for row in original.key_frame.itertuples(index=False, name=None)}
+        assert actual.count_rows(keys) == original.count_rows(keys)
+    assert _label_preview_observations(actual) == _label_preview_observations(original)
+    pd.testing.assert_frame_equal(frame, before, check_exact=True)
+
+
+@pytest.mark.parametrize('columns', [['_label', 'shift'], ['shift', '_label'], ['reference', 'shift']])
+def test_label_collision_cache_revision_matches_frozen_original(columns):
+    frame = _label_collision_frame(object)
+    actual, original = DataFrameGroupingIndex(frame, columns), _OriginalLabelPreparation(frame, columns)
+    before = _label_preview_observations(original)
+    assert _label_preview_observations(actual) == before
+    frame.loc[0, '_label'] = 'revised'
+    assert _label_preview_observations(actual) == before
+    assert _label_preview_observations(original) == before
+    # Existing indexes own normalized snapshots; rebuild from the new input explicitly.
+    actual_new, original_new = DataFrameGroupingIndex(frame, columns), _OriginalLabelPreparation(frame, columns)
+    assert _label_preview_observations(actual_new) == _label_preview_observations(original_new)
+    actual.key_frame, original.key_frame = actual_new.key_frame, original_new.key_frame
+    actual._grouped_preview = original._grouped_preview = None
+    assert _label_preview_observations(actual) == _label_preview_observations(original)
+
+
+def _legacy_column_edge(case):
+    if case == 'duplicate_label':
+        return pd.DataFrame([['A', 'C', 'B']], columns=['_label', '_label', 'shift']), ['_label', 'shift']
+    if case in ('multiindex_partial', 'multiindex_tuple'):
+        columns = pd.MultiIndex.from_tuples([('_label', 'left'), ('shift', 'right')])
+        keys = ['_label', 'shift'] if case == 'multiindex_partial' else list(columns)
+        return pd.DataFrame([['A', 'B']], columns=columns), keys
+    if case == 'row_count_collision':
+        return pd.DataFrame({'_row_count': ['A'], 'shift': ['B']}), ['_row_count', 'shift']
+    frame = pd.DataFrame({'_label': ['A'], 'shift': ['B']})
+    frame.index.name = '_label'
+    return frame, ['_label', 'shift'] if case == 'index_level_collision' else ['shift']
+
+
+@pytest.mark.parametrize('case', ['duplicate_label', 'multiindex_partial', 'multiindex_tuple',
+                                 'row_count_collision', 'index_level_collision', 'index_level_unselected'])
+def test_grouping_column_legacy_acceptance_and_errors(case):
+    frame, columns = _legacy_column_edge(case)
+    before = frame.copy(deep=True)
+    try:
+        expected = _label_preview_observations(_OriginalLabelPreparation(frame, columns))
+    except Exception as error:  # Deliberately compare the original supported rejection, including text.
+        print(f'legacy edge {case}: {type(error).__name__}: {error}')
+        with pytest.raises(type(error)) as captured:
+            _label_preview_observations(DataFrameGroupingIndex(frame, columns))
+        assert str(captured.value) == str(error)
+    else:
+        print(f'legacy edge {case}: ACCEPTED')
+        assert _label_preview_observations(DataFrameGroupingIndex(frame, columns)) == expected
+    pd.testing.assert_frame_equal(frame, before, check_exact=True)

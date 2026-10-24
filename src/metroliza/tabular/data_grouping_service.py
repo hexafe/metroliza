@@ -297,3 +297,132 @@ def reassign_group_keys_to_default(df, *, selected_part_keys, default_group, gro
     df.loc[rows_to_reassign, 'GROUP'] = default_group
     df.loc[rows_to_reassign, group_color_column] = default_group_color
     return bool(rows_to_reassign.any())
+
+
+def _plain_grouping_state(value, allowed):
+    state = vars(value)
+    if type(state) is not dict or any(type(key) is not str or key not in allowed for key in state):
+        return None
+    return state
+
+
+def _native_grouping_text_array(value):
+    if type(value) is np.ndarray:
+        return value
+    if type(value) is pd.arrays.StringArray and not vars(value):
+        array = value._ndarray
+        if type(array) is np.ndarray:
+            return array
+    return None
+
+
+def _native_grouping_axis(axis):
+    from pandas._libs.index import ObjectEngine, StringObjectEngine
+
+    if type(axis) not in (pd.Index, pd.RangeIndex):
+        return False
+    state = _plain_grouping_state(axis, {'_data', '_range', '_name', '_cache', '_id', '_references'})
+    if state is None:
+        return False
+    cache = state.get('_cache', {})
+    if type(cache) is not dict or any(type(key) is not str for key in cache):
+        return False
+    if any(key not in {'_engine', 'is_unique', 'dtype', 'inferred_type', '_is_multi'} for key in cache):
+        return False
+    if '_engine' in cache and type(cache['_engine']) not in (ObjectEngine, StringObjectEngine):
+        return False
+    native_cache_types = (bool, str, pd.StringDtype, type(np.dtype(object)), type(np.dtype('int64')))
+    if any(type(value) not in native_cache_types for key, value in cache.items() if key != '_engine'):
+        return False
+    if type(axis) is pd.RangeIndex:
+        return type(state.get('_range')) is range
+    return _native_grouping_text_array(state.get('_data')) is not None
+
+
+def _native_grouping_cache(cache):
+    if type(cache) is not dict or any(type(key) is not str for key in cache):
+        return False
+    scalar_types = (bool, int, str, pd.StringDtype) + tuple(
+        type(np.dtype(dtype)) for dtype in ('object', 'int64', 'float64', 'bool')
+    )
+    for value in cache.values():
+        if type(value) in scalar_types:
+            continue
+        if type(value) is tuple and all(type(part) is int for part in value):
+            continue
+        if _native_grouping_text_array(value) is None:
+            return False
+    return True
+
+
+def _native_grouping_frame_metadata(state):
+    from pandas.core.flags import Flags
+
+    if state is None:
+        return False
+    if any(type(state.get(key, {})) is not dict or state.get(key, {}) for key in ('_attrs', '_item_cache')):
+        return False
+    flags = state.get('_flags')
+    if type(flags) is not Flags:
+        return False
+    flag_state = _plain_grouping_state(flags, {'_allows_duplicate_labels', '_obj'})
+    return flag_state is not None and type(flag_state.get('_allows_duplicate_labels')) is bool
+
+
+def _native_grouping_color_blocks(blocks):
+    from pandas.core.internals.blocks import ExtensionBlock, NumpyBlock
+
+    if type(blocks) is not tuple:
+        return False
+    for block in blocks:
+        if type(block) not in (NumpyBlock, ExtensionBlock):
+            return False
+        if _plain_grouping_state(block, {'_cache'}) is None or not _native_grouping_cache(vars(block).get('_cache', {})):
+            return False
+        if _native_grouping_text_array(block.values) is None:
+            return False
+    return True
+
+
+def _native_grouping_color_frame(df):
+    """Decline overridden storage before reading pandas metadata or values."""
+    from pandas.core.internals.managers import BlockManager
+
+    if type(df) is not pd.DataFrame:
+        return False
+    state = _plain_grouping_state(df, {'_mgr', '_attrs', '_flags', '_item_cache', '_is_copy'})
+    if not _native_grouping_frame_metadata(state):
+        return False
+    manager = state.get('_mgr')
+    if type(manager) is not BlockManager:
+        return False
+    if _plain_grouping_state(manager, {'_known_consolidated', '_is_consolidated'}) is None:
+        return False
+    if type(manager.axes) is not list or len(manager.axes) != 2:
+        return False
+    if not all(_native_grouping_axis(axis) for axis in manager.axes):
+        return False
+    if not _native_grouping_color_blocks(manager.blocks):
+        return False
+    columns = _native_grouping_text_array(vars(manager.axes[0]).get('_data'))
+    return columns is not None and all(type(value) is str for value in columns) and len(set(columns)) == len(columns)
+
+
+def native_group_color_assignment(df, *, default_group, default_color, color_column):
+    """Resolve existing native text colours in one pass; retain dynamic palette fallback."""
+    if any(type(value) is not str for value in (default_group, default_color, color_column)):
+        return None
+    if not _native_grouping_color_frame(df):
+        return None
+    groups, colors = df['GROUP'], df[color_column]
+    group_values, color_values = groups.tolist(), colors.tolist()
+    if not all(type(value) is str for value in group_values + color_values):
+        return None
+    assigned = {default_group: default_color}
+    for group, color in zip(group_values, color_values, strict=True):
+        if color and color != default_color:
+            assigned.setdefault(group, color)
+    if any(group not in assigned for group in group_values):
+        # _next_group_color is an extension hook and observes each preceding mutation.
+        return None
+    return groups.map(assigned).astype(colors.dtype)

@@ -1413,7 +1413,7 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
             dialog.populate_list_widgets()
             dialog.populate_list_widgets()
 
-        self.assertEqual(calls['count'], 2)
+        self.assertEqual(calls['count'], 1)
 
     def test_populate_list_widgets_falls_back_to_first_when_group_missing(self):
         from unittest.mock import patch
@@ -1475,3 +1475,104 @@ class TestDataGroupingSelectionRetention(unittest.TestCase):
         self.assertEqual(call_args['preferred_group_name'], 'Ops Team')
         reassigned_group = dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP'].iloc[0]
         self.assertEqual(reassigned_group, 'POPULATION')
+
+
+class TestGroupingPreparationLiteralOracle(unittest.TestCase):
+    @staticmethod
+    def _original_colors(dialog):
+        if dialog.group_color_column not in dialog.df.columns:
+            dialog.df[dialog.group_color_column] = dialog.default_group_color
+        dialog.df[dialog.group_color_column] = dialog.df[dialog.group_color_column].fillna(dialog.default_group_color)
+        dialog.df.loc[dialog.df['GROUP'] == dialog.default_group, dialog.group_color_column] = dialog.default_group_color
+        for group_name in dialog.df['GROUP'].dropna().astype(str).unique():
+            if group_name == dialog.default_group:
+                continue
+            existing = dialog.df.loc[dialog.df['GROUP'] == group_name, dialog.group_color_column].dropna().astype(str)
+            assigned_color = next((value for value in existing if value and value != dialog.default_group_color), None)
+            if assigned_color is None:
+                assigned_color = dialog._next_group_color()
+            dialog.df.loc[dialog.df['GROUP'] == group_name, dialog.group_color_column] = assigned_color
+
+    def test_color_integrity_matches_original_including_custom_palette_callback(self):
+        cases = [
+            ['POPULATION', 'A', 'A', 'B', 'B', '', ' ', '001', '1'],
+            ['POPULATION', 'A', None, 1, '1', 'A', 'B', 'B', ''],
+            [],
+        ]
+        for groups in cases:
+            for colors in ([None] * len(groups), ['#FFFFFF', '#123456', '', '#789ABC', '#FFFFFF', ' ', '#654321', '#111111', '#222222'][:len(groups)]):
+                frame = pd.DataFrame({'GROUP': pd.Series(groups, dtype=object), 'GROUP_COLOR': pd.Series(colors, dtype=object)})
+                dialogs = [TestDataGroupingColorAssignments()._dialog_with_df(frame) for _ in range(2)]
+                calls = [[], []]
+                for dialog, log in zip(dialogs, calls):
+                    original_next = dialog._next_group_color
+                    def next_color(original_next=original_next, log=log, dialog=dialog):
+                        log.append(dialog.df.copy(deep=True))
+                        return original_next()
+                    dialog._next_group_color = next_color
+                self._original_colors(dialogs[0])
+                dialogs[1]._ensure_group_color_integrity()
+                pd.testing.assert_frame_equal(dialogs[0].df, dialogs[1].df, check_exact=True)
+                self.assertEqual(len(calls[0]), len(calls[1]))
+                for expected, actual in zip(calls[0], calls[1]):
+                    pd.testing.assert_frame_equal(expected, actual, check_exact=True)
+
+    def test_full_and_filtered_indexes_are_independent_and_invalidate_with_source(self):
+        dialog = _DataGroupingHarness()
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame({'GROUP_KEY': ['a', 'a', 'b'], 'GROUP': ['POPULATION'] * 3,
+                                  'PART_NAME': ['A', 'A', 'B']})
+        dialog._applied_scope_filter_text = ''
+        full = dialog._current_full_grouping_row_index()
+        filtered = dialog._current_grouping_row_index()
+        pd.testing.assert_frame_equal(full, filtered, check_exact=True)
+        filtered.loc[0, 'PART_NAME'] = 'mutated index'
+        self.assertEqual(full.loc[0, 'PART_NAME'], 'A')
+        self.assertEqual(dialog.df.loc[0, 'PART_NAME'], 'A')
+        dialog.df.loc[0, 'PART_NAME'] = 'new source'
+        dialog._invalidate_grouping_cache()
+        self.assertEqual(dialog._current_grouping_row_index().loc[0, 'PART_NAME'], 'new source')
+        dialog._cached_filtered_grouping_dataframe = dialog.df.iloc[[2]].copy()
+        dialog._cached_grouping_row_index = None
+        self.assertEqual(dialog._current_grouping_row_index()['GROUP_KEY'].tolist(), ['b'])
+        self.assertEqual(dialog._current_full_grouping_row_index()['GROUP_KEY'].tolist(), ['a', 'b'])
+
+
+class TestGroupingFakePopulationCompatibility(unittest.TestCase):
+    def test_exported_fake_list_and_object_aliases_decline_blocker_import(self):
+        import builtins
+        from unittest.mock import patch
+
+        for exported_list in (_PopulateListWidget, object):
+            with self.subTest(exported_list=exported_list):
+                dialog = _DataGroupingHarness()
+                dialog.default_group = 'POPULATION'
+                dialog.default_group_color = '#FFFFFF'
+                dialog.group_color_column = 'GROUP_COLOR'
+                dialog.df = pd.DataFrame({'REFERENCE': ['R1'], 'GROUP_KEY': ['k1'],
+                                          'GROUP': ['POPULATION'], 'GROUP_COLOR': ['#FFFFFF'],
+                                          'SAMPLE_NUMBER': [1]})
+                for name in ('reference_list', 'part_list', 'all_parts_list', 'groups_list', 'part_group_list'):
+                    setattr(dialog, name, _PopulateListWidget())
+                dialog._apply_list_theme_styles = lambda: None
+                dialog._ensure_group_color_integrity = lambda: None
+                dialog._apply_item_color = lambda *_args: None
+                dialog._refresh_selection_summary = lambda: None
+                calls = []
+                dialog._populate_part_list = lambda reference: calls.append(('reference', reference))
+                dialog._populate_part_group_list = lambda group: calls.append(('group', group))
+                def fail_error(error):
+                    self.fail(str(error))
+                dialog.log_and_exit = fail_error
+                original_import = builtins.__import__
+                def forbid_blocker(name, globals=None, locals=None, fromlist=(), level=0):
+                    if name == 'PyQt6.QtCore' and 'QSignalBlocker' in fromlist:
+                        self.fail('fake/general population attempted blocker import')
+                    return original_import(name, globals, locals, fromlist, level)
+                with patch.dict(DataGrouping.populate_list_widgets.__globals__, {
+                    'QListWidget': exported_list, 'QListWidgetItem': _PopulateListItem,
+                }), patch('builtins.__import__', side_effect=forbid_blocker):
+                    dialog.populate_list_widgets()
+                self.assertEqual(calls, [('reference', 'R1'), ('group', 'POPULATION')])
+                self.assertEqual(dialog.reference_list.currentItem().text(), 'R1 (n=1)')
+                self.assertEqual(dialog.groups_list.currentItem().text(), 'POPULATION (n=1)')

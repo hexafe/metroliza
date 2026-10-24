@@ -166,3 +166,45 @@ def test_cleanup_failure_is_explicit_and_closes_session(sqlite_source) -> None:
 
     assert broken_connection.closed is True
     assert store._connection is None
+
+
+def test_effective_assignments_preserve_persistent_catalog_and_literal_state(sqlite_source):
+    with sqlite_connection_scope(sqlite_source.path) as connection:
+        before = connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall()
+    store = TabularGroupingAssignmentStore(sqlite_source, table_name='oracle_assignments')
+    commands = (
+        AssignGroupingRows('001', '#112233', (4, 1, 1)),
+        AssignGroupingRows(' ', '#445566', (2,)),
+        RenameGroupingGroup('001', '1', '#778899'),
+    )
+    try:
+        assert [(a.row_id, a.group_name, a.color) for a in store.assignments(commands, default_group='POPULATION')] == [
+            (1, '1', '#778899'), (2, ' ', '#445566'), (4, '1', '#778899')
+        ]
+        assert store.group_counts(commands, default_group='POPULATION').as_dict() == {' ': 1, '1': 2, 'POPULATION': 1}
+        assert store.group_members(commands, default_group='POPULATION', group_name='1', limit=1).row_ids == (1,)
+        with sqlite_connection_scope(sqlite_source.path) as connection:
+            assert connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall() == before
+    finally:
+        store.cleanup()
+    assert store._connection is None
+
+
+def test_effective_group_name_index_is_temp_used_and_removed(sqlite_source):
+    store = TabularGroupingAssignmentStore(sqlite_source, table_name='indexed_assignments')
+    try:
+        commands = (AssignGroupingRows('A', '#123456', (1, 3)),)
+        store.assignments(commands, default_group='POPULATION')
+        connection = store._connection
+        assert connection.execute("SELECT name FROM sqlite_temp_master WHERE type='index'").fetchall() == [
+            ('indexed_assignments_group_name',)
+        ]
+        plan = connection.execute(
+            'EXPLAIN QUERY PLAN SELECT row_id FROM indexed_assignments WHERE group_name=? ORDER BY row_id LIMIT 2', ('A',)
+        ).fetchall()
+        assert any('USING COVERING INDEX indexed_assignments_group_name' in row[-1] for row in plan)
+        assert not connection.execute("SELECT name FROM sqlite_master WHERE name LIKE 'indexed_assignments%'").fetchall()
+        connection.execute('DROP TABLE indexed_assignments')
+        assert not connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'indexed_assignments%'").fetchall()
+    finally:
+        store.cleanup()
