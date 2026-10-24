@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QSignalBlocker, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
 from PyQt6.QtWidgets import (
     QDialog,
@@ -46,6 +46,7 @@ from metroliza.tabular.tabular_column_selection import (
 )
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
+    TABULAR_SQLITE_ROW_THRESHOLD,
     TabularColumnFilter,
     build_tabular_grouping_dataframe,
     selectable_tabular_source_columns,
@@ -114,7 +115,7 @@ _DATE_FILTER_OPERATOR_SYMBOLS = {
     "on_or_before": "<=",
     "lte": "<=",
 }
-_ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS = 250_000
+_ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS = TABULAR_SQLITE_ROW_THRESHOLD
 _SQLITE_SOURCE_EXCLUDED_COLUMNS = {
     "source_row_number",
     "source_file",
@@ -756,10 +757,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not assignments:
             return
         group_colors: dict[str, str] = {}
+        normalize_color = _local_color_normalizer(self, _native_assignment_colors(assignments))
         for group_name, color in assignments.values():
             if group_name == self.default_group:
                 continue
-            normalized = self._normalized_group_color(color)
+            normalized = normalize_color(color)
             if normalized != self.default_group_color:
                 group_colors.setdefault(group_name, normalized)
         for row_id, (group_name, color) in list(assignments.items()):
@@ -830,6 +832,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         color_map: dict[tuple[str, ...], str] = {}
         mixed_keys: set[tuple[str, ...]] = set()
         assignments = self._temp_assignments()
+        normalize_color = _local_color_normalizer(
+            self, _native_assignment_colors(assignments) and _native_selector_rows(row_ids_by_key),
+        )
         for key_tuple, row_ids in row_ids_by_key.items():
             groups: set[str] = set()
             colors: set[str] = set()
@@ -839,7 +844,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                     (self.default_group, self.default_group_color),
                 )
                 groups.add(str(group_name))
-                colors.add(self._normalized_group_color(color))
+                colors.add(normalize_color(color))
             if len(groups) == 1 and len(colors) == 1:
                 color_map[key_tuple] = next(iter(colors))
             elif len(groups) > 1:
@@ -1277,6 +1282,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if self.group_color_column not in frame.columns:
             frame[self.group_color_column] = None
         deduped = frame.drop_duplicates(subset=["REPORT_ID"], keep="last").set_index("REPORT_ID")
+        if (type(dataframe) is pd.DataFrame and type(dataframe.columns) is pd.Index
+                and all(type(column) is str for column in dataframe.columns)):
+            colors = _plain_color_array(deduped[self.group_color_column])
+            if colors is not None:
+                return {
+                    int(report_id): (str(group), color)
+                    for report_id, group, color in zip(
+                        deduped.index.to_numpy(), deduped["GROUP"].to_numpy(dtype=object), colors, strict=True,
+                    )
+                }
         return {
             int(report_id): (str(row["GROUP"]), row.get(self.group_color_column))
             for report_id, row in deduped.iterrows()
@@ -1359,6 +1374,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if sqlite_operations is not None:
             sqlite_operations.clear()
         self._invalidate_sqlite_assignment_cache()
+        normalize_color = _local_color_normalizer(self, _native_assignment_colors(assignments))
         for report_id, assignment in assignments.items():
             if isinstance(assignment, tuple):
                 group_name, color = assignment
@@ -1369,17 +1385,24 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 continue
             temp_assignments[int(report_id)] = (
                 group_name,
-                self._normalized_group_color(color or self.default_group_color),
+                normalize_color(color or self.default_group_color),
             )
         if self._is_sqlite_backed() and temp_assignments:
-            for group_name, color in sorted(set(temp_assignments.values())):
-                row_ids = [
-                    row_id
-                    for row_id, assignment in sorted(temp_assignments.items())
-                    if assignment == (group_name, color)
-                ]
-                self._append_sqlite_row_assignment_operation(row_ids, group_name, color)
+            TabularAnalyticsGroupingDialog._restore_sqlite_assignment_operations(self, temp_assignments)
         self._ensure_group_color_integrity()
+
+    def _restore_sqlite_assignment_operations(self, assignments) -> None:
+        if _native_sqlite_restore(self, assignments):
+            buckets: dict[tuple[str, str], list[int]] = {}
+            for row_id, assignment in sorted(assignments.items()):
+                buckets.setdefault(assignment, []).append(row_id)
+            for (group_name, color), row_ids in sorted(buckets.items()):
+                self._append_sqlite_row_assignment_operation(row_ids, group_name, color)
+            return
+        for group_name, color in sorted(set(assignments.values())):
+            row_ids = [row_id for row_id, assignment in sorted(assignments.items())
+                       if assignment == (group_name, color)]
+            self._append_sqlite_row_assignment_operation(row_ids, group_name, color)
 
     def _materialize_grouping_dataframe(self):
         assignments = self._temp_assignments()
@@ -1471,7 +1494,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             row_count = int(getattr(self.sqlite_store, "row_count", 0) or 0)
         except (TypeError, ValueError):
             row_count = 0
-        return bool(row_count >= _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS and len(self.selector_columns) > 1)
+        return bool(row_count >= _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS)
 
     def _start_sqlite_selector_preview(self, filter_state: _SelectorFilterState) -> None:
         request_id = self._selector_preview_request_id
@@ -2185,18 +2208,20 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_total_rows = int(total_rows)
         selected_keys = set(self.selected_selector_keys)
         color_map, mixed_keys = self._selector_color_map(preview_rows)
-        for row in preview_rows:
-            item = QListWidgetItem(f"{row['label']} (n={row['row_count']})")
-            key = tuple(row["key"])
-            item.setData(Qt.ItemDataRole.UserRole, key)
-            if key in mixed_keys:
-                item.setToolTip("Rows for this value are split across multiple groups.")
-            else:
-                self._apply_item_color(item, color_map.get(key, self.default_group_color))
-            self.selector_list.addItem(item)
-            if key in selected_keys:
-                item.setSelected(True)
+        with QSignalBlocker(self.selector_list):
+            for row in preview_rows:
+                item = QListWidgetItem(f"{row['label']} (n={row['row_count']})")
+                key = tuple(row["key"])
+                item.setData(Qt.ItemDataRole.UserRole, key)
+                if key in mixed_keys:
+                    item.setToolTip("Rows for this value are split across multiple groups.")
+                else:
+                    self._apply_item_color(item, color_map.get(key, self.default_group_color))
+                self.selector_list.addItem(item)
+                if key in selected_keys:
+                    item.setSelected(True)
         self.selector_list.blockSignals(False)
+        self._store_current_selection()
         start = 0 if not total_rows else self._selector_page_offset + 1
         end = min(self._selector_page_offset + len(preview_rows), total_rows)
         if filter_state.mode == "invalid":
@@ -2499,3 +2524,81 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
 
 __all__ = ["TabularAnalyticsGroupingDialog"]
+
+
+_NORMALIZED_GROUP_COLOR = TabularAnalyticsGroupingDialog._normalized_group_color
+_DARK_MODE_BASE = TabularAnalyticsGroupingDialog._is_dark_mode_base
+_APPEND_ROW_OPERATION = TabularAnalyticsGroupingDialog._append_sqlite_row_assignment_operation
+_IS_SQLITE_BACKED = TabularAnalyticsGroupingDialog._is_sqlite_backed
+_NORMALIZE_DISPLAY_COLOR = ui_theme_tokens.normalize_group_display_color
+_IS_DARK_MODE_FUNCTION = ui_theme_tokens.is_dark_mode_base
+
+
+def _native_assignment_colors(assignments):
+    return type(assignments) is dict and all(
+        type(row_id) is int and type(value) is tuple and len(value) == 2
+        and type(value[0]) is str and type(value[1]) is str
+        for row_id, value in assignments.items()
+    )
+
+
+def _native_selector_rows(rows):
+    return type(rows) is dict and all(
+        type(key) is tuple and all(type(part) is str for part in key)
+        and (type(ids) is list or type(ids) is tuple) and all(type(row_id) is int for row_id in ids)
+        for key, ids in rows.items()
+    )
+
+
+def _native_color_context(dialog):
+    if type(dialog) is not TabularAnalyticsGroupingDialog:
+        return False
+    state = vars(dialog)
+    if any(type(key) is not str for key in state):
+        return False
+    return (
+        "_normalized_group_color" not in state and "_is_dark_mode_base" not in state
+        and type(state.get("default_group_color")) is str and type(state.get("default_group")) is str
+        and TabularAnalyticsGroupingDialog._normalized_group_color is _NORMALIZED_GROUP_COLOR
+        and TabularAnalyticsGroupingDialog._is_dark_mode_base is _DARK_MODE_BASE
+        and ui_theme_tokens.normalize_group_display_color is _NORMALIZE_DISPLAY_COLOR
+        and ui_theme_tokens.is_dark_mode_base is _IS_DARK_MODE_FUNCTION
+    )
+
+
+def _native_sqlite_restore(dialog, assignments):
+    if not _native_assignment_colors(assignments) or not _native_color_context(dialog):
+        return False
+    state = vars(dialog)
+    return (
+        "_append_sqlite_row_assignment_operation" not in state and "_is_sqlite_backed" not in state
+        and type(state.get("_sqlite_assignment_operations")) is list
+        and TabularAnalyticsGroupingDialog._append_sqlite_row_assignment_operation is _APPEND_ROW_OPERATION
+        and TabularAnalyticsGroupingDialog._is_sqlite_backed is _IS_SQLITE_BACKED
+    )
+
+
+def _local_color_normalizer(dialog, eligible):
+    """Memoize only callback-free native batches; custom batches retain each old lookup."""
+    if not eligible or not _native_color_context(dialog):
+        return lambda color: dialog._normalized_group_color(color)
+    normalize = dialog._normalized_group_color
+    cache: dict[str, str] = {}
+
+    def normalize_once(color):
+        if color not in cache:
+            if len(cache) >= 256:
+                cache.clear()
+            cache[color] = normalize(color)
+        return cache[color]
+
+    return normalize_once
+
+
+def _plain_color_array(series):
+    # Object/mixed/numeric colors retain iterrows' per-row inference and boxing.
+    if type(series.dtype) is pd.StringDtype:
+        colors = series.to_numpy(dtype=object)
+        if all(type(color) is str for color in colors):
+            return colors
+    return None
