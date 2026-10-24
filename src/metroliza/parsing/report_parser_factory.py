@@ -24,6 +24,8 @@ import re
 import sys
 from threading import Event, RLock
 from typing import Callable, Literal, Type
+from types import FunctionType
+from weakref import WeakKeyDictionary, ref
 
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.shared.env_utils import env_bool
@@ -623,10 +625,107 @@ def plugins_for_format(source_format: str) -> tuple[ParserType, ...]:
     )
 
 
+_KEYWORD_SIGNATURE_INSPECTOR = inspect.signature
+_KEYWORD_SIGNATURE_CACHE_LIMIT = 128
+_KEYWORD_SIGNATURE_CACHE = WeakKeyDictionary()
+_KEYWORD_SIGNATURE_CACHE_LOCK = RLock()
+
+
+def _keyword_signature_metadata(callback):
+    """Decline dynamic metadata and values which could retain plugin closures."""
+
+    if type(callback) is not FunctionType:
+        return None
+    state = callback.__dict__
+    if type(state) is not dict or state:
+        return None
+    defaults = callback.__defaults__
+    kwdefaults = callback.__kwdefaults__
+    annotations = callback.__annotations__
+    if defaults is not None and type(defaults) is not tuple:
+        return None
+    if kwdefaults is not None and type(kwdefaults) is not dict:
+        return None
+    if type(annotations) is not dict:
+        return None
+    defaults = defaults or ()
+    kwdefaults = dict.copy(kwdefaults) if kwdefaults is not None else {}
+    annotations = dict.copy(annotations)
+    mappings = (kwdefaults, annotations)
+    if any(type(key) is not str for mapping in mappings for key in mapping):
+        return None
+    values = (*defaults, *kwdefaults.values(), *annotations.values())
+    literal_types = (str, bytes, int, float, complex, bool, type(None))
+    builtin_annotations = (str, bytes, int, float, complex, bool, object, type(None))
+    if any(
+        not any(type(value) is literal for literal in literal_types)
+        and not any(value is builtin for builtin in builtin_annotations)
+        for value in values
+    ):
+        return None
+    return (defaults, tuple(kwdefaults.items()), tuple(annotations.items()))
+
+
+def _code_keyword_summary(code):
+    """Describe keyword kinds from one immutable code object, without callback state."""
+
+    end = code.co_argcount + code.co_kwonlyargcount
+    has_args = bool(code.co_flags & inspect.CO_VARARGS)
+    has_kwargs = bool(code.co_flags & inspect.CO_VARKEYWORDS)
+    names = code.co_varnames[code.co_posonlyargcount:end + has_args + has_kwargs]
+    return frozenset(names), has_kwargs
+
+
+def _cached_keyword_signature(callback, keyword):
+    """Return an immutable signature summary only for plain, stable functions."""
+
+    if type(keyword) is not str or inspect.signature is not _KEYWORD_SIGNATURE_INSPECTOR:
+        return None
+    metadata = _keyword_signature_metadata(callback)
+    if metadata is None:
+        return None
+    code = callback.__code__
+    if len(metadata[0]) > code.co_argcount:
+        return None
+    if any(type(name) is not str for name in code.co_varnames):
+        return None
+    with _KEYWORD_SIGNATURE_CACHE_LOCK:
+        cached = _KEYWORD_SIGNATURE_CACHE.get(callback)
+        if cached is not None and cached[0]() is code and cached[1] == metadata:
+            return cached[2]
+    # Inspection stays outside the cache lock, including reentrant inspection.
+    signature = inspect.signature(callback)
+    summary = (
+        frozenset(
+            name for name, parameter in signature.parameters.items()
+            if parameter.kind is not inspect.Parameter.POSITIONAL_ONLY
+        ),
+        any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()),
+    )
+    # A concurrent/reentrant swap-and-restore can evade two identity reads.
+    # Never persist an intermediate signature under the restored code's key.
+    if (
+        summary == _code_keyword_summary(code)
+        and callback.__code__ is code
+        and _keyword_signature_metadata(callback) == metadata
+    ):
+        with _KEYWORD_SIGNATURE_CACHE_LOCK:
+            if len(_KEYWORD_SIGNATURE_CACHE) >= _KEYWORD_SIGNATURE_CACHE_LIMIT:
+                oldest = next(iter(_KEYWORD_SIGNATURE_CACHE), None)
+                if oldest is not None:
+                    del _KEYWORD_SIGNATURE_CACHE[oldest]
+            _KEYWORD_SIGNATURE_CACHE[callback] = (ref(code), metadata, summary)
+    return summary
+
+
 def _callable_accepts_keyword(callback, keyword: str) -> bool:
     """Return whether ``callback`` accepts one named keyword argument."""
 
     try:
+        summary = _cached_keyword_signature(callback, keyword)
+        if summary is not None:
+            names, variadic = summary
+            return keyword in names or variadic
         signature = inspect.signature(callback)
     except (TypeError, ValueError):
         return False
