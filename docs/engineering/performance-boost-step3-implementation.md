@@ -166,6 +166,25 @@ packet/resource review receipts and exhausted budgets without resetting them. Fo
 MUST-7, full-output A/A and A/B checks and required integration/CI remain mandatory. Excluded
 timings never become accepted because output comparison later succeeds.
 
+### Coordinator correction — C02 persistence cache withdrawal (2026-10-25)
+
+Authority: the PO's [continuing necessary-fix authorization](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6346416141),
+applied in the [bounded C02 admission](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6400732869).
+Full-input T28 profiling identified recursive validation of T19 A09a-F01 persistence-row caches as
+extra owner-thread work. Profiling is diagnostic, not accepted end-to-end performance evidence.
+Withdraw only production, transfer and consumption of that cache; use the existing general row
+writer with outer membership frozen and nested source values live. Retain legacy prepared-state
+compatibility without trusting cached tuples. Preserve T19 A07-F03 enrichment indexing, replacement
+invalidation, live approval/fallback, T21 metadata work, STEP2's per-report fail-closed registry
+refresh, full computation, transaction/checkpoint order, integrity and durability.
+
+This correction adds no comparator, resource controller, admission, probe, numerical or dependency
+exception and no new cache/revision framework. Require baseline behavioral tests, final-source
+focused/caller tests, staged MUST-7/full security, complete import-output identity, one independent
+FULL1 and at most one DELTA1, an integrated full suite and required CI. C02 is a distinct corrective
+patch with that bounded review budget; retain every earlier review/adverse receipt and exhausted
+budget. Mark timing PENDING until an unchanged unprofiled final campaign qualifies it.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).
@@ -807,8 +826,9 @@ Windows and packaged-candidate behavior were not measured.
   `parsing/parse_reports_thread.py`: `_selected_enrichment_identity` (1752), `_enrichment_transaction_approval`
   (1873).
 - **How:**
-  - carry versioned persistence-ready row tuples and the exact JSON text from preparation; bind `report_id` in the
-    writer; keep the generic path;
+  - original A09a-F01 carried versioned persistence-ready row tuples and exact JSON text from preparation;
+    **withdrawn by C02** after full-input profiling identified costly recursive source-key validation. Use the
+    existing general row writer; retain outer membership freezing, live nested values and legacy-state compatibility;
   - build an occurrence-id → identity index and an identity set once per immutable import plan, rebuilt when the
     plan is replaced.
 - **Tests:** full DB dump identical (pattern of `tests/test_report_measurement_rows_equivalence.py`); enrichment

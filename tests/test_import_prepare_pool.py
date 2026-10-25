@@ -919,36 +919,36 @@ def test_serial_policies_never_validate_the_package_identity(monkeypatch):
 
 def test_prepared_persistence_state_roundtrip_and_legacy_fallback(tmp_path, monkeypatch):
     import pickle
-    from dataclasses import replace
     from metroliza.reports import report_repository as repository_module
 
     report, = _write_synthetic_reports(tmp_path / "reports", 1)
     parser = CMMReportParser(str(report), str(tmp_path / "unused.sqlite3"))
     parser.prepare_for_two_stage_pipeline()
     state = pickle.loads(pickle.dumps(parser.export_prepared_state()))
+    assert "_prepared_persistence_rows" not in state
     restored = CMMReportParser(str(report), str(tmp_path / "restored.sqlite3"))
     restored.apply_prepared_state(state)
-    assert restored._prepared_persistence_rows.source is restored._prepared_measurement_rows
+    assert restored._prepared_persistence_rows is None
     repository = ReportRepository("unused.sqlite")
     expected = repository._measurement_rows(42, restored._prepared_measurement_rows)
     calls = []
     original = repository_module._mapping_measurement_row
     monkeypatch.setattr(repository_module, "_mapping_measurement_row", lambda *args: calls.append(1) or original(*args))
-    supplied = restored._persistence_measurements(restored._prepared_measurement_rows)
-    assert repository._measurement_rows(42, supplied) == expected
-    assert calls == []
-    state["_prepared_persistence_rows"] = replace(state["_prepared_persistence_rows"], version=99)
-    restored.apply_prepared_state(state)
-    assert repository._measurement_rows(42, restored._persistence_measurements(restored._prepared_measurement_rows)) == expected
+    assert repository._measurement_rows(42, restored._normalized_rows_for_persistence()) == expected
     assert len(calls) == len(expected)
-    state.pop("_prepared_persistence_rows")
-    restored.apply_prepared_state(state)
-    assert restored._prepared_persistence_rows is None
-    assert repository._measurement_rows(42, restored._persistence_measurements(restored._prepared_measurement_rows)) == expected
-    assert len(calls) == 2 * len(expected)
+    # Old worker states remain loadable, but cached rows of any version are ignored.
+    for version in (1, 99):
+        state["_prepared_persistence_rows"] = repository_module._PreparedMeasurementRows(
+            version, state["_prepared_measurement_rows"], b"legacy", (("STALE",) * 19,))
+        legacy = pickle.loads(pickle.dumps(state))
+        restored.apply_prepared_state(legacy)
+        assert restored._prepared_persistence_rows is None
+        assert "_prepared_persistence_rows" not in restored.export_prepared_state()
+        assert repository._measurement_rows(42, restored._normalized_rows_for_persistence()) == expected
+    assert len(calls) == 3 * len(expected)
 
 
-def test_real_import_pool_carries_persistence_ready_rows(tmp_path, monkeypatch):
+def test_real_import_pool_transfers_normalized_rows_without_persistence_cache(tmp_path, monkeypatch):
     from metroliza.reports import report_repository as module
 
     source = tmp_path / "reports"
@@ -959,16 +959,17 @@ def test_real_import_pool_carries_persistence_ready_rows(tmp_path, monkeypatch):
     original_mapping = module._mapping_measurement_row
 
     def apply_state(parser, state):
-        states.append(state["_prepared_persistence_rows"])
+        states.append(state)
         return original_apply(parser, state)
 
     monkeypatch.setattr(CMMReportParser, "apply_prepared_state", apply_state)
     monkeypatch.setattr(module, "_mapping_measurement_row", lambda *args: conversions.append(1) or original_mapping(*args))
     worker = _run_import(source, tmp_path / "pool.sqlite3")
     assert worker.last_parse_result.imported_files == 2
-    assert len(states) == 2 and all(type(state) is module._PreparedMeasurementRows for state in states)
-    assert not conversions
-
+    assert len(states) == 2 and all("_prepared_persistence_rows" not in state for state in states)
+    row_count = sum(len(state["_prepared_measurement_rows"]) for state in states)
+    assert len(conversions) == row_count > 0
+    assert len(_dump_database(tmp_path / "pool.sqlite3")["report_measurements"]) == row_count
 
 
 def test_arbitrary_parser_subclasses_retain_generic_persistence(tmp_path):
@@ -987,21 +988,16 @@ def test_arbitrary_parser_subclasses_retain_generic_persistence(tmp_path):
 
 def test_native_row_resize_during_preparation_keeps_export_picklable(tmp_path):
     import pickle
-    from metroliza.reports import report_repository as module
 
     report, = _write_synthetic_reports(tmp_path / "reports", 1)
     parser = CMMReportParser(str(report), str(tmp_path / "unused.sqlite3"))
-    target, fired = [], []
+    fired = []
     previous = sys.gettrace()
 
     def trace(frame, event, arg):
         if event == "return" and frame.f_code.co_name == "parse_measurements" and frame.f_locals.get("self") is parser:
-            target.append(arg[0])
-        elif (target and not fired and event == "line" and frame.f_globals is vars(module)
-                and frame.f_code.co_name == "<genexpr>"
-                and "key" in frame.f_locals and "item" in frame.f_locals):
-            assert type(target[0]) is dict
-            target[0]["ignored_resize"] = 1
+            assert type(arg[0]) is dict
+            arg[0]["ignored_resize"] = 1
             fired.append(1)
         return trace
 
@@ -1012,9 +1008,24 @@ def test_native_row_resize_during_preparation_keeps_export_picklable(tmp_path):
         sys.settrace(previous)
     assert sys.gettrace() is previous and fired == [1]
     state = pickle.loads(pickle.dumps(parser.export_prepared_state()))
-    assert state["_prepared_persistence_rows"] is None
+    assert "_prepared_persistence_rows" not in state
     assert state["_prepared_measurement_rows"][0]["ignored_resize"] == 1
     clean = [{key: value for key, value in row.items() if key != "ignored_resize"}
              for row in state["_prepared_measurement_rows"]]
     repository = ReportRepository("unused.sqlite")
     assert repository._measurement_rows(17, state["_prepared_measurement_rows"]) == repository._measurement_rows(17, clean)
+
+
+def test_preparation_does_not_build_or_transfer_persistence_cache(tmp_path, monkeypatch):
+    from metroliza.parsing import cmm_report_parser as module
+
+    def unused(*args):
+        pytest.fail("preparation must not build unused persistence tuples or source hashes")
+
+    monkeypatch.setattr(module, "_prepare_measurement_rows", unused, raising=False)
+    report, = _write_synthetic_reports(tmp_path / "reports", 1)
+    parser = CMMReportParser(str(report), str(tmp_path / "unused.sqlite3"))
+    parser.prepare_for_two_stage_pipeline()
+    state = parser.export_prepared_state()
+    assert state["_prepared_measurement_rows"]
+    assert "_prepared_persistence_rows" not in state

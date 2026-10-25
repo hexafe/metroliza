@@ -3,7 +3,6 @@
 import logging
 import os
 import re
-import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -47,7 +46,7 @@ from metroliza.reports.report_metadata_normalizers import (
     normalize_sample_number,
 )
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
-from metroliza.reports.report_repository import ReportRepository, _PreparedMeasurementRows, _prepare_measurement_rows
+from metroliza.reports.report_repository import ReportRepository
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.parsing.parser_plugin_contracts import (
     BaseReportParserPlugin,
@@ -65,21 +64,6 @@ from metroliza.parsing.source_inspection import (
     SourceChangedAfterInspectionError,
     SourceInspectionContext,
 )
-
-
-def _supports_prepared_persistence_rows(parser):
-    if type(parser) is CMMReportParser:
-        return True
-    modules = sys.modules
-    if type(modules) is not dict:
-        return False
-    worker_module = dict.get(modules, "metroliza.parsing.import_prepare_pool")
-    if type(worker_module) is not ModuleType:
-        return False
-    attributes = object.__getattribute__(worker_module, "__dict__")
-    if type(attributes) is not dict:
-        return False
-    return dict.get(attributes, "_WORKER_PARSER_CLASS") is type(parser)
 
 
 _METADATA_PDF_BACKEND = load_pdf_backend()
@@ -1354,7 +1338,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 metadata=metadata,
                 candidates=self._metadata_selection_result.candidates,
                 warnings=warnings,
-                measurements=CMMReportParser._persistence_measurements(self, measurement_rows),
+                measurements=measurement_rows,
                 metadata_version="report_metadata_v1",
                 metadata_profile_id=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.template_family,
                 metadata_profile_version="1",
@@ -1402,15 +1386,6 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
         return self.parse_measurements()
 
-    def _persistence_measurements(self, measurement_rows):
-        if type(self) is not CMMReportParser:
-            return measurement_rows
-        prepared = self._prepared_persistence_rows
-        if (type(prepared) is _PreparedMeasurementRows
-                and prepared.source is measurement_rows):
-            return prepared
-        return measurement_rows
-
     def prepare_for_two_stage_pipeline(self):
         """Prepare parser state and normalized rows for deferred single-writer persistence.
 
@@ -1428,15 +1403,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         if self._metadata_selection_result is None:
             self.extract_metadata()
         self._prepared_measurement_rows = self.parse_measurements()
-        if _supports_prepared_persistence_rows(self):
-            self._prepared_persistence_rows = _prepare_measurement_rows(self._prepared_measurement_rows)
         self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
         self.stage_timings_s["prepare_pipeline_runtime"] = perf_counter() - prepare_start
 
     _PREPARED_STATE_ATTRIBUTES = (
         "_blocks_text",
         "_prepared_measurement_rows",
-        "_prepared_persistence_rows",
         "_metadata_selection_result",
         "_canonical_metadata",
         "_metadata_identity_hash",
@@ -1462,12 +1434,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """Adopt ``export_prepared_state()`` output instead of preparing in this process."""
 
         expected = set(self._PREPARED_STATE_ATTRIBUTES)
-        if set(state) not in (expected, expected - {"_prepared_persistence_rows"}):
+        if set(state) not in (expected, expected | {"_prepared_persistence_rows"}):
             raise ValueError("Prepared CMM report state does not match the parser contract")
         self._prepared_persistence_rows = None
         for name in self._PREPARED_STATE_ATTRIBUTES:
-            if name != "_prepared_persistence_rows" or name in state:
-                setattr(self, name, state[name])
+            setattr(self, name, state[name])
 
     def persist_prepared_report(self):
         """Persist report data prepared during stage 1 of the two-stage pipeline.
