@@ -1,6 +1,7 @@
 # Metroliza — audyt wydajności po STEP2 i szacunek STEP3
 
 Poprzedni etap: [performance-boost-step2.md](performance-boost-step2.md).
+Raport wdrożenia i stan pomiarów: [performance-boost-step3.md](performance-boost-step3.md) — T28 PENDING.
 Plan wdrożenia (EN, dla Codex): [performance-boost-step3-implementation.md](performance-boost-step3-implementation.md). Tracker: Issue #1151.
 
 Rewizja audytowana: `101e5a44` (gałąź `perf/step2-boost`, czyli kod po STEP2). Data: 2026-10-21.
