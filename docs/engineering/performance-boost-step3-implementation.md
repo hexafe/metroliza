@@ -206,6 +206,29 @@ Preserve C02's source-only review, failed integrated suite and all older budgets
 focused/caller tests, staged MUST-7/full security, a corrected integrated full suite and actual
 required CI before qualification. This is not a performance change or accepted timing evidence.
 
+### PO amendment — C04 post-action retention (2026-10-25)
+
+Authority: [explicit narrow C04 approval](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6402031022).
+This adds one narrowly scoped exception to the measurement-tool freeze. The frozen UI harness
+failed after the pre-STEP1 Modify DB apply action: optional tabular metadata access touched an
+already deleted native ModifyDB wrapper, preventing output retention and result JSON. Retain
+that actual1 series as excluded; no timing may be reconstructed or accepted from it.
+
+Permit only the approved nine-line `_retain_outputs` guard for exact `ModifyDbApply` and a real
+QObject proven deleted by `sip.isdeleted`, its existing test file, this Plan amendment and necessary
+T28 source/compile bindings. Preserve the complete work-tree copy/manifest, live SQLite backup,
+connection closure, refusal of reused output directories, and errors for live/unexpected lookups
+or deleted tabular scenarios. No RuntimeError blanket catch, timer/metric/computation change,
+output masking, resource/probe/admission change or new framework is admitted. Product source,
+GC, Rust, dependencies and machine policy remain unchanged.
+
+Use the identical corrected harness in all four measured versions, with fresh compile/source
+bindings and fresh f03/f05 series before continuing T28. Retain original903 f03 acceptance as
+its own earlier-harness evidence; do not transfer timing acceptance. C04 has a separate maximum
+of one FULL1 and one DELTA1 fresh independent review. Preserve all earlier budgets, adverse
+receipts and C02/C03 closure; no reset. Require staged MUST-7/full security, focused/caller and
+negative controls, integrated full suite and required CI before qualification.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).

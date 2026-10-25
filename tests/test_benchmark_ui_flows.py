@@ -199,6 +199,121 @@ def test_retention_refuses_mixed_evidence_and_snapshots_sqlite(tmp_path):
         harness._retain_outputs(ctx, scenario, {})
 
 
+def test_retention_preserves_all_files_after_modify_db_dialog_deleted(
+    tmp_path, qapplication_session,
+):
+    from PyQt6 import sip
+    from PyQt6.QtWidgets import QWidget
+
+    work = tmp_path / "work"
+    (work / "nested").mkdir(parents=True)
+    files = {"modified.sqlite": b"synthetic database\x00\xff", "nested/output.bin": bytes(range(256))}
+    for name, data in files.items():
+        (work / name).write_bytes(data)
+    target = tmp_path / "retained"
+    ctx = Namespace(work=work, args=Namespace(keep_output=str(target)))
+    scenario = harness.ModifyDbApply()
+    scenario.dialog = QWidget()
+    sip.delete(scenario.dialog)
+    assert sip.isdeleted(scenario.dialog)
+    with pytest.raises(RuntimeError, match="wrapped C/C\\+\\+ object .* has been deleted"):
+        getattr(scenario.dialog, "tabular_load_result", None)
+
+    result = {}
+    harness._retain_outputs(ctx, scenario, result)
+
+    assert result == {"retained_outputs": sorted(files)}
+    assert {name: (target / name).read_bytes() for name in files} == files
+    assert {name: (work / name).read_bytes() for name in files} == files
+    with pytest.raises(FileExistsError):
+        harness._retain_outputs(ctx, scenario, {})
+
+
+@pytest.mark.parametrize("scenario_type", [Namespace, harness.ModifyDbApply,
+                                           harness.CsvLoad, harness.IndustrialBridge])
+def test_retention_live_tabular_backup_keeps_files_and_closes_connections(
+    tmp_path, monkeypatch, qapplication_session, scenario_type,
+):
+    from contextlib import closing
+    import sqlite3
+    from PyQt6.QtWidgets import QWidget
+
+    source = tmp_path / "source.sqlite"
+    with closing(sqlite3.connect(source)) as connection:
+        connection.execute("CREATE TABLE data(id INTEGER PRIMARY KEY, value BLOB)")
+        connection.execute("INSERT INTO data VALUES (?, ?)", (1, bytes(range(256))))
+        connection.commit()
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "complete.bin").write_bytes(b"complete output\x00\xff")
+    target = tmp_path / "retained"
+    ctx = Namespace(work=work, args=Namespace(keep_output=str(target)))
+    scenario = scenario_type()
+    scenario.dialog = QWidget()
+    scenario.dialog.tabular_load_result = Namespace(sqlite_store=Namespace(path=str(source)))
+    connect = sqlite3.connect
+    opened = []
+
+    def tracked_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+    result = {}
+    harness._retain_outputs(ctx, scenario, result)
+    assert result == {"retained_outputs": ["complete.bin", "tabular.sqlite"]}
+    assert (target / "complete.bin").read_bytes() == b"complete output\x00\xff"
+    assert len(opened) == 2
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+    with closing(connect(target / "tabular.sqlite")) as connection:
+        assert connection.execute("SELECT * FROM data").fetchall() == [(1, bytes(range(256)))]
+    scenario.dialog.close()
+
+
+@pytest.mark.parametrize("scenario_type", [harness.ModifyDbApply, harness.CsvLoad])
+def test_retention_propagates_live_tabular_descriptor_runtime_error(
+    tmp_path, qapplication_session, scenario_type,
+):
+    from PyQt6 import sip
+    from PyQt6.QtWidgets import QWidget
+
+    class BrokenLiveDialog(QWidget):
+        @property
+        def tabular_load_result(self):
+            raise RuntimeError("unexpected live tabular snapshot failure")
+
+    scenario = scenario_type()
+    scenario.dialog = BrokenLiveDialog()
+    assert not sip.isdeleted(scenario.dialog)
+    target = tmp_path / "retained"
+    ctx = Namespace(work=tmp_path, args=Namespace(keep_output=str(target)))
+    with pytest.raises(RuntimeError, match="unexpected live tabular snapshot failure"):
+        harness._retain_outputs(ctx, scenario, {})
+    assert not target.exists()
+    scenario.dialog.close()
+
+
+@pytest.mark.parametrize("scenario_type", [harness.CsvLoad, harness.IndustrialBridge])
+def test_retention_does_not_skip_deleted_tabular_dialogs(
+    tmp_path, qapplication_session, scenario_type,
+):
+    from PyQt6 import sip
+    from PyQt6.QtWidgets import QWidget
+
+    scenario = scenario_type()
+    scenario.dialog = QWidget()
+    sip.delete(scenario.dialog)
+    assert sip.isdeleted(scenario.dialog)
+    target = tmp_path / "retained"
+    ctx = Namespace(work=tmp_path, args=Namespace(keep_output=str(target)))
+    with pytest.raises(RuntimeError, match="wrapped C/C\\+\\+ object .* has been deleted"):
+        harness._retain_outputs(ctx, scenario, {})
+    assert not target.exists()
+
+
 def test_group_analysis_empty_payload_cannot_be_a_success(tmp_path):
     scenario = harness.GroupAnalysisExport()
     scenario.export = Namespace(export_thread=None)

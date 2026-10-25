@@ -1383,7 +1383,15 @@ def _retain_outputs(ctx, scenario, result):
     from contextlib import closing
     from urllib.parse import quote
 
-    loaded = getattr(getattr(scenario, "dialog", None), "tabular_load_result", None)
+    dialog = getattr(scenario, "dialog", None)
+    if type(scenario) is ModifyDbApply:
+        from PyQt6 import sip
+        from PyQt6.QtCore import QObject
+
+        # Apply may delete ModifyDB; its outputs are in ctx.work, with no tabular store.
+        if isinstance(dialog, QObject) and sip.isdeleted(dialog):
+            dialog = None
+    loaded = getattr(dialog, "tabular_load_result", None)
     store = getattr(loaded, "sqlite_store", None)
     if store is not None:
         source = f"file:{quote(str(Path(store.path).resolve()))}?mode=ro"
