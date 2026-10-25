@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 try:
+    from PyQt6 import sip
     from PyQt6.QtGui import QCloseEvent
     from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -290,9 +291,9 @@ def test_closing_the_dialog_while_loading_interrupts_the_worker(dialog_factory, 
     started = time.monotonic()
     dialog.reject()
     assert time.monotonic() - started < industrial_data_dialog.BACKGROUND_STOP_WAIT_MS / 1000 + 1
+    assert _wait_until(lambda: not detached_threads.is_registered(thread), timeout=1)
     assert state["saw_cancel"]
-    assert not thread.isRunning()
-    assert not detached_threads.is_registered(thread)
+    assert sip.isdeleted(thread) or not thread.isRunning()
     assert not dialog.is_loading_analytics_cache()
     assert dialog._analytics_progress_dialog is None
     _app().processEvents()
@@ -326,7 +327,7 @@ def test_stuck_worker_is_detached_without_blocking_close_and_its_result_is_clean
         assert detached_threads.is_registered(thread)
     finally:
         release.set()
-    assert _wait_until(lambda: not thread.isRunning())
+    assert _wait_until(lambda: sip.isdeleted(thread) or not thread.isRunning())
     assert _wait_until(lambda: not detached_threads.is_registered(thread))
     # The dropped result releases its cache view.
     assert result.sqlite_store.cleaned == 1
@@ -415,7 +416,7 @@ def test_cancelling_the_save_prompt_restores_the_stopped_csv_summary_load(
     # The same close with Discard removes the temporary files.
     monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
     dialog.reject()
-    assert not os.path.exists(target.cache_db_file)
+    assert _wait_until(lambda: not os.path.exists(target.cache_db_file))
 
 
 def test_closing_event_cancel_also_restores_the_stopped_csv_summary_load(
@@ -599,7 +600,7 @@ def test_closing_while_the_oznak_check_runs_does_not_destroy_the_thread(dialog_f
         assert detached_threads.is_registered(thread)
     finally:
         release.set()
-    assert _wait_until(lambda: not thread.isRunning())
+    assert _wait_until(lambda: sip.isdeleted(thread) or not thread.isRunning())
     assert _wait_until(lambda: not detached_threads.is_registered(thread))
 
 
@@ -639,3 +640,82 @@ def test_source_combo_lists_profiles_with_cached_rows_only(tmp_path, monkeypatch
         for profile_id, (name, rows) in expected.items()
         if rows
     ]
+
+
+@pytest.mark.parametrize("operation", ["cancel", "reject", "destroy"])
+def test_native_loader_ownership_cleanup_and_gui_delivery(dialog_factory, monkeypatch, operation):
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    entered, release = threading.Event(), threading.Event()
+    result = _fake_loaded()
+    cleanup_threads = []
+    cleanup = result.sqlite_store.cleanup
+    def observed_cleanup():
+        cleanup_threads.append(threading.get_ident())
+        cleanup()
+    result.sqlite_store.cleanup = observed_cleanup
+    def held(*args, **kwargs):
+        entered.set()
+        release.wait(5)
+        return result
+    monkeypatch.setattr(industrial_data_dialog, "load_industrial_cache_tabular_result", held)
+    dialog = dialog_factory()
+    dialog.open_analytics_dialog()
+    worker = dialog._analytics_load_thread
+    destroyed = []
+    worker.destroyed.connect(lambda: destroyed.append(threading.get_ident()))
+    try:
+        assert entered.wait(2)
+        began = time.monotonic()
+        with monkeypatch.context() as m:
+            m.setattr(worker, "wait", lambda *args: pytest.fail("GUI waited for running native worker"))
+            if operation == "destroy":
+                dialog.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            else:
+                getattr(dialog, "_cancel_analytics_load" if operation == "cancel" else "reject")()
+        assert time.monotonic() - began < 1
+        assert detached_threads.is_registered(worker)
+        assert result.sqlite_store.cleaned == 0
+    finally:
+        release.set()
+    assert _wait_until(lambda: not detached_threads.is_registered(worker), timeout=1)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert result.sqlite_store.cleaned == 1
+    assert cleanup_threads == [_MAIN_THREAD]
+    assert destroyed == [_MAIN_THREAD]
+    if operation != "destroy":
+        assert dialog._cache_holding_threads == []
+    if operation == "destroy":
+        # The factory's live-widget teardown must not revisit the explicitly deleted parent.
+        dialog._stop_background_threads = lambda: None
+        dialog.close = lambda: None
+
+
+@pytest.mark.parametrize("terminal", ["success", "error"])
+def test_native_delivery_retains_owner_through_reentrant_parent_deletion(
+    dialog_factory, fake_analytics, monkeypatch, terminal,
+):
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    dialog = dialog_factory()
+    seen = []
+    def destroy_owner(*args, **kwargs):
+        worker = seen[0]
+        assert detached_threads.is_registered(worker)
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert detached_threads.is_registered(worker)
+    if terminal == "error":
+        def load(*args, **kwargs):
+            raise ValueError("synthetic")
+        monkeypatch.setattr(QMessageBox, "warning", destroy_owner)
+    else:
+        def load(*args, **kwargs):
+            return _fake_loaded()
+        monkeypatch.setattr(_FakeAnalyticsDialog, "exec", destroy_owner)
+    monkeypatch.setattr(industrial_data_dialog, "load_industrial_cache_tabular_result", load)
+    dialog.open_analytics_dialog()
+    seen.append(dialog._analytics_load_thread)
+    assert _wait_until(lambda: not detached_threads.is_registered(seen[0]))
+    assert sip.isdeleted(dialog)
+    dialog._stop_background_threads = lambda: None
+    dialog.close = lambda: None

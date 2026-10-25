@@ -38,6 +38,9 @@ from metroliza.ui.modify_db_records import (
     display_value,
     load_record_rows,
     start_load_thread,
+    _NATIVE_RECORD_CLASS,
+    _NATIVE_RECORD_INIT,
+    _NATIVE_RECORD_START,
 )
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.reports.report_schema import ensure_report_schema
@@ -56,7 +59,6 @@ from metroliza.ui.worker_progress_dialog import (
 logger = logging.getLogger(__name__)
 QItemSelection = getattr(QtCore, "QItemSelection", None)
 QItemSelectionModel = getattr(QtCore, "QItemSelectionModel", None)
-
 
 class ModifyDB(QDialog):
     """Provide table-based editing for selected report metadata fields.
@@ -717,7 +719,10 @@ class ModifyDB(QDialog):
         slot.state = "loading"
         slot.pending_specs = specs
         slot.banner.setVisible(True)
-        thread = RecordLoadThread(slot.kind, slot.generation, self.db_file, query, specs, defer_haystack=True)
+        thread_factory = RecordLoadThread
+        native_constructor = (thread_factory is _NATIVE_RECORD_CLASS
+                              and _NATIVE_RECORD_CLASS.__dict__.get("__init__") is _NATIVE_RECORD_INIT)
+        thread = thread_factory(slot.kind, slot.generation, self.db_file, query, specs, defer_haystack=True)
         thread.loaded.connect(self._on_record_rows_loaded)
         thread.failed.connect(self._on_record_load_failed)
         slot.thread = thread
@@ -729,7 +734,21 @@ class ModifyDB(QDialog):
         progress.setWindowModality(Qt.WindowModality.NonModal)
         slot.progress_dialog = progress
         progress.show()
-        start_load_thread(thread)
+        start = start_load_thread
+        if native_constructor and start is _NATIVE_RECORD_START:
+            start(thread, owner=self, on_finished=ModifyDB._deliver_record_load)
+        else:
+            start(thread)
+
+    def _deliver_record_load(self, thread):
+        delivery = vars(thread).pop("_pending_delivery", None)
+        if delivery is None:
+            return
+        terminal, value = delivery
+        if terminal == "loaded":
+            self._on_record_rows_loaded(thread._kind, thread._generation, value)
+        else:
+            self._on_record_load_failed(thread._kind, thread._generation, value)
 
     @staticmethod
     def _release_record_progress(slot):
@@ -774,7 +793,7 @@ class ModifyDB(QDialog):
         self.log_and_exit(error)
 
     def _cancel_record_load(self, slot, *, wait_ms=3000):
-        """Ignore any in-flight fetch for ``slot``, cancel its SQL and join the worker."""
+        """Invalidate the pending request and interrupt SQL without joining the GUI thread."""
         slot.generation += 1
         thread, slot.thread = slot.thread, None
         if slot.state == "loading":

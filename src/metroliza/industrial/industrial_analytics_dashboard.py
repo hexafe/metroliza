@@ -14,6 +14,7 @@ import re
 import shutil
 from time import perf_counter
 from typing import Any
+from collections.abc import Callable
 
 import numpy as np
 from metroliza.charts.full_data_violin import full_data_violin
@@ -122,6 +123,15 @@ _STATIC_POPULATION_DENSITY_POINT_THRESHOLD = DASHBOARD_RAW_POINT_LIMIT
 _AXIS_DEGENERATE_ABS_TOL = 1e-12
 
 
+
+class DashboardCancelled(RuntimeError):
+    """Raised when dashboard construction is cooperatively cancelled."""
+
+
+def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise DashboardCancelled("Analytics generation was canceled.")
+
 def _metric_population_source_frame(
     source_frame: pd.DataFrame | None,
     metric_field_name: str,
@@ -156,9 +166,11 @@ def build_production_dashboard_manifest(
     source_row_count: int | None = None,
     dashboard_row_count: int | None = None,
     static_population_source_frame: pd.DataFrame | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ProductionDashboardManifest:
     """Build a renderer-neutral manifest for the production analytics dashboard."""
 
+    cancel_kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
     aggregation = aggregation_state or ProductionAggregationState()
     charts = chart_selection or ProductionChartSelection()
     cohort = cohort_state or ReferenceCohortState()
@@ -180,12 +192,14 @@ def build_production_dashboard_manifest(
 
     chart_specs: list[dict[str, Any]] = []
     for metric in metric_selection:
+        _raise_if_cancelled(cancel_check)
         if metric.field_name not in frame.columns:
             continue
         metric_frame = frame.loc[frame[metric.field_name].notna()]
         if metric_frame.empty:
             continue
         chart_group_columns = _chart_group_columns(metric_frame, aggregation)
+        _raise_if_cancelled(cancel_check)
         if charts.time_series:
             metric_population_source_frame = _metric_population_source_frame(
                 static_population_source_frame,
@@ -203,8 +217,10 @@ def build_production_dashboard_manifest(
                 plotly_visual_settings=plotly_visual_settings,
                 include_plotly_specs=include_plotly_specs,
                 population_layer_mode=population_layer_mode,
+                **cancel_kwargs,
             )
             chart_specs.extend(spec for spec in specs if spec)
+        _raise_if_cancelled(cancel_check)
         if charts.histogram:
             spec = _build_histogram_chart(
                 metric,
@@ -215,6 +231,7 @@ def build_production_dashboard_manifest(
             )
             if spec:
                 chart_specs.append(spec)
+        _raise_if_cancelled(cancel_check)
         if charts.violin:
             spec = _build_distribution_chart(
                 metric,
@@ -226,6 +243,7 @@ def build_production_dashboard_manifest(
             )
             if spec:
                 chart_specs.append(spec)
+        _raise_if_cancelled(cancel_check)
         if charts.box:
             spec = _build_distribution_chart(
                 metric,
@@ -238,6 +256,7 @@ def build_production_dashboard_manifest(
             if spec:
                 chart_specs.append(spec)
 
+    _raise_if_cancelled(cancel_check)
     summary = {
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "source_rows": selected_source_row_count,
@@ -292,9 +311,12 @@ def write_production_dashboard(
     plotly_serialized_json_bytes_budget: int | None = DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     dashboard_visual_settings: dict[str, Any] | None = None,
     dashboard_interactivity_options: Any = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ProductionDashboardWriteResult:
     """Write an offline production analytics dashboard and local Plotly asset."""
 
+    _raise_if_cancelled(cancel_check)
+    cancel_kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
     validated_manifest = validate_dashboard_manifest(manifest)
     total_start = perf_counter()
     timings_s = {
@@ -344,10 +366,12 @@ def write_production_dashboard(
     population_layer_summary = _apply_static_population_layer_options(
         base_dashboard_manifest,
         interactivity=interactivity,
+        **cancel_kwargs,
     )
+    _raise_if_cancelled(cancel_check)
     timings_s["static_population_layer"] += perf_counter() - static_population_start
     json_measurement_start = perf_counter()
-    spec_sizes = _plotly_spec_sizes(base_dashboard_manifest)
+    spec_sizes = _plotly_spec_sizes(base_dashboard_manifest, **cancel_kwargs)
     plotly_spec_count = len(spec_sizes)
     plotly_serialized_json_bytes = sum(size for size, _index in spec_sizes)
     json_measurement_elapsed = perf_counter() - json_measurement_start
@@ -397,6 +421,7 @@ def write_production_dashboard(
             reasons.append("specs_omitted")
         plotly_budget_reason = ",".join(reasons)
 
+    _raise_if_cancelled(cancel_check)
     asset_directory.mkdir(parents=True, exist_ok=True)
     plotly_runtime_status = "not_needed"
     if interactivity["mode"] == "static" and plotly_spec_count > 0:
@@ -451,7 +476,9 @@ def write_production_dashboard(
         dashboard_manifest,
         asset_directory_name=asset_directory.name,
         dashboard_visual_settings=dashboard_visual_settings,
+        **cancel_kwargs,
     )
+    _raise_if_cancelled(cancel_check)
     timings_s["html_rendering"] += perf_counter() - render_start
     html_bytes = len(html_text.encode("utf-8"))
     write_start = perf_counter()
@@ -535,12 +562,15 @@ def _measure_plotly_spec_json_bytes(plotly_spec: dict[str, Any]) -> int:
     )
 
 
-def _plotly_spec_sizes(manifest: dict[str, Any]) -> list[tuple[int, int]]:
-    return [
-        (_measure_plotly_spec_json_bytes(spec), index)
-        for index, chart in enumerate(manifest["charts"])
-        if isinstance((spec := chart.get("plotly_spec")), dict) and spec
-    ]
+def _plotly_spec_sizes(manifest: dict[str, Any], *, cancel_check=None) -> list[tuple[int, int]]:
+    sizes = []
+    for index, chart in enumerate(manifest["charts"]):
+        _raise_if_cancelled(cancel_check)
+        spec = chart.get("plotly_spec")
+        if isinstance(spec, dict) and spec:
+            sizes.append((_measure_plotly_spec_json_bytes(spec), index))
+    _raise_if_cancelled(cancel_check)
+    return sizes
 
 
 def _retained_plotly_spec_bytes(manifest: dict[str, Any], sizes: list[tuple[int, int]]) -> int:
@@ -613,6 +643,7 @@ def _apply_static_population_layer_options(
     manifest: dict[str, Any],
     *,
     interactivity: dict[str, int | str],
+    cancel_check=None,
 ) -> dict[str, Any]:
     selected_mode = str(
         interactivity.get("large_group_layer_mode")
@@ -657,6 +688,7 @@ def _apply_static_population_layer_options(
 
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     for chart in charts:
+        _raise_if_cancelled(cancel_check)
         if not isinstance(chart, dict):
             continue
         options = _static_group_layer_options_for_chart(chart)
@@ -1629,6 +1661,7 @@ def _build_time_series_charts(
     plotly_visual_settings: dict[str, Any] | None = None,
     include_plotly_specs: bool = True,
     population_layer_mode: str = "auto",
+    cancel_check=None,
 ) -> list[dict[str, Any]]:
     method = aggregation.aggregation_methods[0] if aggregation.aggregation_methods else "mean"
     aggregate_metric = f"{metric.field_name}__{method}"
@@ -1669,6 +1702,7 @@ def _build_time_series_charts(
             _materialize=include_plotly_specs,
         )
         if traces:
+            _raise_if_cancelled(cancel_check)
             charts.append(
                 _chart_payload(
                     chart_id=f"time-series-{metric.field_name}-aggregated",
@@ -1710,6 +1744,7 @@ def _build_time_series_charts(
                     include_plotly_specs=include_plotly_specs,
                 )
                 if hybrid:
+                    _raise_if_cancelled(cancel_check)
                     charts.append(hybrid)
                 return charts
             raw_traces = _time_series_traces(
@@ -1722,6 +1757,7 @@ def _build_time_series_charts(
             )
             raw_traces.extend(overlay_traces)
             if raw_traces:
+                _raise_if_cancelled(cancel_check)
                 charts.append(
                     _chart_payload(
                         chart_id=f"time-series-{metric.field_name}-raw-aggregate",
@@ -3873,13 +3909,16 @@ def _render_dashboard_html(
     *,
     asset_directory_name: str,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    cancel_check=None,
 ) -> str:
     summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     diagnostics = manifest.get("diagnostics") if isinstance(manifest.get("diagnostics"), list) else []
     groupstats = manifest.get("groupstats") if isinstance(manifest.get("groupstats"), dict) else {}
     plotly_charts = _plotly_chart_payloads(charts)
+    _raise_if_cancelled(cancel_check)
     charts_json = json.dumps(plotly_charts, ensure_ascii=False).replace("</", "<\\/")
+    _raise_if_cancelled(cancel_check)
     theme_bootstrap_script = render_dashboard_theme_bootstrap_script()
     dashboard_controls_markup = render_dashboard_control_bar(include_visuals=bool(plotly_charts))
     dashboard_controls_css = render_dashboard_controls_css()
@@ -3995,6 +4034,7 @@ def _render_dashboard_html(
         )
     chart_sections = []
     for chart in charts:
+        _raise_if_cancelled(cancel_check)
         if not isinstance(chart, dict):
             continue
         chart_title = str(chart.get("title") or chart.get("id") or "Chart")

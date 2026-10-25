@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from functools import partial
+import weakref
+
+from PyQt6 import sip
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -80,8 +84,7 @@ from metroliza.ui.worker_progress_dialog import (
 OZNAK_CHECKING_TEXT = "Oznak connector: checking..."
 ANALYTICS_LOADING_TEXT = "Loading industrial cache for CSV Summary..."
 ANALYTICS_LOAD_CANCELED_TEXT = "Loading the industrial cache for CSV Summary was canceled."
-# Upper bound for the GUI thread to wait for an interrupted background thread; a thread that has not
-# stopped by then is detached (it finishes in the background and its result is dropped).
+# Compatibility constant; cancellation no longer joins on the GUI thread.
 BACKGROUND_STOP_WAIT_MS = 2000
 _CACHE_LOAD_ATTEMPTS = 3
 
@@ -112,7 +115,10 @@ class _OznakStatusThread(QThread):
             text = _format_oznak_status(get_oznak_adapter_status())
         except Exception as exc:
             text = f"Unavailable ({exc})"
-        self.status_text_ready.emit(text)
+        if vars(self).get("_defer_delivery", False):
+            self._pending_status = text
+        else:
+            self.status_text_ready.emit(text)
 
 
 class _AnalyticsCacheLoadThread(QThread):
@@ -158,7 +164,13 @@ class _AnalyticsCacheLoadThread(QThread):
             return
         except Exception as exc:
             if not self.isInterruptionRequested():
-                self.failed.emit(self.request_id, exc)
+                if vars(self).get("_defer_delivery", False):
+                    self._pending_error = exc
+                else:
+                    self.failed.emit(self.request_id, exc)
+            return
+        if vars(self).get("_defer_delivery", False):
+            self._pending_result = result
             return
         if self.isInterruptionRequested():
             # Nobody owns the result any more: drop its view from the cache.
@@ -168,6 +180,51 @@ class _AnalyticsCacheLoadThread(QThread):
                 pass
             return
         self.loaded.emit(self.request_id, result)
+
+
+def _release_background_thread(thread_ref, owner_ref) -> None:
+    thread = thread_ref()
+    if thread is not None:
+        try:
+            result = vars(thread).pop("_pending_result", None)
+            if result is not None:
+                cleanup_tabular_load_result(result)
+        finally:
+            owner = owner_ref()
+            if owner is not None and not sip.isdeleted(owner):
+                owner._cache_holding_threads = [held for held in owner._cache_holding_threads if held is not thread]
+            thread.deleteLater()
+
+
+def _deliver_background_thread(owner, thread) -> None:
+    if sip.isdeleted(owner):
+        return
+    if type(thread) is _OznakStatusThread:
+        text = vars(thread).pop("_pending_status", None)
+        if owner._oznak_status_thread is thread and text is not None:
+            owner._on_oznak_status_ready(text)
+        return
+    error = vars(thread).pop("_pending_error", None)
+    has_result = "_pending_result" in vars(thread)
+    result = vars(thread).pop("_pending_result", None)
+    if error is not None:
+        owner._on_analytics_cache_failed(thread.request_id, error)
+    elif has_result:
+        owner._on_analytics_cache_loaded(thread.request_id, result)
+
+
+def _register_background_thread(thread, owner) -> bool:
+    native = type(thread) in (_OznakStatusThread, _AnalyticsCacheLoadThread)
+    if native:
+        thread._defer_delivery = True
+        detached_threads.register(thread, defer_quit=True, owner=owner,
+                                  on_finished=_deliver_background_thread)
+        detached_threads.run_when_finished(
+            (thread,), partial(_release_background_thread, weakref.ref(thread), weakref.ref(owner)))
+    else:
+        detached_threads.register(thread)
+        thread.finished.connect(thread.release)
+    return native
 
 
 class IndustrialDataDialog(QDialog):
@@ -838,9 +895,8 @@ class IndustrialDataDialog(QDialog):
             return
         thread = _OznakStatusThread()
         self._oznak_status_thread = thread
-        detached_threads.register(thread)
+        _register_background_thread(thread, self)
         thread.status_text_ready.connect(self._on_oznak_status_ready)
-        thread.finished.connect(thread.release)
         thread.start()
 
     def _on_oznak_status_ready(self, text: str) -> None:
@@ -859,8 +915,7 @@ class IndustrialDataDialog(QDialog):
             thread.status_text_ready.disconnect(self._on_oznak_status_ready)
         except (TypeError, RuntimeError):
             pass
-        if thread.wait(BACKGROUND_STOP_WAIT_MS):
-            thread.release()
+        thread.requestInterruption()
 
     @staticmethod
     def _format_workflow_strip(
@@ -1039,10 +1094,10 @@ class IndustrialDataDialog(QDialog):
             source_profile_ids=source_profile_ids,
         )
         self._analytics_load_thread = thread
-        detached_threads.register(thread)
+        _register_background_thread(thread, self)
+        self._cache_holding_threads.append(thread)
         thread.loaded.connect(self._on_analytics_cache_loaded)
         thread.failed.connect(self._on_analytics_cache_failed)
-        thread.finished.connect(thread.release)
         self._set_action_buttons_enabled(cache_available=bool(self.db_file))
         thread.start()
         self._analytics_progress_dialog.show()
@@ -1060,7 +1115,7 @@ class IndustrialDataDialog(QDialog):
             progress_dialog.deleteLater()
 
     def _stop_analytics_load(self) -> None:
-        """Invalidate a pending load; interrupt its thread and wait a bounded time for it."""
+        """Invalidate delivery and interrupt the load, retaining its native owner."""
 
         self._analytics_load_request_id += 1
         self._dismiss_analytics_progress_dialog()
@@ -1078,16 +1133,13 @@ class IndustrialDataDialog(QDialog):
             except (TypeError, RuntimeError):
                 pass
         thread.requestInterruption()
-        if thread.wait(BACKGROUND_STOP_WAIT_MS):
-            thread.release()
-        else:
-            # The detached loader may still read the cache file; its removal waits for it.
+        if thread not in self._cache_holding_threads:
             self._cache_holding_threads.append(thread)
 
     def _cleanup_temporary_cache(self, target: IndustrialCacheTarget | None) -> None:
         """Remove a temporary cache once no detached loader can still hold the file open."""
 
-        holding = [thread for thread in self._cache_holding_threads if not thread.isFinished()]
+        holding = [thread for thread in self._cache_holding_threads if detached_threads.is_registered(thread)]
         self._cache_holding_threads = holding
         if not holding:
             cleanup_temporary_industrial_cache(target)
@@ -1140,7 +1192,8 @@ class IndustrialDataDialog(QDialog):
             presentation_mode="industrial_cache",
         )
         self.analytics_window.exec()
-        self.refresh_status()
+        if not sip.isdeleted(self):
+            self.refresh_status()
 
     def open_links_dialog(self) -> None:
         if not self.report_db_file:
@@ -1356,7 +1409,7 @@ class IndustrialDataDialog(QDialog):
         self.setTabOrder(self.links_button, self.close_button)
 
     def _stop_background_threads(self) -> None:
-        """Stop the CSV Summary cache load and the Oznak check with a bounded wait."""
+        """Cancel background delivery without joining either worker on the GUI thread."""
 
         self._stop_analytics_load()
         self._stop_oznak_status_check()

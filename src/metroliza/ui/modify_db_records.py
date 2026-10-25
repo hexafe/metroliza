@@ -12,12 +12,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
+import weakref
 from typing import Any
 
 from PyQt6.QtCore import QAbstractTableModel, QCoreApplication, QModelIndex, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QTableView, QWidget
 
 from metroliza.reports.db import iter_sql_query_batches
+from metroliza.ui import detached_threads
 
 
 FIELD_SEPARATOR = "\x1f"
@@ -364,51 +367,102 @@ class RecordLoadThread(QThread):
                 defer_haystack=self._defer_haystack,
             )
         except Exception as exc:  # worker boundary: report instead of killing the thread
-            self.failed.emit(self._kind, self._generation, exc)
+            if vars(self).get("_defer_delivery", False):
+                self._pending_delivery = ("failed", exc)
+            else:
+                self.failed.emit(self._kind, self._generation, exc)
             return
         if rows is not None:
-            self.loaded.emit(self._kind, self._generation, rows)
+            if vars(self).get("_defer_delivery", False):
+                self._pending_delivery = ("loaded", rows)
+            else:
+                self.loaded.emit(self._kind, self._generation, rows)
 
 
+_NATIVE_RECORD_CLASS = RecordLoadThread
+_NATIVE_RECORD_RUN = RecordLoadThread.run
+_NATIVE_RECORD_INIT = RecordLoadThread.__init__
 _ACTIVE_LOAD_THREADS: set[RecordLoadThread] = set()
 _QUIT_HOOK_APPS: list[Any] = []
 
 
 def cancel_load_thread(thread: RecordLoadThread | None, *, wait_ms: int = 3000) -> None:
-    """Cancel SQL and join the worker before its owner or the application can shut down.
+    """Request cancellation without joining on the GUI thread.
 
-    Normal SQLite execution and lock waits cooperate promptly. A SQLite extension may be
-    uninterruptible: if it exceeds the normal wait, defer shutdown until it returns rather
-    than allowing interpreter teardown with a live QThread.
+    Outside the application thread, preserve the public bounded wait followed by
+    completion. GUI consumers retain native ownership and delivery acknowledgement
+    asynchronously until noncooperative SQL actually returns.
     """
-
-    if thread is None:
-        return
-    thread.requestInterruption()
-    if not thread.wait(wait_ms):
-        thread.wait()
+    if thread is not None:
+        app = QCoreApplication.instance()
+        if app is None or QThread.currentThread() != app.thread():
+            thread.requestInterruption()
+            if not thread.wait(wait_ms):
+                thread.wait()
+            return
+        if isinstance(thread, QThread) and not detached_threads.is_registered(thread):
+            # Direct-start callers keep their signal and deletion ownership. Retain only
+            # native lifetime here; already-finished threads need polling, not a lost signal.
+            _ACTIVE_LOAD_THREADS.add(thread)
+            detached_threads.register(thread, defer_quit=True)
+            detached_threads.run_when_finished(
+                (thread,), partial(_release_record_load, weakref.ref(thread), delete=False))
+            detached_threads.discard(thread)
+        thread.requestInterruption()
 
 
 def shutdown_load_threads() -> None:
-    """Stop every running record fetch (application exit must not destroy a running QThread)."""
-
-    threads = list(_ACTIVE_LOAD_THREADS)
-    for thread in threads:
-        thread.requestInterruption()
-    for thread in threads:
+    """Request cancellation; the shared native-completion owner defers normal Quit."""
+    for thread in tuple(_ACTIVE_LOAD_THREADS):
         cancel_load_thread(thread)
 
 
-def start_load_thread(thread: RecordLoadThread) -> None:
-    """Start ``thread`` and keep it alive until it has finished, whatever happens to its dialog."""
+def _release_record_load(thread_ref, *, delete=True) -> None:
+    thread = thread_ref()
+    if thread is not None:
+        _ACTIVE_LOAD_THREADS.discard(thread)
+        if delete:
+            vars(thread).pop("_pending_delivery", None)
+            thread.deleteLater()
 
+
+def start_load_thread(thread: RecordLoadThread, *, owner=None, on_finished=None) -> None:
+    """Start a public worker without changing signal order or deletion ownership.
+
+    Only an explicit native GUI consumer may opt into deferred result delivery and
+    cleanup through ``on_finished(owner, thread)``; that callback must consume the
+    pending result synchronously, including any nested modal return.
+    """
     app = QCoreApplication.instance()
-    if app is not None and not any(app is hooked for hooked in _QUIT_HOOK_APPS):
+    if app is None or not isinstance(thread, QThread):
+        # Preserve direct/headless and custom test workers without requiring a GUI owner.
+        _ACTIVE_LOAD_THREADS.add(thread)
+        thread.finished.connect(partial(_release_record_load, weakref.ref(thread), delete=False))
+        thread.start()
+        return
+    if not any(app is hooked for hooked in _QUIT_HOOK_APPS):
         _QUIT_HOOK_APPS.append(app)
         app.aboutToQuit.connect(shutdown_load_threads)
     _ACTIVE_LOAD_THREADS.add(thread)
-    thread.finished.connect(lambda: _ACTIVE_LOAD_THREADS.discard(thread))
+    native_delivery = _managed_record_delivery(thread, owner, on_finished)
+    if native_delivery:
+        thread._defer_delivery = True
+        detached_threads.register(thread, defer_quit=True, owner=owner, on_finished=on_finished)
+    else:
+        detached_threads.register(thread, defer_quit=True)
+    detached_threads.run_when_finished(
+        (thread,), partial(_release_record_load, weakref.ref(thread), delete=native_delivery))
     thread.start()
+
+
+_NATIVE_RECORD_START = start_load_thread
+
+
+def _managed_record_delivery(thread, owner, callback) -> bool:
+    return (owner is not None and callback is not None
+            and type(thread) is _NATIVE_RECORD_CLASS and "run" not in vars(thread)
+            and _NATIVE_RECORD_CLASS.__dict__.get("run") is _NATIVE_RECORD_RUN
+            and _NATIVE_RECORD_CLASS.__dict__.get("__init__") is _NATIVE_RECORD_INIT)
 
 
 @dataclass

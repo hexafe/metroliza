@@ -1085,3 +1085,34 @@ def test_grouping_snapshot_survives_load_recursion_with_same_rows(monkeypatch, t
     assert list(data['GROUP']) == ['B', 'Rest']
     assert list(data['length_mm']) == [10, 20]
     assert Path(result.html_dashboard_path).stat().st_size > 0
+
+
+@pytest.mark.parametrize("stage", ["manifest", "writer"])
+def test_dashboard_cancellation_is_forwarded_and_translated(monkeypatch, tmp_path, stage):
+    from metroliza.industrial.industrial_analytics_dashboard import DashboardCancelled
+    entered = []
+    def never_cancel():
+        return False
+    def build(**kwargs):
+        assert kwargs["cancel_check"] is never_cancel
+        entered.append("manifest")
+        if stage == "manifest":
+            raise DashboardCancelled("manifest stopped")
+        return {}
+    def write(*args, **kwargs):
+        assert kwargs["cancel_check"] is never_cancel
+        entered.append("writer")
+        Path(args[1]).write_text("partial")
+        raise DashboardCancelled("writer stopped")
+    monkeypatch.setattr(workflow_module, "build_production_dashboard_manifest", build)
+    monkeypatch.setattr(workflow_module, "write_production_dashboard", write)
+    with pytest.raises(AnalyticsCancelled, match="stopped"):
+        workflow_module._write_dashboard(
+            frame=pd.DataFrame({"v": [1.]}), metrics=(),
+            aggregation=ProductionAggregationState(), aggregated=None,
+            groupstats=workflow_module.ProductionGroupstatsResult(),
+            charts=ProductionChartSelection(), cohort=ReferenceCohortState(), diagnostics=(),
+            output_dashboard_file=str(tmp_path / "result.html"),
+            dashboard_title="Title", dashboard_subtitle="Subtitle", cancel_check=never_cancel)
+    assert entered == (["manifest"] if stage == "manifest" else ["manifest", "writer"])
+    assert not list(tmp_path.iterdir())

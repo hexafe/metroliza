@@ -5,6 +5,7 @@ from copy import deepcopy
 import ast
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -404,3 +405,58 @@ def test_writer_complete_consumed_output(dashboard, monkeypatch, tmp_path, mode,
         (destination / "consumed.json").write_text(json.dumps(
             {"manifest": consumed[0], "result": result, "assets": assets},
             ensure_ascii=False, sort_keys=True, allow_nan=True), encoding="utf-8")
+
+
+def test_uncancelled_writer_literal_outputs_and_input_state(dashboard, monkeypatch, tmp_path):
+    """Cancellation work must preserve every consumed byte and the caller's manifest."""
+    manifest = _manifest()
+    before = deepcopy(manifest)
+    monkeypatch.setattr(dashboard, "perf_counter", lambda: 0.0)
+    results, outputs = [], []
+    for name in ("first", "second"):
+        root = tmp_path / name
+        result = dashboard.write_production_dashboard(manifest, root / "dashboard.html")
+        results.append({key: Path(value).name if key.endswith("_path") else value
+                        for key, value in result.items()})
+        outputs.append({str(path.relative_to(root)): path.read_bytes()
+                        for path in root.rglob("*") if path.is_file()})
+    assert results[0] == results[1]
+    assert outputs[0] == outputs[1]
+    assert manifest == before
+
+
+@pytest.mark.parametrize("stage", ["manifest", "serialization", "render"])
+def test_cancel_after_real_dashboard_stage_stops_later_work(dashboard, monkeypatch, tmp_path, stage):
+    entered = []
+    if stage == "manifest":
+        def chart(*args, **kwargs):
+            entered.append("chart")
+            return {"id": "first"}
+        monkeypatch.setattr(dashboard, "_build_histogram_chart", chart)
+        with pytest.raises(RuntimeError):
+            dashboard.build_production_dashboard_manifest(
+                frame=pd.DataFrame({"v": [1., 2.], "w": [3., 4.]}),
+                metric_selection=(dashboard.ProductionMetricSelection("v"),
+                                  dashboard.ProductionMetricSelection("w")),
+                chart_selection=dashboard.ProductionChartSelection(
+                    time_series=False, histogram=True, violin=False, box=False),
+                **({"cancel_check": lambda: bool(entered)}
+                   if "cancel_check" in inspect.signature(dashboard.build_production_dashboard_manifest).parameters
+                   else {}),
+            )
+        assert entered == ["chart"]
+    else:
+        helper = "_measure_plotly_spec_json_bytes" if stage == "serialization" else "_render_chart_section"
+        original = getattr(dashboard, helper)
+        def observed(*args, **kwargs):
+            entered.append(stage)
+            return original(*args, **kwargs)
+        monkeypatch.setattr(dashboard, helper, observed)
+        with pytest.raises(RuntimeError):
+            dashboard.write_production_dashboard(
+                _manifest(), tmp_path / "cancelled.html",
+                **({"cancel_check": lambda: bool(entered)}
+                   if "cancel_check" in inspect.signature(dashboard.write_production_dashboard).parameters
+                   else {}))
+        assert entered == [stage]
+        assert not (tmp_path / "cancelled.html").exists()
