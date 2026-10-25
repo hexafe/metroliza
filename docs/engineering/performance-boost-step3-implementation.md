@@ -137,6 +137,35 @@ comparisons remain useful correctness evidence, without turning their timings in
 The final four-stage Polish report must distinguish measured seconds and reductions from PENDING
 or incomparable cells and preserve the stated common-flow set and aggregate weights.
 
+### PO amendment — C01 import runtime timestamps (2026-10-25)
+
+Authority: [explicit narrow C01 approval](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6399420191).
+This is the sole additional exception to the comparator freeze above. Independently generated
+`101e5a44` full imports differ in deliberately generated persistence timestamps. The unchanged
+comparator's failed A/A result and the excluded f02 timing series remain retained.
+
+Allow a named, explicitly enabled import-only comparison exception at exactly these locations:
+`parsed_reports.created_at`, `parsed_reports.updated_at`,
+`report_metadata_candidates.created_at`, `report_metadata_warnings.created_at`,
+`report_parse_state.updated_at`, `source_file_locations.discovered_at` and
+`source_files.discovered_at`. Validate the timestamp type and exact UTC format and the declared
+import database/schema scope. Require the explicit `--import-runtime-timestamps` option together
+with `--sqlite`, literal paired `import.sqlite` filenames and the canonical eight-core-table import
+schema binding. Keep the default comparison strict. All other columns, row counts,
+types, ordering, schema objects and output files remain literal. Do not change product persistence.
+Require calendar-valid `YYYY-MM-DD HH:MM:SS` UTC only for `report_parse_state.updated_at`,
+which baseline SQLite writes with `CURRENT_TIMESTAMP`; require `YYYY-MM-DDTHH:MM:SSZ` only
+for the other six locations written by baseline `utc_timestamp()`. Reject cross-location formats.
+
+Prove each allowed location and negative cases for the same timestamp pattern elsewhere,
+malformed/null values, changed measurements/metadata/JSON and changed schema. Permit only the
+necessary comparator, existing tests, T28 caller/binding and this plan update. Resource controllers,
+supervision, admission gates, probes, numerical settings and all other frozen tools stay unchanged.
+C01 has a separately approved maximum of one FULL1 and one DELTA1 review; preserve all earlier
+packet/resource review receipts and exhausted budgets without resetting them. Focused tests,
+MUST-7, full-output A/A and A/B checks and required integration/CI remain mandatory. Excluded
+timings never become accepted because output comparison later succeeds.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).

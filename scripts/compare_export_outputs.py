@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import ast
 from contextlib import closing, contextmanager
+from datetime import datetime
+import hashlib
+import json
 import html
 from html.parser import HTMLParser
 from itertools import zip_longest
@@ -33,6 +36,27 @@ SHEET_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 CSV_SUMMARY_CODE = "tabular_sqlite_store_created"
+# C01: the report-import v1 table declarations, including PK/FK/type/NOT NULL/CHECK
+# constraints, as stored by SQLite. Serialize ordered (name, sql) pairs as compact
+# ASCII JSON before hashing. This is a frozen contract, not a live product import;
+# a new report schema requires a separately admitted comparator contract.
+IMPORT_SCHEMA_TABLES = frozenset({
+    "parsed_reports", "report_metadata", "report_measurements", "report_metadata_candidates",
+    "report_metadata_warnings", "report_parse_state", "source_file_locations", "source_files",
+})
+IMPORT_SCHEMA_SHA256 = "b9026389095aa17b27269c3d51c34356bc49e729303b5b993791ee09bf441ce0"
+IMPORT_RUNTIME_TIMESTAMPS = {
+    "parsed_reports": frozenset({"created_at", "updated_at"}),
+    "report_metadata_candidates": frozenset({"created_at"}),
+    "report_metadata_warnings": frozenset({"created_at"}),
+    "report_parse_state": frozenset({"updated_at"}),
+    "source_file_locations": frozenset({"discovered_at"}),
+    "source_files": frozenset({"discovered_at"}),
+}
+IMPORT_UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
+# report_schema.upsert_report_parse_state uses SQLite CURRENT_TIMESTAMP (UTC),
+# whereas the other six locations use report_repository.utc_timestamp().
+IMPORT_SQLITE_UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\Z")
 
 
 def _plain_shared_text(strings, index):
@@ -246,14 +270,39 @@ def _ordered_table_query(table: str, columns: list[str]) -> str:
                      ", ".join(_identifier(column) for column in columns)))
 
 
-def _table_difference(a, b, name):
+def _import_schema_scope(schema):
+    tables = sorted((name, sql) for kind, name, _table, sql in schema
+                    if kind == "table" and name in IMPORT_SCHEMA_TABLES)
+    encoded = json.dumps(tables, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    if hashlib.sha256(encoded).hexdigest() != IMPORT_SCHEMA_SHA256:
+        raise ValueError("import runtime timestamps require the canonical report-import v1 schema")
+
+
+def _import_row_values(row, timestamp_columns):
+    for index, name in timestamp_columns.items():
+        value = row[index]
+        pattern = (IMPORT_SQLITE_UTC_TIMESTAMP if name == "report_parse_state.updated_at"
+                   else IMPORT_UTC_TIMESTAMP)
+        if type(value) is not str or not pattern.fullmatch(value):
+            raise ValueError(f"invalid import runtime timestamp at {name}: unexpected UTC text format")
+        # Regex enforces each writer's exact format; datetime rejects impossible dates/times.
+        datetime.fromisoformat(value.removesuffix("Z"))
+    return tuple(value for index, value in enumerate(row) if index not in timestamp_columns)
+
+
+def _table_difference(a, b, name, *, import_runtime_timestamps=False):
     columns = a.execute("SELECT * FROM pragma_table_info(?)", (name,)).fetchall()
     keys = [row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5]]
     query = _ordered_table_query(name, keys or [row[1] for row in columns])
+    allowed = IMPORT_RUNTIME_TIMESTAMPS.get(name, ()) if import_runtime_timestamps else ()
+    timestamp_columns = {row[0]: f"{name}.{row[1]}" for row in columns if row[1] in allowed}
     missing = object()
     for index, (x, y) in enumerate(zip_longest(a.execute(query), b.execute(query), fillvalue=missing)):
-        if x != y or (x is not missing and y is not missing
-                      and tuple(map(type, x)) != tuple(map(type, y))):
+        if x is missing or y is missing:
+            return f"SQLite table {name}: row {index} differs"
+        if timestamp_columns:
+            x, y = (_import_row_values(row, timestamp_columns) for row in (x, y))
+        if x != y or tuple(map(type, x)) != tuple(map(type, y)):
             return f"SQLite table {name}: row {index} differs"
     return None
 
@@ -283,7 +332,7 @@ def _sqlite_read_copy(path):
             yield connection
 
 
-def _sqlite_difference(left: Path, right: Path) -> str | None:
+def _sqlite_difference(left: Path, right: Path, *, import_runtime_timestamps=False) -> str | None:
     with _sqlite_read_copy(left) as a, _sqlite_read_copy(right) as b:
         a.execute("BEGIN")
         b.execute("BEGIN")
@@ -293,8 +342,11 @@ def _sqlite_difference(left: Path, right: Path) -> str | None:
         for index, (x, y) in enumerate(zip_longest(schema, b.execute(catalog).fetchall())):
             if x != y:
                 return f"SQLite schema object {index} differs: {x[:3] if x else None}, {y[:3] if y else None}"
+        if import_runtime_timestamps:
+            _import_schema_scope(schema)
         for kind, name, _table, _sql in schema:
-            difference = _table_difference(a, b, name) if kind == "table" else None
+            difference = _table_difference(a, b, name,
+                import_runtime_timestamps=import_runtime_timestamps) if kind == "table" else None
             if difference:
                 return difference
     return None
@@ -406,7 +458,8 @@ def _html_difference(left, right, pair):
     return _bytes_difference(*(_html_without_times(value) for value in values))
 
 
-def _directory_difference(left, right, *, sqlite, csv_summary_temp_root=None):
+def _directory_difference(left, right, *, sqlite, csv_summary_temp_root=None,
+                          import_runtime_timestamps=False):
     pair = _generation_pair(left, right)
     difference = _asset_difference(pair)
     if difference:
@@ -419,7 +472,8 @@ def _directory_difference(left, right, *, sqlite, csv_summary_temp_root=None):
         raise ValueError("no outputs to compare")
     for name in a:
         difference = _file_difference(left / name, right / name, sqlite=sqlite, pair=pair,
-                                      csv_summary_temp_root=csv_summary_temp_root)
+                                      csv_summary_temp_root=csv_summary_temp_root,
+                                      import_runtime_timestamps=import_runtime_timestamps and name == Path("import.sqlite"))
         if difference:
             return f"{name}: {difference}"
     return None
@@ -431,28 +485,38 @@ def _ordinary_files(root, generation):
 
 
 def compare_outputs(left: Path, right: Path, *, sqlite: bool = False,
-                    csv_summary_temp_root: str | Path | None = None) -> str | None:
+                    csv_summary_temp_root: str | Path | None = None,
+                    import_runtime_timestamps: bool = False) -> str | None:
     """Return the first difference; errors propagate to the fail-closed CLI."""
+    if import_runtime_timestamps:
+        if not sqlite:
+            raise ValueError("import runtime timestamps require SQLite comparison")
+        imports = [path / "import.sqlite" if path.is_dir() else path for path in (left, right)]
+        if any(path.name != "import.sqlite" or not path.is_file() for path in imports):
+            raise ValueError("import runtime timestamps require paired import.sqlite files at the comparison root")
     if not left.exists() or not right.exists():
         raise FileNotFoundError("both comparison inputs must exist")
     if left.is_dir() != right.is_dir():
         return "input types differ"
     if left.is_dir():
-        return _directory_difference(left, right, sqlite=sqlite, csv_summary_temp_root=csv_summary_temp_root)
+        return _directory_difference(left, right, sqlite=sqlite, csv_summary_temp_root=csv_summary_temp_root,
+                                     import_runtime_timestamps=import_runtime_timestamps)
     pair = _generation_pair(left.parent, right.parent) if left.suffix.lower() in {".html", ".htm"} else None
     difference = _asset_difference(pair)
     return difference or _file_difference(left, right, sqlite=sqlite, pair=pair,
-                                          csv_summary_temp_root=csv_summary_temp_root)
+                                          csv_summary_temp_root=csv_summary_temp_root,
+                                          import_runtime_timestamps=import_runtime_timestamps)
 
 
-def _file_difference(left, right, *, sqlite, pair, csv_summary_temp_root=None):
+def _file_difference(left, right, *, sqlite, pair, csv_summary_temp_root=None,
+                     import_runtime_timestamps=False):
     if left.suffix.lower() != right.suffix.lower():
         return "output formats differ"
     suffix = left.suffix.lower()
     if suffix == ".xlsx":
         return _xlsx_difference(left, right, csv_summary_temp_root=csv_summary_temp_root)
     if sqlite and suffix in {".sqlite", ".sqlite3", ".db"}:
-        return _sqlite_difference(left, right)
+        return _sqlite_difference(left, right, import_runtime_timestamps=import_runtime_timestamps)
     if suffix in {".html", ".htm"}:
         return _html_difference(left, right, pair)
     return _bytes_difference(left.read_bytes(), right.read_bytes())
@@ -464,6 +528,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("right", type=Path)
     parser.add_argument("--sqlite", action="store_true",
                         help="compare SQLite schema objects and table rows in primary-key order")
+    parser.add_argument("--import-runtime-timestamps", action="store_true",
+                        help="C01 opt-in: validate and ignore only seven import runtime UTC fields in "
+                             "paired import.sqlite files with canonical report-import v1 tables; requires --sqlite")
     parser.add_argument("--csv-summary-temp-root",
                         help="recorded common temp root for the single CSV Summary Diagnostics context basename")
     parser.add_argument("--baseline-control", action="store_true",
@@ -471,7 +538,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         difference = compare_outputs(args.left, args.right, sqlite=args.sqlite,
-                                     csv_summary_temp_root=args.csv_summary_temp_root)
+                                     csv_summary_temp_root=args.csv_summary_temp_root,
+                                     import_runtime_timestamps=args.import_runtime_timestamps)
     except Exception as error:  # noqa: BLE001 - comparison errors are failures, never equality
         print(f"comparison failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

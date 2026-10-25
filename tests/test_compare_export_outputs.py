@@ -561,3 +561,258 @@ def test_recorded_temp_root_accepts_explicit_host_path_object(tmp_path):
     for path, nonce in zip(paths, ('a1b2c3d4', 'd4c3b2a1')):
         _write_csv_summary(path, _csv_summary_members(root, nonce, separator=sep))
     assert compare_outputs(*paths, csv_summary_temp_root=root) is None
+
+
+IMPORT_TIMESTAMP_LOCATIONS = (
+    ('parsed_reports', 'created_at'), ('parsed_reports', 'updated_at'),
+    ('report_metadata_candidates', 'created_at'), ('report_metadata_warnings', 'created_at'),
+    ('report_parse_state', 'updated_at'), ('source_file_locations', 'discovered_at'),
+    ('source_files', 'discovered_at'),
+)
+IMPORT_TIME = '2026-01-02T03:04:05Z'
+OTHER_IMPORT_TIME = '2026-02-03T04:05:06Z'
+IMPORT_SQLITE_TIME = '2026-01-02 03:04:05'
+OTHER_IMPORT_SQLITE_TIME = '2026-02-03 04:05:06'
+
+
+def _import_pair(tmp_path):
+    """Independent synthetic imports using the product's declared report schema."""
+    from metroliza.reports.report_schema import (
+        SCHEMA_INDEX_STATEMENTS, SCHEMA_TABLE_STATEMENTS, SCHEMA_VIEW_STATEMENTS,
+    )
+
+    paths = tuple(tmp_path / side / 'import.sqlite' for side in ('a', 'b'))
+    for path in paths:
+        path.parent.mkdir()
+        with closing(sqlite3.connect(path)) as connection:
+            for statement in (*SCHEMA_TABLE_STATEMENTS, *SCHEMA_INDEX_STATEMENTS,
+                              *SCHEMA_VIEW_STATEMENTS):
+                connection.execute(statement)
+            connection.executemany('INSERT INTO app_schema VALUES (?, ?)', [
+                ('schema_version', 'report_metadata_v1'), ('source_location_ownership_version', '1')])
+            for index in (1, 2):
+                connection.execute('INSERT INTO source_files '
+                    '(id, sha256, source_format, discovered_at) VALUES (?, ?, ?, ?)',
+                    (index, str(index) * 64, 'pdf', IMPORT_TIME))
+                connection.execute('INSERT INTO source_file_locations '
+                    '(id, source_file_id, absolute_path, directory_path, file_name, file_extension, '
+                    'discovered_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (index, index, f'/synthetic/{index}.pdf', '/synthetic', f'{index}.pdf', '.pdf', IMPORT_TIME))
+                connection.execute('INSERT INTO parsed_reports '
+                    '(id, source_file_id, parser_id, template_family, parse_status, created_at, updated_at, '
+                    'raw_report_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    (index, index, 'synthetic', 'synthetic', 'parsed', IMPORT_TIME, IMPORT_TIME,
+                     '{"created_at":"' + IMPORT_TIME + '"}'))
+                connection.execute('INSERT INTO report_metadata '
+                    '(report_id, metadata_version, report_date, metadata_json) VALUES (?, ?, ?, ?)',
+                    (index, 'report_metadata_v1', IMPORT_TIME, '{"time":"' + IMPORT_TIME + '"}'))
+                connection.execute('INSERT INTO report_measurements '
+                    '(id, report_id, row_order, meas, status_code, description) VALUES (?, ?, ?, ?, ?, ?)',
+                    (index, index, 1, 1.25, 'ok', IMPORT_TIME))
+                connection.execute('INSERT INTO report_metadata_candidates '
+                    '(id, report_id, field_name, source_type, rule_id, confidence, created_at) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    (index, index, 'reference', 'synthetic', 'synthetic', 1.0, IMPORT_TIME))
+                connection.execute('INSERT INTO report_metadata_warnings '
+                    '(id, report_id, code, severity, message, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                    (index, index, 'synthetic', 'info', 'synthetic', IMPORT_TIME))
+                connection.execute('INSERT INTO report_parse_state (report_id, updated_at) VALUES (?, ?)',
+                                   (index, IMPORT_SQLITE_TIME))
+            connection.commit()
+    return paths
+
+
+def _import_update(path, table, column, value):
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(f'UPDATE "{table}" SET "{column}" = ?', (value,))
+        connection.commit()
+
+
+@pytest.mark.parametrize('table,column', IMPORT_TIMESTAMP_LOCATIONS)
+def test_import_default_strict_equivalence_and_timestamp_control(tmp_path, table, column):
+    paths = _import_pair(tmp_path)
+    args = [str(path) for path in paths] + ['--sqlite', '--baseline-control']
+    assert main(args) == 0
+    _import_update(paths[1], table, column,
+                   OTHER_IMPORT_SQLITE_TIME if table == 'report_parse_state' else OTHER_IMPORT_TIME)
+    assert main(args) == 1
+
+
+@pytest.mark.parametrize('table,column', IMPORT_TIMESTAMP_LOCATIONS)
+def test_import_runtime_timestamp_explicit_opt_in(tmp_path, table, column):
+    import hashlib
+
+    paths = _import_pair(tmp_path)
+    _import_update(paths[1], table, column,
+                   OTHER_IMPORT_SQLITE_TIME if table == 'report_parse_state' else OTHER_IMPORT_TIME)
+    before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 0
+    assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths} == before
+    assert sorted(path.name for path in paths[0].parent.iterdir()) == ['import.sqlite']
+    assert sorted(path.name for path in paths[1].parent.iterdir()) == ['import.sqlite']
+
+
+def test_import_runtime_timestamps_api_and_directory_cli(tmp_path):
+    paths = _import_pair(tmp_path)
+    for table, column in IMPORT_TIMESTAMP_LOCATIONS:
+        _import_update(paths[1], table, column,
+                   OTHER_IMPORT_SQLITE_TIME if table == 'report_parse_state' else OTHER_IMPORT_TIME)
+    assert compare_outputs(*paths, sqlite=True)
+    assert compare_outputs(*paths, sqlite=True, import_runtime_timestamps=True) is None
+    roots = [path.parent for path in paths]
+    assert main([str(root) for root in roots] + ['--sqlite', '--import-runtime-timestamps',
+                                               '--baseline-control']) == 0
+    # Another DB and every ordinary file remain literal under the directory opt-in.
+    for path in paths:
+        with closing(sqlite3.connect(path.parent / 'other.sqlite')) as connection:
+            connection.execute('CREATE TABLE source_files (id INTEGER PRIMARY KEY, discovered_at TEXT)')
+            connection.execute('INSERT INTO source_files VALUES (1, ?)', (IMPORT_TIME,))
+            connection.commit()
+    _import_update(roots[1] / 'other.sqlite', 'source_files', 'discovered_at', OTHER_IMPORT_TIME)
+    assert main([str(root) for root in roots] + ['--sqlite', '--import-runtime-timestamps']) == 1
+
+
+@pytest.mark.parametrize('table,column', IMPORT_TIMESTAMP_LOCATIONS)
+@pytest.mark.parametrize('bad', [None, 0, 1.25, IMPORT_TIME.encode(), '',
+    '2026-01-02 03:04:05Z', '2026-01-02T03:04:05+00:00', '2026-01-02T03:04:05.000000Z',
+    '2026-01-02T03:04:05', '2026-02-29T03:04:05Z', '2026-01-02T24:00:00Z',
+    '2026-01-02T03:04:60Z', '0000-01-02T03:04:05Z', '２０２６-01-02T03:04:05Z',
+    '2026-01-02T03:04:05Z\n'])
+def test_import_runtime_timestamp_rejects_invalid_even_when_equal(tmp_path, table, column, bad):
+    paths = _import_pair(tmp_path)
+    for path in paths:
+        if bad is None:
+            # Simulate persisted corrupt NULL despite NOT NULL, then restore the exact
+            # catalog. Merely changing the schema would not reach value validation.
+            with closing(sqlite3.connect(path)) as connection:
+                original = connection.execute('SELECT sql FROM sqlite_master WHERE name=?',
+                                              (table,)).fetchone()[0]
+                connection.execute('PRAGMA writable_schema=ON')
+                connection.execute('UPDATE sqlite_master SET sql=? WHERE name=?',
+                                   (original.replace(column + ' TEXT NOT NULL', column + ' TEXT'), table))
+                connection.commit()
+            _import_update(path, table, column, None)
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute('PRAGMA writable_schema=ON')
+                connection.execute('UPDATE sqlite_master SET sql=? WHERE name=?', (original, table))
+                connection.commit()
+        else:
+            _import_update(path, table, column, bad)
+    # Unchanged invalid values are rejected too; equality cannot bypass validation.
+    assert main([str(path) for path in paths] + ['--sqlite']) == 0
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 2
+
+
+@pytest.mark.parametrize('table,column,value', [
+    ('parsed_reports', 'parse_started_at', OTHER_IMPORT_TIME),
+    ('parsed_reports', 'raw_report_json', '{"created_at":"' + OTHER_IMPORT_TIME + '"}'),
+    ('source_files', 'ingested_at', OTHER_IMPORT_TIME),
+    ('report_metadata', 'report_date', OTHER_IMPORT_TIME),
+    ('report_metadata', 'metadata_json', '{"time":"' + OTHER_IMPORT_TIME + '"}'),
+    ('report_metadata_candidates', 'raw_value', OTHER_IMPORT_TIME),
+    ('report_metadata_warnings', 'details_json', '{"created_at":"' + OTHER_IMPORT_TIME + '"}'),
+    ('report_measurements', 'description', OTHER_IMPORT_TIME),
+    ('report_measurements', 'meas', 1.2500000000000002),
+])
+def test_import_runtime_timestamps_leave_all_other_values_literal(tmp_path, table, column, value):
+    paths = _import_pair(tmp_path)
+    for timestamp_table, timestamp_column in IMPORT_TIMESTAMP_LOCATIONS:
+        _import_update(paths[1], timestamp_table, timestamp_column,
+                       OTHER_IMPORT_SQLITE_TIME if timestamp_table == 'report_parse_state' else OTHER_IMPORT_TIME)
+    _import_update(paths[1], table, column, value)
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 1
+
+
+@pytest.mark.parametrize('left_value,right_value', [(IMPORT_TIME, OTHER_IMPORT_TIME), (None, 0), (0, 0.0)])
+def test_import_opt_in_preserves_unlisted_table_values_and_storage_types(tmp_path, left_value, right_value):
+    paths = _import_pair(tmp_path)
+    for path, value in zip(paths, (left_value, right_value)):
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute('CREATE TABLE extra (id INTEGER PRIMARY KEY, created_at)')
+            connection.execute('INSERT INTO extra VALUES (1, ?)', (value,))
+            connection.commit()
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 1
+
+
+@pytest.mark.parametrize('statement', [
+    'DELETE FROM report_metadata_candidates WHERE id=2',
+    'INSERT INTO report_parse_state(report_id,updated_at) VALUES (3, "2026-01-02T03:04:05Z")',
+    'UPDATE report_measurements SET id=3 WHERE id=2',
+    'DROP INDEX idx_report_measurements_report',
+    'DROP VIEW vw_report_overview',
+    'CREATE TRIGGER extra_guard BEFORE INSERT ON source_files BEGIN SELECT 1; END',
+    'ALTER TABLE parsed_reports ADD COLUMN extra TEXT',
+])
+def test_import_opt_in_rejects_count_order_and_catalog_changes(tmp_path, statement):
+    paths = _import_pair(tmp_path)
+    with closing(sqlite3.connect(paths[1])) as connection:
+        connection.execute(statement)
+        connection.commit()
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 1
+
+
+@pytest.mark.parametrize('change', ['column', 'type', 'missing', 'arbitrary'])
+def test_import_opt_in_requires_canonical_schema_even_when_both_sides_match(tmp_path, change):
+    paths = _import_pair(tmp_path)
+    for path in paths:
+        with closing(sqlite3.connect(path)) as connection:
+            if change == 'column':
+                connection.execute('ALTER TABLE parsed_reports ADD COLUMN extra TEXT')
+            elif change == 'missing':
+                connection.execute('DROP TABLE report_measurements')
+            elif change == 'type':
+                connection.execute('PRAGMA writable_schema=ON')
+                connection.execute("UPDATE sqlite_master SET sql=replace(sql, 'created_at TEXT', "
+                                   "'created_at BLOB') WHERE name='parsed_reports'")
+            else:
+                connection.execute('DROP TABLE parsed_reports')
+                connection.execute('CREATE TABLE parsed_reports '
+                                   '(id INTEGER PRIMARY KEY, created_at TEXT, updated_at TEXT)')
+                connection.execute('INSERT INTO parsed_reports VALUES (1, ?, ?)', (IMPORT_TIME, IMPORT_TIME))
+            connection.commit()
+    assert main([str(path) for path in paths] + ['--sqlite']) == 0
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 2
+
+
+def test_import_opt_in_requires_sqlite_and_exact_root_filename(tmp_path):
+    paths = _import_pair(tmp_path)
+    with pytest.raises(ValueError, match='require SQLite'):
+        compare_outputs(*paths, import_runtime_timestamps=True)
+    assert main([str(path) for path in paths] + ['--import-runtime-timestamps']) == 2
+    for path in paths:
+        path.rename(path.with_name('other.sqlite'))
+    wrong_paths = [path.with_name('other.sqlite') for path in paths]
+    with pytest.raises(ValueError, match='paired import.sqlite'):
+        compare_outputs(*wrong_paths, sqlite=True, import_runtime_timestamps=True)
+    assert main([str(path) for path in wrong_paths] + ['--sqlite', '--import-runtime-timestamps']) == 2
+    assert main([str(path.parent) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 2
+
+
+def test_import_timestamp_validation_accepts_leap_day_and_preserves_second_precision(tmp_path):
+    paths = _import_pair(tmp_path)
+    for path, value in zip(paths, ('2024-02-29T00:00:00Z', '2026-12-31T23:59:59Z')):
+        for table, column in IMPORT_TIMESTAMP_LOCATIONS:
+            _import_update(path, table, column, value.replace('T', ' ').removesuffix('Z')
+                           if table == 'report_parse_state' else value)
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 0
+
+
+@pytest.mark.parametrize('table,column', IMPORT_TIMESTAMP_LOCATIONS)
+def test_import_timestamp_formats_are_not_interchangeable(tmp_path, table, column):
+    paths = _import_pair(tmp_path)
+    wrong_format = IMPORT_TIME if table == 'report_parse_state' else IMPORT_SQLITE_TIME
+    for path in paths:
+        _import_update(path, table, column, wrong_format)
+    assert main([str(path) for path in paths] + ['--sqlite']) == 0
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 2
+
+
+@pytest.mark.parametrize('bad', ['2026-02-29 03:04:05', '2026-01-02 24:00:00',
+                               '2026-01-02 03:04:60', '0000-01-02 03:04:05',
+                               '2026-1-02 03:04:05', '2026-01-02 03:04:05.000',
+                               '2026-01-02 03:04:05+00:00', '2026-01-02 03:04:05\n'])
+def test_import_sqlite_utc_format_rejects_invalid_calendar_and_extra_precision(tmp_path, bad):
+    paths = _import_pair(tmp_path)
+    for path in paths:
+        _import_update(path, 'report_parse_state', 'updated_at', bad)
+    assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 2
