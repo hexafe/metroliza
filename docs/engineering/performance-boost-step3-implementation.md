@@ -229,6 +229,24 @@ of one FULL1 and one DELTA1 fresh independent review. Preserve all earlier budge
 receipts and C02/C03 closure; no reset. Require staged MUST-7/full security, focused/caller and
 negative controls, integrated full suite and required CI before qualification.
 
+### Coordinator correction — C05 native completion polling (2026-10-25)
+
+Authority: [continuing correctness-fix grant](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6346416141)
+and [source-bound C05 admission](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6402612813).
+Required C04 PR CI caught a warning in the rejected-close native Quit test. A controlled Qt6.6.1
+finished-signal gate reproduced it: `isFinished()` can be true during native finish, while `wait(0)`
+still enters a wait using an invalid negative timespec. Keep native completion polling, but use an
+already expired precise `QDeadlineTimer` with no positive wait budget. This must neither release a
+worker before native cleanup nor block the GUI, interrupt noncancellable work or bypass pending GUI
+delivery, close rejection or Quit replay. Preserve the warning assertions and the ordinary path.
+
+Scope is only `ui/detached_threads.py`, its existing test file and this Plan record. Require a
+deterministic old-source regression, real native controls, focused/caller tests, staged MUST-7/full
+security, one fresh independent FULL1 (at most one DELTA1), integrated full suite and new-head CI.
+Preserve the failed CI and all prior budgets; no unchanged retry-to-green. No output exception,
+measurement-tool change, dependency, GC, Rust or machine-policy change is authorized by C05.
+Full-flow performance remains separately PENDING until qualified T28 evidence is available.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).

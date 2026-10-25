@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import gc
+import os
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import weakref
@@ -28,6 +31,20 @@ pytestmark = pytest.mark.skipif(
 )
 
 _TIMEOUT_S = 20
+
+
+def _run_native_script(script, *args, timeout=10):
+    source = Path(detached_threads.__file__).resolve()
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(source.parents[2])
+    prologue = f"""from pathlib import Path
+from metroliza.ui import detached_threads as _source_registry
+assert Path(_source_registry.__file__).resolve() == Path({str(source)!r})
+assert Path(_source_registry._completion_ready.__code__.co_filename).resolve() == Path({str(source)!r})
+"""
+    with tempfile.TemporaryDirectory(prefix="metroliza-native-registry-") as cwd:
+        return subprocess.run([sys.executable, "-c", prologue + script, *args],
+                              cwd=cwd, env=environment, capture_output=True, text=True, timeout=timeout)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -279,7 +296,7 @@ def test_registry_drops_a_thread_only_after_it_finished():
 def test_opt_in_native_settling_is_warning_free():
     script = '''
 import functools
-from PyQt6.QtCore import QThread, QTimer, qInstallMessageHandler, qVersion, PYQT_VERSION_STR
+from PyQt6.QtCore import QDeadlineTimer, QThread, QTimer, qInstallMessageHandler, qVersion, PYQT_VERSION_STR
 from PyQt6.QtWidgets import QApplication
 from metroliza.ui import detached_threads
 app = QApplication([])
@@ -290,7 +307,8 @@ class Worker(QThread):
     def run(self):
         self.msleep(100)
     def wait(self, timeout):
-        assert timeout == 0 and self.isFinished(), 'GUI wait before finished'
+        assert isinstance(timeout, QDeadlineTimer) and timeout.hasExpired() and timeout.remainingTime() == 0
+        assert self.isFinished(), 'GUI wait before finished'
         waits.append(timeout)
         return super().wait(timeout)
 thread = Worker()
@@ -308,7 +326,7 @@ assert waits and not messages, messages
 assert not detached_threads.running_threads()
 print('warning-free native settle', PYQT_VERSION_STR, qVersion(), len(beats), waits)
 '''
-    child = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=10)
+    child = _run_native_script(script)
     assert child.returncode == 0, child.stdout + child.stderr
     assert "warning-free native settle 6." in child.stdout
     assert child.stderr == ""
@@ -318,7 +336,7 @@ print('warning-free native settle', PYQT_VERSION_STR, qVersion(), len(beats), wa
 def test_opt_in_native_quit_routes_and_replay_race(mode):
     script = '''
 import functools, sys, threading
-from PyQt6.QtCore import QEvent, QThread, QTimer, Qt, qInstallMessageHandler
+from PyQt6.QtCore import QDeadlineTimer, QEvent, QThread, QTimer, Qt, qInstallMessageHandler
 from PyQt6.QtWidgets import QApplication, QWidget
 from metroliza.ui import detached_threads as registry
 app = QApplication([])
@@ -344,7 +362,8 @@ class Worker(QThread):
         except Exception as error:
             self.error = str(error)
     def wait(self, timeout):
-        assert timeout == 0 and self.isFinished(), 'blocking or premature GUI wait'
+        assert isinstance(timeout, QDeadlineTimer) and timeout.hasExpired() and timeout.remainingTime() == 0
+        assert self.isFinished(), 'blocking or premature GUI wait'
         return super().wait(timeout)
     def requestInterruption(self):
         raise AssertionError('noncancellable work interrupted')
@@ -393,13 +412,15 @@ app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 print(mode, code, 'native routes settled', len(beats), cleanups)
 sys.exit(code)
 '''
-    child = subprocess.run([sys.executable, "-c", script, mode], capture_output=True, text=True, timeout=10)
+    child = _run_native_script(script, mode)
     assert child.returncode == (23 if mode == "directexit" else 0), child.stdout + child.stderr
     assert "native routes settled" in child.stdout
     assert child.stderr == ""
 
 
 def test_opt_in_defers_cleanup_past_finished_until_native_settle(qapplication_session):
+    from PyQt6.QtCore import QDeadlineTimer
+
     class Signal:
         def connect(self, slot):
             pass
@@ -415,7 +436,7 @@ def test_opt_in_defers_cleanup_past_finished_until_native_settle(qapplication_se
             return False
 
         def wait(self, timeout):
-            assert timeout == 0
+            assert isinstance(timeout, QDeadlineTimer) and timeout.hasExpired() and timeout.remainingTime() == 0
             return self.settled
 
     thread, calls = Thread(), []
@@ -462,7 +483,7 @@ def test_opt_in_gui_acknowledgement_native_process(mode):
     script = r"""
 import functools
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent, QEventLoop, QThread, QTimer
+from PyQt6.QtCore import QDeadlineTimer, QEvent, QEventLoop, QThread, QTimer
 from PyQt6.QtWidgets import QApplication, QWidget
 from metroliza.ui import detached_threads
 app = QApplication([])
@@ -472,7 +493,8 @@ consumed, cleaned, observed = [], [], []
 class Worker(QThread):
     def run(self): self.msleep(40)
     def wait(self, timeout):
-        assert timeout == 0 and self.isFinished()
+        assert isinstance(timeout, QDeadlineTimer) and timeout.hasExpired() and timeout.remainingTime() == 0
+        assert self.isFinished()
         return super().wait(timeout)
 thread = Worker()
 def consume(current_owner, current_thread):
@@ -511,7 +533,60 @@ assert observed == ([(True, True, False), (True, False)] if mode == 'consume' el
 assert sip.isdeleted(thread)
 print('native GUI acknowledgement complete', mode, observed)
 """
-    child = subprocess.run([sys.executable, "-c", script, mode], capture_output=True, text=True, timeout=8)
+    child = _run_native_script(script, mode, timeout=8)
     assert child.returncode == 0, child.stdout + child.stderr
     assert "native GUI acknowledgement complete" in child.stdout
+    assert child.stderr == ""
+
+
+def test_opt_in_finished_signal_still_retains_native_cleanup_without_warnings():
+    script = r"""
+import functools, threading, time
+from PyQt6.QtCore import QThread, QTimer, Qt, qInstallMessageHandler
+from PyQt6.QtWidgets import QApplication
+from metroliza.ui import detached_threads as registry
+app = QApplication([])
+app.setQuitOnLastWindowClosed(False)
+entered, release = threading.Event(), threading.Event()
+messages, cleanups, beats, expired = [], [], [], []
+qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+class Worker(QThread):
+    def run(self): pass
+def hold_native_finish():
+    entered.set()
+    if not release.wait(3): expired.append(True)
+thread = Worker()
+thread.finished.connect(hold_native_finish, Qt.ConnectionType.DirectConnection)
+registry.register(thread, defer_quit=True)
+registry.run_when_finished([thread], functools.partial(cleanups.append, 'settled'))
+heartbeat = QTimer()
+heartbeat.timeout.connect(functools.partial(beats.append, 1))
+heartbeat.start(1)
+thread.start()
+try:
+    deadline = time.monotonic() + 2
+    while not entered.is_set() and time.monotonic() < deadline:
+        app.processEvents(); time.sleep(.001)
+    assert entered.is_set() and thread.isFinished(), 'native barrier not reached'
+    # Qt 6.6.1 exposes isFinished during its finished signal, before native cleanup.
+    registry.discard(thread)
+    stopped = registry.shutdown(0)
+    deadline = time.monotonic() + .03
+    while time.monotonic() < deadline:
+        app.processEvents(); time.sleep(.001)
+    observed = (stopped, registry.is_registered(thread), list(cleanups), len(beats))
+    observed_messages = list(messages)
+finally:
+    release.set()
+    assert QThread.wait(thread, 2000), 'test rescue failed'
+app.processEvents()
+registry.running_threads(); registry._run_ready_deferred()
+assert observed[0:3] == (False, True, []) and observed[3] >= 2, observed
+assert not expired and cleanups == ['settled'] and not registry.running_threads()
+assert not observed_messages and not messages, (observed_messages, messages)
+print('held native finish warning-free', observed)
+"""
+    child = _run_native_script(script)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert "held native finish warning-free" in child.stdout
     assert child.stderr == ""

@@ -97,12 +97,15 @@ def _completion_ready(thread) -> bool:
         return _is_finished(thread)
     if getattr(thread, "_metroliza_delivery_pending", False):
         return False
-    # finished precedes native TLS cleanup. Never wait, even with timeout zero,
-    # on a running thread (Qt 6.6 can emit QWaitCondition diagnostics there).
+    # finished precedes native cleanup, so isFinished() alone cannot release ownership.
     if not _is_finished(thread):
         return False
     try:
-        return bool(thread.wait(0))
+        from PyQt6.QtCore import QDeadlineTimer, Qt
+
+        # Qt 6.6.1 maps wait(0) to a sentinel deadline with a negative POSIX tv_nsec.
+        # A real, already-expired instant polls native completion without that invalid timeout.
+        return bool(thread.wait(QDeadlineTimer.current(Qt.TimerType.PreciseTimer)))
     except RuntimeError:
         return True
 
