@@ -153,3 +153,51 @@ def test_existing_proxies_use_shared_implementation(module_name):
     if module_name == "tabular.data_grouping_service":
         assert module._LazyNumpy is LazyNumpy
         assert isinstance(module.np, LazyNumpy)
+
+
+def test_t27_realtime_import_defers_workflow_and_preserves_public_aliases(tmp_path):
+    script = r'''
+import importlib.abc
+import sys
+from pathlib import Path
+import metroliza.industrial.industrial_workers as workers
+from metroliza.ui.realtime_industrial_monitoring_dialog import RealtimeIndustrialMonitoringDialog
+assert 'industrial_workers.py' == Path(workers.__file__).name
+assert 'metroliza.industrial.industrial_analytics_workflow' not in sys.modules
+assert not any(name in sys.modules for name in ('pandas', 'scipy'))
+class RejectWorkflow(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, *args):
+        if fullname == 'metroliza.industrial.industrial_analytics_workflow':
+            raise RuntimeError('synthetic workflow import failure')
+reject = RejectWorkflow()
+sys.meta_path.insert(0, reject)
+try:
+    workers.run_tabular_file_analytics
+except RuntimeError as error:
+    assert str(error) == 'synthetic workflow import failure'
+else:
+    raise AssertionError('deferred import error was swallowed')
+sys.meta_path.remove(reject)
+from metroliza.industrial import industrial_analytics_workflow as workflow
+for name in ('AnalyticsCancelled', 'run_production_cache_analytics', 'run_tabular_file_analytics'):
+    assert name in dir(workers)
+    assert getattr(workers, name) is getattr(workflow, name)
+namespace = {}
+exec('from metroliza.industrial.industrial_workers import *', namespace)
+assert namespace['run_tabular_file_analytics'] is workflow.run_tabular_file_analytics
+assert namespace['RealtimeMonitorPollThread'] is workers.RealtimeMonitorPollThread
+assert namespace['IndustrialOznakAccessCheckThread'] is workers.IndustrialOznakAccessCheckThread
+try:
+    workers.missing_t27_symbol
+except AttributeError:
+    pass
+else:
+    raise AssertionError('unknown symbol accepted')
+'''
+    checkout = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(checkout / "src"), str(checkout)))},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -248,7 +248,23 @@ class QtStartupSplash:
             self._movie.start()
             record_event("splash_gif_loaded")
         except Exception as exc:  # pragma: no cover - defensive fallback for packaged assets.
+            self._dispose_loading_movie()
             record_event("splash_gif_failed", error_type=type(exc).__name__)
+
+    def _dispose_loading_movie(self) -> None:
+        movie = self._movie
+        self._movie = None
+        if movie is not None:
+            movie.stop()
+            self._gif_label.clear()  # Disconnect QLabel's frame updates before deleting its device.
+            movie.setDevice(None)
+            movie.deleteLater()
+        for name in ("_gif_buffer", "_gif_reader_buffer"):
+            buffer = getattr(self, name)
+            setattr(self, name, None)
+            if buffer is not None:
+                buffer.close()
+                buffer.deleteLater()
 
     def _center_on_screen(self) -> None:
         screen = self._splash.screen() or self._app.primaryScreen()
@@ -271,12 +287,14 @@ class QtStartupSplash:
             widget.raise_()
         if hasattr(widget, "activateWindow"):
             widget.activateWindow()
+        self._dispose_loading_movie()
         self._splash.close()
         self._app.processEvents()
         record_event("splash_finish_done")
 
     def close(self) -> None:
         record_event("splash_close_start")
+        self._dispose_loading_movie()
         self._splash.close()
         self._app.processEvents()
         record_event("splash_close_done")

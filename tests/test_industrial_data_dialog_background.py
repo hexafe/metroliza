@@ -719,3 +719,43 @@ def test_native_delivery_retains_owner_through_reentrant_parent_deletion(
     assert sip.isdeleted(dialog)
     dialog._stop_background_threads = lambda: None
     dialog.close = lambda: None
+
+
+@pytest.mark.parametrize("terminal", ["reject", "accept"])
+def test_t27_native_analytics_reopens_without_retained_children(dialog_factory, tmp_path, monkeypatch, terminal):
+    from PyQt6.QtCore import QCoreApplication, QEvent, QTimer
+    from metroliza.tabular.tabular_analytics_service import load_tabular_analytics_file
+    from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog
+
+    dialog = dialog_factory()
+    source = tmp_path / "synthetic.csv"
+    source.write_text("reference,value\nA,1\nA,2\nB,3\n")
+    completed = []
+
+    real_exec = IndustrialAnalyticsDialog.exec
+
+    def modal(analytics):
+        assert analytics.tabular_load_result.row_count == 3
+        assert dialog.analytics_window is analytics
+        completed.append(analytics)
+        QTimer.singleShot(0, getattr(analytics, terminal))
+        return real_exec(analytics)
+
+    monkeypatch.setattr(IndustrialAnalyticsDialog, "exec", modal)
+    try:
+        for request in (1, 2):
+            loaded = load_tabular_analytics_file(str(source))
+            dialog._analytics_load_request_id = request
+            dialog._analytics_load_thread = object()
+            dialog._analytics_load_context = (None, "")
+            dialog._on_analytics_cache_loaded(request, loaded)
+            assert dialog.analytics_window is None
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert all(sip.isdeleted(analytics) for analytics in completed)
+            assert not dialog.findChildren(IndustrialAnalyticsDialog)
+    finally:
+        for analytics in completed:
+            if not sip.isdeleted(analytics):
+                analytics.reject()
+                analytics.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 try:
     from modules import industrial_workers
@@ -287,3 +288,63 @@ def test_thread_hands_issued_grouping_to_workflow_without_revalidation(monkeypat
     assert captured['grouping_df'] is values
     assert captured['_grouping_snapshot'] is snapshot
     assert values[0].group == 'A'
+
+
+@pytest.mark.parametrize("source_kind", ["tabular_file", "production_cache"])
+def test_deferred_workflow_import_failure_emits_primary_error_without_retry(monkeypatch, tmp_path, source_kind):
+    import builtins
+
+    _skip_if_pyqt_unavailable()
+    primary = ImportError("synthetic primary workflow import failure")
+    secondary = ImportError("unexpected secondary workflow import retry")
+    attempts = []
+    original_import = builtins.__import__
+    runner_name = f"run_{source_kind}_analytics"
+    for name in (runner_name, "AnalyticsCancelled"):
+        monkeypatch.delitem(vars(industrial_workers), name, raising=False)
+
+    def fail_workflow_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "metroliza.industrial" and "industrial_analytics_workflow" in fromlist:
+            attempts.append(name)
+            raise primary if len(attempts) == 1 else secondary
+        return original_import(name, globals, locals, fromlist, level)
+
+    thread = IndustrialAnalyticsThread(
+        source_kind=source_kind, input_file=str(tmp_path / "synthetic.csv"),
+        db_file=str(tmp_path / "synthetic.db"), output_dashboard_file=str(tmp_path / "out.html"),
+    )
+    errors, cancelled, results = [], [], []
+    _capture_signal(thread.error_occurred, errors)
+    _capture_signal(thread.cancelled, cancelled)
+    _capture_signal(thread.result_ready, results)
+    monkeypatch.setattr(builtins, "__import__", fail_workflow_import)
+    thread.run()
+    assert errors == [str(primary)]
+    assert len(attempts) == 1
+    assert not cancelled and not results
+
+
+def test_workflow_cancellation_class_is_resolved_after_runner_callback(monkeypatch, tmp_path):
+    _skip_if_pyqt_unavailable()
+    order = []
+
+    class CustomCancellation(ImportError):
+        pass
+
+    def run_workflow(**kwargs):
+        order.append("runner")
+        monkeypatch.setattr(industrial_workers, "AnalyticsCancelled", CustomCancellation)
+        raise CustomCancellation("synthetic custom cancellation")
+
+    monkeypatch.setattr(industrial_workers, "run_tabular_file_analytics", run_workflow)
+    thread = IndustrialAnalyticsThread(
+        source_kind="tabular_file", input_file=str(tmp_path / "synthetic.csv"),
+        output_dashboard_file=str(tmp_path / "out.html"),
+    )
+    errors, cancelled = [], []
+    _capture_signal(thread.error_occurred, errors)
+    _capture_signal(thread.cancelled, cancelled)
+    thread.run()
+    assert order == ["runner"]
+    assert cancelled == ["synthetic custom cancellation"]
+    assert not errors

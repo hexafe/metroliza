@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys as _sys
 from pathlib import Path
 import time
 from typing import Any
@@ -24,11 +25,6 @@ from metroliza.industrial.industrial_analytics_state import (
     ProductionFilterState,
     ProductionMetricSelection,
     ReferenceCohortState,
-)
-from metroliza.industrial.industrial_analytics_workflow import (
-    AnalyticsCancelled,
-    run_production_cache_analytics,
-    run_tabular_file_analytics,
 )
 from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
@@ -64,6 +60,25 @@ from metroliza.industrial.realtime.source_runtime import RealtimeSourceRuntime
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.shared.progress_status import diagnostic_progress_message
 from metroliza.shared.worker_cancellation import WorkerCancellationMixin
+
+
+_WORKFLOW_EXPORTS = (
+    "AnalyticsCancelled", "run_production_cache_analytics", "run_tabular_file_analytics",
+)
+
+
+def __getattr__(name):
+    if name in _WORKFLOW_EXPORTS:
+        # Keep the literal import visible to frozen-build analysis. Public aliases
+        # retain their actual function/exception identity, including failed imports.
+        from metroliza.industrial import industrial_analytics_workflow
+
+        return getattr(industrial_analytics_workflow, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_WORKFLOW_EXPORTS))
 
 
 def _oznak_warning_detail(diagnostics: dict[str, Any]) -> str | None:
@@ -414,9 +429,15 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.update_label.emit(message)
 
     def run(self):
+        workers = _sys.modules[__name__]
         try:
             if self.source_kind == "tabular_file":
-                result = run_tabular_file_analytics(
+                try:
+                    run_analytics = workers.run_tabular_file_analytics
+                except Exception as exc:
+                    self.error_occurred.emit(redact_sensitive_text(exc))
+                    return
+                result = run_analytics(
                     input_file=self.input_file,
                     output_dashboard_file=self.output_dashboard_file,
                     output_workbook_file=self.output_workbook_file or None,
@@ -443,7 +464,12 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                     progress_callback=self._emit_progress_message,
                 )
             elif self.source_kind == "production_cache":
-                result = run_production_cache_analytics(
+                try:
+                    run_analytics = workers.run_production_cache_analytics
+                except Exception as exc:
+                    self.error_occurred.emit(redact_sensitive_text(exc))
+                    return
+                result = run_analytics(
                     db_file=self.db_file,
                     output_dashboard_file=self.output_dashboard_file,
                     output_workbook_file=self.output_workbook_file or None,
@@ -460,7 +486,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
             else:
                 raise ValueError(f"Unsupported analytics source kind: {self.source_kind}")
             self.result_ready.emit(result)
-        except AnalyticsCancelled as exc:
+        except workers.AnalyticsCancelled as exc:
             self.cancelled.emit(redact_sensitive_text(exc))
         except Exception as exc:
             self.error_occurred.emit(redact_sensitive_text(exc))
@@ -952,3 +978,7 @@ class IndustrialOznakAccessCheckThread(WorkerCancellationMixin, QThread):
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
         self.progress_message.emit(redact_sensitive_text(diagnostic_progress_message(diagnostic)))
+
+
+# Preserve the preexisting wildcard-import surface alongside the deferred aliases.
+__all__ = [name for name in globals() if not name.startswith("_")] + list(_WORKFLOW_EXPORTS)

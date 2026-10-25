@@ -55,6 +55,7 @@ from metroliza.industrial.industrial_source_config import (
 )
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.industrial_sync_dialog import IndustrialSyncDialog
+
 from metroliza.industrial.industrial_workers import (
     IndustrialExportThread as IndustrialExportThread,
     IndustrialLinkRefreshThread,
@@ -80,6 +81,8 @@ from metroliza.ui.worker_progress_dialog import (
     create_delayed_worker_progress_dialog,
     dismiss_worker_progress_dialog,
 )
+
+_NATIVE_ANALYTICS_DIALOG = IndustrialAnalyticsDialog
 
 OZNAK_CHECKING_TEXT = "Oznak connector: checking..."
 ANALYTICS_LOADING_TEXT = "Loading industrial cache for CSV Summary..."
@@ -1191,7 +1194,19 @@ class IndustrialDataDialog(QDialog):
             ),
             presentation_mode="industrial_cache",
         )
-        self.analytics_window.exec()
+        analytics_window = self.analytics_window
+        analytics_window.exec()
+        # A custom dialog retains its old lifetime contract. For the native dialog,
+        # modal return plus cleared worker references proves its callbacks/waits have
+        # settled. A programmatic accept with pending work keeps the original owner.
+        if (type(analytics_window) is _NATIVE_ANALYTICS_DIALOG
+                and not sip.isdeleted(analytics_window)
+                and analytics_window.tabular_load_thread is None
+                and analytics_window.analytics_thread is None):
+            analytics_window._set_tabular_load_result(None)
+            analytics_window.deleteLater()
+            if not sip.isdeleted(self) and self.analytics_window is analytics_window:
+                self.analytics_window = None
         if not sip.isdeleted(self):
             self.refresh_status()
 
