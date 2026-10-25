@@ -185,6 +185,27 @@ FULL1 and at most one DELTA1, an integrated full suite and required CI. C02 is a
 patch with that bounded review budget; retain every earlier review/adverse receipt and exhausted
 budget. Mark timing PENDING until an unchanged unprofiled final campaign qualifies it.
 
+### Coordinator correction — C03 native lookup test oracle (2026-10-25)
+
+Authority: the continuing necessary-fix authorization above, applied in the
+[bounded C03 admission](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6401236089).
+The integrated C02 suite returned 1 with two native OCR test failures; retain that adverse result.
+A source-bound seed58 control reproduces both failures on original `101e5a44` and C02: one
+attribute expression can invoke raw-key equality more than once. The failed suite's original seed
+was not captured; the control does not prove its precise historical trigger or a product regression.
+
+Correct only the existing native lookup test's invalid fixed-callback premise. Observe the exact
+original dictionary lookup, require its complete ordered callback sequence and literal geometry,
+then require the candidate to match. Preserve stateful sensitivity and demonstrate rejection of
+the extra-membership/extra-lookup mutant across fixed and random seeds. Keep product geometry,
+all output comparisons and measurement infrastructure unchanged; no permissive callback ranges,
+assertion skips, selected favorable seed or interpreter-setting workaround.
+
+C03 has at most one independent FULL1 and one DELTA1 for this distinct test-oracle correction.
+Preserve C02's source-only review, failed integrated suite and all older budgets/receipts. Require
+focused/caller tests, staged MUST-7/full security, a corrected integrated full suite and actual
+required CI before qualification. This is not a performance change or accepted timing evidence.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).

@@ -196,12 +196,14 @@ def test_native_raw_method_key_keeps_single_lookup_and_geometry(stateful):
     from metroliza.parsing.pdf_backend import require_pdf_backend
 
     events = []
+    callbacks_per_lookup = None
 
     class Key(str):
         __hash__ = str.__hash__
 
         def __eq__(self, other):
-            result = stateful and bool(events)
+            result = (stateful and callbacks_per_lookup is not None
+                      and len(events) >= callbacks_per_lookup)
             events.append(result)
             return result
 
@@ -211,8 +213,17 @@ def test_native_raw_method_key_keeps_single_lookup_and_geometry(stateful):
         page = document.new_page(width=600, height=800)
         page.insert_image((30, 40, 570, 120), stream=image.getvalue(), keep_proportion=False)
         object.__getattribute__(page, "__dict__")[Key("get_text")] = None
+        assert events == []
+        # One original attribute lookup may compare the same raw key more than
+        # once, depending on the interpreter's hash-table probe sequence.
+        original_blocks = page.get_text("dict")["blocks"]
+        assert original_blocks[0]["bbox"] == (30.0, 40.0, 570.0, 120.0)
+        callbacks_per_lookup = len(events)
+        assert callbacks_per_lookup > 0
+        assert events == [False] * callbacks_per_lookup
+        events.clear()
         actual = _block_candidates(page, page_width=600, page_height=800,
                                    top_limit_fraction=0.24, min_width_fraction=0.45)
         assert actual == [{"index": 0, "bbox": (30.0, 40.0, 570.0, 120.0),
                            "width": 540.0, "height": 80.0, "area": 43200.0}]
-        assert events == [False]
+        assert events == [False] * callbacks_per_lookup
