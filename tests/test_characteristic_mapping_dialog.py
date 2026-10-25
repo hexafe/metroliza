@@ -707,3 +707,329 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_editor_literal_callback_and_error_contract(qapplication_session):
+    import importlib
+    from PyQt6.QtCore import QThread
+    native = importlib.import_module('metroliza.ui.characteristic_mapping_dialog')
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    assert native.QDialog is widgets.QDialog
+    assert native.CharacteristicAliasEditorDialog is CharacteristicAliasEditorDialog
+    calls = []
+
+    def resolver(alias, scope, value):
+        assert QThread.currentThread() is qapplication_session.thread()
+        calls.append((alias, scope, value))
+        if alias == 'ERROR':
+            raise RuntimeError('literal preview error')
+        return {'measurement_count': 1234, 'report_count': 12, 'reference_count': 3}
+
+    editor = native.CharacteristicAliasEditorDialog(impact_resolver=resolver)
+    try:
+        assert editor.impact_label.text() == 'Select a report/export name to preview affected rows.'
+        editor.alias_input.setCurrentText(' DIA - X ')
+        assert editor.impact_label.text() == 'Affects 1,234 rows in 12 reports across 3 references.'
+        editor.apply_to_combo.setCurrentText(ONE_REFERENCE_LABEL)
+        assert editor.impact_label.text() == 'Select a reference to preview this reference-only match.'
+        editor.reference_input.setCurrentText(' REF-1 ')
+        assert calls == [('DIA - X', 'global', None), ('DIA - X', 'reference', 'REF-1')]
+        with patch.object(native, 'CustomLogger') as logger:
+            editor.alias_input.setCurrentText('ERROR')
+        assert editor.impact_label.text() == 'Impact preview could not be loaded.'
+        assert str(logger.call_args.args[0]) == 'literal preview error'
+        editor.impact_resolver = None
+        editor._refresh_impact_preview()
+        assert editor.impact_label.text() == 'Impact preview is unavailable for this database.'
+    finally:
+        editor.close()
+
+
+def _impact_native_dialog(tmp_path):
+    import importlib
+    native = importlib.import_module('metroliza.ui.characteristic_mapping_dialog')
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    assert native.QDialog is widgets.QDialog
+    return native, native.CharacteristicMappingDialog(db_file=str(tmp_path / 'impact.sqlite'))
+
+
+def _wait_impact(app, predicate):
+    deadline = time.monotonic() + 10
+    while not predicate() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+    assert predicate()
+
+
+def test_default_impact_refresh_close_and_reopen_stay_synchronous(tmp_path, qapplication_session):
+    native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
+    calls = []
+
+    def fetch(db, **kwargs):
+        assert QThread.currentThread() is qapplication_session.thread()
+        calls.append((db, kwargs))
+        return {'measurement_count': 9, 'report_count': 3, 'reference_count': 2}
+
+    # The withdrawn background feature must not register an impact worker or
+    # retain pending/debounced work. Existing source-option loading is separate.
+    with patch.object(native, 'fetch_mapping_impact_counts', side_effect=fetch), patch.object(
+        native.detached_threads, 'register', wraps=native.detached_threads.register,
+    ) as register:
+        editor = owner._build_editor()
+        try:
+            editor.alias_input.setCurrentText('DIA - X')
+            editor.apply_to_combo.setCurrentText(ONE_REFERENCE_LABEL)
+            editor.reference_input.setCurrentText('REF-1')
+            assert editor.impact_label.text() == 'Affects 9 rows in 3 reports across 2 references.'
+            assert calls[-1] == (owner.db_file, {'alias_name': 'DIA - X', 'scope_type': 'reference', 'scope_value': 'REF-1'})
+            owner.db_file = str(tmp_path / 'changed.sqlite')
+            editor.alias_input.setCurrentText('LATEST')
+            assert calls[-1][0] == owner.db_file
+            assert calls[-1][1]['alias_name'] == 'LATEST'
+            editor.reject()
+            editor.show()
+            editor._refresh_impact_preview()
+            assert editor.impact_label.text() == 'Affects 9 rows in 3 reports across 2 references.'
+            assert not any(name.startswith('_impact_') for name in vars(editor))
+            register.assert_not_called()
+        finally:
+            editor.close()
+            owner.close()
+
+
+def test_default_impact_current_error_and_zero_keep_public_dispatch(tmp_path, qapplication_session):
+    native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
+    editor = owner._build_editor()
+    try:
+        # Patch after construction: the saved built-in resolver must perform a
+        # live public fetch lookup, including GUI callback/error semantics.
+        with patch.object(native, 'fetch_mapping_impact_counts', side_effect=RuntimeError('public error')), patch.object(native, 'CustomLogger') as logger:
+            editor.alias_input.setCurrentText('FAIL')
+            assert editor.impact_label.text() == 'Impact preview could not be loaded.'
+            assert str(logger.call_args.args[0]) == 'public error'
+        with patch.object(native, 'fetch_mapping_impact_counts', return_value={}) as fetch:
+            editor.alias_input.setCurrentText('ZERO')
+            assert editor.impact_label.text() == 'Affects 0 rows in 0 reports across 0 references.'
+            assert fetch.call_args.kwargs == {'alias_name': 'ZERO', 'scope_type': 'global', 'scope_value': None}
+        assert not any(name.startswith('_impact_') for name in vars(editor))
+    finally:
+        editor.close()
+        owner.close()
+
+
+def test_mapping_instance_and_class_resolver_hooks_stay_on_gui(tmp_path, qapplication_session):
+    native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
+    calls = []
+
+    def resolve(*args):
+        assert QThread.currentThread() is qapplication_session.thread()
+        calls.append(args)
+        return {'measurement_count': 4, 'report_count': 2, 'reference_count': 1}
+
+    try:
+        for context in (patch.object(owner, '_resolve_impact_preview', resolve),
+                        patch.object(native.CharacteristicMappingDialog, '_resolve_impact_preview', resolve)):
+            with context:
+                editor = owner._build_editor()
+                try:
+                    editor.alias_input.setCurrentText('CUSTOM')
+                    assert editor.impact_label.text() == 'Affects 4 rows in 2 reports across 1 references.'
+                    assert not any(name.startswith('_impact_') for name in vars(editor))
+                finally:
+                    editor.close()
+        assert len(calls) == 2
+    finally:
+        owner.close()
+
+
+def test_editor_legacy_standin_keeps_original_dispatch(qapplication_session):
+    import importlib
+    from types import SimpleNamespace
+    native = importlib.import_module('metroliza.ui.characteristic_mapping_dialog')
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    assert native.QDialog is widgets.QDialog
+    label = widgets.QLabel()
+    calls = []
+    standin = SimpleNamespace(
+        alias_input=SimpleNamespace(currentText=lambda: ' DIA '), impact_label=label,
+        _current_scope_payload=lambda: ('global', None),
+        impact_resolver=lambda *args: calls.append(args) or {'measurement_count': 2})
+    native.CharacteristicAliasEditorDialog._refresh_impact_preview(standin)
+    assert calls == [('DIA', 'global', None)]
+    assert label.text() == 'Affects 2 rows in 0 reports across 0 references.'
+
+
+def test_editor_raw_keys_do_not_add_equality_callbacks(qapplication_session):
+    import importlib
+    native = importlib.import_module('metroliza.ui.characteristic_mapping_dialog')
+    comparisons = []
+
+    class Key(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            comparisons.append(other)
+            return False
+
+    editor = native.CharacteristicAliasEditorDialog(impact_resolver=lambda *_args: {'measurement_count': 3})
+    try:
+        # Collides with a new async field; original refresh never looks this name up.
+        editor.__dict__[Key('_impact_timer')] = 'observing key'
+        comparisons.clear()
+        editor.alias_input.setCurrentText('DIA')
+        assert comparisons == []
+        assert editor.impact_label.text() == 'Affects 3 rows in 0 reports across 0 references.'
+    finally:
+        # Remove via object identity so teardown still uses its actual timer.
+        for key in tuple(editor.__dict__):
+            if type(key) is Key:
+                del editor.__dict__[key]
+        editor.close()
+
+
+def test_mapping_public_fetch_override_retains_gui_dispatch(tmp_path, qapplication_session):
+    native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
+
+    def fetch(db, **kwargs):
+        assert QThread.currentThread() is qapplication_session.thread()
+        assert db == owner.db_file
+        assert kwargs == {'alias_name': 'CUSTOM', 'scope_type': 'global', 'scope_value': None}
+        return {'measurement_count': 7}
+
+    try:
+        with patch.object(native, 'fetch_mapping_impact_counts', side_effect=fetch):
+            editor = owner._build_editor()
+            try:
+                editor.alias_input.setCurrentText('CUSTOM')
+                assert editor.impact_label.text() == 'Affects 7 rows in 0 reports across 0 references.'
+                assert not any(name.startswith('_impact_') for name in vars(editor))
+            finally:
+                editor.close()
+    finally:
+        owner.close()
+
+
+def test_impact_deleted_editor_leaves_no_new_worker(tmp_path, qapplication_session):
+    import importlib
+    core = importlib.import_module('PyQt6.QtCore')
+    native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
+    before = native.detached_threads.running_threads()
+    editor = owner._build_editor()
+    with patch.object(native, 'fetch_mapping_impact_counts', return_value={'measurement_count': 5}):
+        editor.alias_input.setCurrentText('DIA')
+        assert editor.impact_label.text() == 'Affects 5 rows in 0 reports across 0 references.'
+    assert not any(name.startswith('_impact_') for name in vars(editor))
+    editor.deleteLater()
+    core.QCoreApplication.sendPostedEvents(None, core.QEvent.Type.DeferredDelete)
+    assert native.detached_threads.running_threads() == before
+    owner.close()
+
+
+def test_editor_keeps_option_and_resolver_evaluation_order(tmp_path, qapplication_session):
+    native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
+    metrics, references, calls = owner.metric_options, owner.reference_options, []
+
+    def resolve(*args):
+        calls.append(args)
+        return {'measurement_count': 6}
+
+    def read_metrics(_owner):
+        calls.append('metrics')
+        owner._resolve_impact_preview = resolve
+        return metrics
+
+    def read_references(_owner):
+        calls.append('references')
+        return references
+
+    try:
+        with patch.object(native.CharacteristicMappingDialog, 'metric_options', property(read_metrics), create=True), patch.object(
+            native.CharacteristicMappingDialog, 'reference_options', property(read_references), create=True,
+        ):
+            editor = owner._build_editor()
+        try:
+            editor.alias_input.setCurrentText('ORDER')
+            assert calls == ['metrics', 'references', ('ORDER', 'global', None)]
+            assert editor.impact_label.text() == 'Affects 6 rows in 0 reports across 0 references.'
+        finally:
+            editor.close()
+    finally:
+        owner.close()
+
+
+def test_mapping_live_fetch_and_raw_key_transitions_keep_latest_output(tmp_path, qapplication_session):
+    native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
+    editor = owner._build_editor()
+    comparisons, calls = [], []
+
+    class Key(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            comparisons.append(other)
+            return False
+
+    def fetch(_db, **kwargs):
+        assert QThread.currentThread() is qapplication_session.thread()
+        calls.append(kwargs['alias_name'])
+        return {'measurement_count': 7 if kwargs['alias_name'] == 'B' else 3}
+
+    try:
+        editor.alias_input.setCurrentText('A')
+        with patch.object(native, 'fetch_mapping_impact_counts', side_effect=fetch):
+            editor.__dict__[Key('_impact_timer')] = 'unsupported key'
+            comparisons.clear()
+            editor.alias_input.setCurrentText('B')
+            assert editor.impact_label.text() == 'Affects 7 rows in 0 reports across 0 references.'
+            assert comparisons == []
+            for key in tuple(editor.__dict__):
+                if type(key) is Key:
+                    del editor.__dict__[key]
+            editor.alias_input.setCurrentText('C')
+            assert editor.impact_label.text() == 'Affects 3 rows in 0 reports across 0 references.'
+            qapplication_session.processEvents()
+            assert calls == ['B', 'C']
+            assert not any(name.startswith('_impact_') for name in vars(editor))
+    finally:
+        editor.close()
+        owner.close()
+
+
+def test_impact_application_quit_creates_no_preview_worker():
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent('''
+        from unittest.mock import patch
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QApplication
+        from metroliza.app.gc_policy import install
+        from metroliza.ui import characteristic_mapping_dialog as native
+        app = QApplication([])
+        install(app)
+        app.setQuitOnLastWindowClosed(False)
+        owner = native.CharacteristicMappingDialog(db_file='')
+        owner.db_file = 'unused.sqlite'
+        with patch.object(native.detached_threads, 'register') as register:
+            editor = owner._build_editor()
+            with patch.object(native, 'fetch_mapping_impact_counts', return_value={'measurement_count': 7}):
+                editor.alias_input.setCurrentText('DIA')
+                assert editor.impact_label.text() == 'Affects 7 rows in 0 reports across 0 references.'
+            QTimer.singleShot(0, app.quit)
+            assert app.exec() == 0
+            assert not any(name.startswith('_impact_') for name in vars(editor))
+            register.assert_not_called()
+            editor.close()
+        owner.close()
+    ''')
+    completed = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=20)
+    assert completed.returncode == 0, completed.stdout + completed.stderr

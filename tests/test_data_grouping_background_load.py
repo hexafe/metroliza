@@ -247,3 +247,24 @@ def test_synchronous_construction_is_unchanged_without_the_flag(tmp_path):
     finally:
         dialog.close()
         parent.close()
+
+
+def test_visible_selection_batches_actual_dialog_update(tmp_path, qapplication_session):
+    import importlib
+    native = importlib.import_module('metroliza.ui.data_grouping')
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    assert native.QListWidget is widgets.QListWidget
+    assert native.DataGrouping is DataGrouping
+    dialog = native.DataGrouping(db_file=str(_fixture_db(tmp_path)))
+    try:
+        dialog._populate_part_list()
+        assert dialog.part_list.count() == 3
+        dialog.part_list.item(1).setHidden(True)
+        updates = []
+        dialog.part_list.itemSelectionChanged.connect(lambda: updates.append(dialog.selection_summary_label.text()))
+        dialog._select_visible_parts_for_grouping()
+        assert updates == ['Selected parts: 2']
+        assert dialog.create_group_button.isEnabled()
+        assert [dialog.part_list.item(i).isSelected() for i in range(3)] == [True, False, True]
+    finally:
+        dialog.close()

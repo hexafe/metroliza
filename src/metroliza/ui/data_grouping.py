@@ -74,6 +74,30 @@ from PyQt6.QtWidgets import(
 )
 
 
+def _can_batch_native_part_selection(part_list, items):
+    try:
+        from PyQt6.sip import wrappertype
+    except ImportError:  # Legacy Qt stand-ins have no native wrapper API.
+        return False
+    if type(QListWidget) is not wrappertype:
+        return False
+    if (QListWidget is not QtWidgets.QListWidget
+            or QListWidgetItem is not QtWidgets.QListWidgetItem
+            or type(part_list) is not QtWidgets.QListWidget):
+        return False
+    # SIP descriptors identify native dispatch without evaluating an overridden
+    # property or method. Exported aliases alone do not establish native identity.
+    descriptor_type = type(inspect.getattr_static(QtWidgets.QWidget, "blockSignals", None))
+    methods = ((QtWidgets.QListWidget, 'blockSignals'),
+               (QtWidgets.QListWidgetItem, 'isSelected'),
+               (QtWidgets.QListWidgetItem, 'setSelected'),
+               (QtWidgets.QListWidgetItem, 'isHidden'))
+    return (all(type(inspect.getattr_static(owner, name, None)) is descriptor_type
+                for owner, name in methods)
+            and not vars(part_list)
+            and all(type(item) is QtWidgets.QListWidgetItem and not vars(item) for item in items))
+
+
 class _LazyPandas:
     def __getattr__(self, name):
         import importlib
@@ -2103,6 +2127,23 @@ class DataGrouping(QDialog):
             items = [part_list.item(row) for row in range(part_list.count())]
         elif hasattr(part_list, "_items"):
             items = list(getattr(part_list, "_items", ()) or ())
+
+        # Only native objects without instance hooks can coalesce selection signals.
+        # Custom widgets/items retain the original per-item dispatch and error order.
+        native = _can_batch_native_part_selection(part_list, items)
+        if native:
+            previous = part_list.blockSignals(True)
+            changed = False
+            try:
+                for item in items:
+                    before = item.isSelected()
+                    item.setSelected(not item.isHidden())
+                    changed = changed or before != item.isSelected()
+            finally:
+                part_list.blockSignals(previous)
+            if changed and not previous:
+                part_list.itemSelectionChanged.emit()
+            return
 
         for item in items:
             if item is None or not hasattr(item, "setSelected"):

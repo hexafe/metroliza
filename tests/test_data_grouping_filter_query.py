@@ -1576,3 +1576,153 @@ class TestGroupingFakePopulationCompatibility(unittest.TestCase):
                 self.assertEqual(calls, [('reference', 'R1'), ('group', 'POPULATION')])
                 self.assertEqual(dialog.reference_list.currentItem().text(), 'R1 (n=1)')
                 self.assertEqual(dialog.groups_list.currentItem().text(), 'POPULATION (n=1)')
+
+
+def test_visible_parts_literal_native_state(qapplication_session):
+    import importlib
+    from types import SimpleNamespace
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    core = importlib.import_module('PyQt6.QtCore')
+    native = importlib.import_module('metroliza.ui.data_grouping')
+    assert native.QListWidget is widgets.QListWidget
+    assert native.DataGrouping is DataGrouping
+    parts = widgets.QListWidget()
+    parts.setSelectionMode(widgets.QAbstractItemView.SelectionMode.MultiSelection)
+    for name, hidden, selected in [('A', False, False), ('B', True, True), ('C', False, True)]:
+        item = widgets.QListWidgetItem(name, parts)
+        item.setData(core.Qt.ItemDataRole.UserRole, name + '-key')
+        item.setHidden(hidden)
+        item.setSelected(selected)
+    owner = SimpleNamespace(part_list=parts, _safe_attr=DataGrouping._safe_attr)
+    for blocked in (False, True):
+        parts.blockSignals(blocked)
+        DataGrouping._select_visible_parts_for_grouping(owner)
+        assert [parts.item(i).isSelected() for i in range(3)] == [True, False, True]
+        assert [item.data(core.Qt.ItemDataRole.UserRole) for item in parts.selectedItems()] == ['A-key', 'C-key']
+        assert parts.signalsBlocked() is blocked
+    parts.close()
+
+
+def test_visible_parts_literal_custom_callbacks_and_errors():
+    from types import SimpleNamespace
+    events = []
+
+    class Item:
+        def __init__(self, hidden):
+            self.hidden = hidden
+
+        def isHidden(self):
+            events.append(('hidden', self.hidden))
+            return self.hidden
+
+        def setSelected(self, selected):
+            events.append(('selected', selected))
+            if self.hidden:
+                raise ValueError('selection rejected')
+
+    owner = SimpleNamespace(part_list=SimpleNamespace(_items=[None, Item(False), Item(True)]),
+                            _safe_attr=DataGrouping._safe_attr)
+    import pytest
+    with pytest.raises(ValueError, match='selection rejected'):
+        DataGrouping._select_visible_parts_for_grouping(owner)
+    assert events == [('hidden', False), ('selected', True), ('hidden', True), ('selected', False)]
+
+
+def test_visible_parts_native_emits_one_final_update(qapplication_session):
+    import importlib
+    from types import SimpleNamespace
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    native = importlib.import_module('metroliza.ui.data_grouping')
+    assert native.QListWidget is widgets.QListWidget
+    parts = widgets.QListWidget()
+    parts.setSelectionMode(widgets.QAbstractItemView.SelectionMode.MultiSelection)
+    for text in ['A', 'B', 'C']:
+        widgets.QListWidgetItem(text, parts)
+    states = []
+    parts.itemSelectionChanged.connect(lambda: states.append([parts.item(i).isSelected() for i in range(3)]))
+    owner = SimpleNamespace(part_list=parts, _safe_attr=DataGrouping._safe_attr)
+    DataGrouping._select_visible_parts_for_grouping(owner)
+    assert states == [[True, True, True]]
+    DataGrouping._select_visible_parts_for_grouping(owner)
+    assert len(states) == 1
+    parts.blockSignals(True)
+    parts.item(0).setSelected(False)
+    DataGrouping._select_visible_parts_for_grouping(owner)
+    assert parts.signalsBlocked()
+    assert len(states) == 1
+    parts.close()
+
+
+def test_visible_parts_native_custom_item_keeps_callbacks(qapplication_session):
+    import importlib
+    from types import SimpleNamespace
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    calls = []
+
+    class CustomItem(widgets.QListWidgetItem):
+        def setSelected(self, value):
+            calls.append(value)
+            return super().setSelected(value)
+
+    parts = widgets.QListWidget()
+    parts.setSelectionMode(widgets.QAbstractItemView.SelectionMode.MultiSelection)
+    CustomItem('A', parts)
+    CustomItem('B', parts)
+    updates = []
+    parts.itemSelectionChanged.connect(lambda: updates.append(len(parts.selectedItems())))
+    owner = SimpleNamespace(part_list=parts, _safe_attr=DataGrouping._safe_attr)
+    DataGrouping._select_visible_parts_for_grouping(owner)
+    assert calls == [True, True]
+    assert updates == [1, 2]
+    parts.close()
+
+
+def test_visible_parts_rebound_object_and_fake_alias_keep_general_path(qapplication_session):
+    import importlib
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    native = importlib.import_module('metroliza.ui.data_grouping')
+    calls = []
+
+    class Item:
+        def isHidden(self):
+            calls.append('hidden')
+            return False
+
+        def setSelected(self, selected):
+            calls.append(('selected', selected))
+
+    class FakeList:
+        _items = [Item()]
+
+        @property
+        def __dict__(self):
+            raise AssertionError('new native introspection of fake list')
+
+    for alias, parts in [(object, object()), (FakeList, FakeList())]:
+        with patch.object(native, 'QListWidget', alias):
+            owner = SimpleNamespace(part_list=parts, _safe_attr=DataGrouping._safe_attr)
+            DataGrouping._select_visible_parts_for_grouping(owner)
+    assert calls == ['hidden', ('selected', True)]
+
+
+def test_visible_parts_changed_native_method_keeps_original_callback_order(qapplication_session):
+    import importlib
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    widgets = importlib.import_module('PyQt6.QtWidgets')
+    parts = widgets.QListWidget()
+    parts.setSelectionMode(widgets.QAbstractItemView.SelectionMode.MultiSelection)
+    widgets.QListWidgetItem('A', parts)
+    widgets.QListWidgetItem('B', parts)
+    updates = []
+    parts.itemSelectionChanged.connect(lambda: updates.append(len(parts.selectedItems())))
+    try:
+        # The original selection path never dispatches blockSignals; changing
+        # this native class method must decline batching before invoking it.
+        with patch.object(widgets.QListWidget, 'blockSignals', side_effect=AssertionError('custom blockSignals')) as block:
+            DataGrouping._select_visible_parts_for_grouping(SimpleNamespace(part_list=parts, _safe_attr=DataGrouping._safe_attr))
+            block.assert_not_called()
+        assert updates == [1, 2]
+    finally:
+        parts.close()

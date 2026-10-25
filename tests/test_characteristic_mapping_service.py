@@ -625,3 +625,65 @@ def test_metric_names_equivalent_on_unmigrated_legacy_fallback(tmp_path, monkeyp
     assert [row['metric_name'] for row in expected] == [
         'DIA - X', 'MIXED - CASE', 'Mixed - case', 'mixed - Case', 'NUM - Z', 'ONLY-NULL', 'UNI',
     ]
+
+
+@pytest.mark.parametrize('alias,scope,value,expected', [
+    ('DIA - X', 'global', None, {'measurement_count': 2, 'report_count': 2, 'reference_count': 2}),
+    ('DIA - X', 'reference', 'REF-1', {'measurement_count': 1, 'report_count': 1, 'reference_count': 1}),
+    ('DIA - X', 'reference', 'ref-1', {'measurement_count': 0, 'report_count': 0, 'reference_count': 0}),
+    ('LENGTH - Y', 'global', None, {'measurement_count': 2, 'report_count': 2, 'reference_count': 1}),
+])
+def test_impact_frozen_literal_counts(tmp_path, alias, scope, value, expected):
+    import importlib
+    native = importlib.import_module('metroliza.reports.characteristic_mapping_service')
+    assert native.fetch_mapping_impact_counts is fetch_mapping_impact_counts
+    db = str(tmp_path / 'literal.sqlite')
+    _create_measurement_export_db(db)
+    assert native.fetch_mapping_impact_counts(db, alias_name=alias, scope_type=scope, scope_value=value) == expected
+
+
+def test_public_impact_reader_closes_on_success_and_validation_error(tmp_path, monkeypatch):
+    import importlib
+    native = importlib.import_module('metroliza.reports.characteristic_mapping_service')
+    db = str(tmp_path / 'owned.sqlite')
+    _create_measurement_export_db(db)
+    opened, open_calls = [], []
+    from metroliza.reports import db as db_module
+    connect = db_module.connect_sqlite
+
+    def tracked(path, **kwargs):
+        open_calls.append((path, kwargs))
+        connection = connect(path, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(db_module, 'connect_sqlite', tracked)
+    assert native.fetch_mapping_impact_counts(db, alias_name='DIA - X', scope_type='global') == {
+        'measurement_count': 2, 'report_count': 2, 'reference_count': 2}
+    assert len(opened) == 3
+    with pytest.raises(ValueError, match='alias_name is required'):
+        native.fetch_mapping_impact_counts(db, alias_name='', scope_type='global')
+    assert len(opened) == 3  # Validation must not open another connection.
+    assert open_calls == [(db, {'timeout_s': 5.0})] * 3
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match='closed database'):
+            connection.execute('SELECT 1')
+
+
+@pytest.mark.parametrize('message,attempts', [('database is locked', 3), ('syntax error', 1)])
+def test_public_impact_reader_retains_open_retry_policy(monkeypatch, message, attempts):
+    import importlib
+    native = importlib.import_module('metroliza.reports.characteristic_mapping_service')
+    calls = []
+
+    def fail(path, **kwargs):
+        assert kwargs == {'timeout_s': 5.0}
+        calls.append(path)
+        raise sqlite3.OperationalError(message)
+
+    from metroliza.reports import db as db_module
+    monkeypatch.setattr(db_module, 'connect_sqlite', fail)
+    monkeypatch.setattr(db_module.time, 'sleep', lambda _seconds: None)
+    with pytest.raises(sqlite3.OperationalError, match=message):
+        native.fetch_mapping_impact_counts('preview.sqlite', alias_name='DIA', scope_type='global')
+    assert calls == ['preview.sqlite'] * attempts
