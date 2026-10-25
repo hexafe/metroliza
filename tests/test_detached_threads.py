@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import gc
+import subprocess
+import sys
 import threading
 import time
 import weakref
@@ -272,3 +274,244 @@ def test_registry_drops_a_thread_only_after_it_finished():
         assert thread.wait(_TIMEOUT_S * 1000)
     detached_threads.discard(thread)
     assert not detached_threads.is_registered(thread)
+
+
+def test_opt_in_native_settling_is_warning_free():
+    script = '''
+import functools
+from PyQt6.QtCore import QThread, QTimer, qInstallMessageHandler, qVersion, PYQT_VERSION_STR
+from PyQt6.QtWidgets import QApplication
+from metroliza.ui import detached_threads
+app = QApplication([])
+app.setQuitOnLastWindowClosed(False)
+messages, waits, cleanup, beats = [], [], [], []
+qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+class Worker(QThread):
+    def run(self):
+        self.msleep(100)
+    def wait(self, timeout):
+        assert timeout == 0 and self.isFinished(), 'GUI wait before finished'
+        waits.append(timeout)
+        return super().wait(timeout)
+thread = Worker()
+detached_threads.register(thread, defer_quit=True)
+detached_threads.run_when_finished([thread], functools.partial(cleanup.append, 'settled'))
+heartbeat = QTimer()
+heartbeat.timeout.connect(functools.partial(beats.append, 1))
+heartbeat.start(5)
+thread.start()
+QTimer.singleShot(10, app.quit)
+QTimer.singleShot(3000, functools.partial(app.exit, 99))
+code = app.exec()
+assert code == 0 and cleanup == ['settled'] and len(beats) >= 5
+assert waits and not messages, messages
+assert not detached_threads.running_threads()
+print('warning-free native settle', PYQT_VERSION_STR, qVersion(), len(beats), waits)
+'''
+    child = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=10)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert "warning-free native settle 6." in child.stdout
+    assert child.stderr == ""
+
+
+@pytest.mark.parametrize("mode", ["quit", "lastwindow", "directexit", "rejected"])
+def test_opt_in_native_quit_routes_and_replay_race(mode):
+    script = '''
+import functools, sys, threading
+from PyQt6.QtCore import QEvent, QThread, QTimer, Qt, qInstallMessageHandler
+from PyQt6.QtWidgets import QApplication, QWidget
+from metroliza.ui import detached_threads as registry
+app = QApplication([])
+mode = sys.argv[1]
+class Owner(QWidget):
+    allow_close = False
+    rejections = 0
+    def closeEvent(self, event):
+        if mode == 'rejected' and not self.allow_close:
+            self.rejections += 1; event.ignore(); return
+        super().closeEvent(event)
+owner = Owner(); owner.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose); owner.show()
+jobs, cleanups, beats, messages, exits = [], [], [], [], []
+qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+class Worker(QThread):
+    def __init__(self, name):
+        super().__init__(); self.name = name; self.release = threading.Event(); self.error = None
+    def run(self):
+        try:
+            assert self.release.wait(3), 'control expired'
+            if self.name == 'second':
+                raise OSError('literal worker error')
+        except Exception as error:
+            self.error = str(error)
+    def wait(self, timeout):
+        assert timeout == 0 and self.isFinished(), 'blocking or premature GUI wait'
+        return super().wait(timeout)
+    def requestInterruption(self):
+        raise AssertionError('noncancellable work interrupted')
+def add(name, delay):
+    job = Worker(name); jobs.append(job)
+    registry.register(job, defer_quit=True); job.start()
+    registry.run_when_finished([job], functools.partial(cleanups.append, name))
+    QTimer.singleShot(delay, job.release.set)
+add('first', 150); add('second', 250)
+controller = app._metroliza_detached_quit
+def admit_late():
+    if controller.replay_queued and len(jobs) == 2:
+        add('late', 120)
+controller.timer.timeout.connect(admit_late)
+heartbeat = QTimer(); heartbeat.timeout.connect(functools.partial(beats.append, 1)); heartbeat.start(5)
+def at_exit():
+    exits.append([job.name for job in jobs if not job.isFinished()])
+app.aboutToQuit.connect(at_exit)
+assert registry.shutdown(0) is False and cleanups == []
+if mode == 'lastwindow':
+    QTimer.singleShot(30, owner.close)
+elif mode in ('quit', 'rejected'):
+    QTimer.singleShot(30, app.quit); QTimer.singleShot(60, app.quit)
+else:
+    QTimer.singleShot(30, functools.partial(app.exit, 23))
+if mode == 'rejected':
+    def resolve_close_guard():
+        assert owner.rejections == 1 and not controller.pending and not controller.timer.isActive()
+        owner.allow_close = True; app.quit()
+    QTimer.singleShot(600, resolve_close_guard)
+QTimer.singleShot(3000, functools.partial(app.exit, 99))
+code = app.exec()
+if mode == 'directexit':
+    assert code == 23 and exits == [['first', 'second']]
+    for job in jobs:
+        job.release.set()
+        assert QThread.wait(job, 1000)  # test rescue after the intentionally unprotected exit
+    registry.running_threads(); registry._run_ready_deferred()
+else:
+    assert code == 0 and exits == [[]] and len(jobs) == 3
+    assert cleanups == ['first', 'second', 'late'] and len(beats) > 30
+    assert jobs[1].error == 'literal worker error'
+assert not registry.running_threads() and not registry._QUIT_BLOCKERS
+assert not messages, messages
+app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+print(mode, code, 'native routes settled', len(beats), cleanups)
+sys.exit(code)
+'''
+    child = subprocess.run([sys.executable, "-c", script, mode], capture_output=True, text=True, timeout=10)
+    assert child.returncode == (23 if mode == "directexit" else 0), child.stdout + child.stderr
+    assert "native routes settled" in child.stdout
+    assert child.stderr == ""
+
+
+def test_opt_in_defers_cleanup_past_finished_until_native_settle(qapplication_session):
+    class Signal:
+        def connect(self, slot):
+            pass
+
+    class Thread:
+        finished = Signal()
+        settled = False
+
+        def isFinished(self):
+            return True
+
+        def isRunning(self):
+            return False
+
+        def wait(self, timeout):
+            assert timeout == 0
+            return self.settled
+
+    thread, calls = Thread(), []
+    detached_threads.register(thread, defer_quit=True)
+    detached_threads.run_when_finished([thread], lambda: calls.append("cleanup"))
+    detached_threads.discard(thread)
+    assert detached_threads.shutdown(0) is False and calls == []
+    assert detached_threads.is_registered(thread)
+    thread.settled = True
+    detached_threads.discard(thread)
+    detached_threads.discard(thread)
+    assert calls == ["cleanup"] and not detached_threads.is_registered(thread)
+
+
+def test_opt_in_unstarted_and_deleted_wrappers_release(qapplication_session):
+    from PyQt6.QtCore import QEvent
+
+    thread = QThread()
+    detached_threads.register(thread, defer_quit=True)
+    calls = []
+    detached_threads.run_when_finished([thread], lambda: calls.append("aborted"))
+    detached_threads.discard(thread)  # start failure, without a native wait
+    detached_threads.discard(thread)
+    assert calls == ["aborted"] and not detached_threads.is_registered(thread)
+    detached_threads.register(thread, defer_quit=True)
+    thread.deleteLater()
+    qapplication_session.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert thread not in detached_threads.running_threads()
+    assert not detached_threads._QUIT_BLOCKERS
+
+
+def test_registry_import_remains_qt_lazy():
+    child = subprocess.run([sys.executable, "-c", '''
+import sys
+from metroliza.ui import detached_threads
+assert not any(name.startswith('PyQt6') for name in sys.modules)
+assert detached_threads.QUIT_WAIT_TOTAL_MS == 5000
+'''], capture_output=True, text=True, timeout=10)
+    assert child.returncode == 0, child.stdout + child.stderr
+
+
+@pytest.mark.parametrize("mode", ["consume", "destroy", "startfailure"])
+def test_opt_in_gui_acknowledgement_native_process(mode):
+    script = r"""
+import functools
+from PyQt6 import sip
+from PyQt6.QtCore import QEvent, QEventLoop, QThread, QTimer
+from PyQt6.QtWidgets import QApplication, QWidget
+from metroliza.ui import detached_threads
+app = QApplication([])
+app.setQuitOnLastWindowClosed(False)
+owner = QWidget()
+consumed, cleaned, observed = [], [], []
+class Worker(QThread):
+    def run(self): self.msleep(40)
+    def wait(self, timeout):
+        assert timeout == 0 and self.isFinished()
+        return super().wait(timeout)
+thread = Worker()
+def consume(current_owner, current_thread):
+    assert current_owner is owner and current_thread is thread
+    consumed.append(1)
+    loop = QEventLoop()
+    def during():
+        detached_threads._quit_deferral().check()
+        observed.append((thread.isFinished(), detached_threads.is_registered(thread), bool(cleaned)))
+        app.quit()
+        # Even destruction inside a reentrant handler must not release its worker.
+        current_owner.deleteLater()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        observed.append((detached_threads.is_registered(thread), bool(cleaned)))
+        loop.quit()
+    QTimer.singleShot(30, during)
+    loop.exec()
+detached_threads.register(thread, defer_quit=True, owner=owner, on_finished=consume)
+detached_threads.run_when_finished([thread], functools.partial(cleaned.append, 1))
+detached_threads.run_when_finished([thread], thread.deleteLater)
+mode = __import__('sys').argv[1]
+if mode == 'startfailure':
+    detached_threads.discard(thread)
+    detached_threads.discard(thread)
+    QTimer.singleShot(0, app.quit)
+else:
+    thread.start()
+    if mode == 'destroy':
+        owner.deleteLater()
+        QTimer.singleShot(1, app.quit)
+QTimer.singleShot(3000, functools.partial(app.exit, 99))
+assert app.exec() == 0
+assert cleaned == [1] and not detached_threads.running_threads()
+assert consumed == ([1] if mode == 'consume' else [])
+assert observed == ([(True, True, False), (True, False)] if mode == 'consume' else [])
+assert sip.isdeleted(thread)
+print('native GUI acknowledgement complete', mode, observed)
+"""
+    child = subprocess.run([sys.executable, "-c", script, mode], capture_output=True, text=True, timeout=8)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert "native GUI acknowledgement complete" in child.stdout
+    assert child.stderr == ""

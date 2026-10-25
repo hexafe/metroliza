@@ -1033,3 +1033,695 @@ def test_impact_application_quit_creates_no_preview_worker():
     ''')
     completed = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=20)
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+class TestAliasCsvBaseline(unittest.TestCase):
+    """Literal public CSV behavior shared by the synchronous reference versions."""
+
+    @classmethod
+    def setUpClass(cls):
+        TestCharacteristicMappingDialog.setUpClass.__func__(cls)
+
+    def setUp(self):
+        import importlib
+        from pathlib import Path
+        self.native = importlib.import_module('metroliza.ui.characteristic_mapping_dialog')
+        self.service = importlib.import_module('metroliza.reports.characteristic_alias_service')
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.db = self.root / 'synthetic.sqlite'
+        self.owner = self.native.CharacteristicMappingDialog(db_file='')
+        self.addCleanup(self.owner.close)
+        self.owner.db_file = str(self.db)
+
+    def snapshot(self):
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(self.db)) as connection:
+            return {
+                'catalog': connection.execute(
+                    'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
+                ).fetchall(),
+                'rows': connection.execute('SELECT * FROM CHARACTERISTIC_ALIASES ORDER BY id').fetchall(),
+                'dump': tuple(connection.iterdump()),
+            }
+
+    def test_alias_csv_baseline_literal_roundtrip_repeat_and_reopen(self):
+        source, target = self.root / 'input.csv', self.root / 'output.csv'
+        source.write_text('\ufeff alias_name ,canonical_name,scope_type,scope_value\n'
+                          ' z , Zed , GLOBAL ,discarded\n'
+                          '001,Numeric,reference, 007 \n'
+                          '"a,b","Quoted ""name""",global,\n', encoding='utf-8')
+        expected = [
+            {'alias_name': '001', 'canonical_name': 'Numeric', 'scope_type': 'reference', 'scope_value': '007'},
+            {'alias_name': 'a,b', 'canonical_name': 'Quoted "name"', 'scope_type': 'global', 'scope_value': None},
+            {'alias_name': 'z', 'canonical_name': 'Zed', 'scope_type': 'global', 'scope_value': None},
+        ]
+        calls = []
+        load = self.owner.load_aliases
+
+        def reload():
+            self.assertIs(QThread.currentThread(), self.app.thread())
+            calls.append('load')
+            load()
+
+        with patch.object(self.native.QFileDialog, 'getOpenFileName', return_value=(str(source), '')), patch.object(
+            self.owner, 'load_aliases', side_effect=reload,
+        ), patch.object(self.native.QMessageBox, 'information', side_effect=lambda *args: calls.append(args[1:])):
+            for _ in range(2):
+                self.owner.import_mappings()
+                self.assertEqual(self.service.fetch_all_characteristic_aliases(str(self.db)), expected)
+                self.assertEqual(self.owner.alias_table.rowCount(), 3)
+        self.assertEqual(calls, ['load', ('Import complete', 'Imported 3 mapping row(s).')] * 2)
+        before = self.snapshot()
+        self.assertEqual(before['rows'], [
+            (1, 'z', 'Zed', 'global', None, None, None),
+            (2, '001', 'Numeric', 'reference', '007', None, None),
+            (3, 'a,b', 'Quoted "name"', 'global', None, None, None),
+        ])
+        with patch.object(self.native.QFileDialog, 'getSaveFileName', return_value=(str(target), '')), patch.object(
+            self.native.QMessageBox, 'information',
+        ) as info:
+            for _ in range(2):
+                self.owner.export_mappings()
+                thread = getattr(self.owner, '_alias_csv_thread', None)
+                if thread is not None:
+                    deadline = time.monotonic() + 10
+                    while (self.owner._alias_csv_thread is not None or
+                           self.native.detached_threads.is_registered(thread)) and time.monotonic() < deadline:
+                        self.app.processEvents()
+                        time.sleep(.005)
+                    self.assertIsNone(self.owner._alias_csv_thread)
+                    self.assertFalse(self.native.detached_threads.is_registered(thread))
+                self.assertEqual(target.read_bytes(), (
+                    b'alias_name,canonical_name,scope_type,scope_value\r\n'
+                    b'001,Numeric,reference,007\r\n'
+                    b'"a,b","Quoted ""name""",global,\r\nz,Zed,global,\r\n'))
+        self.assertEqual(info.call_args.args[1:], ('Export complete', 'Exported 3 mapping row(s).'))
+        self.assertEqual(self.snapshot(), before)
+        self.owner.close()
+        reopened = self.native.CharacteristicMappingDialog(db_file='')
+        try:
+            reopened.db_file = str(self.db)
+            reopened.load_aliases()
+            self.assertEqual([[reopened.alias_table.item(r, c).text() for c in range(4)] for r in range(3)], [
+                ['001', 'Numeric', ONE_REFERENCE_LABEL, '007'],
+                ['a,b', 'Quoted "name"', ALL_REFERENCES_LABEL, '—'],
+                ['z', 'Zed', ALL_REFERENCES_LABEL, '—'],
+            ])
+            self.assertEqual(self.snapshot(), before)
+        finally:
+            reopened.close()
+
+    def test_alias_csv_baseline_real_validation_atomicity_and_remediation_choices(self):
+        import csv
+        source, report = self.root / 'invalid.csv', self.root / 'report.csv'
+        self.service.ensure_characteristic_alias_schema(str(self.db))
+        self.service.upsert_characteristic_alias(str(self.db), 'KEEP', 'Kept', 'global')
+        before = self.snapshot()
+        source.write_text('alias_name,canonical_name,scope_type,scope_value\n'
+                          'A,C,global,\n A ,Other, GLOBAL ,ignored\nR,C,reference,\n'
+                          'S,C,wat,\nQ,,global,\nVALID,C,global,\n', encoding='utf-8')
+        issues = [
+            (3, 'alias_name', 'duplicate_key_collision', 'duplicate_collision',
+             'duplicate alias/scope key for "A" (global) at row 3; first seen at row 2',
+             'Remove or merge duplicate alias rows with the same alias_name + scope.'),
+            (4, 'scope_value', 'reference_scope_requires_scope_value', 'scope_requirements',
+             'scope_value is required for reference scope at row 4', 'Set scope_value for reference-scoped aliases.'),
+            (5, 'scope_type', 'invalid_scope_type', 'invalid_value',
+             'scope_type must be one of: global, reference at row 5', "Use scope_type 'global' or 'reference'."),
+            (6, 'canonical_name', 'missing_canonical_name', 'missing_required_field',
+             'canonical_name is required at row 6', 'Provide the canonical_name to map this alias to.'),
+        ]
+        with self.assertRaises(self.service.CharacteristicAliasImportValidationError) as caught:
+            self.service.import_characteristic_aliases_csv(str(self.db), str(source))
+        fields = ('row_number', 'field', 'code', 'category', 'message', 'remediation_hint')
+        self.assertEqual(caught.exception.row_error_details, [dict(zip(fields, issue)) for issue in issues])
+        self.assertEqual((caught.exception.total_rows_processed, caught.exception.valid_rows, caught.exception.invalid_rows), (6, 2, 4))
+        self.assertEqual(self.snapshot(), before)
+        for accept, filename in [(False, ''), (True, ''), (True, str(report))]:
+            with self.subTest(accept=accept, filename=bool(filename)), patch.object(
+                self.native.QFileDialog, 'getOpenFileName', return_value=(str(source), ''),
+            ), patch.object(self.native.QFileDialog, 'getSaveFileName', return_value=(filename, '')) as save, patch.object(
+                self.native.QMessageBox, 'exec', return_value=QMessageBox.StandardButton.Ok,
+            ), patch.object(self.native.QMessageBox, 'question', return_value=(
+                QMessageBox.StandardButton.Yes if accept else QMessageBox.StandardButton.No
+            )), patch.object(self.native.QMessageBox, 'information') as info, patch.object(
+                self.native, 'CustomLogger',
+            ), patch.object(self.owner, 'load_aliases') as load:
+                self.owner.import_mappings()
+                load.assert_not_called()
+                self.assertEqual(save.call_count, int(accept))
+                self.assertEqual(info.call_count, int(bool(filename)))
+                box = self.owner.findChildren(QMessageBox)[-1]
+                self.assertEqual(box.windowTitle(), 'Import error')
+                for text in ('Total rows processed: 6', 'Valid rows: 2', 'Invalid rows: 4', 'duplicate_collision: 1'):
+                    self.assertIn(text, box.text())
+                for issue in issues:
+                    self.assertIn(issue[4], box.detailedText())
+                    self.assertIn(issue[5], box.detailedText())
+                if filename:
+                    self.assertEqual(info.call_args.args[1:], ('Report saved', 'Saved remediation report with 4 row issue(s).'))
+            self.assertEqual(self.snapshot(), before)
+        with report.open(newline='', encoding='utf-8') as stream:
+            self.assertEqual(list(csv.reader(stream)), [list(fields)] + [[str(value) for value in issue] for issue in issues])
+
+    def test_alias_csv_baseline_schema_and_missing_header_messages(self):
+        source = self.root / 'schema.csv'
+        self.service.ensure_characteristic_alias_schema(str(self.db))
+        before = self.snapshot()
+        for contents, detected in [('', '(none)'), ('canonical_name,alias_name\n', 'canonical_name, alias_name')]:
+            source.write_text(contents, encoding='utf-8')
+            with self.subTest(contents=contents), patch.object(
+                self.native.QFileDialog, 'getOpenFileName', return_value=(str(source), ''),
+            ), patch.object(self.native.QMessageBox, 'critical') as critical, patch.object(
+                self.native, 'CustomLogger',
+            ), patch.object(self.owner, 'load_aliases') as load:
+                self.owner.import_mappings()
+                critical.assert_called_once_with(self.owner, 'Import error',
+                    'Could not import mappings because the CSV header row does not match the expected schema.\n\n'
+                    'Required columns: alias_name, canonical_name, scope_type, scope_value\n'
+                    f'Detected columns: {detected}\n\nUse this exact header line (same names and order):\n'
+                    'alias_name,canonical_name,scope_type,scope_value')
+                load.assert_not_called()
+                self.assertEqual(self.snapshot(), before)
+
+    def test_alias_csv_baseline_public_standin_dispatch_order_cancel_and_errors(self):
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+        comparisons = []
+
+        class Key(str):
+            __hash__ = str.__hash__
+
+            def __eq__(self, other):
+                comparisons.append(other)
+                return False
+
+        for operation in ('import', 'export'):
+            for mode in ('success', 'cancel', 'error', 'schema_error'):
+                events = []
+
+                def record(name, result=None, error=None):
+                    def callback(*args, **kwargs):
+                        self.assertIs(QThread.currentThread(), self.app.thread())
+                        events.append((name, args, kwargs))
+                        if error:
+                            raise RuntimeError(error)
+                        return result
+                    return callback
+
+                standin = SimpleNamespace(
+                    db_file='synthetic-hook.sqlite',
+                    _ensure_db_file_selected=record('selected', True),
+                    load_aliases=record('load'),
+                )
+                standin.__dict__[Key('_alias_csv_task')] = 'existing extension value'
+                comparisons.clear()
+                filename = '' if mode == 'cancel' else 'synthetic-hook.csv'
+                with self.subTest(operation=operation, mode=mode), ExitStack() as stack:
+                    dialog_method = 'getOpenFileName' if operation == 'import' else 'getSaveFileName'
+                    stack.enter_context(patch.object(self.native.QFileDialog, dialog_method, side_effect=record('file', (filename, ''))))
+                    stack.enter_context(patch.object(self.native, 'ensure_characteristic_alias_schema', side_effect=record(
+                        'schema', error='schema failed' if mode == 'schema_error' else None)))
+                    stack.enter_context(patch.object(self.native, f'{operation}_characteristic_aliases_csv', side_effect=record(
+                        'producer', 17, 'producer failed' if mode == 'error' else None)))
+                    for name in ('information', 'critical'):
+                        stack.enter_context(patch.object(self.native.QMessageBox, name, side_effect=record(name)))
+                    stack.enter_context(patch.object(self.native, 'CustomLogger', side_effect=record('log')))
+                    getattr(self.native.CharacteristicMappingDialog, f'{operation}_mappings')(standin)
+                expected = ['selected', 'file']
+                if mode != 'cancel':
+                    expected += ['schema']
+                    if mode != 'schema_error':
+                        expected += ['producer']
+                    expected += (['load'] if operation == 'import' else []) + ['information'] if mode == 'success' else ['log', 'critical']
+                self.assertEqual([event[0] for event in events], expected)
+                self.assertEqual(comparisons, [])
+                if mode in ('success', 'error'):
+                    self.assertEqual(events[3][1:], (('synthetic-hook.sqlite', filename), {}))
+                if mode == 'success':
+                    verb = 'Imported' if operation == 'import' else 'Exported'
+                    self.assertEqual(events[-1][1], (standin, f'{operation.title()} complete', f'{verb} 17 mapping row(s).'))
+                elif mode in ('error', 'schema_error'):
+                    message = 'producer failed' if mode == 'error' else 'schema failed'
+                    self.assertEqual(events[-2][2], {'reraise': False})
+                    self.assertEqual(events[-1][1], (standin, f'{operation.title()} error', f'Could not {operation} mappings: {message}'))
+
+
+class TestAliasCsvBackground(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestCharacteristicMappingDialog.setUpClass.__func__(cls)
+
+    def setUp(self):
+        TestAliasCsvBaseline.setUp(self)
+        self._cleanups.pop()  # replace close with a cleanup safe after explicit native deletion
+        self.addCleanup(self.close_owner)
+        self.source = self.root / 'native.csv'
+        self.source.write_text('alias_name,canonical_name,scope_type,scope_value\nDIA,Diameter,global,\n')
+
+    def close_owner(self):
+        from PyQt6 import sip
+        if not sip.isdeleted(self.owner):
+            self.owner.close()
+
+    def wait(self, predicate):
+        deadline = time.monotonic() + 10
+        while not predicate() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(.005)
+        self.app.processEvents()
+        self.assertTrue(predicate())
+
+    def test_native_csv_actual_services_controls_and_gui_delivery(self):
+        native = self.native
+        real_run = native._AliasCsvThread.run
+        for operation in ('import', 'export'):
+            gate, started, events = threading.Event(), threading.Event(), []
+            def held(thread):
+                events.append(('worker', QThread.currentThread() is self.app.thread()))
+                started.set()
+                if not gate.wait(8):
+                    thread.error = RuntimeError('test gate expired')
+                    return
+                real_run(thread)
+            target = self.root / 'native-export.csv'
+            def info(*_args):
+                events.append(('info', QThread.currentThread() is self.app.thread()))
+            self.owner.export_button.setEnabled(False)
+            states = [getattr(self.owner, name).isEnabled() for name in native._ALIAS_CSV_CONTROLS]
+            with patch.object(native._AliasCsvThread, 'run', held), patch.object(
+                native.QFileDialog, 'getOpenFileName', return_value=(str(self.source), ''),
+            ) as opening, patch.object(native.QFileDialog, 'getSaveFileName', return_value=(str(target), '')) as saving, patch.object(
+                native.QMessageBox, 'information', side_effect=info,
+            ):
+                getattr(self.owner, operation + '_mappings')()
+                thread = self.owner._alias_csv_thread
+                self.wait(started.is_set)
+                self.assertTrue(native.detached_threads.is_registered(thread))
+                self.assertTrue(all(not getattr(self.owner, name).isEnabled() for name in native._ALIAS_CSV_CONTROLS))
+                getattr(self.owner, operation + '_mappings')()
+                self.assertEqual((opening if operation == 'import' else saving).call_count, 1)
+                self.assertEqual(events, [('worker', False)])
+                gate.set()
+                self.wait(lambda: self.owner._alias_csv_thread is None)
+                self.wait(lambda: not native.detached_threads.is_registered(thread))
+            self.assertEqual(events, [('worker', False), ('info', True)])
+            self.assertEqual([getattr(self.owner, name).isEnabled() for name in native._ALIAS_CSV_CONTROLS], states)
+        self.assertEqual(target.read_bytes(), b'alias_name,canonical_name,scope_type,scope_value\r\nDIA,Diameter,global,\r\n')
+        self.assertEqual(self.owner.alias_table.item(0, 1).text(), 'Diameter')
+
+    def test_native_csv_raw_keys_custom_producer_and_class_hook_keep_gui_fallback(self):
+        comparisons, calls = [], []
+        native, original_load = self.native, self.native.CharacteristicMappingDialog.load_aliases
+        class Key(str):
+            __hash__ = str.__hash__
+            def __eq__(self, other):
+                comparisons.append(other)
+                return False
+        class Filename(str):
+            pass
+        def load(owner):
+            calls.append(('load', QThread.currentThread() is self.app.thread()))
+            original_load(owner)
+        def produce(db, filename):
+            calls.append(('producer', QThread.currentThread() is self.app.thread()))
+            return self.service.import_characteristic_aliases_csv(db, filename)
+        from contextlib import ExitStack
+        for mode in ('raw-key', 'producer', 'class-hook', 'filename'):
+            with self.subTest(mode=mode), ExitStack() as stack:
+                comparisons.clear()
+                if mode == 'raw-key':
+                    self.owner.__dict__[Key('_alias_csv_thread')] = 'legacy extension'
+                    comparisons.clear()
+                elif mode == 'producer':
+                    stack.enter_context(patch.object(native, 'import_characteristic_aliases_csv', side_effect=produce))
+                elif mode == 'class-hook':
+                    stack.enter_context(patch.object(native.CharacteristicMappingDialog, 'load_aliases', load))
+                filename = Filename(str(self.source)) if mode == 'filename' else str(self.source)
+                stack.enter_context(patch.object(native.QFileDialog, 'getOpenFileName', return_value=(filename, '')))
+                info = stack.enter_context(patch.object(native.QMessageBox, 'information'))
+                worker = stack.enter_context(patch.object(native, '_AliasCsvThread'))
+                self.owner.import_mappings()
+                worker.assert_not_called()
+                info.assert_called_once_with(self.owner, 'Import complete', 'Imported 1 mapping row(s).')
+                self.assertEqual(comparisons, [])
+                for key in tuple(vars(self.owner)):
+                    if type(key) is Key:
+                        del vars(self.owner)[key]
+        self.assertEqual(calls, [('producer', True), ('load', True)])
+
+    def test_native_csv_close_stale_database_delete_and_late_error_drop_delivery(self):
+        from PyQt6 import sip
+        for action in ('close', 'database', 'delete'):
+            owner = self.native.CharacteristicMappingDialog(db_file='')
+            owner.db_file = str(self.root / (action + '.sqlite'))
+            owner.show()
+            gate, started = threading.Event(), threading.Event()
+            def held(thread):
+                started.set()
+                gate.wait(8)
+                thread.error = RuntimeError('literal late error')
+            with patch.object(self.native._AliasCsvThread, 'run', held), patch.object(
+                self.native.QFileDialog, 'getOpenFileName', return_value=(str(self.source), ''),
+            ), patch.object(self.native.QMessageBox, 'critical') as critical, patch.object(
+                self.native.QMessageBox, 'information',
+            ) as info:
+                owner.import_mappings()
+                thread = owner._alias_csv_thread
+                self.wait(started.is_set)
+                if action == 'close':
+                    owner.close()
+                    owner.show()
+                elif action == 'database':
+                    owner.db_file = str(self.root / 'new.sqlite')
+                else:
+                    sip.delete(owner)
+                gate.set()
+                self.wait(lambda: not self.native.detached_threads.is_registered(thread))
+                critical.assert_not_called()
+                info.assert_not_called()
+            if not sip.isdeleted(owner):
+                self.assertIsNone(owner._alias_csv_thread)
+                owner.close()
+
+    def test_native_csv_validation_start_failure_and_reentrant_delivery(self):
+        self.source.write_text('alias_name,canonical_name,scope_type,scope_value\nDIA,,global,\n')
+        with patch.object(self.native.QFileDialog, 'getOpenFileName', return_value=(str(self.source), '')), patch.object(
+            self.native.QMessageBox, 'exec', return_value=QMessageBox.StandardButton.Ok,
+        ), patch.object(self.native.QMessageBox, 'question', return_value=QMessageBox.StandardButton.No), patch.object(
+            self.native, 'CustomLogger',
+        ) as logger:
+            self.owner.import_mappings()
+            self.wait(lambda: self.owner._alias_csv_thread is None)
+        self.assertIsInstance(logger.call_args.args[0], self.service.CharacteristicAliasImportValidationError)
+        self.assertIn('canonical_name is required at row 2', self.owner.findChildren(QMessageBox)[-1].detailedText())
+        self.assertEqual(self.service.fetch_all_characteristic_aliases(str(self.db)), [])
+        before = self.native.detached_threads.running_threads()
+        with patch.object(self.native._AliasCsvThread, 'start', side_effect=RuntimeError('start failed')), patch.object(
+            self.native.QFileDialog, 'getOpenFileName', return_value=(str(self.source), ''),
+        ), patch.object(self.native, 'CustomLogger'), patch.object(self.native.QMessageBox, 'critical') as critical:
+            self.owner.import_mappings()
+        self.assertEqual(critical.call_args.args[1:], ('Import error', 'Could not import mappings: start failed'))
+        self.assertIsNone(self.owner._alias_csv_thread)
+        self.assertEqual(self.native.detached_threads.running_threads(), before)
+        self.source.write_text('alias_name,canonical_name,scope_type,scope_value\nDIA,Diameter,global,\n')
+        observed = []
+        def information(*_args):
+            observed.append(self.owner._alias_csv_thread is not None)
+            self.owner.import_mappings()
+            self.app.processEvents()
+            observed.append(self.native.detached_threads.is_registered(self.owner._alias_csv_thread))
+        with patch.object(self.native.QFileDialog, 'getOpenFileName', return_value=(str(self.source), '')) as opening, patch.object(
+            self.native.QMessageBox, 'information', side_effect=information,
+        ):
+            self.owner.import_mappings()
+            self.wait(lambda: self.owner._alias_csv_thread is None)
+        self.assertEqual(observed, [True, True])
+        self.assertEqual(opening.call_count, 1)
+
+
+def test_csv_completion_uses_current_selection_and_keeps_restrictions(tmp_path, qapplication_session):
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QTableWidgetItem
+    from metroliza.ui import characteristic_mapping_dialog as native
+    from metroliza.reports import characteristic_alias_service as service
+
+    for mode in ('select', 'deselect', 'restricted'):
+        db = str(tmp_path / (mode + '.sqlite'))
+        service.ensure_characteristic_alias_schema(db)
+        service.upsert_characteristic_alias(db, 'A', 'Common', 'global')
+        owner = native.CharacteristicMappingDialog(db_file='')
+        owner.db_file = db
+        owner.load_aliases()
+        owner.metric_table.setRowCount(1)
+        owner.metric_table.setItem(0, 0, QTableWidgetItem('A'))
+        if mode != 'select':
+            owner.alias_table.selectRow(0)
+            owner.metric_table.selectRow(0)
+        if mode == 'restricted':
+            owner.edit_button.setEnabled(False)
+        owner.export_button.setEnabled(False)
+        entered, release = threading.Event(), threading.Event()
+        real_fetch = service.fetch_all_characteristic_aliases
+
+        def interact():
+            if mode == 'select':
+                owner.alias_table.selectRow(0)
+                owner.metric_table.selectRow(0)
+            elif mode == 'deselect':
+                owner.alias_table.clearSelection()
+                owner.metric_table.clearSelection()
+
+        def held(*args, **kwargs):
+            entered.set()
+            if QThread.currentThread() is qapplication_session.thread():
+                interact()  # original synchronous reference has no admitted event-loop gap
+            elif not release.wait(8):
+                raise TimeoutError('selection gate expired')
+            return real_fetch(*args, **kwargs)
+
+        thread = None
+        try:
+            with patch.object(service, 'fetch_all_characteristic_aliases', held), patch.object(
+                native.QFileDialog, 'getSaveFileName', return_value=(str(tmp_path / (mode + '.csv')), ''),
+            ), patch.object(native.QMessageBox, 'information'):
+                owner.export_mappings()
+                thread = getattr(owner, '_alias_csv_thread', None)
+                if thread is not None:
+                    deadline = time.monotonic() + 8
+                    while not entered.is_set() and time.monotonic() < deadline:
+                        QTest.qWait(5)
+                    assert entered.is_set()
+                    interact()
+                release.set()
+                deadline = time.monotonic() + 10
+                while thread is not None and detached_threads.is_registered(thread) and time.monotonic() < deadline:
+                    QTest.qWait(5)
+                assert thread is None or not detached_threads.is_registered(thread)
+            assert owner.add_from_selected_button.isEnabled() == (mode != 'deselect')
+            assert owner.edit_button.isEnabled() == (mode == 'select')
+            assert owner.delete_button.isEnabled() == (mode != 'deselect')
+            if mode == 'restricted':
+                assert not owner.export_button.isEnabled()
+        finally:
+            release.set()
+            if thread is not None:
+                deadline = time.monotonic() + 10
+                while detached_threads.is_registered(thread) and time.monotonic() < deadline:
+                    QTest.qWait(5)
+                assert not detached_threads.is_registered(thread)
+            owner.close()
+
+
+def test_csv_selection_getter_hooks_keep_original_export_callbacks(tmp_path, qapplication_session):
+    from contextlib import ExitStack
+    from PyQt6.QtTest import QTest
+    from metroliza.ui import characteristic_mapping_dialog as native
+    from metroliza.reports import characteristic_alias_service as service
+
+    for mode in ('instance', 'class'):
+        db = str(tmp_path / (mode + '.sqlite'))
+        output = tmp_path / (mode + '.csv')
+        service.ensure_characteristic_alias_schema(db)
+        service.upsert_characteristic_alias(db, 'A', 'Common', 'global')
+        owner = native.CharacteristicMappingDialog(db_file='')
+        owner.db_file = db
+        events = []
+        try:
+            with ExitStack() as stack:
+                for name in ('_selected_metric_option', '_selected_mapping'):
+                    def selected(*args, name=name):
+                        events.append(name)
+                        return None
+                    stack.enter_context(patch.object(owner if mode == 'instance' else type(owner), name, selected))
+                def filename(*args):
+                    events.append('filename')
+                    return str(output), ''
+                stack.enter_context(patch.object(native.QFileDialog, 'getSaveFileName', side_effect=filename))
+                stack.enter_context(patch.object(native.QMessageBox, 'information',
+                                                side_effect=lambda *args: events.append('information')))
+                owner.export_mappings()
+                thread = getattr(owner, '_alias_csv_thread', None)
+                deadline = time.monotonic() + 10
+                while thread is not None and detached_threads.is_registered(thread) and time.monotonic() < deadline:
+                    QTest.qWait(5)
+                assert thread is None or not detached_threads.is_registered(thread)
+                assert events == ['filename', 'information']
+                assert output.read_bytes() == (b'alias_name,canonical_name,scope_type,scope_value\r\n'
+                                               b'A,Common,global,\r\n')
+        finally:
+            owner.close()
+
+
+def test_csv_close_preserves_durable_import_order(tmp_path, qapplication_session):
+    from PyQt6.QtTest import QTest
+    from metroliza.ui import characteristic_mapping_dialog as native
+    from metroliza.reports import characteristic_alias_service as service
+
+    for action in ('close', 'done', 'reject'):
+        db = str(tmp_path / (action + '.sqlite'))
+        source = tmp_path / (action + '.csv')
+        source.write_text('alias_name,canonical_name,scope_type,scope_value\nA,Old,global,\n')
+        owner = native.CharacteristicMappingDialog(db_file='')
+        owner.db_file = db
+        owner.show()
+        entered, release, events = threading.Event(), threading.Event(), []
+        real_upsert = service.upsert_characteristic_aliases_bulk
+
+        def held(*args, **kwargs):
+            entered.set()
+            if QThread.currentThread() is not qapplication_session.thread() and not release.wait(8):
+                raise TimeoutError('import gate expired')
+            result = real_upsert(*args, **kwargs)
+            events.append('old-durable')
+            return result
+
+        def next_action():
+            service.upsert_characteristic_alias(db, 'A', 'New', 'global')
+            events.append('new-durable')
+
+        thread = None
+        try:
+            with patch.object(service, 'upsert_characteristic_aliases_bulk', held), patch.object(
+                native.QFileDialog, 'getOpenFileName', return_value=(str(source), ''),
+            ), patch.object(native.QMessageBox, 'information'):
+                owner.import_mappings()
+                thread = getattr(owner, '_alias_csv_thread', None)
+                deadline = time.monotonic() + 8
+                while not entered.is_set() and time.monotonic() < deadline:
+                    QTest.qWait(5)
+                assert entered.is_set()
+                if action == 'done':
+                    owner.done(1)
+                else:
+                    getattr(owner, action)()
+                if not owner.isVisible():
+                    next_action()  # only a returned modal owner admits the next same-DB action
+                release.set()
+                deadline = time.monotonic() + 10
+                while thread is not None and detached_threads.is_registered(thread) and time.monotonic() < deadline:
+                    QTest.qWait(5)
+                assert thread is None or not detached_threads.is_registered(thread)
+                assert not owner.isVisible()
+                assert owner.result() == (1 if action == 'done' else 0)
+                if 'new-durable' not in events:
+                    next_action()
+            assert events == ['old-durable', 'new-durable']
+            assert service.fetch_all_characteristic_aliases(db)[0]['canonical_name'] == 'New'
+        finally:
+            release.set()
+            if thread is not None:
+                deadline = time.monotonic() + 10
+                while detached_threads.is_registered(thread) and time.monotonic() < deadline:
+                    QTest.qWait(5)
+                assert not detached_threads.is_registered(thread)
+            owner.close()
+
+
+def test_csv_native_owner_destroyed_inside_result_modal(tmp_path):
+    import subprocess
+    import sys
+    script = r'''
+import sys,time
+from pathlib import Path
+from unittest.mock import patch
+from PyQt6 import sip
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication,QMessageBox
+from metroliza.app.gc_policy import install
+from metroliza.ui import characteristic_mapping_dialog as native
+from metroliza.reports import characteristic_alias_service as service
+root=Path(sys.argv[1]);mode=sys.argv[2];root.mkdir()
+operation='export' if mode=='export' else 'import'
+app=QApplication([]);install(app);app.setQuitOnLastWindowClosed(False)
+db=str(root/'data.sqlite');source=root/'data.csv'
+source.write_text('alias_name,canonical_name,scope_type,scope_value\nA,Common,global,\n')
+if mode=='validation':source.write_text('alias_name,canonical_name,scope_type,scope_value\nA,,global,\n')
+if mode=='error':source.unlink()
+service.ensure_characteristic_alias_schema(db);service.upsert_characteristic_alias(db,'A','Common','global')
+owner=native.CharacteristicMappingDialog(db_file='');owner.db_file=db
+events=[]
+real_exec=QMessageBox.exec
+def modal(box):
+    def destroy():
+        events.append('destroyed-in-modal');sip.delete(owner)
+    QTimer.singleShot(0,destroy)
+    return real_exec(box)
+def information(*args):
+    box=QMessageBox(owner);box.setText(args[2])
+    box.exec()
+with patch.object(native.QFileDialog,'getOpenFileName',return_value=(str(source),'')),patch.object(native.QFileDialog,'getSaveFileName',return_value=(str(root/'export.csv'),'')),patch.object(native.QMessageBox,'information',side_effect=information),patch.object(native.QMessageBox,'critical',side_effect=information),patch.object(native.QMessageBox,'exec',modal),patch.object(native,'CustomLogger'):
+    getattr(owner,operation+'_mappings')()
+    thread=vars(owner).get('_alias_csv_thread')
+    deadline=time.monotonic()+10
+    while (not sip.isdeleted(owner) or native.detached_threads.running_threads()) and time.monotonic()<deadline:
+        app.processEvents();time.sleep(.005)
+assert sip.isdeleted(owner)
+assert events==['destroyed-in-modal'],events
+assert not native.detached_threads.running_threads()
+if thread is not None:
+    deadline=time.monotonic()+10
+    while not sip.isdeleted(thread) and time.monotonic()<deadline:
+        app.processEvents();time.sleep(.005)
+    assert sip.isdeleted(thread)
+assert service.fetch_all_characteristic_aliases(db)[0]['canonical_name']=='Common'
+print('NATIVE RESULT DELETE PASS',mode,events,flush=True)
+'''
+    for operation in ('import', 'export', 'validation', 'error'):
+        result = subprocess.run([sys.executable, '-c', script, str(tmp_path / operation), operation],
+                                capture_output=True, text=True, timeout=20)
+        (tmp_path / (operation + '.log')).write_text(result.stdout + result.stderr)
+        print('native deletion child exit', operation, result.returncode, result.stdout, result.stderr)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_alias_csv_native_normal_quit_and_owner_close_process(tmp_path):
+    import subprocess
+    import sys
+    import textwrap
+    code = textwrap.dedent('''
+        from pathlib import Path
+        from threading import Event
+        from unittest.mock import patch
+        import sys,time
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QApplication
+        from metroliza.app.gc_policy import install
+        from metroliza.ui import characteristic_mapping_dialog as native
+        from metroliza.reports import characteristic_alias_service as service
+        operation,mode,root=sys.argv[1],sys.argv[2],Path(sys.argv[3]);root.mkdir()
+        db=str(root/'synthetic.sqlite');source=root/'input.csv';target=root/'export.csv'
+        source.write_text('alias_name,canonical_name,scope_type,scope_value\\nDIA,Diameter,global,\\n')
+        service.ensure_characteristic_alias_schema(db)
+        if operation=='export':service.upsert_characteristic_alias(db,'DIA','Diameter','global')
+        app=QApplication([]);install(app);owner=native.CharacteristicMappingDialog(db_file='');owner.db_file=db;owner.show()
+        started=Event();real_run=native._AliasCsvThread.run;events=[];beats=[]
+        def held(thread):
+            started.set();time.sleep(5.2);real_run(thread)
+        def request():
+            if not started.is_set():return
+            timer.stop();events.append(('started-visible',owner.isVisible()))
+            if mode=='close':owner.close()
+            else:app.quit()
+        timer=QTimer();timer.setInterval(5);timer.timeout.connect(request)
+        heartbeat=QTimer();heartbeat.setInterval(20);heartbeat.timeout.connect(lambda:beats.append(1));heartbeat.start()
+        with patch.object(native._AliasCsvThread,'run',held),patch.object(native.QFileDialog,'getOpenFileName',return_value=(str(source),'')),patch.object(native.QFileDialog,'getSaveFileName',return_value=(str(target),'')),patch.object(native.QMessageBox,'information',side_effect=lambda *args:events.append(('information',args[1],args[2]))):
+            getattr(owner,operation+'_mappings')();timer.start();assert app.exec()==0
+        assert events[0]==('started-visible',True),events
+        assert len(beats)>100,len(beats)
+        assert not native.detached_threads.running_threads()
+        assert service.fetch_all_characteristic_aliases(db)==[{'alias_name':'DIA','canonical_name':'Diameter','scope_type':'global','scope_value':None}]
+        if operation=='export':assert target.read_bytes()==b'alias_name,canonical_name,scope_type,scope_value\\r\\nDIA,Diameter,global,\\r\\n'
+        assert len(events)==(1 if mode=='close' else 2),events
+        owner.close();print('NATIVE PASS',operation,mode,events,len(beats),flush=True)
+    ''')
+    for operation in ('import', 'export'):
+        for mode in ('quit', 'close'):
+            result = subprocess.run([sys.executable, '-c', code, operation, mode, str(tmp_path / (operation + '-' + mode))],
+                                    capture_output=True, text=True, timeout=20)
+            (tmp_path / (operation + '-' + mode + '.log')).write_text(result.stdout + result.stderr)
+            print(result.stdout + result.stderr)
+            assert result.returncode == 0, result.stdout + result.stderr

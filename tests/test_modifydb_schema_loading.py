@@ -150,6 +150,9 @@ def test_modifydb_applies_normalization_to_legacy_database(tmp_path):
         f"""
         import json
         import sqlite3
+        from time import monotonic
+        from PyQt6 import sip
+        from PyQt6.QtCore import QEvent
         from contextlib import closing
         from PyQt6.QtWidgets import QApplication, QMessageBox
         from modules.modify_db import ModifyDB
@@ -157,12 +160,24 @@ def test_modifydb_applies_normalization_to_legacy_database(tmp_path):
         app = QApplication.instance() or QApplication([])
         QMessageBox.information = lambda *args, **kwargs: None
         dialog = ModifyDB(parent=None, db_file={json.dumps(str(db_path))})
+        errors = []
+        dialog.log_and_exit = errors.append
         try:
             app.processEvents()
             dialog.reference_table.item(0, 1).setText("REF-A2")
             dialog.normalize_tab_widget.setCurrentIndex(2)
             dialog.header_table.item(0, 1).setText("HEIGHT2")
             dialog.apply_changes()
+            thread = getattr(dialog, "_edit_thread", None)
+            deadline = monotonic() + 10
+            while getattr(dialog, "_edit_thread", None) is not None and monotonic() < deadline:
+                app.processEvents()
+            assert getattr(dialog, "_edit_thread", None) is None
+            assert dialog._changes_committed and not errors
+            if thread is not None:
+                assert sip.isdeleted(thread) or thread.isFinished()
+                app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                assert sip.isdeleted(thread)
 
             with closing(sqlite3.connect({json.dumps(str(db_path))})) as connection, connection:
                 references = connection.execute("SELECT REFERENCE FROM REPORTS ORDER BY ID").fetchall()

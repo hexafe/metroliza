@@ -1338,3 +1338,71 @@ def test_measurement_export_view_exposes_measurement_id(tmp_path):
         ).fetchone()[0]
 
     assert export_measurement_id == measurement_id
+
+
+def test_literal_edit_service_preserves_partial_commits_and_failed_record_rollback(tmp_path):
+    import pytest
+    from metroliza.reports.report_edit_service import ReportEditService
+
+    database = str(tmp_path / 'partial.db')
+    repository = ReportRepository(database)
+    repository.ensure_schema()
+    report_id = _persist_basic_report(tmp_path, repository)
+    with closing(sqlite3.connect(database)) as connection:
+        measurement_id = connection.execute('SELECT id FROM report_measurements').fetchone()[0]
+        original = connection.execute(
+            'SELECT raw_measurement_json FROM report_measurements').fetchone()[0]
+    with pytest.raises(ValueError, match='Measurement 999999 does not exist'):
+        ReportEditService(database).apply_changes(
+            storage_flavor='current', normalization_changes={},
+            report_updates=((report_id, {'comment': 'committed first'}),),
+            measurement_updates=((999999, {'header': 'missing'}),
+                                 (measurement_id, {'header': 'never reached'})),
+        )
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute('SELECT comment FROM report_metadata').fetchall() == [('committed first',)]
+        assert connection.execute('SELECT raw_measurement_json FROM report_measurements').fetchall() == [(original,)]
+        assert connection.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+
+
+def test_literal_edit_service_transaction_commit_rollback_close_order(tmp_path, monkeypatch):
+    import pytest
+    from metroliza.reports import db
+    from metroliza.reports.report_edit_service import ReportEditService
+
+    database = str(tmp_path / 'chronology.db')
+    repository = ReportRepository(database)
+    repository.ensure_schema()
+    report_id = _persist_basic_report(tmp_path, repository)
+    events = []
+    original_connect = db.connect_sqlite
+
+    class Connection:
+        def __init__(self, path):
+            self.connection = original_connect(path)
+            events.append('open')
+
+        def cursor(self, **kwargs):
+            return self.connection.cursor(**kwargs)
+
+        def commit(self):
+            events.append('commit')
+            self.connection.commit()
+
+        def rollback(self):
+            events.append('rollback')
+            self.connection.rollback()
+
+        def close(self):
+            events.append('close')
+            self.connection.close()
+
+    monkeypatch.setattr(db, 'connect_sqlite', Connection)
+    with pytest.raises(ValueError, match='Measurement 999999 does not exist'):
+        ReportEditService(database).apply_changes(
+            storage_flavor='current', normalization_changes={'reference': (('REF-2', 'REF-1'),)},
+            report_updates=((report_id, {'comment': 'first'}), (report_id, {'comment': 'second'})),
+            measurement_updates=((999999, {'header': 'missing'}),),
+        )
+    assert events == ['open', 'commit', 'close', 'open', 'commit', 'close',
+                      'open', 'commit', 'close', 'open', 'rollback', 'close']

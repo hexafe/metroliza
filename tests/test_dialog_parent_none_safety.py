@@ -2,7 +2,9 @@ import importlib
 import sys
 import types
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+
+import pytest
 from unittest.mock import patch
 
 
@@ -67,6 +69,13 @@ def _qt_stubbed_imports():
         for name, module in module_cache.items()
         if name.startswith(isolated_prefixes)
     }
+    package_attributes = {
+        name: (module, tuple(vars(module).items()))
+        for name, module in tuple(module_cache.items())
+        if name in ('metroliza.ui', 'modules')
+        or (name.startswith(isolated_prefixes) and '__path__' in vars(module))
+    }
+    missing = object()
     with patch.dict(
         sys.modules,
         {
@@ -80,6 +89,21 @@ def _qt_stubbed_imports():
         try:
             yield
         finally:
+            scoped_names = set(preserved_modules) | {
+                name for name in module_cache if name.startswith(isolated_prefixes)
+            }
+            for package_name, (package, attributes) in package_attributes.items():
+                children = {name.rpartition('.')[2] for name in scoped_names
+                            if name.rpartition('.')[0] == package_name}
+                children.update(name for name, value in tuple(vars(package).items())
+                                if isinstance(value, types.ModuleType)
+                                and value.__name__.startswith(isolated_prefixes))
+                for child in children:
+                    original = next((value for name, value in attributes if name == child), missing)
+                    if original is missing:
+                        vars(package).pop(child, None)
+                    else:
+                        setattr(package, child, original)
             for name in tuple(module_cache):
                 if name.startswith(isolated_prefixes) and name not in preserved_modules:
                     module_cache.pop(name, None)
@@ -144,3 +168,41 @@ class TestDialogParentNoneSafety(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.mark.parametrize('raises', [False, True])
+@pytest.mark.parametrize('attribute_present', [False, True])
+def test_stub_scope_restores_native_module_and_parent_identity(raises, attribute_present):
+    from PyQt6.QtWidgets import QMessageBox
+
+    package = importlib.import_module('metroliza.ui')
+    canonical = importlib.import_module('metroliza.ui.modify_db')
+    legacy_package = importlib.import_module('modules')
+    legacy = importlib.import_module('modules.modify_db')
+    assert canonical.QMessageBox is QMessageBox
+    if not attribute_present:
+        vars(package).pop('modify_db', None)
+    added_name = 'metroliza.ui.__stub_scope_added__'
+    assert '__stub_scope_added__' not in vars(package)
+    try:
+        with pytest.raises(RuntimeError, match='scope failure') if raises else nullcontext():
+            with _qt_stubbed_imports():
+                reloaded = _import_fresh('modules.modify_db')
+                assert package.modify_db is reloaded
+                added = types.ModuleType(added_name)
+                sys.modules[added_name] = added
+                package.__stub_scope_added__ = added
+                if raises:
+                    raise RuntimeError('scope failure')
+        assert sys.modules['metroliza.ui.modify_db'] is canonical
+        assert sys.modules['modules.modify_db'] is legacy
+        assert legacy_package.modify_db is legacy
+        assert canonical.QMessageBox is QMessageBox
+        if attribute_present:
+            assert package.modify_db is canonical
+        else:
+            assert 'modify_db' not in vars(package)
+        assert '__stub_scope_added__' not in vars(package)
+        assert added_name not in sys.modules
+    finally:
+        package.modify_db = canonical

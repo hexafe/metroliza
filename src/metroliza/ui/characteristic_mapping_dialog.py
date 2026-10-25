@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 
+from PyQt6 import sip
 from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -70,6 +71,58 @@ SOURCE_LOAD_CANCELED_TEXT = 'Loading report/export names was canceled. Use Brows
 # Upper bound for the GUI thread to wait for an interrupted loader; a loader that has not stopped by
 # then is detached (it keeps running to completion in the background and its result is dropped).
 SOURCE_LOAD_STOP_WAIT_MS = 2000
+
+_DEFAULT_ALIAS_SCHEMA = ensure_characteristic_alias_schema
+_DEFAULT_ALIAS_IMPORT = import_characteristic_aliases_csv
+_DEFAULT_ALIAS_EXPORT = export_characteristic_aliases_csv
+_ALIAS_CSV_CONTROLS = ('select_db_button', 'add_button', 'add_from_selected_button',
+                       'edit_button', 'delete_button', 'import_button', 'export_button')
+
+
+def _alias_csv_busy(owner):
+    return type(owner) is _NATIVE_MAPPING_DIALOG and any(
+        type(key) is str and key == '_alias_csv_thread' and value is not None
+        for key, value in vars(owner).items()
+    )
+
+
+def _native_alias_csv(owner):
+    if type(owner) is not _NATIVE_MAPPING_DIALOG:
+        return False
+    state = vars(owner)
+    if any(type(key) is not str for key in state):
+        return False
+    if type(state.get('db_file')) is not str or '_alias_csv_thread' not in state or state.get('_source_loading'):
+        return False
+    if any(name in state or vars(_NATIVE_MAPPING_DIALOG).get(name) is not method
+           for name, method in _ALIAS_CSV_METHODS.items()):
+        return False
+    return (ensure_characteristic_alias_schema is _DEFAULT_ALIAS_SCHEMA
+            and import_characteristic_aliases_csv is _DEFAULT_ALIAS_IMPORT
+            and export_characteristic_aliases_csv is _DEFAULT_ALIAS_EXPORT
+            and all(type(state.get(name)) is QPushButton for name in _ALIAS_CSV_CONTROLS))
+
+
+class _AliasCsvThread(QThread):
+    """Own one immutable path request; result/error delivery remains on the GUI."""
+
+    def __init__(self, operation, db_file, filename):
+        super().__init__()
+        self.operation, self.db_file, self.filename = operation, db_file, filename
+        self.producer = _DEFAULT_ALIAS_IMPORT if operation == 'import' else _DEFAULT_ALIAS_EXPORT
+        self.count, self.error, self.discard_result = None, None, False
+
+    def run(self):
+        try:
+            _DEFAULT_ALIAS_SCHEMA(self.db_file)
+            self.count = self.producer(self.db_file, self.filename)
+        except Exception as exc:
+            self.error = exc
+
+    def result(self):
+        if self.error is not None:
+            raise self.error
+        return self.count
 
 
 def _has_selected_db_file(db_file: str) -> bool:
@@ -468,6 +521,12 @@ class CharacteristicMappingDialog(QDialog):
         self._source_load_canceled = False
         self._source_thread: _SourceOptionsLoadThread | None = None
         self._source_progress_dialog = None
+        if type(self) is CharacteristicMappingDialog:
+            self._alias_csv_thread = None
+            self._alias_csv_progress = None
+            self._alias_csv_controls = ()
+            self._alias_csv_selection_controls = ()
+            self._alias_csv_close_result = None
 
         self.subtitle_label = QLabel(
             'Map report/export names so Group Analysis treats equivalent characteristics as one metric.'
@@ -627,6 +686,8 @@ class CharacteristicMappingDialog(QDialog):
         return {'metric_name': metric_name} if metric_name else None
 
     def _sync_selection_actions(self):
+        if _alias_csv_busy(self):
+            return
         has_db = _has_selected_db_file(self.db_file)
         has_metric_selection = self._selected_metric_option() is not None
         has_selection = self._selected_mapping() is not None
@@ -667,6 +728,8 @@ class CharacteristicMappingDialog(QDialog):
             self.metric_empty_label.setVisible(False)
 
     def select_db_file(self):
+        if _alias_csv_busy(self):
+            return
         filename, _ = QFileDialog.getOpenFileName(
             self,
             'Select a database file',
@@ -774,10 +837,15 @@ class CharacteristicMappingDialog(QDialog):
         QMessageBox.critical(self, 'Load error', f'Could not load report/export names: {exc}')
 
     def done(self, result):
+        if CharacteristicMappingDialog._abandon_alias_csv(self, result):
+            return
         self._stop_source_loading()
         super().done(result)
 
     def closeEvent(self, event):
+        if CharacteristicMappingDialog._abandon_alias_csv(self, QDialog.DialogCode.Rejected):
+            event.ignore()
+            return
         self._stop_source_loading()
         super().closeEvent(event)
 
@@ -897,6 +965,8 @@ class CharacteristicMappingDialog(QDialog):
         )
 
     def add_selected_mapping(self):
+        if _alias_csv_busy(self):
+            return
         selected_metric = self._selected_metric_option()
         if selected_metric is None:
             return
@@ -911,6 +981,8 @@ class CharacteristicMappingDialog(QDialog):
         )
 
     def add_mapping(self, initial_values=None):
+        if _alias_csv_busy(self):
+            return
         if not self._ensure_db_file_selected():
             return
 
@@ -947,6 +1019,8 @@ class CharacteristicMappingDialog(QDialog):
             QMessageBox.critical(self, 'Save error', f'Could not save name match: {exc}')
 
     def edit_mapping(self):
+        if _alias_csv_busy(self):
+            return
         if not self._ensure_db_file_selected():
             return
 
@@ -1003,6 +1077,8 @@ class CharacteristicMappingDialog(QDialog):
             QMessageBox.critical(self, 'Save error', f'Could not update name match: {exc}')
 
     def delete_mapping(self):
+        if _alias_csv_busy(self):
+            return
         selected = self._selected_mapping()
         if selected is None:
             return
@@ -1120,6 +1196,9 @@ class CharacteristicMappingDialog(QDialog):
         return '\n'.join(summary_lines), '\n'.join(detail_lines)
 
     def import_mappings(self):
+        started_at = time.monotonic()
+        if _alias_csv_busy(self):
+            return
         if not self._ensure_db_file_selected():
             return
 
@@ -1132,9 +1211,19 @@ class CharacteristicMappingDialog(QDialog):
         if not filename:
             return
 
-        try:
+        if type(filename) is str and _native_alias_csv(self):
+            CharacteristicMappingDialog._start_alias_csv(self, 'import', filename, started_at)
+            return
+
+        def produce():
             ensure_characteristic_alias_schema(self.db_file)
-            imported_count = import_characteristic_aliases_csv(self.db_file, filename)
+            return import_characteristic_aliases_csv(self.db_file, filename)
+
+        CharacteristicMappingDialog._apply_alias_import(self, produce)
+
+    def _apply_alias_import(self, producer):
+        try:
+            imported_count = producer()
             self.load_aliases()
             QMessageBox.information(self, 'Import complete', f'Imported {imported_count} mapping row(s).')
         except CharacteristicAliasImportValidationError as exc:
@@ -1148,6 +1237,8 @@ class CharacteristicMappingDialog(QDialog):
             details_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             details_box.exec()
 
+            if _alias_csv_busy(self) and sip.isdeleted(self):
+                return
             if exc.row_error_details:
                 save_response = QMessageBox.question(
                     self,
@@ -1187,6 +1278,9 @@ class CharacteristicMappingDialog(QDialog):
             QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')
 
     def export_mappings(self):
+        started_at = time.monotonic()
+        if _alias_csv_busy(self):
+            return
         if not self._ensure_db_file_selected():
             return
 
@@ -1199,10 +1293,114 @@ class CharacteristicMappingDialog(QDialog):
         if not filename:
             return
 
-        try:
+        if type(filename) is str and _native_alias_csv(self):
+            CharacteristicMappingDialog._start_alias_csv(self, 'export', filename, started_at)
+            return
+
+        def produce():
             ensure_characteristic_alias_schema(self.db_file)
-            exported_count = export_characteristic_aliases_csv(self.db_file, filename)
+            return export_characteristic_aliases_csv(self.db_file, filename)
+
+        CharacteristicMappingDialog._apply_alias_export(self, produce)
+
+    def _apply_alias_export(self, producer):
+        try:
+            exported_count = producer()
             QMessageBox.information(self, 'Export complete', f'Exported {exported_count} mapping row(s).')
         except Exception as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Export error', f'Could not export mappings: {exc}')
+
+    def _start_alias_csv(self, operation, filename, started_at):
+        thread, cleanup_registered = None, False
+        try:
+            thread = _AliasCsvThread(operation, self.db_file, filename)
+            self._alias_csv_thread = thread
+            self._alias_csv_controls = tuple((getattr(self, name), getattr(self, name).isEnabled())
+                                             for name in _ALIAS_CSV_CONTROLS)
+            # A disabled action with an existing selection is an intentional restriction.
+            self._alias_csv_selection_controls = tuple(
+                (control, control.isEnabled() or not selected)
+                for control, selected in (
+                    (self.add_from_selected_button, self._selected_metric_option() is not None),
+                    (self.edit_button, self._selected_mapping() is not None),
+                    (self.delete_button, self._selected_mapping() is not None),
+                )
+            )
+            for control, _enabled in self._alias_csv_controls:
+                control.setEnabled(False)
+            detached_threads.register(thread, defer_quit=True, owner=self,
+                                      on_finished=CharacteristicMappingDialog._finish_alias_csv)
+            detached_threads.run_when_finished([thread], thread.deleteLater)
+            cleanup_registered = True
+            self._alias_csv_progress, _, bar, _ = create_delayed_worker_progress_dialog(
+                self, window_title=f'{operation.title()} name matches',
+                initial_status_text=f'{operation.title()}ing name matches…',
+                on_cancel=lambda: None, action_started_at=started_at, cancellable=False,
+            )
+            bar.setRange(0, 0)
+            self._alias_csv_progress.show()
+            thread.start()
+        except Exception as exc:
+            if thread is None or not thread.isRunning():
+                if thread is not None:
+                    detached_threads.discard(thread)
+                    if not cleanup_registered:
+                        thread.deleteLater()
+                CharacteristicMappingDialog._release_alias_csv(self)
+            else:
+                thread.discard_result = True
+            def failed(error=exc):
+                raise error
+            apply = CharacteristicMappingDialog._apply_alias_import if operation == 'import' else CharacteristicMappingDialog._apply_alias_export
+            apply(self, failed)
+
+    def _release_alias_csv(self):
+        self._alias_csv_thread = None
+        progress, self._alias_csv_progress = self._alias_csv_progress, None
+        controls, self._alias_csv_controls = self._alias_csv_controls, ()
+        selection, self._alias_csv_selection_controls = self._alias_csv_selection_controls, ()
+        # A result message runs a nested event loop and can destroy the whole owner.
+        if sip.isdeleted(self):
+            return
+        dismiss_worker_progress_dialog(progress)
+        for control, enabled in controls:
+            control.setEnabled(enabled)
+        for control, unrestricted in selection:
+            selected = (self._selected_metric_option() if control is self.add_from_selected_button
+                        else self._selected_mapping())
+            if unrestricted:
+                control.setEnabled(_has_selected_db_file(self.db_file) and not self._source_loading
+                                   and selected is not None)
+
+    def _finish_alias_csv(self, thread):
+        if thread is not self._alias_csv_thread:
+            return
+        try:
+            if thread.discard_result or type(self.db_file) is not str or self.db_file != thread.db_file:
+                return
+            apply = CharacteristicMappingDialog._apply_alias_import if thread.operation == 'import' else CharacteristicMappingDialog._apply_alias_export
+            apply(self, thread.result)
+        finally:
+            CharacteristicMappingDialog._release_alias_csv(self)
+            if not sip.isdeleted(self):
+                if type(self.db_file) is not str or self.db_file != thread.db_file:
+                    self._sync_selection_actions()
+                    self._sync_warning_labels()
+                if self._alias_csv_close_result is not None:
+                    result, self._alias_csv_close_result = self._alias_csv_close_result, None
+                    self.done(result)
+
+    def _abandon_alias_csv(self, result):
+        if _alias_csv_busy(self):
+            # Retain the modal database admission until this earlier request is durable.
+            self._alias_csv_close_result = result
+            self._alias_csv_thread.discard_result = True
+            return True
+        return False
+
+
+_NATIVE_MAPPING_DIALOG = CharacteristicMappingDialog
+_ALIAS_CSV_METHODS = {name: vars(CharacteristicMappingDialog)[name] for name in
+                      ('_ensure_db_file_selected', 'load_aliases', '_build_import_validation_summary',
+                       '_selected_metric_option', '_selected_mapping')}
