@@ -357,9 +357,29 @@ Obtain fresh `101e5a44`/STEP3 A/B results and keep the existing n=2/n=3 rotation
 scenarios. For the two exceptionally long complete CSV grouped-analytics and Group Analysis
 scenarios, the coordinator selects one full observation per side, explicitly n=1 with no
 measured spread or precision claim. Group Analysis uses the same runtime harness timeout
-3600 s on both sides, external limit3720 s, replacing the exhausted900/1020 s bounds; no
-product work is removed. A repeated identical timeout is not another measurement strategy.
+14400 s on both sides, external limit14520 s, following the PO's explicit direction to
+finish even when a complete run exceeds one hour. Earlier 900/1020 and 3600/3720 s
+incomplete product runs remain excluded; no product work is removed.
 Output checks remain strict and a changed output still stops the comparison.
+
+For the final f23 pair only, the coordinator records a transparent operational disposition
+under that current PO scale-measurement direction, without claiming a separate literal PO
+approval. Both complete product actions exited0 (2664 metrics each), but the original
+operator exited1 solely because its subsequent unchanged comparator reached3720 s and
+exited-15. Preserve that FAILED summary and adverse receipt. Finish only the identical
+strict comparison separately, with external limit14520 s, rather than rerunning complete
+product calculations. Accept descriptive n1 action times only after that comparison exits0,
+full retained manifests match before/after, and the same source bindings pass again.
+Record all three exit levels separately; this is an explicit departure from requiring one
+clean operator exit, never a relabelled original PASS. It does not accept any incomplete
+action or restore any earlier excluded series. Harness, comparator predicates/negative
+controls, numerical settings, resource tools and machine policy remain frozen.
+
+Report each scenario's actual source head and harness. The final data retain the earlier
+93641f82 cohort, the remeasured Industrial Bridge on75ea71c5, and corrected Records plus
+both long flows on18d67f59. Do not claim that every flow was rerun on a single final head.
+Only the Bridge and Modify DB product files changed across those cohorts; the final report
+commit itself changes Markdown only. The report states the actual evidence and limits.
 
 Use the source-bound historical before/after-STEP1 common14 columns as descriptive context
 instead of rerunning every historical long case. The source is the STEP2 measurements JSON

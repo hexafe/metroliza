@@ -1,267 +1,156 @@
-# Performance Boost STEP3 — raport wyników
+# Performance Boost STEP3 — wyniki pomiarów
 
-> Stan na 2026-10-26: przyjęto 4/23 przepływy. Sześć scenariuszy wykluczyły bramki obciążenia, jeden zatrzymał błąd retencji harnessu na bazie, dwunastu nie uruchomiono. Brakujące wyniki pozostają PENDING. T26 WITHHELD; C07 shutdown SIGSEGV nadal UNKNOWN/UNRESOLVED. To nie jest zamknięcie #1151 ani akceptacja spakowanego Windows.
+Zakończono 23 scenariusze na pełnych syntetycznych wejściach oraz ich kontrole wyjść: **103 ścisłe porównania z kodem 0 i 10 kontroli bez trwałego pliku**. Pełny audyt 18 przepływów: **17.60% krócej**; wszystkie 23 akcje: **12.59% krócej**; wspólne 14: **19.40% krócej** względem bieżącej bazy STEP2. Każda suma ma osobno podany zakres i wagę.
 
-## Bieżąca kampania C05/C08 — cztery etapy, moduły i suma
+**Jawne odstępstwo wykonawcze dla ostatniej pary:** oba pełne Group Analysis zakończyły się kodem 0, lecz pierwotny operator zakończył się kodem 1 przez późniejszy timeout komparatora. Niezmienione ścisłe porównanie dokończono osobno z kodem 0; manifesty i źródła pozostały równe. Raport przyjmuje opisowe czasy obu kompletnych akcji według [bieżącego kierunku PO i ujawnionej decyzji koordynatora](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6414934954). Nie nazywa błędu operatora PASS i nie wykorzystuje starszych nieukończonych lub wykluczonych akcji. Szczegóły poniżej.
 
-Dokładne wersje: przed STEP1`fb72a42e`, po STEP1`15ddbeb7`, po STEP2`101e5a44`, po STEP3`e2f9f273`; produkt src`9689863e47c04ca6960a48b3daf831d138e28508`. Wspólny harness`5e2c762fef893717148d8add56fec1f872d27c44654afb00094d60c46044a315`, pełne syntetyczne wejście, balanced/AC, CPU8 i rotacja12prób (n3/etap) w przyjętych wspólnych scenariuszach. Wyniki są z nowych sesji; wcześniejszych pomiarów nie przeniesiono. ModifyOpen/Apply mają headB e2f9f273; nowe sesje C08 mają0fcf13fb. Produkt src i harness pozostają identyczne. Różnice dokumentacji i zatwierdzona polityka heartbeat C08 są jawne.
+## Cztery etapy według modułów
 
-Suma modułu obejmuje tylko jego scenariusze ze wspólnego zestawu 14 i sumuje ich mediany z wagą 1. Dodatkowe scenariusze T00 są przedstawione osobno i nie wchodzą do tych sum. Procent wynika z sum sekund, nie ze średniej procentów. Nie jest to czas pojedynczej sekwencji użytkownika. Moduł otrzymuje sumę dopiero po przyjęciu wszystkich swoich scenariuszy; pełny indeks ma14wspólnych przepływów. Brakujące komórki nie oznaczają zera. Ujemny procent oznacza wydłużenie czasu i pozostaje widoczny.
+Czasy dotyczą zadeklarowanej akcji harnessu; setup oraz późniejsze kontrole wyjść pozostają osobnymi etapami. Indeks 14 wspólnych scenariuszy sumuje mediany z wagą 1 na scenariusz. Redukcja sumy wynika z sum sekund, nie ze średniej procentów. To indeks porównawczy, a nie czas pojedynczej operacji użytkownika. Zestawów 14, 18 i 23 scenariuszy nie mieszamy. Ujemny procent oznacza wydłużenie czasu.
 
-| Scenariusz / moduł | Przed STEP1 [s] | Po STEP1 [s] | Redukcja1/0 [%] | Po STEP2 [s] | Redukcja2/1 [%] | Redukcja2/0 [%] | Po STEP3 [s] | Redukcja3/2 [%] | Redukcja3/0 [%] |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV Summary | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Eksport raportów | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Filtry i grupowanie | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Industrial Data | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Edycja bazy | 29.4071 | 0.2422 | 99.18 | 0.2499 | -3.18 | 99.15 | 0.1773 | 29.05 | 99.40 |
-| Realtime | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Mapping | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| SUMA wspólnych14 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+¹ Kolumny przed i po STEP1 pochodzą z historycznej sesji 2026-10-21: plik `performance-boost-step2-measurements.json`, SHA-256 `dd8890ac93312098770059ccd300c9d9c5ad40e6099ee0521a026289a8019a7c`. Procenty między tamtą a bieżącą sesją pokazują orientacyjną skalę, bez kontrolowanego dowodu przyczynowego. Bieżące pary 101/STEP3 mają te same pełne wejścia, interpreter i harness danej pary.
 
-### Szczegóły bieżących scenariuszy wspólnych
+| Scenariusz/moduł | Przed STEP1 s¹ | Po STEP1 s¹ | Redukcja 1/0 %¹ | STEP2/101 s | Redukcja 2/1 %¹ | Redukcja 2/0 %¹ | STEP3 s | Redukcja 3/2 % | Redukcja 3/0 %¹ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CSV Summary | 149.7992 | 122.5542 | 18.1877 | 118.5714 | 3.2498 | 20.8464 | 105.5994 | 10.9402 | 29.5060 |
+| Eksport raportów | 467.6158 | 163.5545 | 65.0237 | 103.8089 | 36.5295 | 77.8004 | 73.0805 | 29.6009 | 84.3717 |
+| Filtry i grupowanie | 2.8265 | 2.6940 | 4.6878 | 2.1980 | 18.4113 | 22.2360 | 1.2687 | 42.2793 | 55.1141 |
+| Industrial Data | 11.8406 | 11.3608 | 4.0522 | 9.2830 | 18.2892 | 21.6003 | 8.7070 | 6.2049 | 26.4649 |
+| Edycja bazy | 28.2036 | 0.2388 | 99.1533 | 0.2278 | 4.6064 | 99.1923 | 0.1585 | 30.4214 | 99.4380 |
+| Realtime | 1.1871 | 0.3812 | 67.8881 | 0.3327 | 12.7230 | 71.9737 | 0.2304 | 30.7484 | 80.5914 |
+| Mapping | 169.9696 | 163.2817 | 3.9348 | 0.9462 | 99.4205 | 99.4433 | 0.6608 | 30.1628 | 99.6112 |
+| **SUMA 14** | 831.4424 | 464.0652 | 44.1855 | 235.3680 | 49.2813 | 71.6916 | 189.7053 | 19.4006 | 77.1836 |
 
-| Scenariusz / moduł | Przed STEP1 [s] | Po STEP1 [s] | Redukcja1/0 [%] | Po STEP2 [s] | Redukcja2/1 [%] | Redukcja2/0 [%] | Po STEP3 [s] | Redukcja3/2 [%] | Redukcja3/0 [%] |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| ModifyOpen | 20.0644 | 0.2006 | 99.00 | 0.2100 | -4.69 | 98.95 | 0.1529 | 27.19 | 99.24 |
-| ModifyApply | 9.3427 | 0.0416 | 99.55 | 0.0399 | 4.09 | 99.57 | 0.0244 | 38.85 | 99.74 |
-| ExportOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| FilterOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| GroupingOpen | 1.4390 | 1.5550 | -8.06 | 0.7831 | 49.64 | 45.58 | 0.6284 | 19.75 | 56.33 |
-| CharacteristicMapping | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| MainPlots1500 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| Extended216 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| CsvLoad100k | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| CsvAnalytics100k | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| IndustrialOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| IndustrialBridge | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| RealtimeOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| PathsCsvSummary100k | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+## Wspólne 14 — szczegóły
 
-ModifyOpen, ModifyApply i GroupingOpen: po9ścisłych porównań katalogu SQLite i typowanych uporządkowanych wierszy, rzeczywiste kody0. Pełne wejście1500raportów/216000pomiarów, pliki niezmienione, bez wyjątku timestampów. Audyty każdego przyjętego i wykluczonego przebiegu potwierdzają dokładne przywrócenie ustawień i wyjście procesów. Scenariusze bez zapisywanego wyjścia oznaczono N/A. Brak deklaracji istotności statystycznej, akceptacji Windows i globalnego przyspieszenia.
+| Scenariusz/moduł | Przed STEP1 s¹ | Po STEP1 s¹ | Redukcja 1/0 %¹ | STEP2/101 s | Redukcja 2/1 %¹ | Redukcja 2/0 %¹ | STEP3 s | Redukcja 3/2 % | Redukcja 3/0 %¹ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| csv_analytics_100k | 51.4387 | 52.0166 | -1.1235 | 39.7863 | 23.5123 | 22.6530 | 38.0110 | 4.4621 | 26.1043 |
+| csv_load_100k | 4.9605 | 4.9376 | 0.4616 | 6.0439 | -22.4056 | -21.8405 | 4.6501 | 23.0613 | 6.2574 |
+| export_main_plots_1500 | 58.4681 | 28.8264 | 50.6972 | 26.7929 | 7.0543 | 54.1752 | 22.8109 | 14.8621 | 60.9857 |
+| export_open | 0.1232 | 0.1256 | -1.9481 | 0.0920 | 26.7516 | 25.3247 | 0.0901 | 2.0652 | 26.8669 |
+| filter_open | 1.5636 | 1.1935 | 23.6697 | 1.4679 | -22.9912 | 6.1205 | 0.6526 | 55.5419 | 58.2630 |
+| grouping_open | 1.2629 | 1.5005 | -18.8138 | 0.7301 | 51.3429 | 42.1886 | 0.6161 | 15.6143 | 51.2155 |
+| industrial_bridge | 10.2655 | 10.5073 | -2.3555 | 8.9606 | 14.7202 | 12.7115 | 8.3712 | 6.5777 | 18.4531 |
+| industrial_open | 1.5751 | 0.8535 | 45.8130 | 0.3224 | 62.2261 | 79.5315 | 0.3358 | -4.1563 | 78.6807 |
+| modify_db_apply | 8.9525 | 0.0457 | 99.4895 | 0.0318 | 30.4158 | 99.6448 | 0.0192 | 39.6226 | 99.7855 |
+| modify_db_open | 19.2511 | 0.1931 | 98.9969 | 0.1960 | -1.5018 | 98.9819 | 0.1393 | 28.9286 | 99.2764 |
+| realtime_open | 1.1871 | 0.3812 | 67.8881 | 0.3327 | 12.7230 | 71.9737 | 0.2304 | 30.7484 | 80.5914 |
+| export_extended_small | 409.0245 | 134.6025 | 67.0918 | 76.9240 | 42.8510 | 81.1933 | 50.1795 | 34.7674 | 87.7319 |
+| char_mapping_open | 169.9696 | 163.2817 | 3.9348 | 0.9462 | 99.4205 | 99.4433 | 0.6608 | 30.1628 | 99.6112 |
+| benchmark_paths_csv_summary_100k_8 | 93.4000 | 65.6000 | 29.7645 | 72.7412 | -10.8860 | 22.1186 | 62.9383 | 13.4764 | 32.6142 |
 
-### Zachowane surowe próby przyjętych pomiarów
+## Pełne 18 przepływów audytu — odrębny indeks STEP2/STEP3
 
-| Scenariusz | Wersja | Próby [s], w kolejności danej wersji | Mediana [s] |
-| --- | --- | --- | ---: |
-| ModifyOpen | przed STEP1 | 19.4578, 20.5704, 20.0644 | 20.0644 |
-| ModifyOpen | po STEP1 | 0.2006, 0.1921, 0.2026 | 0.2006 |
-| ModifyOpen | po STEP2 | 0.2022, 0.2100, 0.2450 | 0.2100 |
-| ModifyOpen | po STEP3 | 0.1358, 0.1529, 0.1668 | 0.1529 |
-| ModifyApply | przed STEP1 | 9.3427, 9.3476, 8.9966 | 9.3427 |
-| ModifyApply | po STEP1 | 0.0411, 0.0416, 0.0693 | 0.0416 |
-| ModifyApply | po STEP2 | 0.0399, 0.0393, 0.0412 | 0.0399 |
-| ModifyApply | po STEP3 | 0.0244, 0.0192, 0.0264 | 0.0244 |
+Wszystkie 18 pierwotnych przepływów audytu (f01–f18), z ponownym pomiarem poprawionego Records C13, dają **267.6977 → 220.5810 s**, czyli **17.60% redukcji czasu**. To suma median z wagą 1 na scenariusz. Indeks obejmuje dodatkowo Review, Import, Records i Theme, których nie ma w historycznej sumie 14; nie dopisujemy im fikcyjnych wyników przed/po STEP1. Nie porównujemy tej sumy wprost z audytową prognozą 231.6 s z innej sesji. Pięć scenariuszy T00 (f19–f23) przedstawiamy osobno. Pierwotna prognoza audytu wynosiła około 30%; bieżący pełny indeks pokazuje 17.60%. Wynik nie osiąga tej prognozy. Różne warunki i sesje nie pozwalają traktować różnicy względem prognozy jako izolowanego wpływu jednego pakietu.
 
-### Dalsze surowe próby przyjętych pomiarów
+## Wszystkie 23 akcje — osobna suma bieżącej kampanii
 
-| Scenariusz | Wersja | Próby [s] | Mediana [s] |
-| --- | --- | --- | ---: |
-| f08-c08 | pre1 | 1.4390, 1.4972, 1.3540 | 1.4390 |
-| f08-c08 | post1 | 1.5550, 1.4584, 1.6483 | 1.5550 |
-| f08-c08 | A | 0.7831, 0.8641, 0.6024 | 0.7831 |
-| f08-c08 | B | 0.5346, 0.6284, 0.6589 | 0.6284 |
-| f12-c08 | A | 0.2086, 0.1694, 0.1727 | 0.1727 |
-| f12-c08 | B | 0.1685, 0.1885, 0.1740 | 0.1740 |
+Suma z wagą 1 na każdy z 23 scenariuszy daje **7378.2352 → 6449.3273 s**, czyli opisowo **12.59% krócej**. To suma median zwykłych serii i pojedynczych obserwacji dwóch długich eksportów, a nie czas jednej ścieżki użytkownika. Długie zadania dominują w tej sumie i nie mają zmierzonego rozrzutu. Nie ma dla niej dopasowanego odpowiednika przed/po STEP1; czteroetapowy indeks nadal obejmuje tylko wspólne 14. Tożsamość wszystkich wyjść jest zamknięta; wyjątek wykonawczy ostatniej pary opisano na początku raportu.
 
-### Pierwsze wykluczenia C05 i dalsze sesje C08
+## Liczność, źródła i warunki
 
-Review1500 wykluczono po trzech kompletnych próbach: niezmienione zabezpieczenie sklasyfikowało cztery procesy Python po około99%rdzenia jako konkurujące i nieprzypisane do sesji. Ich historyczny właściciel pozostaje UNKNOWN; późniejszy brak PID nie dowodzi pochodzenia. ExportOpen wykluczono po trzech próbach przez kswapd0 na31,18%rdzenia, przed rozpoczęciem B. Żadnego czasu tych serii nie przyjęto ani nie wznowiono. Niezależne audyty obu wykluczeń potwierdziły dokładne przywrócenie ustawień, zakończone korzenie sesji i brak pozostającej rozpoznanej pracy. Nie wykazano regresji produktu.
+Przed STEP1: `fb72a42e21651c516d912005eec18802504301e2`; po STEP1: `15ddbeb7e34ff7d6b77a349c0167fd6d8e902af0`. Wymagana bieżąca baza STEP2 to `101e5a445bc76223b88067de3a3bb37deb7dbb4e`. Historyczne `a176139d` nie zastępuje 101 i nie wchodzi do bieżącej kolumny STEP2.
 
-Po pierwszych wykluczeniach z2026-10-25 czasy pozostałyPENDING. Dnia2026-10-26 wznowiono odrębne świeże sesje po aktualnej obserwacji hosta, kwalifikacjiC08 i niezależnym audycie ustawień. Żaden czas wykluczonych serii nie został przyjęty ani odtworzony. Przypisanie8CPU pozostawia współdzieloną pamięć, cache,I/O i termikę; każdy wynik jest związany ze swoją sesją. Źródła/testy/review/CI są weryfikowane oddzielnie od brakujących końcowych czasów.
+Historyczne Mapping i Extended mają n=1 na wersję, Paths n=2, pozostałe n=3. W świeżych parach Paths ma n=2, pozostałe wspólne scenariusze n=3. Main i Extended mają dodatkową świeżą serię czterech wersji po trzy obserwacje: Main 60.1476 → 27.7576 → 26.7929 → 22.8109 s; Extended 368.9168 → 153.0201 → 76.9240 → 50.1795 s. To osobne sprawdzenie; jego kolumn historycznych nie mieszamy z sumą starszej kohorty.
 
-## Archiwalne trzy etapy — oddzielny punkt odniesienia
+Trzynaście wspólnych przepływów wykonano na rzeczywistym headzie `93641f82` z harnessem `5e2c762f`. Industrial Bridge powtórzono na `75ea71c5` z `136323eb` po korekcie trwałego cache C11. Review, Import, Theme, CSV Grouping i oba anulowania zmierzono na `75ea71c5`; poprawiony Records i oba duże eksporty na `18d67f59`. C10 zmienia wyłącznie retencję po zakończeniu mierzonej akcji. W całym zakresie 936→18 zmieniły się tylko dwa pliki produktu: Industrial Bridge i Modify DB. Wyniki zachowują rzeczywiste źródła i nie są deklaracją ponownego uruchomienia wszystkich przepływów na jednym końcowym headzie.
 
-Poniższe czasy pochodzą z pomiarów STEP2 z 2026-10-21. Przed STEP1: `fb72a42e21651c516d912005eec18802504301e2`; po STEP1: `15ddbeb7e34ff7d6b77a349c0167fd6d8e902af0`; historyczne po STEP2: `a176139d740ec25aeac0f9fd3b39f9a3620db40c`. Wymagana baza końcowego porównania STEP3 to `101e5a44`, a nie historyczna wersja po STEP2. Nie zastępujemy jednej drugą.
+[Metoda laptopowa według kierunku PO](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6414934954) zachowuje pełne obliczenia, jakość wykresów i rotację zwykłych serii. Jednocześnie wykonuje się jedno ciężkie zadanie Metrolizy pod blokadą; profil zasilania i dostępne obciążenie są zapisywane. Zwykłe korzystanie z laptopa oraz krótkie skoki obciążenia nie odrzucają kompletnej serii. Nie zmieniamy profilu, przydziału rdzeni, widżetu ani przeglądarki. Dwa wyjątkowo duże zadania mają po jednej pełnej obserwacji na wersję (n=1), bez zmierzonego rozrzutu. Starsze wykluczenia pozostają wykluczeniami; nie przepisujemy ich czasów do nowej kampanii.
 
-Redukcja czasu = 100 × (czas wcześniejszy − czas późniejszy) / czas wcześniejszy. Dodatnia wartość oznacza przyspieszenie; ujemna oznacza regresję. Brak wyniku pozostaje PENDING lub N/A, nigdy zero.
+Środowisko pomiarowe: Linux, Python 3.11.16, PyQt6 6.6.1, Qt 6.6.1, NumPy 2.4.6, SciPy 1.17.1, pandas 3.0.6. Syntetyczny manifest wejść obejmuje 1555 plików / 536069121 bajtów, SHA-256 `7bdd11563d11393beeb4bd4cd4a8a9c434a52729ff620c64e64cacd1b4fa696a`. Dla każdej pary użyto identycznego pliku harnessu po obu stronach i niezmienionych ustawień bibliotek numerycznych. Bieżący harness UI ma SHA-256 `136323ebe9afb6fa0be574b4a73d4876ca3bc9bb6aacc8d351eefe369428d40d`, komparator `04bf289897e09d422deb641245579379a91ef1f2a15e41267c36d14218824d19`. Starsza kohorta zachowuje własny harness `5e2c762f` i rzeczywisty head.
 
-| Moduł | Przed STEP1 [s] | Po STEP1 [s] | Redukcja 1/0 [%] | Historyczne po STEP2 [s] | Redukcja 2/1 [%] | Redukcja 2/0 [%] |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV Summary | 149.7992 | 122.5542 | 18.19 | 104.9535 | 14.36 | 29.94 |
-| Eksport raportów | 467.6158 | 163.5545 | 65.02 | 96.5505 | 40.97 | 79.35 |
-| Filtry i grupowanie | 2.8265 | 2.6940 | 4.69 | 1.9190 | 28.77 | 32.11 |
-| Industrial Data | 11.8406 | 11.3608 | 4.05 | 6.0615 | 46.65 | 48.81 |
-| Edycja bazy | 28.2036 | 0.2388 | 99.15 | 0.2231 | 6.57 | 99.21 |
-| Realtime | 1.1871 | 0.3812 | 67.89 | 0.4009 | -5.17 | 66.23 |
-| Mapping | 169.9696 | 163.2817 | 3.93 | 0.7825 | 99.52 | 99.54 |
-| SUMA wspólnych 14 scenariuszy | 831.4424 | 464.0652 | 44.19 | 210.8910 | 54.56 | 74.64 |
+W 46 zapisanych sondach przed/po wybranych scenariuszach oba odczyty profilu (`power_profile` i `platform_profile`) wynosiły `balanced`, wszystkie sondy zakończyły się kodem 0. To obserwacje punktowe, nie dowód ciągłej ciszy lub izolacji. Sonda po Group Analysis pochodzi z końca osobno dokończonej kontroli wyjść.
 
-Suma obejmuje 14 wspólnych scenariuszy z wagą 1 na scenariusz i sumuje ich mediany. Jest indeksem porównawczym, nie czasem jednej ścieżki użytkownika. Procent sumy wynika z sum sekund, nie ze średniej procentów. Dane o liczności prób: długie Extended i Mapping po 1, CSV Summary paths po 2, pozostałe po 3 dla każdej wersji. Nie łączymy tego zestawu z 18 scenariuszami audytu ani z nowymi scenariuszami T00.
+## Rozrzut świeżych par i rzeczywiste źródła
 
-### Szczegóły scenariuszy
+| Scenariusz | n / wersję 101 i STEP3 | Zakres 101 s | Zakres STEP3 s | Head STEP3 / harness | Ścisłe porównania (kod 0) |
+|---|---:|---|---|---|---:|
+| csv_analytics_100k | 3/3 | 38.6801–41.8141 | 36.6646–41.5959 | `93641f82` / `5e2c762f` | 5 |
+| csv_load_100k | 3/3 | 5.9781–6.3304 | 4.6084–4.7186 | `93641f82` / `5e2c762f` | 5 |
+| export_main_plots_1500 | 3/3 | 25.9295–26.8468 | 22.6156–23.2154 | `93641f82` / `5e2c762f` | 9 |
+| export_open | 3/3 | 0.0913–0.0966 | 0.0890–0.0939 | `93641f82` / `5e2c762f` | 5 |
+| filter_open | 3/3 | 1.4457–1.4688 | 0.6396–0.7266 | `93641f82` / `5e2c762f` | 5 |
+| grouping_open | 3/3 | 0.6614–0.7615 | 0.5645–0.6488 | `93641f82` / `5e2c762f` | 5 |
+| industrial_bridge | 3/3 | 8.8465–9.0676 | 8.0431–8.5867 | `75ea71c5` / `136323eb` | 5 |
+| industrial_open | 3/3 | 0.2910–0.3362 | 0.3245–0.3829 | `93641f82` / `5e2c762f` | 5 |
+| modify_db_apply | 3/3 | 0.0288–0.0363 | 0.0180–0.0222 | `93641f82` / `5e2c762f` | 5 |
+| modify_db_open | 3/3 | 0.1918–0.2050 | 0.1343–0.1498 | `93641f82` / `5e2c762f` | 5 |
+| realtime_open | 3/3 | 0.3134–0.3638 | 0.2240–0.2322 | `93641f82` / `5e2c762f` | 5 |
+| export_extended_small | 3/3 | 73.0232–77.3836 | 44.8960–62.1988 | `93641f82` / `5e2c762f` | 9 |
+| char_mapping_open | 3/3 | 0.9451–0.9873 | 0.6476–0.6989 | `93641f82` / `5e2c762f` | 5 |
+| benchmark_paths_csv_summary_100k_8 | 2/2 | 70.5087–74.9738 | 62.7690–63.1077 | `93641f82` / `5e2c762f` | 3 |
 
-| Scenariusz | Przed STEP1 [s] | Po STEP1 [s] | Redukcja 1/0 [%] | Historyczne po STEP2 [s] | Redukcja 2/1 [%] | Redukcja 2/0 [%] | n 0/1/2 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `csv_analytics_100k` | 51.4387 | 52.0166 | -1.12 | 35.3942 | 31.96 | 31.19 | 3/3/3 |
-| `csv_load_100k` | 4.9605 | 4.9376 | 0.46 | 4.7093 | 4.62 | 5.06 | 3/3/3 |
-| `export_main_plots_1500` | 58.4681 | 28.8264 | 50.70 | 27.6799 | 3.98 | 52.66 | 3/3/3 |
-| `export_open` | 0.1232 | 0.1256 | -1.95 | 0.1172 | 6.69 | 4.87 | 3/3/3 |
-| `filter_open` | 1.5636 | 1.1935 | 23.67 | 1.2943 | -8.45 | 17.22 | 3/3/3 |
-| `grouping_open` | 1.2629 | 1.5005 | -18.81 | 0.6247 | 58.37 | 50.53 | 3/3/3 |
-| `industrial_bridge` | 10.2655 | 10.5073 | -2.36 | 5.7345 | 45.42 | 44.14 | 3/3/3 |
-| `industrial_open` | 1.5751 | 0.8535 | 45.81 | 0.3270 | 61.69 | 79.24 | 3/3/3 |
-| `modify_db_apply` | 8.9525 | 0.0457 | 99.49 | 0.0460 | -0.66 | 99.49 | 3/3/3 |
-| `modify_db_open` | 19.2511 | 0.1931 | 99.00 | 0.1771 | 8.29 | 99.08 | 3/3/3 |
-| `realtime_open` | 1.1871 | 0.3812 | 67.89 | 0.4009 | -5.17 | 66.23 | 3/3/3 |
-| `export_extended_small` | 409.0245 | 134.6025 | 67.09 | 68.7534 | 48.92 | 83.19 | 1/1/1 |
-| `char_mapping_open` | 169.9696 | 163.2817 | 3.93 | 0.7825 | 99.52 | 99.54 | 1/1/1 |
-| `benchmark_paths_csv_summary_100k_8` | 93.4000 | 65.6000 | 29.76 | 64.8500 | 1.14 | 30.57 | 2/2/2 |
+## Scenariusze dodatkowe poza sumą 14
 
-Bez porównywalnego wyniku przed STEP1: `modify_db_records`, `reports_import_1500`, `reports_scan_1500`, `theme_switch_1500`. Te scenariusze pozostają poza sumą 14.
+| Scenariusz | STEP2/101 s | STEP3 s | Redukcja 3/2 % | Zakres czasu STEP3 s | n/wersję |
+|---|---:|---:|---:|---|---:|
+| Review 1500 | 12.5489 | 10.4173 | 16.99 | 9.5357–10.6921 | 3 |
+| Import 1500 | 17.3952 | 18.0493 | -3.76 | 17.7045–18.4533 | 3 |
+| Records 216k | 2.2117 | 2.2243 | -0.57 | 2.1975–2.3848 | 3 |
+| Theme 1500 | 0.1739 | 0.1848 | -6.27 | 0.1559–0.2253 | 3 |
+| CSV Grouping 100k | 17.6255 | 1.0702 | 93.93 | 0.9593–1.0878 | 3 |
+| CSV grouped 100k / 216 | 3278.7503 | 2777.4975 | 15.29 | 2777.4975 (jedna obserwacja) | 1 |
+| Anulowanie eksportu | 0.5104 | 0.0885 | 82.66 | 0.0820–0.1489 | 3 |
+| Anulowanie CSV | 0.0462 | 0.0480 | -3.90 | 0.0334–0.0502 | 3 |
+| Group Analysis 1500 / standard | 3813.6051 | 3450.0421 | 9.53² | 3450.0421 (jedna obserwacja) | 1 |
 
-Źródło historyczne: [pomiary STEP2](performance-boost-step2-measurements.json), SHA256 `dd8890ac93312098770059ccd300c9d9c5ad40e6099ee0521a026289a8019a7c`. Zapisana historyczna metoda: te same dane syntetyczne i plik harnessu, oddzielne drzewa, skompilowany bytecode, balanced i rotacja wersji. Sam wyciąg tabeli nie potwierdza ponownie dawnych plików wejściowych, zależności, cache ani pełnych dowodów identyczności. Ta granica musi pozostać widoczna w końcowym raporcie.
+Records przed C13: wszystkie 216000 wierszy i 54000 wyników były poprawne, ale pierwszy filtr blokował GUI przez 2263–2676 ms wobec 81–97 ms bazy. Dwie opcje T17 przeniosły budowę tekstu wyszukiwania na pierwszy filtr GUI. C13 je wycofał i powtórzył pełną serię na `18d67f59`: 2.2117 → 2.2243 s, czyli czas porównywalny, bez deklaracji zysku. Najdłuższe pauzy bazy to 61.1–69.5 ms, STEP3 69.4–82.0 ms; w sześciu próbach nie było pauzy ≥100 ms. Pięć ścisłych porównań plików przeszło. Wcześniejsza regresja pozostaje w dowodach. CSV cancel ma w bazie również próbę 44.536 s obok 0.0435 i 0.0462 s; zachowujemy ją, ponieważ mediana nie opisuje najgorszego przypadku.
 
+Duży CSV: pełne 100000 przypisań i 216 grup, oba statusy OK, dashboard HTML o rozmiarze 32103683 bajtów. Ścisłe porównanie A/B zakończyło się kodem 0, manifesty przed/po są równe. Jedna pełna para daje oszczędność 501.2528 s (8 min 21 s). Pierwsza informacja: 4.8862 → 2.9330 s; najdłuższa pauza GUI: 5.8155 → 5.6372 s. Ten przepływ nadal ma wielosekundowe pauzy. Nie przypisujemy całego zysku samemu T11 ani nie ogłaszamy rozwiązania wszystkich zamrożeń GUI.
 
-## Kampania końcowa 101e5a44 → STEP3
+² Group Analysis: oba pełne przebiegi mają status OK i po 2664 metryki. Zachowano po 15989 plików / około 1.23 GB, w tym 15984 PNG, HTML, XLSX i SQLite. Opisowy zysk czasu to 363.5630 s (6 min 4 s), n=1 bez rozrzutu. Pierwsza informacja: 1.5592 → 2.1321 s; najdłuższa pauza GUI: 1.7628 → 2.1371 s. Wielosekundowe pauzy pozostają. Kandydat T26 nie jest wdrożony. **Tożsamość wyjść zgodna, kod 0:** pierwotny operator 1 / timeout samego komparatora 3720 s / proces −15 pozostaje zachowany. Niezmieniona kontrola z limitem 14520 s zakończyła się kodem 0 po 5128.4434 s; manifesty przed/po są równe i końcowe źródła zweryfikowane. Nie przedstawiamy błędu operatora jako PASS ani nie odzyskujemy starszej nieukończonej akcji bazy.
 
-**PENDING.** Wymagane: 18 przepływów audytu oraz scenariusze T00, ten sam harness i dane syntetyczne, balanced, rotacja wersji, n=3 (n=2 ponad 60 s), identyczność każdego wyjścia. Warunki stanowiska i liczność prób należy podać przy wyniku. Nie przenosimy skumulowanych wyników poszczególnych pakietów do końcowych komórek.
+## Zgodność wyjść
 
-### Wcześniejszy przyjęty wynik — inny harness, bez przeniesienia akceptacji
+Wspólne 14: 76 ścisłych porównań z kodem 0. Wszystkie 23 scenariusze: 103 ścisłe porównania z kodem 0 oraz 10 kontroli bez trwałego wyjścia; manifesty przed/po są równe. Liczby obejmują kontrole A/A i porównania 101/STEP3. Pięć wcześniejszych porównań Records przed C13 pozostaje dodatkowym historycznym dowodem regresji. XLSX: te same elementy, kolejność, CRC i bajty, poza nazwanymi datami w `docProps/core.xml`. HTML: wyłącznie dopuszczone daty i dokładny token losowego katalogu generacji; zawartość zasobów pozostaje bajtowa. SQLite: katalog `sqlite_master`, typowane wartości i wszystkie wiersze. C01 dopuszcza siedem nazwanych pól czasu importu. C12 dopuszcza tylko dwa pola runtime `updated_at` cache Industrial przy wymaganym schemacie i zakresie, z kontrolami negatywnymi. `max_updated_at` pozostaje literalny i jest poprawiony w C11. Brak pliku w Review/Theme oznacza N/A dla plików, nie zwolnienie z kontroli wyniku GUI.
 
-Warianty `fb72a42e` / `15ddbeb7` / `101e5a44` / `1acd37c9`, ten sam harness903afc, dane syntetyczne1500raportów/216000pomiarów, balanced/AC, CPU8 i rotacja12prób (n3/etap). To osobna sesja względem historycznej tabeli powyżej.
+## Rejestr pakietów
 
-| Scenariusz | Przed STEP1 [s] | Po STEP1 [s] | Po STEP2 [s] | Po STEP3 [s] | Redukcja STEP3/STEP2 [%] | Redukcja STEP3/początek [%] |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Modify DB open | 20.6606 | 0.2030 | 0.2137 | 0.1627 | 23.87 | 99.21 |
+Historyczne pomiary pakietów pochodzą z różnych sesji i często ze skumulowanych wersji. Nie są niezależnymi wkładami i nie wolno ich sumować. Gdy brak pomiaru izolowanego, poniższy zysk końcowego przepływu oznaczamy jako skumulowany, z rzeczywistym headem podanym w tabelach powyżej.
 
-Dziewięć dosłownych porównań SQLite (katalog i typowane uporządkowane wiersze), wszystkie z kodem0; pełne liczności w każdej z12prób. Niezależny audyt hosta: brak różnic masek, dokładne przywrócenie widżetu, oba procesy nadzoru zakończone, bez awaryjnego przywracania i bez pozostałej pracy. Pierwszy zapis akceptacji błędnie oczekiwał etykiety RETIRED zamiast rzeczywistego EXITED; zachowano ten błąd operatora i potwierdzono znaczenie API w źródle, bez powtórzenia benchmarku. Nie jest to jeszcze suma modułu ani całej aplikacji i nie stanowi deklaracji istotności statystycznej.
-
-Scenariusz Modify DB apply zakończył pierwszą próbę pre1 kodem1: po wykonaniu działania `_retain_outputs` odczytuje opcjonalne `tabular_load_result` z usuniętego natywnego okna ModifyDB. Nie powstał JSON wyniku, więc żadnego czasu nie przyjęto ani nie odtworzono z innych logów. Przywrócenie ustawień potwierdzono niezależnie; źródła nie zmieniły się. PO zatwierdził wąski C04, opisany niżej. Wcześniejszy wynik f03 pozostaje dowodem dla harnessu903afc; akceptacja nie przechodzi na poprawiony harness5e2. Wynik końcowy i suma czterech etapów pozostają PENDING.
-
-### Scenariusze poza wspólną sumą14
-
-Te dziewięć scenariuszy dopełnia kampanię18przepływów audytu+5T00. Brak wcześniejszego porównywalnego pomiaru wyłącza je z sumy14; nie oznacza zerowego czasu. Nie mają przyjętego końcowego wyniku dla aktualnych źródeł C05.
-
-| Scenariusz | Pełne wejście / wymagany wynik | Końcowy pomiar STEP3 |
-| --- | --- | --- |
-| Review reports | 1500syntetycznych raportów;1500wierszy przeglądu | PENDING; stary f01 dotyczy wcześniejszych źródeł |
-| Import reports | 1500raportów/216000pomiarów, pełny SQLite | PENDING; ścisła funkcjonalna zgodność sprawdzona osobno, czasy f02 wykluczone |
-| Modify DB records | 216000załadowanych wierszy; niepusty wynik filtrowania | PENDING |
-| Theme switch | Pełny zestaw1500raportów, zakończony scenariusz GUI | PENDING; brak trwałego wyjścia oznacza N/A tylko dla porównania plików |
-| CSV grouping open | 100000przypisań/216zapisanych grup, niepuste populacje | PENDING |
-| CSV grouped analytics | Pełne100000przypisań/216grup, kompletny dashboard | PENDING |
-| Export cancel | Praca faktycznie rozpoczęta przed cancel, worker zakończony, brak reszt wyjścia | PENDING; czas request→idle |
-| CSV analytics cancel | Praca faktycznie rozpoczęta przed cancel, worker zakończony, brak reszt wyjścia | PENDING; czas request→idle |
-| Group Analysis legacy export | Pełny standardowy eksport z dodatnią liczbą metryk, XLSX/HTML/zasoby | PENDING; wcześniejszy timeout bazy bez kompletnego wyniku zachowany, przyczyna UNKNOWN |
-
-## Pakiety i tożsamość wyników
-
-Rejestr źródłowy T00–T24 jest zachowany w handbackach. Poniższe obserwacje pakietów pochodzą z różnych sesji i często porównują skumulowany kandydat z bazą101. Nie są niezależnym wkładem pakietu, nie wolno ich sumować ani przenosić do końcowej kolumny STEP3. T25/fala6 zweryfikowane na `d89886d3`: pełna lokalna suita 8788 PASS +418 subtestów, DELTA1 APPROVE, oba CI SUCCESS z Windows core i Linux packaging; performance PENDING. [Zamknięcie fali6](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6396507244). Fala7 jest zamknięta na `2320013103f61e3adc661d65b398e68c3078438f`: T27 zintegrowany, T26 WITHHELD. Lokalna pełna suita: 8796 PASS, 140 SKIP i 418 subtestów; niezależny pełny review APPROVE; oba wymagane przebiegi CI SUCCESS. [Zamknięcie fali7](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6398179826). Końcowy pomiar i raport T28 pozostają nieukończone.
-
-## Ograniczenia
-
-Wyniki lokalnego Linux, przegląd źródeł, CI Windows core, pakowanie i akceptacja spakowanej aplikacji Windows są odrębnymi dowodami. Testowego EXE i akceptacji kandydata Windows nie uruchomiono. E5/E6/E7 nie przyjęto; obliczenia, wykresy, integralność i trwałość pozostają wymaganiami. Wycofane i NOT_APPLICABLE podzadania należy zachować w ostatecznym rejestrze.
-
-## Rejestr pakietów — przygotowanie końcowego handbacku
 
 | Pakiet | Wynik wydajności | Dowód zgodności i decyzje zakresowe |
 | --- | --- | --- |
 | T00 | Bez deklaracji przyspieszenia | Harness i komparator XLSX/HTML/zasoby/SQLite, kontrole A/A i negatywne; przypięcie istniejących zależności i poprawka własności formatów skoroszytu. [Handback](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6344792507), [korekta](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6346295299). |
-| T01 | Extended81,9629→70,0489s;14,54% redukcji | Literalna zgodność wyjść. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6348992512). |
-| T02 | Extended33,61%, HTML32,87% redukcji; wynik skumulowany | Plotstats-first, pełny i delta review, literalne wyjścia. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6351520064). |
-| T03 | Extended65,25965→42,64585s;34,65% redukcji skumulowanej | Literalne wyjścia; A01-F02 DROPPED po zmianie PNG, kod wycofany. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6352555339). |
-| T04 | Main26,27115→23,097s;12,08% redukcji skumulowanej | Identyczne uporządkowane wyniki SQL i eksporty. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6353837309). |
-| T05 | Main26,3015→22,85245s;13,1135% redukcji skumulowanej | Literalne wyjścia po sortowaniu grup. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6354716661). |
-| T06 | Anulowanie52,26% redukcji; Main bez wykazanego zysku | Poziom6 zachowany,11 kontroli tożsamości, pełny/delta review. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6350574781). |
-| T07 | CSV33,4957→32,4726s;3,0544% redukcji skumulowanej | Trzy ścisłe porównania wyjść. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6358224323). |
-| T08 | CSV5,5482%, Paths12,7769% redukcji skumulowanej | Sześć porównań, kontrola natywnych struktur i fallbacków; uwaga review zamknięta. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6369295227). |
-| T09 | CSV3,372%, Paths4,451% redukcji skumulowanej | Sześć ścisłych porównań dashboardu i skoroszytu. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6366302389). |
-| T10 | Paths60,4443→53,9785s;10,6972% redukcji skumulowanej, bezT09 | Oracle XLSX i pełne wejście zgodne; indywidualny pełny/delta review. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6366490799). |
-| T11 | PENDING | Pełny snapshot100k/216grup, wyjścia/testy/review/CI zweryfikowane; nieukończone serie nie są wynikami. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6381260308). |
-| T12a | Pula2/4: czas Paths wzrósł6,75%/0,51%, CSV16,59%/11,65% | 16 poleceń i16 ścisłych porównań; wyłącznie pomiar, E6 NOT ADOPTED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6372570215). |
-| T13 | CSV4,4397→3,5062s;21,0262% redukcji na własnej rewizji | 20 porównań SQLite/uporządkowanych podsumowań i40 negatywnych kontroli. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6363527163). |
-| T14 | PENDING | 14 typowanych uporządkowanych wyników na1500raportów zgodnych; ogólny fallback zachowany, filtr ID odroczony. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383026791). |
-| T15 | PENDING | 2664 wyników/4limity próbek zgodne; MATERIALIZED i stary SQL fallback. Stary natywny parser NOT_RUN. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383075102). |
-| T16 | PENDING | 50kwierszy/1Mwartości/20pól/128582facety zgodne. Przepisanie trwałych widoków pominięte dla zachowania katalogu; E7 niewdrożone. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383153520). |
-| T17 | PENDING | 29wyjść Grouping i pełny stan ModifyDB zgodne; kolizja_label naprawiona; ochrona szkicuSTEP2 zachowana. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383642242). |
-| T18 | Bez zysku; DROPPED/NOT_APPLICABLE | Cache parsera wycofany do dokładnej bazy101; odświeżanie rejestru NOT_APPLICABLE bez taniego dokładnego sygnału, fail-closed zachowane. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
-| T19 | PENDING | Cache gotowych wierszy wycofany wC02; indeks wzbogacania i ogólny writer zachowane. Pełne1500raportów/216000wartości: katalog, typowane wiersze i dump zgodne. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
-| T20 | PENDING | Ponowne użycie nagłówków przyjęte; skrót float DROPPED, block_parser identyczny101. Pełne wyjścia zgodne. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
-| T21 | PENDING | Pełne1500raportów/58500nagłówków/216000pomiarów zgodne; pełny/delta review i CI. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
-| T22 | PENDING | Dwa osobne pełne stany100k/216grup literalne, pełny/delta review/CI. F06 niewdrożone, F07 DROPPED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6390458270). |
-| T23 | PENDING | Zliczenia i wybór części zgodne; oba pełny/delta review/CI. Mapping impact background DROPPED/DEFERRED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6391685452). |
-| T24 | PENDING | 24paryCSV+5profili+pełny1500Mapping zgodne, czteryP2 zamknięte. ModifyDB-background/ensure-skip DROPPED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6393090524). |
-| T25 | PENDING | 14pełnych porównań literalnych, kontrola rzeczywistej pracy/anulowania/normalnegoQuit, pełna suita/review/obaCI. StarySIGSEGV pozostajeUNKNOWN. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6396507244). |
-| T26 | WITHHELD; bez deklaracji zysku | Kandydat poza integracją. Niezmienione CLI bazy101 przekroczyło limit1020s bez kompletnego wyniku; przyczyna UNKNOWN. Brak pełnej tożsamości A/A i A/B. Wszystkie cztery optymalizacje wstrzymane; źródła i testy w zintegrowanej wersji zachowują dokładną rewizję sprzed T26. [Decyzja i dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6398047834). |
-| T27 | PENDING; kod zintegrowany | Pełny stan50kwierszy/39kolumn/20metryk: A/A i A/B literalne. Testy callerów716PASS/5SKIP/+1subtest; pełna suita, pełny review i oba CI zakończone sukcesem. Theme/profile-cache DROPPED, A03-F06 rozliczony tylkoT00. [Handback](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6398048291). |
-| T28 | PENDING; przyjęte4/23 | ModifyOpen27,19%, ModifyApply38,85%, GroupingOpen19,75% redukcji versusSTEP2; ThemeSwitch−0,75%, bez potwierdzonego zysku. Pełne wyjścia przyjętych scenariuszy zgodne;6scenariuszy wykluczonych przez bramki,1błąd retencji harnessu na bazie,12nieuruchomionych. Wszystkie dostępne kompletne wyjścia ostatnich wykluczeń dodatkowo porównane. C09propozycjaNOT_ADMISSIBLE; działający kontroler niezmieniony. |
-
-## Wcześniejsza walidacja fali7 — zachowany checkpoint
-
-Produkt w checkpointcie fali7: `2320013103f61e3adc661d65b398e68c3078438f`, drzewo `1500e54fed343d493dc5eb10d5ef5d1db5cf3614`. [CI pull requesta40194557292](https://github.com/hexafe/metroliza/actions/runs/40194557292) oraz [CI uruchomione ręcznie40194573983](https://github.com/hexafe/metroliza/actions/runs/40194573983) zakończyły się SUCCESS. Drzewo scaleniowej rewizji CI PR jest identyczne ze zweryfikowanym drzewem produktu. Oba przebiegi Unit: 8796 PASS, 140 SKIP, 412 subtestów i dziewięć dodatkowych partii UI; pokrycie82,86%, kanoniczne86,56%. Różnica sześciu subtestów względem lokalnego uruchomienia pozostaje niewyjaśniona; wyniki podano oddzielnie.
-
-Windows core smoke potwierdza źródła i testy podstawowe, a Linux packaging smoke potwierdza pakowanie. To nie jest akceptacja spakowanego kandydata Windows. W pakowaniu Linux zależność przechodnia wybrała pandas3.1.0, podczas gdy lokalna i jednostkowa walidacja używała3.0.6; obecne bezpośrednie piny nie są pełnym lockfile zależności. Nie porównano wydajności ani wyjść spakowanego wariantu.
-
-## Korekta C01 — zamknięta
-
-PO zatwierdził [wąski wyjątek](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6399420191) dla siedmiu pól czasu importu. Domyślne porównanie pozostaje ścisłe. Jawny tryb waliduje rozpoznany schemat i właściwy format UTC każdej kolumny; inne dane i sqlite_master są porównywane dosłownie. Pełne zachowane wyjścia: A/A i obie pary A/B zgodne z tym wyjątkiem; dziesięć negatywnych kontroli odrzuconych, oryginalne pliki bez zmian. To nie przyjmuje wykluczonych czasów importu.
-
-Lokalny commit `a14e1720afcdcfc6e86a3b98921e91a442ff4081` zmienia komparator, jego testy i plan; kod produktu ma nadal drzewo src `c649b4ea0cf5b3026e8f1cfa3ae493fc924fae14`. [Niezależny pełny review C01](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6399864772): APPROVE, skonfigurowany gpt-6.1-sol/xhigh, backend NOT_VISIBLE. Pełna lokalna suita: 8956 PASS, 140 SKIP i 418 subtestów. Commit wypchnięty; [CI PR40211001479](https://github.com/hexafe/metroliza/actions/runs/40211001479) i [CI ręczne40211103888](https://github.com/hexafe/metroliza/actions/runs/40211103888) zakończyły się SUCCESS, z potwierdzonymi źródłami. Oba Unit: 8956 PASS, 140 SKIP i 412 subtestów, dziewięć dodatkowych partii UI; pokrycie82,87%, kanoniczne86,56%. Windows core i Linux packaging zakończone sukcesem; nowe testy komparatora nie wchodzą do wyboru Windows core. C01 zamknięto w [handbacku](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6400590285). T28 i cały STEP3 pozostają nieukończone.
+| T01 | Extended 81,9629→70,0489 s; 14,54% redukcji | Literalna zgodność wyjść. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6348992512). |
+| T02 | Extended 33,61%, HTML 32,87% redukcji; wynik skumulowany | Plotstats-first, pełny i delta review, literalne wyjścia. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6351520064). |
+| T03 | Extended 65,25965→42,64585 s; 34,65% redukcji skumulowanej | Literalne wyjścia; A01-F02 DROPPED po zmianie PNG, kod wycofany. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6352555339). |
+| T04 | Main 26,27115→23,097 s; 12,08% redukcji skumulowanej | Identyczne uporządkowane wyniki SQL i eksporty. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6353837309). |
+| T05 | Main 26,3015→22,85245 s; 13,1135% redukcji skumulowanej | Literalne wyjścia po sortowaniu grup. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6354716661). |
+| T06 | Anulowanie 52,26% redukcji; Main bez wykazanego zysku | Poziom 6 zachowany, 11 kontroli tożsamości, pełny/delta review. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6350574781). |
+| T07 | CSV 33,4957→32,4726 s; 3,0544% redukcji skumulowanej | Trzy ścisłe porównania wyjść. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6358224323). |
+| T08 | CSV 5,5482%, Paths 12,7769% redukcji skumulowanej | Sześć porównań, kontrola natywnych struktur i fallbacków; uwaga review zamknięta. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6369295227). |
+| T09 | CSV 3,372%, Paths 4,451% redukcji skumulowanej | Sześć ścisłych porównań dashboardu i skoroszytu. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6366302389). |
+| T10 | Paths 60,4443→53,9785 s; 10,6972% redukcji skumulowanej, bez T09 | Oracle XLSX i pełne wejście zgodne; indywidualny pełny/delta review. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6366490799). |
+| T11 | Brak oddzielnego pomiaru wkładu; końcowy pełny T28 f20: 3278.7503→2777.4975 s,15.29% skumulowane/n=1; osobny wkład T11 niemierzony | Pełny snapshot 100000 wierszy/216 grup, wyjścia/testy/review/CI zweryfikowane; nieukończone serie nie są wynikami. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6381260308). |
+| T12a | Pula 2/4: czas Paths wzrósł 6,75%/0,51%, CSV 16,59%/11,65% | 16 poleceń i 16 ścisłych porównań; wyłącznie pomiar, E6 NOT ADOPTED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6372570215). |
+| T13 | CSV 4,4397→3,5062 s; 21,0262% redukcji na własnej rewizji | 20 porównań SQLite/uporządkowanych podsumowań i 40 negatywnych kontroli. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6363527163). |
+| T14 | Brak oddzielnego pomiaru wkładu; końcowy Filter Open 1.4679→0.6526 s,55.54% skumulowane | 14 typowanych uporządkowanych wyników na 1500 raportów zgodnych; ogólny fallback zachowany, filtr ID odroczony. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383026791). |
+| T15 | Brak oddzielnego pomiaru wkładu; końcowy Characteristic Mapping 0.9462→0.6608 s,30.16% skumulowane | 2664 wyników/4 limity próbek zgodne; MATERIALIZED i stary SQL fallback. Stary natywny parser NOT_RUN. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383075102). |
+| T16 | Końcowy Bridge 8.9606→8.3712 s,6.58% skumulowane; C11 zachowuje literalne cache | 50000 wierszy/1000000 wartości/20 pól/128582 wartości facetów zgodnych. Przepisanie trwałych widoków pominięte dla zachowania katalogu; E7 niewdrożone. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383153520). |
+| T17 | Końcowy Grouping 0.7301→0.6161 s,15.61%; Records po C13: 2.2117→2.2243 s (−0.57%); dodatkowe blokowanie GUI usunięte | 29 wyjść Grouping i pełny stan ModifyDB zgodne; kolizja_label naprawiona; ochrona szkicu STEP2 zachowana. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6383642242). |
+| T18 | Bez zysku; DROPPED/NOT_APPLICABLE | Cache parsera wycofany do dokładnej bazy 101; odświeżanie rejestru NOT_APPLICABLE bez taniego dokładnego sygnału, fail-closed zachowane. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
+| T19 | Końcowy Import 17.3952→18.0493 s,−3.76%; bez potwierdzonego zysku | Cache gotowych wierszy wycofany w C02; indeks wzbogacania i ogólny writer zachowane. Pełne 1500 raportów/216000 wartości: katalog, typowane wiersze i dump zgodne. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
+| T20 | Końcowy Review 12.5489→10.4173 s,16.99% skumulowane; import −3.76% | Ponowne użycie nagłówków przyjęte; skrót float DROPPED, block_parser identyczny 101. Pełne wyjścia zgodne. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
+| T21 | Końcowy Review 16.99% skumulowane; bez oddzielnego przypisania wkładu T21 | Pełne 1500 raportów/58500 nagłówków/216000 pomiarów zgodne; pełny/delta review i CI. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6389503390). |
+| T22 | Końcowy CSV Grouping 17.6255→1.0702 s,93.93% skumulowane; pełna analiza f20: 15.29% skumulowane/n=1 | Dwa osobne pełne stany 100000 wierszy/216 grup literalne, pełny/delta review/CI. F06 niewdrożone, F07 DROPPED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6390458270). |
+| T23 | Końcowy Mapping 0.9462→0.6608 s,30.16% skumulowane; bez osobnego wkładu T23 | Zliczenia i wybór części zgodne; oba pełny/delta review/CI. Mapping impact background DROPPED/DEFERRED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6391685452). |
+| T24 | Końcowy CSV Load 6.0439→4.6501 s,23.06% skumulowane; bez osobnego wkładu T24 | 24 pary CSV+5 profili+pełny 1500 Mapping zgodne, cztery P2 zamknięte. ModifyDB-background/ensure-skip DROPPED. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6393090524). |
+| T25 | Końcowe anulowanie eksportu 0.5104→0.0885 s,82.66%; CSV 0.0462→0.0480 s,−3.90%, oba wyniki skumulowane | 14 pełnych porównań literalnych, kontrola rzeczywistej pracy/anulowania/normalnego Quit, pełna suita/review/oba CI. Stary SIGSEGV pozostaje UNKNOWN. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6396507244). |
+| T26 | WITHHELD; bez deklaracji zysku | Kandydat poza integracją. Historyczna próba bazy przy limicie 1020 s nie dała kompletnego wyniku; tamten przebieg pozostaje niezakwalifikowany. T28 bada zintegrowany standardowy Group Analysis bez czterech optymalizacji T26. Pełna tożsamość kandydata T26 nie jest potwierdzona. [Decyzja i dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6398047834). |
+| T27 | Brak oddzielnego pomiaru wkładu; Realtime 0.3327→0.2304 s,30.75% skumulowane; Industrial Open −4.16%/Theme −6.27% bez potwierdzonego zysku | Pełny stan 50000 wierszy/39 kolumn/20 metryk: A/A i A/B literalne. Testy callerów 716 PASS/5 SKIP/+1 subtest; pełna suita, pełny review i oba CI zakończone sukcesem. Theme/profile-cache DROPPED, A03-F06 rozliczony tylko T00. [Handback](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6398048291). |
+| T28 | Wspólne 14: 235.3680→189.7053 s,19.40%; cała kampania 23/23; duży CSV 15.29%/501.25 s krócej, Group Analysis 9.53% / 363.56 s krócej, n=1, tożsamość zgodna po osobnej kontroli | Aktualne wspólne 14 i wszystkie 18 audytu mają pełne dane i literalne wyjścia; duży CSV 100000 wierszy/216 grup A/B 15.29% krócej, zgodność 0; Group Analysis ma pełne wyjścia zgodne, kod 0; pierwotny timeout operatora pozostaje zachowany. Starsze wykluczenia i błędy zachowane w dowodach, nie przenoszone do nowych czasów. C09 został źródłowo/natywnie zakwalifikowany; bieżąca metoda laptopowa nie używa kontrolerów/partycji/widżetu. |
 
 
-## Korekty C02 i C03 — zamknięte na 1acd37c9
+## Walidacja, modele i ograniczenia
 
-[C02](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6400732869) wycofał wyłącznie cache gotowych wierszy zapisu T19 A09a-F01 po wykazaniu kosztu rekurencyjnego klucza. Indeks wzbogacania T19, T21 i celowe fail-closed STEP2 pozostają zachowane. Pełny import1500raportów/216000pomiarów zgodny z bazą101 i C01 przy zatwierdzonych siedmiu polach czasu; zmiana pomiaru daje FAIL. Pierwotne niepowodzenie launchera po przejściowej obserwacji resource_tracker zachowano; historyczna tożsamość PID i przyczyna pozostają UNKNOWN.
+Źródła produktu: tree `6c3317fb0a6ee15ff8b01ef3d68ccf01269d2763`; scripts tree `b375df625883c93a011da1a18f2ddba1ae11e74d`. Końcowa integracja raportu zmienia wyłącznie trzy istniejące pliki Markdown. Produkt `18d67f59` ma pełną lokalną suitę: **9140 PASS, 140 SKIP, 25 ostrzeżeń i 418 subtestów**, kod 0, 1650.24 s; head i źródła pozostały niezmienione. [PR CI 40351575717](https://github.com/hexafe/metroliza/actions/runs/40351575717) i [ręczne CI 40351594372](https://github.com/hexafe/metroliza/actions/runs/40351594372) zakończyły się SUCCESS: wszystkie nieskipowane zadania/kroki przeszły, w tym Windows core i Linux packaging. PR checkout `752096b3` ma dokładne tree `a73652db`; ręczne Unit/Windows/packaging użyły `18d67f59`. Oba główne Unit: 9140 PASS / 140 SKIP / 412 subtestów oraz dziewięć dodatkowych partii UI. Pokrycie: 82.87%, kanoniczne 86.55%. Historyczna różnica sześciu subtestów local/CI pozostaje niewyjaśniona. Linux packaging: artifact `12667535061`, SHA-256 ZIP `350d1c7223b3d0e6141c9eab2dd56c7d50315525cd8229a24d0595a16ecf9682`. W pakowaniu rozwiązano tranzytywne pandas 3.1.0 wobec lokalnego/Unit 3.0.6: piny bezpośrednich zależności nie są pełnym lockiem i nie dowodzą pełnej zgodności wyjść pakietu. Windows core CI nie zastępuje kwalifikacji spakowanego EXE; wydajności Windows ani Windows EXE nie uruchamiano.
 
-Pierwsza pełna suita C02 miała dwie porażki testu geometrii OCR; seed58 odtworzył je również na oryginalnym101. C03 poprawia wyłącznie test: wymaga dokładnego śladu oryginalnego lookupu zamiast stałej liczby callbacków równości oraz zachowuje dosłowną geometrię. Dla seedów0/1/2/58/losowego baza i kandydat przechodzą, mutant dodatkowego lookupu zawodzi. Nie wykazano regresji produktu. Pierwotny seed suity nie został zarejestrowany.
+Przypadek T28 miał niezależne [FULL1 REQUEST_CHANGES](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6398911897) oraz [DELTA1 APPROVE](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6399085105), oba ze skonfigurowanym `gpt-6.1-sol/xhigh`; backend i effort niezależnie not visible. Delta naprawiła granicę pomiaru anulowania: od żądania cancel do bezczynności, z osobnym czasem całej akcji. Budżet T28 FULL1/DELTA1 jest wykorzystany. To review kodu przypadku; nie zastępuje bieżących dowodów wykonania ani nie jest nowym review końcowego raportu. Osobne zatwierdzone korekty zachowują własne raporty i budżety.
 
-Commity `dd399a926ab82905d59b4aa0c97fde17e09622ee` i `1acd37c93c13f029746e2ccce488affd7ea7ceb1`, drzewo `42949fbd8d8aaccb8ec3c1d22eb157c61dd5c88f`, produkt src `84619c209e248a6e389425e0cb4c1396503ee2ef`. Oba niezależne FULL1 APPROVE, MUST-7 i pełny audyt bezpieczeństwa0. Poprawiona lokalna pełna suita:8960PASS/140SKIP/25ostrzeżeń/418subtestów, rzeczywisty kod0.
+C10–C12: skonfigurowany implementer `gpt-6.1-sol/high`, świeży reviewer `gpt-6.1-sol/xhigh`; niezależna tożsamość backendu i effort nie są widoczne. Każdy zużył FULL1 i DELTA1. C11 korzystał z porady `gpt-6-astra/high`. C13: ten sam implementer/reviewer, [FULL1 APPROVE_SOURCE_ONLY](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6419594872), bez P0–P2, DELTA1 niewykorzystane. Porada `gpt-6-astra/high` miała nazwany trigger `MEASURED_GUI_STALL_REGRESSION_MODIFY_RECORDS_216K`; nie była konsultacją Opus ani formalnym review. C13 ma staged MUST-7/full security PASS, 84 testy modelu i 279 callerów +13 subtestów, pełną suitę, świeży pełny 216k A/B i oba CI. Modele i bramki wcześniejszych pakietów pozostają w podlinkowanych handbackach; nie odtwarzamy ich z aktualnych domyślnych ustawień.
 
-[CI PR40222113351](https://github.com/hexafe/metroliza/actions/runs/40222113351) i [CI ręczne40222228479](https://github.com/hexafe/metroliza/actions/runs/40222228479): TERMINAL/SUCCESS, źródła potwierdzone; oba Unit8960PASS/140SKIP/25ostrzeżeń/412subtestów oraz dziewięć dodatkowych partiiUI. Windows core i Linux packaging przeszły; akceptacji spakowanego Windows nie wykonywano. [Handback zamknięcia](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6402091396). Implementer gpt-6.1-sol/high, reviewer gpt-6.1-sol/xhigh; ograniczona porada diagnostyczna C03 gpt-6-astra/high; backendy NOT_VISIBLE. Czasy wykluczonego f02 nie zostały przyjęte.
+T18: odświeżanie rejestru NOT_APPLICABLE bez taniego, dokładnego sygnału zmian; zachowano fail-closed STEP2. T26 WITHHELD, kandydat poza integracją. E5/E6/E7 niewdrożone. Historyczny C07 shutdown SIGSEGV pozostaje UNKNOWN/UNRESOLVED; przechodzące testy nie dowodzą jego naprawy. Nie zmieniono `app/gc_policy.py` ani launchera Rust. Wyniki nie są deklaracją braku wszystkich możliwych błędów ani kwalifikacji spakowanego Windows.
 
-## C04 — wcześniejsze CI wykryło błąd, korekta zamknięta wraz z C05
-
-PO zatwierdził [wąski wyjątek C04](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6402031022). Wypchnięty commit `ed4420a5781da931eb8207309cefccc4407a1038`, drzewo `8371d897d93faafe8bec4faf203944403dbe0d2d`, poprawia wyłącznie retencję po zakończonym Modify DB apply i testy/plan; produkt src84619c2 nie zmienił się. Wszystkie cztery wersje mają identyczny harness5e2 i świeży bytecode. Kontrole oryginału i mutanta odtwarzają błąd; kandydat przechodzi10kontroli. Po git add126PASS z pełnym smoke, MUST-7 i pełny audyt bezpieczeństwa0. [FULL1 C04](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6402298470): APPROVE, reviewer gpt-6.1-sol/xhigh, backend NOT_VISIBLE; FULL1wykorzystany1/1, DELTA0/1. Lokalna pełna suita8969PASS/140SKIP/25ostrzeżeń/418subtestów, rzeczywisty kod0.
-
-[CI PR40228098820](https://github.com/hexafe/metroliza/actions/runs/40228098820) zakończyło się FAILURE:8968PASS/1FAIL/140SKIP/412subtestów; natywny test odrzuconego zamknięcia wykrył ostrzeżenie QWaitCondition. Oba Windows core smoke przeszły, lecz na tym etapie C04 nie zamknięto wobec niepowodzenia wymaganego CI. [Ręczny przebieg40228188938](https://github.com/hexafe/metroliza/actions/runs/40228188938) zakończył się TERMINAL/SUCCESS: Unit8969PASS, Windows core i Linux packaging przeszły, rzeczywiste źródła potwierdzone. Ten sukces nie usuwa porażki wcześniejszego PR CI. Pełną kwalifikację zamknęła dopiero korekta C05 i jej nowe CI, opisane poniżej; nie powtarzano niezmienionego CI do uzyskania zielonego wyniku.
-
-Świeży f05-c04 zakończył pierwszą próbę pre1 kodem0: błąd retencji nie wrócił. Seria została jednak przerwana po10próbach przez niezmienione zabezpieczenie obciążenia; próbnik wykrył kswapd0 na28,74%rdzenia. W chwili przerwania brakowało kompletnego podsumowania i porównań; żaden czas nie został przyjęty. Później siedem ścisłych porównań zachowanych wyjść SQLite przeszło kodem0; każdy z10wyników ma1500raportów/216000pomiarów, pliki pozostały niezmienione. To wyłącznie dowód funkcjonalny starego C04/src84619c2, bez wznowienia serii i bez akceptacji czasu. Niezależny audyt potwierdził dokładne przywrócenie widżetu/masek i zakończenie procesów, bez pozostałej pracy. Nie ustalono przyczyny presji pamięci ani regresji produktu. f03-c04 nie uruchomiono; zastąpiły go świeże f03-c05 i f05-c05 z aktualnych źródeł, opisane na początku raportu. Wcześniejszego f03 nie przeniesiono na harness5e2.
-
-## C05 — natywne sprawdzanie zakończenia wątku
-
-[Przyjęty zakres diagnostyki](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6402612813) obejmuje wyłącznie ui/detached_threads.py i istniejący test. W kontrolowanym Qt6.6.1 isFinished może już zwracać prawdę podczas natywnego kończenia, gdy wait nadal musi sprawdzić ukończenie. Trzymana sygnalizacja finished deterministycznie odtworzyła ostrzeżenie dla wait(0); próba z już wygasłym precyzyjnym QDeadlineTimer zwracaFalse bez ostrzeżenia, a po faktycznym ukończeniuTrue. To rozróżnienie mechanizmu, nie dowód każdego szczegółu wcześniejszej porażki CI.
-
-Wąska korekta jest zintegrowana i wypchnięta jako `e2f9f273027828d35bc0e70b150f3fc1e4460859`, drzewo `6cc02b7f2ab776f9d8f32641c4e6348d947e4233`, produkt src `9689863e47c04ca6960a48b3daf831d138e28508`. Kontrole po git add772PASS/5SKIP/48subtestów, MUST-7 156PASS/5subtestów i pełny audyt bezpieczeństwa przeszły kodem0; [Świeży FULL1 C05](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6402869254) zakończył się APPROVE bez ustaleń P0–P2/MUST; skonfigurowany reviewer gpt-6.1-sol/xhigh, backend NOT_VISIBLE, źródła związane przed/po. Pełna lokalna suita zakończona rzeczywistym kodem0:8970PASS/140SKIP/25ostrzeżeń/418subtestów,1314,69s, źródła przed/po identyczne i czyste. Asercje braku ostrzeżeń, brak blokowania GUI, natywne domknięcie, pending delivery, odrzucenie zamknięcia i wyścig ponowionego Quit pozostają obowiązkowe. Brak zmian zależności, GC, Rust, komparatora i kontrolerów pomiarów. Implementer gpt-6.1-sol/high; backend NOT_VISIBLE. Nie przypisujemy Opusowi udziału w tej korekcie; nie został wywołany. Review źródeł APPROVE; pełna suita i wymagane CI poprawionej wersji zakończone sukcesem. [CI PR40232527375](https://github.com/hexafe/metroliza/actions/runs/40232527375) i [CI ręczne40232531359](https://github.com/hexafe/metroliza/actions/runs/40232531359): wszystkie7/8wymaganych zadań i wykonane kroki zweryfikowane, rzeczywiste źródła potwierdzone. Oba Unit8970PASS/140SKIP/25ostrzeżeń/412subtestów plus9partiiUI; Windows core24grupy podsumowań każdy i Linux packaging PASS. Bezpośredni nowy test natywny C05 nie jest wybrany w Windows core; spakowany Windows nadal NOT_QUALIFIED. [Zamknięcie C04/C05](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6403417324). C04 i C05 mają każdy FULL1wykorzystany1/1, DELTA0/1; wcześniejsze budżety i porażki zachowane. STEP3 pozostaje nieukończone.
-
-## Dodatkowe scenariusze poza wspólnym zestawem 14
-
-| Scenariusz | Przed STEP1 [s] | Po STEP1 [s] | Po STEP2 [s] | Po STEP3 [s] | Redukcja 3/2 [%] |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| ThemeSwitch1500 | N/A | N/A | 0.1727 | 0.1740 | -0.75 |
-
-Zgodnie z zamrożoną macierzą jest to porównanie STEP2/STEP3, po trzy próbki na etap. Wyjście trwałe jest N/A, puste manifesty są identyczne. Proces i niezależny audyt zakończyły się kodem 0. Nie potwierdzono zysku; ujemna redukcja pozostaje widoczna.
-
-## C06 i C08 — źródła oraz kontrole nadzoru
-
-C06 poprawił obsługę odejścia procesów przeglądarki z obserwacji. Jego poprawiona wersja otrzymała DELTA1 source-only approval. Obie późniejsze serie natywne pozostały FAILED_NOT_ACCEPTED: odstępy heartbeat 2.172936 s i 2.051826 s przekroczyły dotychczasowy limit 2 s. Niezależne audyty potwierdziły przywrócenie ustawień, lecz nie kwalifikację tych serii. Dawne budżety i negatywne raporty zachowano.
-
-[C08](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6411368805) jest zatwierdzonym poluzowaniem limitu i metadanych heartbeat z 2 do 5 s, nie diagnozą przyczyny opóźnień. FULL1 zakończył się SOURCE_ONLY_APPROVE. Przeszły 44 testy kontrolera, pięć kontroli negatywnych z mutantami, istniejący validator oraz staged MUST-7. Wszystkie pięć natywnych kontroli i osobny audyt ROOT zakończyły się kodem 0: 28 plików bez zmian, dokładne przywrócenie ustawień i brak pozostałych procesów. Implementer gpt-6.1-sol/high, reviewer gpt-6.1-sol/xhigh; backend NOT_VISIBLE. C08 FULL1 wykorzystany 1/1, DELTA1 0/1.
-
-## Dalsze wykluczenia i dostępne dowody wyjść
-
-- FilterOpen: sześć ukończonych prób, następnie kswapd0 = 28.72% rdzenia. Trzy ścisłe porównania dostępnych pełnych wyjść przeszły kodem 0.
-- CharacteristicMapping: sześć ukończonych prób, następnie kswapd0 = 26.08%. Trzy ścisłe porównania wyjść przeszły kodem 0.
-- CsvLoad100k: cztery ukończone próby, następnie zewnętrzny proces Claude = 32.48%. Dostępna para pełnych wyjść baza/final przeszła ścisłe porównanie kodem 0.
-- IndustrialOpen: dwanaście ukończonych prób, następnie klasyfikacja Python = 100.01%. Wszystkie dwanaście wyjść pozostało zgodnych: sześć porównań tej samej wersji i trzy baza/final, kody 0. Pochodzenie próbki omówiono poniżej.
-- ModifyRecords216k: już na 101e5a44 retencja dotknęła usuniętego obiektu ModifyDB, przed wynikowym JSON. Obecny wyjątek C04 obejmuje dokładnie Apply; nie poszerzono go o Records.
-
-Żaden z tych czasów nie został przyjęty ani odtworzony. Audyty każdego zakończonego zadania potwierdziły dokładne przywrócenie ustawień i wyjście procesów. Częściowy dowód wyjść nie zastępuje pełnej serii pomiarowej.
-
-## C09 — wykazany błąd klasyfikacji, korekta niewdrożona
-
-Własny dziennik porównania Industrial zawiera ten sam PID, który kontroler sklasyfikował jako obcy, i zakończenie tego porównania kodem 0. Historyczny próbnik zapisuje PID, nazwę i CPU, bez czasu urodzenia oraz UID. Dlatego nie rozstrzygamy ponownego użycia PID ani nie przypisujemy kategorycznie tamtej próbki.
-
-Niezależnie od tożsamości historycznej, kontrolowany test rzeczywistego resource_probe odtwarza błąd źródłowy: własny proces jest żywy przy obu końcach próbki CPU, kończy się przed klasyfikacją, a filtr bieżącego token_alive usuwa wyjątek i zgłasza obce obciążenie. Oryginał daje RED z rzeczywistym kodem 1, kontrola żywego procesu kod 0.
-
-Dwie prywatne propozycje przechodziły autorskie 14/16 kontroli, ale dodawały niezatwierdzone globalne veto narodzin i wyjść procesów. Obie odrzucono jako NOT_ADMISSIBLE. Zamrożone źródła nie zmieniły się; trzeciej próby nie wykonano. Review, integracja i natywne kontrole C09: NOT_RUN.
-
-Dalsze zawężenie musi zachować dotychczasowe przecięcie procesów z obu końców próbnika oraz udowodnić PID, czas urodzenia, UID i wcześniejszą przynależność każdej zwracanej gorącej próbki do dopuszczonego drzewa. Brak dowodu nie może tworzyć wyjątku. Zakres nie obejmuje globalnego veta zwykłej rotacji, reguł nazw, rejestru zakończonych PID, progów, harnessu, komparatora, 21 funkcji scenariuszy ani 28 slotów zasobów. Wymaga odrębnego dopuszczenia względem zamrożenia §3 i reguły dwóch prób §8. To propozycja zakresu, nie wdrożenie i nie naprawa wcześniejszych wykluczeń.
-
-## Aktualne CI i nierozstrzygnięte C07
-
-[PR40290315903](https://github.com/hexafe/metroliza/actions/runs/40290315903) i [manual40290404956](https://github.com/hexafe/metroliza/actions/runs/40290404956) zakończyły się TERMINAL/SUCCESS: 7/8 wykonanych zadań oraz wszystkie wykonane kroki przeszły, oba watchery zwróciły 0. Faktyczny checkout PR20ab1599 ma dokładnie drzewo7755ad5b kandydata0fcf13fb; ręczny przebieg pobrał0fcf13fb.
-
-Oba Unit: 8970 PASS, 140 SKIP, 25 ostrzeżeń, 412 subtestów oraz dziewięć dodatkowych partii UI. Windows core: po 24 grupy podsumowań PASS. Linux packaging: PASS. Pokrycie 82.862185%. Packaged Windows pozostaje NOT_QUALIFIED; osiem opcjonalnych flag ma wartość 0. Pandas3.1.0 w packaging wobec3.0.6 lokalnie/Unit pozostaje ograniczeniem przechodnich zależności, nie dowodem identyczności spakowanych wyjść.
-
-Historyczny PR40277856581 zakończył się kodem139 po 8970 przechodzących testach. Przyczyna C07 pozostaje UNKNOWN. Jeden pasywny przebieg GDB na tym samym drzewie zakończył się kodem0: 8970 PASS, 140 SKIP i 418 subtestów, LOCAL_NON_REPRODUCTION_NOT_RESOLVED. Lokalny Python3.11.16 różni się od CI3.11.17; debugger zmienia czas wykonania. C08 i późniejsze zielone CI nie dowodzą naprawy tej awarii. Historyczna różnica sześciu subtestów lokalnie/CI pozostaje niewyjaśniona.
+Pierwszą próbę Group Analysis na 101 przerwał dawny limit 3720 s (TimeoutExpired, proces −15, brak ukończonego JSON/czasu/tożsamości), mimo powstałego skoroszytu i zasobów. PO jawnie dopuścił czas ponad godzinę i polecił dokończenie. [Aktualna metoda](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6414934954) daje obu wersjom 14400 s runtime i 14520 s limitu zewnętrznego. Nowa baza i STEP3 ukończyły pełny standardowy eksport po 2664 metryki w 3813.6051 i 3450.0421 s. Odrębny komparator został następnie zakończony po 3720 s (TimeoutExpired, −15), więc oryginalny operator pozostał FAILED/1. Niezmienione ścisłe porównanie z limitem 14520 s zakończyło się kodem 0 po 5128.4434 s; oba pełne zakończone wyniki i niezmienione manifesty/źródła są zweryfikowane. Koordynator przyjął tę kompletną parę jako opisowy pomiar n=1 z jawnym odstępstwem wykonawczym: osobno zakończona kontrola po błędzie pierwotnego operatora. Nie deklarujemy osobnego dosłownego zatwierdzenia nowego wyjątku przez PO; decyzja wykonawcza stosuje jego aktualne polecenie dokończenia pomiarów skali także ponad godzinę, z zachowaniem ścisłej tożsamości. Ten przebieg nie jest przedstawiany jako bezbłędne zakończenie pierwotnego operatora. Nie zmieniono produktu, harnessu, porównań ani zakresu obliczeń. Poprzednia niedokończona próba pozostaje porażką, nie udanym pomiarem.
