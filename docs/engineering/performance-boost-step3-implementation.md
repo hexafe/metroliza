@@ -247,6 +247,32 @@ Preserve the failed CI and all prior budgets; no unchanged retry-to-green. No ou
 measurement-tool change, dependency, GC, Rust or machine-policy change is authorized by C05.
 Full-flow performance remains separately PENDING until qualified T28 evidence is available.
 
+### PO amendment — C06 browser snapshot departure (2026-10-26)
+
+Authority: [explicit narrow C06 approval](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6409265363).
+A fresh FilterOpen series passed admission but later omitted the Firefox main process from its
+approved-browser snapshot and classified it as competing load. A deterministic mock proves a
+matching mechanism: one sibling task can disappear during affinity validation, causing the whole
+still-live, correctly masked process to be omitted. The exact exception in the actual failed series
+was not retained; its precise cause remains unproved. The entire series stays excluded and its
+independent exact-restoration audit is preserved.
+
+This is a narrow exception to the infrastructure freeze: the approved 11-net-line correction in
+the existing CPU helper's `interactive_tokens`, focused tests in its existing test file and necessary
+source/configuration bindings only. Continue validation after a task departure only with the unchanged
+exact main identity and proved task absence; live/reused tasks retain denial. Validate every surviving
+observed task and deny empty or leader-incomplete enumeration. Preserve UID/permission/bad-mask errors,
+the existing reused-TID control, epoch checks, deadlines, process bounds and restoration behavior.
+No retry loop, process-name exemption, wider ancestry, threshold relaxation or new controller.
+
+Require old-source regression and bad-mask-mutant negative controls, focused helper tests, one fresh
+independent FULL1 and at most one DELTA1 for C06, then the existing native normal/failure/TERM/
+individual-owner-loss controls with independent exact-restoration audits. No new measurement admission
+until these source/runtime gates pass. Rebind exact sources and use fresh complete four-version series;
+retain the same harness, populations, outputs, sample order and comparison rules. Earlier review budgets,
+failed controls and excluded timings remain unchanged. No product, dependency, GC, Rust, machine-profile,
+computation, output, comparator or sampling change is authorized.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).
