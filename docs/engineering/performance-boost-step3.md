@@ -1,12 +1,12 @@
 # Performance Boost STEP3 — raport wyników
 
-> Stan na2026-10-25: implementacja fal0–7 oraz C01–C05 zweryfikowana; T26 WITHHELD. T28 pozostaje nieukończone: przyjęto2/23przepływy bieżącej kampanii,2serie wykluczono,19nie uruchomiono. Brakujące pomiary są PENDING; nie jest to zamknięcie #1151 ani akceptacja spakowanego Windows.
+> Stan na 2026-10-26: przyjęto 4/23 przepływy. Sześć scenariuszy wykluczyły bramki obciążenia, jeden zatrzymał błąd retencji harnessu na bazie, dwunastu nie uruchomiono. Brakujące wyniki pozostają PENDING. T26 WITHHELD; C07 shutdown SIGSEGV nadal UNKNOWN/UNRESOLVED. To nie jest zamknięcie #1151 ani akceptacja spakowanego Windows.
 
-## Bieżąca kampania C05 — cztery etapy, moduły i suma
+## Bieżąca kampania C05/C08 — cztery etapy, moduły i suma
 
-Dokładne wersje: przed STEP1`fb72a42e`, po STEP1`15ddbeb7`, po STEP2`101e5a44`, po STEP3`e2f9f273`; produkt src`9689863e47c04ca6960a48b3daf831d138e28508`. Wspólny harness`5e2c762fef893717148d8add56fec1f872d27c44654afb00094d60c46044a315`, pełne syntetyczne wejście, balanced/AC, CPU8 i rotacja12prób (n3/etap) w obu przyjętych scenariuszach. Wyniki są z nowych sesji; wcześniejszych pomiarów nie przeniesiono.
+Dokładne wersje: przed STEP1`fb72a42e`, po STEP1`15ddbeb7`, po STEP2`101e5a44`, po STEP3`e2f9f273`; produkt src`9689863e47c04ca6960a48b3daf831d138e28508`. Wspólny harness`5e2c762fef893717148d8add56fec1f872d27c44654afb00094d60c46044a315`, pełne syntetyczne wejście, balanced/AC, CPU8 i rotacja12prób (n3/etap) w przyjętych wspólnych scenariuszach. Wyniki są z nowych sesji; wcześniejszych pomiarów nie przeniesiono. ModifyOpen/Apply mają headB e2f9f273; nowe sesje C08 mają0fcf13fb. Produkt src i harness pozostają identyczne. Różnice dokumentacji i zatwierdzona polityka heartbeat C08 są jawne.
 
-Suma modułu to suma median jego scenariuszy, z wagą1 każdy. Procent wynika z sum sekund, nie ze średniej procentów. Nie jest to czas pojedynczej sekwencji użytkownika. Moduł otrzymuje sumę dopiero po przyjęciu wszystkich swoich scenariuszy; pełny indeks ma14wspólnych przepływów. Brakujące komórki nie oznaczają zera. Ujemny procent oznacza wydłużenie czasu i pozostaje widoczny.
+Suma modułu obejmuje tylko jego scenariusze ze wspólnego zestawu 14 i sumuje ich mediany z wagą 1. Dodatkowe scenariusze T00 są przedstawione osobno i nie wchodzą do tych sum. Procent wynika z sum sekund, nie ze średniej procentów. Nie jest to czas pojedynczej sekwencji użytkownika. Moduł otrzymuje sumę dopiero po przyjęciu wszystkich swoich scenariuszy; pełny indeks ma14wspólnych przepływów. Brakujące komórki nie oznaczają zera. Ujemny procent oznacza wydłużenie czasu i pozostaje widoczny.
 
 | Scenariusz / moduł | Przed STEP1 [s] | Po STEP1 [s] | Redukcja1/0 [%] | Po STEP2 [s] | Redukcja2/1 [%] | Redukcja2/0 [%] | Po STEP3 [s] | Redukcja3/2 [%] | Redukcja3/0 [%] |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -27,7 +27,7 @@ Suma modułu to suma median jego scenariuszy, z wagą1 każdy. Procent wynika z 
 | ModifyApply | 9.3427 | 0.0416 | 99.55 | 0.0399 | 4.09 | 99.57 | 0.0244 | 38.85 | 99.74 |
 | ExportOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | FilterOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
-| GroupingOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
+| GroupingOpen | 1.4390 | 1.5550 | -8.06 | 0.7831 | 49.64 | 45.58 | 0.6284 | 19.75 | 56.33 |
 | CharacteristicMapping | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | MainPlots1500 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | Extended216 | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
@@ -38,7 +38,7 @@ Suma modułu to suma median jego scenariuszy, z wagą1 każdy. Procent wynika z 
 | RealtimeOpen | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 | PathsCsvSummary100k | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING | PENDING |
 
-Po dziewięć ścisłych porównań katalogu SQLite i typowanych uporządkowanych wierszy na przyjęty scenariusz zakończyło się kodem0. Każdy z24wyników ma1500raportów/216000pomiarów; porównania nie zmieniły plików. Nie użyto wyjątków timestampów. Niezależne audyty potwierdziły dokładne przywrócenie masek/widżetu, zakończone korzenie sesji, brak pozostałej pracy i awaryjnego przywracania. To pojedyncze lokalne sesje; brak deklaracji istotności statystycznej, Windows i łącznego przyspieszenia aplikacji.
+ModifyOpen, ModifyApply i GroupingOpen: po9ścisłych porównań katalogu SQLite i typowanych uporządkowanych wierszy, rzeczywiste kody0. Pełne wejście1500raportów/216000pomiarów, pliki niezmienione, bez wyjątku timestampów. Audyty każdego przyjętego i wykluczonego przebiegu potwierdzają dokładne przywrócenie ustawień i wyjście procesów. Scenariusze bez zapisywanego wyjścia oznaczono N/A. Brak deklaracji istotności statystycznej, akceptacji Windows i globalnego przyspieszenia.
 
 ### Zachowane surowe próby przyjętych pomiarów
 
@@ -53,11 +53,22 @@ Po dziewięć ścisłych porównań katalogu SQLite i typowanych uporządkowanyc
 | ModifyApply | po STEP2 | 0.0399, 0.0393, 0.0412 | 0.0399 |
 | ModifyApply | po STEP3 | 0.0244, 0.0192, 0.0264 | 0.0244 |
 
-### Wykluczenia i warunek kontynuacji
+### Dalsze surowe próby przyjętych pomiarów
+
+| Scenariusz | Wersja | Próby [s] | Mediana [s] |
+| --- | --- | --- | ---: |
+| f08-c08 | pre1 | 1.4390, 1.4972, 1.3540 | 1.4390 |
+| f08-c08 | post1 | 1.5550, 1.4584, 1.6483 | 1.5550 |
+| f08-c08 | A | 0.7831, 0.8641, 0.6024 | 0.7831 |
+| f08-c08 | B | 0.5346, 0.6284, 0.6589 | 0.6284 |
+| f12-c08 | A | 0.2086, 0.1694, 0.1727 | 0.1727 |
+| f12-c08 | B | 0.1685, 0.1885, 0.1740 | 0.1740 |
+
+### Pierwsze wykluczenia C05 i dalsze sesje C08
 
 Review1500 wykluczono po trzech kompletnych próbach: niezmienione zabezpieczenie sklasyfikowało cztery procesy Python po około99%rdzenia jako konkurujące i nieprzypisane do sesji. Ich historyczny właściciel pozostaje UNKNOWN; późniejszy brak PID nie dowodzi pochodzenia. ExportOpen wykluczono po trzech próbach przez kswapd0 na31,18%rdzenia, przed rozpoczęciem B. Żadnego czasu tych serii nie przyjęto ani nie wznowiono. Niezależne audyty obu wykluczeń potwierdziły dokładne przywrócenie ustawień, zakończone korzenie sesji i brak pozostającej rozpoznanej pracy. Nie wykazano regresji produktu.
 
-Zgodnie z [wiążącą poprawką §3](performance-boost-step3-implementation.md) dalsze pomiary oczekują na odpowiednie, stabilne warunki. Po kolejnych niestabilnych oknach nie powtarzano długich serii, nie osłabiano zabezpieczeń i nie rozbudowywano kontrolerów. Przypisanie8CPU nie izoluje współdzielonej pamięci, cache, I/O ani termiki. Zachowano wszystkie niekorzystne wyniki. Źródła/testy/review/CI są zweryfikowane oddzielnie od brakujących końcowych czasów i porównań pełnych wyjść.
+Po pierwszych wykluczeniach z2026-10-25 czasy pozostałyPENDING. Dnia2026-10-26 wznowiono odrębne świeże sesje po aktualnej obserwacji hosta, kwalifikacjiC08 i niezależnym audycie ustawień. Żaden czas wykluczonych serii nie został przyjęty ani odtworzony. Przypisanie8CPU pozostawia współdzieloną pamięć, cache,I/O i termikę; każdy wynik jest związany ze swoją sesją. Źródła/testy/review/CI są weryfikowane oddzielnie od brakujących końcowych czasów.
 
 ## Archiwalne trzy etapy — oddzielny punkt odniesienia
 
@@ -174,7 +185,7 @@ Wyniki lokalnego Linux, przegląd źródeł, CI Windows core, pakowanie i akcept
 | T25 | PENDING | 14pełnych porównań literalnych, kontrola rzeczywistej pracy/anulowania/normalnegoQuit, pełna suita/review/obaCI. StarySIGSEGV pozostajeUNKNOWN. [Dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6396507244). |
 | T26 | WITHHELD; bez deklaracji zysku | Kandydat poza integracją. Niezmienione CLI bazy101 przekroczyło limit1020s bez kompletnego wyniku; przyczyna UNKNOWN. Brak pełnej tożsamości A/A i A/B. Wszystkie cztery optymalizacje wstrzymane; źródła i testy w zintegrowanej wersji zachowują dokładną rewizję sprzed T26. [Decyzja i dowody](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6398047834). |
 | T27 | PENDING; kod zintegrowany | Pełny stan50kwierszy/39kolumn/20metryk: A/A i A/B literalne. Testy callerów716PASS/5SKIP/+1subtest; pełna suita, pełny review i oba CI zakończone sukcesem. Theme/profile-cache DROPPED, A03-F06 rozliczony tylkoT00. [Handback](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6398048291). |
-| T28 | PENDING | Przygotowano23 scenariusze na istniejącej zamrożonej infrastrukturze. FULL1 wykrył P2 w granicy czasu anulowania; poprawka używa request→idle i DELTA1 zakończył się APPROVE. Pierwsza próba f01 nie została dopuszczona z powodu limitu przestrzeni tymczasowej; obliczenia nie wystartowały, a przywrócenie ustawień potwierdzono niezależnie. Po zachowaniu identycznej kopii starych syntetycznych wyników T06 na dysku uruchomiono świeżą próbę. Przyjęto f01:12,5803→9,8615s, redukcja21,6116%, n3/stronę; brak trwałych wyjść oznaczono N/A, przywrócenie ustawień potwierdzono niezależnie. To wynik wcześniejszego drzewa produktu `c649b4ea`; nie przenosi się na nowe źródła C02. Powtórka f01 i pozostałe scenariusze dla końcowej wersji pozostają PENDING. [Review](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6399085105). |
+| T28 | PENDING; przyjęte4/23 | ModifyOpen27,19%, ModifyApply38,85%, GroupingOpen19,75% redukcji versusSTEP2; ThemeSwitch−0,75%, bez potwierdzonego zysku. Pełne wyjścia przyjętych scenariuszy zgodne;6scenariuszy wykluczonych przez bramki,1błąd retencji harnessu na bazie,12nieuruchomionych. Wszystkie dostępne kompletne wyjścia ostatnich wykluczeń dodatkowo porównane. C09propozycjaNOT_ADMISSIBLE; działający kontroler niezmieniony. |
 
 ## Wcześniejsza walidacja fali7 — zachowany checkpoint
 
@@ -212,3 +223,45 @@ PO zatwierdził [wąski wyjątek C04](https://github.com/hexafe/metroliza/issues
 [Przyjęty zakres diagnostyki](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6402612813) obejmuje wyłącznie ui/detached_threads.py i istniejący test. W kontrolowanym Qt6.6.1 isFinished może już zwracać prawdę podczas natywnego kończenia, gdy wait nadal musi sprawdzić ukończenie. Trzymana sygnalizacja finished deterministycznie odtworzyła ostrzeżenie dla wait(0); próba z już wygasłym precyzyjnym QDeadlineTimer zwracaFalse bez ostrzeżenia, a po faktycznym ukończeniuTrue. To rozróżnienie mechanizmu, nie dowód każdego szczegółu wcześniejszej porażki CI.
 
 Wąska korekta jest zintegrowana i wypchnięta jako `e2f9f273027828d35bc0e70b150f3fc1e4460859`, drzewo `6cc02b7f2ab776f9d8f32641c4e6348d947e4233`, produkt src `9689863e47c04ca6960a48b3daf831d138e28508`. Kontrole po git add772PASS/5SKIP/48subtestów, MUST-7 156PASS/5subtestów i pełny audyt bezpieczeństwa przeszły kodem0; [Świeży FULL1 C05](https://github.com/hexafe/metroliza/pull/1152#issuecomment-6402869254) zakończył się APPROVE bez ustaleń P0–P2/MUST; skonfigurowany reviewer gpt-6.1-sol/xhigh, backend NOT_VISIBLE, źródła związane przed/po. Pełna lokalna suita zakończona rzeczywistym kodem0:8970PASS/140SKIP/25ostrzeżeń/418subtestów,1314,69s, źródła przed/po identyczne i czyste. Asercje braku ostrzeżeń, brak blokowania GUI, natywne domknięcie, pending delivery, odrzucenie zamknięcia i wyścig ponowionego Quit pozostają obowiązkowe. Brak zmian zależności, GC, Rust, komparatora i kontrolerów pomiarów. Implementer gpt-6.1-sol/high; backend NOT_VISIBLE. Nie przypisujemy Opusowi udziału w tej korekcie; nie został wywołany. Review źródeł APPROVE; pełna suita i wymagane CI poprawionej wersji zakończone sukcesem. [CI PR40232527375](https://github.com/hexafe/metroliza/actions/runs/40232527375) i [CI ręczne40232531359](https://github.com/hexafe/metroliza/actions/runs/40232531359): wszystkie7/8wymaganych zadań i wykonane kroki zweryfikowane, rzeczywiste źródła potwierdzone. Oba Unit8970PASS/140SKIP/25ostrzeżeń/412subtestów plus9partiiUI; Windows core24grupy podsumowań każdy i Linux packaging PASS. Bezpośredni nowy test natywny C05 nie jest wybrany w Windows core; spakowany Windows nadal NOT_QUALIFIED. [Zamknięcie C04/C05](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6403417324). C04 i C05 mają każdy FULL1wykorzystany1/1, DELTA0/1; wcześniejsze budżety i porażki zachowane. STEP3 pozostaje nieukończone.
+
+## Dodatkowe scenariusze poza wspólnym zestawem 14
+
+| Scenariusz | Przed STEP1 [s] | Po STEP1 [s] | Po STEP2 [s] | Po STEP3 [s] | Redukcja 3/2 [%] |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ThemeSwitch1500 | N/A | N/A | 0.1727 | 0.1740 | -0.75 |
+
+Zgodnie z zamrożoną macierzą jest to porównanie STEP2/STEP3, po trzy próbki na etap. Wyjście trwałe jest N/A, puste manifesty są identyczne. Proces i niezależny audyt zakończyły się kodem 0. Nie potwierdzono zysku; ujemna redukcja pozostaje widoczna.
+
+## C06 i C08 — źródła oraz kontrole nadzoru
+
+C06 poprawił obsługę odejścia procesów przeglądarki z obserwacji. Jego poprawiona wersja otrzymała DELTA1 source-only approval. Obie późniejsze serie natywne pozostały FAILED_NOT_ACCEPTED: odstępy heartbeat 2.172936 s i 2.051826 s przekroczyły dotychczasowy limit 2 s. Niezależne audyty potwierdziły przywrócenie ustawień, lecz nie kwalifikację tych serii. Dawne budżety i negatywne raporty zachowano.
+
+[C08](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6411368805) jest zatwierdzonym poluzowaniem limitu i metadanych heartbeat z 2 do 5 s, nie diagnozą przyczyny opóźnień. FULL1 zakończył się SOURCE_ONLY_APPROVE. Przeszły 44 testy kontrolera, pięć kontroli negatywnych z mutantami, istniejący validator oraz staged MUST-7. Wszystkie pięć natywnych kontroli i osobny audyt ROOT zakończyły się kodem 0: 28 plików bez zmian, dokładne przywrócenie ustawień i brak pozostałych procesów. Implementer gpt-6.1-sol/high, reviewer gpt-6.1-sol/xhigh; backend NOT_VISIBLE. C08 FULL1 wykorzystany 1/1, DELTA1 0/1.
+
+## Dalsze wykluczenia i dostępne dowody wyjść
+
+- FilterOpen: sześć ukończonych prób, następnie kswapd0 = 28.72% rdzenia. Trzy ścisłe porównania dostępnych pełnych wyjść przeszły kodem 0.
+- CharacteristicMapping: sześć ukończonych prób, następnie kswapd0 = 26.08%. Trzy ścisłe porównania wyjść przeszły kodem 0.
+- CsvLoad100k: cztery ukończone próby, następnie zewnętrzny proces Claude = 32.48%. Dostępna para pełnych wyjść baza/final przeszła ścisłe porównanie kodem 0.
+- IndustrialOpen: dwanaście ukończonych prób, następnie klasyfikacja Python = 100.01%. Wszystkie dwanaście wyjść pozostało zgodnych: sześć porównań tej samej wersji i trzy baza/final, kody 0. Pochodzenie próbki omówiono poniżej.
+- ModifyRecords216k: już na 101e5a44 retencja dotknęła usuniętego obiektu ModifyDB, przed wynikowym JSON. Obecny wyjątek C04 obejmuje dokładnie Apply; nie poszerzono go o Records.
+
+Żaden z tych czasów nie został przyjęty ani odtworzony. Audyty każdego zakończonego zadania potwierdziły dokładne przywrócenie ustawień i wyjście procesów. Częściowy dowód wyjść nie zastępuje pełnej serii pomiarowej.
+
+## C09 — wykazany błąd klasyfikacji, korekta niewdrożona
+
+Własny dziennik porównania Industrial zawiera ten sam PID, który kontroler sklasyfikował jako obcy, i zakończenie tego porównania kodem 0. Historyczny próbnik zapisuje PID, nazwę i CPU, bez czasu urodzenia oraz UID. Dlatego nie rozstrzygamy ponownego użycia PID ani nie przypisujemy kategorycznie tamtej próbki.
+
+Niezależnie od tożsamości historycznej, kontrolowany test rzeczywistego resource_probe odtwarza błąd źródłowy: własny proces jest żywy przy obu końcach próbki CPU, kończy się przed klasyfikacją, a filtr bieżącego token_alive usuwa wyjątek i zgłasza obce obciążenie. Oryginał daje RED z rzeczywistym kodem 1, kontrola żywego procesu kod 0.
+
+Dwie prywatne propozycje przechodziły autorskie 14/16 kontroli, ale dodawały niezatwierdzone globalne veto narodzin i wyjść procesów. Obie odrzucono jako NOT_ADMISSIBLE. Zamrożone źródła nie zmieniły się; trzeciej próby nie wykonano. Review, integracja i natywne kontrole C09: NOT_RUN.
+
+Dalsze zawężenie musi zachować dotychczasowe przecięcie procesów z obu końców próbnika oraz udowodnić PID, czas urodzenia, UID i wcześniejszą przynależność każdej zwracanej gorącej próbki do dopuszczonego drzewa. Brak dowodu nie może tworzyć wyjątku. Zakres nie obejmuje globalnego veta zwykłej rotacji, reguł nazw, rejestru zakończonych PID, progów, harnessu, komparatora, 21 funkcji scenariuszy ani 28 slotów zasobów. Wymaga odrębnego dopuszczenia względem zamrożenia §3 i reguły dwóch prób §8. To propozycja zakresu, nie wdrożenie i nie naprawa wcześniejszych wykluczeń.
+
+## Aktualne CI i nierozstrzygnięte C07
+
+[PR40290315903](https://github.com/hexafe/metroliza/actions/runs/40290315903) i [manual40290404956](https://github.com/hexafe/metroliza/actions/runs/40290404956) zakończyły się TERMINAL/SUCCESS: 7/8 wykonanych zadań oraz wszystkie wykonane kroki przeszły, oba watchery zwróciły 0. Faktyczny checkout PR20ab1599 ma dokładnie drzewo7755ad5b kandydata0fcf13fb; ręczny przebieg pobrał0fcf13fb.
+
+Oba Unit: 8970 PASS, 140 SKIP, 25 ostrzeżeń, 412 subtestów oraz dziewięć dodatkowych partii UI. Windows core: po 24 grupy podsumowań PASS. Linux packaging: PASS. Pokrycie 82.862185%. Packaged Windows pozostaje NOT_QUALIFIED; osiem opcjonalnych flag ma wartość 0. Pandas3.1.0 w packaging wobec3.0.6 lokalnie/Unit pozostaje ograniczeniem przechodnich zależności, nie dowodem identyczności spakowanych wyjść.
+
+Historyczny PR40277856581 zakończył się kodem139 po 8970 przechodzących testach. Przyczyna C07 pozostaje UNKNOWN. Jeden pasywny przebieg GDB na tym samym drzewie zakończył się kodem0: 8970 PASS, 140 SKIP i 418 subtestów, LOCAL_NON_REPRODUCTION_NOT_RESOLVED. Lokalny Python3.11.16 różni się od CI3.11.17; debugger zmienia czas wykonania. C08 i późniejsze zielone CI nie dowodzą naprawy tej awarii. Historyczna różnica sześciu subtestów lokalnie/CI pozostaje niewyjaśniona.
