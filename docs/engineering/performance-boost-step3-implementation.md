@@ -279,6 +279,30 @@ retain the same harness, populations, outputs, sample order and comparison rules
 failed controls and excluded timings remain unchanged. No product, dependency, GC, Rust, machine-profile,
 computation, output, comparator or sampling change is authorized.
 
+### PO amendment — C08 measurement-controller cadence budget (2026-10-26)
+
+Authority: [explicit narrow C08 approval](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6410917157).
+The corrected C06 source passed DELTA1, but its native qualification remained incomplete: one batch
+rejected a 2.172936-second heartbeat gap and the one predeclared quarantined follow-up rejected
+2.051826 seconds against the existing 2-second bound. Both failed batches and their independent
+exact-restoration audits remain retained; no timing is accepted from them. The cause of these small
+overruns is unproved, and they do not establish general machine instability.
+
+This exception permits exactly the two-line existing common-module policy change: heartbeat gap
+limit and declared instrumentation metadata from 2 to 5 seconds, matching the existing consumer
+status-freshness bound. This deliberately accepts gaps between 2 and 5 seconds that were previously
+rejected; it is an approved measurement-policy relaxation, not a product fix or proved causal repair.
+Keep nominal heartbeat 1 second, consumer freshness 5 seconds, helper polling 0.5 seconds, parent
+polling 0.25 seconds, and all source/identity/mask/epoch/load checks, process/deadline bounds,
+restoration and output comparisons. No new controller, retry mechanism or further limit increase.
+
+Require focused old-source/positive/greater-than-5-second negative controls and preserved epoch,
+child-failure and consumer-staleness denials; one fresh FULL1 and at most one DELTA1 for C08; then
+the existing complete native five-control qualification and independent restoration audits before
+fresh complete T28 timing series. C06 and earlier budgets/failures are not reset. Product computation,
+chart density/quality, integrity, durability, GC, Rust and dependencies remain unchanged. C07's separate
+CI shutdown SIGSEGV remains unresolved; this amendment and future green CI are not its fix.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).
