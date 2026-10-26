@@ -303,6 +303,42 @@ fresh complete T28 timing series. C06 and earlier budgets/failures are not reset
 chart density/quality, integrity, durability, GC, Rust and dependencies remain unchanged. C07's separate
 CI shutdown SIGSEGV remains unresolved; this amendment and future green CI are not its fix.
 
+### PO amendment — C09 sampled process identity (2026-10-26)
+
+Authority: [explicit narrow C09 approval](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6412934740).
+The actual old classifier rejects an owned process that is alive at both CPU-sampling endpoints but
+finishes before classification. A guarded old-source regression returns actual1; the unchanged
+live-owned control returns0. The excluded Industrial series contains a matching own-comparison PID,
+but its historical sampler has no birth/UID evidence, so its identity and timing remain unqualified.
+
+Two private proposals added an all-host lifecycle veto and are NOT_ADMISSIBLE. Preserve both attempts
+and their evidence. This exception permits exactly one further narrow implementation attempt, without
+applying those proposals or resetting any earlier budget. Scope is only the existing common resource
+probe seam, exact identity/window/supervisor evidence in the existing host sampler, existing common
+test fixtures/controls, and necessary Plan/source/config bindings. No new controller or registry.
+
+Preserve the sampler's original intersection coverage: ordinary processes absent at an endpoint remain
+outside that sampled CPU scope, with the same disclosed limitation. Exempt a returned hot row only
+with matching PID/birth/UID at both endpoints and trustworthy pre-window membership in the admitted
+own/selected tree under the same source/supervisor and valid monotonic epoch stream. Normal epoch
+advancement remains allowed. Completion after the sampling window must not invalidate its exact
+window proof. Missing, malformed, changed/reused or unobserved identity must not grant an exemption.
+No new name allowance, PID-only fallback, finished-PID registry or global churn veto is permitted.
+
+Keep the CPU20% threshold, heartbeat5s, other cadence/deadline/process bounds, source/mask/epoch/load
+checks, restoration, all21 T28 case function ASTs and28 resource source slots. Product computation,
+chart density/quality, integrity, durability, GC, Rust, dependencies, harness and comparator stay
+unchanged. This does not repair f04 retention, kswapd/external load or C07, and permits no historical
+timing reclassification or salvage.
+
+Require actual old-source RED, preserved old-test semantics, completed/live-own positives, ordinary
+unsampled churn and normal epoch advancement, plus external/reused/malformed/missing-identity,
+post-window membership, owner/source/freshness and threshold negative controls. C09 receives at most
+one fresh FULL1 and one DELTA1; prior reviews and failures remain retained. Then require the existing
+complete five native controls, independent ROOT restoration audit, staged MUST-7/required CI and exact
+source bindings before fresh complete T28 timing series. Stop and report if the admitted narrow
+attempt fails or needs another scope expansion.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).
