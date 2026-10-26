@@ -540,42 +540,13 @@ def _metadata_scope_fingerprint(
         """,
         params,
     ).fetchone()
-    profile_inputs = connection.execute(
-        f"""
-        SELECT DISTINCT records.source_profile_id, profiles.id,
-            typeof(profiles.profile_name), hex(profiles.profile_name)
-        FROM industrial_records records
-        LEFT JOIN industrial_source_profiles profiles
-            ON profiles.id = records.source_profile_id
-        {where_sql}
-        ORDER BY records.source_profile_id
-        """,
-        params,
-    ).fetchall()
-    # This derived-cache column is an opaque equality token, never a parsed timestamp.
-    # Include exact scoped label inputs (including missing profiles and embedded NULs)
-    # without changing the persisted cache schema or the public scope key.
-    label_token = "v2:" + hashlib.sha256(
-        json.dumps(
-            [str(row[2] or ""), profile_inputs], separators=(",", ":"),
-            default=_fingerprint_json_value,
-        ).encode("utf-8")
-    ).hexdigest()
     return (
         int(row[0] or 0),
         int(row[1] or 0),
-        label_token,
+        str(row[2] or ""),
         int(value_row[0] or 0),
         int(value_row[1] or 0),
     )
-
-
-def _fingerprint_json_value(value: Any) -> list[str]:
-    # SQLite scalar IDs may be orphan BLOBs. The tagged array cannot collide with
-    # a TEXT ID (JSON string); keep the encoding of every existing JSON scalar.
-    if type(value) is bytes:
-        return ["sqlite_blob", value.hex()]
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _ensure_table_column(
@@ -632,16 +603,7 @@ def _ensure_value_facets_for_scope(
 ) -> None:
     if row_count <= 0:
         return
-    cached = connection.execute(
-        f"""
-        SELECT 1
-        FROM {_quote_identifier(_INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE)}
-        WHERE scope_key = ?
-        LIMIT 1
-        """,
-        (scope_key,),
-    ).fetchone()
-    if cached is not None:
+    if _profile_value_facets_match(connection, scope_key=scope_key, where_sql=where_sql, params=params):
         return
     _refresh_value_facets(
         connection,
@@ -651,6 +613,48 @@ def _ensure_value_facets_for_scope(
         params=params,
         dynamic_fields=dynamic_fields,
     )
+
+
+def _profile_value_facets_match(connection, *, scope_key: str, where_sql: str, params: tuple[Any, ...]) -> bool:
+    # Labels can change without advancing record timestamps. Compare the complete
+    # derived relations instead of persisting a token in the literal timestamp field.
+    # The ID relation also catches orphan-ID changes with an unchanged alias label.
+    queries = []
+    for column, expression in _BASE_INDUSTRIAL_COLUMNS:
+        if column not in ("source", "source_profile_id"):
+            continue
+        normalized_expr = _normalized_value_sql(expression)
+        queries.append(
+            f"""
+            SELECT '{column}' AS column_name, {normalized_expr} AS normalized_value,
+                {normalized_expr} AS display_value, COUNT(*) AS row_count
+            FROM industrial_records records
+            LEFT JOIN industrial_source_profiles profiles ON profiles.id = records.source_profile_id
+            {where_sql}
+            GROUP BY normalized_value, display_value
+            """
+        )
+    # SQL equality alone can conflate scalar types; hex preserves embedded NULs
+    # and exact bytes without decoding arbitrary SQLite values in Python.
+    signature = (
+        "column_name, typeof(normalized_value), hex(normalized_value),"
+        " typeof(display_value), hex(display_value), typeof(row_count), hex(row_count)"
+    )
+    different = connection.execute(
+        f"""
+        WITH current_facets AS ({' UNION ALL '.join(queries)}),
+        current_relation AS (SELECT {signature} FROM current_facets),
+        cached_relation AS (
+            SELECT {signature}
+            FROM {_quote_identifier(_INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE)}
+            WHERE scope_key = ? AND column_name IN ('source', 'source_profile_id')
+        )
+        SELECT EXISTS(SELECT * FROM current_relation EXCEPT SELECT * FROM cached_relation)
+            OR EXISTS(SELECT * FROM cached_relation EXCEPT SELECT * FROM current_relation)
+        """,
+        (*params, *params, scope_key),
+    ).fetchone()[0]
+    return not different
 
 
 def _refresh_value_facets(

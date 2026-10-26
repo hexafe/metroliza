@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_on": "2026-10-24",
+  "generated_on": "2026-10-26",
   "entries": [
     {
       "repository": "hexafe-plotstats",
@@ -391,7 +391,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2e153d568cba0e6befad212f11f1b3086323eca826f48da819b4c07bc1d55963",
+      "fingerprint": "c1721168babef300490840519ea50113ba0360a0cde2439810945755bab5c076",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -400,7 +400,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "41d02788cdb88b86b345e7df24cb05fbb50a04053fc5f78f3571890e65d955e6",
+      "fingerprint": "5921769715915fe66d51dbed4d3b604a4f5a34b5cfd242b69c6478ada60a94ba",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -418,7 +418,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "0bc78b3b3b9ccf634c3a5769d9e34e72f1e9c9fb57e0da4d1cabb1017d45e5cf",
+      "fingerprint": "0bfff4d370eb22a0f124061b4bfe53118fefa30a303f890bae535de299625a71",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -427,7 +427,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6356052bed0db6c837e79e46fd6bbe6f68b0df874754a09e8bf0a9ca1e7debde",
+      "fingerprint": "8e423d16b69aa590da3686cf356b613a45bf3bbd9bd236efd4140d268e8d0072",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -436,16 +436,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "37c37975913bac7e4fb62ee0d76c353934dfde735d65354489072c42cb64ce52",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
-      "owner": "Security review",
-      "rationale": "_ensure_value_facets_for_scope: _INDUSTRIAL_TABULAR_VALUE_FACETS_TABLE is a module constant quoted by _quote_identifier. scope_key is bound; no cached column names or values enter the SELECT text.",
-      "expires_on": "2027-04-30"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "6b36083d4365795525a6b0e6719ad6a633e211ab4816eddea9b6c608a93da536",
+      "fingerprint": "62bc8e60488bc659a26d9f911de2eedb95119cf4fe1df69b34a3f5dfaab590c8",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -454,7 +445,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "b1ca6e429d0bacd1d87c2bcc79b7f032c7fc108252f8cc985724fa891992590b",
+      "fingerprint": "cfbd1c028de12b106c9dd78e33c3628183fd053e0683ac83c8efdd248f4cb78d",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -472,7 +463,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "41fe75add3315ff2c4f7c55641dd22431de9f1c707f80ff76f5b10529fd7da6d",
+      "fingerprint": "26a5b4d0976109f8e7e8ad837e8f67881b1badf19543aa622500acc6339978bb",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -490,7 +481,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e32fd6e188fd1c61e6af799a16cca8994c8f8f5beee090071b76745fdd5549a1",
+      "fingerprint": "cda0f95ffc14065e41e05c009d172742aa43ee8cf7be4bc9d89be646f95a22f4",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -508,7 +499,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "aa8ebe2099af86968cc500789d41b4b0f66c0cd51922e9a811bf46ac41850ad8",
+      "fingerprint": "ad4828c9b900102712c4ff609425466934794e63126be0de702837a2c1a884a8",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -1399,7 +1390,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4f6b65dc92f486e467b955c28cfc38a154a90068cc6520b9f54d764969b4f02f",
+      "fingerprint": "dc657d0bd8e6f2e6f654e787ca39bec34bd29217a6ff2e9ed1ca3edf504821a0",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
@@ -1408,20 +1399,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ce5550e6ea30842080f80eb51d343b987afb25eddda4767e6258e693b516d655",
+      "fingerprint": "b5553e900d6b1a907ba5e9dc5265221faaaf47844534fca324e3457dd7f8710c",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
       "owner": "Security review",
       "rationale": "_distinct_dynamic_metadata_rows (STEP3 T16, #1151/#906): its only production caller supplies the fixed TRIM/COALESCE value expression; _NUMERIC_VALUE_SQL is a module constant. where_sql is the bridge fixed IN-template chain and all selection values remain separately bound params. Field text remains grouped SQL data/UDF input; this exception does not admit external arbitrary SQL fragments.",
-      "expires_on": "2027-04-30"
-    },
-    {
-      "repository": "metroliza",
-      "fingerprint": "153430dc007cfa4290860146beee3fd6f6b7f8f6a14e224ecea9dcfe3b1e6fda",
-      "test_id": "B608",
-      "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
-      "owner": "Security review",
-      "rationale": "_metadata_scope_fingerprint profile-label inputs (STEP3 T16, #1151/#906): where_sql comes through the private bridge chain from fixed records.source_profile_id/source_db_alias IN templates in load_industrial_cache_tabular_result. Placeholder count is generated from normalized selections; actual IDs/aliases are supplied separately as params. Tables/columns/joins are literal; profile names are returned as data and hex-encoded for the cache token, never interpolated into SQL.",
       "expires_on": "2027-04-30"
     },
     {
@@ -1477,6 +1459,24 @@
       "owner": "Security review",
       "rationale": "_count_sqlite_source_id_chunks: internal fallback receives table_name and fixed source_row_number from count_source_row_numbers, quotes the table name, and uses a generated placeholder list plus the canonical compiled filter clause. Filter values and row ID chunks are supplied separately to execute; arbitrary caller SQL is outside this internal helper contract.",
       "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "5dbdab8fb4324c21a4990d98851aee82b3f3ba3f0496121eea5e7fb9232bb854",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
+      "owner": "Metroliza maintainers",
+      "rationale": "_profile_value_facets_match: the two profile-facet SELECT arms use only the literal source/source_profile_id members of _BASE_INDUSTRIAL_COLUMNS and existing normalization expressions. where_sql comes from load_industrial_cache_tabular_result's fixed IN-placeholder clauses; profile IDs are normalized to int and aliases to str, with all values bound through (*params, *params, scope_key). The compound comparison uses a constant typed/hex projection and the quoted module-constant facet table. No user-controlled identifier or SQL fragment enters this production call chain; these parameterized internal SELECTs are reviewed B608 false positives. Keep scope/parameter construction unchanged or reassess.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "a6524278f13ea61caf7d35426fec18895c600373f16d3b36b294648ef84f7a29",
+      "test_id": "B608",
+      "path": "src/metroliza/industrial/industrial_tabular_bridge.py",
+      "owner": "Metroliza maintainers",
+      "rationale": "_profile_value_facets_match: the two profile-facet SELECT arms use only the literal source/source_profile_id members of _BASE_INDUSTRIAL_COLUMNS and existing normalization expressions. where_sql comes from load_industrial_cache_tabular_result's fixed IN-placeholder clauses; profile IDs are normalized to int and aliases to str, with all values bound through (*params, *params, scope_key). The compound comparison uses a constant typed/hex projection and the quoted module-constant facet table. No user-controlled identifier or SQL fragment enters this production call chain; these parameterized internal SELECTs are reviewed B608 false positives. Keep scope/parameter construction unchanged or reassess.",
+      "expires_on": "2027-01-24"
     }
   ]
 }

@@ -404,6 +404,30 @@ commit itself was benchmarked. Product
 source identity and the narrow post-action harness delta must remain explicit in the report.
 
 
+### Coordinator correction — C11 persisted cache identity (2026-10-26)
+
+Authority: the continuing necessary-fix authorization and the [concrete C11/C12 diagnosis](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6417102976).
+Full50k Industrial Bridge output exposed a deterministic T16 regression: a v2 profile hash was
+persisted in `industrial_tabular_metadata_cache.max_updated_at` in place of the baseline raw
+source timestamp. This difference is not nondeterminism and must never be masked.
+
+Restore the original five-field fingerprint/persistence representation while retaining strong
+profile freshness. On a metadata-cache hit, validate complete current `source` and
+`source_profile_id` facet relations against cached rows, including storage type, exact bytes
+and counts. Missing/extra/changed rows refresh through the existing path on the same connection
+and transaction; matching relations leave cached rows unchanged. Current SQL views continue
+reading raw values. Existing v2 rows naturally miss and refresh. Preserve numeric/dynamic
+optimizations, old-SQLite fallback, cancellation/error propagation and commit boundaries.
+No new schema, registry, dependency or weakened integrity is permitted.
+
+Original101/current936/final format controls are PASS/RED/PASS. Preserve all profile, orphan,
+BLOB/NUL, scope, migration, corruption and warm-versus-cold behavioral vectors; replace only
+v2-format assertions with the baseline representation and exact output checks. Timestamp-only
+rollback and omission of source-ID freshness must fail. C11 has at most one FULL1 and one DELTA1;
+FULL1 is source-only, not full50k identity or performance acceptance. Require integrated guards,
+full security, the integrated full suite and actual CI. Compare corrected full outputs with only
+the separately qualified C12 runtime timestamps; all other fields and schema remain literal.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).

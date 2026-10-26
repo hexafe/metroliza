@@ -434,6 +434,7 @@ def test_out_of_scope_profile_name_keeps_warm_metadata(synthetic_cache, tmp_path
         raise AssertionError("an unrelated profile must not invalidate this scope")
 
     monkeypatch.setattr(bridge, "_dynamic_field_metadata", fail_refresh)
+    monkeypatch.setattr(bridge, "_refresh_value_facets", fail_refresh)
     assert _snapshot(db_file, **scope) == expected
 
 
@@ -505,24 +506,30 @@ def test_present_facet_query_activates_with_literal_ordered_results(
         ).fetchall() == actual
 
 
-def test_fingerprint_preserves_type_null_missing_and_embedded_nul(tmp_path):
+def test_fingerprint_keeps_literal_timestamp_for_all_profile_inputs(tmp_path):
     with sqlite_connection_scope(str(tmp_path / "fingerprint.sqlite")) as connection:
         connection.execute("CREATE TABLE industrial_records (id INTEGER, source_profile_id INTEGER, updated_at TEXT)")
         connection.execute("CREATE TABLE industrial_record_values (id INTEGER, record_id INTEGER)")
         connection.execute("CREATE TABLE industrial_source_profiles (id INTEGER, profile_name)")
         connection.execute("INSERT INTO industrial_records VALUES (1, 1, 'fixed')")
-        tokens = []
         for name in (None, "", "N\0a", "N\0b", b"N\x00b", 123, "123"):
             connection.execute("DELETE FROM industrial_source_profiles")
             connection.execute("INSERT INTO industrial_source_profiles VALUES (1, ?)", (name,))
             fingerprint = bridge._metadata_scope_fingerprint(connection, where_sql="", params=())
             assert fingerprint[:2] == (1, 1)
             assert fingerprint[3:] == (0, 0)
-            assert fingerprint[2].startswith("v2:")
-            tokens.append(fingerprint[2])
+            assert fingerprint[2] == "fixed"
         connection.execute("DELETE FROM industrial_source_profiles")
-        tokens.append(bridge._metadata_scope_fingerprint(connection, where_sql="", params=())[2])
-        assert len(tokens) == len(set(tokens))
+        assert bridge._metadata_scope_fingerprint(connection, where_sql="", params=())[2] == "fixed"
+
+
+def test_metadata_cache_persists_literal_record_timestamp(synthetic_cache):
+    warm, _profiles = synthetic_cache
+    _snapshot(warm)
+    with sqlite_connection_scope(str(warm)) as connection:
+        assert connection.execute("SELECT max_updated_at FROM industrial_tabular_metadata_cache").fetchone()[0] == (
+            connection.execute("SELECT MAX(updated_at) FROM industrial_records").fetchone()[0]
+        )
 
 
 def test_metadata_query_error_rolls_back_without_published_view(synthetic_cache, monkeypatch):
@@ -562,6 +569,11 @@ def _raw_orphan_snapshot(db_file):
             "rows": [tuple((type(value).__name__, value) for value in row) for row in rows],
             "facets": facets, "token": token, "row_count": loaded.row_count,
             "preview": loaded.dataframe.to_dict("records"),
+            "counts": store.count_rows(),
+            "value_previews": {
+                column: store.preview_value_rows(column, limit=500)
+                for column in ("source", "source_profile_id")
+            },
         }
     finally:
         store.cleanup()
@@ -571,13 +583,14 @@ def test_blob_orphan_profile_id_public_read_and_warm_invalidation(synthetic_cach
     template, _profiles = synthetic_cache
     warm = _copy(template, tmp_path, "blob-warm.sqlite")
     _raw_orphan_snapshot(warm)
-    tokens = []
-    for value in (b"orphan", "orphan", '["sqlite_blob","6f727068616e"]', b"different", b""):
+    for index, value in enumerate((
+        b"orphan", "orphan", '["sqlite_blob","6f727068616e"]', b"different", b"", 999, "999text",
+    )):
         with sqlite_connection_scope(str(warm)) as connection:
             connection.execute("PRAGMA foreign_keys = OFF")
             connection.execute("UPDATE industrial_records SET source_profile_id = ? WHERE id = 1", (value,))
             connection.commit()
-        cold = _copy(warm, tmp_path, f"blob-cold-{len(tokens)}.sqlite")
+        cold = _copy(warm, tmp_path, f"blob-cold-{index}.sqlite")
         with sqlite_connection_scope(str(cold)) as connection:
             connection.execute("DELETE FROM industrial_tabular_metadata_cache")
             connection.execute("DELETE FROM industrial_tabular_value_facets")
@@ -585,10 +598,144 @@ def test_blob_orphan_profile_id_public_read_and_warm_invalidation(synthetic_cach
         expected = _raw_orphan_snapshot(cold)
         actual = _raw_orphan_snapshot(warm)
         assert actual == expected
+        with sqlite_connection_scope(str(warm)) as connection:
+            assert actual["token"] == connection.execute("SELECT MAX(updated_at) FROM industrial_records").fetchone()[0]
         assert actual["row_count"] == 27
         # The source ID keeps its storage type; source labels still use the alias fallback.
         assert actual["rows"][0][1:4] == (
             ("str", "alias_line_a"), ("str", "alias_line_a"), (type(value).__name__, value),
         )
-        tokens.append(actual["token"])
-    assert len(set(tokens)) == len(tokens)
+
+
+def test_profile_types_null_missing_and_nul_match_reopened_cold_cache(synthetic_cache, tmp_path):
+    warm, profiles = synthetic_cache
+    with sqlite_connection_scope(str(warm)) as connection:
+        # Preserve the complete profile schema, but permit the original fingerprint's
+        # NULL/numeric/TEXT/BLOB vectors without SQLite TEXT affinity coercing them.
+        connection.execute("PRAGMA foreign_keys = OFF")
+        schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'industrial_source_profiles'"
+        ).fetchone()[0]
+        connection.execute(schema.replace("industrial_source_profiles", "replacement_profiles", 1)
+                           .replace("profile_name TEXT NOT NULL", "profile_name"))
+        connection.execute("INSERT INTO replacement_profiles SELECT * FROM industrial_source_profiles")
+        connection.execute("DROP TABLE industrial_source_profiles")
+        connection.execute("ALTER TABLE replacement_profiles RENAME TO industrial_source_profiles")
+        connection.commit()
+    _raw_orphan_snapshot(warm)
+    for index, value in enumerate((None, "", "N\0a", "N\0b", b"N\x00b", 123, "123")):
+        with sqlite_connection_scope(str(warm)) as connection:
+            connection.execute("UPDATE industrial_source_profiles SET profile_name = ? WHERE id = ?",
+                               (value, profiles["line_a"]))
+            assert connection.execute("SELECT typeof(profile_name) FROM industrial_source_profiles WHERE id = ?",
+                                      (profiles["line_a"],)).fetchone()[0] == (
+                "null" if value is None else "blob" if type(value) is bytes else "integer" if type(value) is int else "text"
+            )
+            connection.commit()
+        _assert_warm_matches_cold(warm, tmp_path, f"profile-cold-{index}.sqlite")
+    with sqlite_connection_scope(str(warm)) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("DELETE FROM industrial_source_profiles WHERE id = ?", (profiles["line_a"],))
+        connection.commit()
+    _assert_warm_matches_cold(warm, tmp_path, "profile-missing.sqlite")
+
+
+def _assert_warm_matches_cold(warm, tmp_path, name):
+    cold = _copy(warm, tmp_path, name)
+    with sqlite_connection_scope(str(cold)) as connection:
+        connection.execute("DELETE FROM industrial_tabular_metadata_cache")
+        connection.execute("DELETE FROM industrial_tabular_value_facets")
+        connection.commit()
+    expected = _raw_orphan_snapshot(cold)
+    assert _raw_orphan_snapshot(warm) == expected
+    assert _raw_orphan_snapshot(warm) == expected
+
+
+@pytest.mark.parametrize("column", ["source", "source_profile_id"])
+@pytest.mark.parametrize("corruption", ["missing", "extra", "count", "blob", "nul"])
+def test_profile_facet_relation_rejects_missing_extra_counts_and_exact_bytes(
+    synthetic_cache, tmp_path, column, corruption,
+):
+    warm, _profiles = synthetic_cache
+    _raw_orphan_snapshot(warm)
+    with sqlite_connection_scope(str(warm)) as connection:
+        row_id = connection.execute(
+            "SELECT rowid FROM industrial_tabular_value_facets WHERE column_name = ? LIMIT 1", (column,),
+        ).fetchone()[0]
+        if corruption == "missing":
+            connection.execute("DELETE FROM industrial_tabular_value_facets WHERE rowid = ?", (row_id,))
+        elif corruption == "extra":
+            connection.execute(
+                "INSERT INTO industrial_tabular_value_facets"
+                " SELECT scope_key, column_name, 'extra', 'extra', 1, updated_at"
+                " FROM industrial_tabular_value_facets WHERE rowid = ?", (row_id,),
+            )
+        elif corruption == "count":
+            connection.execute("UPDATE industrial_tabular_value_facets SET row_count = row_count + 1 WHERE rowid = ?",
+                               (row_id,))
+        elif corruption == "blob":
+            connection.execute("UPDATE industrial_tabular_value_facets SET display_value = CAST(display_value AS BLOB)"
+                               " WHERE rowid = ?", (row_id,))
+        else:
+            connection.execute("UPDATE industrial_tabular_value_facets SET display_value = display_value || ?"
+                               " WHERE rowid = ?", ("\0different", row_id))
+        connection.commit()
+    _assert_warm_matches_cold(warm, tmp_path, "relation-cold.sqlite")
+
+
+def test_unchanged_profile_facets_do_not_rewrite_persisted_cache(synthetic_cache, monkeypatch):
+    warm, _profiles = synthetic_cache
+    expected = _snapshot(warm)
+    with sqlite_connection_scope(str(warm)) as connection:
+        for table in ("industrial_tabular_metadata_cache", "industrial_tabular_value_facets"):
+            connection.execute(f"UPDATE {table} SET updated_at = 'unchanged-sentinel'")
+        connection.commit()
+
+    def fail_refresh(*_args, **_kwargs):
+        raise AssertionError("matching relations must reuse the cache")
+
+    monkeypatch.setattr(bridge, "_refresh_value_facets", fail_refresh)
+    monkeypatch.setattr(bridge, "_dynamic_field_metadata", fail_refresh)
+    assert _snapshot(warm) == expected
+    with sqlite_connection_scope(str(warm)) as connection:
+        for table in ("industrial_tabular_metadata_cache", "industrial_tabular_value_facets"):
+            assert connection.execute(f"SELECT DISTINCT updated_at FROM {table}").fetchall() == [("unchanged-sentinel",)]
+
+
+def test_reopened_v2_metadata_row_migrates_to_literal_timestamp(synthetic_cache, tmp_path):
+    warm, profiles = synthetic_cache
+    _snapshot(warm)
+    with sqlite_connection_scope(str(warm)) as connection:
+        connection.execute("UPDATE industrial_tabular_metadata_cache SET max_updated_at = ?", ("v2:" + "a" * 64,))
+        connection.execute("UPDATE industrial_source_profiles SET profile_name = 'migration' WHERE id = ?",
+                           (profiles["line_a"],))
+        connection.commit()
+    _assert_warm_matches_cold(warm, tmp_path, "migration-cold.sqlite")
+    with sqlite_connection_scope(str(warm)) as connection:
+        assert connection.execute("SELECT max_updated_at FROM industrial_tabular_metadata_cache").fetchone()[0] == (
+            connection.execute("SELECT MAX(updated_at) FROM industrial_records").fetchone()[0]
+        )
+
+
+def test_warm_facet_validation_query_error_propagates_without_cache_writes(synthetic_cache, monkeypatch):
+    import sqlite3
+
+    warm, _profiles = synthetic_cache
+    expected = _snapshot(warm)
+    validate = bridge._profile_value_facets_match
+
+    def deny_hex(operation, _first, second, _database, _trigger):
+        return sqlite3.SQLITE_DENY if operation == sqlite3.SQLITE_FUNCTION and second == "hex" else sqlite3.SQLITE_OK
+
+    def fail_query(connection, **kwargs):
+        connection.set_authorizer(deny_hex)
+        try:
+            return validate(connection, **kwargs)
+        finally:
+            connection.set_authorizer(None)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(bridge, "_profile_value_facets_match", fail_query)
+        with pytest.raises(sqlite3.OperationalError, match="not authorized"):
+            bridge.load_industrial_cache_tabular_result(warm)
+    assert _snapshot(warm) == expected
