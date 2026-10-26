@@ -1477,6 +1477,15 @@
       "owner": "Metroliza maintainers",
       "rationale": "_profile_value_facets_match: the two profile-facet SELECT arms use only the literal source/source_profile_id members of _BASE_INDUSTRIAL_COLUMNS and existing normalization expressions. where_sql comes from load_industrial_cache_tabular_result's fixed IN-placeholder clauses; profile IDs are normalized to int and aliases to str, with all values bound through (*params, *params, scope_key). The compound comparison uses a constant typed/hex projection and the quoted module-constant facet table. No user-controlled identifier or SQL fragment enters this production call chain; these parameterized internal SELECTs are reviewed B608 false positives. Keep scope/parameter construction unchanged or reassess.",
       "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "7155dc9ea4b80f8f91b71eb1ef3781690dd521a795cb58fed120431de094ff1d",
+      "test_id": "B608",
+      "path": "scripts/compare_export_outputs.py",
+      "owner": "Metroliza maintainers",
+      "rationale": "_industrial_schema_scope: table iterates only the two literal keys of INDUSTRIAL_RUNTIME_TABLES; _identifier quotes that fixed identifier. The SELECT reads distinct scope keys after canonical cache-catalog validation, through the existing read-only comparison snapshot. No filename, database-provided object name, user value or external SQL fragment enters the statement. Scope values are compared in Python, not interpolated. This constant-table SELECT is a reviewed B608 false positive; changes to the enumeration or identifier quoting require reassessment.",
+      "expires_on": "2027-01-24"
     }
   ]
 }

@@ -57,6 +57,15 @@ IMPORT_UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}
 # report_schema.upsert_report_parse_state uses SQLite CURRENT_TIMESTAMP (UTC),
 # whereas the other six locations use report_repository.utc_timestamp().
 IMPORT_SQLITE_UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\Z")
+# C12: frozen baseline cache tables and lookup index, serialized from the ordered
+# (type, name, tbl_name, sql) catalog rows as compact ASCII JSON. Only these two
+# updated_at writers use CURRENT_TIMESTAMP; max_updated_at remains literal data.
+INDUSTRIAL_RUNTIME_TABLES = frozenset({
+    "industrial_tabular_metadata_cache", "industrial_tabular_value_facets",
+})
+INDUSTRIAL_CACHE_SCHEMA_SHA256 = "8078c895d47be6e6c7168163a0d26fa41717dc680a29ab64c34be331b62ab0ad"
+# Baseline _metadata_scope_key(where_sql="", params=()): the unfiltered harness context.
+INDUSTRIAL_CACHE_SCOPE = "1ff81e85e9e4903ffdffc81321dec4cf07361eba66c057533204aad439778069"
 
 
 def _plain_shared_text(strings, index):
@@ -290,18 +299,48 @@ def _import_row_values(row, timestamp_columns):
     return tuple(value for index, value in enumerate(row) if index not in timestamp_columns)
 
 
-def _table_difference(a, b, name, *, import_runtime_timestamps=False):
+def _industrial_schema_scope(connection, schema):
+    objects = [row for row in schema if row[1] in INDUSTRIAL_RUNTIME_TABLES
+               or row[1] == "idx_industrial_tabular_value_facets_lookup"]
+    encoded = json.dumps(objects, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    if hashlib.sha256(encoded).hexdigest() != INDUSTRIAL_CACHE_SCHEMA_SHA256:
+        raise ValueError("industrial runtime timestamps require the canonical industrial cache schema")
+    markers = connection.execute("SELECT key, value FROM app_schema WHERE key IN "
+        "('industrial_schema_version', 'industrial_timestamp_storage_format') ORDER BY key").fetchall()
+    if markers != [("industrial_schema_version", "industrial_data_v7"),
+                   ("industrial_timestamp_storage_format", "utc_iso8601_microseconds_v1")]:
+        raise ValueError("industrial runtime timestamps require the canonical industrial schema context")
+    for table in INDUSTRIAL_RUNTIME_TABLES:
+        scopes = connection.execute("SELECT DISTINCT scope_key FROM " + _identifier(table)).fetchall()
+        if scopes != [(INDUSTRIAL_CACHE_SCOPE,)]:
+            raise ValueError("industrial runtime timestamps require the unfiltered industrial cache scope")
+
+
+def _industrial_row_values(row, timestamp_columns):
+    for index, name in timestamp_columns.items():
+        value = row[index]
+        if type(value) is not str or not IMPORT_SQLITE_UTC_TIMESTAMP.fullmatch(value):
+            raise ValueError(f"invalid industrial runtime timestamp at {name}: unexpected UTC text format")
+        datetime.fromisoformat(value)
+    return tuple(value for index, value in enumerate(row) if index not in timestamp_columns)
+
+
+def _table_difference(a, b, name, *, import_runtime_timestamps=False,
+                      industrial_runtime_timestamps=False):
     columns = a.execute("SELECT * FROM pragma_table_info(?)", (name,)).fetchall()
     keys = [row[1] for row in sorted(columns, key=lambda row: row[5]) if row[5]]
     query = _ordered_table_query(name, keys or [row[1] for row in columns])
     allowed = IMPORT_RUNTIME_TIMESTAMPS.get(name, ()) if import_runtime_timestamps else ()
+    if industrial_runtime_timestamps and name in INDUSTRIAL_RUNTIME_TABLES:
+        allowed = ("updated_at",)
     timestamp_columns = {row[0]: f"{name}.{row[1]}" for row in columns if row[1] in allowed}
     missing = object()
     for index, (x, y) in enumerate(zip_longest(a.execute(query), b.execute(query), fillvalue=missing)):
         if x is missing or y is missing:
             return f"SQLite table {name}: row {index} differs"
         if timestamp_columns:
-            x, y = (_import_row_values(row, timestamp_columns) for row in (x, y))
+            row_values = _industrial_row_values if industrial_runtime_timestamps else _import_row_values
+            x, y = (row_values(row, timestamp_columns) for row in (x, y))
         if x != y or tuple(map(type, x)) != tuple(map(type, y)):
             return f"SQLite table {name}: row {index} differs"
     return None
@@ -332,7 +371,8 @@ def _sqlite_read_copy(path):
             yield connection
 
 
-def _sqlite_difference(left: Path, right: Path, *, import_runtime_timestamps=False) -> str | None:
+def _sqlite_difference(left: Path, right: Path, *, import_runtime_timestamps=False,
+                       industrial_runtime_timestamps=False) -> str | None:
     with _sqlite_read_copy(left) as a, _sqlite_read_copy(right) as b:
         a.execute("BEGIN")
         b.execute("BEGIN")
@@ -344,9 +384,13 @@ def _sqlite_difference(left: Path, right: Path, *, import_runtime_timestamps=Fal
                 return f"SQLite schema object {index} differs: {x[:3] if x else None}, {y[:3] if y else None}"
         if import_runtime_timestamps:
             _import_schema_scope(schema)
+        if industrial_runtime_timestamps:
+            for connection in (a, b):
+                _industrial_schema_scope(connection, schema)
         for kind, name, _table, _sql in schema:
             difference = _table_difference(a, b, name,
-                import_runtime_timestamps=import_runtime_timestamps) if kind == "table" else None
+                import_runtime_timestamps=import_runtime_timestamps,
+                industrial_runtime_timestamps=industrial_runtime_timestamps) if kind == "table" else None
             if difference:
                 return difference
     return None
@@ -459,7 +503,7 @@ def _html_difference(left, right, pair):
 
 
 def _directory_difference(left, right, *, sqlite, csv_summary_temp_root=None,
-                          import_runtime_timestamps=False):
+                          import_runtime_timestamps=False, industrial_runtime_timestamps=False):
     pair = _generation_pair(left, right)
     difference = _asset_difference(pair)
     if difference:
@@ -473,7 +517,8 @@ def _directory_difference(left, right, *, sqlite, csv_summary_temp_root=None,
     for name in a:
         difference = _file_difference(left / name, right / name, sqlite=sqlite, pair=pair,
                                       csv_summary_temp_root=csv_summary_temp_root,
-                                      import_runtime_timestamps=import_runtime_timestamps and name == Path("import.sqlite"))
+                                      import_runtime_timestamps=import_runtime_timestamps and name == Path("import.sqlite"),
+                                      industrial_runtime_timestamps=industrial_runtime_timestamps and name == Path("ind_50k.sqlite"))
         if difference:
             return f"{name}: {difference}"
     return None
@@ -484,10 +529,23 @@ def _ordinary_files(root, generation):
                   if path.is_file() and (generation is None or not path.is_relative_to(generation)))
 
 
+def _industrial_input_scope(left, right, *, sqlite, import_runtime_timestamps):
+    if import_runtime_timestamps:
+        raise ValueError("import and industrial runtime timestamp options are incompatible")
+    if not sqlite:
+        raise ValueError("industrial runtime timestamps require SQLite comparison")
+    databases = [path / "ind_50k.sqlite" if path.is_dir() else path for path in (left, right)]
+    if any(path.name != "ind_50k.sqlite" or not path.is_file() for path in databases):
+        raise ValueError("industrial runtime timestamps require paired ind_50k.sqlite files at the comparison root")
+
+
 def compare_outputs(left: Path, right: Path, *, sqlite: bool = False,
                     csv_summary_temp_root: str | Path | None = None,
-                    import_runtime_timestamps: bool = False) -> str | None:
+                    import_runtime_timestamps: bool = False,
+                    industrial_runtime_timestamps: bool = False) -> str | None:
     """Return the first difference; errors propagate to the fail-closed CLI."""
+    if industrial_runtime_timestamps:
+        _industrial_input_scope(left, right, sqlite=sqlite, import_runtime_timestamps=import_runtime_timestamps)
     if import_runtime_timestamps:
         if not sqlite:
             raise ValueError("import runtime timestamps require SQLite comparison")
@@ -500,23 +558,26 @@ def compare_outputs(left: Path, right: Path, *, sqlite: bool = False,
         return "input types differ"
     if left.is_dir():
         return _directory_difference(left, right, sqlite=sqlite, csv_summary_temp_root=csv_summary_temp_root,
-                                     import_runtime_timestamps=import_runtime_timestamps)
+                                     import_runtime_timestamps=import_runtime_timestamps,
+                                     industrial_runtime_timestamps=industrial_runtime_timestamps)
     pair = _generation_pair(left.parent, right.parent) if left.suffix.lower() in {".html", ".htm"} else None
     difference = _asset_difference(pair)
     return difference or _file_difference(left, right, sqlite=sqlite, pair=pair,
                                           csv_summary_temp_root=csv_summary_temp_root,
-                                          import_runtime_timestamps=import_runtime_timestamps)
+                                          import_runtime_timestamps=import_runtime_timestamps,
+                                          industrial_runtime_timestamps=industrial_runtime_timestamps)
 
 
 def _file_difference(left, right, *, sqlite, pair, csv_summary_temp_root=None,
-                     import_runtime_timestamps=False):
+                     import_runtime_timestamps=False, industrial_runtime_timestamps=False):
     if left.suffix.lower() != right.suffix.lower():
         return "output formats differ"
     suffix = left.suffix.lower()
     if suffix == ".xlsx":
         return _xlsx_difference(left, right, csv_summary_temp_root=csv_summary_temp_root)
     if sqlite and suffix in {".sqlite", ".sqlite3", ".db"}:
-        return _sqlite_difference(left, right, import_runtime_timestamps=import_runtime_timestamps)
+        return _sqlite_difference(left, right, import_runtime_timestamps=import_runtime_timestamps,
+                                  industrial_runtime_timestamps=industrial_runtime_timestamps)
     if suffix in {".html", ".htm"}:
         return _html_difference(left, right, pair)
     return _bytes_difference(left.read_bytes(), right.read_bytes())
@@ -531,6 +592,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--import-runtime-timestamps", action="store_true",
                         help="C01 opt-in: validate and ignore only seven import runtime UTC fields in "
                              "paired import.sqlite files with canonical report-import v1 tables; requires --sqlite")
+    parser.add_argument("--industrial-runtime-timestamps", action="store_true",
+                        help="C12 opt-in: validate and ignore only the two industrial cache updated_at UTC fields "
+                             "in paired ind_50k.sqlite files with canonical unfiltered cache context; requires --sqlite")
     parser.add_argument("--csv-summary-temp-root",
                         help="recorded common temp root for the single CSV Summary Diagnostics context basename")
     parser.add_argument("--baseline-control", action="store_true",
@@ -539,7 +603,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         difference = compare_outputs(args.left, args.right, sqlite=args.sqlite,
                                      csv_summary_temp_root=args.csv_summary_temp_root,
-                                     import_runtime_timestamps=args.import_runtime_timestamps)
+                                     import_runtime_timestamps=args.import_runtime_timestamps,
+                                     industrial_runtime_timestamps=args.industrial_runtime_timestamps)
     except Exception as error:  # noqa: BLE001 - comparison errors are failures, never equality
         print(f"comparison failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 2

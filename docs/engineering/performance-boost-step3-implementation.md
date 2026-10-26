@@ -428,6 +428,30 @@ FULL1 is source-only, not full50k identity or performance acceptance. Require in
 full security, the integrated full suite and actual CI. Compare corrected full outputs with only
 the separately qualified C12 runtime timestamps; all other fields and schema remain literal.
 
+### Coordinator qualification — C12 industrial cache runtime timestamps (2026-10-26)
+
+Authority: the PO's three-part intentional-nondeterminism rule and the [actual C11/C12 controls](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6417102976).
+Complete101-vs101 output comparisons reproduce differences only at
+`industrial_tabular_metadata_cache.updated_at` and
+`industrial_tabular_value_facets.updated_at`; baseline code deliberately writes SQLite
+`CURRENT_TIMESTAMP`. This named additional exception does not include `max_updated_at`:
+raw-timestamp versus v2-hash output must still FAIL and is corrected in C11.
+
+Allow only explicit `--industrial-runtime-timestamps` together with `--sqlite`, paired literal
+root `ind_50k.sqlite` files, the exact recognized cache catalog, canonical industrial schema
+and timestamp-storage markers, and the unfiltered cache scope. The option applies to that
+root database alone in directory comparisons. Import and industrial modes are incompatible.
+Validate both values as TEXT in the exact calendar-valid `YYYY-MM-DD HH:MM:SS` SQLite UTC
+format before omitting only those two fully qualified fields. Default comparison stays strict.
+All other columns, JSON, data, types, row counts/order, schema objects and files remain literal.
+
+Retain negative tests for the same pattern elsewhere, malformed/null/type/calendar values,
+wrong filename/schema/markers/scope and changed data. Full actual A/A must return0 only with
+the option, while the old deterministic A/B remains1. Comparisons must not mutate inputs.
+Preserve the earlier complexity failure and its helper-only correction without raising the
+ratchet. C12 has at most one FULL1 and one DELTA1; source review does not replace integrated
+MUST/security/full-suite/CI gates or corrected full50k identity and fresh timing receipts.
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).

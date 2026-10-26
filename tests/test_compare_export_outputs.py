@@ -816,3 +816,190 @@ def test_import_sqlite_utc_format_rejects_invalid_calendar_and_extra_precision(t
     for path in paths:
         _import_update(path, 'report_parse_state', 'updated_at', bad)
     assert main([str(path) for path in paths] + ['--sqlite', '--import-runtime-timestamps']) == 2
+
+
+INDUSTRIAL_TIME = '2026-01-02 03:04:05'
+OTHER_INDUSTRIAL_TIME = '2026-02-03 04:05:06'
+INDUSTRIAL_SCOPE = '1ff81e85e9e4903ffdffc81321dec4cf07361eba66c057533204aad439778069'
+INDUSTRIAL_TABLES = ('industrial_tabular_metadata_cache', 'industrial_tabular_value_facets')
+
+
+def _industrial_pair(tmp_path):
+    """Synthetic SQLite only; use the product's canonical cache declarations."""
+    from metroliza.industrial.industrial_tabular_bridge import _ensure_tabular_metadata_cache
+
+    paths = tuple(tmp_path / side / 'ind_50k.sqlite' for side in ('a', 'b'))
+    for path in paths:
+        path.parent.mkdir()
+        with closing(sqlite3.connect(path)) as connection:
+            _ensure_tabular_metadata_cache(connection)
+            connection.execute('CREATE TABLE app_schema (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            connection.executemany('INSERT INTO app_schema VALUES (?, ?)', [
+                ('industrial_schema_version', 'industrial_data_v7'),
+                ('industrial_timestamp_storage_format', 'utc_iso8601_microseconds_v1')])
+            connection.execute('INSERT INTO industrial_tabular_metadata_cache VALUES '
+                '(?, 2, 2, ?, 2, 2, ?, ?, ?)', (INDUSTRIAL_SCOPE,
+                '2026-01-02T03:04:05.123456Z', '["metric"]', '{"metric":{"count":2}}', INDUSTRIAL_TIME))
+            connection.executemany('INSERT INTO industrial_tabular_value_facets VALUES (?, ?, ?, ?, ?, ?)',
+                [(INDUSTRIAL_SCOPE, 'metric', str(index), str(index), 1, INDUSTRIAL_TIME) for index in (1, 2)])
+            connection.execute('CREATE TABLE measurements (id INTEGER PRIMARY KEY, value, updated_at TEXT)')
+            connection.executemany('INSERT INTO measurements VALUES (?, ?, ?)',
+                                   [(1, 1, INDUSTRIAL_TIME), (2, 2, INDUSTRIAL_TIME)])
+            connection.commit()
+    return paths
+
+
+def _industrial_args(paths):
+    return [str(path) for path in paths] + ['--sqlite', '--industrial-runtime-timestamps']
+
+
+@pytest.mark.parametrize('table', INDUSTRIAL_TABLES)
+def test_industrial_runtime_timestamp_explicit_opt_in(tmp_path, table):
+    import hashlib
+
+    paths = _industrial_pair(tmp_path)
+    _import_update(paths[1], table, 'updated_at', OTHER_INDUSTRIAL_TIME)
+    before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    assert main([str(path) for path in paths] + ['--sqlite', '--baseline-control']) == 1
+    assert main(_industrial_args(paths)) == 0
+    assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths} == before
+    assert all(list(path.parent.iterdir()) == [path] for path in paths)
+
+
+def test_industrial_runtime_timestamps_api_directory_and_other_files(tmp_path):
+    paths = _industrial_pair(tmp_path)
+    for table in INDUSTRIAL_TABLES:
+        _import_update(paths[1], table, 'updated_at', OTHER_INDUSTRIAL_TIME)
+    assert compare_outputs(*paths, sqlite=True)
+    assert compare_outputs(*paths, sqlite=True, industrial_runtime_timestamps=True) is None
+    roots = [path.parent for path in paths]
+    assert main(_industrial_args(roots)) == 0
+    for root, time in zip(roots, (INDUSTRIAL_TIME, OTHER_INDUSTRIAL_TIME)):
+        (root / 'other.txt').write_text(time)
+    assert main(_industrial_args(roots)) == 1
+    for root in roots:
+        (root / 'other.txt').unlink()
+    for root, time in zip(roots, (INDUSTRIAL_TIME, OTHER_INDUSTRIAL_TIME)):
+        with closing(sqlite3.connect(root / 'other.sqlite')) as connection:
+            connection.execute('CREATE TABLE industrial_tabular_value_facets (updated_at TEXT)')
+            connection.execute('INSERT INTO industrial_tabular_value_facets VALUES (?)', (time,))
+            connection.commit()
+    assert main(_industrial_args(roots)) == 1
+
+
+@pytest.mark.parametrize('table', INDUSTRIAL_TABLES)
+@pytest.mark.parametrize('bad', [None, 0, 1.25, INDUSTRIAL_TIME.encode(), '',
+    '2026-02-29 03:04:05', '2026-01-02 24:00:00', '2026-01-02 03:04:60',
+    '0000-01-02 03:04:05', '2026-1-02 03:04:05', '２０２６-01-02 03:04:05',
+    '2026-01-02T03:04:05Z', '2026-01-02T03:04:05', '2026-01-02 03:04:05Z',
+    '2026-01-02 03:04:05.000', '2026-01-02 03:04:05+00:00', '2026-01-02 03:04:05\n'])
+@pytest.mark.parametrize('side', ['left', 'right', 'both'])
+def test_industrial_runtime_timestamp_rejects_invalid_values(tmp_path, table, bad, side):
+    paths = _industrial_pair(tmp_path)
+    for path in paths if side == 'both' else [paths[side == 'right']]:
+        # Persist corrupt storage types/NULL, then restore the exact canonical catalog.
+        with closing(sqlite3.connect(path)) as connection:
+            original = connection.execute('SELECT sql FROM sqlite_master WHERE name=?', (table,)).fetchone()[0]
+            connection.execute('PRAGMA writable_schema=ON')
+            connection.execute('UPDATE sqlite_master SET sql=? WHERE name=?',
+                (original.replace('\n            updated_at TEXT NOT NULL', '\n            updated_at BLOB'), table))
+            connection.commit()
+        _import_update(path, table, 'updated_at', bad)
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute('PRAGMA writable_schema=ON')
+            connection.execute('UPDATE sqlite_master SET sql=? WHERE name=?', (original, table))
+            connection.commit()
+    assert main(_industrial_args(paths)) == 2
+
+
+@pytest.mark.parametrize('table,column,value', [
+    ('industrial_tabular_metadata_cache', 'max_updated_at', 'v2:' + 'a' * 64),
+    ('industrial_tabular_metadata_cache', 'max_updated_at', OTHER_INDUSTRIAL_TIME),
+    ('industrial_tabular_metadata_cache', 'dynamic_fields_json', '["2026-02-03 04:05:06"]'),
+    ('industrial_tabular_metadata_cache', 'dynamic_stats_json', '{"updated_at":"2026-02-03 04:05:06"}'),
+    ('industrial_tabular_metadata_cache', 'row_count', 3),
+    ('industrial_tabular_metadata_cache', 'max_record_id', 3),
+    ('industrial_tabular_metadata_cache', 'value_count', 3),
+    ('industrial_tabular_metadata_cache', 'max_value_id', 3),
+    ('industrial_tabular_value_facets', 'column_name', OTHER_INDUSTRIAL_TIME),
+    ('industrial_tabular_value_facets', 'normalized_value', OTHER_INDUSTRIAL_TIME),
+    ('industrial_tabular_value_facets', 'display_value', OTHER_INDUSTRIAL_TIME),
+    ('industrial_tabular_value_facets', 'row_count', 3),
+    ('measurements', 'updated_at', OTHER_INDUSTRIAL_TIME),
+    ('measurements', 'value', 1.0000000000000002),
+])
+def test_industrial_runtime_timestamps_keep_other_fields_literal(tmp_path, table, column, value):
+    paths = _industrial_pair(tmp_path)
+    for allowed in INDUSTRIAL_TABLES:
+        _import_update(paths[1], allowed, 'updated_at', OTHER_INDUSTRIAL_TIME)
+    with closing(sqlite3.connect(paths[1])) as connection:
+        connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=1', (value,))
+        connection.commit()
+    assert main(_industrial_args(paths)) == 1
+
+
+@pytest.mark.parametrize('statement', [
+    'DELETE FROM industrial_tabular_value_facets WHERE rowid=2',
+    'UPDATE measurements SET id=3 WHERE id=2',
+    'UPDATE measurements SET value=1.0 WHERE id=1',
+    'ALTER TABLE industrial_tabular_metadata_cache ADD COLUMN extra TEXT',
+    'DROP INDEX idx_industrial_tabular_value_facets_lookup',
+    'CREATE TRIGGER extra_guard BEFORE INSERT ON measurements BEGIN SELECT 1; END',
+])
+def test_industrial_runtime_timestamps_keep_count_order_types_schema_literal(tmp_path, statement):
+    paths = _industrial_pair(tmp_path)
+    with closing(sqlite3.connect(paths[1])) as connection:
+        connection.execute(statement)
+        connection.commit()
+    assert main(_industrial_args(paths)) == 1
+
+
+@pytest.mark.parametrize('change', ['column', 'type', 'missing', 'index', 'scope', 'facet_scope',
+                                  'empty', 'version', 'storage', 'context'])
+def test_industrial_runtime_timestamps_reject_wrong_matching_context(tmp_path, change):
+    paths = _industrial_pair(tmp_path)
+    for path in paths:
+        with closing(sqlite3.connect(path)) as connection:
+            if change == 'column':
+                connection.execute('ALTER TABLE industrial_tabular_metadata_cache ADD COLUMN extra TEXT')
+            elif change == 'type':
+                connection.execute('PRAGMA writable_schema=ON')
+                connection.execute("UPDATE sqlite_master SET sql=replace(sql, 'updated_at TEXT', "
+                                   "'updated_at BLOB') WHERE name='industrial_tabular_value_facets'")
+            elif change == 'missing':
+                connection.execute('DROP TABLE industrial_tabular_value_facets')
+            elif change == 'index':
+                connection.execute('DROP INDEX idx_industrial_tabular_value_facets_lookup')
+            elif change in ('scope', 'facet_scope'):
+                tables = INDUSTRIAL_TABLES if change == 'scope' else INDUSTRIAL_TABLES[1:]
+                for table in tables:
+                    connection.execute(f'UPDATE "{table}" SET scope_key=?', ('a' * 64,))
+            elif change == 'empty':
+                connection.execute('DELETE FROM industrial_tabular_value_facets')
+            elif change in ('version', 'storage'):
+                key = 'industrial_schema_version' if change == 'version' else 'industrial_timestamp_storage_format'
+                connection.execute('UPDATE app_schema SET value=? WHERE key=?', ('other', key))
+            else:
+                connection.execute('DROP TABLE app_schema')
+            connection.commit()
+    assert main([str(path) for path in paths] + ['--sqlite']) == 0
+    assert main(_industrial_args(paths)) == 2
+
+
+def test_industrial_runtime_timestamps_require_sqlite_filename_and_separate_import_mode(tmp_path):
+    paths = _industrial_pair(tmp_path)
+    assert main([str(path) for path in paths] + ['--industrial-runtime-timestamps']) == 2
+    assert main(_industrial_args(paths) + ['--import-runtime-timestamps']) == 2
+    for path in paths:
+        path.rename(path.with_name('other.sqlite'))
+    wrong_paths = [path.with_name('other.sqlite') for path in paths]
+    assert main(_industrial_args(wrong_paths)) == 2
+    assert main(_industrial_args([paths[0].parent, paths[1].parent])) == 2
+
+
+def test_industrial_runtime_timestamps_accept_calendar_valid_second_precision(tmp_path):
+    paths = _industrial_pair(tmp_path)
+    for path, value in zip(paths, ('2024-02-29 00:00:00', '2026-12-31 23:59:59')):
+        for table in INDUSTRIAL_TABLES:
+            _import_update(path, table, 'updated_at', value)
+    assert main(_industrial_args(paths)) == 0
