@@ -688,6 +688,29 @@ new dependencies or installs, machine changes, other pushes, merge/rebase/force-
 candidate acceptance. E5/E6/E7 remain PO decisions under the original plan. A correction is not a new
 output exception unless it addresses a demonstrated invalid baseline result while preserving valid ones.
 
+### Coordinator correction — C13 first-record-filter GUI regression (2026-10-26)
+
+Authority: the continuing necessary-fix authorization and the [measured C13 admission](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6419369745).
+The complete216000-row ModifyDB flow exposed a real T17 regression: median2.7079→4.7131s
+and first-filter GUI stalls2263–2676ms versus81–97ms on101. All rows,54000 filtered results
+and five strict output comparisons remained identical. Two UI defer_haystack opt-ins deferred
+the existing search-text construction until the first GUI filter.
+
+Withdraw only those two opt-ins in ui/modify_db.py. Normal asynchronous loading again delivers
+a populated worker-built cache; the explicit blocking compatibility path remains blocking.
+Preserve the optional public lazy API, eager/lazy search equivalence, before/after-search edit
+semantics, custom hooks, grouping improvements and T25 completion/cancellation ownership.
+Tests must demonstrate the old missing-cache failure, cache construction before installation,
+first-filter reuse and a filter entered before load completion; keep the earlier edit assertions.
+
+C13 has at most one independent FULL1 and one DELTA1; earlier review budgets and adverse
+receipts are not reset. The named MEASURED_GUI_STALL_REGRESSION_MODIFY_RECORDS_216K
+gpt-6-astra/high consultation is advice, not the formal review and not an Opus consultation.
+Require focused/caller and lifecycle tests, staged MUST-7/full security, one integrated full suite,
+required CI and a fresh unchanged-harness full216k A/B with output and GUI-stall checks.
+The prior regression remains recorded. Do not broaden the measurement infrastructure.
+
+
 ## 4. Packets
 
 | ID | Wave | Packet | Files (main) | Class / role | Expected gain | After |

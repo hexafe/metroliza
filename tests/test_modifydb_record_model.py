@@ -659,15 +659,94 @@ def test_only_visible_normalization_populates_and_hidden_edits_survive_revisits(
     assert not dialog.has_pending_changes()
 
 
-def test_internal_record_load_displays_before_haystack_and_first_search_sees_edits(current_dialog):
+@pytest.mark.parametrize("flavor", ["current", "legacy"])
+@pytest.mark.parametrize("slot_index", [0, 1], ids=["report", "measurement"])
+@pytest.mark.parametrize("blocking", [False, True], ids=["worker", "blocking"])
+def test_dialog_prepares_search_cache_during_load_not_first_filter(tmp_path, monkeypatch, flavor,
+                                                                slot_index, blocking):
+    _app()
+    database = tmp_path / f"{flavor}.db"
+    (_build_current_database if flavor == "current" else _build_legacy_database)(database)
+    dialog = ModifyDB(parent=None, db_file=str(database), modal=False)
+    batches = []
+    add_batch = records._RecordRowBuilder.add_batch
+    gui_thread = threading.get_ident()
+
+    def observe_batch(builder, columns, rows):
+        add_batch(builder, columns, rows)
+        batches.append((threading.get_ident(), len(builder.rows),
+                        None if builder.haystack is None else len(builder.haystack)))
+
+    monkeypatch.setattr(records._RecordRowBuilder, "add_batch", observe_batch)
+    try:
+        slot = dialog._record_slots[slot_index]
+        if blocking:
+            dialog.ensure_record_tables_loaded()
+        else:
+            dialog.tab_widget.setCurrentWidget(slot.tab)
+            assert _pump(lambda: slot.state == "loaded")
+        model = slot.view.model()
+        assert model.total_row_count > 0 and batches
+        assert all(row_count == cache_count for _, row_count, cache_count in batches)
+        assert all((thread_id == gui_thread) == blocking for thread_id, _, _ in batches)
+        expected_cache = [records.row_haystack(row) for row in model._rows]
+        assert model._haystack == expected_cache
+        needle = "1"
+        expected_rows = [row for row, text in enumerate(expected_cache) if needle in text]
+        assert expected_rows
+        with patch.object(model, "_current_haystack",
+                          side_effect=AssertionError("first filter rebuilt the search cache")):
+            slot.filter_edit.setText(needle)
+            dialog.flush_record_filters()
+        assert [model.source_row(row) for row in range(model.rowCount())] == expected_rows
+    finally:
+        dialog._changes_committed = True
+        dialog.close()
+
+
+def test_record_filter_entered_during_worker_load_uses_prepared_cache(current_dialog, monkeypatch):
+    dialog = current_dialog
+    entered, release = threading.Event(), threading.Event()
+    load = records.load_record_rows
+
+    def held_load(*args, **kwargs):
+        rows = load(*args, **kwargs)
+        entered.set()
+        assert release.wait(5)
+        return rows
+
+    monkeypatch.setattr(records, "load_record_rows", held_load)
+    slot = dialog._record_slots[1]
+    dialog.tab_widget.setCurrentWidget(slot.tab)
+    worker = slot.thread
+    try:
+        assert entered.wait(2) and slot.state == "loading"
+        slot.filter_edit.setText("nok")
+        with patch.object(RecordTableModel, "_current_haystack",
+                          side_effect=AssertionError("GUI rebuilt the worker search cache")):
+            release.set()
+            assert _pump(lambda: slot.state == "loaded")
+        model = slot.view.model()
+        assert model.filter_text == "nok"
+        assert [model.source_row(row) for row in range(model.rowCount())] == [3, 8]
+        assert model._haystack == [records.row_haystack(row) for row in model._rows]
+    finally:
+        release.set()
+        if not sip.isdeleted(worker):
+            assert worker.wait(1000)
+        assert _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS)
+
+
+def test_internal_record_load_has_worker_haystack_and_first_search_sees_edits(current_dialog):
     dialog = current_dialog
     slot = dialog._record_slots[1]
     dialog.tab_widget.setCurrentWidget(slot.tab)
     assert _pump(lambda: slot.state == "loaded")
     model = slot.view.model()
-    assert model.total_row_count == 10 and model._haystack is None
+    assert model.total_row_count == 10
+    assert model._haystack == [records.row_haystack(row) for row in model._rows]
     assert model.setData(model.index(0, 2), "before search")
-    assert model._haystack is None
+    assert model._haystack[0] == model._current_haystack(0)
     slot.filter_edit.setText("before search")
     dialog.flush_record_filters()
     assert model.rowCount() == 1 and model.source_row(0) == 0

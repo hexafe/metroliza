@@ -722,7 +722,7 @@ class ModifyDB(QDialog):
         thread_factory = RecordLoadThread
         native_constructor = (thread_factory is _NATIVE_RECORD_CLASS
                               and _NATIVE_RECORD_CLASS.__dict__.get("__init__") is _NATIVE_RECORD_INIT)
-        thread = thread_factory(slot.kind, slot.generation, self.db_file, query, specs, defer_haystack=True)
+        thread = thread_factory(slot.kind, slot.generation, self.db_file, query, specs)
         thread.loaded.connect(self._on_record_rows_loaded)
         thread.failed.connect(self._on_record_load_failed)
         slot.thread = thread
@@ -818,7 +818,7 @@ class ModifyDB(QDialog):
 
     def _load_record_table_now(self, slot):
         specs, query = self._record_load_plan(slot.kind)
-        rows = load_record_rows(self.db_file, query, specs, defer_haystack=True) if specs else RecordRows([], [])
+        rows = load_record_rows(self.db_file, query, specs) if specs else RecordRows([], [])
         self._install_record_rows(slot, specs, rows)
 
     def _install_record_rows(self, slot, specs, record_rows):
