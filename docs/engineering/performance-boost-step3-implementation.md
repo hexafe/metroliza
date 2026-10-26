@@ -257,13 +257,19 @@ still-live, correctly masked process to be omitted. The exact exception in the a
 was not retained; its precise cause remains unproved. The entire series stays excluded and its
 independent exact-restoration audit is preserved.
 
-This is a narrow exception to the infrastructure freeze: the approved 11-net-line correction in
-the existing CPU helper's `interactive_tokens`, focused tests in its existing test file and necessary
+This is a narrow exception to the infrastructure freeze: the approved correction in the existing
+CPU helper's `interactive_tokens`, focused tests in its existing test file and necessary
 source/configuration bindings only. Continue validation after a task departure only with the unchanged
 exact main identity and proved task absence; live/reused tasks retain denial. Validate every surviving
 observed task and deny empty or leader-incomplete enumeration. Preserve UID/permission/bad-mask errors,
 the existing reused-TID control, epoch checks, deadlines, process bounds and restoration behavior.
 No retry loop, process-name exemption, wider ancestry, threshold relaxation or new controller.
+
+The initial 11-net-line proposal received a blocking FULL1 finding: a positively observed replacement
+could disappear before the absence recheck and be accepted. Preserve denial after any such observation,
+including later absence; cover both identity checks around affinity retrieval. The bounded correction
+remains inside `interactive_tokens`; `_same` and all original tests remain unchanged. This consumes the
+existing C06 correction/delta allowance, without a new review round or broader scope.
 
 Require old-source regression and bad-mask-mutant negative controls, focused helper tests, one fresh
 independent FULL1 and at most one DELTA1 for C06, then the existing native normal/failure/TERM/
