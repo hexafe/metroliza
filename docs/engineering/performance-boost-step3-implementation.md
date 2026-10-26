@@ -339,6 +339,71 @@ complete five native controls, independent ROOT restoration audit, staged MUST-7
 source bindings before fresh complete T28 timing series. Stop and report if the admitted narrow
 attempt fails or needs another scope expansion.
 
+### PO direction — approximate laptop scale measurements (2026-10-26)
+
+Authority: the PO's [current private-laptop measurement direction](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6414934954),
+implemented below by the coordinator. It supersedes laboratory-style admission and precision
+requirements for remaining T28 measurements. The purpose is to show the scale of the changes.
+
+Use the existing full synthetic fixtures, unchanged product calculations and chart quality,
+the same harness on both measured versions, sequential version rotation and one Metroliza
+heavy job under `flock`. Record power state, elapsed seconds and available load observations.
+Ordinary laptop use and short load spikes do not automatically reject a complete series.
+Run the existing harness directly, without CPU partition, widget or guardian mutations.
+Preserve all earlier adverse receipts; do not reclassify their timings as fresh accepted data.
+Approximate laptop results are separate from the earlier isolated-session qualification.
+
+Obtain fresh `101e5a44`/STEP3 A/B results and keep the existing n=2/n=3 rotation for ordinary
+scenarios. For the two exceptionally long complete CSV grouped-analytics and Group Analysis
+scenarios, the coordinator selects one full observation per side, explicitly n=1 with no
+measured spread or precision claim. Group Analysis uses the same runtime harness timeout
+3600 s on both sides, external limit3720 s, replacing the exhausted900/1020 s bounds; no
+product work is removed. A repeated identical timeout is not another measurement strategy.
+Output checks remain strict and a changed output still stops the comparison.
+
+Use the source-bound historical before/after-STEP1 common14 columns as descriptive context
+instead of rerunning every historical long case. The source is the STEP2 measurements JSON
+SHA256 `dd8890ac93312098770059ccd300c9d9c5ad40e6099ee0521a026289a8019a7c`.
+Existing common14 actions/completion/timing methods are unchanged from historical UI harness
+`a71e7496` to `5e2c762f`; the Paths harness is byte-identical. Nominal workloads agree.
+Historical fixture/output/native-thread/affinity receipts are incomplete and Mapping/Extended
+were n=1: these columns do not prove controlled cross-session causal percentages. Historical
+`a176139d` never substitutes for required101. Main and Extended retain their additional fresh
+four-version series. State the origin, sample count, common14 weights and limits of every sum.
+
+### Coordinator correction — C10 Records output retention (2026-10-26)
+
+Authority: [continuing necessary-fix authorization](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6346416141)
+and [bounded coordinator adoption under the current measurement direction](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6415999836).
+No separate literal affirmative C10 reply is claimed. The earlier request for another approval
+was overly narrow for this necessary benchmark-only correction; this is not a product decision.
+
+Extend the exact-type C04 retention eligibility to `(ModifyDbApply, ModifyDbRecords)`.
+A subsequent actual101 Industrial Bridge run exposed the same optional lookup on a deleted
+`IndustrialDataDialog` launcher. Permit only the exact `IndustrialBridge` scenario and exact
+product launcher class, proven deleted and proven by static lookup to have no tabular result.
+An attached Python/static store must still use the ordinary backup path; generic deleted
+wrappers, descriptors and unexpected sources must still fail. Keep the existing test file,
+the real QObject/isdeleted proof, complete
+copy/manifest, live SQLite backup/schema/rows and connection closure, reused-target refusal,
+live descriptor exceptions and deleted tabular failures. No product, comparator/mask,
+computation, chart, controller, probe, GC, Rust, dependency or machine-policy change.
+Original10PASS, old-source intended1FAIL+12PASS and candidate13PASS remain retained.
+The additional launcher defect requires its actual old-source RED and store/error negatives.
+New test-fixture calibration errors remain retained; SQLite backup identity uses schema and
+typed ordered rows, source immutability and an independent backup reference, not input header
+byte equality. Original assertions stay unchanged. FULL1 found no P0-P2 in the Records-only
+proposal; DELTA1 must cover the launcher correction and integrated Plan. Neither source-only
+verdict implies integration, CI or timing acceptance.
+Use at most one FULL1 and one DELTA1 for C10, without resetting any prior budget.
+Require focused/caller tests, staged MUST-7/full security, required CI, exact reviewed harness
+bytes on both measured sides, fresh compilation/source binding and fresh full216k Records
+and50k Industrial Bridge series. Earlier5e2 results keep their actual measured head/hash;
+do not transfer their timing acceptance to a changed harness or claim the final documentation
+commit itself was benchmarked. Product
+source identity and the narrow post-action harness delta must remain explicit in the report.
+
+
 ### PO amendment — technical-report publication (2026-10-23)
 
 Authority: [explicit PO consent](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6359252320).

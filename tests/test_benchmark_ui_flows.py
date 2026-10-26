@@ -199,8 +199,9 @@ def test_retention_refuses_mixed_evidence_and_snapshots_sqlite(tmp_path):
         harness._retain_outputs(ctx, scenario, {})
 
 
+@pytest.mark.parametrize("scenario_type", [harness.ModifyDbApply, harness.ModifyDbRecords])
 def test_retention_preserves_all_files_after_modify_db_dialog_deleted(
-    tmp_path, qapplication_session,
+    tmp_path, qapplication_session, scenario_type,
 ):
     from PyQt6 import sip
     from PyQt6.QtWidgets import QWidget
@@ -212,7 +213,7 @@ def test_retention_preserves_all_files_after_modify_db_dialog_deleted(
         (work / name).write_bytes(data)
     target = tmp_path / "retained"
     ctx = Namespace(work=work, args=Namespace(keep_output=str(target)))
-    scenario = harness.ModifyDbApply()
+    scenario = scenario_type()
     scenario.dialog = QWidget()
     sip.delete(scenario.dialog)
     assert sip.isdeleted(scenario.dialog)
@@ -229,7 +230,7 @@ def test_retention_preserves_all_files_after_modify_db_dialog_deleted(
         harness._retain_outputs(ctx, scenario, {})
 
 
-@pytest.mark.parametrize("scenario_type", [Namespace, harness.ModifyDbApply,
+@pytest.mark.parametrize("scenario_type", [Namespace, harness.ModifyDbApply, harness.ModifyDbRecords,
                                            harness.CsvLoad, harness.IndustrialBridge])
 def test_retention_live_tabular_backup_keeps_files_and_closes_connections(
     tmp_path, monkeypatch, qapplication_session, scenario_type,
@@ -270,10 +271,15 @@ def test_retention_live_tabular_backup_keeps_files_and_closes_connections(
             connection.execute("SELECT 1")
     with closing(connect(target / "tabular.sqlite")) as connection:
         assert connection.execute("SELECT * FROM data").fetchall() == [(1, bytes(range(256)))]
+        with closing(connect(source)) as original:
+            assert connection.execute("SELECT * FROM sqlite_master ORDER BY name").fetchall() == (
+                original.execute("SELECT * FROM sqlite_master ORDER BY name").fetchall()
+            )
     scenario.dialog.close()
 
 
-@pytest.mark.parametrize("scenario_type", [harness.ModifyDbApply, harness.CsvLoad])
+@pytest.mark.parametrize("scenario_type", [harness.ModifyDbApply, harness.ModifyDbRecords,
+                                           harness.CsvLoad])
 def test_retention_propagates_live_tabular_descriptor_runtime_error(
     tmp_path, qapplication_session, scenario_type,
 ):
@@ -307,6 +313,142 @@ def test_retention_does_not_skip_deleted_tabular_dialogs(
     scenario.dialog = QWidget()
     sip.delete(scenario.dialog)
     assert sip.isdeleted(scenario.dialog)
+    target = tmp_path / "retained"
+    ctx = Namespace(work=tmp_path, args=Namespace(keep_output=str(target)))
+    with pytest.raises(RuntimeError, match="wrapped C/C\\+\\+ object .* has been deleted"):
+        harness._retain_outputs(ctx, scenario, {})
+    assert not target.exists()
+
+
+@pytest.fixture
+def industrial_retention_host(qapplication_session):
+    from PyQt6 import sip
+    from PyQt6.QtWidgets import QDialog
+    from metroliza.ui.industrial_data_dialog import IndustrialDataDialog
+
+    # Use the actual host class without starting its unrelated background workers.
+    dialog = IndustrialDataDialog.__new__(IndustrialDataDialog)
+    QDialog.__init__(dialog)
+    yield dialog
+    if not sip.isdeleted(dialog):
+        sip.delete(dialog)
+
+
+def test_retention_deleted_industrial_host_preserves_all_files(tmp_path, industrial_retention_host):
+    from PyQt6 import sip
+
+    work = tmp_path / "work"
+    (work / "nested").mkdir(parents=True)
+    files = {"cache.sqlite": b"synthetic cache\x00\xff", "nested/data.bin": bytes(range(256))}
+    for name, data in files.items():
+        (work / name).write_bytes(data)
+    scenario = harness.IndustrialBridge()
+    scenario.dialog = industrial_retention_host
+    sip.delete(scenario.dialog)
+    with pytest.raises(RuntimeError, match="wrapped C/C\\+\\+ object .* has been deleted"):
+        getattr(scenario.dialog, "tabular_load_result", None)
+    target = tmp_path / "retained"
+    ctx = Namespace(work=work, args=Namespace(keep_output=str(target)))
+    result = {}
+    harness._retain_outputs(ctx, scenario, result)
+    assert result == {"retained_outputs": sorted(files)}
+    assert {name: (target / name).read_bytes() for name in files} == files
+    assert {name: (work / name).read_bytes() for name in files} == files
+    with pytest.raises(FileExistsError):
+        harness._retain_outputs(ctx, scenario, {})
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_retention_industrial_host_with_store_keeps_sqlite(
+    tmp_path, monkeypatch, industrial_retention_host, deleted,
+):
+    from contextlib import closing
+    import sqlite3
+    from PyQt6 import sip
+
+    source = tmp_path / "source.sqlite"
+    with closing(sqlite3.connect(source)) as connection:
+        connection.execute("CREATE TABLE data(id INTEGER PRIMARY KEY, value BLOB)")
+        connection.executemany("INSERT INTO data VALUES (?, ?)", [(1, b"\x00\xff"), (2, bytes(range(256)))])
+        connection.commit()
+        schema = connection.execute("SELECT * FROM sqlite_master ORDER BY name").fetchall()
+        rows = connection.execute("SELECT * FROM data ORDER BY id").fetchall()
+    original_bytes = source.read_bytes()
+    reference = tmp_path / "reference.sqlite"
+    with closing(sqlite3.connect(source)) as reader, closing(sqlite3.connect(reference)) as writer:
+        reader.backup(writer)
+    backup_bytes = reference.read_bytes()
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "complete.bin").write_bytes(b"complete\x00\xff")
+    scenario = harness.IndustrialBridge()
+    scenario.dialog = industrial_retention_host
+    scenario.dialog.tabular_load_result = Namespace(sqlite_store=Namespace(path=str(source)))
+    if deleted:
+        sip.delete(scenario.dialog)
+    connect = sqlite3.connect
+    opened = []
+
+    def tracked_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+    target = tmp_path / "retained"
+    ctx = Namespace(work=work, args=Namespace(keep_output=str(target)))
+    result = {}
+    harness._retain_outputs(ctx, scenario, result)
+    assert result == {"retained_outputs": ["complete.bin", "tabular.sqlite"]}
+    assert (target / "complete.bin").read_bytes() == b"complete\x00\xff"
+    assert source.read_bytes() == original_bytes
+    assert (target / "tabular.sqlite").read_bytes() == backup_bytes
+    assert (work / "tabular.sqlite").read_bytes() == backup_bytes
+    assert len(opened) == 2
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+    with closing(connect(target / "tabular.sqlite")) as connection:
+        assert connection.execute("SELECT * FROM sqlite_master ORDER BY name").fetchall() == schema
+        assert connection.execute("SELECT * FROM data ORDER BY id").fetchall() == rows
+    with pytest.raises(FileExistsError):
+        harness._retain_outputs(ctx, scenario, {})
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_retention_industrial_host_static_descriptor_errors_propagate(
+    tmp_path, monkeypatch, industrial_retention_host, deleted,
+):
+    from PyQt6 import sip
+
+    def broken(_self):
+        raise RuntimeError("unexpected industrial tabular failure")
+
+    monkeypatch.setattr(type(industrial_retention_host), "tabular_load_result", property(broken), raising=False)
+    scenario = harness.IndustrialBridge()
+    scenario.dialog = industrial_retention_host
+    if deleted:
+        sip.delete(scenario.dialog)
+    target = tmp_path / "retained"
+    ctx = Namespace(work=tmp_path, args=Namespace(keep_output=str(target)))
+    with pytest.raises(RuntimeError, match="unexpected industrial tabular failure"):
+        harness._retain_outputs(ctx, scenario, {})
+    assert not target.exists()
+
+
+def test_retention_deleted_industrial_host_subclass_fails_closed(tmp_path, qapplication_session):
+    from PyQt6 import sip
+    from PyQt6.QtWidgets import QDialog
+    from metroliza.ui.industrial_data_dialog import IndustrialDataDialog
+
+    class UnexpectedHost(IndustrialDataDialog):
+        pass
+
+    dialog = UnexpectedHost.__new__(UnexpectedHost)
+    QDialog.__init__(dialog)
+    sip.delete(dialog)
+    scenario = harness.IndustrialBridge()
+    scenario.dialog = dialog
     target = tmp_path / "retained"
     ctx = Namespace(work=tmp_path, args=Namespace(keep_output=str(target)))
     with pytest.raises(RuntimeError, match="wrapped C/C\\+\\+ object .* has been deleted"):

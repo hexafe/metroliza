@@ -1384,12 +1384,22 @@ def _retain_outputs(ctx, scenario, result):
     from urllib.parse import quote
 
     dialog = getattr(scenario, "dialog", None)
-    if type(scenario) is ModifyDbApply:
+    if type(scenario) in (ModifyDbApply, ModifyDbRecords):
         from PyQt6 import sip
         from PyQt6.QtCore import QObject
 
-        # Apply may delete ModifyDB; its outputs are in ctx.work, with no tabular store.
+        # Apply/Records may delete ModifyDB; their outputs are in ctx.work, with no tabular store.
         if isinstance(dialog, QObject) and sip.isdeleted(dialog):
+            dialog = None
+    elif type(scenario) is IndustrialBridge:
+        from inspect import getattr_static
+        from PyQt6 import sip
+        from metroliza.ui.industrial_data_dialog import IndustrialDataDialog
+
+        # This launcher passes tabular ownership to a separate analytics dialog.
+        missing = object()
+        if (type(dialog) is IndustrialDataDialog and sip.isdeleted(dialog)
+                and getattr_static(dialog, "tabular_load_result", missing) is missing):
             dialog = None
     loaded = getattr(dialog, "tabular_load_result", None)
     store = getattr(loaded, "sqlite_store", None)
