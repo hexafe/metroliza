@@ -754,6 +754,31 @@ failure requires its trace to identify the next bounded question before any furt
 Opus5.5/high generic advice is not a formal source review or new product authority.
 Earlier packet/review budgets remain unchanged. No packaged Windows acceptance is admitted.
 
+### Coordinator correction — C15 native Industrial CI exit evidence (2026-10-27)
+
+Authority: continuing necessary-correction authorization and the [bounded C15 admission](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6430889159).
+CI40423677624 on c4c9c957 passed native Windows core and the main9140 tests, but its
+separate five-file Industrial UI process passed122 tests then died with SIGSEGV/139.
+No native stack/core from that runner is available. One local exact covered shard
+under GDB exited normally; it is NON_REPRODUCTION, not an explanation or fix.
+
+Only wrap that same Linux subprocess in an explicit fail-closed batch GDB command
+file, using the existing debugger, unchanged pytest/coverage arguments/order and job
+timeout. Normal exit must propagate its exact code; signal, unknown state and startup
+failure must remain nonzero. Emit bounded-depth all-thread native stacks on a fault.
+Disable init files/debuginfod; no installs, new dependencies, core, QObject observers,
+forced GC, product changes, skipped tests, clock/timeout changes or retry for green.
+This CI-only correction does not unfreeze measurement tools or reset C14's budget.
+
+Require controlled normal0/nonzero/signal/startup-failure evidence, one exact covered
+local shard, staged MUST-7/security and a fresh exact-source FULL1 with at most one
+DELTA1. Then one source-bound C15 diagnostic PR CI attempt. If it faults, use the
+actual stack to define a separate bounded correction; if it passes, report only the
+current diagnostic-qualified CI, retaining UNKNOWN for the original fault and the
+debugger timing limitation. Generic no-code Opus5.5/high advice is not source review.
+All23 performance actions/103strict comparisons are complete; no timing repetitions.
+No merge, release or packaged Windows acceptance is admitted.
+
 ## 4. Packets
 
 | ID | Wave | Packet | Files (main) | Class / role | Expected gain | After |

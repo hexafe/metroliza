@@ -911,13 +911,19 @@ jobs:
             --cov-append \
             --cov-report= \
             --cov-fail-under=0
-          PYTHONPATH=src:. python -m pytest tests/test_industrial_data_dialog.py tests/test_industrial_export_dialog.py tests/test_industrial_filter_dialog.py tests/test_industrial_linking_dialog.py tests/test_industrial_sync_dialog.py -q \
-            --cov=src/metroliza \
-            --cov=modules \
-            --cov=scripts \
-            --cov-append \
-            --cov-report= \
-            --cov-fail-under=0
+          # Capture a native shutdown fault without changing the shard or its exit status.
+          (
+            ulimit -c 0
+            PYTHONPATH=src:. gdb --nx --batch \
+              -iex 'set auto-load off' -iex 'set debuginfod enabled off' \
+              -x scripts/ci_industrial_ui.gdb --args python -m pytest tests/test_industrial_data_dialog.py tests/test_industrial_export_dialog.py tests/test_industrial_filter_dialog.py tests/test_industrial_linking_dialog.py tests/test_industrial_sync_dialog.py -q \
+              --cov=src/metroliza \
+              --cov=modules \
+              --cov=scripts \
+              --cov-append \
+              --cov-report= \
+              --cov-fail-under=0
+          )
           PYTHONPATH=src:. python -m pytest tests/test_phase2_db_migrated_behaviors.py tests/test_data_grouping_filter_query.py tests/test_modifydb_record_updates.py tests/test_modifydb_update_statements.py -q \
             --cov=src/metroliza \
             --cov=modules \
