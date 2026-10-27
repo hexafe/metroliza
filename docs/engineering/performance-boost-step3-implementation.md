@@ -779,6 +779,20 @@ debugger timing limitation. Generic no-code Opus5.5/high advice is not source re
 All23 performance actions/103strict comparisons are complete; no timing repetitions.
 No merge, release or packaged Windows acceptance is admitted.
 
+C15 terminal outcome and withdrawal: the sole diagnostic PRCI40429936975 on
+cd1c36d2 returned127 because the actual Ubuntu runner has no gdb. The target shard
+never started; no native observation or causal stack was obtained. Main9140 tests
+and native Windows core24groups passed; later coverage/trend/CMM were NOT_RUN.
+The coordinator's tool-availability assumption was wrong. Withdraw this hard CI
+dependency: restore the workflow byte-for-byte to c4c9c957, delete the helper and
+only its pending ownership include. No installation, substitute debugger, fallback,
+new observation or budget reset. Use the remaining C15 DELTA1 to review withdrawal
+and documentation, then staged MUST-7/security and one ordinary required CI of the
+corrected source. This is justified by removing the observed introduced127 cause;
+it neither retries the native experiment nor explains/fixes historical139. All
+original pytest/coverage arguments/order/timeout/assertions stay exact, and an
+ordinary native fault must still fail. The original SIGSEGV remains UNKNOWN.
+
 ## 4. Packets
 
 | ID | Wave | Packet | Files (main) | Class / role | Expected gain | After |
