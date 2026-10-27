@@ -731,6 +731,29 @@ required CI and a fresh unchanged-harness full216k A/B with output and GUI-stall
 The prior regression remains recorded. Do not broaden the measurement infrastructure.
 
 
+### Coordinator correction — C14 passive diagnostic CI evidence (2026-10-27)
+
+Authority: continuing necessary-correction authorization, applied in the [bounded C14 admission](https://github.com/hexafe/metroliza/issues/1151#issuecomment-6429960792).
+Required CI on the Markdown-only T28 report head7a21bb51 returned one Windows-core
+SAVED assertion failure with PUBLISH_INCOMPLETE; the relevant diagnostic source and
+tests are byte-identical to STEP2/101e5a44. Its original cause remains UNKNOWN.
+
+Attach only the existing bounded publisher observer to that qualification test and keep
+its frozen fixed-operation/status/timing facts visible on pass/fail. Preserve the exact
+SAVED predicate, complete launch/preview/export journey, real clock,750ms close budget,
+return values, fsync/atomic publication/readback and all production code. No retries,
+sleeps, fixture redesign, new observer framework, benchmark/comparator/resource change
+or workflow edit. Root documentation may record the evidence and limits.
+
+Require baseline/focused/caller evidence, the controlled incomplete-publication negative,
+staged MUST-7/full security and one independent FULL1 with at most one DELTA1. Then make
+one source-bound normal Windows-core diagnostic CI attempt, with the same case order
+and recorded runner image. A passing trace is a healthy observed baseline, never an
+explanation or fix of the original failure; retain UNKNOWN and the adverse receipt. A
+failure requires its trace to identify the next bounded question before any further change.
+Opus5.5/high generic advice is not a formal source review or new product authority.
+Earlier packet/review budgets remain unchanged. No packaged Windows acceptance is admitted.
+
 ## 4. Packets
 
 | ID | Wave | Packet | Files (main) | Class / role | Expected gain | After |

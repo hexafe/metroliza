@@ -459,14 +459,20 @@ def test_preview_cleanup_survives_widget_import_failure(monkeypatch, has_window)
 
 @pytest.mark.parametrize("headless_environment", [False, True], ids=["desktop-env", "headless-env"])
 def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
-    tmp_path, headless_environment
+    tmp_path, headless_environment, monkeypatch, capfd
 ):
+    from tests.test_diagnostic_launcher import _trace_publisher_calls
+
     root = Path(__file__).resolve().parents[1]
     state = tmp_path / "application-state"
     store = IncidentStore(state / ("Metroliza" if os.name == "nt" else "metroliza") / "diagnostics")
     child = Path(__file__).parent / "fixtures/diagnostic_child.py"
+    trace = _trace_publisher_calls(monkeypatch, store)
     crashed = run_with_store([sys.executable, str(child), "hard_exit"], store=store)
-    assert crashed.storage_status is StoreStatus.SAVED
+    trace_json = json.dumps(trace(), sort_keys=True)
+    with capfd.disabled():
+        print(f"C14_PUBLISHER_TRACE {trace_json}", flush=True)
+    assert crashed.storage_status is StoreStatus.SAVED, trace_json
     work = tmp_path / "preview"
     work.mkdir()
     env = dict(os.environ, METROLIZA_STARTUP_SMOKE="1", METROLIZA_LICENSE_VERIFICATION="0",
