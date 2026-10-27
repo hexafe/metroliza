@@ -15,6 +15,8 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
 - [`engineering/codex-model-routing.md`](engineering/codex-model-routing.md) — universal coordinator/worker routing, exact-head evidence, review feedback, merge authority, and Metroliza adaptation.
+- [`engineering/chatgpt-project-instructions.md`](engineering/chatgpt-project-instructions.md) — concise project-instruction mirror for ChatGPT/Codex orchestration and current branch lifecycle guidance.
+- [`engineering/model-routing-research-2026-09-23.md`](engineering/model-routing-research-2026-09-23.md) — GPT-6 routing research/evidence supporting the current orchestration playbook.
 - [`engineering/codex-task-packet-template.md`](engineering/codex-task-packet-template.md) — reusable pre-dispatch and post-execution packet with MUST/SHOULD/DEFERRED scope.
 - [`engineering/pr-routing-report-template.md`](engineering/pr-routing-report-template.md) — PR-ready routing, MUST-to-evidence, validation, review, and remote-operation report.
 - [`engineering/supervised-diagnostics-v1.md`](engineering/supervised-diagnostics-v1.md) — supervised process/store contracts, bounds, rollback and source/package qualification boundaries.
@@ -140,7 +142,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.
 - `release_checks/google_conversion_smoke.md` — required release smoke evidence log for Google conversion checks.
 - `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
-- `release_checks/realtime_industrial_rollout_checklist.md` — current 2026.06 RC1 realtime industrial tester rollout gate for replay, bounded reads, source lag, threshold review, and rollback.
+- `release_checks/realtime_industrial_rollout_checklist.md` — historical 2026.06 RC1 realtime industrial tester rollout evidence for replay, bounded reads, source lag, threshold review, and rollback. Current RC qualification is in `release_checks/release_status.md`.
 - `release_checks/realtime_monitor_ui_ux_audit_2026-06-15.md` — build `260615` realtime monitor UI/UX audit, implemented workflow guardrails, About cleanup, and deferred dashboard-mode follow-up.
 - `release_checks/realtime_industrial_optimization_check_2026-06-16.md` — build `260616` Industrial Data fetch, realtime dashboard, and interactive dashboard point-marking release-check note.
 - `release_checks/realtime_industrial_performance_check_2026-06-17.md` — build `260617` Industrial Data SQLite handoff, cached workbook export, realtime polling, and Oznak fallback release-check note.
@@ -169,3 +171,12 @@ Retired planning/temporary docs are under `archive/`.
 
 - Archive entry point: `archive/README.md`
 - Year buckets: `archive/YYYY/`
+
+## RC1 integration and repository cleanup
+
+- [Current release status](release_checks/release_status.md)
+- [Historical step1 package](engineering/repo-cleanup-step1.md) and [manifest](engineering/repo-cleanup-manifest.json)
+- [Independent admission review](engineering/repo-cleanup-admission-20261027.md)
+- [External recovery receipts](engineering/repo-cleanup-external-recovery.json)
+- [Historical test build261021 provenance](archive/2026/build-261021-provenance/README.md)
+- [Live execution ledger #1153](https://github.com/hexafe/metroliza/issues/1153)

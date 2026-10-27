@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-08-26
+Last reviewed: 2026-10-18 (routing/adoption; dated branch/release decisions retain their own evidence)
 Review cadence: every release cycle or monthly, whichever is sooner
 
 This directory is the canonical entry point for planning and developing Metroliza. GitHub Issues
@@ -37,15 +37,32 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
 - The Product Owner owns product direction and separately gated remote or destructive decisions.
 - The external project orchestrator owns the Issue/specification, task packet, whole-PR routing,
   independent exact-head review, and merge decision.
-- The Codex coordinator owns bounded execution, integration, validation, internal exact-head
-  readiness audit, and PR preparation.
+- The admitted coordinator, Codex or Claude, owns bounded execution, integration, validation,
+  internal exact-head readiness audit, and PR preparation.
 - Workers own only explicitly bounded slices and cannot override the packet or repository sources
   of truth.
 
-Root [`AGENTS.md`](../../AGENTS.md) is the concise session entry point. The expanded playbook owns
-the reusable routing contract; this control center and the architecture/workflow/release documents
-own Metroliza-specific product and engineering rules. Codex coordinators and workers never merge
-their own PRs.
+Root [`AGENTS.md`](../../AGENTS.md) is the concise session entry point. The playbook binds shared
+`development-routing` policy v1.1 and model map v1.0 to Metroliza; the shared map alone maintains
+exact model IDs/effort. This control center and architecture/workflow/release documents own
+Metroliza product and engineering rules. Codex and Claude coordinators/workers never merge their
+own PRs. One coordinator owns integration; one writer per file and one Docker/CI owner retain
+resource control. Independent scope and delta review use fresh non-fork contexts, with prior
+findings supplied to delta; all named review, CI and specialized acceptance gates remain.
+
+The [accepted 2026-10-18 direction](https://github.com/hexafe/metroliza/issues/1061#issuecomment-6251973769)
+applies immediately to new tasks and to running/paused work at its next safe packet boundary after
+recording source, ownership, gates and spent/remaining budget continuity. It does not interrupt,
+reset, spend or reassign just because routing changed. Before #1063 merges the accepted Issue/packet
+is execution authority and branch docs are a review candidate; after merge they are the active
+repository source. Named gates need explicit reconciliation before any change.
+
+Clients without local skills must obtain the authoritative shared policy/map contents or immutable
+snapshot and accepted packet from the coordinator, recording origin, version and hash. Do not infer
+model defaults from repository mirrors or historical research; no particular host path is required.
+Use the playbook's provider modes, quota evidence and takeover procedure without expanding action
+authority. Shared policy selects routes; Metroliza still requires GitHub Codex Review, independent
+exact-head review, actual CI, thread resolution and applicable SQLite/native/Windows/release gates.
 
 ## GitHub control plane
 
@@ -113,7 +130,8 @@ roadmap, but they do not create reverse prerequisites for their foundations.
 | [#922](https://github.com/hexafe/metroliza/issues/922) | Map current codebase, data flow and supported workflows. |
 | [#923](https://github.com/hexafe/metroliza/issues/923) | Apply the ChatGPT project source/chat policy. |
 | [#924](https://github.com/hexafe/metroliza/issues/924) | Review, preserve and retire historical release branches safely. |
-| [#965](https://github.com/hexafe/metroliza/issues/965) | Adopt the AI orchestration, task-packet and model-routing policy; Dependabot activation remains separate. |
+| [#965](https://github.com/hexafe/metroliza/issues/965) | Original AI orchestration adoption; current shared-policy direction is recorded in #1061 and integrated by #1063. Dependabot activation remains separate. |
+| [#1061](https://github.com/hexafe/metroliza/issues/1061) | Current and future work adopts shared development-routing v1.1 / model map v1.0; repository integration remains in existing PR #1063. |
 
 ## Source-of-truth hierarchy
 
@@ -133,12 +151,19 @@ a durable project decision. Record it in an Issue, pull request, ADR or active d
 
 ## Repository and branch state
 
-Decision date: 2026-08-22. The authoritative rationale and release evidence are in the
+Current decision: 2026-10-27 under [#1153](https://github.com/hexafe/metroliza/issues/1153).
+`release/2026.09-rc1` is the current RC source line, cut from accepted develop after the ordered
+integrations. Final build identity and packaged Windows acceptance remain pending. The two June
+RC2 refs are retained historical evidence with separate #901/#924 cycle closure. No master
+promotion or published release is authorized.
+
+Historical branch-transition decision date: 2026-08-22. The authoritative rationale and release evidence are in the
 [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
 and the active [release status](../release_checks/release_status.md).
 
 - `develop` is the canonical branch for normal Issue-driven development and integration.
-- `release/2026.06-rc2` is the frozen release-candidate and evidence branch.
+- `release/2026.09-rc1` is the current RC source/evidence branch; distribution needs final artifact qualification.
+- `release/2026.06-rc2` is a retained historical frozen evidence branch.
 - `rc2` is a temporary historical transition/reference alias, not a routine development base.
 - `master` remains the current production/history anchor and is unchanged pending the separate
   [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
@@ -160,7 +185,7 @@ product requirement / evidence
 ### Working rules
 
 - Start meaningful implementation from an Issue with testable acceptance criteria.
-- Branch normal work from and target `develop`; use `release/2026.06-rc2` only for approved
+- Branch normal work from and target `develop`; use `release/2026.09-rc1` only for approved
   release fixes and evidence.
 - Use one primary Issue/outcome per pull request; split broad work before coding.
 - Keep behavior changes separate from structural refactors.

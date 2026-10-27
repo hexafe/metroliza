@@ -29,17 +29,18 @@ under `docs/release_checks/`.
 
 ## 2. Current repository and product state
 
-Branch decision date: 2026-08-22. Authoritative branch rationale and release evidence remain in
+Current RC source-line decision: 2026-10-27 under #1153. Historical branch-transition rationale remains in
 [`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
 and [`release_status.md`](../release_checks/release_status.md).
 
 - `develop` is the canonical branch for normal Issue-driven development and integration.
-- `release/2026.06-rc2` is the frozen release-candidate and evidence branch.
+- `release/2026.09-rc1` is the current RC source/evidence line; exact accepted source and cut receipt are in #1153.
+- `release/2026.06-rc2` is retained historical frozen evidence, with separate #901/#924 cycle closure.
 - `rc2` is a temporary historical transition/reference alias, not a routine development base.
 - `master` remains the current production/history anchor and is unchanged pending the separate
   [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
-- Canonical release metadata remains `2026.06 RC2 (build 260711)`; this roadmap does not duplicate
-  or supersede the release evidence required for promotion.
+- Canonical release metadata lives in `src/metroliza/app/version.py`. The September RC1 source cut
+  does not assign a new final build identity or replace packaged/manual evidence required for distribution and promotion.
 
 ## 3. Roadmap overview
 

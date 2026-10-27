@@ -6,6 +6,13 @@ Metroliza is a Python desktop app for industrial metrology workflows: parsing me
 reports, organizing data in SQLite, and creating analysis-ready Excel summaries,
 dashboard-first grouped analysis, and CSV/production dashboards.
 
+## Repository and release status
+
+The current RC source line is `release/2026.09-rc1`, cut from accepted develop under
+[#1153](https://github.com/hexafe/metroliza/issues/1153). Final packaged Windows acceptance and
+the final build identity remain pending. See [release status](docs/release_checks/release_status.md).
+The June RC2 refs are retained historical evidence; master promotion is separately gated.
+
 ## Quickstart
 
 ```bash

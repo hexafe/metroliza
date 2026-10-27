@@ -273,7 +273,7 @@ Native acceleration is optional and policy-controlled.
 | Risk | Evidence | Treatment |
 |---|---|---|
 | Default/development branch divergence | GitHub still defaults to `master` while normal Issue-driven work belongs on `develop` | #921 repository-default/protection decision; select PR bases explicitly |
-| Incomplete release promotion evidence | the frozen `release/2026.06-rc2` candidate still lacks the manual evidence owned by #901 | keep release evidence authoritative and do not promote `master` before the release-owner decision |
+| Incomplete release promotion evidence | current `release/2026.09-rc1` source still needs exact packaged/manual qualification; June RC2 refs retain separate historical #901/#924 cycle closure | keep release evidence authoritative and do not promote `master` before the release-owner decision |
 | Exporter concentration | `export_data_thread.py` is about 306 KB and owns mixed concerns | #903 incremental seams |
 | Dashboard concentration | controls/options/spec modules embed large shared behavior surfaces | #904 contract-preserving split |
 | Compatibility ambiguity in tests | behavior tests still use many `modules.*` imports | #905 measured burn-down, shims retained |

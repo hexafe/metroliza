@@ -1,70 +1,92 @@
 # Metroliza repository instructions
 
-## Sources of truth
+## Sources and continuity
 
-1. The active GitHub Issue and its accepted execution packet define the current task.
-2. [`docs/project/README.md`](docs/project/README.md) defines the project source hierarchy.
-3. [`docs/project/architecture.md`](docs/project/architecture.md) owns architecture, data, native,
-   compatibility, and security boundaries.
-4. [`docs/project/development_workflow.md`](docs/project/development_workflow.md) and
-   [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md) own
-   delivery, branch, validation, and release rules.
-5. [`docs/engineering/codex-model-routing.md`](docs/engineering/codex-model-routing.md) is the
-   expanded AI-orchestration and model-routing playbook.
+Read the active Issue/packet and relevant live code/CI. Use [project hierarchy](docs/project/README.md),
+[architecture](docs/project/architecture.md), [development workflow](docs/project/development_workflow.md)
+and [release rules](docs/release_checks/branching_strategy.md) for their boundaries.
+The [playbook](docs/engineering/codex-model-routing.md) binds shared `development-routing` policy
+v1.1 and model map v1.0 to Metroliza delivery. Resolve semantic roles from that versioned shared
+map; dated research is historical reference, not the current model default. Clients without local
+skills must obtain the authoritative policy/map snapshot and accepted packet through the
+coordinator before dispatch; no particular host path or inferred model default is required.
 
-Do not silently skip, broaden, or reinterpret a requirement. Record an approved deferral with its
-reason, owner, target Issue or phase, and preserved seam.
+**[User adoption: 2026-10-18](https://github.com/hexafe/metroliza/issues/1061#issuecomment-6251973769).**
+Current and future work follows accepted #1061 direction. New tasks adopt immediately. Running/paused work, including WIN-DLV-1, adopts at its next safe packet boundary
+with recorded source, owner and spent/remaining budget continuity; do not interrupt, reset, spend
+or reassign merely because policy changed. Named review/acceptance gates remain until explicitly
+reconciled. Before #1063 merges, accepted Issue/packet direction governs execution and these branch
+files are a review candidate; after merge they are the active repository source. Old evidence
+keeps its actual identity. No client configuration is installed here.
 
-## Metroliza contracts
+## Non-negotiable contracts
 
-- Start normal Issue work from `develop` and target `develop`; never rely on GitHub's default base.
-- Use `src/metroliza` and `metroliza.*` as canonical. Treat `modules.*` as compatibility-only.
-- Preserve local-first operation, SQLite atomicity, bounded processing, offline dashboards,
-  deterministic cleanup, and deterministic Python fallbacks.
-- Native/Rust paths remain optional and require Python parity, representative benchmarks, locked
-  builds, packaging proof, explicit fallback behavior, and rollback.
-- Preserve packaged Windows compatibility and keep CI evidence distinct from clean-machine,
-  packaged, live-service, legal, and release-owner evidence.
-- Keep credentials, customer/supplier reports, proprietary measurement data, production extracts,
-  secrets, and unredacted diagnostics out of repository, chat, and PR artifacts.
-- Never claim a test, CI run, benchmark, review, merge, release, model, reasoning mode, token count,
-  cost, or remote action without observed evidence. Report unavailable runtime identity as
-  `not visible`.
+- Normal branches start from and target `develop`; never assume GitHub's default base.
+- Apply the accepted develop PR template explicitly using the [publication procedure](docs/project/development_workflow.md#pr-template-publication); the template auto-filled from default `master` may be stale. Record its source commit and verify the actual PR body before handoff.
+- Remote branches are disposable execution refs, not evidence archives. Steady state is `master` + `develop` + an active `release/*` when needed + current PR heads.
+- Do not create a remote branch per agent, reviewer, test attempt or checkpoint. Reuse the Issue branch for in-scope corrections.
+- After merge, mark the source branch for retirement unless a named live consumer per the [cleanup gate](docs/release_checks/branching_strategy.md#cleanup-gate) requires that exact ref; record the consumer and retirement trigger. Physical deletion follows that gate: complete live-consumer checks and clean-repository recovery fetch of the exact commit/tree for every branch, including merged and squashed branches, then a Product-Owner-approved finite exact-ref/full-SHA manifest and expected-old-value guards.
+- Canonical package: `src/metroliza` / `metroliza.*`; `modules.*` is compatibility-only.
+- Preserve local-first, SQLite atomicity, bounded processing, offline dashboards, deterministic
+  cleanup, last-complete-output safety and deterministic Python fallbacks.
+- Optional Rust/native work needs locked builds, Python parity including failure/cancel/fallback,
+  representative performance, packaging proof and rollback.
+- Source CI is not packaged Windows, clean-machine, live-service, legal or release-owner evidence.
+- No credentials, customer/supplier measurements/reports, production extracts or raw diagnostics
+  in chat/repository/artifacts. Never invent tests, CI, review, merge, runtime or usage evidence.
 
-## AI orchestration
+## Delivery and review
 
-The Product Owner owns product direction and separately gated remote or destructive decisions. The
-external project orchestrator owns the Issue/specification, task packet, whole-PR routing,
-independent exact-head review, and merge decision. The Codex coordinator owns bounded execution,
-integration, validation, its internal exact-head readiness audit, and PR preparation. Workers own
-only their explicitly assigned slices.
+One coherent outcome per Issue/PR, with **MUST**, **SHOULD**, **DEFERRED**. Critical/major or violated
+MUST: correct or safely contain now within authority. Every distinct defect gets a deduplicated
+Issue. Lesser defects get evidence, impact, owner, workaround and target stabilization pack rather
+than hijacking the feature. Bot priority, severity and merge/release disposition are separate.
 
-Classify the whole PR separately from any delegated slice:
+Test affected behavior continuously. One complete affected-scope/direct-consumer review, grouped
+blocking fixes, then at most one changed-head delta in a fresh non-fork context supplied with prior
+findings and affected dependencies. Extra rounds need a named blocker and an explicit finite budget
+extension within the user cap. No whole-repository audit per correction or full QA per helper.
+Reuse valid unchanged evidence, but rebind the exact-head verdict. Keep required CI, GitHub Codex Review, independent
+review and adjudicated/resolved threads. Self-check is not independent review.
 
-| Whole-PR class | Default coordinator |
-| --- | --- |
-| MICRO | GPT-5.6 Luna / Medium |
-| BOUNDED INTEGRATION | GPT-5.6 Terra / High |
-| FEATURE / CROSS-LAYER | GPT-5.6 Sol / High |
-| CRITICAL / MILESTONE | GPT-5.6 Sol / Ultra |
+Before each minor/major release, complete selected stabilization packs, inspect integrated changes
+and execute applicable full regression and real Windows-package journeys. Remaining minor Issues
+need explicit disposition. Never relabel FAIL, skipped or unknown as PASS.
 
-| Slice risk | Default worker |
-| --- | --- |
-| GREEN | GPT-5.6 Luna |
-| YELLOW | GPT-5.6 Terra |
-| RED | GPT-5.6 Sol |
-| CRITICAL | GPT-5.6 Sol |
+## Routing and helpers
 
-An externally selected coordinator cannot be silently downgraded. Escalate upward when evidence
-requires it. Delegate only when bounded ownership or independent context improves the work; skip a
-worker when startup and context-loading cost exceed the slice.
+Separate risk, model, reasoning, delegation, speed and effective permissions. Use the highest of
+packet risk, path floor and semantic risk. With OpenAI available, MICRO uses `economy_worker`;
+BOUNDED/FEATURE/CRITICAL use `implementer`. Select implementation and independent review by class
+and observed provider mode in the playbook, including its CLAUDE_ONLY implementation roles;
+CRITICAL alone does not automatically add `escalation_reviewer`. Resolve exact IDs/effort at dispatch
+from shared map v1.0 and record overrides. Standard speed; no silent downgrade or default Ultra.
 
-Every nontrivial packet uses explicit **MUST**, **SHOULD**, and **DEFERRED** sections and follows
-[`docs/engineering/codex-task-packet-template.md`](docs/engineering/codex-task-packet-template.md).
-Every nontrivial PR reports routing and evidence with
-[`docs/engineering/pr-routing-report-template.md`](docs/engineering/pr-routing-report-template.md).
+Either Codex or Claude may coordinate. Record BOTH / OPENAI_ONLY / CLAUDE_ONLY / NEITHER / UNKNOWN
+from applicable timestamped capacity evidence; missing, invalid or older-than-60-minute data is
+UNKNOWN. Never make paid quota probes or infer reserve from token/cost estimates. A generic approved
+fallback cannot waive a specifically assigned reviewer or Metroliza's actual gates.
 
-Codex coordinators and workers never merge their own PR. Standing merge authorization belongs only
-to the external orchestrator and only after every gate in the expanded playbook is satisfied. It
-never authorizes release promotion, real-data migration, deployment, destructive operations,
-secrets, billing, external publication, or other remote product mutations.
+Delegate only useful disjoint slices, normally at most two auxiliary contexts concurrently,
+including reviewers. No recursive swarm or overlapping writers. One coordinator, one writer per
+file, one Docker/CI owner and one heavy validation run; at most one active Claude invocation per
+task. Verify former writers/processes idle and transfer resource ownership before takeover.
+Independent review uses fresh non-fork context, trusted instructions and exact immutable sources;
+verify effective no-write permissions or use a controlled snapshot and disclose limitations.
+Record requested, configured/reported and response-observed identity/effort separately; unsupported
+telemetry is `not visible`. Keep finite shared budgets and consumed/remaining review rounds.
+
+## Authority and handoff
+
+PO owns direction and separately gated operations. External orchestration owns packets, routing,
+risk decisions and merge; the Codex or Claude coordinator owns tactical execution/integration and
+routine in-scope corrections without per-file/per-commit PO approvals. Use the [packet](docs/engineering/codex-task-packet-template.md)
+and [PR report](docs/engineering/pr-routing-report-template.md). GitHub is durable;
+a remote archive pathname is not recovered code.
+
+Only external orchestration merges under the playbook's exact-head/current-base predicate:
+all applicable gates, adjudicated/resolved threads, no later blocker and mergeability. Prefer squash
+merge for normal Issue slices; release/history reconciliation uses the evidence-preserving method
+explicitly stated in the release decision, as required by the [branching strategy](docs/release_checks/branching_strategy.md).
+Publication for CI, merge and release are distinct. No author self-merge, force rewrite, release/tag/deploy,
+live-data migration, secrets, billing or destructive authority follows from a model choice.

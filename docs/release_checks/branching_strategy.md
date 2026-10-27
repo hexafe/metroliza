@@ -1,10 +1,32 @@
 # Branching strategy
 
 This document defines the lightweight branching model used for Metroliza development and release
-work. The current branch transition and automatic evidence are recorded in
+work. Current RC roles and qualification are recorded in [release status](release_status.md).
+The historical branch transition and automatic evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md).
 
-## 0) Active repository state — decision 2026-08-22
+## 0) Active repository state — decision 2026-10-27
+
+Under [#1153](https://github.com/hexafe/metroliza/issues/1153), integrate #1109, #1142, the accepted
+STEP2+STEP3 aggregate and refreshed #1063 into develop using merge commits, then cut
+`release/2026.09-rc1` from the accepted final develop. Exact commits, trees and gates are in that
+execution ledger. Current candidate source is distinct from final packaged qualification.
+
+Keep seven refs after the finite cleanup: master, develop, release/2026.09-rc1, historical rc2,
+historical release/2026.06-rc2, and the dependency branches for #972/#973. The two historical refs
+and two dependency branches are named exceptions to the ordinary small branch set. They remain
+until their own lifecycle/update criteria are met. No master promotion or published release.
+
+Final build identity and Windows packaged EXE acceptance are pending. Before RC distribution,
+qualify the exact final artifact per release_status and the RC checklist; do not reuse historical
+build261021 metadata. Archive source/provenance separately. Preserve history, retained recovery
+refs, original adverse receipts and expected-old-SHA deletion guards.
+
+Newly admitted release work must select its base explicitly: normally `develop`, or the current
+`release/2026.09-rc1` after its source cut. The June base selection in the historical decision below
+applies only to explicitly admitted historical cycle work; it is not the current RC default.
+
+## 0.1) Historical repository state — decision 2026-08-22
 
 - `develop` is the canonical branch for new Issue-driven development.
 - `release/2026.06-rc2` is the frozen release-candidate/evidence branch for
@@ -44,7 +66,7 @@ must be reconciled into `develop` and any active release line where applicable.
 ### `master`
 
 `master`: current production-ready branch and historical/default production anchor. It represents
-the last accepted production state; the current `2026.06 RC2` candidate is not approved for
+the last accepted production state; the historical `2026.06 RC2` candidate is not approved for
 promotion while #901 remains open. Only reviewed, release-owner-approved candidate merges and
 minimal production hotfixes belong here.
 
@@ -63,9 +85,17 @@ Integration branch for active Issue-driven development:
 
 Normal Issue branches start from and target `develop`.
 
+### `release/2026.09-rc1`
+
+Current candidate source/evidence line, cut from accepted develop under #1153. Only approved
+release fixes, qualification evidence and reviewed candidate metadata belong here after freeze.
+Reconcile accepted fixes into develop. Final build/EXE qualification and release-owner Go remain
+separate from the source cut and repository cleanup.
+
 ### `release/2026.06-rc2`
 
-Frozen stabilization/evidence branch for the current candidate. Allowed changes are limited to:
+Historical frozen stabilization/evidence branch; retain it unchanged for separate #901/#924
+cycle closure. The following original restrictions continue for explicitly admitted historical fixes. Allowed changes are limited to:
 
 - release-blocking defects;
 - packaging/clean-machine fixes;
@@ -119,8 +149,8 @@ branches instead of one product-wide change set.
 ## 3) Release and hotfix naming
 
 - Release candidate branches: `release/YYYY.MM-rcN`
-  - Current: `release/2026.06-rc2`
-  - Future example: `release/2026.09-rc1`
+  - Current: `release/2026.09-rc1`
+  - Historical retained example: `release/2026.06-rc2`
 - Hotfix branches: `hotfix/<version>-<description>`
   - Example: `hotfix/2026.09.1-startup-fix`
 
@@ -259,12 +289,112 @@ Not allowed:
 - Do not tag `release/2026.06-rc2` as stable until #901 and the final release-owner decision are
   complete.
 
-## 8) Branch cleanup
+## 8) Branch lifecycle and housekeeping
 
-- Delete merged short-lived Issue branches after the PR and evidence are complete.
-- Keep active release branches only while their release/evidence cycle is open.
-- Preserve historical commits through merged PRs/tags rather than indefinite abandoned branches.
-- Retire `rc2` only after the current candidate is promoted or explicitly abandoned, `develop` is
-  synchronized, useful references are preserved, and a dedicated cleanup decision is recorded.
-- Changing the GitHub default branch is a repository-setting decision and must not be conflated with
-  force-moving `master` or release promotion.
+The intended steady state is deliberately small:
+
+```text
+master                 # production/history anchor (rename to main is a separate repository decision)
+develop                # canonical integration branch
+release/YYYY.MM-rcN    # only while that release/evidence cycle is active
+<active PR heads>      # feature/fix/docs/test/chore/etc. currently being reviewed or integrated
+```
+
+A remote branch is a **temporary execution ref, not an archive or evidence store**. Durable evidence
+lives in the linked Issue/PR, commit/tree SHA, CI run, retained artifact, and release tag when
+applicable.
+
+### Create fewer branches
+
+- Create one branch for one primary Issue/PR when implementation actually starts.
+- Do not create remote branches for backlog ideas, read-only reviewers, agents, test attempts,
+  review rounds, checkpoints, or "maybe useful later" snapshots.
+- Keep in-scope corrections on the existing branch/PR.
+- Research/design work uses an Issue/comment or a documentation PR. It gets a dedicated remote
+  branch only when it contains a concrete mergeable deliverable.
+- A replacement `-v2` branch is exceptional: record why the first branch cannot continue and close
+  or retire the predecessor rather than keeping competing versions indefinitely.
+
+### Delete as part of merge closeout
+
+The merging orchestrator owns the **retirement decision** in the same closeout as the merge.
+Merge authority does not itself authorize destructive ref deletion.
+
+Default lifecycle:
+
+> **Merged PR -> mark its source branch DELETE_CANDIDATE immediately -> delete it in the next approved exact-ref cleanup batch.**
+
+A cleanup batch may contain many branches, so this safety gate must not turn ordinary housekeeping
+into one approval per branch. Before mutation, however, the Product Owner approval must name the
+finite manifest containing each exact branch and expected full SHA.
+
+Keep the branch only when a **named live dependency** still requires that ref name, such as an open
+PR based on it, an active release/integration stack, or a currently running executor/workflow that
+cannot yet move. The keep decision must name the consumer and the exact retirement trigger.
+
+A historical link, old CI run, benchmark, audit, review, or useful commit is **not** a reason to keep
+the branch. Preserve that evidence through verified retained PR refs/artifacts; every deletion still requires
+the clean-repository recovery-fetch proof below, including merged and squash-merged work.
+
+Closed or superseded unmerged PRs also retire once unique useful work is either integrated elsewhere
+or deliberately preserved in a durable PR/commit/document. Do not merge stale code merely to make
+the branch list shorter.
+
+### Temporary integration stacks are exceptions
+
+Normal work starts from and targets `develop`. A delivery may temporarily use an integration branch
+and, when genuinely required, one acceptance/package branch. Such a stack must have:
+
+- one delivery owner;
+- an explicit dependency map;
+- a named final destination;
+- a retirement trigger.
+
+Do not grow a tree of per-worker/per-test integration branches. When leaf work is integrated into the
+retained integration branch, retire the leaf branch. When the delivery is reconciled into its final
+branch, retire the integration/acceptance refs.
+
+### Cleanup gate
+
+Before deleting a branch:
+
+1. re-read its exact current ref/full SHA, PR state and complete remote inventory;
+2. inspect the full live-consumer list from the
+   [exact-ref deletion gate](../project/branch_cleanup_execution.md#fresh-exact-ref-deletion-gate):
+   open PR head/base and stacked review history; workflows, rulesets, releases, settings, documents,
+   scheduled jobs, deployments, submodules, scripts, package jobs, support processes, known
+   integrations and handoffs; also active executors, release/integration stacks, rollback and
+   product-control evidence. Record any named consumer and retirement trigger. Historical mentions
+   alone are not live consumers. Private GitHub App settings and unknown off-GitHub consumers need
+   explicit owner/PO attestation; absence from repository search is not proof of no consumers;
+3. prove accepted work is present in the retained destination and no unreviewed unique work remains,
+   using graph plus direct tree/patch comparisons as applicable. For **every deletion**, including
+   merged, squash-merged, closed and superseded PR branches, prove in a clean disposable repository
+   that the exact source commit and tree can be fetched from the recorded durable retained recovery
+   ref (for example `refs/pull/<number>/head`) or separately approved restore-tested recovery object.
+   Record fetched commit/tree and successful fetch result. A SHA, web page, merged badge or squash
+   destination alone is not recovery proof; keep separately preserved unique work for unmerged PRs;
+4. obtain Product Owner approval for the finite manifest of exact refs/full expected SHAs with
+   recovery ref/commit/tree, consumer evidence/attestations, rollback owner and guarded command;
+   record that manifest, approver, approval timestamp and expected result in the authoritative
+   exact-ref execution ledger #960 before execution;
+   candidate or recovery movement invalidates the affected gate and authorization;
+5. delete each approved exact ref/SHA at most once with an expected-old-value lease; never use a
+   wildcard, blind force, name-only fallback or automatic retry/alternate mutation after failure;
+6. immediately verify absence, unchanged recovery ref/commit/tree and complete remote inventory,
+   including retained heads unchanged; record actual per-row result, immediate verification and
+   adverse receipts in #960. Batch summaries in #921 or another assigned ledger link to those
+   canonical per-ref records and never replace them.
+
+A branch with no open PR and no explicit release/integration role is a cleanup candidate immediately.
+Housekeeping should happen continuously after merges, not as a rare repository-wide archaeology
+project. There is no cosmetic numeric branch cap, but the normal count should be approximately the
+long-lived refs plus genuinely active PR heads.
+
+### Long-lived and historical release refs
+
+Keep `develop` and `master` in their current roles. Keep an active `release/*` branch only while
+its release/evidence cycle is open. Prefer immutable tags for historical release points rather than
+keeping old release branches indefinitely. Retire the historical `rc2` only through its recorded
+release-transition decision; default-branch renaming and release promotion remain separate actions.
+

@@ -2,7 +2,7 @@
 
 Status: Active workspace convention  
 Owner: Maintainer  
-Last reviewed: 2026-08-25
+Last reviewed: 2026-10-18 (routing/adoption update)
 
 ## 1. Purpose
 
@@ -33,40 +33,58 @@ only universal orchestration rules; repository-specific rules belong in each pro
 sources of truth.
 
 ```text
-Treat the active Issue/specification and repository instructions as task authority; inspect the
-current branch and exact head as execution state. Keep Product Owner, external orchestrator, Codex
-coordinator, and bounded-worker roles distinct. Classify the whole PR separately from worker
-slices; never silently downgrade an externally selected coordinator, and escalate on evidence. Use
-explicit MUST, SHOULD, and DEFERRED task-packet sections with owned and forbidden scope,
-acceptance, validation, stop conditions, and remote-operation policy. Verify the exact head and
-report only observed tests, CI, reviews, model,
-reasoning, usage, cost, merge, release, and remote actions; use `not visible` when runtime identity
-is unavailable. Codex coordinators and workers do not merge their own PRs. Require separate
-approval for release, deployment, migration, destructive, secret, billing, publication, and other
-remote product mutations.
+Treat the accepted active Issue/packet and repository instructions as task authority; inspect
+owned worktree/base/head/tree. Apply shared development-routing policy v1.1 and model map v1.0.
+Resolve semantic roles to exact IDs/effort from the authoritative map; do not copy fixed model
+tables. If local skills are absent, obtain the authoritative versioned contents/snapshot and
+accepted packet from the coordinator, recording origin/hash rather than requiring host paths or
+inferring defaults. Either Codex or Claude can coordinate. Separate PO direction, external
+independent merge decision, coordinator execution and bounded worker ownership. The author never
+self-merges. Use MUST/SHOULD/DEFERRED, owned/forbidden scope and finite spent/remaining budgets.
+Observe BOTH/OPENAI_ONLY/CLAUDE_ONLY/NEITHER/UNKNOWN from applicable timestamped capacity evidence;
+missing/invalid/>60min data is UNKNOWN, no paid probes or reserve inferred from tokens/API cost.
+A fallback cannot waive named gates. Use useful disjoint delegation, normally at most two auxiliary
+contexts including reviewers, no recursive swarm; one writer per file, one coordinator, one
+Docker/CI owner, one heavy validation run and at most one active Claude invocation. Takeover needs
+idle old writers/processes and verified source/resource ownership. One independent scope review
+and at most one changed-head delta use fresh non-fork contexts; provide prior findings to delta.
+Extra rounds need a named blocker and explicit finite extension within user caps. Preserve adverse
+receipts and valid unchanged evidence. Report requested, configured/reported and response-observed
+model/effort separately; unsupported identity is not visible. Source review, CI, integration and
+user acceptance are separate. Retain all project/named gates and existing permissions; a model or
+provider choice grants no remote/destructive/release/data/secret/billing action authority.
 ```
 
 Use this second block as the Metroliza project instruction:
 
 ```text
-Treat GitHub repository hexafe/metroliza and its active Issue as durable truth. Read root AGENTS.md,
-docs/project/README.md, docs/project/architecture.md, docs/project/development_workflow.md, and
-docs/release_checks/branching_strategy.md before changing a bounded branch. Start normal work from
-and target develop; never rely on the default branch. Use src/metroliza as canonical and modules
-only for compatibility. Preserve local-first behavior, SQLite atomicity, bounded processing,
-offline dashboards, deterministic Python fallbacks, Python/Rust parity and representative
-benchmark gates, packaged Windows compatibility, and confidential measurement-data hygiene. Apply
-the coordinator/worker routes and exact-head readiness policy in
-docs/engineering/codex-model-routing.md. Never claim tests, CI,
-benchmarks, packaged/manual gates, model/reasoning, merge, release, or remote actions without an
-observed result. Record durable decisions and follow-up work in Issues, PRs, or active repository
-docs.
+Treat GitHub repository hexafe/metroliza and its accepted active Issue/packet as durable truth.
+Read root AGENTS.md and relevant project, architecture, development workflow and release contracts.
+Normal work starts from and targets develop; never rely on the default branch. Canonical code is
+src/metroliza; modules is compatibility-only. Preserve local-first, SQLite atomicity, bounded
+processing, offline dashboards, deterministic Python fallback, Python/native parity and packaging,
+representative benchmarks, Windows journeys and confidential measurement-data hygiene. Apply
+shared semantic roles/modes via docs/engineering/codex-model-routing.md; no fixed model table here.
+The accepted Oct18 direction (#1061 comment 6251973769) covers current and future work: new tasks
+immediately; running/paused packets at the next safe boundary with source/owner/gate/budget
+continuity. Do not interrupt/reset/spend/reassign merely for policy change. Before #1063 merge,
+accepted Issue/packet direction governs; after merge the repository playbook is active. Named
+review/acceptance gates remain until explicitly reconciled. Keep GitHub Codex Review, independent
+exact-head review, resolved threads and all applicable actual CI/SQLite/native/Windows/release
+gates. CRITICAL/milestone integration needs applicable cross-provider evidence or a candidate user
+exception. Only authorized external orchestration merges, never the author. Release, tag/deploy,
+real data and destructive operations retain separate authority. Remote branches are WIP, not
+archives: mark merged sources DELETE_CANDIDATE; before any deletion prove the complete live-consumer
+list and clean-repository fetch of exact commit/tree from retained recovery ref, then use a PO
+approved finite exact-ref/full-SHA manifest with expected-old-value guards. Never fabricate tests,
+manual evidence, model identity, usage, merge or actions. Write durable decisions/follow-ups to
+Issues, PRs or active docs.
 ```
 
 Keep both instruction blocks short and stable. Put feature-specific detail and the exact selected
 route in the linked Issue/task packet, not in a permanently growing instruction block. Named-model
-mappings remain authoritative in the repository playbook and should be refreshed there rather than
-copied into global instructions.
+mappings remain authoritative in the versioned shared map; the repository playbook binds its
+roles and gates. Obtain the matching shared snapshot and packet rather than copying model tables.
 
 ## 3. Canonical project sources
 
@@ -81,7 +99,8 @@ Use the following small source set as the persistent context layer:
 5. `docs/project/roadmap.md`
 6. `docs/project/development_workflow.md`
 7. `docs/project/chatgpt_workspace.md`
-8. `docs/engineering/codex-model-routing.md`
+8. `docs/engineering/codex-model-routing.md` plus its accepted packet and authoritative shared
+   policy v1.1 / map v1.0 snapshot (origin/hash recorded; obtain if not locally available)
 
 ### Repository and contributor sources
 
@@ -348,9 +367,10 @@ Start the chat with:
 1. the Issue link/number;
 2. target/base branch;
 3. explicit requested outcome (audit, implementation, review, or evidence);
-4. whole-PR coordinator class/model/reasoning and any delegated-slice route;
+4. whole-change risk, provider mode/evidence, coordinator and semantic slice/review roles,
+   resolved map version/ID/effort and requested/configured/response-observed evidence;
 5. the accepted execution packet or a completed
-   [`Codex task packet`](../engineering/codex-task-packet-template.md);
+   [`development task packet`](../engineering/codex-task-packet-template.md);
 6. any local test/artifact constraint not already in the Issue.
 
 The first action should be to read the Issue and current branch state through GitHub, not to rely on
@@ -370,10 +390,12 @@ base, contradiction, or missing authority instead of silently adapting the packe
 8. **Open PR** — link Issue and use the
    [`PR routing report`](../engineering/pr-routing-report-template.md) for evidence, risk, rollback,
    and routing details.
-9. **Review/repair** — coordinator audits the exact diff/readiness; external orchestrator performs
-   the independent exact-head merge review; resolve threads and CI for the unchanged head.
+9. **Review/repair** — one independent affected-scope review, consolidate blockers, then at most
+   one changed-head delta in a fresh non-fork context supplied with prior findings. The external
+   orchestrator verifies the independent exact-head merge decision, threads and actual required CI.
+   Further review needs a named blocker and explicit finite budget extension within user caps.
 10. **Merge/close** — only the authorized external orchestrator merges after all standing gates;
-    update Issue and durable docs. Codex coordinators/workers do not merge.
+    update Issue and durable docs. Neither Codex nor Claude authors self-merge.
 11. **Archive chat** — retain only as history after the GitHub record is complete.
 
 ## 7. Context handoff template
@@ -381,7 +403,15 @@ base, contradiction, or missing authority instead of silently adapting the packe
 When moving work between chats, post a concise handoff to the Issue or PR:
 
 ```text
-Current branch/SHA:
+Owned worktree/branch/base/head/tree and dirty-patch owner:
+Issue/adoption authority, acceptance criteria and pre-merge/merged-source activation:
+Shared policy/map version, origin/hash and packet binding:
+Mode; applicable quota source/time/window/reset or UNKNOWN:
+Current coordinator/writer/resource owners; old processes idle before takeover:
+Requested/configured-reported/response-observed IDs/effort (not visible if absent):
+Named project/model/cross-provider/acceptance gates retained or explicit amendment:
+Budget spent/remaining, consumed/remaining review rounds and user caps:
+Fresh non-fork scope/delta review evidence; prior findings supplied to delta:
 Issue and acceptance criteria status:
 Whole-PR class and requested coordinator/reasoning:
 Actual runtime model/reasoning or not visible:
@@ -406,8 +436,10 @@ Do not copy a long chat transcript. Preserve the facts and decisions needed to c
 - Keep one control chat per domain; close/archive obsolete implementation chats.
 - Do not paste the same broad context into every chat. Link the Issue and canonical docs instead.
 - Do not use chat memory as evidence that a test, purchase, release, or manual smoke happened.
-- Refresh `AGENTS.md`, the routing playbook, and both templates together when the accepted
-  capability mapping or orchestration contract changes; do not patch an uploaded copy alone.
+- Refresh `AGENTS.md`, the routing playbook, and both templates together when the accepted shared
+  policy/map binding changes; preserve the authoritative map as the single ID source. Refresh
+  uploaded copies only after integration; they do not activate repository policy or change
+  ChatGPT settings. Keep accepted in-flight Issue/packet authority explicit before merge.
 
 ## 9. Privacy and security
 

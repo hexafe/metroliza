@@ -119,9 +119,10 @@ on hosted runners.
 - [ ] The RC is merged only after evidence review:
 
 ```bash
+RELEASE_BRANCH="release/YYYY.MM-rcN" # Exact approved branch from the dated release evidence.
 git checkout master
 git pull --ff-only origin master
-git merge --no-ff release/2026.06-rc2
+git merge --no-ff "$RELEASE_BRANCH"
 ```
 
 - [ ] The release tag is created from the reviewed merge commit and pushed.

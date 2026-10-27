@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Maintainer  
-Last reviewed: 2026-10-22 (dependency version policy)
+Last reviewed: 2026-10-27 (RC roles; dependency policy retained from 2026-10-22)
 
 ## 1. Core rule: Issue first
 
@@ -20,20 +20,39 @@ slices, use several pull requests and keep the Issue open until all acceptance c
 The branch decision and exact validation evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md).
 
+### Steady-state repository shape
+
+Keep the remote branch set intentionally small: `master`, `develop`, at most the currently active
+`release/*` line, and branches that are heads of genuinely active PRs. Temporary delivery
+integration/acceptance branches are explicit exceptions, not a permanent layer.
+The [2026-10-27 branch decision](../release_checks/branching_strategy.md)
+names the two retained historical RC refs and post-RC dependency branches as current finite exceptions.
+
+Branches are disposable work refs. PRs, commit/tree SHAs, CI runs, artifacts and tags preserve
+history/evidence; keeping an old branch name does not add evidence. Merge closeout marks the source
+branch `DELETE_CANDIDATE` unless a named live consumer per the
+[cleanup gate](../release_checks/branching_strategy.md#cleanup-gate) still needs that exact ref;
+record the consumer and retirement trigger. Physical deletion follows that gate: complete
+live-consumer checks and clean-repository recovery fetch of the exact commit/tree for every branch,
+including merged and squashed branches, then a PO-approved finite exact-ref/full-SHA manifest
+and expected-old-value guards.
+
 ### Normal development
 
 - `develop` is the canonical development base.
 - Create feature, fix, refactor, test, security, documentation, and chore branches from `develop`
   unless the Issue is explicitly release-specific.
 - Normal pull requests target `develop`.
-- Broad new work must not target `rc2`, `release/2026.06-rc2`, or the current production `master`.
+- Broad new work must not target `release/2026.09-rc1`, `rc2`, `release/2026.06-rc2`, or the current production `master`.
 
 ### Current release candidate
 
-- `release/2026.06-rc2` is the frozen candidate/evidence branch for
-  `2026.06 RC2 (build 260711)`.
+- `release/2026.09-rc1` is the current source candidate/evidence line under
+  [#1153](https://github.com/hexafe/metroliza/issues/1153), cut from accepted develop after the ordered integrations.
+- Final candidate build identity and packaged Windows acceptance are pending; qualify the exact artifact before RC distribution.
+- `rc2` and `release/2026.06-rc2` are retained historical evidence, with separate #901/#924 cycle closure.
 - Only release-blocking fixes, packaging/evidence work, release metadata/notes, and narrowly
-  approved security/legal changes target this branch.
+  approved security/legal changes target `release/2026.09-rc1`.
 - Every accepted release-line change is reconciled into `develop` through a reviewed PR or an
   explicitly recorded equivalent; do not allow a release-only fix to disappear from future work.
 
@@ -45,7 +64,34 @@ The branch decision and exact validation evidence are recorded in
   clean-machine Windows, Google, notices, and legal evidence receives a release-owner Go decision.
 - No force-push, history rewrite, or synthetic branch reconciliation is permitted.
 - GitHub still presents `master` as the default branch, so select the PR base explicitly:
-  `develop` for normal work or `release/2026.06-rc2` for approved release work.
+  `develop` for normal work or `release/2026.09-rc1` for approved current release work.
+
+### PR template publication
+
+[GitHub serves PR templates from the default branch](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
+Merging this policy to `develop` activates repository guidance but does not update the form
+auto-filled from `master`. The coordinator owns the following mandatory interim procedure for
+new PRs and the next safe update of an existing PR:
+
+1. Read `.github/pull_request_template.md` from an exact accepted `develop` commit. Before #1063
+   merges, use the exact candidate template admitted by the #1061 packet and identify it as such.
+2. Explicitly apply that template to the PR body (for example, edit a local body file and use
+   `gh pr create --body-file` or `gh pr edit --body-file`). Merge required fields into an existing
+   body without losing its evidence. Do not rely on the automatically selected template.
+3. Record the template source commit and verify the published body contains its lifecycle,
+   routing/authority and closeout controls, with applicable evidence or explicit pending status.
+   Check repository links in the PR-body context; absolute `blob/develop/...` links are used in
+   the template. Bind acceptance evidence separately to immutable commits, not those moving links.
+
+Default-branch synchronization is tracked in #1061 and belongs to the release owner. In the next
+approved release synchronization packet, include the exact accepted develop template among the
+documentation promoted through the reviewed release PR into `master`. If the frozen RC is used,
+first obtain the narrowly scoped documentation approval and triage required by the release rules;
+all existing #901 evidence and release-owner Go gates remain. After authorized promotion, compare
+the template blob on `master` with the accepted source and verify the auto-filled PR body. Only
+then record automatic-template activation in #1061. Until then the explicit procedure above remains
+mandatory. This policy does not authorize an early write to `master`, a default-branch change or a
+release bypass. A template-only early synchronization would require its own explicit PO packet.
 
 ## 3. Issue lifecycle
 
@@ -182,6 +228,7 @@ only when history/evidence requires it.
 - [ ] Temporary files/flags/dead plans are removed or explicitly tracked.
 - [ ] Follow-up work has separate Issues rather than hidden TODOs.
 - [ ] The primary Issue is closed by the merge or closed with a final evidence comment.
+- [ ] The merged source branch is marked `DELETE_CANDIDATE`, or a named live dependency and retirement trigger are recorded.
 
 ## 4. Priority model
 
@@ -345,7 +392,7 @@ A commit should be understandable without reading the entire diff. Avoid message
 
 ## 8. Release workflow
 
-Current RC2 flow:
+Historical June RC2 flow (preserved for separate cycle closure):
 
 1. normal development proceeds on Issue branches from `develop`;
 2. `release/2026.06-rc2` is frozen for release fixes/evidence only;
@@ -356,7 +403,7 @@ Current RC2 flow:
 7. the production result is synchronized back to `develop`;
 8. `rc2` can then be retired through an explicit cleanup decision.
 
-Future normal flow:
+Current September RC1 and future normal flow:
 
 1. develop features/refactors on Issue branches from `develop`;
 2. cut `release/YYYY.MM-rcN` when scope freezes;
