@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from fnmatch import fnmatchcase
 import importlib.util
 import inspect
 import json
 import os
 from pathlib import Path
 import sys
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
+
+# Specs put only packaging/ and src/ on sys.path; the shared flavor helper lives in scripts/.
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.append(_REPO_ROOT)
+
+from scripts.build_flavor import (  # noqa: E402
+    BENCHMARK_BUILD_FLAVOR,
+    flavor_includes_openvino,
+    resolve_build_flavor,
+)
 
 try:
     from PyInstaller.utils.hooks import (
@@ -32,6 +44,46 @@ except ModuleNotFoundError as exc:
     copy_metadata = _missing_pyinstaller_hook
 else:
     _PYINSTALLER_IMPORT_ERROR = None
+
+
+# Destination-path globs (lower-case, forward slashes) of payload that user builds do not use.
+# OpenVINO is covered by `excludes` at analysis time; the globs below are the safety net applied to
+# the collected (dest, source, ...) TOC entries. The benchmark flavor keeps the unfiltered payload.
+USER_BUILD_EXCLUDED_PAYLOAD_GLOBS = (
+    # Dev/benchmark-only OCR engine (module, native libs, plugins, frontends, dist-info).
+    "openvino/*",
+    "openvino_*",
+    "openvino-*",
+    "openvino.libs/*",
+    # OpenCV video IO (ffmpeg) and cascade data; header OCR only uses the cv2 core.
+    "*opencv_videoio_ffmpeg*.dll",
+    "cv2/data/*.xml",
+    # RapidOCR's bundled default models. Metroliza passes its vendored models explicitly and roots
+    # RapidOCR in that directory (Global.model_root_dir); the recognizer's character list is
+    # embedded in the vendored model, so nothing under rapidocr/models/ is read at runtime.
+    "rapidocr/models/*",
+    # Software OpenGL fallback; the Qt UI is widgets-only (no QtQuick/QtOpenGL/WebEngine shipped).
+    "*opengl32sw.dll",
+)
+USER_BUILD_EXCLUDED_MODULES = ("openvino", "openvino_telemetry")
+
+
+def is_user_build_excluded_payload(dest_name: str) -> bool:
+    """Return True when a collected destination path is unused user-build payload."""
+    normalized = str(dest_name).replace("\\", "/").removeprefix("./").lstrip("/").lower()
+    return any(fnmatchcase(normalized, glob) for glob in USER_BUILD_EXCLUDED_PAYLOAD_GLOBS)
+
+
+def filter_payload_toc(entries: Iterable[tuple], flavor: str | None = None) -> list[tuple]:
+    """Drop unused payload from collected (dest, source, ...) TOC tuples.
+
+    The benchmark flavor keeps every entry; the user flavor removes the entries matched by
+    ``USER_BUILD_EXCLUDED_PAYLOAD_GLOBS``.
+    """
+    resolved_flavor = resolve_build_flavor() if flavor is None else flavor
+    if resolved_flavor == BENCHMARK_BUILD_FLAVOR:
+        return list(entries)
+    return [entry for entry in entries if not is_user_build_excluded_payload(entry[0])]
 
 
 ONEDIR_OFFLINE_ONNXRUNTIME_NAMESPACES = (
@@ -202,6 +254,22 @@ def filter_onedir_hiddenimports(hiddenimports: list[str]) -> list[str]:
         or module_name == inference_prefix
         or module_name.startswith(f"{inference_prefix}.")
     ]
+
+
+ONEDIR_OCR_WORKER_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy")
+
+
+def onedir_ocr_worker_packages(flavor: str | None = None) -> frozenset[str]:
+    """Top-level packages the Qt-free OCR worker bundles for the selected build flavor.
+
+    OpenVINO is part of the worker only in the explicit benchmark flavor; user builds ship
+    ONNX Runtime only.
+    """
+    resolved_flavor = resolve_build_flavor() if flavor is None else flavor
+    packages = set(ONEDIR_OCR_WORKER_PACKAGES)
+    if flavor_includes_openvino(resolved_flavor):
+        packages.add("openvino")
+    return frozenset(packages)
 
 
 def _load_pyinstaller_binary_scanner() -> tuple[str, str, Any, Any]:
@@ -631,9 +699,17 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
         onnxruntime_binaries,
         onnxruntime_hiddenimports,
     ) = collect_required_runtime_assets("onnxruntime")
-    openvino_datas, openvino_binaries, openvino_hiddenimports = collect_required_runtime_assets(
-        "openvino"
-    )
+    include_openvino = flavor_includes_openvino(resolve_build_flavor())
+    if include_openvino:
+        openvino_datas, openvino_binaries, openvino_hiddenimports = collect_required_runtime_assets(
+            "openvino"
+        )
+        openvino_metadata = collect_optional_distribution_metadata("openvino")
+        openvino_module_names = ["openvino"]
+    else:
+        openvino_datas, openvino_binaries, openvino_hiddenimports = [], [], []
+        openvino_metadata = []
+        openvino_module_names = []
     cv2_datas, cv2_binaries, cv2_hiddenimports = collect_required_runtime_assets("cv2")
     numpy_datas, numpy_binaries, numpy_hiddenimports = collect_required_runtime_assets("numpy")
 
@@ -662,6 +738,7 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     ]
 
     return {
+        "excludes": [] if include_openvino else list(USER_BUILD_EXCLUDED_MODULES),
         "binaries": (
             collect_windows_python_runtime_binaries()
             + pymupdf_binaries
@@ -691,7 +768,7 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             + numpy_datas
             + collect_optional_distribution_metadata("rapidocr")
             + collect_optional_distribution_metadata("onnxruntime")
-            + collect_optional_distribution_metadata("openvino")
+            + openvino_metadata
             + collect_optional_distribution_metadata("opencv-python")
             + collect_optional_distribution_metadata("numpy")
             + collect_optional_distribution_metadata("hexafe-plotstats")
@@ -726,7 +803,7 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
             "fitz",
             "rapidocr",
             "onnxruntime",
-            "openvino",
+            *openvino_module_names,
             "cv2",
             "numpy",
             "metroliza",

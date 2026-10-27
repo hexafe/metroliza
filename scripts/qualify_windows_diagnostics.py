@@ -935,16 +935,19 @@ class _WindowsProcess:
         allow_ocr_worker = (
             artifact_dir / "metroliza_ocr_worker.exe" in self._expected_images
         )
+        compute_workers = getattr(evidence, "compute_workers", 0)
         try:
             order = verified_runtime_order(
                 proof, supervised=topology.launcher_processes_observed == 2,
                 allow_ocr_worker=allow_ocr_worker,
+                compute_workers=compute_workers,
             )
         except (ValueError, TypeError, KeyError):
             raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None
         # The semantic suffix accounts for real physical members, not a count
         # projection. The independent native image and journal proof must agree.
         helpers = (2 if any(event["kind"] == "platform_ver" for event in proof["events"]) else 0) + int(allow_ocr_worker)
+        helpers += compute_workers
         if (topology.unexpected_processes_observed != helpers
                 or topology.assigned_processes != len(order)
                 or topology.application_processes_observed != 1
@@ -4128,7 +4131,7 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
         count = value.get(key)
         result[key] = count if type(count) is int and 0 <= count <= 16 else "invalid"
     order = value.get("creation_order")
-    roles = {"launcher_bootloader", "launcher_supervisor", "application", "ocr_worker", "unexpected",
+    roles = {"launcher_bootloader", "launcher_supervisor", "application", "ocr_worker", "compute_worker", "unexpected",
              "windows_version_command", "windows_version_console"}
     result["creation_order"] = (
         order if type(order) is list and len(order) <= 16
@@ -4141,7 +4144,7 @@ def _topology_failure_observation(value: object) -> dict[str, object]:
 
 def _validate_topology_record(
     value: object, *, supervised: bool, require_runtime_evidence: bool = False,
-    allow_ocr_worker: bool = False,
+    allow_ocr_worker: bool = False, compute_workers: int = 0,
 ) -> None:
     expected = {
         "launcher_processes_observed",
@@ -4174,6 +4177,7 @@ def _validate_topology_record(
             expected_order = list(verified_runtime_order(
                 value["runtime_evidence"], supervised=supervised,
                 allow_ocr_worker=allow_ocr_worker,
+                compute_workers=compute_workers,
             ))
         except (ValueError, TypeError, KeyError):
             raise QualificationFailure("output_failed", qualification_reason="qualification_topology_failed") from None

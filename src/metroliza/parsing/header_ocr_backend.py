@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import importlib
+import importlib.util
 import sys
 import threading
 from pathlib import Path
@@ -38,6 +39,10 @@ RAPIDOCR_ENGINE_ALIASES = {
     "ov": "openvino",
     "tensorrt": "tensorrt",
     "trt": "tensorrt",
+}
+# Engines whose runtime package is optional and not shipped in user builds.
+RAPIDOCR_ENGINE_MODULES = {
+    "openvino": "openvino",
 }
 RAPIDOCR_ACCELERATOR_ALIASES = {
     "": "cpu",
@@ -224,6 +229,19 @@ def _normalize_rapidocr_engine(value: str | None) -> str:
         allowed = ", ".join(sorted(set(RAPIDOCR_ENGINE_ALIASES.values())))
         raise ValueError(f"Unsupported header OCR engine {value!r}; expected one of: {allowed}.")
     return engine
+
+
+def rapidocr_engine_unavailable_reason(engine: str) -> str | None:
+    """Return a stable ``header_ocr_error`` value when the engine package is not in this build."""
+
+    module_name = RAPIDOCR_ENGINE_MODULES.get(engine)
+    if module_name is None:
+        return None
+    try:
+        available = importlib.util.find_spec(module_name) is not None
+    except (ImportError, ValueError):
+        available = False
+    return None if available else f"header_ocr_engine_unavailable:{engine}"
 
 
 def _normalize_rapidocr_accelerator(value: str | None) -> str:
@@ -561,6 +579,11 @@ class RapidOcrLatinBackend:
         params = dict(DEFAULT_LATIN_PARAMS)
         params.update(
             {
+                # RapidOCR 3.8.1 requires ``Global.model_root_dir`` to exist even when every
+                # model path is explicit, and defaults it to ``rapidocr/models`` inside its own
+                # package. User builds do not ship that directory, so point it at the directory
+                # that holds the vendored models (it always exists when the models do).
+                "Global.model_root_dir": str(Path(self.config.model_paths.det_model_path).parent),
                 "Det.model_path": str(self.config.model_paths.det_model_path),
                 "Cls.model_path": str(self.config.model_paths.cls_model_path),
                 "Rec.model_path": str(self.config.model_paths.rec_model_path),

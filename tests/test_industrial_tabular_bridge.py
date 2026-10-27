@@ -354,3 +354,83 @@ def test_industrial_cache_bridge_discovers_metric_after_preview_window(tmp_path,
         assert "late_metric" in candidate_names
     finally:
         loaded.sqlite_store.cleanup()
+
+
+def test_industrial_view_literals_do_not_reinterpret_question_marks(tmp_path):
+    database = str(tmp_path / "literal-scope.sqlite")
+    repository = IndustrialDataRepository(database)
+    alias = "source?' OR 1=1 --"
+    profile = repository.upsert_source_profile(
+        profile_key="literal_scope",
+        profile_name="Synthetic source",
+        source_db_alias=alias,
+        database_type="sqlite",
+        source_object_name="measurements",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=alias,
+        rows=({"source_record_key": "selected", "reference": "REF-1"},),
+    )
+    loaded = load_industrial_cache_tabular_result(
+        database, source_db_aliases=(alias, "other?source"),
+    )
+    try:
+        assert loaded.row_count == 1
+        assert loaded.sqlite_store.read_dataframe()["source_record_key"].tolist() == ["selected"]
+    finally:
+        loaded.sqlite_store.cleanup()
+
+
+def test_scope_replacement_prunes_facets_and_rebuilds_saved_previews(tmp_path):
+    from metroliza.industrial.industrial_cache_target import (
+        IndustrialCacheTarget, disposable_cache_counts, persist_temporary_industrial_cache,
+    )
+
+    database = tmp_path / "scopes.sqlite"
+    repository = IndustrialDataRepository(str(database))
+    profiles = [repository.upsert_source_profile(
+        profile_key=f"line_{i}", profile_name=f"Line {i}", source_db_alias=f"line_{i}",
+        database_type="sqlite", source_object_name="events",
+    ) for i in range(2)]
+    for i, profile in enumerate(profiles):
+        repository.upsert_industrial_records_from_rows(
+            source_profile_id=profile.id, source_db_alias=profile.source_db_alias,
+            rows=({"source_record_key": f"row-{j}", "length_mm": str(i * 10 + j)} for j in range(3)),
+        )
+    all_sources = load_industrial_cache_tabular_result(database)
+    single = load_industrial_cache_tabular_result(database, source_profile_ids=(profiles[0].id,))
+    try:
+        with sqlite_connection_scope(str(database)) as connection:
+            for table in ("industrial_tabular_value_facets", "industrial_tabular_metadata_cache"):
+                assert connection.execute(f"SELECT DISTINCT scope_key FROM {table}").fetchall() == [
+                    (single.sqlite_store.value_facet_scope_key,),
+                ]
+        counts = disposable_cache_counts(database)
+        # Derived Summary tables are rebuilt from operator data, never counted as it.
+        assert counts["industrial_records"] == 6
+        assert "industrial_tabular_value_facets" not in counts
+        assert single.sqlite_store.preview_value_rows("length_mm", search_text="missing")[1] == 0
+        assert single.sqlite_store.preview_group_rows(("length_mm",), offset=99)[1] == 3
+        # Missing derived facets must use the current view, not report no values.
+        with sqlite_connection_scope(str(database)) as connection:
+            connection.execute("DELETE FROM industrial_tabular_value_facets")
+            connection.commit()
+        assert single.sqlite_store.preview_value_rows("length_mm")[1] == 3
+        assert single.sqlite_store.preview_group_rows(("length_mm",))[1] == 3
+        assert single.sqlite_store.preview_value_rows("length_mm", search_text="missing")[1] == 0
+        saved = persist_temporary_industrial_cache(
+            IndustrialCacheTarget("temporary", str(database), is_temporary=True), tmp_path / "saved.sqlite",
+        )
+        reopened = load_industrial_cache_tabular_result(saved.cache_db_file)
+        try:
+            assert reopened.sqlite_store.preview_value_rows("length_mm")[1] == 6
+            with sqlite_connection_scope(saved.cache_db_file) as connection:
+                assert connection.execute(
+                    "SELECT DISTINCT scope_key FROM industrial_tabular_value_facets"
+                ).fetchall() == [(reopened.sqlite_store.value_facet_scope_key,)]
+        finally:
+            reopened.sqlite_store.cleanup()
+    finally:
+        single.sqlite_store.cleanup()
+        all_sources.sqlite_store.cleanup()

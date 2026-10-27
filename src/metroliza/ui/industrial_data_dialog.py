@@ -26,6 +26,7 @@ from metroliza.industrial.industrial_cache_target import (
     cleanup_temporary_industrial_cache,
     create_temporary_industrial_cache_target,
     disposable_cache_counts,
+    temporary_cache_contents_summary as _temporary_cache_contents_summary,
     existing_metroliza_cache_target,
     persist_temporary_industrial_cache,
     resolve_industrial_cache_destination,
@@ -433,11 +434,10 @@ class IndustrialDataDialog(QDialog):
         counts = self._temporary_cache_lifecycle_counts(target)
         if not any(counts.values()):
             return True
-        persisted_rows = sum(counts.values())
         choice = QMessageBox.question(
             self,
             "Temporary industrial data",
-            f"This temporary cache contains {persisted_rows:,} persisted data row(s). "
+            f"This temporary cache contains {_temporary_cache_contents_summary(counts)}. "
             "Save it before removing the temporary files?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
@@ -524,12 +524,10 @@ class IndustrialDataDialog(QDialog):
 
     def _refresh_storage_lifecycle(self) -> None:
         if self.cache_target.is_temporary:
-            persisted_rows = sum(
-                self._temporary_cache_lifecycle_counts(self.cache_target).values()
-            )
-            if persisted_rows:
+            counts = self._temporary_cache_lifecycle_counts(self.cache_target)
+            if any(counts.values()):
                 self.storage_lifecycle_label.setText(
-                    f"Temporary storage · {persisted_rows:,} persisted data row(s) will be "
+                    f"Temporary storage · {_temporary_cache_contents_summary(counts)} will be "
                     "deleted when this window closes. Save cache as… to keep them."
                 )
                 set_status_variant(self.storage_lifecycle_label, "danger")

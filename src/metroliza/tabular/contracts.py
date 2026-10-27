@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from metroliza.analytics.row_table import RowTable
+
 
 @dataclass(frozen=True)
 class GroupingAssignment:
@@ -64,6 +66,8 @@ def validate_grouping_assignments(value: object | None) -> GroupingAssignments |
 
 
 def _grouping_records(value: object) -> tuple[Mapping[str, Any], ...]:
+    if isinstance(value, RowTable):
+        return _mapping_tuple(value.iter_rows(as_dict=True))
     if isinstance(value, GroupingAssignment):
         return (_assignment_record(value),)
     if isinstance(value, Mapping):

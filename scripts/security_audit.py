@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENT_FILES = (
     "requirements.txt",
     "requirements-ocr.txt",
+    "requirements-ocr-benchmark.txt",
     "requirements-build.txt",
     "requirements-dev.txt",
     "requirements-windows-candidate-host.txt",

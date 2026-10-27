@@ -22,7 +22,7 @@ FAILURE_EXIT = 97
 CALLERS = frozenset({"setuptools", "numpy", "matplotlib", "platformdirs", "metroliza", "other"})
 PLATFORM_CALLERS = CALLERS - {"metroliza", "other"}
 KINDS = frozenset({
-    "platform_ver", "ocr_worker_launch", "other", "other_arguments", "other_executable",
+    "platform_ver", "ocr_worker_launch", "compute_worker_launch", "other", "other_arguments", "other_executable",
     "other_command", "other_frames", "other_depth",
 })
 
@@ -106,6 +106,55 @@ def _classify_platform_call(arguments, frame, expected_cmd: str) -> tuple[str, s
     return ("platform_ver" if required == {"_syscmd_ver", "win32_ver"} else "other_frames"), caller
 
 
+def classify_compute_call(arguments, frame, expected_worker: str | None) -> tuple[str, str]:
+    """Windows multiprocessing uses CreateProcess directly, not subprocess.Popen."""
+    import ntpath
+    import re
+    if expected_worker is None or len(arguments) != 3:
+        return "other_arguments", "other"
+    executable, command, cwd = arguments
+    # CPython 3.11 get_command_line uses the parent's sys.executable when
+    # frozen, even though Popen uses spawn.get_executable as application_name.
+    # Verify the actual compute image separately from this application argv[0].
+    application = ntpath.join(ntpath.dirname(expected_worker), "metroliza_application.exe")
+    prefix = f'"{application}" "--multiprocessing-fork" '
+    if (executable != expected_worker or type(command) is not str
+            or cwd is not None
+            or not command.startswith(prefix)
+            or re.fullmatch(r'"parent_pid=[1-9][0-9]{0,9}" "pipe_handle=[0-9]{1,20}"', command[len(prefix):]) is None):
+        return "other_command", "other"
+    if _is_spawn_caller(frame):
+        return "compute_worker_launch", "metroliza"
+    return "other_frames", "other"
+
+
+def _is_spawn_caller(frame):
+    try:
+        from multiprocessing.popen_spawn_win32 import Popen
+    except ImportError:
+        return False
+    return (frame is not None and frame.f_code is Popen.__init__.__code__
+            and frame.f_globals is Popen.__init__.__globals__)
+
+
+def _forward_create_process(native, *arguments):
+    # Only the opt-in audit installs this adapter. The tuple in this frame is
+    # exactly what the native function receives, including its command line.
+    return native(*arguments)
+
+
+def _is_create_process_adapter(frame):
+    return (frame is not None and frame.f_code is _forward_create_process.__code__
+            and frame.f_globals is globals())
+
+
+def _adapt_create_process():
+    import _winapi
+    from functools import partial
+
+    _winapi.CreateProcess = partial(_forward_create_process, _winapi.CreateProcess)
+
+
 def install() -> None:
     # Ordinary product execution performs only this fixed opt-in check.
     if os.environ.get(GATE) != "1":
@@ -118,8 +167,43 @@ def install() -> None:
         os._exit(FAILURE_EXIT)
 
 
+def _observed_call(event, arguments, frame, expected_cmd, expected_worker, expected_compute):
+    if event == "_winapi.CreateProcess":
+        return _classify_native_compute_call(arguments, frame, expected_compute)
+    return classify_call(arguments, frame, expected_cmd, expected_worker)
+
+
+def _classify_native_compute_call(arguments, frame, expected_compute):
+    # CPython 3.11 _winapi.c audits command_line (a PyObject*) with "uuu",
+    # treating it as wchar_t*, so the event's command string is unusable.
+    # Recover only the exact forwarded argument tuple at our native boundary,
+    # with CPython's actual Popen constructor as its immediate caller. Never
+    # recover unrelated cmd locals or trust module/function names.
+    if (len(arguments) != 3 or not _is_create_process_adapter(frame)
+            or not _is_spawn_caller(frame.f_back)):
+        return "other_frames", "other"
+    forwarded = frame.f_locals.get("arguments")
+    if (type(forwarded) is not tuple or len(forwarded) != 9
+            or forwarded[0] != arguments[0] or forwarded[7] != arguments[2]):
+        return "other_arguments", "other"
+    return classify_compute_call((forwarded[0], forwarded[1], forwarded[7]), frame.f_back, expected_compute)
+
+
+def _already_observed(event, frame):
+    # subprocess.Popen is journalled before its internal native CreateProcess.
+    if _is_create_process_adapter(frame):
+        frame = frame.f_back
+    return (event == "_winapi.CreateProcess" and frame.f_globals.get("__name__") == "subprocess"
+            and frame.f_code.co_name == "_execute_child")
+
+
+def _expected_compute(application):
+    if application.name.lower() == "metroliza_application.exe":
+        return str(application.with_name("metroliza_compute_worker.exe"))
+    return None
+
+
 def _install() -> None:
-    import _thread
     import ctypes
 
     root = Path(os.environ[ROOT])
@@ -142,16 +226,33 @@ def _install() -> None:
         str(application.with_name("metroliza_ocr_worker.exe"))
         if application.name.lower() == "metroliza_application.exe" else None
     )
+    expected_compute = _expected_compute(application)
+    observe, installed_seen = _make_observer(root, nonce, expected_cmd, expected_worker, expected_compute)
+    _adapt_create_process()
+    sys.addaudithook(observe)
+    # CPython can silently decline registration if an earlier hook rejects it.
+    sys.audit("metroliza.qualifier.audit_installed", nonce)
+    if not installed_seen:
+        raise ValueError("runtime_audit_invalid")
+    _write(root, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+
+
+def _make_observer(root, nonce, expected_cmd, expected_worker, expected_compute):
+    import _thread
+
     lock = _thread.allocate_lock()
     count = 0
-    installed_seen = False
+    installed_seen = []
 
     def observe(event, arguments):
-        nonlocal count, installed_seen
+        nonlocal count
         if event == "metroliza.qualifier.audit_installed" and arguments == (nonce,):
-            installed_seen = True
+            installed_seen.append(True)
             return
-        if event != "subprocess.Popen":
+        if event not in {"subprocess.Popen", "_winapi.CreateProcess"}:
+            return
+        frame = sys._getframe(1)
+        if _already_observed(event, frame):
             return
         acquired = False
         try:
@@ -159,7 +260,7 @@ def _install() -> None:
             if not acquired or count >= MAX_EVENTS:
                 raise ValueError("runtime_audit_invalid")
             count += 1
-            kind, caller = classify_call(arguments, sys._getframe(1), expected_cmd, expected_worker)
+            kind, caller = _observed_call(event, arguments, frame, expected_cmd, expected_worker, expected_compute)
             phase = "after_ready" if (root / "ready").exists() else "startup"
             _write(
                 root,
@@ -179,12 +280,7 @@ def _install() -> None:
             if acquired:
                 lock.release()
 
-    sys.addaudithook(observe)
-    # CPython can silently decline registration if an earlier hook rejects it.
-    sys.audit("metroliza.qualifier.audit_installed", nonce)
-    if not installed_seen:
-        raise ValueError("runtime_audit_invalid")
-    _write(root, "installed.json", {"schema_version": 1, "nonce": nonce, "installed": True})
+    return observe, installed_seen
 
 
 def wait_for_host_ready(*, seconds: float = 5.0) -> None:

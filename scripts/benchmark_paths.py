@@ -459,49 +459,49 @@ def _run_excel_export_with_close_timing(thread: Any) -> tuple[bool, dict[str, fl
 def _run_with_pandas_excel_writer_close_timing(
     operation: Callable[[], Any],
 ) -> tuple[Any, dict[str, float]]:
-    original_excel_writer = pd.ExcelWriter
-    original_to_excel = pd.DataFrame.to_excel
-    timings = {
-        'workbook_sheet_writes': 0.0,
-        'workbook_close': 0.0,
-    }
+    from pandas.io.excel._xlsxwriter import XlsxWriter
+    from metroliza.tabular import tabular_xlsx_writer
+
+    timings = {'workbook_sheet_writes': 0.0, 'workbook_close': 0.0}
     sheet_write_count = 0
+    depth = 0
 
-    class TimingExcelWriter:
-        def __init__(self, *args, **kwargs):
-            self._inner = original_excel_writer(*args, **kwargs)
+    def instrument(owner, name, stage):
+        original = getattr(owner, name)
 
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-        def __enter__(self):
-            return self._inner.__enter__()
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            close_start = time.perf_counter()
+        def timed(*args, **kwargs):
+            nonlocal sheet_write_count, depth
+            if depth:
+                return original(*args, **kwargs)
+            started = time.perf_counter()
+            depth += 1
             try:
-                return self._inner.__exit__(exc_type, exc_value, traceback)
+                return original(*args, **kwargs)
             finally:
-                timings['workbook_close'] += time.perf_counter() - close_start
+                depth -= 1
+                timings[stage] += time.perf_counter() - started
+                if stage == 'workbook_sheet_writes':
+                    sheet_write_count += 1
 
-    def timed_to_excel(self, *args, **kwargs):
-        nonlocal sheet_write_count
-        write_start = time.perf_counter()
-        try:
-            return original_to_excel(self, *args, **kwargs)
-        finally:
-            timings['workbook_sheet_writes'] += time.perf_counter() - write_start
-            sheet_write_count += 1
+        setattr(owner, name, timed)
+        return owner, name, original
 
-    pd.ExcelWriter = TimingExcelWriter
-    pd.DataFrame.to_excel = timed_to_excel
+    originals = [
+        instrument(pd.DataFrame, 'to_excel', 'workbook_sheet_writes'),
+        instrument(tabular_xlsx_writer, 'write_tabular_dataframe', 'workbook_sheet_writes'),
+        instrument(XlsxWriter, '_save', 'workbook_close'),
+    ]
     try:
         result = operation()
     finally:
-        pd.ExcelWriter = original_excel_writer
-        pd.DataFrame.to_excel = original_to_excel
+        for owner, name, original in originals:
+            setattr(owner, name, original)
     timings['workbook_sheet_write_count'] = float(sheet_write_count)
     return result, dict(timings)
+
+
+
+
 
 
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:

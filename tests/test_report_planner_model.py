@@ -393,3 +393,48 @@ def test_bulk_selection_repaints_actual_changed_range_and_keeps_cached_counts():
     model.select_all_ready()
     assert len(changes) == 2
     assert selections == [0, 3]
+
+
+def test_metadata_rows_follow_selectable_reports_and_carry_only_unchanged_identities():
+    from dataclasses import replace
+
+    from PyQt6.QtCore import Qt
+    from metroliza.parsing.preflight import ParsePreflightStatus
+    from metroliza.ui.report_planner_model import ReportPlannerModel
+    from tests.metadata_review_fakes import make_selection, review_result
+
+    model = ReportPlannerModel()
+    first = review_result(("a.pdf", "b.pdf", "c.pdf"), other=(("d.pdf", ParsePreflightStatus.DUPLICATE),))
+    model.set_review(first)
+    assert set(model.metadata_rows) == {"a.pdf", "b.pdf", "c.pdf"}  # READY reports only
+    assert all(row.state == "pending" for row in model.metadata_rows.values())
+    assert model.counts["attention"] == 1  # the duplicate; pending metadata is never "missing"
+    assert model.metadata_counts == {"missing_reference": 0, "pending": 3}
+
+    for name in ("a.pdf", "b.pdf", "c.pdf"):
+        row = model.metadata_row(name)
+        row.apply_fast(make_selection({"part_name": "P", "sample_number": "1", "report_date": "2024-01-01"}))
+        model._row_changed(name)
+    assert model.metadata_counts["missing_reference"] == 3
+    assert model.counts["attention"] == 4
+    assert model.setData(model.index(0, model.column_for_field("reference")), "R1")
+    assert model.metadata_counts["missing_reference"] == 2
+    assert model.data(model.index(0, model.column_for_field("reference")), model.STYLE_ROLE) == "manual"
+    assert model.data(model.index(0, model.column_for_field("reference")), Qt.ItemDataRole.EditRole) == "R1"
+
+    carried = model.metadata_rows
+    carried["b.pdf"].mark_failed("x", state="failed")
+    changed = tuple(
+        replace(item, fingerprint="sha256:" + "e" * 64) if item.display_name == "c.pdf"
+        else replace(item, parser_id="other.parser") if item.display_name == "d.pdf" else item
+        for item in first.files
+    )
+    model.set_review(replace(first, files=changed), carry=carried)
+    assert model.metadata_row("a.pdf") is carried["a.pdf"]  # same identity: edit kept
+    assert model.metadata_row("a.pdf").value("reference") == "R1"
+    assert model.metadata_row("b.pdf") is carried["b.pdf"] and model.metadata_row("b.pdf").state == "pending"
+    assert model.metadata_row("c.pdf") is not carried["c.pdf"]  # content changed: fresh row
+    assert model.metadata_row("c.pdf").state == "pending"
+
+    model.invalidate()
+    assert model.metadata_rows == {} and model.counts["attention"] == 0

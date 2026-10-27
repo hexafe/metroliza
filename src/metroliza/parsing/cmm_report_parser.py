@@ -26,6 +26,7 @@ from metroliza.parsing.header_ocr_backend import (
     default_rapidocr_latin_model_paths,
     get_cached_rapidocr_latin_backend,
     missing_rapidocr_latin_model_paths,
+    rapidocr_engine_unavailable_reason,
     rapidocr_latin_runtime_config_from_env,
 )
 from metroliza.reports.header_ocr_corrections import (
@@ -37,6 +38,7 @@ from metroliza.parsing.header_ocr_geometry import convert_ocr_records_to_header_
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_extractor import extract_report_metadata
 from metroliza.reports.report_metadata_models import MetadataExtractionContext
+from metroliza.reports.report_metadata_review import apply_metadata_override
 from metroliza.reports.report_metadata_normalizers import (
     normalize_reference,
     normalize_report_date,
@@ -57,7 +59,10 @@ from metroliza.parsing.parser_plugin_contracts import (
     ProbeResult,
     ReportInfoV2,
 )
-from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.source_inspection import (
+    SourceChangedAfterInspectionError,
+    SourceInspectionContext,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -131,6 +136,10 @@ class EmptyCMMReportError(RuntimeError):
 
 class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     """Class to parse and convert PDF CMM report."""
+
+    # Parsers that expose ``metadata_review_override`` honor values confirmed in
+    # the pre-import metadata review step; others are shown read-only there.
+    supports_metadata_review_override = True
 
     manifest = PluginManifest(
         plugin_id="cmm",
@@ -348,6 +357,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self.stage_timings_s: dict[str, float] = {}
         self._prepared_measurement_rows = None
         self._metadata_selection_result = None
+        self.metadata_review_override = None
         self._metadata_identity_hash = None
         self._page_count = None
         self._first_page_width = None
@@ -623,6 +633,9 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             runtime_config = rapidocr_latin_runtime_config_from_env(
                 ocr_thread_count=ocr_thread_count
             )
+            engine_unavailable = rapidocr_engine_unavailable_reason(runtime_config.engine)
+            if engine_unavailable:
+                return [], engine_unavailable
             backend = get_cached_rapidocr_latin_backend(
                 RapidOcrLatinBackendConfig(
                     model_paths=model_paths,
@@ -732,14 +745,17 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             diagnostics["header_ocr_error"] = ocr_error
         return word_items, diagnostics
 
-    def _cached_embedded_text_for_open_report(self) -> str | None:
+    def _cached_embedded_lines_for_open_report(self) -> list[str] | None:
         source_inspection = getattr(self, "source_inspection_context", None)
         if source_inspection is None:
             return None
         try:
-            return source_inspection.get_cached_pdf_text(
+            page_texts = source_inspection.get_cached_pdf_page_texts(
                 max_chars=CMM_PROBE_MAX_EXTRACTED_CHARS,
             )
+            if page_texts is not None:
+                return [line for text in page_texts for line in text.splitlines()]
+            return None
         except Exception:
             return None
 
@@ -762,11 +778,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             """
             pdf_backend = self._require_pdf_backend()
             pdf_path = Path(self.file_path) / self.file_name
-            cached_embedded_text = self._cached_embedded_text_for_open_report()
+            cached_embedded_lines = self._cached_embedded_lines_for_open_report()
 
             with pdf_backend.open(str(pdf_path)) as pdf_report:
                 self._page_count = self._resolve_page_count(pdf_report)
-                if cached_embedded_text is not None:
+                if cached_embedded_lines is not None:
                     if self._page_count:
                         first_page = pdf_report[0]
                         self._first_page_width, self._first_page_height = self._page_size(
@@ -780,7 +796,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                             pdf_backend,
                             metadata_parsing_mode=self.metadata_parsing_mode,
                         )
-                    self.raw_text.extend(cached_embedded_text.splitlines())
+                    self.raw_text.extend(cached_embedded_lines)
                     return
 
                 page_counter = 0
@@ -1039,6 +1055,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         )
         self._metadata_selection_result = self._apply_legacy_metadata_fallbacks(self._metadata_selection_result)
         self._metadata_selection_result = self._apply_header_extraction_diagnostics(self._metadata_selection_result)
+        if self.metadata_review_override is not None:
+            # Values confirmed in the pre-import metadata review (#1100).
+            self._metadata_selection_result = apply_metadata_override(
+                self._metadata_selection_result,
+                self.metadata_review_override,
+            )
         self.canonical_metadata = self._metadata_selection_result.metadata
         self._metadata_identity_hash = build_report_identity_hash(self.canonical_metadata)
         return self._metadata_selection_result
@@ -1307,6 +1329,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             self.stage_timings_s["db_write_runtime"] = perf_counter() - db_write_start
             logger.info("Report '%s' measurements inserted into the database.", self.file_name)
             return outcome
+        except SourceChangedAfterInspectionError as e:
+            # Atomic import reports expected drift through its owning workflow.
+            # Preserve the legacy replacement API's error-reporting contract.
+            if not import_if_absent:
+                self.log_and_exit(e)
+            raise
         except Exception as e:
             self.log_and_exit(e)
             raise
@@ -1336,6 +1364,38 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self._prepared_measurement_rows = self.parse_measurements()
         self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
         self.stage_timings_s["prepare_pipeline_runtime"] = perf_counter() - prepare_start
+
+    _PREPARED_STATE_ATTRIBUTES = (
+        "_blocks_text",
+        "_prepared_measurement_rows",
+        "_metadata_selection_result",
+        "_canonical_metadata",
+        "_metadata_identity_hash",
+        "_page_count",
+        "_first_page_width",
+        "_first_page_height",
+        "_first_page_header_items",
+        "_header_extraction_diagnostics",
+        "parse_backend_used",
+        "stage_timings_s",
+    )
+
+    def export_prepared_state(self) -> dict[str, object]:
+        """Return the picklable result of ``prepare_for_two_stage_pipeline()``.
+
+        It carries exactly what ``to_sqlite()`` consumes, so a worker process can run the
+        CPU-bound preparation and the owning process can persist it unchanged.
+        """
+
+        return {name: getattr(self, name) for name in self._PREPARED_STATE_ATTRIBUTES}
+
+    def apply_prepared_state(self, state: dict[str, object]) -> None:
+        """Adopt ``export_prepared_state()`` output instead of preparing in this process."""
+
+        if set(state) != set(self._PREPARED_STATE_ATTRIBUTES):
+            raise ValueError("Prepared CMM report state does not match the parser contract")
+        for name in self._PREPARED_STATE_ATTRIBUTES:
+            setattr(self, name, state[name])
 
     def persist_prepared_report(self):
         """Persist report data prepared during stage 1 of the two-stage pipeline.

@@ -695,6 +695,85 @@ def test_runtime_cleanup_refuses_replaced_root_or_unknown_content(tmp_path, defe
     assert evidence.root.is_dir() and protected.read_bytes() == b"synthetic preserved"
 
 
+def _observe_held_other_command(api, process, root):
+    """Query helper identities only inside the fixture's held interval."""
+    if (root / "control-helper-finish").exists():
+        return
+    if not (root / "control-helper-ready").exists():
+        return
+    if api._job_accounting(process._job)[0] != 3:
+        return
+    process.observe()
+    assert len(process._observations) == 3
+    (root / "control-helper-finish").touch()
+
+
+def test_other_command_observation_is_confined_to_held_interval(tmp_path):
+    observed = []
+    process = SimpleNamespace(
+        _job=object(), _observations={1: None, 2: None, 3: None},
+        observe=lambda: observed.append("identities"),
+    )
+    active = [1]
+    api = SimpleNamespace(_job_accounting=lambda _job: (active[0], 3))
+    _observe_held_other_command(api, process, tmp_path)
+    (tmp_path / "control-helper-ready").touch()
+    _observe_held_other_command(api, process, tmp_path)
+    assert observed == []
+    active[0] = 3
+    _observe_held_other_command(api, process, tmp_path)
+    assert observed == ["identities"]
+    assert (tmp_path / "control-helper-finish").exists()
+    _observe_held_other_command(api, process, tmp_path)
+    assert observed == ["identities"]
+
+
+@pytest.mark.parametrize("host_releases", [False, True])
+def test_other_command_fixture_holds_until_identity_ack_and_closes_stdin(
+    tmp_path, monkeypatch, host_releases
+):
+    spec = importlib.util.spec_from_file_location(
+        "runtime_audit_control", ROOT / "tests/fixtures/windows_runtime_audit_control.py",
+    )
+    control = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(control)
+    monkeypatch.chdir(tmp_path)
+    sequence = []
+
+    class Process:
+        stdout = SimpleNamespace(readline=lambda: b"synthetic\r\n")
+
+        def __enter__(self):
+            return self
+
+        def communicate(self, value):
+            assert value == b"\n"
+            sequence.append("stdin_closed")
+
+        def __exit__(self, *_args):
+            sequence.append("process_closed")
+
+    def launch(command, **kwargs):
+        assert command == "echo synthetic&set /p synthetic="
+        assert kwargs == {"shell": True, "stdin": subprocess.PIPE, "stdout": subprocess.PIPE}
+        return Process()
+
+    def acknowledge(name):
+        assert name == "control-helper-finish"
+        assert (tmp_path / "control-helper-ready").is_file()
+        sequence.append("host_observation")
+        return host_releases
+
+    monkeypatch.setattr(control.subprocess, "Popen", launch)
+    monkeypatch.setattr(control, "_wait_for_marker", acknowledge)
+    if host_releases:
+        control._held_other_command()
+    else:
+        with pytest.raises(RuntimeError, match="synthetic helper observation watchdog"):
+            control._held_other_command()
+    assert sequence == ["host_observation", "stdin_closed", "process_closed"]
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows owned process and audit control")
 @pytest.mark.parametrize(
     "mode", ["none", "ver", "deep_ver", "late_numpy", "late_ver", "late_other", "hard", "other", "write_failure", "blocked_install", "outer", "concurrent"]
@@ -816,6 +895,8 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                     if process.poll() is not None and api._job_accounting(process._job)[0] == 0:
                         # Hard-exit controls need no finish marker.
                         single_released = True
+                    elif mode in {"other", "late_other"}:
+                        _observe_held_other_command(api, process, tmp_path / "0")
                     else:
                         # Identity-bearing observation belongs to the held
                         # phase; an exit-phase image query races with teardown.
@@ -853,6 +934,17 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             else:
                 proof = evidence.proof()
                 proofs.append(proof)
+                if mode in {"other", "late_other"}:
+                    assert proof["events"] == [{
+                        "kind": "other_command", "caller": "other",
+                        "phase": "after_ready" if mode == "late_other" else "startup",
+                    }]
+                    assert proof["owned"]["unobserved"] == 0
+                    assert proof["owned"]["observation_unavailable"] is False
+                    assert proof["owned"]["job_empty"] is True
+                    assert [member["role"] for member in proof["owned"]["members"]] == [
+                        "package_application", "system_cmd", "system_conhost",
+                    ]
                 if mode in {"other", "late_ver", "late_other"}:
                     with pytest.raises(ValueError):
                         verified_runtime_order(proof, supervised=False)
@@ -1012,3 +1104,177 @@ def test_runtime_ready_missing_environment_is_closed(tmp_path, monkeypatch, miss
     monkeypatch.delenv(missing, raising=False)
     with pytest.raises(ValueError, match="^runtime_audit_invalid$"):
         audit.wait_for_host_ready()
+
+
+def test_compute_roles_require_exact_attempt_count_native_identity_and_job_drain():
+    from copy import deepcopy
+
+    proof = _proof(supervised=True, helpers=False)
+    members = proof['owned']['members']
+    for _ in range(4):
+        members.append({'role': 'package_compute_worker', 'identity': 'fixed_file_verified',
+                        'first_phase': 'running', 'last_phase': 'running',
+                        'parent_ordinal_advisory': 2, 'lifecycle': 'job_empty'})
+    proof['owned']['assigned'] = len(members)
+    proof['events'] += [{'kind': 'compute_worker_launch', 'caller': 'metroliza', 'phase': 'after_ready'}] * 4
+    assert verified_runtime_order(proof, supervised=True, compute_workers=4)[-4:] == ('compute_worker',) * 4
+    with pytest.raises(ValueError):
+        verified_runtime_order(proof, supervised=True)
+    for alter in ('unknown_image', 'unowned', 'startup', 'missing_event', 'not_drained'):
+        broken = deepcopy(proof)
+        member = broken['owned']['members'][-1]
+        if alter == 'unknown_image':
+            member['identity'] = 'unknown'
+        elif alter == 'unowned':
+            member['parent_ordinal_advisory'] = 1
+        elif alter == 'startup':
+            member['first_phase'] = 'startup'
+        elif alter == 'missing_event':
+            broken['events'].pop()
+        else:
+            broken['owned']['job_empty'] = False
+        with pytest.raises(ValueError):
+            verified_runtime_order(broken, supervised=True, compute_workers=4)
+
+
+def _windows_spawn_module(monkeypatch):
+    """Load this interpreter's real Windows Popen with crash-safe OS stubs."""
+    import io
+    import multiprocessing
+    import types
+
+    winapi = types.ModuleType('_winapi')
+    winapi.CreatePipe = lambda *_args: (456, 789)
+    winapi.CloseHandle = lambda *_args: None
+    monkeypatch.setitem(sys.modules, '_winapi', winapi)
+    monkeypatch.setitem(sys.modules, 'msvcrt', SimpleNamespace(open_osfhandle=lambda *_args: 0))
+    monkeypatch.setattr(subprocess, 'STARTUPINFO', lambda **_kwargs: None, raising=False)
+    monkeypatch.setattr(subprocess, 'STARTF_FORCEOFFFEEDBACK', 0, raising=False)
+    name = 'multiprocessing.popen_spawn_win32'
+    spec = importlib.util.spec_from_file_location(
+        name, Path(multiprocessing.__file__).with_name('popen_spawn_win32.py'))
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, 'open', lambda *_args, **_kwargs: io.BytesIO(), raising=False)
+    monkeypatch.setattr(module, 'WINENV', False)
+    monkeypatch.setattr(module.spawn, 'get_preparation_data', lambda *_args: {})
+    return module
+
+
+def _run_windows_spawn(monkeypatch, native, command=None):
+    module = _windows_spawn_module(monkeypatch)
+    worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
+    application = r'C:\Program Files\Metroliza\metroliza_application.exe'
+    monkeypatch.setattr(module.spawn, 'get_executable', lambda: worker)
+    monkeypatch.setattr(module.spawn, 'get_command_line', lambda **_kwargs: command or [
+        application, '--multiprocessing-fork', 'parent_pid=123', 'pipe_handle=456'])
+    module._winapi.CreateProcess = native
+    audit._adapt_create_process()
+    with pytest.raises(RuntimeError, match='^stop_before_launch$'):
+        module.Popen(SimpleNamespace(_name='synthetic'))
+    return module
+
+
+def test_native_spawn_observer_journals_compute_and_avoids_popen_double_count(monkeypatch, tmp_path):
+    worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
+    (tmp_path / 'ready').touch()
+    observe, installed = audit._make_observer(tmp_path, 'a' * 32, 'cmd.exe', None, worker)
+    observe('metroliza.qualifier.audit_installed', ('a' * 32,))
+    assert installed
+    forwarded = []
+
+    def native(*args):
+        forwarded.append(args)
+        with monkeypatch.context() as patch:
+            frame = sys._getframe(1)
+            patch.setattr(sys, '_getframe', lambda depth: frame)
+            observe('_winapi.CreateProcess', (args[0], 'corrupted C audit command', args[7]))
+        raise RuntimeError('stop_before_launch')
+
+    module = _run_windows_spawn(monkeypatch, native)
+    assert len(forwarded) == 1 and len(forwarded[0]) == 9
+    assert forwarded[0][1].endswith('"parent_pid=123" "pipe_handle=456"')
+    event = json.loads((tmp_path / 'event-01.json').read_text())
+    assert event['kind'] == 'compute_worker_launch' and event['phase'] == 'after_ready'
+    with monkeypatch.context() as patch:
+        frame = SimpleNamespace(f_code=audit._forward_create_process.__code__,
+                                f_globals=vars(audit), f_back=_frame('subprocess', '_execute_child'))
+        patch.setattr(sys, '_getframe', lambda depth: frame)
+        observe('_winapi.CreateProcess', ('cmd.exe', 'already journalled', None))
+    assert not (tmp_path / 'event-02.json').exists()
+    assert module.Popen.__init__.__code__.co_filename.endswith('popen_spawn_win32.py')
+
+
+@pytest.mark.parametrize('change', ['command', 'image', 'cwd', 'outer', 'caller', 'globals', 'helper'])
+def test_native_compute_observation_cannot_bypass_exact_spawn_checks(monkeypatch, change):
+    worker = r'C:\Program Files\Metroliza\metroliza_compute_worker.exe'
+    results = []
+
+    def native(*args):
+        frame = sys._getframe(1)
+        arguments = (args[0], 'corrupted C audit command', args[7])
+        if change == 'image':
+            arguments = ('other.exe', arguments[1], None)
+        elif change == 'cwd':
+            arguments = (worker, arguments[1], 'other')
+        elif change in {'outer', 'caller', 'globals'}:
+            parent = frame.f_back
+            caller = SimpleNamespace(f_code=parent.f_code, f_globals=parent.f_globals)
+            if change == 'caller':
+                caller.f_code = (lambda: None).__code__
+            elif change == 'globals':
+                caller.f_globals = dict(parent.f_globals)
+            else:
+                caller = _frame('unrelated', 'call', parent)
+            frame = SimpleNamespace(f_code=frame.f_code, f_globals=frame.f_globals,
+                                    f_locals=frame.f_locals, f_back=caller)
+        results.append(audit._observed_call('_winapi.CreateProcess', arguments, frame, 'cmd.exe', None, worker))
+        raise RuntimeError('stop_before_launch')
+
+    command = None
+    if change == 'command':
+        command = ['unrelated command']
+    elif change == 'helper':
+        command = [worker, '-c', 'print(123)']
+    _run_windows_spawn(monkeypatch, native, command)
+    assert results and results[0][0] != 'compute_worker_launch'
+
+
+@pytest.mark.parametrize('actual', ['spawn', 'different', 'helper'])
+def test_compute_native_recovery_rejects_spoofed_caller_and_unrelated_command(actual):
+    # Names and a plausible local cmd cannot authenticate the C call's argument.
+    namespace = {'__name__': 'multiprocessing.popen_spawn_win32', 'audit': audit, 'sys': sys}
+    exec('''
+def __init__(worker, application, actual):
+    python_exe = worker
+    cmd = f'"{application}" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
+    command = {'spawn': cmd, 'different': 'unrelated command',
+               'helper': f'"{worker}" -c "print(123)"'}[actual]
+    return audit._observed_call('_winapi.CreateProcess', (python_exe, command, None),
+                                sys._getframe(), 'cmd.exe', None, worker)
+''', namespace)
+    assert namespace['__init__'](
+        r'C:\Metroliza\metroliza_compute_worker.exe', r'C:\Metroliza\metroliza_application.exe', actual,
+    )[0] != 'compute_worker_launch'
+
+
+def test_adapter_rejects_matching_names_with_different_code(monkeypatch):
+    module = _windows_spawn_module(monkeypatch)
+    worker = r'C:\Metroliza\metroliza_compute_worker.exe'
+    command = r'"C:\Metroliza\metroliza_application.exe" "--multiprocessing-fork" "parent_pid=123" "pipe_handle=456"'
+    results = []
+
+    def native(*args):
+        results.append(audit._observed_call(
+            '_winapi.CreateProcess', (args[0], 'corrupted', args[7]), sys._getframe(1),
+            'cmd.exe', None, worker))
+
+    module._winapi.CreateProcess = native
+    audit._adapt_create_process()
+    # Even globals identical to the genuine module cannot replace code identity.
+    exec('def __init__(worker, cmd):\n'
+         '    return _winapi.CreateProcess(worker, cmd, None, None, False, 0, None, None, None)\n',
+         module.__dict__)
+    module.__init__(worker, command)
+    assert results == [('other_frames', 'other')]

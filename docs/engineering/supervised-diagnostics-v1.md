@@ -35,6 +35,58 @@ serialized `finally` path, so the adjacent application bootloader initializes it
 Only approved canonical event bytes enter the queue and recorder. Raw stdout and stderr go to
 the OS null sink, including no-console execution. No global Qt exception hook is installed.
 
+## Package identity reasons, notices and self-repair
+
+[Issue #1111](https://github.com/hexafe/metroliza/issues/1111) makes the package check precise.
+`inspect_package` still verifies the manifest schema, the SHA-256 of the five fixed components
+(`COMPONENTS`), the size bound, the unchanged-during-read check and the equality of the manifest
+build SHA with `build_provenance.json`. It no longer collapses the outcomes: `PackageIdentity`
+carries a specific `reason` and, when it concerns one fixed file, `component` (a manifest-listed
+name or `supervision_manifest.json`; never a path).
+
+| `reason` | Meaning | Notice names |
+| --- | --- | --- |
+| `verified` | Everything matches | - |
+| `manifest_missing` | `supervision_manifest.json` (or the package root) is absent | the manifest |
+| `manifest_invalid` | Manifest unusable: not a plain single-link file, over 4096 bytes, not JSON, wrong schema, duplicate key or malformed digest | the manifest |
+| `component_missing` | A fixed component or its parent directory is absent (antivirus quarantine, interrupted copy) | the file |
+| `component_modified` | Content hash differs from the manifest, or the file exceeds the size bound | the file |
+| `component_unsafe` | Rejected by the path policy below: not a regular file, symbolic or hard link, reparse point on the file or on a directory up to the package root | the file |
+| `component_unreadable` | The file exists but cannot be read, or changed while it was read | the file |
+| `provenance_mismatch` | Manifest build SHA differs from `build_provenance.json` (files from two versions) | none |
+| `package_unavailable` | Only an unexpected failure that no reason above describes | none |
+
+The path policy is deliberately unchanged: components must be regular files with `st_nlink == 1`
+and without `FILE_ATTRIBUTE_REPARSE_POINT`, and so must every directory from the component up to
+and including the package root; `O_NOFOLLOW` is used where available. The shipped distributions
+verify files in a directory their extractor creates itself (`%TEMP%\_MEI...` for the portable EXE,
+the native launcher's runtime cache under `%LOCALAPPDATA%` for the native launcher), and the check
+does not look above the package root, so the policy costs nothing there. An unpacked onedir placed
+behind a junction or inside a cloud-synchronised folder is rejected as `component_unsafe`; that
+is the intended strictness, not a content-integrity finding.
+
+Persistence is unchanged and the reasons are not stored: an unstarted incident is published with
+the same fixed observation and `git_sha` as before (the manifest SHA for `component_modified`,
+`unknown` for every other reason). The incident schema has no reason field and is not extended.
+
+Callers share one result. The supervisor shows a fixed Polish notice built only from the reason and
+the fixed file name (for example "plik python311.dll jest zmieniony lub uszkodzony"), always ending
+with "Pobierz Metroliza ponownie i uruchom pobrany plik.". The qualification-mode notice
+suppression is unchanged. The OCR worker launch still fails closed with
+`ocr_package_identity_failed`, now suffixed with `:<reason>[:<file>]` built from the same
+allowlists (no path). The portable envelope shows the same notice when the extracted payload is
+rejected; a launcher or sidecar failure keeps its fixed generic text.
+
+### Self-repair contract with the native launcher
+
+When the native runtime launcher (#1099, implemented in #1105) starts the supervisor it may set
+`METROLIZA_RUNTIME_REPAIR_AVAILABLE=1` (exactly `1`; any other value is ignored). If the package
+identity is then invalid, the supervisor persists the unstarted incident exactly as without the
+variable, shows **no** notice, and exits with code `75` (`EXIT_PACKAGE_REPAIR_REQUESTED` in
+`metroliza.app.diagnostic_launcher`). The launcher re-extracts its cached runtime and starts again
+**without** the variable, so a second failure shows the precise notice and exits `1`. A valid
+package ignores the variable. The launcher must not treat `75` as the application's own exit code.
+
 ## Limits and failure states
 
 | Resource | Hard maximum/default |

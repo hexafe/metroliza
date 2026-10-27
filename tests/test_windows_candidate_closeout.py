@@ -87,7 +87,7 @@ def test_closed_native_protocol_control_requires_the_requested_scale(scale):
 @pytest.mark.skipif(os.name == "nt", reason="Source offscreen integration; Windows display runs in the actual package")
 def test_actual_source_closeout_hooks_match_the_host_contract(tmp_path, monkeypatch):
     from metroliza.app.bootstrap import get_or_create_qapplication
-    from metroliza.app.windows_candidate_qualification import _run_closeout_slices
+    from metroliza.app.windows_candidate_qualification import ScenarioFailure, _run_closeout_slices
 
     monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
     monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", "1")
@@ -96,7 +96,11 @@ def test_actual_source_closeout_hooks_match_the_host_contract(tmp_path, monkeypa
     fixtures = Path(__file__).parent / "fixtures/windows_candidate/reports"
     receipt = {}
     stages = []
-    _run_closeout_slices(tmp_path, fixtures, receipt, stage_recorder=stages.append)
+    try:
+        _run_closeout_slices(tmp_path, fixtures, receipt, stage_recorder=stages.append)
+    except ScenarioFailure as error:
+        error.add_note(repr(receipt.get("closeout_observation", {})))
+        raise
     assert stages == [
         "closeout_privacy", "closeout_shell", "closeout_lifecycle",
         "closeout_lifecycle_review", "closeout_lifecycle_seed",

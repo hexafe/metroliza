@@ -19,6 +19,8 @@ from metroliza.shared.dashboard_interactivity import (
     DashboardInteractivityOptions,
     normalize_dashboard_interactivity_options,
 )
+from metroliza.analytics.grouping_labels import normalize_default_group_label
+from metroliza.exporting.export_grouping_utils import get_default_group_label
 from metroliza.tabular.contracts import GroupingAssignments, validate_grouping_df
 from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
@@ -51,6 +53,7 @@ class IndustrialAnalyticsRequest:
     tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
     tabular_filter_expression: str = ""
     grouping_df: GroupingAssignments | None = None
+    grouping_default_group_label: str | None = None
     dashboard_visual_settings: dict[str, Any] | None = None
     dashboard_interactivity_options: DashboardInteractivityOptions | dict[str, Any] | None = None
 
@@ -132,6 +135,9 @@ def validate_industrial_analytics_request(
             field_name="tabular filter expression",
         ),
         grouping_df=validate_grouping_df(request.grouping_df),
+        grouping_default_group_label=normalize_default_group_label(
+            request.grouping_default_group_label, fallback=get_default_group_label(request.grouping_df),
+        ),
         dashboard_visual_settings=normalize_dashboard_visual_settings(
             request.dashboard_visual_settings
         ),

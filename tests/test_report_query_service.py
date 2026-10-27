@@ -549,7 +549,7 @@ def test_build_measurement_expression_clause_rejects_unknown_fields():
 
 def test_build_distinct_value_query_targets_view_or_scoped_query():
     query = build_distinct_value_query("REFERENCE", source_view="vw_report_overview")
-    assert 'FROM vw_report_overview' in query
+    assert 'FROM "vw_report_overview"' in query
     assert 'DISTINCT "REFERENCE" AS value' in query
 
 
@@ -667,3 +667,21 @@ def _assert_dispatch_scope_once(values, bound, operator, value, second, exclude_
         selected = connection.execute(f"SELECT rowid FROM source_values WHERE {predicate} ORDER BY rowid", params or ()).fetchall()
         assert [row[0] for row in selected] == expected
         assert observations == values
+
+
+@pytest.mark.parametrize("column", ['reference" OR 1=1 --', 'reference"quoted'])
+def test_distinct_values_quote_database_identifiers(column):
+    source = 'source"; DROP TABLE sentinel; --'
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute("CREATE TABLE sentinel (value)")
+        conn.execute(
+            f"CREATE TABLE {canonical_query.quote_identifier(source)} "
+            f"({canonical_query.quote_identifier(column)} TEXT)"
+        )
+        conn.executemany(
+            f"INSERT INTO {canonical_query.quote_identifier(source)} VALUES (?)",
+            [("selected",), ("",), (None,)],
+        )
+        query = canonical_query.build_distinct_value_query(column, source_view=source)
+        assert conn.execute(query).fetchall() == [("selected",)]
+        assert conn.execute("SELECT COUNT(*) FROM sentinel").fetchone() == (0,)

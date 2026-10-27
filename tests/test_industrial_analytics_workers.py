@@ -242,3 +242,24 @@ def test_tabular_analytics_load_thread_emits_cancelled_for_service_cancel(
     assert cancelled == ["CSV/Excel loading was canceled."]
     assert results == []
     assert errors == []
+
+
+def test_tabular_worker_preserves_default_label_through_request_validation(monkeypatch, tmp_path):
+    from metroliza.analytics.row_table import RowTable
+    from metroliza.exporting.export_grouping_utils import set_default_group_label
+    from metroliza.industrial.contracts import validate_industrial_analytics_request
+
+    _skip_if_pyqt_unavailable()
+    grouping = set_default_group_label(RowTable(rows=(), columns=("REPORT_ID", "GROUP")), "Rest")
+    thread = IndustrialAnalyticsThread(
+        source_kind="tabular_file", input_file=str(tmp_path / "source.csv"),
+        output_dashboard_file=str(tmp_path / "dashboard.html"), grouping_df=grouping,
+    )
+    assert validate_industrial_analytics_request(thread.request).grouping_default_group_label == "Rest"
+    calls, errors = [], []
+    monkeypatch.setattr(industrial_workers, "run_tabular_file_analytics", lambda **kwargs: calls.append(kwargs))
+    _capture_signal(thread.error_occurred, errors)
+    thread.run()
+    assert not errors
+    assert calls[0]["grouping_default_group_label"] == "Rest"
+    assert calls[0]["grouping_df"].default_group_label == "Rest"

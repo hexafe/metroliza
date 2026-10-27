@@ -26,6 +26,9 @@ else:
     PYQT_IMPORT_ERROR = None
 
 
+pytestmark = pytest.mark.usefixtures("qapplication_session")
+
+
 class _DummyParent(QWidget if QWidget is not None else object):
     def __init__(self):
         super().__init__()
@@ -1068,7 +1071,8 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
     if os.environ.get("METROLIZA_ENRICHMENT_UI_TEST_CHILD") != "1":
         environment = dict(os.environ, METROLIZA_ENRICHMENT_UI_TEST_CHILD="1", QT_QPA_PLATFORM="offscreen")
         completed = subprocess.run(
-            [sys.executable, "-m", "pytest", request.node.nodeid, "-q"],
+            [sys.executable, "-m", "pytest", "-q",
+             "-p", "no:cacheprovider", "-o", "addopts=", request.node.nodeid],
             cwd=Path(__file__).resolve().parents[1], env=environment,
             capture_output=True, text=True, timeout=60,
         )
@@ -1170,7 +1174,8 @@ def test_embedded_enrichment_real_click_completion(tmp_path, monkeypatch, reques
         else:
             QTest.mouseClick(dialog.parse_button, Qt.MouseButton.LeftButton)
         deadline = time.monotonic() + 15
-        while dialog.parse_thread is not None and time.monotonic() < deadline:
+        # Import can be queued behind a metadata reader before parse_thread exists.
+        while (not workers or dialog.parse_thread is not None) and time.monotonic() < deadline:
             app.processEvents()
             if outcome == "close" and extraction_started.is_set() and not release_extraction.is_set():
                 dialog.reject()

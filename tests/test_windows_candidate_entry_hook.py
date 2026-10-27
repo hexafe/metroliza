@@ -19,8 +19,8 @@ def _module(**members):
     return value
 
 
-def _run_entry(monkeypatch, *, startup_code: int, diagnostic_scenario, candidate_scenario):
-    events = []
+def _run_entry(monkeypatch, *, startup_code: int, diagnostic_scenario, candidate_scenario, events=None):
+    events = [] if events is None else events
 
     class Recorder:
         def close(self):
@@ -39,6 +39,13 @@ def _run_entry(monkeypatch, *, startup_code: int, diagnostic_scenario, candidate
         requested_scenario=lambda: events.append("candidate_requested") or candidate_scenario,
         run_qualification=lambda: events.append("candidate_run") or 12,
     )
+    # Both real requested_scenario() functions return a scenario only when
+    # METROLIZA_STARTUP_SMOKE=1, and the entry checks that shared gate before importing
+    # either harness (#1112). Stubbed scenarios therefore run under the gate.
+    if diagnostic_scenario is not None or candidate_scenario is not None:
+        monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
+    else:
+        monkeypatch.delenv("METROLIZA_STARTUP_SMOKE", raising=False)
     monkeypatch.setitem(sys.modules, "metroliza.shared.diagnostic_transport", transport)
     monkeypatch.setitem(sys.modules, "metroliza.app.bootstrap", bootstrap)
     monkeypatch.setitem(sys.modules, "metroliza.app.diagnostic_qualification", diagnostic)
@@ -83,3 +90,80 @@ def test_candidate_gate_requires_both_explicit_environment_values(monkeypatch):
         if qualification is not None:
             monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", qualification)
         assert requested_scenario() == expected
+
+
+@pytest.mark.parametrize("qualification", [False, True])
+def test_package_parent_installs_native_version_before_bootstrap(monkeypatch, qualification):
+    from metroliza.shared import compute_worker
+
+    events = []
+    monkeypatch.setattr(compute_worker, "use_native_windows_version", lambda: events.append("native_version"))
+    code, entry_events = _run_entry(
+        monkeypatch, startup_code=0, diagnostic_scenario=None,
+        candidate_scenario="core" if qualification else None, events=events,
+    )
+    assert code == (12 if qualification else 0)
+    assert entry_events[:2] == ["native_version", "bootstrap"]
+    assert events.count("native_version") == 1
+
+
+@pytest.mark.parametrize("qualification", [False, True])
+def test_production_parent_uses_native_fallback_before_bootstrap_import(monkeypatch, qualification):
+    import builtins
+    import platform
+    from metroliza.shared import compute_worker
+
+    original_import = builtins.__import__
+    native_fallback = compute_worker.use_native_windows_version
+    runtime_sys = types.SimpleNamespace(
+        frozen=True, platform="win32",
+        getwindowsversion=lambda: types.SimpleNamespace(platform_version=(10, 0, 20348)),
+    )
+    monkeypatch.setattr(platform, "_syscmd_ver", lambda *_a, **_k: pytest.fail("shell fallback called"))
+    monkeypatch.setattr(compute_worker, "use_native_windows_version", lambda: native_fallback(
+        runtime_sys=runtime_sys, runtime_os=types.SimpleNamespace(name="nt")))
+    checked = []
+
+    def checked_import(name, *args, **kwargs):
+        if name == "metroliza.app.bootstrap":
+            assert platform._syscmd_ver() == ("", "", "10.0.20348")
+            checked.append(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", checked_import)
+    code, _ = _run_entry(
+        monkeypatch, startup_code=0, diagnostic_scenario=None,
+        candidate_scenario="core" if qualification else None,
+    )
+    assert code == (12 if qualification else 0)
+    assert checked == ["metroliza.app.bootstrap"]
+
+
+def test_compute_qualification_uses_the_production_parent_path(monkeypatch, tmp_path):
+    import json
+    from metroliza.app import compute_worker_qualification as workload
+    from metroliza.shared import compute_worker, diagnostic_runtime_audit
+
+    events = []
+    monkeypatch.setenv(workload.GATE, str(tmp_path))
+    monkeypatch.setattr(compute_worker, "use_native_windows_version", lambda: events.append("native_version"))
+    monkeypatch.setattr(diagnostic_runtime_audit, "wait_for_host_ready", lambda **_kwargs: None)
+
+    def imported(*_args):
+        assert events == ["native_version", "bootstrap"]
+        events.append("import")
+        return {"seconds": 1}
+
+    def exported(*_args):
+        assert events == ["native_version", "bootstrap", "import"]
+        events.append("export")
+        return {"seconds": 2}
+
+    monkeypatch.setattr(workload, "run_import", imported)
+    monkeypatch.setattr(workload, "run_export", exported)
+    code, _ = _run_entry(
+        monkeypatch, startup_code=0, diagnostic_scenario=None, candidate_scenario="core", events=events,
+    )
+    assert code == 0
+    assert events == ["native_version", "bootstrap", "import", "export", "recorder_close"]
+    assert json.loads((tmp_path / "compute.json").read_text())["export"]["seconds"] == 2

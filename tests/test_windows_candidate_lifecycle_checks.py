@@ -99,6 +99,67 @@ def test_lifecycle_checks_use_real_workers_and_keep_native_claim_explicit(tmp_pa
     assert observation["evidence"]["rebound_same_dialog"] is True
 
 
+def test_seed_import_observes_the_deferred_metadata_handoff(tmp_path, monkeypatch):
+    from threading import Event
+
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from metroliza.app.bootstrap import get_or_create_qapplication
+    from metroliza.app.windows_candidate_qualification import _stage_reports
+    from metroliza.parsing.metadata_review import MetadataReviewReader
+    from metroliza.ui.parsing_dialog import _ReportOperations
+
+    app = get_or_create_qapplication()
+    reports, _hashes = _stage_reports(FIXTURES, tmp_path)
+    entered, release = Event(), Event()
+    deferred = []
+    read_one = MetadataReviewReader._read_one
+    start_import = _ReportOperations.show_loading_screen
+    close_owner = checks._close_seed_owner
+    wait = checks._wait
+
+    def gated_read(reader, *args, **kwargs):
+        entered.set()
+        if not release.wait(10):
+            raise RuntimeError("synthetic metadata barrier expired")
+        return read_one(reader, *args, **kwargs)
+
+    def wait_for_review(application, predicate, *, seconds, code):
+        wait(application, predicate, seconds=seconds, code=code)
+        if code == "seed_review_deadline":
+            wait(application, entered.is_set, seconds=10,
+                 code="synthetic_metadata_barrier_deadline")
+
+    def request_import(workspace, **kwargs):
+        try:
+            start_import(workspace, **kwargs)
+            deferred.append(workspace._start_pending)
+        finally:
+            release.set()
+
+    def close_after_handoff(window, application):
+        # Also unwind safely on the regression's failing path: a queued import
+        # must finish before its owner is deleted, even if the observer missed it.
+        release.set()
+        workspace = window.reports_workspace
+        checks._wait(application, lambda: workspace.pdf_workers_idle()
+                     and not workspace._start_pending,
+                     seconds=45, code="synthetic_seed_cleanup_deadline")
+        close_owner(window, application)
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    monkeypatch.setattr(MetadataReviewReader, "_read_one", gated_read)
+    monkeypatch.setattr(checks, "_wait", wait_for_review)
+    monkeypatch.setattr(_ReportOperations, "show_loading_screen", request_import)
+    monkeypatch.setattr(checks, "_close_seed_owner", close_after_handoff)
+    try:
+        database = checks._seed_report_database(app, tmp_path, reports)
+        assert database.is_file()
+        assert deferred[0] is True
+    finally:
+        release.set()
+
+
 @pytest.mark.parametrize("join_kind", ("report", "export", "dashboard"))
 def test_lifecycle_failed_joins_exit_unavailable_without_receipt(
     monkeypatch, join_kind,
