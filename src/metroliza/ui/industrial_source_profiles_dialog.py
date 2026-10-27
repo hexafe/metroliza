@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -158,6 +159,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         self._build_layout()
         self.reload_profiles()
         apply_metroliza_theme(self)
+        self.status_label.setMinimumHeight(self.status_label.sizeHint().height())
         finalize_window_size(self)
 
     def _build_layout(self) -> None:
@@ -181,10 +183,14 @@ class IndustrialSourceProfilesDialog(QDialog):
         form.addRow("Timestamp column", self.timestamp_column_edit)
         form.addRow("Server ordering", self.order_by_checkbox)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(body)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.form_scroll = QScrollArea()
+        self.form_scroll.setWidgetResizable(True)
+        self.form_scroll.setWidget(body)
+        self.form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.form_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Ignored,
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -200,7 +206,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         config_controls.addWidget(self.reload_config_button)
         layout.addLayout(config_controls)
         layout.addWidget(self.status_label)
-        layout.addWidget(scroll, 1)
+        layout.addWidget(self.form_scroll, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
