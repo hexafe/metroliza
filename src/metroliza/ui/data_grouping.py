@@ -349,7 +349,8 @@ class DataGrouping(QDialog):
             filter_query=filter_query,
         )
         self._load_thread = thread
-        detached_threads.register(thread)
+        # SQL reads finish natively even after dialog cancellation.
+        detached_threads.register(thread, defer_quit=True)
         thread.loaded.connect(self._on_background_load_finished)
         thread.failed.connect(self._on_background_load_failed)
         thread.finished.connect(thread.release)

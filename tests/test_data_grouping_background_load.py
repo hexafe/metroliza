@@ -268,3 +268,62 @@ def test_visible_selection_batches_actual_dialog_update(tmp_path, qapplication_s
         assert [dialog.part_list.item(i).isSelected() for i in range(3)] == [True, False, True]
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize("quit_route", ["quit", "lastwindow"])
+def test_cancelled_grouping_load_defers_normal_quit_until_native_completion(tmp_path, quit_route):
+    from tests.test_detached_threads import _run_native_script
+
+    script = """
+import sys, threading
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication, QDialog
+from metroliza.ui import data_grouping, detached_threads
+app = QApplication([])
+parent = QDialog()
+parent.show()
+started, release = threading.Event(), threading.Event()
+exits, beats = [], []
+# Observe the quit signal before the registry can enter its bounded shutdown hook.
+app.aboutToQuit.connect(lambda: exits.append(thread.isFinished()))
+def blocked_read(_reader, _db_file, _filter_query):
+    started.set()
+    assert release.wait(8), 'test worker expired'
+    raise RuntimeError('cancelled synthetic read')
+data_grouping.load_grouping_dataframe = blocked_read
+data_grouping._GROUPING_LOAD_STOP_WAIT_MS = 1
+dialog = data_grouping.DataGrouping(parent=parent, db_file=sys.argv[1], background_load=True)
+thread = dialog._load_thread
+assert started.wait(5)
+dialog.reject()
+assert detached_threads.is_registered(thread) and thread.isRunning()
+assert not dialog.is_loading_grouping() and dialog.df is None
+# The old bounded shutdown can finish safely, but aboutToQuit would be emitted
+# prematurely. Release off the GUI thread so that the negative control never hangs.
+release_timer = threading.Timer(0.6, release.set)
+release_timer.start()
+heartbeat = QTimer()
+heartbeat.timeout.connect(lambda: beats.append(1))
+heartbeat.start(10)
+if sys.argv[2] == 'quit':
+    QTimer.singleShot(20, app.quit)
+else:
+    QTimer.singleShot(20, parent.close)
+QTimer.singleShot(5000, lambda: app.exit(99))
+try:
+    code = app.exec()
+finally:
+    release.set()
+    release_timer.join()
+    assert thread.wait(5000)
+    app.processEvents()
+assert code == 0 and exits == [True], (code, exits)
+assert len(beats) >= 5, beats
+assert not detached_threads.is_registered(thread)
+assert dialog.df is None
+parent.close()
+print('grouping native completion before normal quit', sys.argv[2])
+"""
+    child = _run_native_script(script, str(_fixture_db(tmp_path)), quit_route)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert "grouping native completion before normal quit" in child.stdout
