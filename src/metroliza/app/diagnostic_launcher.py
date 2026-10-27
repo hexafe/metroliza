@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from metroliza.app.diagnostic_supervisor import SupervisedResult, launch_supervised
+from metroliza.app.startup_profile import record_event
 from metroliza.shared.diagnostic_events import WorkflowDiagnosticEvent, WorkflowOutcome
 from metroliza.shared.diagnostic_incident import (
     ChannelState,
@@ -325,6 +326,7 @@ def _fixed_notice(message: str) -> None:
         mark("notice_suppressed")
         return
     mark("notice_requested")
+    _close_launcher_splash()
     if os.name == "nt":
         import ctypes
 
@@ -333,13 +335,28 @@ def _fixed_notice(message: str) -> None:
         sys.stderr.write(message + "\n")
 
 
+def _close_launcher_splash() -> None:
+    """Close the native launcher splash so it never covers this notice (best effort)."""
+    try:
+        from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+        # A copy: the application child must still receive the handle when it is started.
+        splash = launcher_splash_from_environment(environ=dict(os.environ))
+        if splash is not None:
+            splash.close()
+    except Exception:
+        pass
+
+
 def main() -> int:
     store = IncidentStore()
     mark("store_constructed")
     if getattr(sys, "frozen", False):
         root = Path(sys.executable).absolute().parent
         mark("package_inspection")
+        record_event("supervisor_package_inspection_start")
         identity = inspect_package(root)
+        record_event("supervisor_package_inspection_done", valid=identity.valid)
         if not identity.valid:
             mark("package_rejected")
             observed = SupervisedResult(
@@ -363,6 +380,7 @@ def main() -> int:
         ]
         git_sha = "unknown"
     mark("supervision_entered")
+    record_event("supervisor_launch_start")
     delivery = run_with_store(argv, store=store, git_sha=git_sha)
     mark("supervision_returned")
     mark("storage_" + delivery.storage_status.value)

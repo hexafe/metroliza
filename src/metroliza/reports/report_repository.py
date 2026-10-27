@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -17,6 +17,7 @@ from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
 from metroliza.reports.report_schema import (
     is_report_schema_ready,
+    is_report_schema_ready_cached,
     ensure_report_schema,
     upsert_report_parse_state,
 )
@@ -215,12 +216,17 @@ def infer_source_format(file_path: str | Path) -> str:
     return suffix or "unknown"
 
 
+# ``json.dumps(..., ensure_ascii=False, sort_keys=True)`` builds a new encoder per call;
+# one shared instance produces the same text without that per-row construction.
+_JSON_ENCODER = json.JSONEncoder(ensure_ascii=False, sort_keys=True)
+
+
 def _to_json(value: Any) -> str | None:
     if value is None:
         return None
-    if is_dataclass(value):
+    if type(value) is not dict and is_dataclass(value):
         value = asdict(value)
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return _JSON_ENCODER.encode(value)
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -256,6 +262,8 @@ def _coerce_bool_int(value: Any) -> int:
 
 
 def _coerce_float(value: Any) -> float | None:
+    if type(value) is float:
+        return value
     if value is None or value == "":
         return None
     try:
@@ -319,6 +327,101 @@ def _measurement_status_values(measurement: Any, outtol: float | None) -> tuple[
     return _status_from_outtol(outtol)
 
 
+def _metadata_persistence_values(metadata: Any) -> tuple[dict[str, Any], Any, str | None]:
+    """Return ``(mapping, metadata_json, metadata_json_text)`` for the metadata row.
+
+    A dataclass whose ``metadata_json`` is a plain dict is read field by field: the row
+    stores only its scalar fields and that dict, so deep-copying everything else (the
+    warnings, with their detail dicts) is wasted work. Whenever the dict cannot be encoded
+    as it is (a nested dataclass, a circular reference), the generic path below runs
+    exactly as before and produces the same result or the same error.
+    """
+
+    if (
+        is_dataclass(metadata)
+        and not isinstance(metadata, type)
+        and type(getattr(metadata, "metadata_json", None)) is dict
+    ):
+        try:
+            shallow = {item.name: getattr(metadata, item.name) for item in fields(metadata)}
+            shallow_text = _to_json(shallow["metadata_json"])
+        except (TypeError, ValueError):
+            pass
+        else:
+            return shallow, shallow["metadata_json"], shallow_text
+    metadata_map = _as_mapping(metadata)
+    metadata_json = metadata_map.get("metadata_json")
+    if metadata_json is None:
+        metadata_json = {
+            key: value
+            for key, value in metadata_map.items()
+            if key not in {"warnings"}
+            and isinstance(value, (str, int, float, bool, type(None), list, tuple, dict))
+        }
+    return metadata_map, metadata_json, _to_json(metadata_json)
+
+
+def _mapping_measurement_row(report_id: int, row_order: int, measurement: dict) -> tuple[Any, ...]:
+    """Row tuple for a dict measurement; same values as the generic attribute path."""
+
+    get = measurement.get
+    explicit_order = get("row_order")
+    outtol = _coerce_float(get("outtol"))
+    status_code = get("status_code")
+    if status_code not in (None, ""):
+        status_code = _coerce_status_code(status_code)
+        is_nok = 1 if status_code == "nok" else 0
+    else:
+        raw_is_nok = get("is_nok")
+        if raw_is_nok is not None:
+            is_nok = 1 if raw_is_nok else 0
+            status_code = "nok" if is_nok else "ok"
+        else:
+            is_nok, status_code = _status_from_outtol(outtol)
+    raw = get("raw_measurement_json", _UNSET)
+    return (
+        report_id,
+        _coerce_int(get("page_number")),
+        int(explicit_order if explicit_order is not None else row_order),
+        get("header"),
+        get("section_name"),
+        get("feature_label"),
+        get("characteristic_name"),
+        get("characteristic_family"),
+        get("description"),
+        get("ax"),
+        _coerce_float(get("nominal", get("nom"))),
+        _coerce_float(get("tol_plus")),
+        _coerce_float(get("tol_minus")),
+        _coerce_float(get("bonus")),
+        _coerce_float(get("meas")),
+        _coerce_float(get("dev")),
+        outtol,
+        is_nok,
+        status_code,
+        _to_json(_as_mapping(measurement) if raw is _UNSET else raw),
+    )
+
+
+@dataclass(frozen=True)
+class _PreparedMeasurementRows:
+    """Legacy pickled state; cached tuples are ignored in favor of live source rows."""
+
+    version: int
+    source: list | tuple
+    source_key: bytes
+    rows: tuple[tuple[Any, ...], ...]
+
+    def __iter__(self):
+        return iter(self.source)
+
+
+def _freeze_measurements(measurements):
+    if type(measurements) is _PreparedMeasurementRows:
+        measurements = measurements.source
+    return tuple(measurements)
+
+
 class ReportRepository:
     """Persistence facade for the report metadata schema."""
 
@@ -331,7 +434,7 @@ class ReportRepository:
 
     def _import_schema_is_ready(self) -> bool:
         if self.connection is not None:
-            return is_report_schema_ready(self.connection)
+            return is_report_schema_ready_cached(self.connection)
         if Path(self.database).is_file():
             try:
                 with sqlite_readonly_connection_scope(self.database) as connection:
@@ -649,15 +752,7 @@ class ReportRepository:
         metadata_profile_id: str | None = None,
         metadata_profile_version: str | None = None,
     ) -> None:
-        metadata_map = _as_mapping(metadata)
-        metadata_json = metadata_map.get("metadata_json")
-        if metadata_json is None:
-            metadata_json = {
-                key: value
-                for key, value in metadata_map.items()
-                if key not in {"warnings"}
-                and isinstance(value, (str, int, float, bool, type(None), list, tuple, dict))
-            }
+        metadata_map, metadata_json, metadata_json_text = _metadata_persistence_values(metadata)
 
         cursor.execute(
             """
@@ -716,7 +811,7 @@ class ReportRepository:
                 metadata_version,
                 metadata_profile_id,
                 metadata_profile_version,
-                _to_json(metadata_json),
+                metadata_json_text,
             ),
         )
         upsert_report_parse_state(cursor, int(report_id), metadata_json)
@@ -981,14 +1076,20 @@ class ReportRepository:
 
     @persist_stage("row_building")
     def _measurement_rows(self, report_id: int, measurements: Iterable[Any]) -> list[tuple[Any, ...]]:
+        report_id = int(report_id)
+        if type(measurements) is _PreparedMeasurementRows:
+            measurements = measurements.source
         rows = []
         for row_order, measurement in enumerate(measurements, start=1):
+            if isinstance(measurement, dict):
+                rows.append(_mapping_measurement_row(report_id, row_order, measurement))
+                continue
             explicit_order = _get_value(measurement, "row_order")
             outtol = _coerce_float(_get_value(measurement, "outtol"))
             is_nok, status_code = _measurement_status_values(measurement, outtol)
             rows.append(
                 (
-                    int(report_id),
+                    report_id,
                     _coerce_int(_get_value(measurement, "page_number")),
                     int(explicit_order if explicit_order is not None else row_order),
                     _get_value(measurement, "header"),
@@ -1600,7 +1701,7 @@ class ReportRepository:
                 )
         self._ensure_import_schema()
         now = utc_timestamp()
-        measurement_values = tuple(measurements)
+        measurement_values = _freeze_measurements(measurements)
         candidate_values = tuple(candidates)
         warning_values = tuple(warnings)
 
@@ -1696,7 +1797,7 @@ class ReportRepository:
         self.ensure_schema()
         source_record = self.upsert_source_file(source_path, sha256=source_sha256)
         now = utc_timestamp()
-        measurement_values = tuple(measurements)
+        measurement_values = _freeze_measurements(measurements)
         candidate_values = tuple(candidates)
         warning_values = tuple(warnings)
 

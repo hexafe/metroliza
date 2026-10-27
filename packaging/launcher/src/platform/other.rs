@@ -7,6 +7,12 @@ use std::process::Command;
 use super::Instance;
 use crate::cache::Progress;
 use crate::error::{ErrorKind, LauncherError, Result};
+use crate::log::Log;
+
+/// Environment variable carrying the splash window handle to the entry (Windows only).
+pub const SPLASH_HWND_ENV: &str = "METROLIZA_LAUNCHER_SPLASH_HWND";
+/// Window class of the Windows splash.
+pub const SPLASH_CLASS: &str = "MetrolizaLauncherSplash";
 
 /// Placeholder guard; there is no single-instance enforcement off Windows.
 pub struct InstanceGuard;
@@ -24,25 +30,45 @@ pub fn show_error(kind: ErrorKind) {
     eprintln!("{}", kind.user_message());
 }
 
-/// No window off Windows.
-pub struct ProgressWindow;
-
-impl ProgressWindow {
-    pub fn new() -> Self {
-        Self
-    }
+/// No window off Windows; keeps the launcher flow identical for the development stand-in.
+///
+/// The hooks log the same timing marks as the Windows splash (`splash_show`, `splash_reopen`,
+/// `runtime_work_begin`, `runtime_work_done`; plus `splash_repairing` here), so tests on this
+/// stand-in can check when the launcher asks for visible feedback.
+pub struct Splash {
+    log: Log,
 }
 
-impl Default for ProgressWindow {
-    fn default() -> Self {
-        Self::new()
+impl Splash {
+    pub fn show(log: &Log) -> Self {
+        log.mark("splash_show");
+        log.mark("splash_unavailable");
+        Self { log: log.clone() }
     }
+
+    pub fn reopen(&self) {
+        self.log.mark("splash_reopen");
+    }
+
+    pub fn handle_for_entry(&self) -> Option<String> {
+        None
+    }
+
+    pub fn repairing(&self) {
+        self.log.mark("splash_repairing");
+    }
+
+    pub fn close(&self) {}
 }
 
-impl Progress for ProgressWindow {
-    fn begin(&self, _total_bytes: u64) {}
+impl Progress for Splash {
+    fn begin(&self, _total_bytes: u64) {
+        self.log.mark("runtime_work_begin");
+    }
     fn advance(&self, _bytes: u64) {}
-    fn finish(&self) {}
+    fn finish(&self) {
+        self.log.mark("runtime_work_done");
+    }
 }
 
 pub struct Child(std::process::Child);

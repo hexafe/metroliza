@@ -1,11 +1,11 @@
 from xlsxwriter.utility import xl_col_to_name
+from xlsxwriter.workbook import Workbook as XlsxWriterWorkbook
 
 from metroliza.exporting.export_summary_utils import resolve_nominal_and_limits
 from metroliza.shared.stats_utils import is_one_sided_geometric_tolerance
 
 
 LEGACY_MEASUREMENT_CHART_INSERT_ROW = 7
-_MEASUREMENT_FORMATS_CACHE = {}
 
 
 def _get_col_name_cached(col_index, cache=None):
@@ -290,8 +290,18 @@ def write_measurement_summary_rows(worksheet, summary_rows, formats):
 
 
 def create_measurement_formats(workbook):
-    cache_key = id(workbook)
-    cached = _MEASUREMENT_FORMATS_CACHE.get(cache_key)
+    # Adapters are ephemeral; formats must live with the raw workbook that owns their XF tables.
+    owner = workbook
+    try:
+        wrapped = getattr(workbook, '_workbook', None)
+    except (AttributeError, TypeError):
+        wrapped = None
+    if isinstance(wrapped, XlsxWriterWorkbook):
+        owner = wrapped
+    try:
+        cached = getattr(owner, '_metroliza_measurement_formats', None)
+    except (AttributeError, TypeError):
+        cached = None
     if cached is not None:
         return cached
 
@@ -302,7 +312,12 @@ def create_measurement_formats(workbook):
         'percent': workbook.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '0.00%'}),
         'red': workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1}),
     }
-    _MEASUREMENT_FORMATS_CACHE[cache_key] = cached
+    try:
+        owner._metroliza_measurement_formats = cached
+    except (AttributeError, TypeError):
+        # Generic workbook implementations may prohibit attribute storage, hashing and weakrefs.
+        # They still receive fresh formats without extending any global owner's lifetime.
+        pass
     return cached
 
 

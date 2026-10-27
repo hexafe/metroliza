@@ -149,5 +149,353 @@ class TestExportQueryService(unittest.TestCase):
         self.assertIn('file_name AS FILENAME', query)
 
 
+class TestSnapshotPartitionEquivalence(unittest.TestCase):
+    """An independent ordered SQL oracle, also executed before the fast path exists."""
+
+    REFERENCES = (
+        'shared', None, '', '   ', '\t', '\n', '01', '1', 1, 1.0,
+        1.000000000000001, 0, '0', '00', ' padded ', 'żółć:β',
+        'Report 2 (no reference)', 'report:2', 'reference:x', 'shared',
+        None, 'shared', b'1',
+    )
+
+    @classmethod
+    def populate_snapshot(cls, connection, reference_type='TEXT', report_type='INTEGER'):
+        connection.execute(
+            f'CREATE TABLE source_rows (REPORT_ID {report_type}, REFERENCE {reference_type}, '
+            'HEADER TEXT, AX TEXT, MEAS REAL, OCCURRENCE INTEGER)'
+        )
+        rows = [
+            (2 if ref is None or ref in ('', '   ') else index + 1,
+             ref, 'H' + str(index % 2), 'X', index / 4, index)
+            for index, ref in enumerate(cls.REFERENCES)
+        ]
+        # A true duplicate is retained; no report join may discard this orphan id.
+        rows.extend([rows[0], (9999, None, 'H0', 'X', 2.0, 99)])
+        connection.executemany('INSERT INTO source_rows VALUES (?, ?, ?, ?, ?, ?)', rows)
+        connection.execute(
+            'CREATE TEMP TABLE snapshot_rows AS SELECT * FROM source_rows '
+            'ORDER BY OCCURRENCE % 3, OCCURRENCE DESC'
+        )
+        connection.execute('CREATE INDEX snapshot_ref ON snapshot_rows(REFERENCE)')
+        connection.execute('CREATE INDEX snapshot_report ON snapshot_rows(REPORT_ID)')
+
+    @staticmethod
+    def oracle(connection):
+        # Deliberately independent of the service's SQL builder and predicates.
+        cursor = connection.execute('''
+            SELECT *,
+                CASE WHEN NULLIF(TRIM(REFERENCE), '') IS NULL
+                    THEN 'report:' || CAST(REPORT_ID AS TEXT)
+                    ELSE 'reference:' || REFERENCE END AS EXPORT_PARTITION_KEY,
+                CASE WHEN NULLIF(TRIM(REFERENCE), '') IS NULL
+                    THEN 'Report ' || CAST(REPORT_ID AS TEXT) || ' (no reference)'
+                    ELSE REFERENCE END AS EXPORT_PARTITION_LABEL
+            FROM snapshot_rows ORDER BY rowid
+        ''')
+        return cursor.fetchall(), [column[0] for column in cursor.description]
+
+    def check_partitions(self, connection, **loader_options):
+        from metroliza.exporting import export_query_service as service
+
+        ordered, columns = self.oracle(connection)
+        scope = 'SELECT * FROM temp."snapshot_rows"' if loader_options else 'SELECT * FROM snapshot_rows'
+        query = service.build_analytical_partition_query(scope)
+        keys = list(dict.fromkeys(row[-2] for row in ordered if row[-2] is not None))
+        for key in keys + ['reference:absent', 'report:0002', 'report:bad', 'unsupported:x', 'reference:', None]:
+            with self.subTest(key=key):
+                expected = [row for row in ordered if key is not None and row[-2] == key]
+                actual = service.load_export_partition_dataframe(
+                    ':memory:', query, key, partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, **loader_options,
+                )
+                self.assertEqual(list(actual.columns), columns)
+                self.assertEqual(list(actual.iter_rows()), expected)
+                self.assertEqual(
+                    [[type(value) for value in row] for row in actual.iter_rows()],
+                    [[type(value) for value in row] for row in expected],
+                )
+                measurement = service.load_measurement_export_partition_dataframe(
+                    ':memory:', query, key, partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, **loader_options,
+                )
+                self.assertEqual(list(measurement.columns), columns + ['SAMPLE_NUMBER', 'HEADER - AX'])
+                self.assertEqual(
+                    list(measurement.iter_rows()),
+                    [row + (str(index + 1), f'{row[2]} - {row[3]}') for index, row in enumerate(expected)],
+                )
+        counts = service.fetch_partition_header_counts(
+            ':memory:', query, partition_column='EXPORT_PARTITION_KEY', connection=connection,
+        )
+        self.assertEqual(list(counts), sorted(keys))
+        self.assertEqual(counts, {
+            key: len({row[2] + ' - ' + row[3] for row in ordered if row[-2] == key})
+            for key in sorted(keys)
+        })
+        self.assertIn('reference:\t', keys)
+        self.assertIn('reference:\n', keys)
+        self.assertIn('reference: padded ', keys)
+        self.assertIn('reference:Report 2 (no reference)', keys)
+        self.assertIn('report:2', keys)
+        self.assertEqual(sum(row[-2] == 'reference:shared' for row in ordered), 4)
+        generic = service.load_export_partition_dataframe(
+            ':memory:', query, 'H0', partition_column='HEADER', connection=connection,
+            **loader_options,
+        )
+        self.assertEqual(list(generic.iter_rows()), [row for row in ordered if row[2] == 'H0'])
+
+    def test_ordered_typed_snapshot_partitions_match_independent_oracle(self):
+        import sqlite3
+        from contextlib import closing
+
+        for affinity in ('TEXT', ''):
+            with self.subTest(affinity=affinity), closing(sqlite3.connect(':memory:')) as connection:
+                self.populate_snapshot(connection, reference_type=affinity)
+                self.check_partitions(connection)
+
+    def test_snapshot_storage_proof_preserves_all_rows_or_uses_general_path(self):
+        import sqlite3
+        from contextlib import closing
+        from metroliza.exporting import export_query_service as service
+
+        for reference_type, report_type in (('TEXT', 'INTEGER'), ('', 'INTEGER'), ('TEXT', 'TEXT')):
+            with self.subTest(reference_type=reference_type, report_type=report_type):
+                with closing(sqlite3.connect(':memory:')) as connection:
+                    self.populate_snapshot(connection, reference_type, report_type)
+                    source = service.prepare_snapshot_partition_source(connection, 'snapshot_rows')
+                    # BLOB values disqualify TEXT even though its declared affinity is TEXT.
+                    self.assertNotIn('REFERENCE', source.indexed_columns)
+                    self.assertEqual('REPORT_ID' in source.indexed_columns, report_type == 'INTEGER')
+                    self.check_partitions(connection, snapshot_source=source)
+
+    def test_snapshot_indexed_predicates_keep_literal_rows_and_insertion_order(self):
+        import sqlite3
+        from contextlib import closing
+        from unittest import mock
+        from metroliza.exporting import export_query_service as service
+
+        with closing(sqlite3.connect(':memory:')) as connection:
+            self.populate_snapshot(connection)
+            connection.execute("DELETE FROM snapshot_rows WHERE typeof(REFERENCE) = 'blob'")
+            source = service.prepare_snapshot_partition_source(connection, 'snapshot_rows')
+            self.assertEqual(source.indexed_columns, frozenset({'REFERENCE', 'REPORT_ID'}))
+            self.check_partitions(connection, snapshot_source=source)
+            actual_reader = service._read_sql_query
+            with mock.patch.object(service, '_read_sql_query', wraps=actual_reader) as reader:
+                for key, column, expected_parameter in (
+                    ('reference:shared', 'REFERENCE', 'shared'), ('report:2', 'REPORT_ID', 2),
+                    ('reference:01', 'REFERENCE', '01'), ('reference:\t', 'REFERENCE', '\t'),
+                    ("reference:' OR 1=1 --", 'REFERENCE', "' OR 1=1 --"),
+                ):
+                    service.load_export_partition_dataframe(
+                        ':memory:', service.build_analytical_partition_query('SELECT * FROM temp."snapshot_rows"'),
+                        key, partition_column='EXPORT_PARTITION_KEY', connection=connection,
+                        snapshot_source=source,
+                    )
+                    args, kwargs = reader.call_args
+                    sql = args[1]
+                    self.assertIn(f'WHERE {column} = ?', sql)
+                    self.assertIn('ORDER BY export_scope."_rowid_"', sql)
+                    self.assertEqual(kwargs['params'], (expected_parameter,))
+                    plan = connection.execute('EXPLAIN QUERY PLAN ' + sql, kwargs['params']).fetchall()
+                    self.assertTrue(any('SEARCH' in row[3] and 'INDEX snapshot_' in row[3] for row in plan), plan)
+                    self.assertFalse(any('TEMP B-TREE' in row[3] for row in plan), plan)
+
+    def test_malformed_typed_keys_and_generic_columns_retain_general_query(self):
+        import sqlite3
+        from contextlib import closing
+        from unittest import mock
+        from metroliza.exporting import export_query_service as service
+
+        with closing(sqlite3.connect(':memory:')) as connection:
+            self.populate_snapshot(connection)
+            source = service.prepare_snapshot_partition_source(connection, 'snapshot_rows')
+            actual_reader = service._read_sql_query
+            with mock.patch.object(service, '_read_sql_query', wraps=actual_reader) as reader:
+                for key in ('report:02', 'report:+2', 'report: 2', 'report:٢', 'report:',
+                            'report:9223372036854775808', 'report:-0', 'report:2_0',
+                            'report:no', 'unsupported:2', 2, None):
+                    result = service.load_export_partition_dataframe(
+                        ':memory:', service.build_analytical_partition_query('SELECT * FROM temp."snapshot_rows"'),
+                        key, partition_column='EXPORT_PARTITION_KEY', connection=connection,
+                        snapshot_source=source,
+                    )
+                    self.assertTrue(result.empty)
+                    self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                service.load_export_partition_dataframe(
+                    ':memory:', 'SELECT * FROM snapshot_rows', 'H0', partition_column='HEADER',
+                    connection=connection, snapshot_source=source,
+                )
+                self.assertIn('WHERE "HEADER" = ?', reader.call_args.args[1])
+
+    def test_hidden_rowid_alias_collisions_fall_back_without_extra_columns(self):
+        import sqlite3
+        from contextlib import closing
+        from metroliza.exporting import export_query_service as service
+
+        with closing(sqlite3.connect(':memory:')) as connection:
+            connection.execute('CREATE TEMP TABLE collision (REFERENCE TEXT, REPORT_ID INT, "_rowid_" TEXT)')
+            source = service.prepare_snapshot_partition_source(connection, 'collision')
+            self.assertEqual(source.rowid_column, 'rowid')
+            connection.execute('ALTER TABLE collision ADD COLUMN rowid TEXT')
+            connection.execute('ALTER TABLE collision ADD COLUMN oid TEXT')
+            self.assertIsNone(service.prepare_snapshot_partition_source(connection, 'collision'))
+
+    def test_snapshot_source_cannot_bypass_filtered_or_projected_scope(self):
+        import sqlite3
+        from contextlib import closing
+        from unittest import mock
+        from metroliza.exporting import export_query_service as service
+
+        with closing(sqlite3.connect(':memory:')) as connection:
+            self.populate_snapshot(connection)
+            connection.execute("DELETE FROM snapshot_rows WHERE typeof(REFERENCE) = 'blob'")
+            source = service.prepare_snapshot_partition_source(connection, 'snapshot_rows')
+            actual_reader = service._read_sql_query
+            for scope in (
+                'SELECT * FROM temp."snapshot_rows" WHERE OCCURRENCE = 0',
+                "SELECT HEADER, AX, REPORT_ID, REFERENCE, CAST(MEAS AS TEXT) AS MEAS, "
+                "'stored' AS SAMPLE_NUMBER FROM temp.\"snapshot_rows\" WHERE OCCURRENCE = 0",
+            ):
+                query = service.build_analytical_partition_query(scope)
+                cursor = connection.execute(query)
+                expected = [row for row in cursor.fetchall() if row[-2] == 'reference:shared']
+                columns = [column[0] for column in cursor.description]
+                self.assertEqual(len(expected), 2)
+                with mock.patch.object(service, '_read_sql_query', wraps=actual_reader) as reader:
+                    result = service.load_export_partition_dataframe(
+                        ':memory:', query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                        connection=connection, snapshot_source=source,
+                    )
+                    self.assertEqual(list(result.iter_rows()), expected)
+                    self.assertEqual(list(result.columns), columns)
+                    self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                    self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+                measurement = service.load_measurement_export_partition_dataframe(
+                    ':memory:', query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=source,
+                )
+                if 'SAMPLE_NUMBER' in columns:
+                    self.assertEqual(measurement['SAMPLE_NUMBER'].tolist(), ['stored', 'stored'])
+                    self.assertEqual(measurement['MEAS'].tolist(), ['0.0', '0.0'])
+
+    def test_snapshot_source_is_bound_to_actual_connection_identity(self):
+        import sqlite3
+        from contextlib import closing
+        from unittest import mock
+        from metroliza.exporting import export_query_service as service
+
+        with closing(sqlite3.connect(':memory:')) as owner, closing(sqlite3.connect(':memory:')) as foreign:
+            for connection in (owner, foreign):
+                self.populate_snapshot(connection)
+                connection.execute("DELETE FROM snapshot_rows WHERE typeof(REFERENCE) = 'blob'")
+            foreign.execute("UPDATE snapshot_rows SET MEAS = 50.0 WHERE REFERENCE = 'shared'")
+            source = service.prepare_snapshot_partition_source(owner, 'snapshot_rows')
+            expected, columns = self.oracle(foreign)
+            expected = [row for row in expected if row[-2] == 'reference:shared']
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                result = service.load_export_partition_dataframe(
+                    ':memory:', service.build_analytical_partition_query('SELECT * FROM temp."snapshot_rows"'),
+                    'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=foreign, snapshot_source=source,
+                )
+                self.assertEqual(list(result.columns), columns)
+                self.assertEqual(list(result.iter_rows()), expected)
+                self.assertEqual(result['MEAS'].tolist(), [50.0] * 4)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+
+    def test_real_report_storage_is_not_admitted_as_integer_identity(self):
+        import sqlite3
+        from contextlib import closing
+        from unittest import mock
+        from metroliza.exporting import export_query_service as service
+
+        with closing(sqlite3.connect(':memory:')) as connection:
+            self.populate_snapshot(connection)
+            connection.execute("UPDATE snapshot_rows SET REPORT_ID = 2.5 WHERE REFERENCE IS NULL")
+            source = service.prepare_snapshot_partition_source(connection, 'snapshot_rows')
+            self.assertNotIn('REPORT_ID', source.indexed_columns)
+            ordered, columns = self.oracle(connection)
+            expected = [row for row in ordered if row[-2] == 'report:2.5']
+            self.assertGreater(len(expected), 0)
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                result = service.load_export_partition_dataframe(
+                    ':memory:', service.build_analytical_partition_query('SELECT * FROM temp."snapshot_rows"'),
+                    'report:2.5', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=source,
+                )
+                self.assertEqual(list(result.columns), columns)
+                self.assertEqual(list(result.iter_rows()), expected)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+
+
+class TestPartitionStringSubclassCompatibility(unittest.TestCase):
+    def check_service(self, service, kind, *, snapshot, callbacks):
+        import sqlite3
+        from contextlib import closing
+        from unittest import mock
+
+        class SQLiteString(str):
+            def partition(self, *_args):
+                callbacks.append('partition')
+                raise RuntimeError('unexpected Python partition callback')
+
+            def __eq__(self, _other):
+                callbacks.append('equality')
+                raise RuntimeError('unexpected Python equality callback')
+
+            def __ne__(self, _other):
+                callbacks.append('inequality')
+                raise RuntimeError('unexpected Python inequality callback')
+
+        class Identifier:
+            def __str__(self):
+                return 'EXPORT_PARTITION_KEY'
+
+            def __eq__(self, _other):
+                callbacks.append('identifier equality')
+                raise RuntimeError('unexpected identifier equality callback')
+
+        with closing(sqlite3.connect(':memory:')) as connection:
+            connection.execute('CREATE TEMP TABLE string_rows (REFERENCE TEXT, REPORT_ID INTEGER)')
+            connection.executemany('INSERT INTO string_rows VALUES (?, ?)', [('A', 1), ('A', 2), ('B', 3)])
+            connection.execute('CREATE INDEX string_ref ON string_rows(REFERENCE)')
+            scope = 'SELECT * FROM temp."string_rows"'
+            if kind == 'narrowed_scope':
+                scope += ' WHERE REPORT_ID = 1'
+            query = service.build_analytical_partition_query(scope)
+            value = SQLiteString('reference:A') if kind == 'partition_value' else 'reference:A'
+            if kind in ('canonical_scope', 'narrowed_scope'):
+                query = SQLiteString(query)
+            column = 'EXPORT_PARTITION_KEY'
+            if kind == 'partition_column':
+                column = SQLiteString(column)
+            elif kind == 'identifier_object':
+                column = Identifier()
+            options = {'snapshot_source': service.prepare_snapshot_partition_source(connection, 'string_rows')} if snapshot else {}
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                table = service.load_export_partition_dataframe(
+                    ':memory:', query, value, partition_column=column,
+                    connection=connection, **options,
+                )
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+            expected = [('A', 1, 'reference:A', 'A')]
+            if kind != 'narrowed_scope':
+                expected.append(('A', 2, 'reference:A', 'A'))
+            self.assertEqual(list(table.columns), ['REFERENCE', 'REPORT_ID', 'EXPORT_PARTITION_KEY', 'EXPORT_PARTITION_LABEL'])
+            self.assertEqual(list(table.iter_rows()), expected)
+            self.assertEqual(callbacks, [])
+            return {'rows': list(table.iter_rows()), 'columns': list(table.columns), 'callbacks': callbacks}
+
+    def test_subclasses_preserve_sqlite_parameter_and_scope_behavior(self):
+        from metroliza.exporting import export_query_service as service
+
+        for kind in ('partition_value', 'canonical_scope', 'narrowed_scope', 'partition_column', 'identifier_object'):
+            with self.subTest(kind=kind):
+                self.check_service(service, kind, snapshot=True, callbacks=[])
+
+
 if __name__ == '__main__':
     unittest.main()

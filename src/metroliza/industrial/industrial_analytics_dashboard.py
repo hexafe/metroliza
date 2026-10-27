@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 import hashlib
+import heapq
 import html
 from io import BytesIO
 import json
@@ -13,6 +14,7 @@ import re
 import shutil
 from time import perf_counter
 from typing import Any
+from collections.abc import Callable
 
 import numpy as np
 from metroliza.charts.full_data_violin import full_data_violin
@@ -82,13 +84,7 @@ from metroliza.shared.dashboard_interactivity import (
     dashboard_size_limit_bytes,
     normalize_dashboard_interactivity_mapping,
 )
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 pd = _LazyPandas()
@@ -127,6 +123,15 @@ _STATIC_POPULATION_DENSITY_POINT_THRESHOLD = DASHBOARD_RAW_POINT_LIMIT
 _AXIS_DEGENERATE_ABS_TOL = 1e-12
 
 
+
+class DashboardCancelled(RuntimeError):
+    """Raised when dashboard construction is cooperatively cancelled."""
+
+
+def _raise_if_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise DashboardCancelled("Analytics generation was canceled.")
+
 def _metric_population_source_frame(
     source_frame: pd.DataFrame | None,
     metric_field_name: str,
@@ -161,9 +166,11 @@ def build_production_dashboard_manifest(
     source_row_count: int | None = None,
     dashboard_row_count: int | None = None,
     static_population_source_frame: pd.DataFrame | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ProductionDashboardManifest:
     """Build a renderer-neutral manifest for the production analytics dashboard."""
 
+    cancel_kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
     aggregation = aggregation_state or ProductionAggregationState()
     charts = chart_selection or ProductionChartSelection()
     cohort = cohort_state or ReferenceCohortState()
@@ -185,12 +192,14 @@ def build_production_dashboard_manifest(
 
     chart_specs: list[dict[str, Any]] = []
     for metric in metric_selection:
+        _raise_if_cancelled(cancel_check)
         if metric.field_name not in frame.columns:
             continue
         metric_frame = frame.loc[frame[metric.field_name].notna()]
         if metric_frame.empty:
             continue
         chart_group_columns = _chart_group_columns(metric_frame, aggregation)
+        _raise_if_cancelled(cancel_check)
         if charts.time_series:
             metric_population_source_frame = _metric_population_source_frame(
                 static_population_source_frame,
@@ -208,8 +217,10 @@ def build_production_dashboard_manifest(
                 plotly_visual_settings=plotly_visual_settings,
                 include_plotly_specs=include_plotly_specs,
                 population_layer_mode=population_layer_mode,
+                **cancel_kwargs,
             )
             chart_specs.extend(spec for spec in specs if spec)
+        _raise_if_cancelled(cancel_check)
         if charts.histogram:
             spec = _build_histogram_chart(
                 metric,
@@ -220,6 +231,7 @@ def build_production_dashboard_manifest(
             )
             if spec:
                 chart_specs.append(spec)
+        _raise_if_cancelled(cancel_check)
         if charts.violin:
             spec = _build_distribution_chart(
                 metric,
@@ -231,6 +243,7 @@ def build_production_dashboard_manifest(
             )
             if spec:
                 chart_specs.append(spec)
+        _raise_if_cancelled(cancel_check)
         if charts.box:
             spec = _build_distribution_chart(
                 metric,
@@ -243,6 +256,7 @@ def build_production_dashboard_manifest(
             if spec:
                 chart_specs.append(spec)
 
+    _raise_if_cancelled(cancel_check)
     summary = {
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "source_rows": selected_source_row_count,
@@ -297,9 +311,12 @@ def write_production_dashboard(
     plotly_serialized_json_bytes_budget: int | None = DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     dashboard_visual_settings: dict[str, Any] | None = None,
     dashboard_interactivity_options: Any = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ProductionDashboardWriteResult:
     """Write an offline production analytics dashboard and local Plotly asset."""
 
+    _raise_if_cancelled(cancel_check)
+    cancel_kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
     validated_manifest = validate_dashboard_manifest(manifest)
     total_start = perf_counter()
     timings_s = {
@@ -349,11 +366,14 @@ def write_production_dashboard(
     population_layer_summary = _apply_static_population_layer_options(
         base_dashboard_manifest,
         interactivity=interactivity,
+        **cancel_kwargs,
     )
+    _raise_if_cancelled(cancel_check)
     timings_s["static_population_layer"] += perf_counter() - static_population_start
-    plotly_spec_count = _count_plotly_specs(base_dashboard_manifest)
     json_measurement_start = perf_counter()
-    plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(base_dashboard_manifest)
+    spec_sizes = _plotly_spec_sizes(base_dashboard_manifest, **cancel_kwargs)
+    plotly_spec_count = len(spec_sizes)
+    plotly_serialized_json_bytes = sum(size for size, _index in spec_sizes)
     json_measurement_elapsed = perf_counter() - json_measurement_start
     timings_s["plotly_json_measurement"] += json_measurement_elapsed
     timings_s["plotly_json_measurement_initial"] += json_measurement_elapsed
@@ -375,12 +395,14 @@ def write_production_dashboard(
                 base_dashboard_manifest,
                 count_budget=count_budget,
                 json_bytes_budget=json_bytes_budget,
+                _owned_manifest=True,
+                _spec_sizes=spec_sizes,
             )
         )
         timings_s["plotly_budget_resolution"] += perf_counter() - budget_start
     embedded_plotly_spec_count = _count_plotly_specs(dashboard_manifest)
     embedded_json_measurement_start = perf_counter()
-    embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(dashboard_manifest)
+    embedded_plotly_serialized_json_bytes = _retained_plotly_spec_bytes(dashboard_manifest, spec_sizes)
     embedded_json_measurement_elapsed = perf_counter() - embedded_json_measurement_start
     timings_s["plotly_json_measurement"] += embedded_json_measurement_elapsed
     timings_s["plotly_json_measurement_embedded"] += embedded_json_measurement_elapsed
@@ -399,6 +421,7 @@ def write_production_dashboard(
             reasons.append("specs_omitted")
         plotly_budget_reason = ",".join(reasons)
 
+    _raise_if_cancelled(cancel_check)
     asset_directory.mkdir(parents=True, exist_ok=True)
     plotly_runtime_status = "not_needed"
     if interactivity["mode"] == "static" and plotly_spec_count > 0:
@@ -425,7 +448,7 @@ def write_production_dashboard(
 
     embedded_plotly_spec_count = _count_plotly_specs(dashboard_manifest)
     final_json_measurement_start = perf_counter()
-    embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(dashboard_manifest)
+    embedded_plotly_serialized_json_bytes = _retained_plotly_spec_bytes(dashboard_manifest, spec_sizes)
     final_json_measurement_elapsed = perf_counter() - final_json_measurement_start
     timings_s["plotly_json_measurement"] += final_json_measurement_elapsed
     timings_s["plotly_json_measurement_final"] += final_json_measurement_elapsed
@@ -453,7 +476,9 @@ def write_production_dashboard(
         dashboard_manifest,
         asset_directory_name=asset_directory.name,
         dashboard_visual_settings=dashboard_visual_settings,
+        **cancel_kwargs,
     )
+    _raise_if_cancelled(cancel_check)
     timings_s["html_rendering"] += perf_counter() - render_start
     html_bytes = len(html_text.encode("utf-8"))
     write_start = perf_counter()
@@ -537,6 +562,25 @@ def _measure_plotly_spec_json_bytes(plotly_spec: dict[str, Any]) -> int:
     )
 
 
+def _plotly_spec_sizes(manifest: dict[str, Any], *, cancel_check=None) -> list[tuple[int, int]]:
+    sizes = []
+    for index, chart in enumerate(manifest["charts"]):
+        _raise_if_cancelled(cancel_check)
+        spec = chart.get("plotly_spec")
+        if isinstance(spec, dict) and spec:
+            sizes.append((_measure_plotly_spec_json_bytes(spec), index))
+    _raise_if_cancelled(cancel_check)
+    return sizes
+
+
+def _retained_plotly_spec_bytes(manifest: dict[str, Any], sizes: list[tuple[int, int]]) -> int:
+    return sum(
+        size for size, index in sizes
+        if isinstance(manifest["charts"][index].get("plotly_spec"), dict)
+        and manifest["charts"][index]["plotly_spec"]
+    )
+
+
 def _normalize_plotly_budget_value(value: Any) -> int | None:
     if value is None:
         return None
@@ -599,6 +643,7 @@ def _apply_static_population_layer_options(
     manifest: dict[str, Any],
     *,
     interactivity: dict[str, int | str],
+    cancel_check=None,
 ) -> dict[str, Any]:
     selected_mode = str(
         interactivity.get("large_group_layer_mode")
@@ -643,6 +688,7 @@ def _apply_static_population_layer_options(
 
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     for chart in charts:
+        _raise_if_cancelled(cancel_check)
         if not isinstance(chart, dict):
             continue
         options = _static_group_layer_options_for_chart(chart)
@@ -1419,28 +1465,32 @@ def _copy_manifest_with_plotly_budget(
     *,
     count_budget: int | None,
     json_bytes_budget: int | None,
+    _owned_manifest: bool = False,
+    _spec_sizes: list[tuple[int, int]] | None = None,
 ) -> tuple[dict[str, Any], str, str]:
-    rendered_manifest = copy_dashboard_manifest_for_render(
+    rendered_manifest = manifest if _owned_manifest else copy_dashboard_manifest_for_render(
         manifest,
         private_optimization_keys=(_STATIC_POPULATION_SOURCE_XY_KEY,),
     )
     if not _is_over_plotly_count_budget(
-        _count_plotly_specs(rendered_manifest),
+        _count_plotly_specs(rendered_manifest) if _spec_sizes is None else len(_spec_sizes),
         count_budget,
     ) and not _is_over_plotly_json_budget(
-        _measure_plotly_specs_json_bytes(rendered_manifest),
+        (_measure_plotly_specs_json_bytes(rendered_manifest) if _spec_sizes is None
+         else sum(size for size, _index in _spec_sizes)),
         json_bytes_budget,
     ):
         return rendered_manifest, "within_budget", ""
 
     charts = rendered_manifest.get("charts") if isinstance(rendered_manifest.get("charts"), list) else []
-    candidates: list[tuple[int, int]] = []
-    for index, chart in enumerate(charts):
-        if not isinstance(chart, dict):
-            continue
-        plotly_spec = chart.get("plotly_spec")
-        if isinstance(plotly_spec, dict) and plotly_spec:
-            candidates.append((_measure_plotly_spec_json_bytes(plotly_spec), index))
+    candidates: list[tuple[int, int]] = [] if _spec_sizes is None else _spec_sizes
+    if _spec_sizes is None:
+        for index, chart in enumerate(charts):
+            if not isinstance(chart, dict):
+                continue
+            plotly_spec = chart.get("plotly_spec")
+            if isinstance(plotly_spec, dict) and plotly_spec:
+                candidates.append((_measure_plotly_spec_json_bytes(plotly_spec), index))
     kept_indexes: set[int] = set()
     current_count = 0
     current_bytes = 0
@@ -1463,9 +1513,14 @@ def _copy_manifest_with_plotly_budget(
             if isinstance(chart, dict):
                 _omit_chart_plotly_spec(chart, note_message=note)
     reasons = []
-    if _is_over_plotly_count_budget(_count_plotly_specs(manifest), count_budget):
+    if _is_over_plotly_count_budget(
+        _count_plotly_specs(manifest) if _spec_sizes is None else len(_spec_sizes), count_budget,
+    ):
         reasons.append(f"spec_count>{count_budget}")
-    if _is_over_plotly_json_budget(_measure_plotly_specs_json_bytes(manifest), json_bytes_budget):
+    if _is_over_plotly_json_budget(
+        (_measure_plotly_specs_json_bytes(manifest) if _spec_sizes is None
+         else sum(size for size, _index in _spec_sizes)), json_bytes_budget,
+    ):
         reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
     return rendered_manifest, "over_budget", ",".join(reasons)
 
@@ -1606,6 +1661,7 @@ def _build_time_series_charts(
     plotly_visual_settings: dict[str, Any] | None = None,
     include_plotly_specs: bool = True,
     population_layer_mode: str = "auto",
+    cancel_check=None,
 ) -> list[dict[str, Any]]:
     method = aggregation.aggregation_methods[0] if aggregation.aggregation_methods else "mean"
     aggregate_metric = f"{metric.field_name}__{method}"
@@ -1643,8 +1699,10 @@ def _build_time_series_charts(
             group_columns=group_columns,
             default_name=f"{metric.display_label} ({method})",
             time_bucket=aggregation.time_bucket,
+            _materialize=include_plotly_specs,
         )
         if traces:
+            _raise_if_cancelled(cancel_check)
             charts.append(
                 _chart_payload(
                     chart_id=f"time-series-{metric.field_name}-aggregated",
@@ -1668,6 +1726,7 @@ def _build_time_series_charts(
                 default_name=f"{metric.display_label} aggregate",
                 time_bucket=None if use_hybrid_raw else aggregation.time_bucket,
                 aggregate_marker=True,
+                _materialize=include_plotly_specs or use_hybrid_raw,
             )
             if use_hybrid_raw:
                 hybrid = _build_hybrid_time_series_chart(
@@ -1685,6 +1744,7 @@ def _build_time_series_charts(
                     include_plotly_specs=include_plotly_specs,
                 )
                 if hybrid:
+                    _raise_if_cancelled(cancel_check)
                     charts.append(hybrid)
                 return charts
             raw_traces = _time_series_traces(
@@ -1693,9 +1753,11 @@ def _build_time_series_charts(
                 y_column=metric.field_name,
                 group_columns=group_columns,
                 default_name=metric.display_label,
+                _materialize=include_plotly_specs,
             )
             raw_traces.extend(overlay_traces)
             if raw_traces:
+                _raise_if_cancelled(cancel_check)
                 charts.append(
                     _chart_payload(
                         chart_id=f"time-series-{metric.field_name}-raw-aggregate",
@@ -1743,6 +1805,7 @@ def _build_time_series_charts(
         y_column=metric.field_name,
         group_columns=group_columns,
         default_name=metric.display_label,
+        _materialize=include_plotly_specs,
     )
     if not traces:
         return []
@@ -2646,6 +2709,7 @@ def _time_series_traces(
     default_name: str,
     time_bucket: str | None = None,
     aggregate_marker: bool = False,
+    _materialize: bool = True,
 ) -> list[dict[str, Any]]:
     if x_column not in frame.columns or y_column not in frame.columns:
         return []
@@ -2657,8 +2721,9 @@ def _time_series_traces(
         valid_mask = group[x_column].notna() & y_series.notna()
         group = group.loc[valid_mask].copy()
         y_series = y_series.loc[valid_mask]
-        x_values = _json_values(group[x_column], time_bucket=time_bucket)
-        y_values = [float(value) for value in y_series.tolist()]
+        x_values, y_values = _time_series_trace_values(
+            group, y_series, x_column, y_column, time_bucket, materialize=_materialize,
+        )
         if not x_values or not y_values:
             continue
         marker_symbol = (
@@ -2694,6 +2759,73 @@ def _time_series_traces(
             }
         )
     return traces
+
+
+def _time_series_trace_values(
+    frame: pd.DataFrame, y_series: pd.Series, x_column: str, y_column: str,
+    time_bucket: str | None, *, materialize: bool,
+) -> tuple[list[Any], list[float]]:
+    if not materialize and _can_omit_time_series_values(frame, x_column, y_series, time_bucket):
+        return [None] * len(frame.index), [0.0] * len(y_series.index)
+    return _json_values(frame[x_column], time_bucket=time_bucket), [
+        float(value) for value in y_series.tolist()
+    ]
+
+
+def _can_omit_time_series_values(
+    frame: pd.DataFrame, x_column: str, y_series: pd.Series, time_bucket: str | None,
+) -> bool:
+    return (
+        (time_bucket is None or (type(time_bucket) is str and time_bucket == "none"))
+        and type(x_column) is str
+        and _plain_time_series_omission_frame(frame)
+        and _json_values_array_supported(_plain_json_values_array(y_series))
+        and _json_values_array_supported(_plain_json_values_array(frame[x_column]))
+    )
+
+
+def _plain_time_series_omission_frame(frame: pd.DataFrame) -> bool:
+    from pandas.core.flags import Flags
+
+    if type(frame) is not pd.DataFrame:
+        return False
+    state = frame.__dict__
+    if not _plain_pandas_metadata_state(
+        state, allowed={"_mgr", "_attrs", "_flags", "_item_cache", "_is_copy"},
+    ):
+        return False
+    attrs, flags = state.get("_attrs"), state.get("_flags")
+    if type(attrs) is not dict or attrs or type(flags) is not Flags:
+        return False
+    if not _plain_pandas_flags(flags):
+        return False
+    manager = state.get("_mgr")
+    blocks = _plain_pandas_manager_blocks(manager, series=False)
+    if blocks is None or not _plain_pandas_axis(manager.axes[0], columns=True):
+        return False
+    if not _plain_pandas_axis(manager.axes[1]):
+        return False
+    return all(type(block.values) in (np.ndarray, pd.arrays.DatetimeArray) for block in blocks)
+
+
+def _plain_pandas_axis(axis: Any, *, columns: bool = False) -> bool:
+    if type(axis) not in (pd.Index, pd.RangeIndex, pd.DatetimeIndex):
+        return False
+    state = axis.__dict__
+    if not _plain_pandas_metadata_state(
+        state, allowed={"_data", "_name", "_cache", "_id", "_references", "_range"},
+    ):
+        return False
+    storage = state.get("_data")
+    if type(axis) is pd.RangeIndex:
+        return True
+    if type(storage) is pd.arrays.StringArray:
+        if not columns:
+            return False
+        storage = storage._ndarray
+    if type(storage) is np.ndarray:
+        return storage.dtype.kind != "O" or (columns and all(type(label) is str for label in storage))
+    return type(storage) is pd.arrays.DatetimeArray
 
 
 def _histogram_stats_tables(
@@ -3236,6 +3368,8 @@ def _sample_allocations(counts: list[int], limit: int) -> list[int]:
         else 0
         for count, raw in zip(counts, raw_allocations, strict=False)
     ]
+    if type(counts) is list and type(limit) is int and all(type(count) is int for count in counts):
+        return _balance_sample_allocations(counts, raw_allocations, allocations, limit)
     while sum(allocations) > limit:
         candidates = [
             (allocation, index)
@@ -3261,6 +3395,45 @@ def _sample_allocations(counts: list[int], limit: int) -> list[int]:
         _fraction, _remaining, index = max(candidates)
         allocations[index] += 1
     return allocations
+
+
+def _balance_sample_allocations(
+    counts: list[int], raw: list[float], allocations: list[int], limit: int,
+) -> list[int]:
+    delta = sum(allocations) - limit
+    if delta > 0:
+        heap = [(-value, -index) for index, value in enumerate(allocations) if value > 1]
+        heapq.heapify(heap)
+        while delta > 0 and heap:
+            negative_value, negative_index = heapq.heappop(heap)
+            index = -negative_index
+            allocations[index] -= 1
+            delta -= 1
+            if allocations[index] > 1:
+                heapq.heappush(heap, (negative_value + 1, negative_index))
+    else:
+        _increase_sample_allocations(counts, raw, allocations, -delta)
+    return allocations
+
+
+def _increase_sample_allocations(
+    counts: list[int], raw: list[float], allocations: list[int], remaining: int,
+) -> None:
+    heap = [
+        (allocations[index] - raw[index], allocations[index] - max(0, count), -index)
+        for index, count in enumerate(counts) if allocations[index] < max(0, count)
+    ]
+    heapq.heapify(heap)
+    while remaining > 0 and heap:
+        _fraction, _capacity, negative_index = heapq.heappop(heap)
+        index = -negative_index
+        allocations[index] += 1
+        remaining -= 1
+        if allocations[index] < max(0, counts[index]):
+            heapq.heappush(heap, (
+                allocations[index] - raw[index],
+                allocations[index] - max(0, counts[index]), negative_index,
+            ))
 
 
 def _sample_xy_frame(frame: pd.DataFrame, sample_size: int, *, seed: int) -> pd.DataFrame:
@@ -3575,9 +3748,12 @@ def _metric_reference_markings(
 
 
 def _json_values(series: pd.Series, *, time_bucket: str | None = None) -> list[Any]:
+    array = _plain_json_values_array(series)
+    raw_values = series.tolist()
+    na_mask = _json_values_na_mask(array)
     values: list[Any] = []
-    for value in series.tolist():
-        if pd.isna(value):
+    for index, value in enumerate(raw_values):
+        if (pd.isna(value) if na_mask is None else na_mask[index]):
             values.append(None)
         elif time_bucket and time_bucket != "none":
             values.append(_format_time_bucket_value(value, time_bucket))
@@ -3586,6 +3762,100 @@ def _json_values(series: pd.Series, *, time_bucket: str | None = None) -> list[A
         else:
             values.append(value)
     return values
+
+
+def _json_values_na_mask(array: Any) -> list[bool] | None:
+    return pd.isna(array).tolist() if _json_values_array_supported(array) else None
+
+
+def _json_values_array_supported(array: Any) -> bool:
+    if type(array) not in (np.ndarray, pd.arrays.DatetimeArray):
+        return False
+    dtype = array.dtype
+    if not isinstance(dtype, np.dtype) or not dtype.isnative:
+        return False
+    if dtype.kind not in "biuMf" or (dtype.kind != "b" and dtype.itemsize != 8):
+        return False
+    if dtype.kind == "f":
+        bits = array.view(np.uint64)
+        # Scalar conversion of signaling NaNs must retain its original warning behavior.
+        signaling = ((bits & 0x7FF0000000000000) == 0x7FF0000000000000) & (
+            (bits & 0x000FFFFFFFFFFFFF) != 0
+        ) & ((bits & 0x0008000000000000) == 0)
+        if np.any(signaling):
+            return False
+    return True
+
+
+def _plain_json_values_array(series: pd.Series) -> Any:
+    if type(series) is not pd.Series:
+        return None
+    state = series.__dict__
+    if not _plain_pandas_metadata_state(state) or "tolist" in state:
+        return None
+    blocks = _plain_pandas_manager_blocks(state.get("_mgr"), series=True)
+    if blocks is None:
+        return None
+    array = blocks[0].values
+    return array if type(array) in (np.ndarray, pd.arrays.DatetimeArray) else None
+
+
+def _plain_pandas_metadata_state(state: Any, *, allowed: set[str] | None = None) -> bool:
+    if type(state) is not dict:
+        return False
+    keys = tuple(state)
+    if not all(type(key) is str for key in keys):
+        return False
+    return allowed is None or all(key in allowed for key in keys)
+
+
+def _plain_pandas_flags(flags: Any) -> bool:
+    from pandas.core.flags import Flags
+
+    if type(flags) is not Flags:
+        return False
+    state = flags.__dict__
+    return _plain_pandas_metadata_state(state) and state.get("_allows_duplicate_labels") is True
+
+
+def _plain_pandas_manager_blocks(manager: Any, *, series: bool) -> Any:
+    from pandas.core.internals.blocks import DatetimeLikeBlock, NumpyBlock
+    from pandas.core.internals.managers import BlockManager, SingleBlockManager
+
+    expected_type = SingleBlockManager if series else BlockManager
+    if type(manager) is not expected_type:
+        return None
+    state = manager.__dict__
+    if not _plain_pandas_manager_state(state, series=series):
+        return None
+    blocks = _native_series_manager_blocks(manager, state) if series else manager.blocks
+    if type(blocks) is not tuple:
+        return None
+    if any(type(block) not in (NumpyBlock, DatetimeLikeBlock) for block in blocks):
+        return None
+    return blocks
+
+
+def _plain_pandas_manager_state(state: Any, *, series: bool) -> bool:
+    if type(state) is not dict:
+        return False
+    allowed = {"_known_consolidated", "_is_consolidated", "_block"}
+    if series:
+        allowed.update(("axes", "blocks"))
+    return all(type(key) is str and key in allowed for key in tuple(state))
+
+
+def _native_series_manager_blocks(manager: Any, state: dict[str, Any]) -> Any:
+    axes, blocks = state.get("axes"), state.get("blocks")
+    if type(axes) is not list or type(blocks) is not tuple:
+        return None
+    if len(axes) != 1 or len(blocks) != 1:
+        return None
+    if manager.axes is not axes or manager.blocks is not blocks:
+        return None
+    if "_block" in state and state["_block"] is not blocks[0]:
+        return None
+    return blocks
 
 
 def _format_time_bucket_value(value: Any, time_bucket: str) -> str:
@@ -3639,13 +3909,16 @@ def _render_dashboard_html(
     *,
     asset_directory_name: str,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    cancel_check=None,
 ) -> str:
     summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
     charts = manifest.get("charts") if isinstance(manifest.get("charts"), list) else []
     diagnostics = manifest.get("diagnostics") if isinstance(manifest.get("diagnostics"), list) else []
     groupstats = manifest.get("groupstats") if isinstance(manifest.get("groupstats"), dict) else {}
     plotly_charts = _plotly_chart_payloads(charts)
+    _raise_if_cancelled(cancel_check)
     charts_json = json.dumps(plotly_charts, ensure_ascii=False).replace("</", "<\\/")
+    _raise_if_cancelled(cancel_check)
     theme_bootstrap_script = render_dashboard_theme_bootstrap_script()
     dashboard_controls_markup = render_dashboard_control_bar(include_visuals=bool(plotly_charts))
     dashboard_controls_css = render_dashboard_controls_css()
@@ -3761,6 +4034,7 @@ def _render_dashboard_html(
         )
     chart_sections = []
     for chart in charts:
+        _raise_if_cancelled(cancel_check)
         if not isinstance(chart, dict):
             continue
         chart_title = str(chart.get("title") or chart.get("id") or "Chart")

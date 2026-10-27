@@ -166,3 +166,164 @@ def test_cleanup_failure_is_explicit_and_closes_session(sqlite_source) -> None:
 
     assert broken_connection.closed is True
     assert store._connection is None
+
+
+def test_effective_assignments_preserve_persistent_catalog_and_literal_state(sqlite_source):
+    with sqlite_connection_scope(sqlite_source.path) as connection:
+        before = connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall()
+    store = TabularGroupingAssignmentStore(sqlite_source, table_name='oracle_assignments')
+    commands = (
+        AssignGroupingRows('001', '#112233', (4, 1, 1)),
+        AssignGroupingRows(' ', '#445566', (2,)),
+        RenameGroupingGroup('001', '1', '#778899'),
+    )
+    try:
+        assert [(a.row_id, a.group_name, a.color) for a in store.assignments(commands, default_group='POPULATION')] == [
+            (1, '1', '#778899'), (2, ' ', '#445566'), (4, '1', '#778899')
+        ]
+        assert store.group_counts(commands, default_group='POPULATION').as_dict() == {' ': 1, '1': 2, 'POPULATION': 1}
+        assert store.group_members(commands, default_group='POPULATION', group_name='1', limit=1).row_ids == (1,)
+        with sqlite_connection_scope(sqlite_source.path) as connection:
+            assert connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall() == before
+    finally:
+        store.cleanup()
+    assert store._connection is None
+
+
+def test_effective_group_name_index_is_temp_used_and_removed(sqlite_source):
+    store = TabularGroupingAssignmentStore(sqlite_source, table_name='indexed_assignments')
+    try:
+        commands = (AssignGroupingRows('A', '#123456', (1, 3)),)
+        store.assignments(commands, default_group='POPULATION')
+        connection = store._connection
+        assert connection.execute("SELECT name FROM sqlite_temp_master WHERE type='index'").fetchall() == [
+            ('indexed_assignments_group_name',)
+        ]
+        plan = connection.execute(
+            'EXPLAIN QUERY PLAN SELECT row_id FROM indexed_assignments WHERE group_name=? ORDER BY row_id LIMIT 2', ('A',)
+        ).fetchall()
+        assert any('USING COVERING INDEX indexed_assignments_group_name' in row[-1] for row in plan)
+        assert not connection.execute("SELECT name FROM sqlite_master WHERE name LIKE 'indexed_assignments%'").fetchall()
+        connection.execute('DROP TABLE indexed_assignments')
+        assert not connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'indexed_assignments%'").fetchall()
+    finally:
+        store.cleanup()
+
+
+@pytest.mark.parametrize("keys, expected", [
+    ((("A", "S1"), ("A", "S1"), ("(blank)", "S2")), [(1, "Żółć", "#123456"), (3, "Żółć", "#123456")]),
+    ((("wrong",),), []),
+    (((),), []),
+])
+def test_t23a_literal_selected_key_oracle(sqlite_source, keys, expected):
+    store = TabularGroupingAssignmentStore(sqlite_source)
+    scope = TabularGroupingScope(
+        selector_columns=("line", "station"), search_text="", filter_columns=(),
+        selected_filter_keys=(), base_column_filters=(), selected_group_keys=keys,
+    )
+    try:
+        rows = store.assignments((AssignGroupingScope("Żółć", "#123456", scope),), default_group="POPULATION")
+        assert [(row.row_id, row.group_name, row.color) for row in rows] == expected
+    finally:
+        store.cleanup()
+    assert store._connection is None
+
+
+def test_t23a_compound_keys_above_expression_limit_and_temp_cleanup(sqlite_source):
+    scope = TabularGroupingScope(
+        selector_columns=("line", "station"), search_text="", filter_columns=(),
+        selected_filter_keys=(), base_column_filters=(),
+        selected_group_keys=tuple((f"missing-{i}", "S") for i in range(1500)) + (("A", "S1"), ("A", "S1"), ("(blank)", "S2")),
+    )
+    store = TabularGroupingAssignmentStore(sqlite_source)
+    commands = (AssignGroupingScope("Selected", "#123456", scope),)
+    try:
+        assert [(r.row_id, r.group_name) for r in store.assignments(commands, default_group="POPULATION")] == [(1, "Selected"), (3, "Selected")]
+        connection = store._connection
+        assert not connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'temp_grouping_selected_keys_%'").fetchall()
+        store.invalidate()
+        assert store.group_counts(commands, default_group="POPULATION").as_dict() == {"Selected": 2, "POPULATION": 2}
+        assert store._connection is connection
+    finally:
+        store.cleanup()
+
+
+@pytest.mark.parametrize("error", [RuntimeError("scope failed"), KeyboardInterrupt("cancel")])
+@pytest.mark.parametrize("incremental", [False, True])
+def test_t23a_selected_key_table_cleanup_after_failure(sqlite_source, monkeypatch, error, incremental):
+    scope = TabularGroupingScope(
+        selector_columns=("line",), search_text="", filter_columns=(),
+        selected_filter_keys=(), base_column_filters=(), selected_group_keys=(("A",),),
+    )
+    store = TabularGroupingAssignmentStore(sqlite_source)
+    initial = (AssignGroupingRows("First", "red", (3,)),) if incremental else ()
+    if initial:
+        assert [row.row_id for row in store.assignments(initial, default_group="POPULATION")] == [3]
+    original = TabularGroupingAssignmentStore._apply_scope_query
+    def fail(*args):
+        raise error
+    monkeypatch.setattr(TabularGroupingAssignmentStore, "_apply_scope_query", fail)
+    try:
+        with pytest.raises(type(error), match=str(error)):
+            store.assignments((*initial, AssignGroupingScope("A", "red", scope)), default_group="POPULATION")
+        connection = store._connection
+        assert not store._connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'temp_grouping_selected_keys_%'").fetchall()
+        monkeypatch.setattr(TabularGroupingAssignmentStore, "_apply_scope_query", original)
+        assert [r.row_id for r in store.assignments((*initial, AssignGroupingScope("A", "red", scope)), default_group="POPULATION")] == ([1, 2, 3] if incremental else [1, 2])
+        assert store._connection is connection
+    finally:
+        store.cleanup()
+
+
+def test_t23a_custom_store_retains_general_selected_key_path(sqlite_source, monkeypatch):
+    from dataclasses import fields
+    from metroliza.tabular.tabular_analytics_service import TabularSqliteStore
+    class CustomStore(TabularSqliteStore):
+        pass
+    custom = CustomStore(**{f.name: getattr(sqlite_source, f.name) for f in fields(sqlite_source) if f.init})
+    store = TabularGroupingAssignmentStore(custom)
+    scope = TabularGroupingScope(
+        selector_columns=("line", "station"), search_text="", filter_columns=(),
+        selected_filter_keys=(), base_column_filters=(), selected_group_keys=(("A", "S2"),),
+    )
+    try:
+        query, params = store._selected_group_keys_query(scope)
+        assert " IN (SELECT " not in query
+        assert params[-2:] == ["A", "S2"]
+        assert [r.row_id for r in store.assignments((AssignGroupingScope("A", "red", scope),), default_group="POPULATION")] == [2]
+    finally:
+        store.cleanup()
+
+
+def test_t23a_selected_keys_exceed_connection_parameter_limit(sqlite_source):
+    import sqlite3
+    store = TabularGroupingAssignmentStore(sqlite_source)
+    try:
+        assert store.assignments((), default_group="POPULATION") == ()
+        old_limit = store._connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 9)
+        scope = TabularGroupingScope(
+            selector_columns=("line",), search_text="", filter_columns=(),
+            selected_filter_keys=(), base_column_filters=(),
+            selected_group_keys=tuple((f"absent-{i}",) for i in range(120)) + (("A",),),
+        )
+        assert [r.row_id for r in store.assignments((AssignGroupingScope("A", "red", scope),), default_group="POPULATION")] == [1, 2]
+        store._connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, old_limit)
+    finally:
+        store.cleanup()
+
+
+def test_t23a_inherited_store_does_not_dispatch_new_helper_collisions(sqlite_source):
+    class CustomStore(TabularGroupingAssignmentStore):
+        def _selected_key_scope(self, *args):
+            raise AssertionError("old subclass helper")
+        def _apply_scope_query(self, *args):
+            raise AssertionError("old subclass helper")
+    store = CustomStore(sqlite_source)
+    scope = TabularGroupingScope(
+        selector_columns=("line",), search_text="", filter_columns=(),
+        selected_filter_keys=(), base_column_filters=(), selected_group_keys=(("A",),),
+    )
+    try:
+        assert [r.row_id for r in store.assignments((AssignGroupingScope("A", "red", scope),), default_group="POPULATION")] == [1, 2]
+    finally:
+        store.cleanup()

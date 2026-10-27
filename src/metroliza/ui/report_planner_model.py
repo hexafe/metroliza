@@ -210,6 +210,8 @@ class ReportPlannerModel(QAbstractTableModel):
         self._base_attention_selectable_ids: frozenset[str] = frozenset()
         self._total_count = 0
         self._valid = False
+        self._location_sort_keys: tuple[bytes, ...] = ()
+        self._location_indexes: tuple[QModelIndex, ...] = ()
         self._meta_rows: dict[str, ReviewRow] = {}
         self._row_by_occurrence: dict[str, int] = {}
         self._meta_attention_ids: set[str] = set()
@@ -446,6 +448,16 @@ class ReportPlannerModel(QAbstractTableModel):
             raise TypeError("result must be a ParsePreflightResult")
         self.beginResetModel()
         self._review = result
+        # QString's default case-sensitive ordering compares UTF-16 code units.
+        # The location is immutable for this review; avoid thousands of Python/Qt
+        # data()/QVariant round trips during the proxy's initial sort.
+        self._location_sort_keys = tuple(
+            str(item.display_name).encode("utf-16-be", errors="surrogatepass")
+            for item in result.files
+        )
+        self._location_indexes = tuple(
+            self.createIndex(row, self.LOCATION_COLUMN) for row in range(len(result.files))
+        )
         self._valid = not result.cancelled
         self._cache_review_summary()
         self._selected_occurrence_ids = set(self._selectable_occurrence_ids)
@@ -462,6 +474,8 @@ class ReportPlannerModel(QAbstractTableModel):
         if had_review:
             self.beginResetModel()
         self._review = None
+        self._location_sort_keys = ()
+        self._location_indexes = ()
         self._valid = False
         self._selected_occurrence_ids.clear()
         self._selectable_occurrence_ids = frozenset()
@@ -555,6 +569,17 @@ class ReportPlannerModel(QAbstractTableModel):
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else self.COLUMN_COUNT
+
+    def index(self, row, column, parent=QModelIndex()):
+        # QAbstractTableModel.index() dispatches through rowCount/columnCount for
+        # every comparison in the proxy sort. Validate the same flat-table bounds
+        # directly, avoiding two extra C++/Python round trips per index.
+        if (parent.isValid() or not self.valid or row < 0 or column < 0
+                or row >= len(self._review.files) or column >= self.COLUMN_COUNT):
+            return QModelIndex()
+        if column == self.LOCATION_COLUMN:
+            return self._location_indexes[row]
+        return self.createIndex(row, column)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
         if orientation != Qt.Orientation.Horizontal or not 0 <= section < self.COLUMN_COUNT:
@@ -814,9 +839,44 @@ class ReportPlannerFilterModel(QSortFilterProxyModel):
         self._status_filter = ""
         self._parser_filter = ""
         self._attention_only = False
+        self._planner_source = None
+        self._default_location_order = True
         self.setDynamicSortFilter(True)
         self.setFilterKeyColumn(-1)
         self.setSortRole(ReportPlannerModel.SORT_ROLE)
+
+    def setSourceModel(self, source):  # noqa: N802 - Qt API
+        self._planner_source = source if isinstance(source, ReportPlannerModel) else None
+        super().setSourceModel(source)
+
+    def setSortCaseSensitivity(self, sensitivity):  # noqa: N802 - Qt API
+        self._default_location_order = (
+            sensitivity == Qt.CaseSensitivity.CaseSensitive and not self.isSortLocaleAware()
+            and self.sortRole() == ReportPlannerModel.SORT_ROLE
+        )
+        super().setSortCaseSensitivity(sensitivity)
+
+    def setSortLocaleAware(self, enabled):  # noqa: N802 - Qt API
+        self._default_location_order = (
+            not enabled and self.sortCaseSensitivity() == Qt.CaseSensitivity.CaseSensitive
+            and self.sortRole() == ReportPlannerModel.SORT_ROLE
+        )
+        super().setSortLocaleAware(enabled)
+
+    def setSortRole(self, role):  # noqa: N802 - Qt API
+        self._default_location_order = (
+            role == ReportPlannerModel.SORT_ROLE and not self.isSortLocaleAware()
+            and self.sortCaseSensitivity() == Qt.CaseSensitivity.CaseSensitive
+        )
+        super().setSortRole(role)
+
+    def lessThan(self, left, right):  # noqa: N802 - Qt override
+        source = self._planner_source
+        if (source is not None and self._default_location_order
+                and left.column() == source.LOCATION_COLUMN):
+            keys = source._location_sort_keys
+            return keys[left.row()] < keys[right.row()]
+        return super().lessThan(left, right)
 
     def set_text_filter(self, value: str) -> None:
         normalized = str(value or "").casefold().strip()

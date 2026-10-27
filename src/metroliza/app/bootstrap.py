@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 import sys
@@ -267,8 +268,13 @@ def log_runtime_provenance(logger: logging.Logger) -> None:
         pass
 
 
-def get_or_create_qapplication():
-    """Return the active QApplication, creating it when startup has not done so yet."""
+def get_or_create_qapplication(*, gui_gc: bool = True):
+    """Return the active QApplication, creating it when startup has not done so yet.
+
+    GUI flows (the application and the qualification flows that open windows and start
+    workers) get the GUI-thread garbage-collection policy of ``metroliza.app.gc_policy``.
+    Modes without a Qt event loop, such as the startup smoke, pass ``gui_gc=False``.
+    """
     record_event("qapplication_import_start")
     from PyQt6.QtWidgets import QApplication
 
@@ -276,12 +282,19 @@ def get_or_create_qapplication():
     existing_app = QApplication.instance()
     if existing_app is not None:
         record_event("qapplication_reused")
-        return existing_app
+        app = existing_app
+    else:
+        record_event("qapplication_create_start")
+        app = QApplication(sys.argv)
+        record_event("qapplication_create_done")
+    if gui_gc:
+        from metroliza.app.gc_policy import install as install_gui_gc
 
-    record_event("qapplication_create_start")
-    app = QApplication(sys.argv)
-    record_event("qapplication_create_done")
+        install_gui_gc(app)
     return app
+
+
+EXIT_AFTER_WARMUP_ENV = "METROLIZA_STARTUP_EXIT_AFTER_WARMUP"
 
 
 def _schedule_startup_ui_smoke_exit(app) -> None:
@@ -290,6 +303,9 @@ def _schedule_startup_ui_smoke_exit(app) -> None:
 
     def record_and_quit() -> None:
         record_event("first_event_loop_tick")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("first_event_loop_tick")
         app.quit()
 
     QTimer.singleShot(0, record_and_quit)
@@ -311,6 +327,17 @@ def _schedule_splash_finish_then_warmup(app, splash, main_window) -> None:
     callback is deliberately not wired up).
     """
 
+    def warmup_finished() -> None:
+        record_event("launch_ui_warmup_finished")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("warmup_finished")
+        # Measurement aid: leave once the window is fully usable (first useful screen).
+        if os.getenv(EXIT_AFTER_WARMUP_ENV) == "1":
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, app.quit)
+
     def finish_splash_and_start_warmup() -> None:
         record_event("main_window_first_paint_tick")
         try:
@@ -322,7 +349,7 @@ def _schedule_splash_finish_then_warmup(app, splash, main_window) -> None:
         finally:
             main_window.schedule_feature_import_warmup(
                 delay_ms=0,
-                on_finished=lambda: record_event("launch_ui_warmup_finished"),
+                on_finished=warmup_finished,
             )
 
     _schedule_after_first_event_loop_tick(finish_splash_and_start_warmup)
@@ -345,7 +372,7 @@ def run_startup_smoke_mode(logger: logging.Logger) -> int:
 
     logger.info("Startup smoke mode enabled (%s): beginning non-interactive init", STARTUP_SMOKE_ENV)
     _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
-    app = get_or_create_qapplication()
+    app = get_or_create_qapplication(gui_gc=False)
     _startup_event(StartupCallsite.QAPPLICATION_READY)
     _startup_event(StartupCallsite.SMOKE_WORK)
     _ = LicenseKeyManager.generate_hardware_id()
@@ -385,6 +412,12 @@ def launch_ui(
     _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
     app = get_or_create_qapplication()
     _startup_event(StartupCallsite.QAPPLICATION_READY)
+    from metroliza.app.gc_policy import install as install_gui_gc
+
+    install_gui_gc(app)
+    from metroliza.app.startup_stall_probe import install_if_requested
+
+    install_if_requested(app)
     splash = create_startup_splash(app, ui_smoke_mode=config.startup_ui_smoke_mode)
     close_bootloader_splash(phase="qt_splash_ready")
     splash.show_message("Checking license...", phase="license")
@@ -439,6 +472,8 @@ def launch_ui(
     record_event("event_loop_enter")
     _startup_event(StartupCallsite.EVENT_LOOP_EXEC_REQUEST, StartupOutcome.STARTUP_COMPLETED)
     exit_code = app.exec()
+    # All quit handlers have finished; collect remaining Qt cycles on the GUI thread.
+    gc.collect()
     record_event("event_loop_exit", exit_code=exit_code)
     return exit_code
 

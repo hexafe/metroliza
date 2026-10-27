@@ -178,6 +178,7 @@ def test_filter_dialog_loads_references_from_local_metroliza_metadata_only(tmp_p
 
     dialog = IndustrialFilterDialog(db_file=db_path, state=IndustrialFilterState())
     dialog.load_database_references()
+    _wait_references(dialog)
 
     assert dialog.references_edit.toPlainText().splitlines() == ["REF-1", "REF-2"]
     assert dialog.summary_label.text().startswith("1 active condition.")
@@ -344,3 +345,291 @@ def test_filter_dialog_dirty_x_and_escape_restore_without_parent_commit(monkeypa
     finally:
         dialog.close()
         parent.close()
+
+
+def _wait_references(dialog):
+    for _ in range(1000):
+        if getattr(dialog, "_reference_thread", None) is None:
+            return
+        _app().processEvents()
+        QTest.qWait(5)
+    pytest.fail("reference load did not finish")
+
+
+def test_reference_load_literal_edge_order(tmp_path):
+    _app()
+    db_path = str(tmp_path / "literal.db")
+    ensure_report_schema(db_path)
+    values = [" ref ", "REF", "réf", "RéF", "001", "1", "", " \t ", None]
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        for index, value in enumerate(values, 1):
+            conn.execute(
+                "INSERT INTO source_files(id,sha256,source_format,discovered_at) VALUES (?,?,?,?)",
+                (index, str(index), "pdf", "2026-01-01"),
+            )
+            conn.execute(
+                "INSERT INTO parsed_reports(id,source_file_id,parser_id,template_family,parse_status,created_at,updated_at) "
+                "VALUES (?,?, 'test','test','parsed','2026-01-01','2026-01-01')", (index, index),
+            )
+            conn.execute(
+                "INSERT INTO report_metadata(report_id,reference,metadata_version) VALUES (?,?,'v1')", (index, value),
+            )
+    dialog = IndustrialFilterDialog(db_file=db_path)
+    dialog.load_database_references()
+    _wait_references(dialog)
+    assert dialog.references_edit.toPlainText() == "001\n1\nref\nREF\nRéF\nréf"
+    assert dialog.source_context_label.text() == (
+        "Reference source: 6 value(s) loaded from the open Metroliza "
+        "report database. Changes stay in this draft until you apply the filters."
+    )
+    dialog.close()
+
+
+def test_reference_custom_scope_literal_error(monkeypatch):
+    _app()
+    calls, warnings = [], []
+
+    def custom(path):
+        calls.append(path)
+        raise ValueError("literal password=abc Unicode: Ω")
+
+    monkeypatch.setattr(industrial_filter_dialog, "sqlite_connection_scope", custom)
+    monkeypatch.setattr(industrial_filter_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    dialog = IndustrialFilterDialog(db_file="custom.db")
+    dialog.load_database_references()
+    assert calls == ["custom.db"]
+    assert warnings == [
+        "Could not read references from the selected Metroliza report database: literal password=abc Unicode: Ω"
+    ]
+    dialog.close()
+
+
+@pytest.mark.parametrize("action", ["normal", "edit", "reset", "database", "close", "discard_gate", "apply"])
+def test_native_reference_worker_stale_and_terminal_lifetime(monkeypatch, tmp_path, action):
+    import threading
+
+    from PyQt6 import sip
+    from PyQt6.QtCore import QThread
+
+    from metroliza.ui import detached_threads
+
+    app = _app()
+    entered, release = threading.Event(), threading.Event()
+    original_run = industrial_filter_dialog._ReferenceThread.run
+    owners = []
+
+    def held_run(worker):
+        owners.append(QThread.currentThread() is app.thread())
+        entered.set()
+        if not release.wait(5):
+            worker.error = "test barrier timed out"
+            return
+        original_run(worker)
+
+    monkeypatch.setattr(industrial_filter_dialog._ReferenceThread, "run", held_run)
+    path = str(tmp_path / "new.db")
+    dialog = IndustrialFilterDialog(db_file=path, state=IndustrialFilterState(references=("draft",)))
+    dialog.load_database_references()
+    worker = dialog._reference_thread
+    try:
+        assert entered.wait(2)
+        assert detached_threads.is_registered(worker)
+        assert detached_threads._QUIT_BLOCKERS[id(worker)] is worker
+        assert not dialog.load_db_references_button.isEnabled()
+        dialog.load_database_references()
+        assert dialog._reference_thread is worker
+        if action == "edit":
+            dialog.references_edit.setPlainText("edited")
+        elif action == "reset":
+            dialog.clear_filter()
+        elif action == "database":
+            dialog.db_file = str(tmp_path / "other.db")
+        elif action == "close":
+            dialog.close()
+        elif action == "discard_gate":
+            dialog._discard_gate_active = True
+        elif action == "apply":
+            dialog.apply_filter()
+        if action == "normal":
+            QTest.qWait(1100)
+            assert dialog._reference_progress.isVisible()
+    finally:
+        release.set()
+        _wait_references(dialog)
+    assert owners == [False]
+    assert dialog.references_edit.toPlainText() == {
+        "normal": "", "edit": "edited", "reset": "", "database": "draft",
+        "close": "draft", "discard_gate": "draft", "apply": "draft",
+    }[action]
+    assert dialog._reference_progress is None
+    assert not detached_threads.is_registered(worker)
+    QTest.qWait(10)
+    assert sip.isdeleted(worker)
+    # The complete schema ensure really ran, including when its result was discarded.
+    with closing(sqlite3.connect(path)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM report_metadata").fetchone() == (0,)
+    dialog._discard_gate_active = False
+    dialog.close()
+
+
+@pytest.mark.parametrize("failure", ["construct", "start", "query"])
+def test_reference_load_failures_release_once(monkeypatch, tmp_path, failure):
+    _app()
+    warnings = []
+    monkeypatch.setattr(industrial_filter_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    dialog = IndustrialFilterDialog(db_file=str(tmp_path / "new.db"))
+    if failure == "construct":
+        def fail(*_args):
+            raise ValueError("constructor Ω")
+        monkeypatch.setattr(industrial_filter_dialog, "_ReferenceThread", fail)
+    elif failure == "start":
+        def fail(_worker):
+            raise ValueError("start Ω")
+        monkeypatch.setattr(industrial_filter_dialog._ReferenceThread, "start", fail)
+    else:
+        dialog.db_file = str(tmp_path / "missing" / "new.db")
+    dialog.load_database_references()
+    _wait_references(dialog)
+    expected = {"construct": "constructor Ω", "start": "start Ω", "query": "unable to open database file"}
+    assert warnings == [
+        "Could not read references from the selected Metroliza report database: " + expected[failure]
+    ]
+    assert dialog._reference_thread is None
+    assert dialog._reference_progress is None
+    assert dialog.load_db_references_button.isEnabled()
+    dialog.close()
+
+
+def test_custom_reference_rows_keep_conversion_exception_outside_warning(monkeypatch):
+    from contextlib import contextmanager
+
+    _app()
+    calls = []
+
+    class Value:
+        def __str__(self):
+            calls.append("str")
+            raise ValueError("conversion Ω")
+
+    class Connection:
+        def execute(self, _sql):
+            calls.append("execute")
+            return self
+
+        def fetchall(self):
+            return [(Value(),)]
+
+    @contextmanager
+    def scope(path):
+        calls.append(path)
+        yield Connection()
+        calls.append("closed")
+
+    monkeypatch.setattr(industrial_filter_dialog, "sqlite_connection_scope", scope)
+    monkeypatch.setattr(industrial_filter_dialog, "ensure_report_schema", lambda *_args, **_kw: calls.append("ensure"))
+    monkeypatch.setattr(industrial_filter_dialog.QMessageBox, "warning", lambda *_args: pytest.fail("must propagate"))
+    dialog = IndustrialFilterDialog(db_file="custom")
+    with pytest.raises(ValueError, match="conversion Ω"):
+        dialog.load_database_references()
+    assert calls == ["custom", "ensure", "execute", "closed", "str"]
+    assert getattr(dialog, "_reference_thread", None) is None
+    dialog.close()
+
+
+def test_reference_subclass_retains_synchronous_dispatch(tmp_path):
+    _app()
+
+    class CustomDialog(IndustrialFilterDialog):
+        def _apply_database_references(self, _references):
+            pytest.fail("new helper must not dispatch a preexisting subclass hook")
+
+    path = str(tmp_path / "custom.db")
+    dialog = CustomDialog(db_file=path)
+    dialog.load_database_references()
+    assert "0 value(s) loaded" in dialog.source_context_label.text()
+    assert not hasattr(dialog, "_reference_thread")
+    dialog.close()
+
+
+def test_stale_completion_identity_preserves_current_request():
+    from types import SimpleNamespace
+    from metroliza.ui.industrial_filter_dialog import IndustrialFilterDialog
+
+    current, stale = object(), object()
+    owner = SimpleNamespace(_reference_thread=current)
+    IndustrialFilterDialog._references_finished(owner, stale)
+    assert owner._reference_thread is current
+
+
+def test_successful_native_operation_normal_owner_close_and_quit(tmp_path):
+    import subprocess
+    import sys
+    script = r"""
+from contextlib import closing
+from pathlib import Path
+from threading import Event, Timer
+from time import monotonic
+import shutil, sqlite3, sys
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QMessageBox
+from metroliza.app.bootstrap import get_or_create_qapplication
+from metroliza.ui import detached_threads
+from tests.test_industrial_linking_dialog import _prepare_linking_db
+app = get_or_create_qapplication(); app.setQuitOnLastWindowClosed(False)
+path = _prepare_linking_db(Path(sys.argv[1]))
+QMessageBox.question = lambda *args: QMessageBox.StandardButton.Discard
+entered, release = Event(), Event()
+beats, closed = [], []
+def dump(database):
+    with closing(sqlite3.connect(database)) as connection:
+        return list(connection.iterdump())
+from metroliza.ui import industrial_filter_dialog as module
+Dialog, Worker = module.IndustrialFilterDialog, module._ReferenceThread
+dialog = Dialog(db_file=path)
+expected = dump(path)
+original_finish = Dialog._references_finished
+def finish(owner, worker):
+    original_finish(owner, worker)
+    assert owner._reference_thread is None
+    assert owner.references_edit.toPlainText() == "MET-123"
+    assert owner.source_context_label.text() == (
+        "Reference source: 1 value(s) loaded from the open Metroliza "
+        "report database. Changes stay in this draft until you apply the filters.")
+    assert owner.close()
+    closed.append(1)
+    app.quit()
+Dialog._references_finished = finish
+start = dialog.load_database_references
+field = '_reference_thread'
+original_run = Worker.run
+def held_run(worker):
+    entered.set()
+    assert release.wait(9), "native operation barrier expired"
+    original_run(worker)
+Worker.run = held_run
+def quit_after_start():
+    if not entered.is_set():
+        QTimer.singleShot(5, quit_after_start); return
+    worker = getattr(dialog, field)
+    assert worker is not None and worker.isRunning()
+    assert detached_threads._QUIT_BLOCKERS[id(worker)] is worker
+    print('actual operation work started', flush=True)
+    Timer(5.2, release.set).start()
+    app.quit()
+heartbeat = QTimer(); heartbeat.timeout.connect(lambda: beats.append(1)); heartbeat.start(10)
+started = monotonic()
+QTimer.singleShot(0, start)
+QTimer.singleShot(5, quit_after_start)
+QTimer.singleShot(12000, lambda: app.exit(99))
+assert app.exec() == 0
+assert entered.is_set() and release.is_set() and closed == [1]
+assert monotonic() - started > 5 and len(beats) > 100
+assert not detached_threads.running_threads() and not dialog.isVisible()
+assert dump(path) == expected
+print('native normal close and saved-reopen complete', len(beats), len(expected), flush=True)
+"""
+    child = subprocess.run([sys.executable, '-c', script, str(tmp_path)], capture_output=True, text=True, timeout=20)
+    print('industrial actual child exit', child.returncode, child.stdout, child.stderr)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert 'native normal close and saved-reopen complete' in child.stdout
+    assert 'QWaitCondition' not in child.stderr

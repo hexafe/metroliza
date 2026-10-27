@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Maintainer  
-Last reviewed: 2026-08-22
+Last reviewed: 2026-10-22 (dependency version policy)
 
 ## 1. Core rule: Issue first
 
@@ -241,6 +241,25 @@ Until labels exist, retain the priority/type prefix in the Issue title and use c
 for status.
 
 ## 6. Validation tiers
+
+### Dependency versions and updates
+
+Pin the direct dependencies listed in `requirements*.txt` to exact versions; retain immutable commit
+references for Git dependencies. CI and packaging consume those files. Keep duplicate requirements
+consistent across runtime, development, build and optional environments. These pins cover the listed
+dependencies; they do not lock every transitive dependency or the complete build toolchain.
+
+Review upstream releases periodically and before adopting a dependency feature. An update proposal
+records the old/new versions, release notes, security fixes, useful features, compatibility changes,
+and expected benefit. Change the pins deliberately in a separate update PR, run Tier 3 validation
+and output-equivalence checks, and measure affected flows when performance may change. Rebuild and
+qualify affected packages before accepting the new dependency version. Security fixes receive prompt
+review. A newly published release alone does not change the accepted pins.
+
+The PO adopted this policy in [STEP3 Issue #1151](https://github.com/hexafe/metroliza/issues/1151)
+on 2026-10-22 after an open XlsxWriter range selected a new release with different XLSX internals.
+STEP3 freezes runtime/development versions from its validated environment and records separate
+provenance and verification limits for build and optional dependencies.
 
 ### Tier 0 — Documentation/process only
 

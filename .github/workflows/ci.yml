@@ -41,6 +41,10 @@ on:
         description: "Set to 1 with portable onefile to compare 200-PDF persistence in the build venv"
         required: false
         default: "0"
+      run_windows_first_run_timeline:
+        description: "Set to 1 to record the first-run timeline (current launcher vs splash PoC, same onedir)"
+        required: false
+        default: "0"
       diagnostic_mode:
         description: "Native identity discriminator or full incident qualification"
         type: choice
@@ -1747,4 +1751,108 @@ jobs:
         with:
           name: windows-startup-artifacts
           path: startup-artifacts
+          if-no-files-found: warn
+
+  windows-first-run-timeline:
+    name: Windows first-run timeline (manual/opt-in, STEP2)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_first_run_timeline == '1'
+    env:
+      # Base launcher (current behaviour) for the before/after comparison on the same onedir.
+      BASELINE_LAUNCHER_SHA: 78d5d775756e4b64530ce8fb04f175a2e3f461f1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements-build.txt
+            requirements-ocr.txt
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Build the supervised onedir and the portable envelope EXE (user flavor)
+        shell: pwsh
+        env:
+          METROLIZA_BUILD_FLAVOR: user
+          METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
+        run: .\build_windows_portable_exe.ps1
+
+      - name: Pack the onedir with the splash PoC launcher
+        shell: pwsh
+        run: .\build_windows_launcher_exe.ps1 -Supervised
+
+      - name: Pack the same onedir with the baseline launcher and a next-version PoC EXE
+        shell: pwsh
+        run: |
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe')
+          if ($launcher.Count -ne 1) { throw 'Expected exactly one PoC launcher EXE' }
+          $onedir = @(Get-ChildItem -LiteralPath dist -Directory -Filter 'metroliza_P_*_onedir')
+          if ($onedir.Count -ne 1) { throw 'Expected exactly one onedir' }
+          $version = $launcher[0].Name -replace '^metroliza_(.+)_launcher\.exe$', '$1'
+          $sha = (git rev-parse HEAD).Trim()
+          git fetch --no-tags --depth=1 origin $env:BASELINE_LAUNCHER_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the baseline commit' }
+          $base = Join-Path $env:RUNNER_TEMP 'baseline-launcher'
+          New-Item -ItemType Directory -Force -Path $base | Out-Null
+          git archive --format=tar -o (Join-Path $env:RUNNER_TEMP 'baseline.tar') $env:BASELINE_LAUNCHER_SHA packaging/launcher
+          tar -xf (Join-Path $env:RUNNER_TEMP 'baseline.tar') -C $base
+          Push-Location (Join-Path $base 'packaging/launcher')
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline launcher build failed' }
+          Pop-Location
+          $packer = 'packaging/launcher/target/release/metroliza-packer.exe'
+          $baseStub = Join-Path $base 'packaging/launcher/target/release/metroliza-launcher.exe'
+          $pocStub = 'packaging/launcher/target/release/metroliza-launcher.exe'
+          New-Item -ItemType Directory -Force -Path timeline-exe | Out-Null
+          & $packer --input $onedir[0].FullName --entry metroliza.exe --version $version --content-key --git-sha $sha --stub $baseStub --output "timeline-exe/baseline_${version}_launcher.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline pack failed' }
+          & $packer --input $onedir[0].FullName --entry metroliza.exe --version "${version}next" --content-key --git-sha $sha --stub $baseStub --output "timeline-exe/baseline_next_launcher.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Baseline next-version pack failed' }
+          & $packer --input $onedir[0].FullName --entry metroliza.exe --version "${version}next" --content-key --git-sha $sha --stub $pocStub --output "timeline-exe/poc_next_launcher.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'PoC next-version pack failed' }
+          Copy-Item -LiteralPath $launcher[0].FullName -Destination "timeline-exe/poc_${version}_launcher.exe"
+          Get-ChildItem timeline-exe | Format-Table Name, Length
+
+      - name: Record the first-run timeline (baseline vs splash PoC)
+        shell: pwsh
+        run: |
+          $base = @(Get-ChildItem timeline-exe -Filter 'baseline_2*_launcher.exe')[0].FullName
+          $poc = @(Get-ChildItem timeline-exe -Filter 'poc_2*_launcher.exe')[0].FullName
+          & .\.venv-build\Scripts\python.exe scripts/measure_windows_first_run_timeline.py `
+            --variant "baseline=$base,$(Resolve-Path timeline-exe/baseline_next_launcher.exe)" `
+            --variant "poc=$poc,$(Resolve-Path timeline-exe/poc_next_launcher.exe)" `
+            --variant "poc_nosplash=$poc,$(Resolve-Path timeline-exe/poc_next_launcher.exe);METROLIZA_LAUNCHER_SPLASH=0" `
+            --frames --rounds 6 --settle-seconds 20 --output-dir first-run-timeline
+          $code = $LASTEXITCODE
+          if (Test-Path first-run-timeline/timeline.md) {
+            Get-Content first-run-timeline/timeline.md | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Warning 'timeline.md was not written'
+          }
+          # 3: the run completed and some samples failed (data, see "Failed launches"); any other
+          # non-zero code is a script failure and fails the step.
+          if ($code -eq 3) {
+            Write-Warning 'Some timeline launches failed; see "Failed launches" in timeline.md and the artifact'
+            $global:LASTEXITCODE = 0
+          } elseif ($code -ne 0) {
+            throw "Timeline script failed with exit code $code"
+          }
+
+      - name: Upload the first-run timeline
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-first-run-timeline
+          path: first-run-timeline
           if-no-files-found: warn

@@ -27,6 +27,12 @@ from metroliza.exporting.xlsx_writer_policy import (
     write_untrusted_xlsx_cell,
     xlsxwriter_workbook_options,
 )
+from metroliza.exporting.xlsx_parallel_package import (
+    _cleanup_step,
+    cleanup_failed_workbook,
+    discard_workbook,
+    enable_parallel_package,
+)
 from metroliza.exporting.execution import (
     ExportExecutionContext,
     ExportStageOutcome,
@@ -346,6 +352,7 @@ class XlsxWorkbookWriter:
     path: str
     book: Any
     sheets: dict[str, Any]
+    temporary_directory: tempfile.TemporaryDirectory[str] | None = None
 
 
 class _NullChartAdapter:
@@ -604,12 +611,44 @@ class ExcelExportBackend:
     def create_writer(self, excel_file: str) -> XlsxWorkbookWriter:
         """Create a direct xlsxwriter workbook session for `excel_file`."""
         book = xlsxwriter.Workbook(excel_file, xlsxwriter_workbook_options())
-        enable_bulk_rows(book)
-        return XlsxWorkbookWriter(path=excel_file, book=book, sheets={})
+        temporary_directory = None
+        if isinstance(book, xlsxwriter.workbook.Workbook):
+            temporary_directory = tempfile.TemporaryDirectory(
+                prefix=".xlsx-package-", dir=Path(excel_file).parent
+            )
+            book.tmpdir = temporary_directory.name
+            book._metroliza_package_scratch = temporary_directory.name
+        try:
+            enable_bulk_rows(book)
+            enable_parallel_package(book)
+        except BaseException as error:
+            discard_workbook(book, error)
+            if temporary_directory is not None:
+                _cleanup_step(temporary_directory.cleanup, error)
+            raise
+        return XlsxWorkbookWriter(
+            path=excel_file, book=book, sheets={}, temporary_directory=temporary_directory
+        )
 
     def close_writer(self, writer: XlsxWorkbookWriter) -> None:
         """Close the active writer and flush workbook contents to disk."""
-        writer.book.close()
+        try:
+            writer.book.close()
+        except BaseException as error:
+            cleanup_failed_workbook(writer.book, error)
+            self.discard_writer(writer, error)
+            raise
+        else:
+            self.discard_writer(writer)
+
+    def discard_writer(
+        self, writer: XlsxWorkbookWriter, error: BaseException | None = None,
+    ) -> None:
+        """Release an unfinished writer without creating a workbook package."""
+        discard_workbook(getattr(writer, "book", None), error)
+        temporary_directory = getattr(writer, "temporary_directory", None)
+        if temporary_directory is not None:
+            _cleanup_step(temporary_directory.cleanup, error)
 
     def write_dataframe(self, writer: XlsxWorkbookWriter, table: Any, sheet_name: str) -> None:
         """Write `table` to `sheet_name` without index columns.
@@ -710,19 +749,31 @@ class ExcelExportBackend:
         temp_path = self.create_temporary_workbook_path(str(target_path))
         excel_writer = None
         outcome = ExportStageOutcome.canceled()
+        pipeline_complete = False
+        pipeline_error: BaseException | None = None
         try:
             excel_writer = self.create_writer(str(temp_path))
             try:
                 outcome = normalize_export_outcome(thread.run_export_pipeline(excel_writer))
+                pipeline_complete = True
+            except BaseException as error:
+                pipeline_error = error
+                raise
             finally:
                 thread.begin_workbook_close()
                 close_start = time.perf_counter()
                 try:
-                    self.close_writer(excel_writer)
+                    if pipeline_complete and outcome:
+                        self.close_writer(excel_writer)
+                    else:
+                        self.discard_writer(excel_writer, pipeline_error)
                 finally:
                     thread.complete_workbook_close(time.perf_counter() - close_start)
-        except BaseException:
-            self.remove_temporary_workbook(temp_path)
+        except BaseException as error:
+            if excel_writer is not None:
+                cleanup_failed_workbook(getattr(excel_writer, "book", None), error)
+                self.discard_writer(excel_writer, error)
+            _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise
 
         if not outcome:
@@ -731,8 +782,8 @@ class ExcelExportBackend:
 
         try:
             self.replace_workbook(temp_path, target_path)
-        except BaseException:
-            self.remove_temporary_workbook(temp_path)
+        except BaseException as error:
+            _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise
 
         return outcome

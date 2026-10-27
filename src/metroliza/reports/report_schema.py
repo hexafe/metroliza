@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
+import weakref
 from collections import defaultdict
 from pathlib import PurePath
 
@@ -774,6 +776,64 @@ def is_report_schema_ready(connection) -> bool:
         return False
 
 
+# Positive readiness verdicts per long-lived connection object (import owner thread).
+# A verdict is reused only while the evidence read right before the full check is
+# unchanged: the schema cookie (any DDL, from any connection), the data version (any
+# commit by another connection) and the ``app_schema`` rows. Negative verdicts are never
+# stored. Connections that cannot be weakly referenced (plain ``sqlite3.Connection``)
+# are always checked in full.
+_READY_VERDICTS: "weakref.WeakKeyDictionary[object, tuple]" = weakref.WeakKeyDictionary()
+_READY_VERDICTS_LOCK = threading.Lock()
+
+
+def _readiness_evidence(connection) -> tuple | None:
+    try:
+        return (
+            connection.execute("PRAGMA schema_version").fetchone()[0],
+            connection.execute("PRAGMA data_version").fetchone()[0],
+            tuple(connection.execute("SELECT key, value FROM app_schema")),
+        )
+    except (sqlite3.DatabaseError, TypeError, IndexError):
+        return None
+
+
+def invalidate_report_schema_ready_cache(connection) -> None:
+    """Forget the stored readiness verdict of ``connection`` (no-op when absent)."""
+
+    if connection is None:
+        return
+    try:
+        with _READY_VERDICTS_LOCK:
+            _READY_VERDICTS.pop(connection, None)
+    except TypeError:
+        pass
+
+
+def is_report_schema_ready_cached(connection) -> bool:
+    """``is_report_schema_ready`` that skips the full re-read while nothing changed.
+
+    The evidence is read before the full check, so a change made in between can only
+    cause one extra full check, never a stale positive verdict.
+    """
+
+    evidence = _readiness_evidence(connection)
+    if evidence is not None:
+        try:
+            with _READY_VERDICTS_LOCK:
+                if _READY_VERDICTS.get(connection) == evidence:
+                    return True
+        except TypeError:
+            evidence = None
+    ready = is_report_schema_ready(connection)
+    if not ready:
+        invalidate_report_schema_ready_cache(connection)
+        return False
+    if evidence is not None:
+        with _READY_VERDICTS_LOCK:
+            _READY_VERDICTS[connection] = evidence
+    return True
+
+
 def ensure_report_schema(database: str, *, connection=None, retries: int = 4, retry_delay_s: float = 1) -> None:
     """Ensure report ingestion tables, indexes, views, and schema metadata exist."""
 
@@ -799,21 +859,25 @@ def ensure_report_schema(database: str, *, connection=None, retries: int = 4, re
             ("source_location_ownership_version", SOURCE_LOCATION_OWNERSHIP_VERSION),
         )
 
-    run_transaction_with_retry(
-        database,
-        _ensure_schema,
-        connection=connection,
-        retries=retries,
-        retry_delay_s=retry_delay_s,
-    )
-    ensure_industrial_storage_schema(
-        database,
-        transaction_runner=run_transaction_with_retry,
-        connection_scope=sqlite_connection_scope,
-        connection=connection,
-        retries=retries,
-        retry_delay_s=retry_delay_s,
-    )
+    invalidate_report_schema_ready_cache(connection)
+    try:
+        run_transaction_with_retry(
+            database,
+            _ensure_schema,
+            connection=connection,
+            retries=retries,
+            retry_delay_s=retry_delay_s,
+        )
+        ensure_industrial_storage_schema(
+            database,
+            transaction_runner=run_transaction_with_retry,
+            connection_scope=sqlite_connection_scope,
+            connection=connection,
+            retries=retries,
+            retry_delay_s=retry_delay_s,
+        )
+    finally:
+        invalidate_report_schema_ready_cache(connection)
 
 
 def ensure_schema_indexes(cursor) -> None:

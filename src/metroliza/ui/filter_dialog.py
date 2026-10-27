@@ -1,4 +1,21 @@
 from metroliza.shared.custom_logger import CustomLogger
+from time import monotonic
+try:
+    from metroliza.ui.worker_progress_dialog import (
+        create_delayed_worker_progress_dialog,
+        dismiss_worker_progress_dialog,
+    )
+except ImportError:  # pragma: no cover - lightweight Qt stubs used for query-only tests.
+    def create_delayed_worker_progress_dialog(*args, **kwargs):
+        from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog as factory
+
+        return factory(*args, **kwargs)
+
+    def dismiss_worker_progress_dialog(dialog):
+        if dialog is not None:
+            from metroliza.ui.worker_progress_dialog import dismiss_worker_progress_dialog as dismiss
+
+            dismiss(dialog)
 from metroliza.shared.list_selection_utils import ListSelectionUtils
 from metroliza.ui import ui_theme_tokens
 try:
@@ -897,6 +914,7 @@ class FilterDialog(QDialog):
         self._start_value_load(FILTER_VALUE_SPECS, self._choice_scope_query)
 
     def _stop_value_load(self):
+        self._dismiss_value_progress()
         self._values_closed = True
         self._value_request += 1
         loader = self._value_loader
@@ -907,6 +925,7 @@ class FilterDialog(QDialog):
             loader.load_failed.disconnect(self._filter_values_failed)
 
     def _start_value_load(self, specs, filter_query):
+        action_started_at = monotonic()
         from metroliza.ui.filter_values_loader import FilterValuesLoader
 
         self._stop_value_load()
@@ -921,7 +940,20 @@ class FilterDialog(QDialog):
         loader.values_ready.connect(self._receive_filter_values)
         loader.load_failed.connect(self._filter_values_failed)
         loader.finished.connect(self._value_load_finished)
+        dialog, _label, bar, _movie = create_delayed_worker_progress_dialog(
+            self, window_title="Loading filter values...",
+            initial_status_text="Loading filter values...\nReading available choices\nETA --",
+            on_cancel=lambda: None, cancellable=False, action_started_at=action_started_at,
+        )
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        bar.setRange(0, 0)
+        self._value_progress_dialog = dialog
         loader.start()
+        dialog.show()
+
+    def _dismiss_value_progress(self):
+        dismiss_worker_progress_dialog(getattr(self, "_value_progress_dialog", None))
+        self._value_progress_dialog = None
 
     def _value_load_finished(self):
         # Interrupted requests emit no result. Drop their wrapper before the
@@ -936,6 +968,7 @@ class FilterDialog(QDialog):
         self.filter_tabs.setEnabled(True)
         self.reset_button.setEnabled(True)
         self._refresh_filter_summary()
+        self._dismiss_value_progress()
 
     def _receive_filter_values(self, request_id, values):
         if request_id != self._value_request or self._values_closed:

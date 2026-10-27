@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
 import uuid
 from types import MappingProxyType
 from dataclasses import dataclass, field
@@ -137,6 +138,14 @@ class TabularGroupingAssignmentCleanupError(RuntimeError):
     """Raised when an assignment table cannot be removed explicitly."""
 
 
+@dataclass(frozen=True)
+class _KeyedScopeQuery:
+    sql: str
+    params: list[Any]
+    columns: tuple[str, ...]
+    keys: tuple[tuple[str, ...], ...]
+
+
 _T = TypeVar("_T")
 
 
@@ -152,6 +161,7 @@ class TabularGroupingAssignmentStore:
         self.source_store = source_store
         token = uuid.uuid4().hex
         self.table_name = table_name or f"__metroliza_grouping_assignments_{token}"
+        self._key_table_name = f"temp_grouping_selected_keys_{token}"
         self._scope_table_name = f"temp_grouping_assignment_scope_{token}"
         self._applied_commands: tuple[TabularGroupingCommand, ...] = ()
         self._reset_required = True
@@ -305,15 +315,23 @@ class TabularGroupingAssignmentStore:
             if connection is None:
                 connection = connect_sqlite(self.source_store.path)
                 self._connection = connection
-            with connection:
-                table_name = self._prepare_effective_table(
-                    connection,
-                    normalized_commands,
-                    default_group=default_group,
-                    replay_start=replay_start,
-                    scope_queries=scope_queries,
-                )
-                result: _T = reader(connection, table_name)
+            keyed_scope = any(isinstance(query, _KeyedScopeQuery) for query in scope_queries.values())
+            try:
+                with connection:
+                    table_name = self._prepare_effective_table(
+                        connection,
+                        normalized_commands,
+                        default_group=default_group,
+                        replay_start=replay_start,
+                        scope_queries=scope_queries,
+                    )
+                    result: _T = reader(connection, table_name)
+            finally:
+                if keyed_scope:
+                    # Per-command DROP permits another key shape in this batch.
+                    # Rollback can restore it after an incremental CREATE, so
+                    # final cleanup must follow the transaction's __exit__.
+                    connection.execute(f"DROP TABLE IF EXISTS {_quote_identifier(self._key_table_name)}")
             self._applied_commands = normalized_commands
             self._reset_required = False
             return result
@@ -335,7 +353,7 @@ class TabularGroupingAssignmentStore:
         *,
         default_group: str,
         replay_start: int,
-        scope_queries: Mapping[int, tuple[str, list[Any]]],
+        scope_queries: Mapping[int, tuple[str, list[Any]] | _KeyedScopeQuery],
     ) -> str:
         table_name = _quote_identifier(self.table_name)
         connection.execute(
@@ -343,6 +361,10 @@ class TabularGroupingAssignmentStore:
             "row_id INTEGER PRIMARY KEY, "
             "group_name TEXT NOT NULL, "
             "color TEXT NOT NULL)"
+        )
+        index_name = _quote_identifier(f"{self.table_name}_group_name")
+        connection.execute(
+            f"CREATE INDEX IF NOT EXISTS temp.{index_name} ON {table_name} (group_name)"
         )
         if replay_start == 0:
             connection.execute(f"DELETE FROM {table_name}")
@@ -363,7 +385,7 @@ class TabularGroupingAssignmentStore:
         command: TabularGroupingCommand,
         *,
         default_group: str,
-        scope_query: tuple[str, list[Any]] | None,
+        scope_query: tuple[str, list[Any]] | _KeyedScopeQuery | None,
     ) -> None:
         if isinstance(command, AssignGroupingRows):
             self._apply_rows_command(
@@ -434,9 +456,12 @@ class TabularGroupingAssignmentStore:
         command: AssignGroupingScope,
         *,
         default_group: str,
-        scope_query: tuple[str, list[Any]] | None,
+        scope_query: tuple[str, list[Any]] | _KeyedScopeQuery | None,
     ) -> None:
-        query, params = scope_query or ("", [])
+        with TabularGroupingAssignmentStore._selected_key_scope(self, connection, scope_query) as (query, params):
+            TabularGroupingAssignmentStore._apply_scope_query(self, connection, table_name, command, default_group, query, params)
+
+    def _apply_scope_query(self, connection, table_name, command, default_group, query, params):
         if not query:
             return
         scope_table = _quote_identifier(self._scope_table_name)
@@ -465,7 +490,25 @@ class TabularGroupingAssignmentStore:
             (command.group_name, command.color),
         )
 
-    def _scope_query(self, scope: TabularGroupingScope) -> tuple[str, list[Any]]:
+    @contextmanager
+    def _selected_key_scope(self, connection, scope_query):
+        if not isinstance(scope_query, _KeyedScopeQuery):
+            yield scope_query or ("", [])
+            return
+        table = _quote_identifier(self._key_table_name)
+        columns = ", ".join(f'"key_{i}" TEXT' for i in range(len(scope_query.columns)))
+        names = ", ".join(f'"key_{i}"' for i in range(len(scope_query.columns)))
+        placeholders = ", ".join("?" for _ in scope_query.columns)
+        try:
+            connection.execute(f"CREATE TEMP TABLE {table} ({columns}, PRIMARY KEY ({names})) WITHOUT ROWID")
+            connection.executemany(
+                f"INSERT OR IGNORE INTO {table} VALUES ({placeholders})", scope_query.keys,
+            )
+            yield scope_query.sql, scope_query.params
+        finally:
+            connection.execute(f"DROP TABLE IF EXISTS {table}")
+
+    def _scope_query(self, scope: TabularGroupingScope) -> tuple[str, list[Any]] | _KeyedScopeQuery:
         if scope.selected_group_keys:
             return self._selected_group_keys_query(scope)
         if scope.search_text:
@@ -491,7 +534,7 @@ class TabularGroupingAssignmentStore:
     def _selected_group_keys_query(
         self,
         scope: TabularGroupingScope,
-    ) -> tuple[str, list[Any]]:
+    ) -> tuple[str, list[Any]] | _KeyedScopeQuery:
         columns = tuple(
             str(column)
             for column in scope.selector_columns
@@ -514,6 +557,15 @@ class TabularGroupingAssignmentStore:
             grouping_filter_aliases=scope.filter_aliases,
             grouping_filter=scope.grouping_filter,
         )
+        if type(self.source_store) is TabularSqliteStore and type(scope) is TabularGroupingScope:
+            expressions = ", ".join(_normalized_value_expression(column) for column in columns)
+            names = ", ".join(f'"key_{i}"' for i in range(len(columns)))
+            predicate = f"({expressions}) IN (SELECT {names} FROM {_quote_identifier(self._key_table_name)})"
+            query = (
+                f'SELECT "source_row_number" FROM ({base_scope.sql}) AS selected_grouping_scope '
+                f"WHERE {predicate}"
+            )
+            return _KeyedScopeQuery(query, list(base_scope.params), columns, selected_keys)
         key_params: list[Any] = []
         predicate = _selected_key_predicate(columns, selected_keys, key_params)
         row_column = _quote_identifier("source_row_number")

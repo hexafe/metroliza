@@ -20,6 +20,7 @@ from metroliza.charts.chart_render_service import deterministic_grouped_downsamp
 from metroliza.charts.hexafe_plotstats_adapter import histogram_stats_request
 from metroliza.charts.dashboard_visual_options import dashboard_visual_settings_to_plotly_settings
 from metroliza.industrial.industrial_analytics_dashboard import (
+    DashboardCancelled,
     DASHBOARD_RAW_POINT_LIMIT,
     build_production_dashboard_manifest,
     write_production_dashboard,
@@ -302,6 +303,7 @@ def run_tabular_file_analytics(
     dashboard_interactivity_options: object | None = None,
     _progress_started_at: float | None = None,
     _loading_progress_emitted: bool = False,
+    _grouping_snapshot=None,
 ) -> IndustrialAnalyticsRunResult:
     """Run analytics from a CSV or Excel file."""
 
@@ -327,6 +329,7 @@ def run_tabular_file_analytics(
             dashboard_detail_mode=dashboard_detail_mode,
             dashboard_interactivity_options=dashboard_interactivity_options,
             grouping_df=grouping_df,
+            _grouping_snapshot=_grouping_snapshot,
             grouping_default_group_label=grouping_default_group_label,
             dashboard_visual_settings=dashboard_visual_settings,
         ),
@@ -382,6 +385,7 @@ def run_tabular_file_analytics(
                 tabular_filter_expression=request.tabular_filter_expression,
                 dashboard_detail_mode=request.dashboard_detail_mode,
                 grouping_df=request.grouping_df,
+                _grouping_snapshot=request._grouping_snapshot,
                 grouping_default_group_label=request.grouping_default_group_label,
                 aggregation_state=request.aggregation_state,
                 cohort_state=request.cohort_state,
@@ -990,25 +994,30 @@ def _write_dashboard(
     dashboard_context: dict[str, object] | None = None,
 ) -> ProductionDashboardWriteResult:
     interactivity_mode = str((dashboard_interactivity_options or {}).get("mode") or "auto")
-    manifest: ProductionDashboardManifest = build_production_dashboard_manifest(
-        frame=frame,
-        metric_selection=metrics,
-        aggregation_state=aggregation,
-        aggregation_result=aggregated,
-        groupstats_result=groupstats,
-        chart_selection=charts,
-        cohort_state=cohort,
-        diagnostics=diagnostics,
-        dashboard_title=dashboard_title,
-        dashboard_subtitle=dashboard_subtitle,
-        dashboard_context=dashboard_context,
-        plotly_visual_settings=plotly_visual_settings,
-        include_plotly_specs=interactivity_mode.strip().casefold() != "static",
-        dashboard_interactivity_options=dashboard_interactivity_options,
-        source_row_count=source_row_count,
-        dashboard_row_count=len(getattr(frame, "index", ())),
-        static_population_source_frame=static_population_source_frame,
-    )
+    cancel_kwargs = {"cancel_check": cancel_check} if cancel_check is not None else {}
+    try:
+        manifest: ProductionDashboardManifest = build_production_dashboard_manifest(
+            frame=frame,
+            metric_selection=metrics,
+            aggregation_state=aggregation,
+            aggregation_result=aggregated,
+            groupstats_result=groupstats,
+            chart_selection=charts,
+            cohort_state=cohort,
+            diagnostics=diagnostics,
+            dashboard_title=dashboard_title,
+            dashboard_subtitle=dashboard_subtitle,
+            dashboard_context=dashboard_context,
+            plotly_visual_settings=plotly_visual_settings,
+            include_plotly_specs=interactivity_mode.strip().casefold() != "static",
+            dashboard_interactivity_options=dashboard_interactivity_options,
+            source_row_count=source_row_count,
+            dashboard_row_count=len(getattr(frame, "index", ())),
+            static_population_source_frame=static_population_source_frame,
+            **cancel_kwargs,
+        )
+    except DashboardCancelled as exc:
+        raise AnalyticsCancelled(str(exc)) from exc
     _raise_if_cancelled(cancel_check)
     target_path = _html_output_path(output_dashboard_file)
     temp_path = _temporary_output_path(target_path)
@@ -1019,9 +1028,13 @@ def _write_dashboard(
             assets_dir=_dashboard_assets_dir(target_path),
             dashboard_visual_settings=dashboard_visual_settings,
             dashboard_interactivity_options=dashboard_interactivity_options,
+            **cancel_kwargs,
         )
         _raise_if_cancelled(cancel_check)
         Path(dashboard["html_dashboard_path"]).replace(target_path)
+    except DashboardCancelled as exc:
+        temp_path.unlink(missing_ok=True)
+        raise AnalyticsCancelled(str(exc)) from exc
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise

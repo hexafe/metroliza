@@ -32,8 +32,11 @@ def app():
 
 
 def test_first_module_owns_the_application(app):
+    import gc
     assert QApplication.instance() is app
     assert any(app is kept for kept in _RETAINED_QT_APPLICATIONS)
+    assert not gc.isenabled()
+    assert app._metroliza_gc_policy.timer.isActive()
 '''
 
 LOCAL_MODULE = '''
@@ -46,22 +49,32 @@ from tests.conftest import _RETAINED_QT_APPLICATIONS
 pytestmark = pytest.mark.usefixtures("qapplication_session")
 
 previous_application = None
+previous_cycle = None
 emergency_owner = []
 
 
 @pytest.mark.parametrize("case", [0, 1])
 def test_local_application_is_owned_before_the_body_returns(case):
-    global previous_application
+    import gc
+    global previous_application, previous_cycle
     if previous_application is not None:
         # Fail before creating a second application if ownership regresses.
         assert previous_application() is not None
         assert QApplication.instance() is previous_application()
+        assert previous_cycle() is None, "young cycle survived per-test collection"
     app = QApplication.instance() or QApplication([])
     try:
+        assert not gc.isenabled()
+        assert app._metroliza_gc_policy.timer.isActive()
         assert any(app is kept for kept in _RETAINED_QT_APPLICATIONS), (
             "test-local QApplication has no process owner during the test body"
         )
         previous_application = weakref.ref(app)
+        class Cycle:
+            pass
+        cycle = Cycle()
+        cycle.self = cycle
+        previous_cycle = weakref.ref(cycle)
     finally:
         # On failure, keep the first app alive so this regression cannot itself
         # recreate QApplication and leave unsafe Qt wrappers behind.

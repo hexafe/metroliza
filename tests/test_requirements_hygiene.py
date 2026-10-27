@@ -2,8 +2,32 @@ import pathlib
 import re
 import unittest
 
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
 
 class RequirementsHygieneTests(unittest.TestCase):
+    def test_direct_dependencies_have_consistent_exact_versions_or_git_commits(self):
+        pins = {}
+        for path in sorted(pathlib.Path('.').glob('requirements*.txt')):
+            for line in path.read_text(encoding='utf-8').splitlines():
+                entry = line.split('#', 1)[0].strip()
+                if not entry or entry.startswith('-r '):
+                    continue
+                with self.subTest(path=path, requirement=entry):
+                    requirement = Requirement(entry)
+                    if requirement.url:
+                        self.assertRegex(requirement.url, r'^git\+https://[^@\s]+@[0-9a-f]{40}$')
+                        pin = requirement.url
+                    else:
+                        versions = list(requirement.specifier)
+                        self.assertEqual(len(versions), 1, 'direct dependency needs one exact version')
+                        self.assertEqual(versions[0].operator, '==')
+                        self.assertNotIn('*', versions[0].version)
+                        pin = str(requirement.specifier)
+                    name = canonicalize_name(requirement.name)
+                    self.assertEqual(pins.setdefault(name, pin), pin, 'duplicate pins must agree')
+
     def _runtime_requirements(self) -> list[str]:
         lines = pathlib.Path('requirements.txt').read_text(encoding='utf-8').splitlines()
         entries: list[str] = []
@@ -62,8 +86,14 @@ class RequirementsHygieneTests(unittest.TestCase):
         self.assertIn('pyinstaller', build.lower())
         self.assertIn('rapidocr', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
         self.assertIn('onnxruntime', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
-        self.assertNotIn('openvino>=', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
-        self.assertIn('openvino>=', pathlib.Path('requirements-ocr-benchmark.txt').read_text(encoding='utf-8').lower())
+        ocr_names = {canonicalize_name(Requirement(line).name) for line in
+                     pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').splitlines()
+                     if line.strip() and not line.startswith(('#', '-r '))}
+        benchmark_names = {canonicalize_name(Requirement(line).name) for line in
+                           pathlib.Path('requirements-ocr-benchmark.txt').read_text(encoding='utf-8').splitlines()
+                           if line.strip() and not line.startswith(('#', '-r '))}
+        self.assertNotIn('openvino', ocr_names)
+        self.assertIn('openvino', benchmark_names)
         self.assertIn('opencv-python', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
 
     def test_runtime_requirements_pin_pyqt_wrapper_and_qt_payload_together(self):
