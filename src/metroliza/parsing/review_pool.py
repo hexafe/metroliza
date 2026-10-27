@@ -191,12 +191,17 @@ class OrderedChunkPool:
         self._next_to_submit = 0
         self._usable = True
         self._closed = False
-        self._executor = ProcessPoolExecutor(
-            max_workers=int(workers),
-            mp_context=spawn_context(),
-            initializer=initializer,
-            initargs=initargs,
-        )
+        self._executor: ProcessPoolExecutor | None = None
+        try:
+            self._executor = ProcessPoolExecutor(
+                max_workers=int(workers),
+                mp_context=spawn_context(),
+                initializer=initializer,
+                initargs=initargs,
+            )
+        except Exception as exc:  # noqa: BLE001 - unavailable workers use the serial path
+            self._usable = False
+            self._record_fallback("initialization_failure", exc)
 
     def _refill(self, position: int) -> None:
         while (
@@ -207,6 +212,7 @@ class OrderedChunkPool:
             index = self._next_to_submit
             self._next_to_submit += 1
             try:
+                assert self._executor is not None
                 self._futures[index] = self._executor.submit(self._function, self._tasks[index])
             except Exception as exc:  # noqa: BLE001 - the rest runs in-process
                 self._record_fallback("submit_failure", exc)
@@ -263,10 +269,11 @@ class OrderedChunkPool:
             future.cancel()
         self._futures.clear()
         try:
-            if cancel:
-                _stop_executor(self._executor)
-            else:
-                self._executor.shutdown(wait=True, cancel_futures=True)
+            if self._executor is not None:
+                if cancel:
+                    _stop_executor(self._executor)
+                else:
+                    self._executor.shutdown(wait=True, cancel_futures=True)
         finally:
             logger.info("Review pool completed: %s", self.telemetry,
                         extra={"completion_metadata": self.completion_metadata})

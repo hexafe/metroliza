@@ -623,3 +623,55 @@ def test_metadata_parent_exports_only_generation_eligible_chunk_probes(review_so
                              for probe in calls[0][4])
     assert readings[0].status == "ok" and readings[1] == "serial-stale"
     assert serial == [stale]
+
+
+@pytest.mark.parametrize("operation", ["inspection", "metadata"])
+@pytest.mark.parametrize("cancel", [False, True])
+def test_executor_initialization_failure_uses_ordered_serial_fallback(
+    review_source, monkeypatch, caplog, operation, cancel
+):
+    source, database = review_source
+    serial = _scan(source, database, workers=0)
+    serial_summary, serial_readings = _read_all(serial, workers=0)
+    attempts = []
+
+    def denied_executor(**kwargs):
+        attempts.append(kwargs)
+        raise PermissionError("synthetic semaphore denial")
+
+    monkeypatch.setattr(review_pool, "ProcessPoolExecutor", denied_executor)
+    monkeypatch.setattr(
+        review_pool, "_stop_executor", lambda _executor: pytest.fail("no executor was created")
+    )
+    delivered = []
+    with caplog.at_level("INFO", logger=review_pool.__name__):
+        if operation == "inspection":
+            result = _scan(
+                source, database, workers=2,
+                should_cancel=lambda: cancel and len(delivered) >= 5,
+                on_progress=lambda *args: delivered.append(args),
+            )
+            if cancel:
+                assert result.cancelled
+                assert result.files == serial.files[:5]
+            else:
+                assert result == serial
+        else:
+            ready = [item.stable_occurrence_id for item in serial.files if item.parser_id]
+            summary = MetadataReviewReader(serial).read(
+                ready, on_reading=delivered.append, workers=2,
+                should_cancel=lambda: cancel and len(delivered) >= 5,
+            )
+            if cancel:
+                assert delivered == serial_readings[:5]
+                assert summary.cancelled == len(ready) - 5
+            else:
+                assert delivered == serial_readings
+                assert summary == serial_summary
+    assert len(attempts) == 1
+    receipts = [record.completion_metadata["review_pool"] for record in caplog.records
+                if hasattr(record, "completion_metadata")]
+    assert receipts[-1]["mode"] == "serial_fallback"
+    assert receipts[-1]["fallback_reason"] == "initialization_failure"
+    assert receipts[-1]["exception_class"] == "PermissionError"
+    assert not multiprocessing.active_children()
