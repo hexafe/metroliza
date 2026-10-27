@@ -19,6 +19,9 @@ def test_large_real_import_and_extended_export_match_with_workers_on_and_off(tmp
         trial.mkdir()
         monkeypatch.setenv('METROLIZA_IMPORT_PREPARE_WORKERS', '2' if enabled else '0')
         monkeypatch.setenv('METROLIZA_EXPORT_GROUP_MP', '1' if enabled else '0')
+        # validate_usage() expects the packaged Windows render limit of two workers; this
+        # unfrozen process would otherwise use the source default of up to four.
+        monkeypatch.setenv('METROLIZA_COMPUTE_WORKERS', '2')
         imported = workload.run_import(tmp_path / 'reports', trial / 'result.sqlite3')
         assert set(imported['stage_seconds']) == {'preflight', 'prepare', 'persist', 'other_pipeline'}
         assert all(value >= 0 for value in imported['stage_seconds'].values())
@@ -220,6 +223,9 @@ def test_qualify_registers_failed_trial_before_launch(tmp_path, monkeypatch):
     assert receipt['runs'][0]['runtime_audit']['status'] == 'unavailable'
 
 
+# run_qualification() creates the process' QApplication in a local variable when none exists;
+# the session fixture keeps one alive so a later module never sees a second application (#1119).
+@pytest.mark.usefixtures("qapplication_session")
 def test_qualification_uses_parent_version_policy_without_harness_override(tmp_path, monkeypatch):
     from metroliza.shared import compute_worker, diagnostic_runtime_audit
 

@@ -418,6 +418,11 @@ impl ProgressWindow {
             thread: Mutex::new(None),
         }
     }
+
+    /// Whether `begin` created the window and `finish` has not closed it yet.
+    pub fn is_open(&self) -> bool {
+        WINDOW.load(Ordering::Acquire) != 0
+    }
 }
 
 impl Default for ProgressWindow {

@@ -376,3 +376,18 @@ def test_persisted_theme_is_applied_to_main_window_at_launch(
     assert payload["launch"]["dark"] is expected_dark
     assert payload["launch"]["window"] == expected_window
     assert payload["launch"] == payload["reselected"]
+
+
+def test_repeated_status_variant_does_not_repolish_each_progress_update(monkeypatch):
+    from metroliza.ui import ui_foundation
+    from PyQt6.QtWidgets import QLabel
+
+    widget = QLabel()
+    refreshed = []
+    monkeypatch.setattr(ui_foundation, "_refresh_widget_style", refreshed.append)
+    ui_foundation.set_status_variant(widget, "warning")
+    for _ in range(600):
+        ui_foundation.set_status_variant(widget, "warning")
+    ui_foundation.set_status_variant(widget, "success")
+    assert refreshed == [widget, widget]
+    assert widget.property("statusVariant") == "success"

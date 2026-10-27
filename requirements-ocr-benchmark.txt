@@ -1,4 +1,4 @@
 # Dev/benchmark-only OCR engines. User builds do not ship or require these.
 # Install for METROLIZA_BUILD_FLAVOR=benchmark builds or for source-environment OCR benchmarks.
 -r requirements-ocr.txt
-openvino>=2026.1,<2027
+openvino==2026.4.1

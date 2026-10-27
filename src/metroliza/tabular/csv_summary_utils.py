@@ -2,18 +2,12 @@ import csv
 from pathlib import Path
 
 from metroliza.shared.grouping_filter_core import DataFrameGroupingIndex, normalize_grouping_key
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 _SAMPLE_ROWS = 200
 _TOP_FULL_READ_CANDIDATES = 2
 _BLANK_GROUP_VALUE = "(blank)"
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()

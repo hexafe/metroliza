@@ -99,3 +99,15 @@ def test_configure_headless_matplotlib_uses_temp_fallback_when_default_is_unwrit
         "force": True,
         "mplconfigdir": expected_cache,
     }
+
+
+def test_configure_headless_matplotlib_overrides_interactive_backend(monkeypatch, tmp_path):
+    monkeypatch.setenv("MPLBACKEND", "QtAgg")
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path))
+    captured = []
+    monkeypatch.setitem(sys.modules, "matplotlib", types.SimpleNamespace(
+        use=lambda backend, **kw: captured.append(backend),
+    ))
+    matplotlib_runtime.configure_headless_matplotlib()
+    assert os.environ["MPLBACKEND"] == "Agg"
+    assert captured == ["Agg"]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,9 @@ from metroliza.shared.dashboard_interactivity import (
 )
 from metroliza.analytics.grouping_labels import normalize_default_group_label
 from metroliza.exporting.export_grouping_utils import get_default_group_label
-from metroliza.tabular.contracts import GroupingAssignments, validate_grouping_df
+from metroliza.tabular.contracts import (
+    GroupingAssignments, _GroupingSnapshotOwner, _ValidatedGroupingSnapshot, validate_grouping_df,
+)
 from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
@@ -54,6 +56,8 @@ class IndustrialAnalyticsRequest:
     tabular_filter_expression: str = ""
     grouping_df: GroupingAssignments | None = None
     grouping_default_group_label: str | None = None
+    _grouping_snapshot: _ValidatedGroupingSnapshot | None = field(default=None, repr=False, compare=False, kw_only=True)
+    _grouping_owner: _GroupingSnapshotOwner | None = field(default=None, repr=False, compare=False, kw_only=True)
     dashboard_visual_settings: dict[str, Any] | None = None
     dashboard_interactivity_options: DashboardInteractivityOptions | dict[str, Any] | None = None
 
@@ -134,10 +138,14 @@ def validate_industrial_analytics_request(
             request.tabular_filter_expression,
             field_name="tabular filter expression",
         ),
-        grouping_df=validate_grouping_df(request.grouping_df),
+        grouping_df=(grouping := _normalize_request_grouping(request))[0],
         grouping_default_group_label=normalize_default_group_label(
-            request.grouping_default_group_label, fallback=get_default_group_label(request.grouping_df),
+            request.grouping_default_group_label,
+            fallback=(grouping[2]
+                      if grouping[2] is not None
+                      else get_default_group_label(request.grouping_df)),
         ),
+        _grouping_snapshot=grouping[1],
         dashboard_visual_settings=normalize_dashboard_visual_settings(
             request.dashboard_visual_settings
         ),
@@ -145,6 +153,18 @@ def validate_industrial_analytics_request(
             request.dashboard_interactivity_options
         ),
     )
+
+
+def _normalize_request_grouping(
+    request: IndustrialAnalyticsRequest,
+) -> tuple[GroupingAssignments | None, _ValidatedGroupingSnapshot | None, str | None]:
+    snapshot = request._grouping_snapshot
+    if type(snapshot) is _ValidatedGroupingSnapshot:
+        return snapshot.resolve(request.grouping_df), snapshot, snapshot.default_group_label
+    if type(request._grouping_owner) is _GroupingSnapshotOwner:
+        values, snapshot = request._grouping_owner.capture(request.grouping_df)
+        return values, snapshot, request._grouping_owner.default_group_label
+    return validate_grouping_df(request.grouping_df), None, None
 
 
 def _normalize_analytics_source_kind(value: object) -> str:

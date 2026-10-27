@@ -22,6 +22,15 @@ from metroliza.app.startup_splash import (
 from modules.license_bootstrap import validate_license_bootstrap
 
 
+@pytest.fixture(autouse=True)
+def stub_gui_gc_for_bootstrap_test_doubles(monkeypatch):
+    # These orchestration tests use fake applications. Real Qt installation and
+    # its ordering before the main-window factory are covered in test_gc_policy.
+    from metroliza.app import gc_policy
+
+    monkeypatch.setattr(gc_policy, "install", lambda app: None)
+
+
 class TestBootstrapStartup(unittest.TestCase):
     def test_package_imports_from_outside_repo_root(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -412,7 +421,7 @@ def startup_trace(tmp_path, monkeypatch):
             kwargs["on_finished"]()
 
     app = Application()
-    monkeypatch.setattr(bootstrap, "get_or_create_qapplication", lambda: app)
+    monkeypatch.setattr(bootstrap, "get_or_create_qapplication", lambda **_kwargs: app)
     monkeypatch.setattr(bootstrap, "load_main_window_factory", lambda: Window)
     monkeypatch.setattr(bootstrap, "create_startup_splash", lambda *args, **kwargs: types.SimpleNamespace(
         show_message=lambda *args, **kwargs: None,
@@ -755,3 +764,71 @@ def test_splash_finish_is_recorded_before_warmup_completion(startup_trace, monke
         < events.index("launch_ui_warmup_finished")
     )
     assert startup_trace.state["calls"].index("splash_finish") < startup_trace.state["calls"].index("warmup")
+
+
+def test_t27_splash_releases_movie_and_buffers_after_finish_or_close(qapplication_session):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtGui import QMovie
+    from PyQt6.QtWidgets import QWidget
+    from metroliza.app.startup_splash import QtStartupSplash
+
+    for method in ("finish", "close"):
+        splash = QtStartupSplash(qapplication_session)
+        movie = splash._movie
+        buffers = (splash._gif_buffer, splash._gif_reader_buffer)
+        assert movie is not None and movie.state() == QMovie.MovieState.Running
+        target = QWidget()
+        try:
+            if method == "finish":
+                splash.finish(target)
+            else:
+                splash.close()
+            assert movie.state() == QMovie.MovieState.NotRunning
+            assert splash._gif_label.movie() is None
+            assert all(not buffer.isOpen() for buffer in buffers)
+            assert splash._movie is splash._gif_buffer is splash._gif_reader_buffer is None
+            splash.close()
+            splash.finish(target)
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert sip.isdeleted(movie)
+            assert all(sip.isdeleted(buffer) for buffer in buffers)
+        finally:
+            if not sip.isdeleted(movie):
+                movie.stop()
+            splash._splash.deleteLater()
+            target.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_t27_splash_partial_movie_failure_closes_created_buffers(qapplication_session, monkeypatch):
+    import base64
+    from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QSize
+    from PyQt6.QtGui import QImageReader
+    from PyQt6.QtWidgets import QDialog, QLabel
+    from metroliza.app.startup_splash import QtStartupSplash
+
+    splash = QtStartupSplash.__new__(QtStartupSplash)
+    splash._splash = QDialog()
+    splash._gif_label = QLabel(splash._splash)
+    splash._movie = splash._gif_buffer = splash._gif_reader_buffer = None
+    buffers = []
+
+    def buffer(parent):
+        result = QBuffer(parent)
+        buffers.append(result)
+        return result
+
+    def broken_movie(*args):
+        raise RuntimeError("synthetic movie creation failure")
+
+    # A partial install still has two open buffers before QMovie construction fails.
+    monkeypatch.setattr(base64, "b64decode", lambda *_: b"GIF89a")
+    try:
+        splash._install_loading_movie(QByteArray, buffer, QIODevice, QImageReader, broken_movie, QSize)
+        assert len(buffers) == 2 and all(not item.isOpen() for item in buffers)
+        assert splash._movie is splash._gif_buffer is splash._gif_reader_buffer is None
+    finally:
+        from PyQt6.QtCore import QCoreApplication, QEvent
+        splash._splash.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

@@ -22,16 +22,21 @@ from time import monotonic
 from typing import Callable, Mapping, Sequence
 
 from metroliza.reports.report_metadata_review import ReportMetadataOverride
-from metroliza.shared.env_utils import env_int, env_value
-from metroliza.shared.compute_worker import compute_workers_available, frozen_windows, spawn_context
+from metroliza.shared.compute_budget import (
+    IMPORT_PREPARE_DEFAULT_MIN_REPORTS,
+    IMPORT_PREPARE_MAX_AUTO,
+    IMPORT_PREPARE_MIN_REPORTS_ENV,
+    IMPORT_PREPARE_WORKERS_ENV,
+    import_prepare_workers,
+)
+from metroliza.shared.compute_worker import compute_workers_available, spawn_context
 
 logger = logging.getLogger(__name__)
 
-WORKERS_ENV = "METROLIZA_IMPORT_PREPARE_WORKERS"
-MIN_REPORTS_ENV = "METROLIZA_IMPORT_PREPARE_MIN_REPORTS"
-DEFAULT_MIN_REPORTS = 64
-MAX_AUTO_WORKERS = 3
-MAX_EXPLICIT_WORKERS = 16
+WORKERS_ENV = IMPORT_PREPARE_WORKERS_ENV
+MIN_REPORTS_ENV = IMPORT_PREPARE_MIN_REPORTS_ENV
+DEFAULT_MIN_REPORTS = IMPORT_PREPARE_DEFAULT_MIN_REPORTS
+MAX_AUTO_WORKERS = IMPORT_PREPARE_MAX_AUTO
 INFLIGHT_PER_WORKER = 3
 _RESULT_POLL_SECONDS = 0.2
 _SHUTDOWN_GRACE_SECONDS = 1.0
@@ -48,38 +53,12 @@ def resolve_prepare_worker_count(report_count: int) -> int:
     explicit count. Small batches stay serial because process start-up would dominate.
     Frozen builds stay serial, even with an explicit count, unless the supported
     compute executable passes package identity validation. The packaged Windows
-    defaults are separate from the source policy and are
-    measured by the built-package CI qualification (see Issue #1134).
+    defaults are separate from the source policy and are measured by the built-package
+    CI qualification (Issue #1134); the packaged app keeps the pool off unless the
+    variable enables it (#1136). The rules live in ``metroliza.shared.compute_budget``.
     """
 
-    configured = (env_value(WORKERS_ENV) or "auto").lower()
-    default_minimum = 200 if frozen_windows() else DEFAULT_MIN_REPORTS
-    try:
-        minimum = max(2, env_int(MIN_REPORTS_ENV, default=default_minimum) or default_minimum)
-    except ValueError:
-        minimum = default_minimum
-    if report_count < minimum:
-        return 0
-    if configured != "auto":
-        try:
-            workers = max(0, min(int(configured), MAX_EXPLICIT_WORKERS, report_count))
-        except ValueError:
-            return 0
-        return _available(workers)
-    if frozen_windows():
-        # Off by default in the packaged Windows app. Windows CI run 39151254630 measured the
-        # import 2 of 3 times SLOWER with workers (82-86 s vs 33-58 s serial, 200 reports):
-        # the parent's persist stage dominates and is not understood yet (#1136).
-        # METROLIZA_IMPORT_PREPARE_WORKERS=N still enables them explicitly.
-        return 0
-    workers = min(MAX_AUTO_WORKERS, (os.cpu_count() or 1) - 1)
-    return _available(workers) if workers >= 2 else 0
-
-
-def _available(workers: int) -> int:
-    # Validate the package identity (it hashes the packaged executables) only when a
-    # worker would actually start, so serial imports never pay for it.
-    return workers if workers and compute_workers_available() else 0
+    return import_prepare_workers(report_count, available=compute_workers_available)
 
 
 _WORKER_PARSER_CLASS = None

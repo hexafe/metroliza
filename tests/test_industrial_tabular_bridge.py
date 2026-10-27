@@ -434,3 +434,101 @@ def test_scope_replacement_prunes_facets_and_rebuilds_saved_previews(tmp_path):
     finally:
         single.sqlite_store.cleanup()
         all_sources.sqlite_store.cleanup()
+
+
+def _small_cache(tmp_path):
+    db_file = tmp_path / "industrial.sqlite"
+    repository = IndustrialDataRepository(str(db_file))
+    profile = repository.upsert_source_profile(
+        profile_key="line_a",
+        profile_name="Line A",
+        source_db_alias="prod_a",
+        database_type="mssql",
+        source_object_name="measurements",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id,
+        source_db_alias=profile.source_db_alias,
+        rows=(
+            {"source_record_key": f"row-{index}", "reference": f"REF-{index % 2}", "length_mm": str(10 + index)}
+            for index in range(6)
+        ),
+    )
+    return db_file
+
+
+def _derived_state(db_file):
+    with sqlite_connection_scope(str(db_file)) as connection:
+        views = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'view' AND name LIKE 'industrial_tabular_rows_%'"
+        ).fetchall()
+        tables = {
+            row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        derived = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("industrial_tabular_metadata_cache", "industrial_tabular_value_facets")
+            if table in tables
+        }
+    return views, derived
+
+
+def test_cancelled_load_leaves_no_view_or_derived_rows(tmp_path, monkeypatch) -> None:
+    db_file = _small_cache(tmp_path)
+
+    # Canceled before any work.
+    try:
+        load_industrial_cache_tabular_result(db_file, cancel_check=lambda: True)
+    except industrial_tabular_bridge.IndustrialCacheLoadCanceled:
+        pass
+    else:
+        raise AssertionError("the load should have been canceled")
+    assert _derived_state(db_file)[0] == []
+
+    # Canceled while SQLite runs the metadata statements: the open transaction is rolled back.
+    state = {"cancel": False}
+    original = industrial_tabular_bridge._dynamic_field_metadata
+
+    def flag_then_run(*args, **kwargs):
+        state["cancel"] = True
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(industrial_tabular_bridge, "_dynamic_field_metadata", flag_then_run)
+    monkeypatch.setattr(industrial_tabular_bridge, "_CANCEL_CHECK_INTERVAL_STEPS", 1)
+    try:
+        load_industrial_cache_tabular_result(db_file, cancel_check=lambda: state["cancel"])
+    except industrial_tabular_bridge.IndustrialCacheLoadCanceled:
+        pass
+    else:
+        raise AssertionError("the load should have been canceled")
+    views, derived = _derived_state(db_file)
+    assert views == []
+    assert all(count == 0 for count in derived.values())
+
+    # Canceled after the view was built: the view is dropped again.
+    monkeypatch.undo()
+    state["cancel"] = False
+    store_type = industrial_tabular_bridge.TabularSqliteStore
+    read_dataframe = store_type.read_dataframe
+
+    def flag_after_read(self, *args, **kwargs):
+        frame = read_dataframe(self, *args, **kwargs)
+        state["cancel"] = True
+        return frame
+
+    monkeypatch.setattr(store_type, "read_dataframe", flag_after_read)
+    try:
+        load_industrial_cache_tabular_result(db_file, cancel_check=lambda: state["cancel"])
+    except industrial_tabular_bridge.IndustrialCacheLoadCanceled:
+        pass
+    else:
+        raise AssertionError("the load should have been canceled")
+    assert _derived_state(db_file)[0] == []
+
+    # The same cache loads normally afterwards.
+    monkeypatch.undo()
+    loaded = load_industrial_cache_tabular_result(db_file, cancel_check=lambda: False)
+    try:
+        assert loaded.row_count == 6
+    finally:
+        loaded.sqlite_store.cleanup()

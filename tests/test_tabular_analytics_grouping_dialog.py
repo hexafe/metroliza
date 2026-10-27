@@ -954,7 +954,8 @@ def test_async_preview_cancel_ignores_late_result_and_reopens_cleanly(tmp_path) 
             assert not dialog.findChildren(grouping_dialog_module._SqliteSelectorPreviewThread)
 
 
-def test_sqlite_grouping_preview_with_actual_async_threshold_rows(tmp_path) -> None:
+@pytest.mark.parametrize("columns", [("line",), ("line", "station")])
+def test_sqlite_grouping_preview_with_actual_async_threshold_rows(tmp_path, columns) -> None:
     _app()
     source = tmp_path / "real_async_preview.csv"
     row_count = grouping_dialog_module._ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS
@@ -970,19 +971,91 @@ def test_sqlite_grouping_preview_with_actual_async_threshold_rows(tmp_path) -> N
         # check, without treating cold expression-index DDL as a 1500 ms UI
         # performance contract. The held-worker cases above exercise ownership
         # while preview_group_rows performs its ordinary cold setup.
-        loaded.sqlite_store._ensure_grouping_column_indexes(("line", "station"))
-        dialog.selector_columns = ["line", "station"]
+        loaded.sqlite_store._ensure_grouping_column_indexes(columns)
+        dialog.selector_columns = list(columns)
         dialog._refresh_selectors()
         assert dialog._selector_preview_threads
-        assert _process_events_until(lambda: dialog.selector_list.count() == 4 and not dialog._selector_preview_threads)
-        assert [dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole) for index in range(4)] == [
+        expected = [("A",), ("B",)] if len(columns) == 1 else [
             ("A", "S0"), ("A", "S2"), ("B", "S1"), ("B", "S3"),
         ]
+        assert _process_events_until(lambda: dialog.selector_list.count() == len(expected) and not dialog._selector_preview_threads)
+        assert [dialog.selector_list.item(index).data(Qt.ItemDataRole.UserRole) for index in range(len(expected))] == expected
         row_ids = loaded.sqlite_store.row_ids_for_group_keys(("line", "station"), {("A", "S0")})
         assert row_ids == list(range(1, row_count + 1, 4))
     finally:
         _dispose_preview_dialog(dialog)
         cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("columns", [("line",), ("line", "station")])
+def test_review_f1_native_final_state_is_literal_at_150k(tmp_path, columns):
+    import json
+
+    _app()
+    source = tmp_path / "native_state.csv"
+    with source.open("w") as stream:
+        stream.write("Line,Station\n")
+        for index in range(150_000):
+            stream.write(f"{'A' if index % 2 == 0 else 'B'},S{index % 4}\n")
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    dialog = TabularAnalyticsGroupingDialog(dataframe=loaded.dataframe, sqlite_store=loaded.sqlite_store)
+    try:
+        assert loaded.sqlite_store.row_count == 150_000
+        loaded.sqlite_store._ensure_grouping_column_indexes(columns)
+        expected = [("A",), ("B",)] if len(columns) == 1 else [
+            ("A", "S0"), ("A", "S2"), ("B", "S1"), ("B", "S3"),
+        ]
+        dialog.selector_columns = list(columns)
+        dialog.selected_selector_keys = {expected[0], ("hidden",)}
+        dialog._refresh_selectors()
+        assert _process_events_until(lambda: dialog.selector_list.count() == len(expected) and not dialog._selector_preview_threads)
+        items = [dialog.selector_list.item(index) for index in range(len(expected))]
+        assert [item.data(Qt.ItemDataRole.UserRole) for item in items] == expected
+        assert [item.isSelected() for item in items] == [True] + [False] * (len(expected) - 1)
+        assert dialog.selected_selector_keys == {expected[0], ("hidden",)}
+        assert dialog._selector_total_rows == len(expected)
+        assert dialog.selector_list.signalsBlocked() is False
+        state = {"items": [(item.text(), item.data(Qt.ItemDataRole.UserRole), item.isSelected(),
+                            item.background().color().name()) for item in items],
+                 "selected": sorted(dialog.selected_selector_keys), "total": dialog._selector_total_rows,
+                 "label": dialog.selector_preview_label.text(), "page": dialog.selector_page_label.text()}
+        output = os.environ.get("METROLIZA_T22_OUTPUT")
+        if output:
+            Path(output, f"native-state-{len(columns)}.json").write_text(json.dumps(state, sort_keys=True))
+    finally:
+        _dispose_preview_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_review_f1_selector_metaclass_equality_is_never_invoked(raises, monkeypatch):
+    _app()
+    calls = []
+
+    class Meta(type):
+        def __eq__(cls, other):
+            calls.append(other)
+            if raises:
+                raise RuntimeError("unexpected metaclass equality")
+            return False
+
+    class RowIds(list, metaclass=Meta):
+        pass
+
+    class Index:
+        def row_ids_by_key(self, keys):
+            return {("A",): RowIds([1, 2])}
+
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame({"REPORT_ID": [1, 2], "line": ["A", "A"]}))
+    try:
+        dialog.selector_columns = ["line"]
+        monkeypatch.setattr(dialog, "_current_selector_index", lambda: Index())
+        colors, mixed = dialog._selector_color_map([{"key": ("A",)}])
+        assert calls == []
+        assert colors == {("A",): dialog._normalized_group_color(dialog.default_group_color)}
+        assert mixed == set()
+    finally:
+        dialog.close()
 
 
 def test_grouping_parent_is_updated_only_after_use_grouping() -> None:
@@ -2986,3 +3059,279 @@ def test_grouping_dialog_keeps_sqlite_assignment_persistence_behind_store_bounda
     assert "metroliza.reports.db" not in imported_modules
     assert persistence_calls == set()
     assert not [fragment for fragment in forbidden_fragments if fragment in source]
+
+
+@pytest.mark.parametrize("row_table", [False, True])
+def test_t22_assignment_literal_last_wins_and_default_fallback(row_table):
+    from metroliza.analytics.row_table import RowTable
+
+    _app()
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
+    rows = [(2, " B ", "red"), (1, "A", None), (2, "C", "#123456"),
+            (3, "POPULATION", "red"), (4, "", "red"), (1, "POPULATION", "blue")]
+    columns = ("REPORT_ID", "GROUP", "GROUP_COLOR")
+    frame = RowTable(rows=tuple(rows), columns=columns) if row_table else pd.DataFrame(rows, columns=columns)
+    try:
+        result = dialog._group_assignments(frame)
+        assert result[2] == ("C", "#123456")
+        assert result[1][0] == "A"
+        if row_table:
+            assert result[1][1] is None
+        else:
+            import struct
+            assert type(result[1][1]) is float
+            assert struct.pack(">d", result[1][1]).hex() == "7ff8000000000000"
+        assert list(result) == ([2, 1] if row_table else [1, 2])
+        assert dialog._group_assignments(None) == {}
+        assert dialog._group_assignments(pd.DataFrame({"REPORT_ID": [1]})) == {}
+        with pytest.raises(ValueError):
+            dialog._apply_group_assignments({1: ("too", "many", "values")})
+    finally:
+        dialog.close()
+
+
+def test_t22_custom_color_callbacks_remain_per_value():
+    _app()
+    calls = []
+
+    class Color:
+        def __str__(self):
+            calls.append("color")
+            return "#123456"
+
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
+    try:
+        color = Color()
+        dialog._apply_group_assignments({1: ("A", color), 2: ("A", color)})
+        assert dialog._temp_assignments() == {1: ("A", "#123456"), 2: ("A", "#123456")}
+        assert calls == ["color", "color"]
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.parametrize("count", [2, 1000])
+def test_t22_selector_restore_blocks_item_work_and_keeps_original_postcondition(blocked, count, monkeypatch):
+    _app()
+    keys = [(f"K{index:04}",) for index in range(count)]
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame({"REPORT_ID": range(1, count + 1), "line": [key[0] for key in keys]}))
+    events = []
+    callbacks = []
+    try:
+        dialog.selector_columns = ["line"]
+        dialog.selected_selector_keys = set(keys) | {("hidden",)}
+        dialog.selector_list.itemSelectionChanged.connect(lambda: events.append("item"))
+        monkeypatch.setattr(dialog, "_sync_status", lambda **kw: callbacks.append(kw))
+        dialog.selector_list.blockSignals(blocked)
+        dialog._render_selector_preview(dialog._selector_filter_state(), [
+            {"key": key, "label": key[0], "row_count": 1} for key in keys
+        ], count)
+        assert events == []
+        assert callbacks == [{"recompute_counts": False, "recompute_scope": False}]
+        assert dialog.selector_list.signalsBlocked() is False
+        assert dialog.selected_selector_keys == set(keys) | {("hidden",)}
+        assert len(dialog.selector_list.selectedItems()) == count
+        dialog._refresh_selectors()
+        assert dialog.selector_list.signalsBlocked() is False
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("columns", [("line",), ("line", "station")])
+def test_t22_async_threshold_tracks_storage_threshold(columns):
+    from types import SimpleNamespace
+    from metroliza.tabular.tabular_analytics_service import TABULAR_SQLITE_ROW_THRESHOLD
+
+    _app()
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
+    try:
+        dialog.selector_columns = list(columns)
+        dialog.sqlite_store = SimpleNamespace(row_count=TABULAR_SQLITE_ROW_THRESHOLD - 1)
+        assert not dialog._sqlite_selector_preview_should_run_async()
+        dialog.sqlite_store.row_count += 1
+        assert dialog._sqlite_selector_preview_should_run_async()
+        dialog.sqlite_store.row_count = "bad"
+        assert not dialog._sqlite_selector_preview_should_run_async()
+    finally:
+        dialog.sqlite_store = None
+        dialog.close()
+
+
+def test_t22_overridden_normalizer_preserves_per_value_dispatch(monkeypatch):
+    _app()
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
+    calls = []
+    normalize = dialog._normalized_group_color
+    try:
+        monkeypatch.setattr(dialog, "_normalized_group_color", lambda value: (calls.append(value), normalize(value))[1])
+        dialog._apply_group_assignments({1: ("A", "#123456"), 2: ("A", "#123456")})
+        assert calls == ["#123456"] * 4
+        assert dialog._temp_assignments() == {1: ("A", "#123456"), 2: ("A", "#123456")}
+    finally:
+        dialog.close()
+
+
+def test_t22_restore_helper_collision_keeps_original_dispatch(monkeypatch):
+    _app()
+
+    class ExistingSubclass(TabularAnalyticsGroupingDialog):
+        def _restore_sqlite_assignment_operations(self, assignments):
+            raise AssertionError("new virtual helper dispatched")
+
+    dialog = ExistingSubclass(dataframe=pd.DataFrame())
+    operations = []
+    try:
+        dialog.sqlite_store = object()
+        monkeypatch.setattr(dialog, "_append_sqlite_row_assignment_operation",
+                            lambda ids, group, color: operations.append((ids, group, color)))
+        dialog._apply_group_assignments({2: ("A", "#123456"), 1: ("A", "#123456")})
+        assert operations == [([1, 2], "A", "#123456")]
+    finally:
+        dialog.sqlite_store = None
+        dialog.close()
+
+
+@pytest.mark.parametrize("mutation", ["default", "normalizer"])
+def test_t22_color_callback_mutation_keeps_literal_state_and_lookups(mutation):
+    _app()
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
+    calls = []
+
+    def replacement(color):
+        calls.append(color)
+        return "#ABCDEF"
+
+    class Color:
+        def __str__(self):
+            if mutation == "default":
+                dialog.default_group_color = "#000000"
+            else:
+                dialog._normalized_group_color = replacement
+            return "#123456"
+
+    try:
+        dialog.default_group_color = "#FFFFFF"
+        value = "invalid" if mutation == "default" else "#123456"
+        dialog._apply_group_assignments({1: ("A", value), 2: ("B", Color()), 3: ("C", value)})
+        if mutation == "default":
+            assert dialog._temp_assignments() == {
+                1: ("A", "#B2B2B2"), 2: ("B", "#464646"), 3: ("C", "#464646"),
+            }
+            assert calls == []
+        else:
+            assert dialog._temp_assignments() == {
+                1: ("A", "#ABCDEF"), 2: ("B", "#ABCDEF"), 3: ("C", "#ABCDEF"),
+            }
+            assert calls == ["#123456", "#123456", "#123456", "#ABCDEF"]
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("dtype,values,expected_type", [
+    ("int64", [1, 2], int), ("bool", [True, False], bool),
+    ("float64", [1.25, -0.0], float),
+])
+def test_t22_assignment_native_scalar_boxing(dtype, values, expected_type):
+    import struct
+
+    _app()
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
+    frame = pd.DataFrame({"REPORT_ID": [1, 2], "GROUP": ["A", "B"],
+                          "GROUP_COLOR": pd.Series(values, dtype=dtype)})
+    try:
+        result = dialog._group_assignments(frame)
+        for row_id, expected in enumerate(values, 1):
+            color = result[row_id][1]
+            assert type(color) is expected_type
+            assert color == expected
+            if expected_type is float:
+                assert struct.pack(">d", color) == struct.pack(">d", expected)
+    finally:
+        dialog.close()
+
+
+def test_t22_assignment_object_scalar_identity_and_subclass_fallback():
+    import numpy as np
+
+    _app()
+    dialog = TabularAnalyticsGroupingDialog(dataframe=pd.DataFrame())
+    values = [np.int64(7), True, np.float64(1.25), "red", None]
+    frame = pd.DataFrame({"REPORT_ID": [1, 2, 3, 4, 5], "GROUP": ["A"] * 5,
+                          "GROUP_COLOR": pd.Series(values, dtype=object)})
+    calls = []
+
+    class Frame(pd.DataFrame):
+        @property
+        def _constructor(self):
+            return Frame
+
+        def iterrows(self):
+            calls.append("iterrows")
+            return super().iterrows()
+
+    try:
+        for source in [frame, Frame(frame)]:
+            result = dialog._group_assignments(source)
+            for row_id, expected in enumerate(values, 1):
+                color = result[row_id][1]
+                if expected is None:
+                    import struct
+                    assert type(color) is float
+                    assert struct.pack(">d", color).hex() == "7ff8000000000000"
+                else:
+                    assert color is expected
+        assert calls == ["iterrows"]
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("sqlite", [False, True])
+def test_t22_complete_saved_assignment_state(sqlite, tmp_path):
+    """Full input qualification, optional outside the admitted synthetic fixture run."""
+    import json
+
+    data = os.environ.get("METROLIZA_STEP3_DATA")
+    if not data:
+        pytest.skip("full STEP3 synthetic fixture not selected")
+    _app()
+    saved = pd.read_csv(Path(data) / "csv_100k_groups.csv")
+    assert len(saved) == 100_000 and saved["GROUP"].nunique() == 216
+    expected = {int(row_id): (group, color.upper()) for row_id, group, color in saved.itertuples(index=False, name=None)}
+    loaded = load_tabular_analytics_file(Path(data) / "csv_100k.csv", force_sqlite=sqlite)
+    dialog = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe if sqlite else loaded.sqlite_store.read_dataframe(),
+        column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store if sqlite else None, grouping_dataframe=saved,
+    )
+    try:
+        assert dialog._temp_assignments() == expected
+        expected_operations = [(group, color, [key for key, value in sorted(expected.items()) if value == (group, color)])
+                               for group, color in sorted(set(expected.values()))] if sqlite else []
+        operations = [(op.group_name, op.color, list(op.row_ids)) for op in dialog._sqlite_assignment_operations]
+        assert operations == expected_operations
+        materialized = dialog._materialize_grouping_dataframe()
+        assert dialog._group_assignments(materialized) == expected
+        dialog.selector_columns = ["line"]
+        dialog.selected_selector_keys = {("LINE_B",), ("hidden",)}
+        dialog._refresh_selectors()
+        state = {
+            "assignments": list(dialog._temp_assignments().items()),
+            "operations": operations,
+            "materialized": list(dialog._group_assignments(materialized).items()),
+            "selectors": [(dialog.selector_list.item(i).text(),
+                           dialog.selector_list.item(i).data(Qt.ItemDataRole.UserRole),
+                           dialog.selector_list.item(i).isSelected(),
+                           dialog.selector_list.item(i).background().color().name())
+                          for i in range(dialog.selector_list.count())],
+            "selected_keys": sorted(dialog.selected_selector_keys),
+            "groups": [dialog.groups_list.item(i).text() for i in range(dialog.groups_list.count())],
+            "commands": [op.kind for op in dialog._sqlite_assignment_operations],
+        }
+        assert len(state["groups"]) == 216
+        assert state["selected_keys"] == [("LINE_B",), ("hidden",)]
+        output = os.environ.get("METROLIZA_T22_OUTPUT")
+        if output:
+            Path(output, f"grouping-{sqlite}.json").write_text(json.dumps(state, sort_keys=True))
+    finally:
+        _dispose_preview_dialog(dialog)
+        cleanup_tabular_load_result(loaded)

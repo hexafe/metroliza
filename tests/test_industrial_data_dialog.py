@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import time
 
 import pytest
 
@@ -874,6 +875,11 @@ def test_launcher_analytics_uses_csv_summary_tabular_cache_workflow(monkeypatch,
     dialog.analysis_source_combo.setCurrentIndex(source_index)
 
     dialog.open_analytics_dialog()
+    # The cache view is built in a background thread; the analytics dialog opens when it is ready.
+    deadline = time.monotonic() + 20
+    while "executed" not in launched and time.monotonic() < deadline:
+        _app().processEvents()
+        time.sleep(0.01)
 
     assert launched["parent"] is dialog
     assert launched["db_file"] == db_path

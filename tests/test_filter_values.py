@@ -94,6 +94,158 @@ def test_unscoped_measurement_choices_use_existing_indexes(choices_db):
             assert "selected_location" not in plan
 
 
+@pytest.fixture
+def report_choice_edges(choices_db):
+    with closing(sqlite3.connect(choices_db)) as connection, connection:
+        connection.executescript("""
+            INSERT INTO source_files(id,sha256,source_format,discovered_at,is_active)
+            VALUES (4,'synthetic-4','pdf','2026',1),(5,'synthetic-5','pdf','2026',1);
+            INSERT INTO parsed_reports(id,source_file_id,parser_id,template_family,template_variant,parse_status,created_at,updated_at)
+            VALUES (4,4,'empty-parser','empty-family','empty-variant','parsed','2026','2026'),
+                   (5,5,'01','  ','','parsed','2026','2026');
+            INSERT INTO report_metadata(report_id,reference,part_name,revision,sample_number,operator_name,sample_number_kind,metadata_version)
+            VALUES (4,'EMPTY','empty-part','empty-rev','empty-sample','empty-operator','unknown','v1'),
+                   (5,'01','  ','',NULL,' 01 ','unknown','v1');
+            INSERT INTO report_measurements(report_id,row_order,header,ax,status_code)
+            VALUES (5,1,'01','1','ok'),(5,2,'01','1','ok');
+            INSERT INTO source_file_locations(id,source_file_id,absolute_path,directory_path,file_name,file_extension,discovered_at,is_active)
+            VALUES (1,1,'/synthetic/old','/synthetic','old.pdf','.pdf','2024',1),
+                   (2,1,'/synthetic/tie','/synthetic','tie.pdf','.pdf','2025',1),
+                   (3,1,'/synthetic/chosen','/synthetic','01.pdf','.pdf','2025',1),
+                   (4,1,'/synthetic/inactive','/synthetic','inactive.pdf','.pdf','2026',0),
+                   (5,2,'/synthetic/blank','/synthetic','  ','.pdf','2026',1),
+                   (6,5,'/synthetic/numeric','/synthetic','01.pdf','.pdf','2026',1);
+        """)
+    return choices_db
+
+
+def _typed_choices(values):
+    return {key: tuple((type(value), value) for value in choices) for key, choices in values.items()}
+
+
+@pytest.mark.parametrize("scope", [None, "blank", "default", "padded", "filtered", "row", "empty", "custom"])
+def test_t14_ordered_typed_choices_preserve_original_scope(report_choice_edges, scope):
+    canonical = build_measurement_export_query()
+    custom = """SELECT 1 AS REPORT_ID, 1 AS MEASUREMENT_ID, 7 AS REFERENCE,
+        X'3031' AS PART_NAME, 2.5 AS REVISION, ' 01 ' AS TEMPLATE_VARIANT,
+        '02' AS SAMPLE_NUMBER, 'custom' AS OPERATOR_NAME, NULL AS SAMPLE_NUMBER_KIND,
+        3 AS AX, 'custom-header' AS HEADER, 'nok' AS STATUS_CODE,
+        'custom.pdf' AS FILENAME, 'custom-parser' AS PARSER_ID, '' AS TEMPLATE_FAMILY"""
+    query = {
+        None: None, "blank": "  ", "default": canonical, "padded": "  " + canonical + ";  ",
+        "filtered": build_measurement_filter_query(reference_values=["REF-Z", "01"]),
+        "row": build_measurement_filter_query(ax_values=["X"]),
+        "empty": build_measurement_filter_query(reference_values=["absent"]), "custom": custom,
+    }[scope]
+    # Freeze the old DISTINCT-over-scope operation independently of the builder.
+    normalized = query.strip().rstrip(";").rstrip() if query else ""
+    with closing(sqlite3.connect(report_choice_edges)) as connection:
+        expected = {}
+        for attribute, column, view in FILTER_VALUE_SPECS:
+            source = f"({normalized}) AS filtered_data" if normalized else view
+            old_query = (f'SELECT DISTINCT "{column}" AS value FROM {source} '
+                         f'WHERE "{column}" IS NOT NULL AND TRIM(CAST("{column}" AS TEXT)) <> \'\' '
+                         'ORDER BY value')
+            expected[attribute] = tuple(row[0] for row in connection.execute(old_query))
+            actual = connection.execute(build_distinct_value_query(column, source_view=view, filter_query=query))
+            assert _typed_choices({attribute: tuple(row[0] for row in actual)}) == _typed_choices({attribute: expected[attribute]})
+    assert _typed_choices(load_filter_values(report_choice_edges, query)) == _typed_choices(expected)
+    assert len(expected) == 14
+    if scope in (None, "blank"):
+        assert expected["reference_list"] == ("01", "EMPTY", "REF-A", "REF-Z")
+        assert expected["filename_list"] == ("FILENAME",)
+    elif scope in ("default", "padded"):
+        assert expected == {
+            "ax_list": (" a ", "1", "X", "y"), "header_list": ("01", "A", "Z"),
+            "all_headers_list": ("01", "A", "Z"), "reference_list": ("01", "REF-A", "REF-Z"),
+            "part_name_list": (" Part ", "Part"), "revision_list": ("A", "Z"),
+            "template_variant_list": ("v-a", "v-z"), "sample_number_list": ("10", "2"),
+            "operator_name_list": (" 01 ", "A", "Z"), "sample_number_kind_list": ("stats_count", "unknown"),
+            "status_code_list": ("nok", "ok", "unknown"), "filename_list": ("01.pdf",),
+            "parser_id_list": ("01", "parser-a", "parser-z"), "template_family_list": ("family-a", "family-z"),
+        }
+    elif scope == "custom":
+        assert _typed_choices(expected)["reference_list"] == ((int, 7),)
+        assert _typed_choices(expected)["part_name_list"] == ((bytes, b"01"),)
+        assert _typed_choices(expected)["revision_list"] == ((float, 2.5),)
+
+
+def _t14_indexed_report_lookup(step):
+    return step in {
+        "SEARCH meas USING COVERING INDEX idx_report_measurements_report (report_id=?)",
+        "SEARCH meas EXISTS USING COVERING INDEX idx_report_measurements_report (report_id=?)",
+    }
+
+
+@pytest.mark.parametrize("step", [
+    "SCAN meas USING COVERING INDEX idx_report_measurements_report (report_id=?)",
+    "SEARCH meas EXISTS USING COVERING INDEX idx_report_measurements_report_header_ax (report_id=?)",
+    "SEARCH other EXISTS USING COVERING INDEX idx_report_measurements_report (report_id=?)",
+    "SEARCH meas EXISTS USING COVERING INDEX idx_report_measurements_report",
+    "SEARCH meas EXISTS USING COVERING INDEX idx_report_measurements_report (header=?)",
+])
+def test_t14_indexed_report_lookup_rejects_wrong_activation(step):
+    assert not _t14_indexed_report_lookup(step)
+
+
+def test_t14_canonical_report_choices_use_indexed_exists(report_choice_edges):
+    canonical = build_measurement_export_query()
+    with closing(sqlite3.connect(report_choice_edges)) as connection:
+        traced = []
+        connection.set_trace_callback(traced.append)
+        values = filter_values._query_values(connection, canonical, FILTER_VALUE_SPECS, lambda: False)
+        report_queries = [query for query in traced if "AS report_choices" in query]
+        assert len(report_queries) == 10
+        assert len(traced) == 13  # The two header lists share their query.
+        for query in report_queries:
+            assert "vw_measurement_export" not in query
+            plan = [row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + query)]
+            assert any(_t14_indexed_report_lookup(step) for step in plan)
+            assert not any("SCAN meas" in step for step in plan)
+        assert values["filename_list"] == ("01.pdf",)
+        assert "EMPTY" not in values["reference_list"]
+
+
+@pytest.mark.parametrize("scope", [None, "blank", "padded", "filtered", "custom", "subclass"])
+def test_t14_uncertain_scope_retains_original_report_query(scope):
+    calls = []
+
+    class CustomScope(str):
+        def strip(self, *args):
+            calls.append("strip")
+            return super().strip(*args)
+
+        def __eq__(self, other):
+            pytest.fail("eligibility must not compare custom strings")
+
+    canonical = build_measurement_export_query()
+    query = {
+        None: None, "blank": "  ", "padded": canonical + ";",
+        "filtered": build_measurement_filter_query(reference_values=["REF-Z"]),
+        "custom": canonical.replace("reference AS REFERENCE", "7 AS REFERENCE"),
+        "subclass": CustomScope(canonical),
+    }[scope]
+    result = build_distinct_value_query("REFERENCE", source_view="vw_report_overview", filter_query=query)
+    assert "report_choices" not in result
+    if scope == "subclass":
+        assert calls == ["strip"]
+
+
+def test_t14_custom_columns_and_views_do_not_gain_eligibility_callbacks():
+    class CustomColumn(str):
+        def upper(self):
+            pytest.fail("report eligibility must not dispatch custom column methods")
+
+    query = build_distinct_value_query(
+        CustomColumn("REFERENCE"), source_view="vw_report_overview", filter_query=build_measurement_export_query(),
+    )
+    assert "report_choices" not in query
+    other_view = build_distinct_value_query(
+        "REFERENCE", source_view="custom_view", filter_query=build_measurement_export_query(),
+    )
+    assert "report_choices" not in other_view
+
+
 @pytest.mark.parametrize("wal", [False, True])
 def test_cache_invalidates_external_commit_and_keeps_scopes_separate(choices_db, monkeypatch, wal):
     with closing(sqlite3.connect(choices_db)) as writer:

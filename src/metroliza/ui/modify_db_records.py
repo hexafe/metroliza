@@ -3,7 +3,7 @@
 The report and measurement record tables can hold hundreds of thousands of rows. Rows are kept as
 plain tuples inside a :class:`RecordTableModel` (no per-cell ``QTableWidgetItem``), edits are tracked
 as a sparse ``{row: {column: text}}`` dict on top of the untouched original values, and filtering is a
-substring test against one precomputed lowercase haystack per row. :func:`load_record_rows` builds
+substring test against one cached lowercase haystack per row. :func:`load_record_rows` builds
 those structures from batched SQL fetches and is safe to run in a worker thread
 (:class:`RecordLoadThread`).
 """
@@ -12,12 +12,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from functools import partial
+import weakref
 from typing import Any
 
 from PyQt6.QtCore import QAbstractTableModel, QCoreApplication, QModelIndex, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QTableView, QWidget
 
 from metroliza.reports.db import iter_sql_query_batches
+from metroliza.ui import detached_threads
 
 
 FIELD_SEPARATOR = "\x1f"
@@ -41,16 +44,16 @@ def row_haystack(values: Sequence[Any]) -> str:
 
 @dataclass(frozen=True)
 class RecordRows:
-    """Rows aligned with the record specs plus their precomputed filter haystack."""
+    """Rows aligned with the record specs plus an optional precomputed filter haystack."""
 
     rows: list[tuple[Any, ...]]
-    haystack: list[str]
+    haystack: list[str] | None
 
 
 class _RecordRowBuilder:
     """Align fetched batches with the record specs and keep memory small."""
 
-    def __init__(self, specs: Sequence[dict[str, Any]]) -> None:
+    def __init__(self, specs: Sequence[dict[str, Any]], *, defer_haystack: bool = False) -> None:
         self._fields = [spec["field"].lower() for spec in specs]
         # Repeated text (section names, labels, status codes) is stored once per column. Key and float
         # columns are skipped: ids are unique and floats would only grow the lookup tables.
@@ -61,7 +64,7 @@ class _RecordRowBuilder:
         }
         self._positions: list[int | None] | None = None
         self.rows: list[tuple[Any, ...]] = []
-        self.haystack: list[str] = []
+        self.haystack: list[str] | None = None if defer_haystack else []
 
     def add_batch(self, columns: Sequence[str], batch_rows: Sequence[tuple[Any, ...]]) -> None:
         if not batch_rows:
@@ -81,6 +84,8 @@ class _RecordRowBuilder:
             aligned.append(column)
 
         self.rows.extend(zip(*aligned))
+        if self.haystack is None:
+            return
         displayed = [
             ["" if value is None else value if value.__class__ is str else str(value) for value in column]
             for column in aligned
@@ -95,10 +100,14 @@ def load_record_rows(
     *,
     should_cancel: Callable[[], bool] | None = None,
     batch_size: int = FETCH_BATCH_SIZE,
+    defer_haystack: bool = False,
 ) -> RecordRows | None:
-    """Fetch ``query`` in batches and build model rows; return ``None`` when cancelled."""
+    """Fetch model rows; the dialog may defer search text until the first filter.
 
-    builder = _RecordRowBuilder(specs)
+    Public callers retain eager haystacks by default. Return ``None`` when cancelled.
+    """
+
+    builder = _RecordRowBuilder(specs, defer_haystack=defer_haystack)
     batches = iter_sql_query_batches(db_file, query, batch_size=batch_size, should_cancel=should_cancel)
     try:
         for batch in batches:
@@ -338,13 +347,15 @@ class RecordLoadThread(QThread):
     loaded = pyqtSignal(str, int, object)
     failed = pyqtSignal(str, int, object)
 
-    def __init__(self, kind: str, generation: int, db_file: str, query: str, specs: Sequence[dict[str, Any]]):
+    def __init__(self, kind: str, generation: int, db_file: str, query: str, specs: Sequence[dict[str, Any]],
+                 *, defer_haystack: bool = False):
         super().__init__()
         self._kind = kind
         self._generation = generation
         self._db_file = db_file
         self._query = query
         self._specs = list(specs)
+        self._defer_haystack = defer_haystack
 
     def run(self) -> None:
         try:
@@ -353,53 +364,105 @@ class RecordLoadThread(QThread):
                 self._query,
                 self._specs,
                 should_cancel=self.isInterruptionRequested,
+                defer_haystack=self._defer_haystack,
             )
         except Exception as exc:  # worker boundary: report instead of killing the thread
-            self.failed.emit(self._kind, self._generation, exc)
+            if vars(self).get("_defer_delivery", False):
+                self._pending_delivery = ("failed", exc)
+            else:
+                self.failed.emit(self._kind, self._generation, exc)
             return
         if rows is not None:
-            self.loaded.emit(self._kind, self._generation, rows)
+            if vars(self).get("_defer_delivery", False):
+                self._pending_delivery = ("loaded", rows)
+            else:
+                self.loaded.emit(self._kind, self._generation, rows)
 
 
+_NATIVE_RECORD_CLASS = RecordLoadThread
+_NATIVE_RECORD_RUN = RecordLoadThread.run
+_NATIVE_RECORD_INIT = RecordLoadThread.__init__
 _ACTIVE_LOAD_THREADS: set[RecordLoadThread] = set()
 _QUIT_HOOK_APPS: list[Any] = []
 
 
 def cancel_load_thread(thread: RecordLoadThread | None, *, wait_ms: int = 3000) -> None:
-    """Cancel SQL and join the worker before its owner or the application can shut down.
+    """Request cancellation without joining on the GUI thread.
 
-    Normal SQLite execution and lock waits cooperate promptly. A SQLite extension may be
-    uninterruptible: if it exceeds the normal wait, defer shutdown until it returns rather
-    than allowing interpreter teardown with a live QThread.
+    Outside the application thread, preserve the public bounded wait followed by
+    completion. GUI consumers retain native ownership and delivery acknowledgement
+    asynchronously until noncooperative SQL actually returns.
     """
-
-    if thread is None:
-        return
-    thread.requestInterruption()
-    if not thread.wait(wait_ms):
-        thread.wait()
+    if thread is not None:
+        app = QCoreApplication.instance()
+        if app is None or QThread.currentThread() != app.thread():
+            thread.requestInterruption()
+            if not thread.wait(wait_ms):
+                thread.wait()
+            return
+        if isinstance(thread, QThread) and not detached_threads.is_registered(thread):
+            # Direct-start callers keep their signal and deletion ownership. Retain only
+            # native lifetime here; already-finished threads need polling, not a lost signal.
+            _ACTIVE_LOAD_THREADS.add(thread)
+            detached_threads.register(thread, defer_quit=True)
+            detached_threads.run_when_finished(
+                (thread,), partial(_release_record_load, weakref.ref(thread), delete=False))
+            detached_threads.discard(thread)
+        thread.requestInterruption()
 
 
 def shutdown_load_threads() -> None:
-    """Stop every running record fetch (application exit must not destroy a running QThread)."""
-
-    threads = list(_ACTIVE_LOAD_THREADS)
-    for thread in threads:
-        thread.requestInterruption()
-    for thread in threads:
+    """Request cancellation; the shared native-completion owner defers normal Quit."""
+    for thread in tuple(_ACTIVE_LOAD_THREADS):
         cancel_load_thread(thread)
 
 
-def start_load_thread(thread: RecordLoadThread) -> None:
-    """Start ``thread`` and keep it alive until it has finished, whatever happens to its dialog."""
+def _release_record_load(thread_ref, *, delete=True) -> None:
+    thread = thread_ref()
+    if thread is not None:
+        _ACTIVE_LOAD_THREADS.discard(thread)
+        if delete:
+            vars(thread).pop("_pending_delivery", None)
+            thread.deleteLater()
 
+
+def start_load_thread(thread: RecordLoadThread, *, owner=None, on_finished=None) -> None:
+    """Start a public worker without changing signal order or deletion ownership.
+
+    Only an explicit native GUI consumer may opt into deferred result delivery and
+    cleanup through ``on_finished(owner, thread)``; that callback must consume the
+    pending result synchronously, including any nested modal return.
+    """
     app = QCoreApplication.instance()
-    if app is not None and not any(app is hooked for hooked in _QUIT_HOOK_APPS):
+    if app is None or not isinstance(thread, QThread):
+        # Preserve direct/headless and custom test workers without requiring a GUI owner.
+        _ACTIVE_LOAD_THREADS.add(thread)
+        thread.finished.connect(partial(_release_record_load, weakref.ref(thread), delete=False))
+        thread.start()
+        return
+    if not any(app is hooked for hooked in _QUIT_HOOK_APPS):
         _QUIT_HOOK_APPS.append(app)
         app.aboutToQuit.connect(shutdown_load_threads)
     _ACTIVE_LOAD_THREADS.add(thread)
-    thread.finished.connect(lambda: _ACTIVE_LOAD_THREADS.discard(thread))
+    native_delivery = _managed_record_delivery(thread, owner, on_finished)
+    if native_delivery:
+        thread._defer_delivery = True
+        detached_threads.register(thread, defer_quit=True, owner=owner, on_finished=on_finished)
+    else:
+        detached_threads.register(thread, defer_quit=True)
+    detached_threads.run_when_finished(
+        (thread,), partial(_release_record_load, weakref.ref(thread), delete=native_delivery))
     thread.start()
+
+
+_NATIVE_RECORD_START = start_load_thread
+
+
+def _managed_record_delivery(thread, owner, callback) -> bool:
+    return (owner is not None and callback is not None
+            and type(thread) is _NATIVE_RECORD_CLASS and "run" not in vars(thread)
+            and _NATIVE_RECORD_CLASS.__dict__.get("run") is _NATIVE_RECORD_RUN
+            and _NATIVE_RECORD_CLASS.__dict__.get("__init__") is _NATIVE_RECORD_INIT)
 
 
 @dataclass
@@ -416,3 +479,4 @@ class RecordTableSlot:
     generation: int = 0
     thread: RecordLoadThread | None = None
     pending_specs: list[dict[str, Any]] | None = None
+    progress_dialog: Any = None

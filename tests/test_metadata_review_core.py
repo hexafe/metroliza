@@ -587,3 +587,234 @@ def test_override_for_a_parser_without_support_fails_closed(tmp_path, monkeypatc
     assert worker.last_parse_result.imported_files == 0
     assert worker.last_parse_result.failed_files == 1
     assert not database.exists() or _graph(database)["parsed_reports"] == []
+
+
+def _t21_original_full_open(parser):
+    """Literal pre-T21 full-open ordering, independent of candidate open dispatch."""
+    backend = parser._require_pdf_backend()
+    cached = parser._cached_embedded_lines_for_open_report()
+    with backend.open(str(Path(parser.file_path) / parser.file_name)) as document:
+        parser._page_count = parser._resolve_page_count(document)
+        if cached is not None:
+            if parser._page_count:
+                page = document[0]
+                parser._first_page_width, parser._first_page_height = parser._page_size(page)
+                (parser._first_page_header_items,
+                 parser._header_extraction_diagnostics) = parser._extract_first_page_header_items(
+                     page, backend, metadata_parsing_mode=parser.metadata_parsing_mode)
+            parser.raw_text.extend(cached)
+            return
+        count = 0
+        for page in document:
+            count += 1
+            if count == 1:
+                parser._first_page_width, parser._first_page_height = parser._page_size(page)
+            text = page.get_text().splitlines()
+            if count == 1:
+                (parser._first_page_header_items,
+                 parser._header_extraction_diagnostics) = parser._extract_first_page_header_items(
+                     page, backend, metadata_parsing_mode=parser.metadata_parsing_mode)
+            parser.raw_text.extend(text)
+        if parser._page_count is None:
+            parser._page_count = count
+
+
+@pytest.mark.parametrize("mode", [MODE_FAST, MODE_OCR])
+@pytest.mark.parametrize("cached", [False, True])
+def test_metadata_open_matches_original_complete_selection_and_geometry(tmp_path, fake_ocr, mode, cached):
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+
+    path = _source(tmp_path) / NAME
+    parsers = [CMMReportParser(str(path), "unused.sqlite", metadata_parsing_mode=mode)
+               for _ in range(2)]
+    if cached:
+        for parser in parsers:
+            parser.source_inspection_context = SourceInspectionContext.from_path(path)
+            parser.source_inspection_context.get_pdf_text(max_chars=1000000)
+    _t21_original_full_open(parsers[0])
+    getattr(parsers[1], "open_metadata_report", parsers[1].open_report)()
+    expected, actual = [parser.extract_metadata() for parser in parsers]
+    assert actual == expected
+    assert actual.metadata.reference == ("ABCDE12345" if mode == MODE_FAST else "OCR-REF-9")
+    assert actual.metadata.report_date == "2024-05-06"
+    assert parsers[0]._page_count == parsers[1]._page_count == 1
+    assert parsers[0]._first_page_header_items == parsers[1]._first_page_header_items
+    assert parsers[0]._header_extraction_diagnostics == parsers[1]._header_extraction_diagnostics
+    assert parsers[0].raw_text  # the oracle is a successful full open
+
+
+def test_metadata_full_open_retains_later_page_error_and_close(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    events = []
+
+    class Page:
+        rect = SimpleNamespace(width=600, height=800)
+
+        def __init__(self, broken=False):
+            self.broken = broken
+
+        def get_text(self):
+            events.append("text")
+            if self.broken:
+                raise ValueError("later page failed")
+            return "first line"
+
+    class Document:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, *args):
+            events.append("close")
+
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            return iter([Page(), Page(True)])
+
+    parser = CMMReportParser(str(tmp_path / NAME), "unused.sqlite")
+    monkeypatch.setattr(parser, "_require_pdf_backend", lambda: SimpleNamespace(open=lambda path: Document()))
+    monkeypatch.setattr(parser, "_extract_first_page_header_items", lambda *a, **kw: ([], {}))
+    monkeypatch.setattr(parser, "log_and_exit", lambda error: events.append((type(error).__name__, str(error))))
+    getattr(parser, "open_metadata_report", parser.open_report)()
+    assert events == ["enter", "text", "text", "close", ("ValueError", "later page failed")]
+    assert parser.raw_text == ["first line"]
+
+
+def test_native_cached_metadata_activation_keeps_default_full_open(tmp_path, monkeypatch):
+    from metroliza.parsing import report_parser_factory as factory
+
+    source = _source(tmp_path)
+    review = _review(source, tmp_path / "unused.sqlite")
+    factory.reset_probe_cache()  # successful probe must populate canonical all-page text
+    observed = []
+    original = CMMReportParser._open_report
+
+    def open_report(parser, *, metadata_only=False):
+        original(parser, metadata_only=metadata_only)
+        observed.append((metadata_only, list(parser.raw_text)))
+
+    monkeypatch.setattr(CMMReportParser, "_open_report", open_report)
+    readings = _read(MetadataReviewReader(review), _rows(review))
+    assert readings[0].status == "ok" and readings[0].selection.metadata.reference == "ABCDE12345"
+    assert observed == [(True, [])]
+    parser = CMMReportParser(str(source / NAME), "unused.sqlite", metadata_parsing_mode=MODE_FAST)
+    parser.open_report()
+    assert observed[-1][0] is False and observed[-1][1]
+
+
+@pytest.mark.parametrize("customization", ["factory", "instance_open", "class_open", "class_extract", "cache_hook"])
+def test_custom_metadata_dispatch_keeps_public_full_open(tmp_path, monkeypatch, customization):
+    from metroliza.parsing import metadata_review as review_module
+    from metroliza.parsing import report_parser_factory as factory
+
+    source = _source(tmp_path)
+    review = _review(source, tmp_path / "unused.sqlite")
+    calls = []
+    original_open = CMMReportParser.open_report
+    original_extract = CMMReportParser.extract_metadata
+
+    def full_open(parser):
+        calls.append("open")
+        return original_open(parser)
+
+    def extract(parser):
+        calls.append("extract")
+        return original_extract(parser)
+
+    def custom_factory(*args, **kwargs):
+        parser = factory.get_parser(*args, **kwargs)
+        if customization == "instance_open":
+            parser.open_report = lambda: full_open(parser)
+        elif customization == "cache_hook":
+            parser._cached_embedded_lines_for_open_report = lambda: None
+        return parser
+
+    def metadata_open(parser):
+        pytest.fail("custom parser dispatch must use full open")
+
+    monkeypatch.setattr(CMMReportParser, "open_metadata_report", metadata_open)
+    if customization == "class_open":
+        monkeypatch.setattr(CMMReportParser, "open_report", full_open)
+    elif customization == "class_extract":
+        monkeypatch.setattr(CMMReportParser, "extract_metadata", extract)
+    item = review.ready_files[0]
+    parser_factory = custom_factory if customization in {"factory", "instance_open", "cache_hook"} else None
+    reading = review_module.read_metadata_one(item, source / NAME, MODE_FAST,
+                                              database_path=str(tmp_path / "unused.sqlite"),
+                                              parser_factory=parser_factory)
+    assert reading.status == "ok" and reading.selection.metadata.reference == "ABCDE12345"
+    if customization in {"instance_open", "class_open", "class_extract"}:
+        assert calls
+
+
+def test_metadata_native_guards_do_not_observe_custom_dictionary_membership(tmp_path):
+    from metroliza.parsing import metadata_review as review_module
+
+    class TrapDict(dict):
+        def __contains__(self, key):
+            pytest.fail("native guard must not invoke custom dictionary membership")
+
+    parser = CMMReportParser(str(tmp_path / NAME), "unused.sqlite")
+    parser.__dict__ = TrapDict(parser.__dict__)
+    assert not review_module._metadata_open_supported(parser, None)
+
+
+@pytest.mark.parametrize("cache_result", [None, "custom_text"])
+def test_metadata_cached_text_reader_preserves_single_getter_and_raw_callbacks(tmp_path, cache_result):
+    from metroliza.parsing.source_inspection import SourceInspectionContext
+
+    events = []
+
+    class Text(str):
+        def splitlines(self):
+            events.append("split")
+            return ["custom cached line"]
+
+    path = _source(tmp_path) / NAME
+    parser = CMMReportParser(str(path), "unused.sqlite", metadata_parsing_mode=MODE_FAST)
+    inspection = SourceInspectionContext.from_path(path)
+
+    def get_cached(**kwargs):
+        events.append("get")
+        return None if cache_result is None else (Text("custom"),)
+
+    object.__setattr__(inspection, "get_cached_pdf_page_texts", get_cached)
+    parser.source_inspection_context = inspection
+    parser.open_metadata_report()
+    assert events == (["get"] if cache_result is None else ["get", "split"])
+    assert parser.raw_text
+    if cache_result is not None:
+        assert parser.raw_text == ["custom cached line"]
+
+
+@pytest.mark.parametrize("stateful", [False, True])
+def test_native_raw_extract_key_keeps_single_lookup_and_success(tmp_path, monkeypatch, stateful):
+    from metroliza.parsing import metadata_review, report_parser_factory
+
+    source = _source(tmp_path)
+    review = _review(source, tmp_path / "unused.sqlite")
+    parser = CMMReportParser(str(source / NAME), "unused.sqlite", metadata_parsing_mode=MODE_FAST)
+    events = []
+
+    class Key(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            result = stateful and bool(events)
+            events.append(result)
+            return result
+
+    object.__getattribute__(parser, "__dict__")[Key("extract_metadata")] = None
+
+    def invoke(*args, source_inspection=None, **kwargs):
+        parser.source_inspection_context = source_inspection
+        return parser
+
+    monkeypatch.setattr(report_parser_factory, "invoke_parser_factory", invoke)
+    reading = metadata_review.read_metadata_one(review.ready_files[0], source / NAME, MODE_FAST,
+                                                database_path="unused.sqlite")
+    assert reading.status == "ok" and reading.selection.metadata.reference == "ABCDE12345"
+    assert events == [False]

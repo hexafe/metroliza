@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import time
 from concurrent.futures import ProcessPoolExecutor
+from copy import deepcopy
 from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 
 configure_headless_matplotlib()
@@ -36,10 +37,12 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import PercentFormatter
 from matplotlib.text import Text
+from matplotlib.font_manager import FontProperties
 from metroliza.workers.export_thread_runtime import QCoreApplication, QThread, pyqtSignal
 
 from metroliza.exporting.contracts import ExportRequest, validate_export_request
 from metroliza.exporting.export_summary_render_pool import (
+    SummaryRenderPool,
     apply_summary_render_result,
     iter_summary_render_results,
 )
@@ -118,6 +121,7 @@ from metroliza.exporting.export_query_service import (
     fetch_sql_measurement_summary,
     fetch_sql_measurement_summaries,
     load_measurement_export_partition_dataframe,
+    prepare_snapshot_partition_source,
     RowTable,
 )
 from metroliza.reports.report_query_service import (
@@ -230,6 +234,10 @@ from metroliza.charts.chart_render_service import (
     deterministic_downsample_frame,
 )
 from metroliza.charts.chart_renderer import (
+    PlotstatsChartRenderer,
+    _resolve_figure_fonts,
+    _resolved_font_properties,
+    _text_render_context,
     build_chart_renderer,
     build_distribution_native_payload,
     build_histogram_native_payload,
@@ -454,6 +462,15 @@ def _coerce_float_or_nan(value):
 
 
 def _numeric_array(values, *, dropna=False):
+    # Casting narrow signaling NaNs emits a warning that scalar float() does
+    # not emit. Keep their conversion (and unsupported dtypes) on the old path.
+    if (
+        type(values) is np.ndarray and values.ndim == 1
+        and values.dtype in (np.dtype('float16'), np.dtype('float32'), np.dtype('float64'))
+        and (values.dtype.itemsize == 8 or not np.isnan(values).any())
+    ):
+        array = values.astype(float, copy=True)
+        return array[np.isfinite(array)] if dropna else array
     array = np.asarray([_coerce_float_or_nan(value) for value in values], dtype=float)
     if dropna:
         return array[np.isfinite(array)]
@@ -493,6 +510,50 @@ def _coerce_datetime_or_none(value):
         return datetime.fromisoformat(text)
     except (TypeError, ValueError):
         return None
+
+
+def _can_sort_header_rows(table):
+    # Generic/pandas tables, subclasses, helper-column collisions and unusual
+    # row layouts retain the copy/assign/sort/drop compatibility path.
+    if type(table) is not RowTable or type(table.columns) is not tuple:
+        return False
+    if not all(type(column) is str for column in table.columns):
+        return False
+    if len(set(table.columns)) != len(table.columns):
+        return False
+    if '_sample_numeric' in table.columns or '_date_sort' in table.columns:
+        return False
+    return type(table.rows) is tuple and all(
+        type(row) is tuple and len(row) == len(table.columns) for row in table.rows
+    )
+
+
+def _header_date_sort_values(values):
+    parsed_strings = {}
+    parsed_values = []
+    for value in values:
+        # Exact strings have no user-defined hash/equality callbacks. Other
+        # accepted date objects and string subclasses keep scalar parsing.
+        if type(value) is str:
+            if value not in parsed_strings:
+                parsed_strings[value] = _coerce_datetime_or_none(value)
+            parsed_values.append(parsed_strings[value])
+        else:
+            parsed_values.append(_coerce_datetime_or_none(value))
+    return parsed_values
+
+
+def _sort_header_row_table(table, *, sample_sort):
+    if sample_sort:
+        primary_values = _numeric_array(table['SAMPLE_NUMBER'])
+        if not np.isfinite(primary_values).any():
+            return table.sort_values(by='SAMPLE_NUMBER', kind='mergesort')
+    else:
+        primary_values = _header_date_sort_values(table['DATE'])
+        if not any(value is not None for value in primary_values):
+            return table.sort_values(by=['DATE', 'SAMPLE_NUMBER'], kind='mergesort')
+    indices = table._sort_indices((primary_values, table['SAMPLE_NUMBER']))
+    return table.take_rows(indices)
 
 
 def _table_records(table):
@@ -1020,7 +1081,8 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
     # Resolve axes transforms once. Text/Annotation.get_window_extent updates
     # candidate geometry (including leader lines) without drawing the figure.
-    figure.canvas.draw()
+    _resolve_figure_fonts(figure)
+    figure.draw_without_rendering()
     renderer = figure.canvas.get_renderer()
     title_bbox = None
     if title_artist is not None:
@@ -2286,7 +2348,8 @@ def annotate_violin_group_stats(
         return style
 
     if use_dynamic_offsets:
-        ax.figure.canvas.draw()
+        _resolve_figure_fonts(ax.figure)
+        ax.figure.draw_without_rendering()
         renderer = ax.figure.canvas.get_renderer()
         preview_text = ax.text(0, 0, '', alpha=0)
 
@@ -2507,7 +2570,8 @@ def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
         strategy_bottom_margin = float(strategy['bottom_margin'])
         fig.subplots_adjust(bottom=strategy_bottom_margin)
 
-    fig.canvas.draw()
+    _resolve_figure_fonts(fig)
+    fig.draw_without_rendering()
     renderer = fig.canvas.get_renderer()
 
     artists = []
@@ -2922,7 +2986,20 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
         return None
 
     line_color = color or SUMMARY_PLOT_PALETTE['density_line']
-    if _HAS_SEABORN:
+    # Generated model curves need no seaborn sorting/aggregation on ordinary
+    # numeric axes. Other inputs retain its conversion and scale semantics.
+    direct_curve = False
+    if _HAS_SEABORN and type(x) is np.ndarray and type(p) is np.ndarray:
+        direct_curve = (
+            x.ndim == p.ndim == 1 and x.size == p.size and x.size >= 2
+            and x.dtype == p.dtype == np.dtype('float64')
+            and ax.get_xscale() == ax.get_yscale() == 'linear'
+            and all(axis.get_units() is None and axis.get_converter() is None
+                    for axis in (ax.xaxis, ax.yaxis))
+            and np.all(np.isfinite(x)) and np.all(np.isfinite(p))
+            and np.all(x[1:] > x[:-1])
+        )
+    if _HAS_SEABORN and not direct_curve:
         sns.lineplot(
             x=x,
             y=p,
@@ -3132,21 +3209,39 @@ def apply_explicit_table_row_heights(table, *, row_heights, ncols):
             cell.set_height(float(row_height))
 
 
+_TEXT_EXTENT_CACHE_SIZE = 512
+
+
+@lru_cache(maxsize=128)
+def _probe_font_properties(fontsize, fontweight, symbol_fallback, context):
+    properties = FontProperties(
+        size=fontsize, weight=fontweight,
+        family='DejaVu Sans' if symbol_fallback else None,
+    )
+    return _resolved_font_properties(properties, context)
+
+
 def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
-    """Measure text extents in display pixels for sizing-aware panel layout."""
+    """Cache exact, unrotated probe extents on one renderer, bounded to 512."""
+    text = str(text)
+    context = _text_render_context()
+    properties = _probe_font_properties(fontsize, fontweight, _uses_symbol_font_fallback(text), context)
+    key = (text, properties, fig.dpi, getattr(renderer, 'dpi', None), renderer.points_to_pixels(1.0), context)
+    cache = getattr(renderer, '_metroliza_text_extents', None)
+    if cache is None:
+        cache = renderer._metroliza_text_extents = OrderedDict()
+    if key in cache:
+        cache.move_to_end(key)
+        return cache[key]
 
-    probe_kwargs = {
-        'fontsize': fontsize,
-        'fontweight': fontweight,
-        'alpha': 0.0,
-    }
-    if _uses_symbol_font_fallback(text):
-        probe_kwargs['fontfamily'] = 'DejaVu Sans'
-
-    probe = Text(0.0, 0.0, str(text), **probe_kwargs)
+    probe = Text(0.0, 0.0, text, fontproperties=properties, alpha=0.0)
     probe.set_figure(fig)
     extent = probe.get_window_extent(renderer=renderer)
-    return extent.width, extent.height
+    result = (extent.width, extent.height)
+    cache[key] = result
+    if len(cache) > _TEXT_EXTENT_CACHE_SIZE:
+        cache.popitem(last=False)
+    return result
 
 
 def _wrap_table_value_text(value_text, *, width):
@@ -3216,16 +3311,24 @@ def render_panel_table(
     def _measure(text, fontsize, fontweight='normal'):
         return _measure_text_extent(fig, renderer, text, fontsize=fontsize, fontweight=fontweight)
 
-    def _measure_layout(candidate_rows, candidate_fontsize):
-        label_header_w, header_h = _measure(title, candidate_fontsize, header_fontweight)
-        value_header_w, _ = _measure('Value', candidate_fontsize, header_fontweight)
-        line_h = _measure('Ag', candidate_fontsize)[1]
+    layout_needs_text_metrics = not (
+        explicit_label_fraction is not None and explicit_value_fraction is not None and shared_row_metrics
+    )
 
-        label_max = label_header_w
-        value_max = value_header_w
-        for label, value in candidate_rows:
-            label_max = max(label_max, _measure(label, candidate_fontsize)[0])
-            value_max = max(value_max, _measure(value, candidate_fontsize)[0])
+    def _measure_layout(candidate_rows, candidate_fontsize):
+        # Explicit widths and shared row metrics override every measured extent.
+        if layout_needs_text_metrics:
+            label_header_w, header_h = _measure(title, candidate_fontsize, header_fontweight)
+            value_header_w, _ = _measure('Value', candidate_fontsize, header_fontweight)
+            line_h = _measure('Ag', candidate_fontsize)[1]
+
+            label_max = label_header_w
+            value_max = value_header_w
+            for label, value in candidate_rows:
+                label_max = max(label_max, _measure(label, candidate_fontsize)[0])
+                value_max = max(value_max, _measure(value, candidate_fontsize)[0])
+        else:
+            label_max = value_max = header_h = line_h = 0.0
 
         required_total_w = label_max + value_max + (4.0 * cell_padding_px)
         dynamic_label_fraction = (label_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
@@ -3664,6 +3767,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._summary_sheet_skip_warning_emitted = False
         self._db_connection = None
         self._snapshot_table_name = None
+        self._snapshot_partition_source = None
         self._active_export_query = self.filter_query
         self._cached_export_filtered_df = None
         self._sql_measurement_summary_cache = {}
@@ -3926,7 +4030,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
             return None
         if self._chart_executor is None:
-            self._chart_executor = ProcessPoolExecutor(max_workers=self.chart_worker_count)
+            self._chart_executor = self._new_chart_executor()
         return self._chart_executor
 
     def _shutdown_chart_executor(self):
@@ -3955,6 +4059,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
 
     def _prepare_export_snapshot(self):
+        if self._snapshot_partition_source is not None:
+            self._snapshot_partition_source.invalidate()
+        self._snapshot_partition_source = None
         if self._db_connection is None:
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
@@ -3971,11 +4078,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             with self._db_connection:
                 self._db_connection.execute(create_snapshot_query)
                 self._index_export_snapshot(snapshot_table_name)
+                snapshot_source = prepare_snapshot_partition_source(self._db_connection, snapshot_table_name)
         except Exception:
             logger.warning(
                 'Export snapshot materialization failed; falling back to live query scope.',
                 exc_info=True,
             )
+            try:
+                self._db_connection.execute(f'DROP TABLE IF EXISTS temp."{snapshot_table_name}"')
+            except sqlite3.Error:
+                logger.debug('Unable to discard failed export snapshot.', exc_info=True)
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
@@ -3984,7 +4096,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
 
         self._snapshot_table_name = snapshot_table_name
-        self._active_export_query = f'SELECT * FROM "{snapshot_table_name}"'
+        self._snapshot_partition_source = snapshot_source
+        self._active_export_query = f'SELECT * FROM temp."{snapshot_table_name}"'
         self._cached_export_filtered_df = None
         self._partition_header_counts_cache = None
         self._sql_measurement_summary_cache.clear()
@@ -3993,6 +4106,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if self._db_connection is None:
             return
         index_specs = (
+            (
+                f'{snapshot_table_name}_report_idx',
+                '("REPORT_ID")',
+            ),
             (
                 f'{snapshot_table_name}_ref_idx',
                 '("REFERENCE")',
@@ -4016,6 +4133,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 )
 
     def _cleanup_export_snapshot(self):
+        if self._snapshot_partition_source is not None:
+            self._snapshot_partition_source.invalidate()
+        self._snapshot_partition_source = None
         if self._db_connection is None or not self._snapshot_table_name:
             self._active_export_query = self.filter_query
             self._snapshot_table_name = None
@@ -4026,7 +4146,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         try:
             with self._db_connection:
-                self._db_connection.execute(f'DROP TABLE IF EXISTS "{self._snapshot_table_name}"')
+                self._db_connection.execute(f'DROP TABLE IF EXISTS temp."{self._snapshot_table_name}"')
         except sqlite3.ProgrammingError:
             logger.debug(
                 'Skipping export snapshot cleanup because database connection is already closed.',
@@ -4038,6 +4158,18 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._cached_export_filtered_df = None
             self._partition_header_counts_cache = None
             self._sql_measurement_summary_cache.clear()
+
+    def _new_chart_executor(self):
+        """Create the chart pool on the shared spawn context; None keeps the charts serial."""
+
+        from metroliza.shared.compute_budget import chart_workers
+        from metroliza.shared.compute_worker import compute_workers_available, spawn_context
+
+        if not compute_workers_available():
+            return None
+        return ProcessPoolExecutor(
+            max_workers=chart_workers(self.chart_worker_count), mp_context=spawn_context(),
+        )
 
     def _iter_reference_partitions(self):
         partition_query = build_analytical_partition_query(self._active_export_query)
@@ -4061,6 +4193,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 partition_value,
                 partition_column='EXPORT_PARTITION_KEY',
                 connection=self._db_connection,
+                snapshot_source=self._snapshot_partition_source,
             )
             if not partition_df.empty:
                 yield partition_df['EXPORT_PARTITION_LABEL'].iloc[0], partition_df
@@ -4249,6 +4382,22 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             lsl=lsl,
             connection=self._db_connection,
         )
+
+    def _try_summary_plotstats_chart(self, payload):
+        """Try the primary renderer without changing the legacy fallback's inputs."""
+        if not isinstance(self._chart_renderer, PlotstatsChartRenderer):
+            return None
+        previous_rc = deepcopy(plt.rcParams)
+        try:
+            result = self._chart_renderer.try_render_payload_png(payload)
+        except Exception:
+            result = None
+        if result is None:
+            # The unchanged _save_summary_chart retries after building the
+            # legacy figure. Keep that retry's mutations, as the old path did,
+            # rather than applying this speculative attempt's mutations twice.
+            plt.rcParams.update(previous_rc)
+        return result
 
     def _save_summary_chart(self, fig, mode='workbook', *, chart_type=None, native_payload=None):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
@@ -4616,6 +4765,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
+        if _can_sort_header_rows(header_group):
+            return _sort_header_row_table(
+                header_group, sample_sort=self._is_sample_sort_mode(sort_mode),
+            )
         sorted_group = header_group.copy()
 
         if self._is_sample_sort_mode(sort_mode):
@@ -5062,10 +5215,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         summary_results = None
+        render_pool = None
         try:
             partition_header_counts = self._partition_header_counts()
             total_references = len(partition_header_counts)
             total_header_units = sum(partition_header_counts.values())
+            render_pool = SummaryRenderPool(self, total_header_units)
             if total_references == 0 or total_header_units == 0:
                 if len(self._build_export_filtered_dataframe()) > 0:
                     raise ValueError(
@@ -5143,7 +5298,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     precomputed_header_entries.append((header, header_group, write_bundle))
                 self._record_stage_timing('transform_grouping', time.perf_counter() - precompute_start)
 
-                summary_results = iter_summary_render_results(self, precomputed_header_entries)
+                summary_results = iter_summary_render_results(
+                    self, precomputed_header_entries, render_pool=render_pool,
+                )
                 for (header, header_group, write_bundle), rendered_summary in summary_results:
                     if self._check_canceled():
                         return
@@ -5257,6 +5414,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         finally:
             if summary_results is not None:
                 summary_results.close()
+            if render_pool is not None:
+                render_pool.close()
 
     def _write_group_analysis_message_sheet(self, worksheet, message):
         from metroliza.exporting.group_analysis_writer import (
@@ -5675,7 +5834,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             ax.grid(axis='y', alpha=0.25)
             fig.tight_layout()
             image_data = BytesIO()
-            fig.savefig(image_data, format='png', dpi=120)
+            fig.savefig(image_data, format='png', dpi=120, pil_kwargs={'compress_level': 4})
             image_data.seek(0)
             return {'image_data': image_data, 'row_span': 16, 'description': description}
         except Exception:
@@ -6426,17 +6585,27 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         )
 
                     distribution_backend_native = resolve_distribution_renderer_backend() == 'native'
-                    if distribution_backend_native:
-                        distribution_native_payload['resolved_render_spec'] = build_resolved_distribution_spec(
-                            distribution_native_payload,
-                        )
-                        distribution_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='distribution',
-                            native_payload=distribution_native_payload,
-                        )
+                    distribution_render_result = None
+                    if not distribution_backend_native:
+                        apply_summary_plot_theme()
+                        distribution_render_result = self._try_summary_plotstats_chart(distribution_native_payload)
+                    if distribution_backend_native or distribution_render_result is not None:
+                        if distribution_backend_native:
+                            distribution_native_payload['resolved_render_spec'] = build_resolved_distribution_spec(
+                                distribution_native_payload,
+                            )
+                            distribution_render_result = self._save_summary_chart(
+                                None,
+                                chart_type='distribution',
+                                native_payload=distribution_native_payload,
+                            )
                         image_data = self._register_chart_image(distribution_render_result.png_bytes)
-                        distribution_slot = _reserve_summary_image_slot('distribution', distribution_canvas)
+                        distribution_slot = _reserve_summary_image_slot(
+                            'distribution', distribution_canvas if distribution_backend_native else {
+                                'width_px': float(categorical_strategy['recommended_fig_width']) * 150.0,
+                                'height_px': 600.0,
+                            },
+                        )
                         if self._check_canceled():
                             return
                     else:
@@ -6581,15 +6750,24 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         ),
                     }
                     iqr_backend_native = resolve_iqr_renderer_backend() == 'native'
-                    if iqr_backend_native:
-                        iqr_native_payload['resolved_render_spec'] = build_resolved_iqr_spec(iqr_native_payload)
-                        iqr_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='iqr',
-                            native_payload=iqr_native_payload,
-                        )
+                    # IQR intentionally inherits ambient rcParams, including a
+                    # preceding distribution chart's theme, just as the legacy path.
+                    iqr_render_result = None if iqr_backend_native else self._try_summary_plotstats_chart(iqr_native_payload)
+                    if iqr_backend_native or iqr_render_result is not None:
+                        if iqr_backend_native:
+                            iqr_native_payload['resolved_render_spec'] = build_resolved_iqr_spec(iqr_native_payload)
+                            iqr_render_result = self._save_summary_chart(
+                                None,
+                                chart_type='iqr',
+                                native_payload=iqr_native_payload,
+                            )
                         image_data = self._register_chart_image(iqr_render_result.png_bytes)
-                        iqr_slot = _reserve_summary_image_slot('iqr', iqr_native_payload['canvas'])
+                        iqr_slot = _reserve_summary_image_slot(
+                            'iqr', iqr_native_payload['canvas'] if iqr_backend_native else {
+                                'width_px': float(iqr_strategy['recommended_fig_width']) * 150.0,
+                                'height_px': 600.0,
+                            },
+                        )
                         if self._check_canceled():
                             return
                     else:
@@ -7136,14 +7314,24 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         'y_limits': trend_y_limits,
                     }
                     trend_native_payload['resolved_render_spec'] = build_resolved_trend_spec(trend_native_payload)
-                    if trend_backend_native:
-                        trend_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='trend',
-                            native_payload=trend_native_payload,
-                        )
+                    trend_render_result = None
+                    if not trend_backend_native:
+                        apply_summary_plot_theme()
+                        trend_render_result = self._try_summary_plotstats_chart(trend_native_payload)
+                    if trend_backend_native or trend_render_result is not None:
+                        if trend_backend_native:
+                            trend_render_result = self._save_summary_chart(
+                                None,
+                                chart_type='trend',
+                                native_payload=trend_native_payload,
+                            )
                         image_data = self._register_chart_image(trend_render_result.png_bytes)
-                        trend_slot = _reserve_summary_image_slot('trend', trend_canvas)
+                        trend_slot = _reserve_summary_image_slot(
+                            'trend', trend_canvas if trend_backend_native else {
+                                'width_px': float(trend_figure_width) * 150.0,
+                                'height_px': 600.0,
+                            },
+                        )
                         if self._check_canceled():
                             return
                     else:

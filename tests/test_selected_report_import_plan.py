@@ -2399,3 +2399,67 @@ def test_failed_or_skipped_import_never_enters_requested_enrichment(tmp_path, mo
     assert worker.last_enrichment_result.total_files == 0
     assert extracted == []
     assert not database.exists()
+
+
+def test_enrichment_occurrence_lookup_last_wins_and_replacement_invalidates(tmp_path, monkeypatch):
+    from metroliza.parsing import parse_reports_thread as module
+
+    reports = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "index.sqlite3"
+    plan = ImportPlan.all_ready(_request(reports[0].parent, database), _preflight(reports[0].parent, database))
+    worker = ParseReportsThread(plan)
+    first = plan.selected_reports[0]
+    last = replace(first, fingerprint="sha256:" + "a" * 64)
+    seen = []
+    monkeypatch.setattr(module, "_require_selected_source_approval", lambda item, inspection, **kw: seen.append((item.selected_identity, kw)))
+    worker.import_plan = replace(plan, selected_reports=(first, last))
+    assert worker._selected_enrichment_identity(reports[0], None) is last
+    worker.import_plan = plan
+    assert worker._selected_enrichment_identity(reports[0], None) is first
+    worker.import_plan = replace(plan, selected_reports=())
+    with pytest.raises(module._SelectedReportApprovalDriftError, match="not selected"):
+        worker._selected_enrichment_identity(reports[0], None)
+    worker.preflight_result = plan.preflight_result
+    assert worker._selected_enrichment_identity(reports[0], None) == first
+    assert all(kw == {"verify_current": True} for _, kw in seen)
+
+
+def test_enrichment_index_reuses_only_plain_immutable_plan_values(tmp_path):
+    reports = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "plain-index.sqlite3"
+    plan = ImportPlan.all_ready(_request(reports[0].parent, database), _preflight(reports[0].parent, database))
+    worker = ParseReportsThread(plan)
+    index = worker._enrichment_plan_index()
+    assert worker._enrichment_plan_index() is index
+    assert index[1] == frozenset(plan.selected_reports)
+    worker.import_plan = replace(plan, selected_reports=())
+    assert worker._enrichment_index is None
+    assert worker._enrichment_plan_index() == ({}, frozenset())
+    worker.import_plan = SimpleNamespace(selected_reports=list(plan.selected_reports))
+    assert worker._enrichment_plan_index() is None
+    worker.import_plan = replace(plan, selected_reports=list(plan.selected_reports))
+    assert worker._enrichment_plan_index() is None
+    class CustomString(str):
+        def __hash__(self):
+            pytest.fail("custom identity must decline before hashing")
+    worker.import_plan = replace(plan, selected_reports=(replace(plan.selected_reports[0], occurrence_id=CustomString("custom")),))
+    assert worker._enrichment_plan_index() is None
+    class LegacyWorker(ParseReportsThread):
+        pass
+    assert ParseReportsThread._enrichment_plan_index(LegacyWorker(plan)) is None
+
+
+def test_missing_enrichment_identity_preserves_legacy_short_circuit(tmp_path):
+    from metroliza.parsing import parse_reports_thread as module
+
+    reports = _write_unique_reports(tmp_path / "reports", 1)
+    database = tmp_path / "legacy-index.sqlite3"
+    plan = ImportPlan.all_ready(_request(reports[0].parent, database), _preflight(reports[0].parent, database))
+    worker = ParseReportsThread(plan)
+    class LegacyPlan:
+        @property
+        def selected_reports(self):
+            pytest.fail("missing identity must short circuit before reading selection")
+    worker.import_plan = LegacyPlan()
+    with pytest.raises(module._SelectedReportApprovalDriftError, match="incomplete"):
+        worker._enrichment_transaction_approval(SimpleNamespace(selected_identity=None))

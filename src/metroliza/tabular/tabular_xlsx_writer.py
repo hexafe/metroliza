@@ -33,6 +33,47 @@ def _column_values(series, kind):
     return values
 
 
+def _plain_string_dict(value):
+    return type(value) is dict and all(type(key) is str for key in value)
+
+
+def _bulk_workbook(writer):
+    from pandas.io.excel._xlsxwriter import XlsxWriter
+    from xlsxwriter import Workbook
+    from xlsxwriter.worksheet import Worksheet
+
+    if type(writer) is not XlsxWriter:
+        return
+    metadata = vars(writer)
+    if not _plain_string_dict(metadata):
+        return
+    book = metadata.get('_book')
+    if type(book) is not Workbook:
+        return
+    metadata = vars(book)
+    if not _plain_string_dict(metadata):
+        return
+    if not _plain_string_dict(metadata.get('sheetnames')):
+        return
+    default_policy = vars(Workbook).get('worksheet_class')
+    if metadata.get('constant_memory') is not False or metadata.get('worksheet_class', default_policy) is not Worksheet:
+        return
+    return book
+
+
+def _prepare_bulk_worksheet(dataframe, writer, sheet_name):
+    from pandas import DataFrame
+
+    from metroliza.exporting.xlsx_bulk_sheet import BulkRowsWorksheet, bulk_write_enabled
+
+    # Inspect only plain metadata before adding a sheet or a mapping lookup.
+    if type(dataframe) is not DataFrame or type(sheet_name) is not str or not sheet_name:
+        return
+    book = _bulk_workbook(writer)
+    if book is not None and bulk_write_enabled() and sheet_name not in book.sheetnames:
+        book.add_worksheet(sheet_name, worksheet_class=BulkRowsWorksheet)
+
+
 def write_tabular_dataframe(dataframe, writer, sheet_name):
     """Write ordinary scalar columns in bulk, retaining pandas for complex types.
 
@@ -54,7 +95,11 @@ def write_tabular_dataframe(dataframe, writer, sheet_name):
     if len(dataframe.index) > 1_048_575 or len(dataframe.columns) > 16_384:
         dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
         return
-    dataframe.iloc[:0].to_excel(writer, sheet_name=sheet_name, index=False)
+    # Preserve header metadata callbacks/errors before any worksheet mutation.
+    header_frame = dataframe.iloc[:0]
+    _prepare_bulk_worksheet(dataframe, writer, sheet_name)
+    header_frame.to_excel(writer, sheet_name=sheet_name, index=False)
+    del header_frame
     worksheet = writer.sheets[sheet_name]
     datetime_format = None
     for index, kind in enumerate(kinds):

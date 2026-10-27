@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
+import multiprocessing.context
 import os
 from pathlib import Path
 import sys
+import threading
 
 
 def frozen_windows() -> bool:
@@ -41,6 +44,72 @@ def compute_workers_available() -> bool:
     return True
 
 
+# Math libraries read these once, when NumPy/SciPy load. A compute worker is already one
+# of several parallel processes, so each keeps a single math thread (they would otherwise
+# each start one thread per core). A value the user set always wins.
+WORKER_THREAD_VARIABLES = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+_SPAWN_ENVIRONMENT_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def worker_thread_environment(environ=None):
+    """Temporarily add the one-thread limits that the environment does not already set.
+
+    The parent's os.environ gains missing variables for the duration of each spawn
+    start, so the child inherits them before importing math libraries. Afterwards,
+    added values still equal to "1" are removed; existing values are left alone.
+    The lock serialises these starts only: other parent threads reading the
+    environment or initializing libraries during that interval can see the limits.
+    Libraries already configured normally retain their earlier settings. The
+    packaged Windows environment API is internally locked as well; this does not
+    isolate the temporary values from other parent threads.
+    """
+
+    environ = os.environ if environ is None else environ
+    with _SPAWN_ENVIRONMENT_LOCK:
+        added = [name for name in WORKER_THREAD_VARIABLES if name not in environ]
+        for name in added:
+            environ[name] = "1"
+        try:
+            yield tuple(added)
+        finally:
+            for name in added:
+                if environ.get(name) == "1":
+                    del environ[name]
+
+
+class _ThreadLimitedSpawnProcess(multiprocessing.context.SpawnProcess):
+    """Spawn process whose child inherits one-thread math libraries before NumPy loads.
+
+    The child environment is fixed at process creation, which is the only point that is
+    early enough for a spawned interpreter: NumPy may already be imported while the
+    worker unpickles its entry point.
+    """
+
+    def start(self):
+        with worker_thread_environment():
+            super().start()
+
+
+class _ThreadLimitedContext:
+    """Spawn context facade whose processes start with ``worker_thread_environment``."""
+
+    def __init__(self, context):
+        self._context = context
+
+    @property
+    def Process(self):  # noqa: N802 - multiprocessing context API
+        return _ThreadLimitedSpawnProcess
+
+    def __getattr__(self, name):
+        return getattr(self._context, name)
+
+
 def spawn_context():
     context = multiprocessing.get_context("spawn")
     if frozen_windows():
@@ -49,7 +118,7 @@ def spawn_context():
         context.set_executable(str(worker_executable()))
     elif getattr(sys, "frozen", False):
         raise RuntimeError("compute_frozen_platform_unqualified")
-    return context
+    return _ThreadLimitedContext(context)
 
 
 def initialize_compute_runtime():

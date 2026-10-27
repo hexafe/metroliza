@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
+from PyQt6 import sip  # noqa: E402
 from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 
@@ -305,8 +306,10 @@ def test_sqlite_load_cancels_before_the_first_batch(tmp_path, blocked_by):
             try:
                 assert started.wait(5)
                 assert not worker.wait(100)  # the SQL/lock is still pending, before any batch
+                requested_at = time.monotonic()
                 records.cancel_load_thread(worker, wait_ms=1000)
-                assert not worker.isRunning(), "cancellation returned with SQLite still executing"
+                assert _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS, timeout=1)
+                print(f"T25 native_sql_{blocked_by} cancel_to_idle_s={time.monotonic() - requested_at:.6f}")
             finally:
                 # Always release real SQL and join, including when testing the broken code.
                 worker.requestInterruption()
@@ -317,12 +320,13 @@ def test_sqlite_load_cancels_before_the_first_batch(tmp_path, blocked_by):
                     except sqlite3.ProgrammingError:  # already closed by the worker
                         pass
                 locker.rollback()
-                worker.wait()
+                if not sip.isdeleted(worker):
+                    worker.wait()
                 _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS)
     assert not loaded and not failed
 
 
-def test_about_to_quit_joins_a_worker_that_exceeds_the_bounded_wait(tmp_path):
+def test_about_to_quit_retains_a_noncooperative_worker_without_joining(tmp_path):
     app = _app()
     database = tmp_path / "blocked.db"
     _write_database(database, [])
@@ -340,19 +344,18 @@ def test_about_to_quit_joins_a_worker_that_exceeds_the_bounded_wait(tmp_path):
         return connection
 
     worker = records.RecordLoadThread("report", 1, str(database), "SELECT blocked_sql() AS report_id", SPECS)
-    cancel = records.cancel_load_thread
     unblock = threading.Timer(0.2, release.set)
     with patch.object(sqlite3, "connect", blocking_connect):
         records.start_load_thread(worker)
         try:
             assert entered.wait(5)
             unblock.start()
-            with patch.object(worker, "wait", wraps=worker.wait) as waits, patch.object(
-                records, "cancel_load_thread", lambda thread: cancel(thread, wait_ms=1)
-            ):
+            with patch.object(worker, "wait", side_effect=AssertionError("GUI join")):
+                began = time.monotonic()
                 app.aboutToQuit.emit()
-                assert not worker.isRunning(), "application shutdown returned before the worker finished"
-                assert waits.call_count == 2  # bounded wait failed, so exit must wait for completion
+                assert time.monotonic() - began < 0.1
+                assert worker.isRunning()
+                assert worker in records._ACTIVE_LOAD_THREADS
         finally:
             release.set()
             unblock.cancel()
@@ -484,3 +487,815 @@ def test_mouse_clicks_emit_cell_pressed_and_shift_click_selects_a_row_range(curr
     # setCurrentCell toggles the clicked row back off in multi-selection mode).
     assert sorted({index.row() for index in view.selectionModel().selectedRows()}) == [2, 3, 4]
     assert view.currentRow() == 5 and view.rowCount() == 10 and view.columnCount() == 17
+
+
+@pytest.mark.parametrize("batch_size", [1, 7, 5000])
+def test_loader_matches_cellwise_reference_for_unicode_nulls_and_reordered_columns(tmp_path, batch_size):
+    database = tmp_path / "equivalence.db"
+    values = [(i, text, number) for i in range(8) for text, number in [
+        ("İßΣ\x1fX", -0.0), ("", None), (None, 1.2345678901234567), ("Repeat", 1e100),
+    ]]
+    _write_database(database, values)
+    specs = [*SPECS, {"label": "ABSENT", "field": "absent"}]
+    result = load_record_rows(str(database), "SELECT nominal, reference, id AS report_id FROM t", specs,
+                              batch_size=batch_size)
+    with closing(sqlite3.connect(database)) as connection:
+        stored = connection.execute("SELECT id, reference, nominal FROM t").fetchall()
+    expected = [(*row, None) for row in stored]
+    assert result.rows == expected
+    assert result.haystack == [records.row_haystack(row) for row in expected]
+    model = RecordTableModel(specs, result.rows, result.haystack)
+    for needle in ["", "repeat", "i̇", "σ", "1e+100", "x\x1f", "absent"]:
+        model.set_filter_text(needle)
+        wanted = [i for i, row in enumerate(expected) if not needle or any(
+            needle in records.display_value(value).lower() for value in row
+        )] if records.FIELD_SEPARATOR in needle else [
+            i for i, row in enumerate(expected) if needle in records.row_haystack(row)
+        ]
+        assert [model.source_row(i) for i in range(model.rowCount())] == wanted
+
+
+def test_record_indicator_is_delayed_nonmodal_and_released_on_cancel(current_dialog, monkeypatch):
+    dialog = current_dialog
+    dialog.ensure_record_tables_loaded()
+    dialog._reset_record_tables()
+    entered = threading.Event()
+
+    def held_loader(*_args, should_cancel, **_kwargs):
+        entered.set()
+        while not should_cancel():
+            time.sleep(0.005)
+        return None
+
+    monkeypatch.setattr(records, "load_record_rows", held_loader)
+    dialog.show()
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    slot = dialog._record_slots[1]
+    assert entered.wait(1)
+    progress = slot.progress_dialog
+    assert progress is not None and not progress.isVisible()
+    assert progress.windowModality() == Qt.WindowModality.NonModal
+    assert progress._delayed_show_timer.interval() == 1000
+    assert _pump(progress.isVisible)
+    assert progress._loading_gif_buffer is not None
+    dialog._cancel_record_load(slot)
+    assert slot.progress_dialog is None and not progress.isVisible()
+    assert not progress._delayed_show_timer.isActive()
+
+@pytest.mark.parametrize("terminal", ["loaded", "failed", "close", "user_cancel"])
+def test_record_indicator_released_on_every_terminal_path(current_dialog, monkeypatch, terminal):
+    dialog = current_dialog
+    entered, release = threading.Event(), threading.Event()
+    logged = []
+
+    def held_loader(*_args, should_cancel, **_kwargs):
+        entered.set()
+        while not release.wait(0.005):
+            if should_cancel():
+                return None
+        if terminal == "failed":
+            raise ValueError("synthetic record load failure")
+        return records.RecordRows([], [])
+
+    monkeypatch.setattr(records, "load_record_rows", held_loader)
+    monkeypatch.setattr(dialog, "log_and_exit", logged.append)
+    dialog.show()
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    slot = dialog._record_slots[1]
+    progress, thread, generation = slot.progress_dialog, slot.thread, slot.generation
+    assert entered.wait(1)
+    try:
+        if terminal == "close":
+            dialog.close()
+        elif terminal == "user_cancel":
+            progress.reject()
+        else:
+            release.set()
+            assert _pump(lambda: slot.state != "loading")
+        assert slot.progress_dialog is None
+        assert not progress.isVisible() and not progress._delayed_show_timer.isActive()
+        assert thread.wait(1000)
+        assert bool(logged) == (terminal == "failed")
+        if terminal in {"close", "user_cancel"}:
+            dialog._on_record_rows_loaded(slot.kind, generation, records.RecordRows([(99,)], ["99"]))
+            assert slot.state == "idle" and slot.view.rowCount() == 0
+    finally:
+        release.set()
+        if not sip.isdeleted(thread):
+            records.cancel_load_thread(thread)
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_literal_search_equivalence_before_and_after_sparse_edits(cached):
+    rows = [(1, None, -0.0), (2, "", None), (3, "İßΣ\x00X", 1e100),
+            (4, "left\x1fright", 0.30000000000000004)]
+    model = RecordTableModel(SPECS, rows, [records.row_haystack(row) for row in rows] if cached else None)
+    assert [[model.text_at(r, c) for c in range(3)] for r in range(4)] == [
+        ["1", "", "-0.0"], ["2", "", ""], ["3", "İßΣ\x00X", "1e+100"],
+        ["4", "left\x1fright", "0.30000000000000004"],
+    ]
+    assert model.setData(model.index(1, 1), "new\x00İ")
+    for needle, expected in [("", [0, 1, 2, 3]), ("new\x00i̇", [1]), ("ς\x00", [2]),
+                             ("left\x1fright", [3]), ("1\x1f", []), ("1e+100", [2])]:
+        model.set_filter_text(needle)
+        assert [model.source_row(i) for i in range(model.rowCount())] == expected
+    model.set_filter_text("")
+    assert model.setData(model.index(1, 1), "")  # revert after the cache has been built
+    model.set_filter_text("new")
+    assert model.rowCount() == 0
+    assert list(model.edited_rows()) == []
+    assert model.original_value(0, 1) is None
+    assert type(model.original_value(0, 2)) is float
+
+
+@pytest.mark.parametrize("flavor", ["current", "legacy"])
+def test_literal_normalization_contents_after_each_tab_visit(tmp_path, flavor):
+    _app()
+    database = tmp_path / f"{flavor}.db"
+    (_build_current_database if flavor == "current" else _build_legacy_database)(database)
+    dialog = ModifyDB(parent=None, db_file=str(database), modal=False)
+    try:
+        expected = [
+            [["REF-A", "REF-A", "2"], ["REF-B", "REF-B", "1"], ["REF-C", "REF-C", "1"]]
+            if flavor == "current" else
+            [["REF-A", "REF-A", "1"], ["REF-B", "REF-B", "2"], ["REF-C", "REF-C", "1"]],
+            [["001", "001", "1"], ["002", "002", "2"], ["004", "004", "1"]],
+            [["DIAM", "DIAM", "2"], ["HEIGHT", "HEIGHT", "3"], ["WIDTH", "WIDTH", "4"]]
+            if flavor == "current" else
+            [["DIAM", "DIAM", "1"], ["HEIGHT", "HEIGHT", "1"], ["WIDTH", "WIDTH", "2"]],
+        ]
+        for index, table in enumerate((dialog.reference_table, dialog.part_number_table, dialog.header_table)):
+            dialog.normalize_tab_widget.setCurrentIndex(index)
+            assert [table.horizontalHeaderItem(c).text() for c in range(3)] == [
+                "Original value", "New value", "Occurrences",
+            ]
+            assert [[table.item(r, c).text() for c in range(3)] for r in range(table.rowCount())] == expected[index]
+            assert [table.item(r, 1).data(Qt.ItemDataRole.UserRole) for r in range(table.rowCount())] == [
+                row[0] for row in expected[index]
+            ]
+        assert not dialog.has_pending_changes()
+    finally:
+        dialog._changes_committed = True
+        dialog.close()
+
+
+def test_only_visible_normalization_populates_and_hidden_edits_survive_revisits(current_dialog):
+    dialog = current_dialog
+    assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 0, 0]
+    dialog.reference_table.item(0, 1).setText("pending reference")
+    dialog.header_filter_edit.setText("width")  # typed before the deferred table loads
+    dialog.normalize_tab_widget.setCurrentIndex(2)
+    assert dialog.header_table.rowCount() == 3 and dialog.part_number_table.rowCount() == 0
+    assert [dialog.header_table.isRowHidden(r) for r in range(3)] == [True, True, False]
+    dialog.header_table.item(2, 1).setText("pending header")
+    dialog.normalize_tab_widget.setCurrentIndex(0)
+    dialog.normalize_tab_widget.setCurrentIndex(2)
+    assert dialog.reference_table.item(0, 1).text() == "pending reference"
+    assert dialog.header_table.item(2, 1).text() == "pending header"
+    assert dialog.has_pending_changes()
+    assert dialog.collect_normalization_value_changes(dialog.header_table) == [("pending header", "WIDTH")]
+    dialog.populate_tables()  # public refresh stays eager and invalidates all old values/edits
+    assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 3, 3]
+    assert not dialog.has_pending_changes()
+
+
+@pytest.mark.parametrize("flavor", ["current", "legacy"])
+@pytest.mark.parametrize("slot_index", [0, 1], ids=["report", "measurement"])
+@pytest.mark.parametrize("blocking", [False, True], ids=["worker", "blocking"])
+def test_dialog_prepares_search_cache_during_load_not_first_filter(tmp_path, monkeypatch, flavor,
+                                                                slot_index, blocking):
+    _app()
+    database = tmp_path / f"{flavor}.db"
+    (_build_current_database if flavor == "current" else _build_legacy_database)(database)
+    dialog = ModifyDB(parent=None, db_file=str(database), modal=False)
+    batches = []
+    add_batch = records._RecordRowBuilder.add_batch
+    gui_thread = threading.get_ident()
+
+    def observe_batch(builder, columns, rows):
+        add_batch(builder, columns, rows)
+        batches.append((threading.get_ident(), len(builder.rows),
+                        None if builder.haystack is None else len(builder.haystack)))
+
+    monkeypatch.setattr(records._RecordRowBuilder, "add_batch", observe_batch)
+    try:
+        slot = dialog._record_slots[slot_index]
+        if blocking:
+            dialog.ensure_record_tables_loaded()
+        else:
+            dialog.tab_widget.setCurrentWidget(slot.tab)
+            assert _pump(lambda: slot.state == "loaded")
+        model = slot.view.model()
+        assert model.total_row_count > 0 and batches
+        assert all(row_count == cache_count for _, row_count, cache_count in batches)
+        assert all((thread_id == gui_thread) == blocking for thread_id, _, _ in batches)
+        expected_cache = [records.row_haystack(row) for row in model._rows]
+        assert model._haystack == expected_cache
+        needle = "1"
+        expected_rows = [row for row, text in enumerate(expected_cache) if needle in text]
+        assert expected_rows
+        with patch.object(model, "_current_haystack",
+                          side_effect=AssertionError("first filter rebuilt the search cache")):
+            slot.filter_edit.setText(needle)
+            dialog.flush_record_filters()
+        assert [model.source_row(row) for row in range(model.rowCount())] == expected_rows
+    finally:
+        dialog._changes_committed = True
+        dialog.close()
+
+
+def test_record_filter_entered_during_worker_load_uses_prepared_cache(current_dialog, monkeypatch):
+    dialog = current_dialog
+    entered, release = threading.Event(), threading.Event()
+    load = records.load_record_rows
+
+    def held_load(*args, **kwargs):
+        rows = load(*args, **kwargs)
+        entered.set()
+        assert release.wait(5)
+        return rows
+
+    monkeypatch.setattr(records, "load_record_rows", held_load)
+    slot = dialog._record_slots[1]
+    dialog.tab_widget.setCurrentWidget(slot.tab)
+    worker = slot.thread
+    try:
+        assert entered.wait(2) and slot.state == "loading"
+        slot.filter_edit.setText("nok")
+        with patch.object(RecordTableModel, "_current_haystack",
+                          side_effect=AssertionError("GUI rebuilt the worker search cache")):
+            release.set()
+            assert _pump(lambda: slot.state == "loaded")
+        model = slot.view.model()
+        assert model.filter_text == "nok"
+        assert [model.source_row(row) for row in range(model.rowCount())] == [3, 8]
+        assert model._haystack == [records.row_haystack(row) for row in model._rows]
+    finally:
+        release.set()
+        if not sip.isdeleted(worker):
+            assert worker.wait(1000)
+        assert _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS)
+
+
+def test_internal_record_load_has_worker_haystack_and_first_search_sees_edits(current_dialog):
+    dialog = current_dialog
+    slot = dialog._record_slots[1]
+    dialog.tab_widget.setCurrentWidget(slot.tab)
+    assert _pump(lambda: slot.state == "loaded")
+    model = slot.view.model()
+    assert model.total_row_count == 10
+    assert model._haystack == [records.row_haystack(row) for row in model._rows]
+    assert model.setData(model.index(0, 2), "before search")
+    assert model._haystack[0] == model._current_haystack(0)
+    slot.filter_edit.setText("before search")
+    dialog.flush_record_filters()
+    assert model.rowCount() == 1 and model.source_row(0) == 0
+    assert model._haystack is not None
+    assert model.setData(model.index(0, 2), "after search")
+    slot.filter_edit.setText("after search")
+    dialog.flush_record_filters()
+    assert model.rowCount() == 1 and model.source_row(0) == 0
+
+
+def test_deferred_loader_opt_in_keeps_public_rows_and_eager_default(tmp_path):
+    database = tmp_path / "rows.db"
+    _write_database(database, [(1, "İ\x00\x1f", None), (2, None, 0.30000000000000004)])
+    query = "SELECT id AS report_id, reference, nominal FROM t ORDER BY id"
+    eager = load_record_rows(str(database), query, SPECS)
+    deferred = load_record_rows(str(database), query, SPECS, defer_haystack=True)
+    assert deferred.rows == eager.rows == [(1, "İ\x00\x1f", None), (2, None, 0.30000000000000004)]
+    assert eager.haystack == ["1\x1fi̇\x00\x1f\x1f", "2\x1f\x1f0.30000000000000004"]
+    assert deferred.haystack is None
+
+
+def test_subclass_keeps_eager_no_keyword_populate_hook_and_ignores_new_helper_collisions(tmp_path):
+    _app()
+    database = tmp_path / "subclass.db"
+    _build_current_database(database)
+
+    class CustomDialog(ModifyDB):
+        def populate_tables(self):
+            self.populated = True
+            return super().populate_tables()
+
+        def _refresh_tables_for_view(self):
+            raise AssertionError("new helper must not replace the old public hook")
+
+        def _load_normalize_table(self, table):
+            raise AssertionError("new helper must not dispatch to an existing subclass method")
+
+        def _load_visible_normalize_table(self):
+            raise AssertionError("new helper must not dispatch to an existing subclass method")
+
+        def _filter_table_rows(self, table, text):
+            raise AssertionError("eager refresh must not add a filter callback")
+
+    dialog = CustomDialog(parent=None, db_file=str(database), modal=False)
+    try:
+        assert dialog.populated
+        assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 3, 3]
+        dialog.normalize_tab_widget.setCurrentIndex(2)
+        assert dialog.header_table.rowCount() == 3
+    finally:
+        dialog._changes_committed = True
+        dialog.close()
+
+
+def test_unavailable_tab_interface_refresh_falls_back_to_public_eager_api():
+    class CustomOwner:
+        normalize_tab_widget = object()
+
+        def populate_tables(self):
+            self.populated = True
+
+    owner = CustomOwner()
+    ModifyDB._refresh_tables_for_view(owner)
+    assert owner.populated
+
+
+def test_public_eager_refresh_retains_existing_normalization_row_visibility(current_dialog):
+    dialog = current_dialog
+    dialog.populate_tables()
+    dialog.header_filter_edit.setText("width")
+    assert [dialog.header_table.isRowHidden(r) for r in range(3)] == [True, True, False]
+    dialog.populate_tables()
+    assert [dialog.header_table.isRowHidden(r) for r in range(3)] == [True, True, False]
+
+
+def test_fake_tab_without_signal_or_current_index_keeps_eager_refresh(current_dialog):
+    from types import SimpleNamespace
+
+    dialog = current_dialog
+    tabs = dialog.normalize_tab_widget
+    errors = []
+    try:
+        dialog.normalize_tab_widget = SimpleNamespace(currentChanged=object())
+        with patch.object(dialog, "log_and_exit", errors.append):
+            dialog.connect_signals()
+            ModifyDB._refresh_tables_for_view(dialog)
+        assert not errors
+        assert [t.rowCount() for t in (dialog.reference_table, dialog.part_number_table, dialog.header_table)] == [3, 3, 3]
+    finally:
+        dialog.normalize_tab_widget = tabs
+
+
+def test_database_switch_invalidates_hidden_tables_and_filtered_record_generation(current_dialog, tmp_path):
+    dialog = current_dialog
+    slot = dialog._record_slots[0]
+    dialog.tab_widget.setCurrentWidget(slot.tab)
+    assert _pump(lambda: slot.state == "loaded")
+    slot.filter_edit.setText("ref-b")
+    dialog.flush_record_filters()
+    assert slot.view.rowCount() == 1
+    database = tmp_path / "replacement.db"
+    _build_legacy_database(database)
+    with patch('metroliza.ui.modify_db.QFileDialog.getOpenFileName', return_value=(str(database), "")):
+        dialog.select_db_file()
+    assert dialog._storage_flavor == "legacy"
+    assert dialog.reference_table.rowCount() == dialog.part_number_table.rowCount() == dialog.header_table.rowCount() == 0
+    assert _pump(lambda: slot.state == "loaded")
+    assert slot.view.rowCount() == 2  # same needle, different database generation
+    dialog.tab_widget.setCurrentWidget(dialog.normalize_tab)
+    dialog.normalize_tab_widget.setCurrentIndex(2)
+    assert dialog.header_table.rowCount() == 3
+    assert dialog.part_number_table.rowCount() == 0
+
+
+@pytest.mark.parametrize("defer", [False, True])
+def test_public_thread_default_keeps_eager_haystacks_and_internal_opt_in_defers(tmp_path, defer):
+    _app()
+    database = tmp_path / "thread.db"
+    _write_database(database, [(1, "Thread\x00İ", 1.25)])
+    kwargs = {"defer_haystack": True} if defer else {}
+    thread = records.RecordLoadThread("report", 1, str(database),
+                                      "SELECT id AS report_id, reference, nominal FROM t", SPECS, **kwargs)
+    loaded = []
+    thread.loaded.connect(lambda kind, generation, rows: loaded.append((kind, generation, rows)))
+    records.start_load_thread(thread)
+    try:
+        assert _pump(lambda: bool(loaded))
+        assert loaded[0][:2] == ("report", 1)
+        assert loaded[0][2].rows == [(1, "Thread\x00İ", 1.25)]
+        assert loaded[0][2].haystack == (None if defer else ["1\x1fthread\x00i̇\x1f1.25"])
+    finally:
+        if not sip.isdeleted(thread):
+            records.cancel_load_thread(thread)
+        assert _pump(lambda: thread not in records._ACTIVE_LOAD_THREADS)
+
+
+def test_cancel_retains_noncooperative_native_worker_without_gui_join(monkeypatch):
+    _app()
+    entered, release = threading.Event(), threading.Event()
+    def blocked(*args, **kwargs):
+        entered.set()
+        release.wait(5)
+        return records.RecordRows([], [])
+    monkeypatch.setattr(records, "load_record_rows", blocked)
+    worker = records.RecordLoadThread("report", 1, "unused", "unused", SPECS)
+    records.start_load_thread(worker)
+    try:
+        assert entered.wait(2)
+        began = time.monotonic()
+        with patch.object(worker, "wait", side_effect=AssertionError("GUI joined native worker")):
+            records.cancel_load_thread(worker, wait_ms=1)
+        assert time.monotonic() - began < 1
+        assert worker in records._ACTIVE_LOAD_THREADS
+    finally:
+        release.set()
+        worker.wait(5000)
+        assert _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS)
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_cancel_already_stopped_and_direct_started_thread_keeps_native_ownership(monkeypatch, managed):
+    from metroliza.ui import detached_threads
+    _app()
+    entered, release = threading.Event(), threading.Event()
+    def held(*args, **kwargs):
+        entered.set()
+        release.wait(5)
+        return records.RecordRows([], [])
+    monkeypatch.setattr(records, "load_record_rows", held)
+    worker = records.RecordLoadThread("report", 1, "unused", "unused", SPECS)
+    (records.start_load_thread(worker) if managed else worker.start())
+    try:
+        assert entered.wait(2)
+        with patch.object(worker, "wait", side_effect=AssertionError("GUI join")):
+            records.cancel_load_thread(worker)
+        assert detached_threads.is_registered(worker)
+    finally:
+        release.set()
+        worker.wait(5000)
+        assert _pump(lambda: worker not in records._ACTIVE_LOAD_THREADS)
+    if not managed:
+        # A directly-started public worker keeps the caller's native deletion ownership.
+        assert not sip.isdeleted(worker)
+        records.cancel_load_thread(worker)
+        assert worker not in records._ACTIVE_LOAD_THREADS
+        worker.deleteLater()
+
+
+def test_normal_quit_defers_to_native_record_completion_with_live_gui_timers():
+    import subprocess
+    import sys
+    code = '''
+import threading, time
+from PyQt6.QtCore import QTimer
+from metroliza.app.bootstrap import get_or_create_qapplication
+from metroliza.ui import detached_threads, modify_db_records as records
+app = get_or_create_qapplication()
+entered, release = threading.Event(), threading.Event()
+def held(*args, **kwargs):
+    entered.set()
+    release.wait(2)
+    return records.RecordRows([], [])
+records.load_record_rows = held
+worker = records.RecordLoadThread("report", 1, "unused", "unused", [])
+delivered, observed = [], []
+worker.loaded.connect(lambda *args: delivered.append(threading.get_ident()))
+records.start_load_thread(worker)
+assert entered.wait(1)
+QTimer.singleShot(0, app.quit)
+QTimer.singleShot(50, lambda: observed.append(detached_threads.is_registered(worker)))
+QTimer.singleShot(100, release.set)
+QTimer.singleShot(2000, lambda: app.exit(9))
+began = time.monotonic()
+assert app.exec() == 0
+elapsed = time.monotonic() - began
+assert observed == [True], observed
+assert delivered == [threading.get_ident()], delivered
+assert worker not in records._ACTIVE_LOAD_THREADS
+assert not detached_threads.is_registered(worker)
+assert .08 <= elapsed < 1, elapsed
+print(f"T25 normal_quit_native_completion_s={elapsed:.6f}")
+'''
+    completed = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=10)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    print(completed.stdout, end="")
+
+
+def test_custom_record_worker_keeps_legacy_start_and_cancel_contract():
+    class Signal:
+        def connect(self, callback):
+            self.callback = callback
+        def emit(self):
+            self.callback()
+    class Worker:
+        def __init__(self):
+            self.finished = Signal()
+            self.interrupted = False
+        def start(self):
+            self.finished.emit()
+        def requestInterruption(self):
+            self.interrupted = True
+    worker = Worker()
+    records.start_load_thread(worker)
+    assert worker not in records._ACTIVE_LOAD_THREADS
+    records.cancel_load_thread(worker)
+    assert worker.interrupted
+
+
+def test_direct_headless_record_worker_does_not_require_qapplication():
+    import subprocess
+    import sys
+    code = '''
+from PyQt6.QtCore import QCoreApplication
+from metroliza.ui import modify_db_records as records
+assert QCoreApplication.instance() is None
+records.load_record_rows = lambda *args, **kwargs: records.RecordRows([], [])
+worker = records.RecordLoadThread("report", 1, "unused", "unused", [])
+records.start_load_thread(worker)
+assert worker.wait(1000)
+records.cancel_load_thread(worker)
+assert worker.isFinished()
+'''
+    completed = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=5)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("terminal", ["loaded", "failed"])
+@pytest.mark.parametrize("finished_first", [True, False])
+@pytest.mark.parametrize("cleanup", [False, True, "delete"])
+def test_public_worker_result_precedes_finished_cleanup(monkeypatch, terminal, finished_first, cleanup):
+    import hashlib
+    import importlib.util
+    import os
+    from pathlib import Path
+    import sys
+    import weakref
+
+    module = records
+    source = os.environ.get("METROLIZA_RECORD_ORDER_SOURCE")
+    if source:
+        path = Path(source).resolve(strict=True)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == os.environ["METROLIZA_RECORD_ORDER_SHA256"]
+        spec = importlib.util.spec_from_file_location("metroliza.ui._record_order_control", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    _app()
+    entered, release = threading.Event(), threading.Event()
+    events, consumed = [], []
+    def load(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        if terminal == "failed":
+            raise ValueError("synthetic public error")
+        return module.RecordRows([(7,)], ["7"])
+    monkeypatch.setattr(module, "load_record_rows", load)
+    worker = module.RecordLoadThread("report", 1, "unused", "unused", [])
+    worker_ref = weakref.ref(worker)
+    def consume(_kind, _generation, value):
+        events.append(terminal)
+        consumed.append(value.rows if terminal == "loaded" else str(value))
+    getattr(worker, terminal).connect(consume)
+    def finished():
+        events.append("finished")
+        current = worker_ref()
+        if cleanup is True:
+            getattr(current, terminal).disconnect(consume)
+        elif cleanup == "delete":
+            current.deleteLater()
+    if finished_first:
+        worker.finished.connect(finished)
+    module.start_load_thread(worker)
+    try:
+        assert entered.wait(1)
+        if not finished_first:
+            worker.finished.connect(finished)
+        release.set()
+        assert _pump(lambda: "finished" in events and worker not in module._ACTIVE_LOAD_THREADS)
+        assert events == [terminal, "finished"]
+        assert consumed == ([[(7,)]] if terminal == "loaded" else ["synthetic public error"])
+        if cleanup == "delete":
+            from PyQt6.QtCore import QCoreApplication, QEvent
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert sip.isdeleted(worker)
+        else:
+            assert not sip.isdeleted(worker), "public helper took the caller's deletion ownership"
+            assert worker.wait(1000), "public QThread.wait contract changed"
+    finally:
+        release.set()
+        if not sip.isdeleted(worker):
+            assert worker.wait(1000)
+            worker.deleteLater()
+
+
+@pytest.mark.parametrize("terminal", ["loaded", "failed"])
+@pytest.mark.parametrize("destroy_at", ["before_delivery", "during_callback"])
+def test_modifydb_managed_delivery_owns_native_thread_through_actual_handler(
+    current_dialog, monkeypatch, terminal, destroy_at,
+):
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from metroliza.ui import detached_threads
+    dialog = current_dialog
+    entered, release = threading.Event(), threading.Event()
+    original_load = records.load_record_rows
+    seen, destroyed = [], []
+    handler_name = "_on_record_rows_loaded" if terminal == "loaded" else "_on_record_load_failed"
+    original_handler = getattr(dialog, handler_name)
+    def held(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        if terminal == "failed":
+            raise ValueError("synthetic managed error")
+        return original_load(*args, **kwargs)
+    def destroy_owner(*_args):
+        assert detached_threads.is_registered(worker)
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert detached_threads.is_registered(worker), "delivery acknowledged before callback return"
+    def handler(*args):
+        seen.append(threading.get_ident())
+        original_handler(*args)
+        if terminal == "loaded":
+            destroy_owner()
+    monkeypatch.setattr(records, "load_record_rows", held)
+    monkeypatch.setattr(dialog, handler_name, handler)
+    monkeypatch.setattr(dialog, "log_and_exit", destroy_owner)
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    worker = dialog._record_slots[1].thread
+    worker.destroyed.connect(lambda: destroyed.append(threading.get_ident()))
+    try:
+        assert entered.wait(1) and worker._defer_delivery
+        if destroy_at == "before_delivery":
+            dialog.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        release.set()
+        assert _pump(lambda: not detached_threads.is_registered(worker) and worker not in records._ACTIVE_LOAD_THREADS)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert seen == ([] if destroy_at == "before_delivery" else [threading.get_ident()])
+        assert destroyed == [threading.get_ident()]
+    finally:
+        release.set()
+        if not sip.isdeleted(worker):
+            assert worker.wait(1000)
+        # The fixture must not revisit the explicitly destroyed native dialog.
+        dialog.close = lambda: None
+
+
+@pytest.mark.parametrize("custom", ["start", "run"])
+def test_modifydb_custom_record_runtime_keeps_legacy_signal_path(current_dialog, monkeypatch, custom):
+    from metroliza.ui import modify_db
+    calls = []
+    if custom == "start":
+        def custom_start(thread):
+            calls.append("start")
+            records.start_load_thread(thread)
+        monkeypatch.setattr(modify_db, "start_load_thread", custom_start)
+    else:
+        original_run = records.RecordLoadThread.run
+        def custom_run(thread):
+            calls.append("run")
+            original_run(thread)
+        monkeypatch.setattr(records.RecordLoadThread, "run", custom_run)
+    dialog = current_dialog
+    dialog.tab_widget.setCurrentWidget(dialog.measurement_rows_tab)
+    slot = dialog._record_slots[1]
+    worker = slot.thread
+    assert _pump(lambda: slot.state == "loaded" and worker not in records._ACTIVE_LOAD_THREADS)
+    assert calls == [custom]
+    assert slot.view.model().total_row_count == 10
+    assert not vars(worker).get("_defer_delivery", False)
+    assert not sip.isdeleted(worker), "custom worker lost caller-owned deletion"
+    worker.deleteLater()
+
+
+@pytest.mark.parametrize("hook", ["start", "run", "constructor", "init", "factory"])
+def test_preimport_custom_record_hooks_keep_the_public_contract(tmp_path, hook):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    code = '''
+import sys, time
+from pathlib import Path
+from metroliza.ui import modify_db_records as records
+assert Path(records.__file__).resolve()==Path(sys.argv[3])/"src/metroliza/ui/modify_db_records.py"
+assert "metroliza.ui.modify_db" not in sys.modules
+hook=sys.argv[1]; calls=[]
+if hook=="constructor":
+    class CustomThread(records.RecordLoadThread):
+        def __init__(self,*args,**kwargs):
+            calls.append(hook)
+            super().__init__(*args,**kwargs)
+    records.RecordLoadThread=CustomThread
+elif hook in ("init", "factory"):
+    original=records.RecordLoadThread.__init__ if hook=="init" else records.RecordLoadThread
+    def custom(*args,**kwargs):
+        calls.append(hook)
+        return original(*args,**kwargs)
+    if hook=="init":
+        records.RecordLoadThread.__init__=custom
+    else:
+        records.RecordLoadThread=custom
+else:
+    target=records if hook=="start" else records.RecordLoadThread
+    name="start_load_thread" if hook=="start" else "run"
+    original=getattr(target,name)
+    def custom(thread):
+        calls.append(hook)
+        original(thread)
+    setattr(target,name,custom)
+from metroliza.ui.modify_db import ModifyDB
+assert Path(sys.modules[ModifyDB.__module__].__file__).resolve()==Path(sys.argv[3])/"src/metroliza/ui/modify_db.py"
+from metroliza.app.bootstrap import get_or_create_qapplication
+from tests.test_modifydb_parity import _build_current_database
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent, QTimer
+from metroliza.ui import detached_threads
+app=get_or_create_qapplication()
+_build_current_database(sys.argv[2])
+dialog=ModifyDB(parent=None,db_file=sys.argv[2],modal=False)
+errors=[]; dialog.log_and_exit=errors.append
+dialog.tab_widget.setCurrentWidget(dialog.report_records_tab)
+slot=dialog._record_slots[0]; worker=slot.thread
+deadline=time.monotonic()+3
+while not errors and (slot.state!="loaded" or worker in records._ACTIVE_LOAD_THREADS) and time.monotonic()<deadline:
+    app.processEvents(); time.sleep(.001)
+result=([str(error) for error in errors],list(calls),slot.state,slot.view.model().total_row_count,vars(worker).get("_defer_delivery",False))
+errors.clear()
+dialog._changes_committed=True; dialog.close()
+deadline=time.monotonic()+3
+while (worker in records._ACTIVE_LOAD_THREADS or detached_threads.is_registered(worker)) and time.monotonic()<deadline:
+    app.processEvents(); time.sleep(.001)
+assert worker not in records._ACTIVE_LOAD_THREADS and not detached_threads.is_registered(worker)
+if not sip.isdeleted(worker):
+    if worker.isRunning() or worker.isFinished():
+        assert worker.wait(1000)
+    worker.deleteLater()
+QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
+dialog.deleteLater()
+QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
+assert sip.isdeleted(worker) and sip.isdeleted(dialog)
+QTimer.singleShot(0,app.quit)
+assert app.exec()==0
+assert result==([], [hook], "loaded", 4, False), result
+'''
+    source_root = Path(os.environ.get("METROLIZA_RECORD_PREIMPORT_ROOT") or Path(records.__file__).resolve().parents[3])
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(map(str, (source_root / "src", source_root, Path(__file__).resolve().parents[1])))
+    result = subprocess.run([sys.executable, "-c", code, hook, str(tmp_path / "copy.sqlite"), str(source_root)],
+                            cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_live_headless_cancel_joins_before_returning(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    code = '''
+import hashlib, json, sqlite3, sys, threading, time
+from pathlib import Path
+from PyQt6.QtCore import QCoreApplication, QEvent, QTimer
+from metroliza.ui import modify_db_records as records
+from metroliza.ui import detached_threads
+source_root=Path(sys.argv[1]).resolve()
+assert Path(records.__file__).resolve()==source_root/'src/metroliza/ui/modify_db_records.py'
+assert QCoreApplication.instance() is None
+entered=threading.Event(); release=threading.Event()
+original_connect=sqlite3.connect
+def blocked_value():
+    entered.set()
+    assert release.wait(5), 'SQL release cap'
+    return 7
+def connect(*args, **kwargs):
+    connection=original_connect(*args, **kwargs)
+    connection.create_function('blocked_value',0,blocked_value)
+    return connection
+sqlite3.connect=connect
+worker=records.RecordLoadThread('report',1,sys.argv[2],'SELECT blocked_value() AS report_id',[{'field':'report_id','key':True}])
+original_wait=worker.wait
+wait_calls=[]
+def observed_wait(*args):
+    wait_calls.append(args)
+    release.set()
+    return original_wait(*args)
+worker.wait=observed_wait
+records.start_load_thread(worker)
+assert entered.wait(3), 'actual SQLite work not started'
+records.cancel_load_thread(worker,wait_ms=1)
+observed={'running_at_cancel_return':worker.isRunning(),'wait_calls':list(wait_calls),'work_started':entered.is_set(),'source_sha256':hashlib.sha256(Path(records.__file__).read_bytes()).hexdigest()}
+release.set(); assert original_wait(3000)
+del worker.wait
+sqlite3.connect=original_connect
+from metroliza.app.bootstrap import get_or_create_qapplication
+from PyQt6 import sip
+app=get_or_create_qapplication()
+deadline=time.monotonic()+3
+while (worker in records._ACTIVE_LOAD_THREADS or detached_threads.is_registered(worker)) and time.monotonic()<deadline:
+    app.processEvents(); time.sleep(.001)
+assert worker not in records._ACTIVE_LOAD_THREADS and not detached_threads.is_registered(worker)
+worker.deleteLater(); QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
+assert sip.isdeleted(worker)
+QTimer.singleShot(0,app.quit); assert app.exec()==0
+print(json.dumps(observed),flush=True)
+assert not observed['running_at_cancel_return'] and observed['wait_calls'][0]==(1,), observed
+'''
+    source_root = Path(records.__file__).resolve().parents[3]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(map(str, (source_root / "src", source_root)))
+    completed = subprocess.run([sys.executable, "-c", code, str(source_root), str(tmp_path / "live.sqlite")],
+                               cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10)
+    assert completed.returncode == 0, completed.stdout + completed.stderr

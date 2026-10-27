@@ -1123,3 +1123,140 @@ def test_cmm_report_parser_split_text_to_blocks_uses_runtime_backend_result():
     assert fake_calls["count"] == 1
     assert parser.parse_backend_used == "native"
     assert parser.blocks_text == [[["RUNTIME BACKEND"], [["X", 10.0, 0.2, -0.2, "", 10.03, 0.03, 0.0]]]]
+
+
+# Literal pre-T20 expression: do not derive this oracle from the optimized helper.
+def _original_status_token(token):
+    from metroliza.cmm import block_parser
+
+    normalized = str(token or "").strip().upper().strip(".,;:()[]{}")
+    return normalized if normalized in block_parser.MEASUREMENT_STATUS_TOKENS else None
+
+
+@pytest.mark.parametrize("token", [
+    None, False, True, 0, 1, -1, 0.0, -0.0, 1.25, float("nan"),
+    float("inf"), -float("inf"), "0", "nan", "", " \t", "(ok).", "[nok]",
+    "\x00OK", "o\u0301k", "ＯＫ", "ß", "ﬃ", "İ", "ok" * 3000,
+])
+def test_status_normalization_literal_original(token):
+    from metroliza.cmm import block_parser
+
+    assert block_parser._normalize_status_token(token) == _original_status_token(token)
+
+
+def test_status_normalization_preserves_mutable_tables_and_alias(monkeypatch):
+    from metroliza.cmm import block_parser
+    from modules import cmm_parsing
+
+    assert cmm_parsing.parse_raw_lines_to_blocks is block_parser.parse_raw_lines_to_blocks
+    for table in ({"OK", "NOK"}, {"1.25", "NAN", "INF", ""}, {"0", "TRUE"}, set()):
+        monkeypatch.setattr(block_parser, "MEASUREMENT_STATUS_TOKENS", table)
+        for token in (None, False, True, 0, -0.0, 1.25, float("nan"), float("inf")):
+            assert block_parser._normalize_status_token(token) == _original_status_token(token)
+        table.add("1.25")
+        assert block_parser._normalize_status_token(1.25) == "1.25"
+
+
+@pytest.mark.parametrize("kind", ["object", "str", "float", "false", "bool_error", "str_error"])
+def test_status_raw_callbacks_and_errors_match_original(kind):
+    from metroliza.cmm import block_parser
+
+    events = []
+
+    class Raw:
+        def __bool__(self):
+            events.append("bool")
+            if kind == "bool_error":
+                raise ValueError("truth failed")
+            return kind != "false"
+
+        def __str__(self):
+            events.append("str")
+            if kind == "str_error":
+                raise TypeError("string failed")
+            return "(ok)"
+
+    class Text(str):
+        __bool__ = Raw.__bool__
+        __str__ = Raw.__str__
+
+    class Number(float):
+        __bool__ = Raw.__bool__
+        __str__ = Raw.__str__
+
+    value = Text("NOK") if kind == "str" else Number(2) if kind == "float" else Raw()
+
+    def observe(function):
+        events.clear()
+        try:
+            result = ("return", function(value))
+        except (TypeError, ValueError) as exc:
+            result = (type(exc), str(exc))
+        return result, list(events)
+
+    assert observe(block_parser._normalize_status_token) == observe(_original_status_token)
+
+
+def test_native_float_and_custom_status_table_results(monkeypatch):
+    from metroliza.cmm import block_parser
+
+    for number in (0.0, -0.0, float("nan"), float("inf"), 1.25):
+        assert block_parser._normalize_status_token(number) is None
+    table = block_parser.MEASUREMENT_STATUS_TOKENS.copy()
+    monkeypatch.setattr(block_parser, "MEASUREMENT_STATUS_TOKENS", table)
+    table.remove("OK")
+    table.add("1.25")
+    assert block_parser._normalize_status_token(1.25) == "1.25"
+
+    calls = []
+
+    class StatusSet(set):
+        def __contains__(self, value):
+            calls.append(value)
+            return True
+
+    monkeypatch.setattr(block_parser, "MEASUREMENT_STATUS_TOKENS", StatusSet(("OK", "NOK")))
+    assert block_parser._normalize_status_token(1.25) == "1.25"
+    assert calls == ["1.25"]
+
+
+
+def test_status_native_set_resize_preserves_original_result(monkeypatch):
+    """Resize the real exported set at a deterministic in-call trace boundary."""
+    import sys
+    from metroliza.cmm import block_parser
+    from modules import cmm_parsing
+
+    table = block_parser.MEASUREMENT_STATUS_TOKENS
+    assert type(table) is set
+    assert cmm_parsing.MEASUREMENT_STATUS_TOKENS is table
+    saved = table.copy()
+    previous_trace = sys.gettrace()
+    resized = []
+    target = block_parser._normalize_status_token
+
+    def resize_during_call(frame, event, arg):
+        if event != "line" or resized:
+            return resize_during_call
+        # Original/restored membership observes the newly added valid status.
+        membership_ready = frame.f_code is target.__code__ and "normalized" in frame.f_locals
+        # The rejected candidate instead exposes an iterator over this live set.
+        purity_iteration = (
+            frame.f_code.co_name == "<genexpr>"
+            and frame.f_back.f_code.co_name == "_has_standard_status_tokens"
+            and "item" in frame.f_locals
+        )
+        if membership_ready or purity_iteration:
+            table.add("1.25")
+            resized.append(("purity_iteration" if purity_iteration else "membership", len(table)))
+        return resize_during_call
+
+    try:
+        sys.settrace(resize_during_call)
+        assert target(1.25) == "1.25"
+        assert len(resized) == 1 and resized[0][1] == 3
+    finally:
+        sys.settrace(previous_trace)
+        table.clear()
+        table.update(saved)
+    assert table == saved

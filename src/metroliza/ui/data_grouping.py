@@ -4,6 +4,7 @@ This UI reads report data from SQLite and coordinates with the main window to
 store, apply, and clear reference/part grouping assignments.
 """
 
+import functools
 import inspect
 import re
 import sqlite3
@@ -12,6 +13,7 @@ import metroliza.shared.custom_logger as custom_logger
 from metroliza.reports.db import read_sql_dataframe
 from metroliza.tabular.data_grouping_service import (
     build_grouping_row_index,
+    native_group_color_assignment,
     build_grouping_query as _build_grouping_query,
     build_grouping_scope_query_from_filter_state,
     compute_group_key_for_df as _compute_group_key_for_df,
@@ -22,7 +24,7 @@ from metroliza.exporting.export_grouping_utils import set_default_group_label
 from metroliza.shared.grouping_filter_core import parse_filter_expression
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.shared.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
-from metroliza.ui import ui_theme_tokens
+from metroliza.ui import detached_threads, ui_theme_tokens
 try:
     from metroliza.ui import ui_foundation
 except Exception:  # pragma: no cover - fallback for heavily stubbed tests
@@ -72,14 +74,56 @@ from PyQt6.QtWidgets import(
 )
 
 
+def _can_batch_native_part_selection(part_list, items):
+    try:
+        from PyQt6.sip import wrappertype
+    except ImportError:  # Legacy Qt stand-ins have no native wrapper API.
+        return False
+    if type(QListWidget) is not wrappertype:
+        return False
+    if (QListWidget is not QtWidgets.QListWidget
+            or QListWidgetItem is not QtWidgets.QListWidgetItem
+            or type(part_list) is not QtWidgets.QListWidget):
+        return False
+    # SIP descriptors identify native dispatch without evaluating an overridden
+    # property or method. Exported aliases alone do not establish native identity.
+    descriptor_type = type(inspect.getattr_static(QtWidgets.QWidget, "blockSignals", None))
+    methods = ((QtWidgets.QListWidget, 'blockSignals'),
+               (QtWidgets.QListWidgetItem, 'isSelected'),
+               (QtWidgets.QListWidgetItem, 'setSelected'),
+               (QtWidgets.QListWidgetItem, 'isHidden'))
+    return (all(type(inspect.getattr_static(owner, name, None)) is descriptor_type
+                for owner, name in methods)
+            and not vars(part_list)
+            and all(type(item) is QtWidgets.QListWidgetItem and not vars(item) for item in items))
+
+
 class _LazyPandas:
     def __getattr__(self, name):
         import importlib
 
-        return getattr(importlib.import_module("pandas"), name)
+        value = getattr(importlib.import_module("pandas"), name)
+        # Cache on the instance: list rendering reads ``pd.isna`` for every cell.
+        setattr(self, name, value)
+        return value
 
 
 pd = _LazyPandas()
+
+
+@functools.lru_cache(maxsize=1024)
+def _cached_ideal_text_color(background_hex):
+    return ui_theme_tokens.ideal_text_color(background_hex)
+
+
+@functools.lru_cache(maxsize=1024)
+def _cached_is_dark_mode_base(base_hex):
+    return ui_theme_tokens.is_dark_mode_base(base_hex)
+
+
+@functools.lru_cache(maxsize=1024)
+def _cached_group_display_color(color, dark_mode, fallback):
+    return ui_theme_tokens.normalize_group_display_color(color, dark_mode=dark_mode, fallback=fallback)
 
 
 _GROUPING_LIST_PREVIEW_LIMIT = 1000
@@ -143,12 +187,72 @@ _SCOPE_FILTER_FIELD_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _GROUPING_SEARCH_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+_GROUPING_LOADING_TEXT = "Loading grouping data..."
+# Upper bound for the GUI thread to wait for a loader that was asked to stop; a loader that has not
+# stopped by then is detached (it finishes in the background and its result is dropped).
+_GROUPING_LOAD_STOP_WAIT_MS = 2000
+
+
+_GROUPING_LOAD_THREAD_CLASS = None
+
+
+def _grouping_load_thread_class():
+    """Return the loader thread class (built on first use so that stubbed Qt modules still import)."""
+    global _GROUPING_LOAD_THREAD_CLASS
+    if _GROUPING_LOAD_THREAD_CLASS is not None:
+        return _GROUPING_LOAD_THREAD_CLASS
+
+    from PyQt6.QtCore import QThread, pyqtSignal
+
+    class _GroupingLoadThread(QThread):
+        """Read the grouping dataset off the GUI thread (schema check, query, DataFrame)."""
+
+        loaded = pyqtSignal(int, object)
+        failed = pyqtSignal(int, object)
+
+        def __init__(self, *, request_id, db_file, filter_query):
+            super().__init__()
+            self.request_id = request_id
+            self.db_file = db_file
+            self.filter_query = filter_query
+
+        def release(self):
+            """Drop the registry reference once the thread has finished."""
+            detached_threads.discard(self)
+
+        def run(self):
+            try:
+                ensure_report_schema(self.db_file)
+                if self.isInterruptionRequested():
+                    return
+                frame = load_grouping_dataframe(read_sql_dataframe, self.db_file, self.filter_query)
+            except Exception as exc:  # reported to the GUI thread, which owns logging and widgets
+                if not self.isInterruptionRequested():
+                    self.failed.emit(self.request_id, exc)
+                return
+            if not self.isInterruptionRequested():
+                self.loaded.emit(self.request_id, frame)
+
+    _GROUPING_LOAD_THREAD_CLASS = _GroupingLoadThread
+    return _GroupingLoadThread
 
 
 class DataGrouping(QDialog):
     """DataGrouping public interface used by export and UI workflows."""
 
-    def __init__(self, parent=None, db_file=""):
+    _grouping_loading = False
+    _load_request_id = 0
+    _load_thread = None
+    _load_progress_dialog = None
+    _load_aborted = False
+
+    def __init__(self, parent=None, db_file="", *, background_load=False):
+        """Create the dialog.
+
+        With ``background_load`` the dataset is read in a worker thread: the dialog is usable for
+        Cancel/close right away and fills its lists when the data arrives (``is_loading_grouping``).
+        The default reads and populates synchronously.
+        """
         super().__init__(parent)
         self.setWindowTitle("Data grouping")
         if parent is not None and hasattr(parent, "windowIcon"):
@@ -172,14 +276,150 @@ class DataGrouping(QDialog):
         self._cached_grouping_row_index = None
         self._cached_full_grouping_row_index = None
         self._discard_gate_active = False
+        self._grouping_loading = False
+        self._load_request_id = 0
+        self._load_thread = None
+        self._load_progress_dialog = None
+        self._load_aborted = False
 
         self.setup_ui()
 
+        if background_load and str(db_file or "").strip():
+            # Dirty checks need a committed baseline while the data is still loading.
+            self._capture_committed_grouping_state()
+            self._start_background_load()
+            return
         self.read_data_to_df()
         self.add_default_group()
         self._restore_saved_grouping_state()
         self.populate_list_widgets()
         self._capture_committed_grouping_state()
+
+    def is_loading_grouping(self):
+        """Return True while the dataset is being read in the background."""
+        return bool(self._safe_attr(self, "_grouping_loading", False))
+
+    def _loading_controls(self):
+        names = (
+            "reference_list",
+            "part_list",
+            "groups_list",
+            "part_group_list",
+            "reference_search_input",
+            "part_search_input",
+            "group_search_input",
+            "part_group_search_input",
+            "scope_filter_input",
+            "use_grouping_button",
+            "dont_use_grouping_button",
+        )
+        return [widget for widget in (self._safe_attr(self, name) for name in names) if widget is not None]
+
+    def _set_loading_controls_enabled(self, enabled):
+        for widget in self._loading_controls():
+            if hasattr(widget, "setEnabled"):
+                widget.setEnabled(enabled)
+
+    def _start_background_load(self):
+        try:
+            initial_filter_query = getattr(self, "_initial_grouping_filter_query", None)
+            filter_query = initial_filter_query() if callable(initial_filter_query) else None
+        except Exception as e:
+            self.log_and_exit(e)
+            return
+        from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog
+
+        self._grouping_loading = True
+        self._set_loading_controls_enabled(False)
+        (
+            self._load_progress_dialog,
+            _loading_label,
+            loading_bar,
+            _loading_gif,
+        ) = create_delayed_worker_progress_dialog(
+            self,
+            window_title=_GROUPING_LOADING_TEXT,
+            initial_status_text=f"{_GROUPING_LOADING_TEXT}\nReading the database\nETA --",
+            on_cancel=self._cancel_background_load,
+        )
+        loading_bar.setRange(0, 0)
+        thread = _grouping_load_thread_class()(
+            request_id=self._load_request_id,
+            db_file=self.db_file,
+            filter_query=filter_query,
+        )
+        self._load_thread = thread
+        detached_threads.register(thread)
+        thread.loaded.connect(self._on_background_load_finished)
+        thread.failed.connect(self._on_background_load_failed)
+        thread.finished.connect(thread.release)
+        thread.start()
+        self._load_progress_dialog.show()
+
+    def _dismiss_load_progress_dialog(self):
+        progress_dialog = self._load_progress_dialog
+        self._load_progress_dialog = None
+        if progress_dialog is not None:
+            from metroliza.ui.worker_progress_dialog import dismiss_worker_progress_dialog
+
+            dismiss_worker_progress_dialog(progress_dialog)
+            progress_dialog.deleteLater()
+
+    def _stop_background_load(self, *, wait_ms=None):
+        """Invalidate a pending load and wait a bounded time for its thread."""
+        self._load_request_id += 1
+        if self._grouping_loading:
+            self._load_aborted = True
+        self._grouping_loading = False
+        self._dismiss_load_progress_dialog()
+        thread = self._load_thread
+        self._load_thread = None
+        if thread is None:
+            return
+        for signal, slot in (
+            (thread.loaded, self._on_background_load_finished),
+            (thread.failed, self._on_background_load_failed),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        thread.requestInterruption()
+        if thread.wait(_GROUPING_LOAD_STOP_WAIT_MS if wait_ms is None else wait_ms):
+            thread.release()
+
+    def _cancel_background_load(self):
+        self._stop_background_load()
+        QDialog.reject(self)
+
+    def _on_background_load_finished(self, request_id, frame):
+        if request_id != self._load_request_id or not self._grouping_loading:
+            return
+        self._grouping_loading = False
+        self._dismiss_load_progress_dialog()
+        self._load_thread = None
+        try:
+            self.df = frame
+            self._invalidate_grouping_cache()
+            self.add_default_group()
+            self._restore_saved_grouping_state()
+            self.populate_list_widgets()
+            self._capture_committed_grouping_state()
+        finally:
+            self._set_loading_controls_enabled(True)
+            self._refresh_selection_summary()
+
+    def _on_background_load_failed(self, request_id, exc):
+        if request_id != self._load_request_id or not self._grouping_loading:
+            return
+        self._grouping_loading = False
+        self._dismiss_load_progress_dialog()
+        self._load_thread = None
+        self.log_and_exit(exc)
+        summary_label = self._safe_attr(self, "scope_filter_summary_label")
+        if summary_label is not None and hasattr(summary_label, "setText"):
+            summary_label.setText("Grouping data could not be loaded")
+            ui_foundation.set_status_variant(summary_label, "warning")
 
     @staticmethod
     def _multi_selection_mode():
@@ -586,6 +826,8 @@ class DataGrouping(QDialog):
 
     def _grouping_counts(self):
         df = self._safe_attr(self, "df")
+        if df is None:
+            return 0, 0  # no dataset yet: do not import pandas on the GUI thread just to say so
         if not isinstance(df, pd.DataFrame) or df.empty or "GROUP" not in df.columns:
             return 0, 0
         group_names = df["GROUP"].fillna(self.default_group).astype(str)
@@ -663,6 +905,9 @@ class DataGrouping(QDialog):
 
         if self._discard_gate_active:
             return False
+        if self._safe_attr(self, "_load_aborted", False):
+            # The data never arrived, so there is no draft to resolve.
+            return True
         if not self._is_grouping_dirty():
             return True
         if self.isVisible():
@@ -682,6 +927,8 @@ class DataGrouping(QDialog):
     def reject(self):
         """Route Escape and dialog rejection through the unsaved-draft guard."""
 
+        if self.is_loading_grouping():
+            self._stop_background_load()
         if not self._discard_draft_if_allowed():
             return
         super().reject()
@@ -689,6 +936,8 @@ class DataGrouping(QDialog):
     def closeEvent(self, event):
         """Accept a native close only after the grouping draft is resolved."""
 
+        if self.is_loading_grouping():
+            self._stop_background_load()
         if not self._discard_draft_if_allowed():
             event.ignore()
             return
@@ -746,6 +995,9 @@ class DataGrouping(QDialog):
         """
 
         try:
+            self._stop_background_load()
+            self._load_aborted = False
+            self._set_loading_controls_enabled(True)
             self.read_data_to_df()
             self.add_default_group()
             self._restore_saved_grouping_state()
@@ -800,7 +1052,7 @@ class DataGrouping(QDialog):
 
     @staticmethod
     def _ideal_text_color(background_hex):
-        return ui_theme_tokens.ideal_text_color(background_hex)
+        return _cached_ideal_text_color(background_hex)
 
     @staticmethod
     def _resolve_default_group_color_from_base(base_hex, fallback_hex='#FFFFFF'):
@@ -811,7 +1063,7 @@ class DataGrouping(QDialog):
 
     @staticmethod
     def _is_dark_mode_base(base_hex):
-        return ui_theme_tokens.is_dark_mode_base(base_hex)
+        return _cached_is_dark_mode_base(base_hex)
 
     @staticmethod
     def _clamp_group_color_for_theme(color_hex, dark_mode=False):
@@ -846,6 +1098,14 @@ class DataGrouping(QDialog):
         self.df[self.group_color_column] = self.df[self.group_color_column].fillna(self.default_group_color)
         self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = self.default_group_color
 
+        assigned = native_group_color_assignment(
+            self.df, default_group=self.default_group, default_color=self.default_group_color,
+            color_column=self.group_color_column,
+        )
+        if assigned is not None:
+            self.df[self.group_color_column] = assigned
+            return
+
         for group_name in self.df['GROUP'].dropna().astype(str).unique():
             if group_name == self.default_group:
                 continue
@@ -860,7 +1120,7 @@ class DataGrouping(QDialog):
         if pd.isna(color) or not str(color).strip():
             return self.default_group_color
         dark_mode = self._is_dark_mode_base(self.default_group_color)
-        return ui_theme_tokens.normalize_group_display_color(str(color), dark_mode=dark_mode, fallback=self.default_group_color)
+        return _cached_group_display_color(str(color), dark_mode, self.default_group_color)
 
     def _apply_item_color(self, item, color_hex):
         color = QColor(color_hex)
@@ -1180,10 +1440,15 @@ class DataGrouping(QDialog):
         cached = getattr(self, "_cached_grouping_row_index", None)
         if isinstance(cached, pd.DataFrame):
             return cached
-        row_index = build_grouping_row_index(
-            self._filtered_grouping_dataframe(),
-            group_color_column=self.group_color_column,
-        )
+        filtered = self._filtered_grouping_dataframe()
+        if filtered is self.df and type(filtered) is pd.DataFrame:
+            # Reuse only this revision's exact full input; keep independent result mutation.
+            row_index = self._current_full_grouping_row_index().copy(deep=True)
+        else:
+            row_index = build_grouping_row_index(
+                filtered,
+                group_color_column=self.group_color_column,
+            )
         self._cached_grouping_row_index = row_index
         return row_index
 
@@ -1365,7 +1630,21 @@ class DataGrouping(QDialog):
             May update UI state, database rows, or in-memory export context.
         """
 
+        signal_blockers = []
         try:
+            widgets = [self._safe_attr(self, name) for name in (
+                'reference_list', 'part_list', 'all_parts_list', 'groups_list', 'part_group_list',
+            )]
+            if QListWidget.__module__ == 'PyQt6.QtWidgets' and all(
+                isinstance(widget, QListWidget) for widget in widgets
+            ):
+                try:
+                    from PyQt6.QtCore import QSignalBlocker
+                except ImportError:
+                    pass  # Preserve the general population path when the binding lacks it.
+                else:
+                    for widget in widgets:
+                        signal_blockers.append(QSignalBlocker(widget))
             self._apply_list_theme_styles()
             self._ensure_group_color_integrity()
             row_index = self._with_reference_selection(self._grouping_row_index())
@@ -1411,11 +1690,12 @@ class DataGrouping(QDialog):
                 self.reference_list.setCurrentRow(preferred_reference_index)
 
             # Use clear and addItems for the rest of the lists
-            selected_reference = self._selected_reference_name()
-            try:
-                self._populate_part_list(selected_reference, row_index=row_index)
-            except TypeError:
-                self._populate_part_list(selected_reference)
+            if not signal_blockers:
+                selected_reference = self._selected_reference_name()
+                try:
+                    self._populate_part_list(selected_reference, row_index=row_index)
+                except TypeError:
+                    self._populate_part_list(selected_reference)
 
             self.all_parts_list.clear()
             if 'SAMPLE_NUMBER' in row_index.columns:
@@ -1458,14 +1738,21 @@ class DataGrouping(QDialog):
                 if preferred_group_name in group_names:
                     preferred_group_index = group_names.index(preferred_group_name)
                 self.groups_list.setCurrentRow(preferred_group_index)
-            selected_group = self._selected_group_name()
-            try:
-                self._populate_part_group_list(selected_group, row_index=group_row_index)
-            except TypeError:
-                self._populate_part_group_list(selected_group)
+            if signal_blockers:
+                self.on_reference_selection_changed()
+                self.on_group_selection_changed()
+            else:
+                selected_group = self._selected_group_name()
+                try:
+                    self._populate_part_group_list(selected_group, row_index=group_row_index)
+                except TypeError:
+                    self._populate_part_group_list(selected_group)
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            for blocker in reversed(signal_blockers):
+                blocker.unblock()
 
     def search_list_widgets(self, list_widget, search_text):
         """Handle `search_list_widgets` for `DataGrouping`.
@@ -1841,6 +2128,23 @@ class DataGrouping(QDialog):
         elif hasattr(part_list, "_items"):
             items = list(getattr(part_list, "_items", ()) or ())
 
+        # Only native objects without instance hooks can coalesce selection signals.
+        # Custom widgets/items retain the original per-item dispatch and error order.
+        native = _can_batch_native_part_selection(part_list, items)
+        if native:
+            previous = part_list.blockSignals(True)
+            changed = False
+            try:
+                for item in items:
+                    before = item.isSelected()
+                    item.setSelected(not item.isHidden())
+                    changed = changed or before != item.isSelected()
+            finally:
+                part_list.blockSignals(previous)
+            if changed and not previous:
+                part_list.itemSelectionChanged.emit()
+            return
+
         for item in items:
             if item is None or not hasattr(item, "setSelected"):
                 continue
@@ -1960,6 +2264,8 @@ class DataGrouping(QDialog):
         """
 
         try:
+            if self.is_loading_grouping():
+                return
             if bool(self._safe_attr(self, "_scope_filter_error", "")):
                 self._refresh_selection_summary()
                 return

@@ -53,10 +53,12 @@ def retain_qapplication() -> None:
     if getattr(application_type, "__module__", None) != "PyQt6.QtWidgets":
         return  # Qt not imported, or replaced by a lightweight test stub.
     application = application_type.instance()
-    if application is not None and not any(
-        application is kept for kept in _RETAINED_QT_APPLICATIONS
-    ):
-        _RETAINED_QT_APPLICATIONS.append(application)
+    if application is not None:
+        from metroliza.app.gc_policy import install
+
+        install(application)
+        if not any(application is kept for kept in _RETAINED_QT_APPLICATIONS):
+            _RETAINED_QT_APPLICATIONS.append(application)
 
 
 @pytest.fixture(scope="session")
@@ -78,3 +80,22 @@ def pytest_runtest_setup(item):
 def pytest_runtest_call(item):
     yield
     retain_qapplication()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item):
+    yield
+    # Fixture teardown may release the final references to widget cycles. Sweep
+    # young objects now on the main thread, promoting older generations only
+    # when due; a full collection after every test would stall large Qt suites.
+    retain_qapplication()
+    if _RETAINED_QT_APPLICATIONS:
+        # Use the installed policy directly: a test may still have stubbed PyQt6 modules.
+        policy = getattr(_RETAINED_QT_APPLICATIONS[0], "_metroliza_gc_policy", None)
+        if policy is not None:
+            import gc
+
+            if gc.isenabled():
+                gc.disable()
+                pytest.fail(f"{item.nodeid} re-enabled automatic GC while the GUI GC policy is installed")
+            policy.collect_due(force_young=True)

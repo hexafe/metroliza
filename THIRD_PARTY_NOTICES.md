@@ -97,6 +97,17 @@ declared license metadata are recorded in the build `260711` inventory linked
 above. Preserve all license files emitted by Cargo/wheel tooling in the release
 notice bundle.
 
+## Native launcher
+
+The native Windows launcher (`packaging/launcher`) decodes its embedded loading
+animation for the startup splash with these crates (versions from
+`packaging/launcher/Cargo.lock`).
+
+| Component | License / notice | Project |
+| --- | --- | --- |
+| gif 0.13.3 | MIT OR Apache-2.0 | https://github.com/image-rs/image-gif |
+| weezl 0.1.12 (LZW decoder used by gif) | MIT OR Apache-2.0 | https://github.com/image-rs/weezl |
+
 ## Release packaging obligations
 
 - Ship or attach this notice with every distributed executable, installer, ZIP,

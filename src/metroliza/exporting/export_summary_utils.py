@@ -28,6 +28,11 @@ def _is_missing_value(value: Any) -> bool:
 
 
 def _to_numeric_array(values) -> np.ndarray:
+    if (
+        type(values) is np.ndarray and values.ndim == 1
+        and values.dtype in (np.dtype('float16'), np.dtype('float32'), np.dtype('float64'))
+    ):
+        return values[np.isfinite(values)].astype(float, copy=False)
     numeric_values = []
     for value in values:
         if _is_missing_value(value):

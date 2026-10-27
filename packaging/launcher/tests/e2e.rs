@@ -214,6 +214,16 @@ struct Run {
 }
 
 fn run_launcher(exe: &Path, root: &Path, log: &Path, args: &[&str]) -> Run {
+    run_launcher_with(exe, root, log, args, &[])
+}
+
+fn run_launcher_with(
+    exe: &Path,
+    root: &Path,
+    log: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Run {
     let _ = fs::remove_file(log);
     // The launcher runs in the directory that holds the EXE; the entry must inherit that
     // directory (see the cwd assertion in the first binary test), not the runtime cache.
@@ -223,7 +233,8 @@ fn run_launcher(exe: &Path, root: &Path, log: &Path, args: &[&str]) -> Run {
             .current_dir(exe.parent().unwrap())
             .env("METROLIZA_RUNTIME_ROOT", root)
             .env("METROLIZA_LAUNCHER_LOG", log)
-            .env("METROLIZA_LAUNCHER_NO_UI", "1"),
+            .env("METROLIZA_LAUNCHER_NO_UI", "1")
+            .envs(env.iter().copied()),
     );
     Run {
         code: status.code(),
@@ -450,6 +461,267 @@ fn exit_75_repairs_the_runtime_and_restarts_once_without_the_repair_variable() {
     assert!(runtime_dir.join(PENDING_MARKER).is_file());
 }
 
+/// Launcher log lines: facts as written, timing marks as their event name
+/// (`timing event=splash_show epoch_ms=...` becomes `splash_show`).
+fn log_events(log: &str) -> Vec<String> {
+    log.lines()
+        .map(|line| match line.strip_prefix("timing event=") {
+            Some(rest) => rest.split_whitespace().next().unwrap_or("").to_string(),
+            None => line.to_string(),
+        })
+        .collect()
+}
+
+/// [`log_events`] after the first line equal to `from`.
+fn log_after(log: &str, from: &str) -> Vec<String> {
+    log_events(log)
+        .into_iter()
+        .skip_while(|line| line != from)
+        .skip(1)
+        .collect()
+}
+
+/// Whether `items` contains every entry of `wanted`, in this order.
+fn in_order(items: &[String], wanted: &[&str]) -> bool {
+    let mut rest = items.iter();
+    wanted
+        .iter()
+        .all(|item| rest.by_ref().any(|seen| seen == item))
+}
+
+#[test]
+fn exit_75_repair_shows_the_splash_or_progress_window_again_before_the_restart() {
+    let (_tmp, exe, root, log, record) = repair_fixture("repair-feedback");
+    let record_arg = record.to_str().unwrap();
+    let args = ["--record", record_arg, "--request-repair", "--exit-code", "0"];
+
+    // Cold, then warm: in both, the feedback hooks run again after the entry asked for the
+    // repair, around the re-extraction and before the restarted entry starts.
+    let cold = run_launcher(&exe, &root, &log, &args);
+    let verified = run_launcher(&exe, &root, &log, &["--exit-code", "0"]);
+    assert!(verified.log.contains("cache=verified"), "{}", verified.log);
+    let _ = fs::remove_file(&record);
+    let warm = run_launcher(&exe, &root, &log, &args);
+    assert!(warm.log.contains("cache=warm"), "{}", warm.log);
+    for run in [&cold, &warm] {
+        assert_eq!(run.code, Some(0), "{}", run.log);
+        let events = log_events(&run.log);
+        let first_show = events.iter().position(|e| e == "splash_show");
+        let instance = events.iter().position(|e| e == "instance_acquired");
+        assert!(
+            instance.is_some() && first_show > instance,
+            "the splash is requested only after the instance check: {}",
+            run.log
+        );
+        let after = log_after(&run.log, "repair=requested");
+        assert!(
+            in_order(
+                &after,
+                &[
+                    "splash_reopen",
+                    "splash_repairing",
+                    "runtime_work_begin",
+                    "runtime_work_done",
+                    "cache=repair",
+                    "entry=started",
+                    "exit=0",
+                ],
+            ),
+            "{}",
+            run.log
+        );
+    }
+    assert_eq!(starts(&record), ["1", "unset"]);
+}
+
+/// A second launcher of a running version only activates the first one: no splash, no progress
+/// window, no cache work. Windows only: the stand-in has no single-instance guard.
+#[cfg(windows)]
+#[test]
+fn a_second_instance_shows_no_splash_and_touches_no_cache() {
+    let (tmp, exe, root, log, record) = repair_fixture("second-instance");
+    let stop = tmp.path().join("stop-first");
+    let first_log = tmp.path().join("first.log");
+    let record_arg = record.to_str().unwrap();
+    let stop_arg = stop.to_str().unwrap();
+    let mut first = Command::new(&exe)
+        .args(["--record", record_arg, "--stop-file", stop_arg, "--sleep-ms", "60000"])
+        .current_dir(exe.parent().unwrap())
+        .env("METROLIZA_RUNTIME_ROOT", &root)
+        .env("METROLIZA_LAUNCHER_LOG", &first_log)
+        .env("METROLIZA_LAUNCHER_NO_UI", "1")
+        .spawn()
+        .unwrap();
+    let _stop = StopOrphan(stop.clone());
+    wait_for_record(&record, "started");
+    let second = run_launcher(&exe, &root, &log, &["--record", record_arg, "--sleep-ms", "0"]);
+    fs::write(&stop, b"stop").unwrap();
+    let first_status = first.wait().unwrap();
+
+    assert_eq!(second.code, Some(0), "{}", second.log);
+    assert!(second.log.contains("instance=second"), "{}", second.log);
+    for forbidden in ["splash_", "runtime_work_", "progress_window_", "cache="] {
+        assert!(!second.log.contains(forbidden), "{forbidden}: {}", second.log);
+    }
+    assert_eq!(starts(&record).len(), 1, "the second instance started no entry");
+    let first_text = fs::read_to_string(&first_log).unwrap_or_default();
+    assert!(first_text.contains("splash_show"), "{first_text}");
+    assert_eq!(first_status.code(), Some(0), "{first_text}");
+}
+
+/// Every span of runtime work in `log` is covered by a window: the splash was open at its start
+/// (then no progress window), or the progress window was shown and closed inside it.
+#[cfg(windows)]
+fn assert_runtime_work_had_a_window(log: &str) {
+    let events = log_events(log);
+    let mut splash_open = false;
+    let mut in_work = false;
+    let mut covered = false;
+    let mut spans = 0;
+    for event in &events {
+        match event.as_str() {
+            "splash_shown" => splash_open = true,
+            e if e.starts_with("splash_closed_") => splash_open = false,
+            // The window thread may log its close slightly after the launcher's next mark.
+            "splash_reopen" => splash_open = false,
+            "runtime_work_begin" => {
+                assert!(!in_work, "nested runtime work: {log}");
+                in_work = true;
+                covered = splash_open;
+            }
+            "progress_window_shown" => {
+                assert!(in_work && !covered, "progress window beside the splash: {log}");
+                covered = true;
+            }
+            "runtime_work_done" => {
+                assert!(in_work && covered, "runtime work without a window: {log}");
+                in_work = false;
+                spans += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(!in_work && spans > 0, "{log}");
+}
+
+/// Splash disabled: extraction, verification and the exit-75 repair show the progress window.
+#[cfg(windows)]
+#[test]
+fn a_disabled_splash_falls_back_to_the_progress_window() {
+    let (_tmp, exe, root, log, record) = repair_fixture("progress-fallback");
+    let disabled = [("METROLIZA_LAUNCHER_SPLASH", "0")];
+    for expected in ["cache=cold", "cache=verified"] {
+        let run = run_launcher_with(&exe, &root, &log, &["--exit-code", "0"], &disabled);
+        assert_eq!(run.code, Some(0), "{}", run.log);
+        assert!(run.log.contains(expected), "{}", run.log);
+        assert!(
+            in_order(
+                &log_events(&run.log),
+                &[
+                    "splash_disabled",
+                    "runtime_work_begin",
+                    "progress_window_shown",
+                    "progress_window_closed",
+                    "runtime_work_done",
+                    expected,
+                ],
+            ),
+            "{}",
+            run.log
+        );
+        assert!(!run.log.contains("splash_shown"), "{}", run.log);
+        assert_runtime_work_had_a_window(&run.log);
+    }
+    let args = ["--record", record.to_str().unwrap(), "--request-repair", "--exit-code", "0"];
+    let run = run_launcher_with(&exe, &root, &log, &args, &disabled);
+    assert_eq!(run.code, Some(0), "{}", run.log);
+    assert!(
+        in_order(
+            &log_after(&run.log, "repair=requested"),
+            &["splash_reopen", "progress_window_shown", "progress_window_closed", "cache=repair"],
+        ),
+        "{}",
+        run.log
+    );
+    assert_runtime_work_had_a_window(&run.log);
+}
+
+/// Each way the splash can fail (debug-build fault injection, see `splash_windows::fault`) ends
+/// in the progress window covering the runtime work; a late window thread never shows its window.
+/// Debug builds only: release builds compile the fault injection out.
+#[cfg(all(windows, debug_assertions))]
+#[test]
+fn every_splash_failure_falls_back_to_the_progress_window() {
+    let faults = [
+        ("decode", "splash_frames_failed"),
+        ("class", "splash_class_failed"),
+        ("window", "splash_window_failed"),
+        ("thread", "splash_thread_failed"),
+        ("late", "splash_late_abandoned"),
+    ];
+    for (fault, failure_mark) in faults {
+        let (_tmp, exe, root, log, _record) = repair_fixture(&format!("fault-{fault}"));
+        // `late`: the window thread creates its window 3 s after `show`; the entry keeps the
+        // launcher alive past that, so the thread's outcome is in the log.
+        let args: &[&str] = if fault == "late" {
+            &["--sleep-ms", "6000", "--exit-code", "0"]
+        } else {
+            &["--exit-code", "0"]
+        };
+        let env = [("METROLIZA_LAUNCHER_SPLASH_FAULT", fault)];
+        let run = run_launcher_with(&exe, &root, &log, args, &env);
+        assert_eq!(run.code, Some(0), "{fault}: {}", run.log);
+        assert!(run.log.contains("cache=cold"), "{fault}: {}", run.log);
+        let events = log_events(&run.log);
+        assert!(
+            in_order(
+                &events,
+                &[
+                    "splash_show",
+                    failure_mark,
+                    "runtime_work_begin",
+                    "progress_window_shown",
+                    "progress_window_closed",
+                    "runtime_work_done",
+                    "cache=cold",
+                ],
+            ),
+            "{fault}: {}",
+            run.log
+        );
+        for never in ["splash_shown", "splash_painted"] {
+            assert!(!run.log.contains(never), "{fault} {never}: {}", run.log);
+        }
+        assert_runtime_work_had_a_window(&run.log);
+        if fault == "late" {
+            assert!(
+                in_order(&events, &["splash_late_abandoned", "splash_abandoned_window_destroyed"]),
+                "the late thread's window is destroyed without being shown: {}",
+                run.log
+            );
+        }
+    }
+}
+
+/// Splash enabled: cold, verified and repair work is covered by the splash or, if the splash
+/// could not be shown on this desktop, by the progress window; never by both, never by none.
+#[cfg(windows)]
+#[test]
+fn runtime_work_always_has_a_window_with_the_splash_enabled() {
+    let (_tmp, exe, root, log, record) = repair_fixture("splash-coverage");
+    for expected in ["cache=cold", "cache=verified"] {
+        let run = run_launcher(&exe, &root, &log, &["--exit-code", "0"]);
+        assert_eq!(run.code, Some(0), "{}", run.log);
+        assert!(run.log.contains(expected), "{}", run.log);
+        assert_runtime_work_had_a_window(&run.log);
+    }
+    let args = ["--record", record.to_str().unwrap(), "--request-repair", "--exit-code", "0"];
+    let run = run_launcher(&exe, &root, &log, &args);
+    assert_eq!(run.code, Some(0), "{}", run.log);
+    assert!(run.log.contains("cache=repair"), "{}", run.log);
+    assert_runtime_work_had_a_window(&run.log);
+}
+
 #[test]
 fn warm_same_length_entry_damage_repairs_once_even_if_restarted_entry_exits_75() {
     let (_tmp, exe, root, log, record) = repair_fixture("spawn-damage");
@@ -530,6 +802,19 @@ fn persistent_spawn_failure_after_repair_returns_error_without_another_repair() 
     );
     assert_eq!(run.log.matches("repair=").count(), 1, "{}", run.log);
     assert_eq!(run.log.matches("cache=repair").count(), 1, "{}", run.log);
+    // The spawn-failure repair is announced as a repair, around its runtime work.
+    let after_failure: Vec<String> = log_events(&run.log)
+        .into_iter()
+        .skip_while(|line| !line.starts_with("repair=spawn_failed"))
+        .collect();
+    assert!(
+        in_order(
+            &after_failure,
+            &["splash_repairing", "runtime_work_begin", "runtime_work_done", "cache=repair"],
+        ),
+        "{}",
+        run.log
+    );
     assert_eq!(
         run.log.matches("error=LaunchFailed").count(),
         2,
