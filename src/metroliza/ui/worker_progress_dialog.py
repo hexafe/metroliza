@@ -3,6 +3,8 @@ from PyQt6.QtGui import QImageReader, QMovie
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
 import base64
+import math
+from time import monotonic
 
 from metroliza.resources import base64_encoded_files
 from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_window_size, secondary_label
@@ -54,7 +56,20 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     loading_gif_size = _scaled_loading_gif_size(loading_gif_source_size)
     loading_gif.setScaledSize(loading_gif_size)
     loading_gif_label.setMovie(loading_gif)
-    loading_gif.start()
+    original_show_event = loading_dialog.showEvent
+    original_hide_event = loading_dialog.hideEvent
+
+    def show_event(event):
+        original_show_event(event)
+        loading_gif.start()
+
+    def hide_event(event):
+        loading_gif.stop()
+        original_hide_event(event)
+
+    loading_dialog.showEvent = show_event
+    loading_dialog.hideEvent = hide_event
+    loading_dialog._loading_gif = loading_gif
     loading_gif_label.setFixedSize(loading_gif_size)
 
     loading_label = secondary_label(initial_status_text)
@@ -102,8 +117,22 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
 
 def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
     """Close a worker progress dialog after the worker has reached a terminal state."""
-    if dialog is None:
+    if dialog is None or getattr(dialog, "_worker_progress_dismissed", False):
         return
+    delete_later = getattr(dialog, "deleteLater", None)
+    if callable(delete_later):
+        dialog._worker_progress_dismissed = True
+    movie = getattr(dialog, "_loading_gif", None)
+    if movie is not None:
+        movie.stop()
+    try:
+        _finish_worker_progress_dialog(dialog, rejected=rejected)
+    finally:
+        if callable(delete_later):
+            delete_later()
+
+
+def _finish_worker_progress_dialog(dialog, *, rejected):
 
     if rejected:
         reject_as_terminal = getattr(dialog, "reject_as_terminal", None)
@@ -184,13 +213,17 @@ def create_delayed_worker_progress_dialog(
     initial_status_text,
     on_cancel,
     delay_ms=1000,
+    action_started_at=None,
+    cancellable=True,
 ):
     """Create a worker progress dialog whose first show is delayed.
 
     Worker flows can create the widgets immediately, connect progress signals, start the
     worker, and call ``show()``. The actual dialog appears only if the operation is still
-    running after ``delay_ms``. Closing, accepting, or rejecting before the timer fires
-    cancels the pending show.
+    running after ``delay_ms``. Pass ``action_started_at=time.monotonic()`` captured
+    at the start of the action slot to include its preparation in that delay. Without
+    it the delay starts at ``show()`` for compatibility. Closing, accepting, or
+    rejecting before the timer fires cancels the pending show.
     """
     loading_dialog, loading_label, loading_bar, loading_gif = create_worker_progress_dialog(
         parent,
@@ -198,11 +231,18 @@ def create_delayed_worker_progress_dialog(
         initial_status_text=initial_status_text,
         on_cancel=on_cancel,
     )
-    _install_delayed_show(loading_dialog, delay_ms=delay_ms)
+    if not cancellable:
+        # These operations already have their own stop action (or no cancellation).
+        # The indicator must not add a new cancel/close route.
+        loading_dialog.findChild(QPushButton).hide()
+        loading_dialog.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        loading_dialog.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+        loading_dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+    _install_delayed_show(loading_dialog, delay_ms=delay_ms, action_started_at=action_started_at)
     return loading_dialog, loading_label, loading_bar, loading_gif
 
 
-def _install_delayed_show(dialog, *, delay_ms: int) -> None:
+def _install_delayed_show(dialog, *, delay_ms: int, action_started_at=None) -> None:
     if QTimer is None:
         return
 
@@ -214,6 +254,7 @@ def _install_delayed_show(dialog, *, delay_ms: int) -> None:
     original_reject_as_terminal = getattr(dialog, "reject_as_terminal", None)
     timer = QTimer(dialog)
     timer.setSingleShot(True)
+    timer.setTimerType(Qt.TimerType.PreciseTimer)
     state = {"finished": False, "shown": False}
 
     def _show_now() -> None:
@@ -225,11 +266,13 @@ def _install_delayed_show(dialog, *, delay_ms: int) -> None:
     def delayed_show() -> None:
         if state["finished"] or state["shown"]:
             return
-        if delay_ms <= 0:
+        elapsed_ms = 0 if action_started_at is None else (monotonic() - action_started_at) * 1000
+        remaining_ms = max(0, math.ceil(delay_ms - elapsed_ms))
+        if remaining_ms <= 0:
             _show_now()
             return
         if not timer.isActive():
-            timer.start(delay_ms)
+            timer.start(remaining_ms)
 
     def finish() -> None:
         state["finished"] = True

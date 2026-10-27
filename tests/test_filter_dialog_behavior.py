@@ -270,22 +270,14 @@ def test_filter_helpers_and_parent_callback_compatibility(monkeypatch):
 
     assert no_arg_parent.called
 
-    list_widget = QListWidget()
-    monkeypatch.setattr(
-        filter_dialog,
-        "execute_with_retry",
-        lambda db_file, query: [("B",), ("A",)],
-    )
-    dialog = filter_dialog.FilterDialog.__new__(filter_dialog.FilterDialog)
-    dialog.db_file = "reports.db"
-    dialog.log_and_exit = lambda *_args, **_kwargs: None
-    dialog._populate_distinct_values(list_widget, "AX")
-
-    assert [list_widget.item(row).text() for row in range(list_widget.count())] == [
-        "SELECT ALL",
-        "B",
-        "A",
-    ]
+    dialog = _build_dialog(monkeypatch)
+    calls = []
+    dialog._start_value_load = lambda specs, query: calls.append((specs, query))
+    try:
+        dialog._populate_distinct_values(dialog.ax_list, "AX", filter_query="scope")
+        assert calls == [((("ax_list", "AX", "vw_measurement_export"),), "scope")]
+    finally:
+        dialog.close()
 
 
 def test_selected_header_delete_branches(monkeypatch):
@@ -309,3 +301,325 @@ def test_selected_header_delete_branches(monkeypatch):
         assert dialog.header_list.item(1).isSelected() is False
     finally:
         dialog.close()
+
+
+def _wait_for_filter(predicate):
+    import time
+
+    deadline = time.monotonic() + 5
+    while not predicate() and time.monotonic() < deadline:
+        QTest.qWait(5)
+    assert predicate(), "Filter worker did not finish"
+
+
+def test_background_choices_keep_gui_responsive_and_close_safe(monkeypatch):
+    import threading
+    from metroliza.ui import filter_values_loader
+
+    app = _app()
+    started = threading.Event()
+    release = threading.Event()
+    gui_thread = threading.get_ident()
+    workers = []
+
+    def slow_load(*_args, **kwargs):
+        workers.append(threading.get_ident())
+        started.set()
+        assert release.wait(5)
+        return {attribute: ("A", "Z") for attribute, _, _ in kwargs["specs"]}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", slow_load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        dialog.show()
+        _wait_for_filter(started.is_set)
+        assert workers == [workers[0]] and workers[0] != gui_thread
+        assert dialog._values_loading
+        assert dialog.filter_summary_label.text() == "Loading filter values…"
+        assert not dialog.apply_button.isEnabled()
+        assert not dialog.filter_tabs.isEnabled()
+        assert dialog.cancel_button.isEnabled()
+        # Processing events while the worker is gated proves the GUI is free.
+        app.processEvents()
+        assert dialog.close()
+        assert not dialog.isVisible()
+        # Even a queued result cannot repopulate the closed dialog.
+        original_count = dialog.ax_list.count()
+        dialog._receive_filter_values(dialog._value_request - 1, {"ax_list": ("late",)})
+        assert dialog.ax_list.count() == original_count
+        dialog.deleteLater()
+        app.processEvents()
+    finally:
+        release.set()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+def test_background_success_error_and_reopen(monkeypatch):
+    from metroliza.ui import filter_values_loader
+
+    _app()
+    calls = []
+
+    def load(*args, **kwargs):
+        calls.append(args)
+        return {attribute: ("A", "Z") for attribute, _, _ in kwargs["specs"]}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        for attr in ("ax_list", "header_list", "all_headers_list", "filename_list"):
+            widget = getattr(dialog, attr)
+            assert [widget.item(row).text() for row in range(widget.count())] == ["SELECT ALL", "A", "Z"]
+        assert dialog.apply_button.isEnabled()
+        assert dialog.close()
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert len(calls) == 2
+
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("synthetic load failure")
+
+        errors = []
+        monkeypatch.setattr(filter_values_loader, "load_filter_values", fail)
+        dialog.log_and_exit = errors.append
+        dialog.populate_list_widgets()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert len(errors) == 1
+        assert not dialog.apply_button.isEnabled()
+        assert "Unable to load" in dialog.filter_summary_label.text()
+        dialog.apply_filters()
+        assert dialog.isVisible()
+    finally:
+        dialog.close()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+def test_replaced_background_request_ignores_old_results(monkeypatch):
+    import threading
+    from metroliza.ui import filter_values_loader
+
+    _app()
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def load(*_args, **kwargs):
+        calls.append(kwargs["specs"])
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(5)
+            return {"ax_list": ("old",)}
+        return {"ax_list": ("new",)}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        _wait_for_filter(started.is_set)
+        old_request = dialog._value_request
+        dialog.populate_list_widgets()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog._receive_filter_values(old_request, {"ax_list": ("old",)})
+        assert dialog.ax_list.item(1).text() == "new"
+    finally:
+        release.set()
+        dialog.close()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+def test_real_database_load_refreshes_retained_dialog_after_commit(tmp_path, monkeypatch):
+    from contextlib import closing
+    import sqlite3
+    import threading
+
+    from metroliza.reports import filter_values
+    from metroliza.reports.report_schema import ensure_report_schema
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    _app()
+    database = str(tmp_path / "synthetic.sqlite")
+    ensure_report_schema(database)
+    with closing(sqlite3.connect(database)) as writer, writer:
+        writer.executescript("""
+            INSERT INTO source_files(id,sha256,source_format,discovered_at)
+            VALUES (1,'synthetic','pdf','2026');
+            INSERT INTO parsed_reports(id,source_file_id,parser_id,template_family,parse_status,created_at,updated_at)
+            VALUES (1,1,'synthetic','synthetic','parsed','2026','2026');
+            INSERT INTO report_measurements(report_id,row_order,header,ax,status_code)
+            VALUES (1,1,'H','X','ok');
+        """)
+    original = filter_values.ensure_report_schema
+    gui_thread = threading.get_ident()
+    workers = []
+
+    def ensure_in_worker(*args, **kwargs):
+        workers.append(threading.get_ident())
+        assert threading.get_ident() != gui_thread
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(filter_values, "ensure_report_schema", ensure_in_worker)
+    dialog = filter_dialog.FilterDialog(db_file=database)
+    try:
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert dialog.ax_list.item(1).text() == "X"
+        assert dialog.header_list.item(1).text() == "H"
+        dialog.hide()  # Apply also retains the dialog by hiding it.
+        with closing(sqlite3.connect(database)) as writer, writer:
+            writer.execute("UPDATE report_measurements SET ax = 'Y'")
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert dialog.ax_list.item(1).text() == "Y"
+        assert len(workers) == 2
+    finally:
+        dialog.close()
+        _wait_for_filter(lambda: not _RUNNING_LOADERS)
+
+
+def test_cleared_reference_cancels_pending_header_scope(monkeypatch):
+    import threading
+    from metroliza.ui import filter_values_loader
+
+    _app()
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def load(*_args, **kwargs):
+        calls.append(kwargs["specs"])
+        if len(calls) == 1:
+            return {attribute: ("A", "Z") for attribute, _, _ in kwargs["specs"]}
+        started.set()
+        assert release.wait(5)
+        return {"header_list": ("stale-scope",)}
+
+    monkeypatch.setattr(filter_values_loader, "load_filter_values", load)
+    dialog = filter_dialog.FilterDialog(db_file="synthetic.sqlite")
+    try:
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog.reference_list.item(1).setSelected(True)
+        _wait_for_filter(started.is_set)
+        assert dialog._values_loading
+        # A controller can clear selection even while user input is disabled.
+        dialog.reference_list.clearSelection()
+        assert not dialog._values_loading
+        release.set()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+        assert [dialog.header_list.item(i).text() for i in range(dialog.header_list.count())] == ["SELECT ALL", "A", "Z"]
+    finally:
+        release.set()
+        dialog.close()
+        _wait_for_filter(lambda: not filter_values_loader._RUNNING_LOADERS)
+
+
+@pytest.fixture
+def applied_choices_db(tmp_path):
+    from contextlib import closing
+    import sqlite3
+
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    database = str(tmp_path / "applied-choices.sqlite")
+    ensure_report_schema(database)
+    with closing(sqlite3.connect(database)) as writer, writer:
+        writer.executescript("""
+            INSERT INTO source_files(id,sha256,source_format,discovered_at)
+            VALUES (1,'synthetic-review','pdf','2026');
+            INSERT INTO parsed_reports(id,source_file_id,parser_id,template_family,parse_status,created_at,updated_at)
+            VALUES (1,1,'synthetic','synthetic','parsed','2026','2026');
+            INSERT INTO report_metadata(report_id,report_date,metadata_version)
+            VALUES (1,'2026-01-01','v1');
+            INSERT INTO report_measurements(report_id,row_order,header,ax,status_code)
+            VALUES (1,1,'H','X','ok'),(1,2,'H','Y','ok');
+        """)
+    return database
+
+
+def _selected_ax_rows(database, query):
+    from contextlib import closing
+    import sqlite3
+
+    with closing(sqlite3.connect(database)) as reader:
+        return [row[0] for row in reader.execute(f'SELECT AX FROM ({query}) ORDER BY AX')]
+
+
+@pytest.mark.parametrize("change", ["replace", "delete"])
+def test_refresh_preserves_unavailable_applied_value_until_explicit_clear(applied_choices_db, change):
+    from contextlib import closing
+    import sqlite3
+
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    _app()
+    dialog = filter_dialog.FilterDialog(db_file=applied_choices_db)
+    try:
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog.ax_list.findItems("X", Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+        dialog.apply_filters()
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == ["X"]
+        applied_query = dialog.filter_query
+        with closing(sqlite3.connect(applied_choices_db)) as writer, writer:
+            if change == "replace":
+                writer.execute("UPDATE report_measurements SET ax = 'Z' WHERE ax = 'X'")
+            else:
+                writer.execute("DELETE FROM report_measurements WHERE ax = 'X'")
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert [item.text() for item in dialog.ax_list.selectedItems()] == ["X"]
+        assert "No active filters" not in dialog.filter_summary_label.text()
+        dialog.apply_filters()
+        assert dialog.filter_query == applied_query
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == []
+        # It remains a normal selectable condition, including explicit clearing.
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog.ax_list.clearSelection()
+        dialog.apply_filters()
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == (["Y", "Z"] if change == "replace" else ["Y"])
+    finally:
+        dialog._confirm_discard = lambda **_kwargs: True
+        dialog.close()
+        _wait_for_filter(lambda: not _RUNNING_LOADERS)
+
+@pytest.mark.parametrize("reset", [False, True])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_reopen_keeps_original_choices_and_allows_switch(applied_choices_db, reset, scoped):
+    from contextlib import closing
+    import sqlite3
+
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    _app()
+    parent = QDialog()
+    if scoped:
+        with closing(sqlite3.connect(applied_choices_db)) as writer, writer:
+            writer.execute("INSERT INTO report_measurements(report_id,row_order,header,ax,status_code) VALUES (1,3,'Other','Z','ok')")
+        scope = filter_dialog.build_measurement_filter_query(ax_values=["X", "Y"])
+        parent.get_filter_query = lambda: scope
+    dialog = filter_dialog.FilterDialog(parent, db_file=applied_choices_db)
+    try:
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        dialog.ax_list.findItems("X", Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+        dialog.apply_filters()
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == ["X"]
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert [dialog.ax_list.item(i).text() for i in range(dialog.ax_list.count())] == ["SELECT ALL", "X", "Y"]
+        if reset:
+            dialog._reset_draft()
+        else:
+            dialog.ax_list.clearSelection()
+        dialog.ax_list.findItems("Y", Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+        dialog.apply_filters()
+        assert _selected_ax_rows(applied_choices_db, dialog.filter_query) == ["Y"]
+        dialog.show()
+        _wait_for_filter(lambda: not dialog._values_loading)
+        assert dialog.ax_list.findItems("X", Qt.MatchFlag.MatchExactly)
+    finally:
+        dialog._confirm_discard = lambda **_kwargs: True
+        dialog.close()
+        parent.close()
+        _wait_for_filter(lambda: not _RUNNING_LOADERS)

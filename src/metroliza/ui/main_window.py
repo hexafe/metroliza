@@ -1,7 +1,10 @@
 import base64
 import importlib
+import importlib.util
+import os
 from pathlib import Path
 import tempfile
+import threading
 from time import perf_counter
 from typing import Callable
 
@@ -13,6 +16,7 @@ from PyQt6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QListWidget,
@@ -40,12 +44,14 @@ from metroliza.ui.ui_foundation import (
     configure_window_size,
     section_label,
     secondary_label,
-    separator,
     set_button_role,
     set_status_variant,
     status_chip,
 )
 
+
+WARMUP_IN_THREAD_ENV = "METROLIZA_WARMUP_IN_THREAD"
+FEATURE_WARMUP_JOIN_TIMEOUT_S = 0.25
 
 FEATURE_IMPORT_WARMUP_MODULES = (
     ("Parse Reports", "metroliza.ui.parsing_dialog"),
@@ -56,6 +62,8 @@ FEATURE_IMPORT_WARMUP_MODULES = (
     ("Modify Database", "metroliza.ui.modify_db"),
     ("Match Characteristic Names", "metroliza.ui.characteristic_mapping_dialog"),
     ("Parser Profiles", "metroliza.ui.parser_plugin_wizard"),
+    ("Realtime Monitor", "metroliza.ui.realtime_industrial_monitoring_dialog"),
+    ("Export Pipeline", "metroliza.exporting.export_data_thread"),
 )
 
 
@@ -133,12 +141,12 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Metroliza [{version_label}]")
         else:
             self.setWindowTitle(f"Metroliza [{version_label}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
-        configure_window_size(self, minimum=(720, 480), initial=(980, 660))
+        configure_window_size(self, minimum=(720, 480), initial=(1100, 740), screen_margin=32)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(16, 16, 16, 16)
-        self.layout.setSpacing(10)
+        self.layout.setContentsMargins(8, 8, 8, 8)
+        self.layout.setSpacing(4)
         self.central_widget.setLayout(self.layout)
         self.days_until_expiration = days_until_expiration
 
@@ -160,6 +168,10 @@ class MainWindow(QMainWindow):
         self._recovered_realtime_db_paths: set[str] = set()
         self._close_deferred_for_realtime = False
         self._close_deferred_for_children = False
+        self._close_deferred_for_reports = False
+        self._reports_workspace = None
+        self._reports_first_paint = False
+        self._database_workflow_buttons = []
         self._deferred_close_blockers: set[str] = set()
         self._deferred_child_close_retry_scheduled = False
         self.parser_plugin_wizard_dialog = None
@@ -173,7 +185,6 @@ class MainWindow(QMainWindow):
             self._on_coordinated_close_deferral_cancelled
         )
         self._coordinated_window_attributes = {
-            "parsing": "parsing_dialog",
             "modify_database": "modifydb_dialog",
             "export": "export_dialog",
             "industrial_data": "industrial_data_dialog",
@@ -189,15 +200,20 @@ class MainWindow(QMainWindow):
         self._feature_import_warmup_on_finished = None
         self._feature_import_warmup_status_callback = None
         self._feature_import_warmup_importer = importlib.import_module
+        self._feature_import_warmup_thread = None
+        self._feature_import_warmup_stop = threading.Event()
+        self._feature_import_warmup_closed = False
+        self._feature_import_warmup_timer = QTimer(self)
+        self._feature_import_warmup_timer.setInterval(25)
+        self._feature_import_warmup_timer.timeout.connect(self._poll_feature_import_warmup)
+        QApplication.instance().aboutToQuit.connect(self._stop_feature_import_warmup)
 
         # Initialize and set up command-center widgets
         self.workflow_label = section_label("Workflow")
         self.context_label = section_label("Current context")
         self.source_status_label = status_chip("Source: not selected", "neutral")
         self.database_status_label = status_chip("Database: not selected", "neutral")
-        self.workflow_hint_label = secondary_label(
-            "Parse reports, clean database values when needed, match names, then export the workbook."
-        )
+        self.workflow_hint_label = secondary_label("Review and import reports in Reports, then prepare or export the database.")
         self.workflow_next_step_label = status_chip(
             "Next step: choose reports and create or select a database.",
             "warning",
@@ -205,6 +221,10 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label = status_chip("Workspace ready", "neutral")
         self.workspace_notice_label.setVisible(False)
         self.parse_button = QPushButton("Parse Reports")
+        self.home_next_action = self.parse_button
+        self.home_report_result = secondary_label("")
+        self.home_report_progress = secondary_label("")
+        self.home_cancel_report = QPushButton("Cancel report operation")
         self.modifydb_button = QPushButton("Modify Database")
         self.export_button = QPushButton("Export Workbook")
         self.map_characteristics_button = QPushButton("Match Characteristic Names")
@@ -235,12 +255,17 @@ class MainWindow(QMainWindow):
         status_callback: Callable[[str], None] | None = None,
     ) -> None:
         """Schedule feature import warmup after the first visible window paint."""
+        if self._feature_import_warmup_closed:
+            return
         if self._feature_import_warmup_completed:
             if on_finished is not None:
                 QTimer.singleShot(0, on_finished)
             return
         if self._feature_import_warmup_completed or self._feature_import_warmup_scheduled:
             return
+        from metroliza.app.startup_stall_probe import begin_post_paint_probe
+
+        begin_post_paint_probe()
         self._feature_import_warmup_scheduled = True
         self._feature_import_warmup_on_finished = on_finished
         self._feature_import_warmup_status_callback = status_callback
@@ -256,7 +281,11 @@ class MainWindow(QMainWindow):
 
     def _preload_next_feature_import(self):
         """Load the next feature module and yield back to Qt before continuing."""
-        if self._feature_import_warmup_completed:
+        if self._feature_import_warmup_completed or self._feature_import_warmup_closed:
+            return
+
+        if os.getenv(WARMUP_IN_THREAD_ENV) != "0" and self._feature_import_warmup_queue:
+            self._start_threaded_feature_import_warmup()
             return
 
         if not self._feature_import_warmup_queue:
@@ -284,7 +313,73 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(0, self._preload_next_feature_import)
 
+    def _start_threaded_feature_import_warmup(self):
+        """Import without Qt access; Python's per-module import locks also protect tool opens.
+
+        Do not hold an application lock around imports: a GUI import must wait only
+        for its module/dependencies, never for the rest of the warm-up queue.
+        """
+        self._feature_import_warmup_start = perf_counter()
+        record_event("feature_warmup_start", module_count=len(FEATURE_IMPORT_WARMUP_MODULES),
+                     mode="thread")
+        queue = list(self._feature_import_warmup_queue)
+        self._feature_import_warmup_queue = []
+        importer = self._feature_import_warmup_importer
+        done = threading.Event()
+        stop = self._feature_import_warmup_stop
+        loaded = self._feature_import_warmup_loaded_modules
+        failed = self._feature_import_warmup_failures
+
+        def work():
+            try:
+                # Must precede feature imports, including transitive pyplot imports.
+                from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
+
+                configure_headless_matplotlib()
+                for label, module_name in queue:
+                    if stop.is_set():
+                        break
+                    loaded_module, failed_module = _warm_feature_module(label, module_name, importer=importer)
+                    if loaded_module is not None:
+                        loaded.append(loaded_module)
+                    if failed_module is not None:
+                        failed.append(failed_module)
+            except Exception as exc:
+                failed.append({"module": "<warmup>", "error_type": type(exc).__name__, "message": str(exc)})
+            finally:
+                done.set()
+
+        self._feature_import_warmup_done = done
+        self._feature_import_warmup_thread = threading.Thread(
+            target=work, name="metroliza-feature-warmup", daemon=False,
+        )
+        self._feature_import_warmup_thread.start()
+        self._feature_import_warmup_timer.start()
+
+    def _poll_feature_import_warmup(self):
+        if self._feature_import_warmup_done.is_set():
+            self._feature_import_warmup_timer.stop()
+            self._finish_feature_import_warmup()
+
+    def _stop_feature_import_warmup(self):
+        """Cancel pending imports and wait at most 250 ms for the current import.
+
+        Python cannot interrupt a running import safely. A timed-out import is
+        reported and retains normal non-daemon interpreter shutdown semantics.
+        """
+        self._feature_import_warmup_closed = True
+        self._feature_import_warmup_stop.set()
+        self._feature_import_warmup_timer.stop()
+        thread = self._feature_import_warmup_thread
+        if thread is not None:
+            thread.join(timeout=FEATURE_WARMUP_JOIN_TIMEOUT_S)
+            record_event("feature_warmup_join", timeout_s=FEATURE_WARMUP_JOIN_TIMEOUT_S,
+                         finished=not thread.is_alive())
+            self._feature_import_warmup_thread = None
+
     def _finish_feature_import_warmup(self):
+        if self._feature_import_warmup_completed or self._feature_import_warmup_closed:
+            return
         loaded_modules = list(self._feature_import_warmup_loaded_modules)
         failed_modules = list(self._feature_import_warmup_failures)
         warmup_start = self._feature_import_warmup_start or perf_counter()
@@ -332,7 +427,7 @@ class MainWindow(QMainWindow):
 
     def setup_button_tooltips(self):
         """Set up the tooltips for the buttons."""
-        self.parse_button.setToolTip("Import measurements from PDF reports into a SQLite database.")
+        self.parse_button.setToolTip("Open Reports and focus the next available report action.")
         self.modifydb_button.setToolTip("Clean stored references, sample numbers, headers, and record values.")
         self.export_button.setToolTip("Filter, group, and export database measurements to an Excel workbook.")
         self.map_characteristics_button.setToolTip("Map different report names to one common characteristic name.")
@@ -346,21 +441,21 @@ class MainWindow(QMainWindow):
         self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
         self.csv_summary_action = QAction("CSV Summary...", self)
         self.csv_summary_action.setToolTip("Analyze CSV or Excel data with dashboards and workbook output.")
-        self.csv_summary_action.triggered.connect(self.launch_csv_summary_dialog)
+        self.csv_summary_action.triggered.connect(lambda: self._show_workspace_page("csv_analytics"))
         self.enrich_metadata_action = QAction("Enrich existing database metadata...", self)
         self.enrich_metadata_action.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
         self.enrich_metadata_action.triggered.connect(self.launch_metadata_enrichment)
         self.industrial_data_action = QAction("Industrial data...", self)
         self.industrial_data_action.setToolTip("Configure, sync, link, and export cached Oznak industrial data")
-        self.industrial_data_action.triggered.connect(self.launch_industrial_data_dialog)
+        self.industrial_data_action.triggered.connect(lambda: self._show_workspace_page("industrial_data"))
         self.realtime_monitoring_action = QAction("Real-time Industrial Monitoring...", self)
         self.realtime_monitoring_action.setToolTip(
             "Configure and run realtime polling for industrial source databases."
         )
-        self.realtime_monitoring_action.triggered.connect(self.launch_realtime_industrial_monitoring_dialog)
+        self.realtime_monitoring_action.triggered.connect(lambda: self._show_workspace_page("realtime_monitor"))
         self.parser_profiles_action = QAction("Parser profiles...", self)
         self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
-        self.parser_profiles_action.triggered.connect(self.launch_parser_plugin_wizard)
+        self.parser_profiles_action.triggered.connect(lambda: self._show_workspace_page("parser_profiles"))
         self.tools_menu = self.menuBar().addMenu("Tools")
         self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
@@ -399,149 +494,201 @@ class MainWindow(QMainWindow):
         if hasattr(self.help_menu, "addSeparator"):
             self.help_menu.addSeparator()
         self.help_menu.addAction(self.release_notes_action)
+        self.diagnostic_incidents_action = QAction("Diagnostic incidents…", self)
+        self.diagnostic_incidents_action.triggered.connect(self.open_diagnostic_incidents)
+        self.help_menu.addAction(self.diagnostic_incidents_action)
+        self.help_menu.aboutToShow.connect(self._refresh_incident_action)
+        self._refresh_incident_action()
         self.help_menu.addAction(self.about_button)
 
-    def setup_buttons_layout(self):
-        """Add the buttons to the layout and connect the signals."""
-        self.layout.addWidget(self.context_label)
-        context_row = QHBoxLayout()
-        context_row.setContentsMargins(0, 0, 0, 0)
-        context_row.setSpacing(8)
-        context_row.addWidget(self.source_status_label, 1)
-        context_row.addWidget(self.database_status_label, 1)
-        self.layout.addLayout(context_row)
-        self.layout.addWidget(self.workspace_notice_label)
-        self.layout.addWidget(separator())
+    def _refresh_incident_action(self):
+        available = importlib.util.find_spec("metroliza.ui.incident_dialog") is not None
+        self.diagnostic_incidents_action.setEnabled(available)
+        explanation = (
+            "Inspect and export selected local diagnostic incidents."
+            if available else "Diagnostic incidents are unavailable in this build."
+        )
+        self.diagnostic_incidents_action.setToolTip(explanation)
+        self.diagnostic_incidents_action.setStatusTip(explanation)
 
+    def open_diagnostic_incidents(self):
+        """Use the normal lazy viewer entry; report absent and broken features separately."""
+        try:
+            module = importlib.import_module("metroliza.ui.incident_dialog")
+        except ModuleNotFoundError as exc:
+            if exc.name == "metroliza.ui.incident_dialog":
+                self.diagnostic_incidents_action.setEnabled(False)
+                message = "Diagnostic incidents are unavailable in this build."
+            else:
+                message = "Diagnostic incidents could not load because an installed dependency is unavailable."
+            QMessageBox.warning(self, "Diagnostic incidents", message)
+            return False
+        except Exception:
+            QMessageBox.warning(self, "Diagnostic incidents", "The installed diagnostic feature could not be loaded.")
+            return False
+        try:
+            module.open_incident_viewer(self)
+        except Exception:
+            QMessageBox.warning(self, "Diagnostic incidents", "The diagnostic viewer could not be opened.")
+            return False
+        return True
+
+    def setup_buttons_layout(self):
+        """Compose primary workspaces around one persistent report owner."""
+        self.layout.addWidget(self.workspace_notice_label)
+        self.navigation_combo = QComboBox()
+        self.navigation_combo.setAccessibleName("Metroliza workspace navigation")
+        self.layout.addWidget(self.navigation_combo)
         shell_row = QHBoxLayout()
         shell_row.setContentsMargins(0, 0, 0, 0)
-        shell_row.setSpacing(12)
+        shell_row.setSpacing(8)
         self.navigation_list = QListWidget()
         self.navigation_list.setObjectName("workspaceNavigation")
-        self.navigation_list.setMaximumWidth(210)
-        self.navigation_list.setMinimumWidth(168)
-        self.navigation_list.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Expanding,
-        )
+        self.navigation_list.setFixedWidth(168)
         self.workspace_stack = QStackedWidget()
         self.workspace_stack.setObjectName("workspacePages")
+        # A hidden page's size hint must not force the current page wider/taller.
+        self.workspace_stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         shell_row.addWidget(self.navigation_list)
         shell_row.addWidget(self.workspace_stack, 1)
         self.layout.addLayout(shell_row, 1)
 
-        home_page = QWidget()
-        home_layout = QVBoxLayout(home_page)
+        self.home_page = QWidget()
+        home_layout = QVBoxLayout(self.home_page)
         home_layout.setContentsMargins(4, 4, 4, 4)
-        home_layout.setSpacing(10)
-        home_layout.addWidget(section_label("Home"))
-        home_layout.addWidget(self.workflow_label)
-        home_layout.addWidget(self.workflow_hint_label)
-        home_layout.addWidget(self.workflow_next_step_label)
-
-        primary_row = QHBoxLayout()
-        primary_row.setContentsMargins(0, 0, 0, 0)
-        primary_row.setSpacing(8)
-        primary_row.addWidget(self.parse_button)
-        primary_row.addWidget(self.export_button)
-        home_layout.addLayout(primary_row)
-
-        prep_row = QHBoxLayout()
-        prep_row.setContentsMargins(0, 0, 0, 0)
-        prep_row.setSpacing(8)
-        prep_row.addWidget(self.modifydb_button)
-        prep_row.addWidget(self.map_characteristics_button)
-        home_layout.addLayout(prep_row)
+        home_layout.setSpacing(8)
+        for widget in (
+            section_label("Home"), self.context_label, self.source_status_label,
+            self.database_status_label, self.workflow_hint_label,
+            self.workflow_next_step_label, self.home_report_progress,
+            self.home_report_result, self.home_next_action, self.home_cancel_report,
+        ):
+            home_layout.addWidget(widget)
         home_layout.addStretch(1)
+        self._add_workspace_page("Home", self.home_page)
 
-        self._add_workspace_page("Home", home_page)
-        self._add_workspace_page(
-            "Reports",
-            self._build_workspace_landing_page(
-                "Reports",
-                "Scan report content, import supported measurements, review the database, "
-                "and export verified deliverables.",
-                (
-                    ("Scan and import reports", self.launch_parsing_dialog),
-                    ("Export workbook or dashboard", self.launch_export_dialog),
-                    ("Review or modify database", self.launch_modifydb_dialog),
-                    ("Match characteristic names", self.launch_characteristic_mapping_dialog),
-                ),
-            ),
-        )
-        self._add_workspace_page(
-            "CSV Analytics",
-            self._build_workspace_landing_page(
-                "CSV Analytics",
-                "Review a CSV or Excel source, configure metrics and grouping, then create "
-                "the required dashboard with an optional workbook.",
-                (("Open CSV Summary", self.launch_csv_summary_dialog),),
-            ),
-        )
-        self._add_workspace_page(
-            "Industrial Data",
-            self._build_workspace_landing_page(
-                "Industrial Data",
-                "Configure a read-only production source, test access, fetch a bounded local "
-                "cache, and analyze it without modifying production data.",
-                (("Open Industrial Data", self.launch_industrial_data_dialog),),
-            ),
-        )
-        self._add_workspace_page(
-            "Realtime Monitor",
-            self._build_workspace_landing_page(
-                "Realtime Monitor",
-                "Monitor saved and reviewed source configurations, inspect source lag, and "
-                "review explainable anomaly events.",
-                (("Open Realtime Monitor", self.launch_realtime_industrial_monitoring_dialog),),
-            ),
-        )
-        self._add_workspace_page(
-            "Parser Profiles",
-            self._build_workspace_landing_page(
-                "Parser Profiles",
-                "Inspect unsupported report content and create a local parser-profile handoff "
-                "without relying on filenames.",
-                (("Manage Parser Profiles", self.launch_parser_plugin_wizard),),
-            ),
-        )
-        self.navigation_list.currentRowChanged.connect(self.workspace_stack.setCurrentIndex)
+        self.reports_page = QWidget()
+        reports_layout = QVBoxLayout(self.reports_page)
+        self._reports_layout = reports_layout
+        reports_layout.setContentsMargins(0, 0, 0, 0)
+        reports_layout.setSpacing(2)
+        downstream_row = QHBoxLayout()
+        downstream_row.setSpacing(4)
+        for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+            downstream_row.addWidget(button)
+        reports_layout.addLayout(downstream_row)
+        self._add_workspace_page("Reports", self.reports_page)
+        for title, description, action, callback in (
+            ("CSV Analytics", "Analyze CSV or Excel data and prepare dashboards or workbooks.",
+             "Open CSV Summary", self.launch_csv_summary_dialog),
+            ("Industrial Data", "Configure read-only sources and work with their bounded local cache.",
+             "Open Industrial Data", self.launch_industrial_data_dialog),
+            ("Realtime Monitor", "Monitor reviewed source configurations and inspect source lag and events.",
+             "Open Realtime Monitor", self.launch_realtime_industrial_monitoring_dialog),
+            ("Parser Profiles", "Inspect unsupported formats and prepare a local parser-profile handoff.",
+             "Manage Parser Profiles", self.launch_parser_plugin_wizard),
+            ("Tools", "Maintenance utilities for the current database. Domain shortcuts in the Tools menu open their primary workspace.",
+             "Enrich existing database metadata", self.launch_metadata_enrichment),
+        ):
+            self._add_workspace_page(title, self._build_workspace_landing_page(
+                title, description, ((action, callback),),
+            ))
+        self.navigation_list.currentRowChanged.connect(self._on_navigation_changed)
+        self.navigation_combo.currentIndexChanged.connect(self.navigation_list.setCurrentRow)
         self.navigation_list.setCurrentRow(0)
-        # Connect persistence after establishing the default row so startup
-        # does not overwrite a previously saved navigation choice with zero
-        # before `_restore_ui_preferences()` can read it.
         self.navigation_list.currentRowChanged.connect(self._persist_navigation_index)
 
-        self.layout.addWidget(separator())
-        self.layout.addWidget(section_label("Task center"))
-        self.layout.addWidget(self.metadata_enrichment_status_label)
-        self.layout.addWidget(self.metadata_enrichment_progress_bar)
-        self.layout.addWidget(self.cancel_metadata_enrichment_button)
-        self.parse_button.clicked.connect(self.launch_parsing_dialog)
+        task_row = QHBoxLayout()
+        task_row.setSpacing(4)
+        task_row.addWidget(self.metadata_enrichment_status_label, 1)
+        task_row.addWidget(self.metadata_enrichment_progress_bar)
+        task_row.addWidget(self.cancel_metadata_enrichment_button)
+        self.layout.addLayout(task_row)
+        self.home_next_action.clicked.connect(self.launch_parsing_dialog)
+        self.home_cancel_report.clicked.connect(self._cancel_report_operation)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
         self.cancel_metadata_enrichment_button.clicked.connect(self.stop_metadata_enrichment)
-        self.metadata_enrichment_status_label.setVisible(False)
-        self.metadata_enrichment_progress_bar.setVisible(False)
-        self.cancel_metadata_enrichment_button.setVisible(False)
-        configure_accessibility(self.parse_button, name="Parse Reports")
+        self.metadata_enrichment_status_label.hide()
+        self.metadata_enrichment_progress_bar.hide()
+        self.cancel_metadata_enrichment_button.hide()
         configure_accessibility(self.export_button, name="Export Workbook")
         configure_accessibility(self.modifydb_button, name="Modify Database")
         configure_accessibility(self.map_characteristics_button, name="Match Characteristic Names")
         configure_accessibility(self.workflow_next_step_label, name="Recommended next workflow step")
         configure_accessibility(self.cancel_metadata_enrichment_button, name="Cancel metadata enrichment")
-        configure_accessibility(
-            self.navigation_list,
-            name="Metroliza workspace navigation",
-            description="Choose a workflow without closing other work.",
-        )
+        configure_accessibility(self.navigation_list, name="Metroliza workspace navigation",
+                                description="Choose a workflow without closing other work.")
+        self._update_navigation_layout()
 
     def _add_workspace_page(self, label: str, page: QWidget) -> None:
+        page_id = label.lower().replace(" ", "_")
         item = QListWidgetItem(label)
-        item.setData(Qt.ItemDataRole.UserRole, label.lower().replace(" ", "_"))
+        item.setData(Qt.ItemDataRole.UserRole, page_id)
         self.navigation_list.addItem(item)
+        self.navigation_combo.addItem(label, page_id)
         self.workspace_stack.addWidget(page)
+
+    def _show_workspace_page(self, page_id):
+        index = self.navigation_combo.findData(page_id)
+        if index >= 0:
+            self.navigation_list.setCurrentRow(index)
+
+    def _on_navigation_changed(self, index):
+        if self._reports_first_paint and self.navigation_combo.itemData(index) == "reports":
+            self._ensure_reports_workspace()
+        self.workspace_stack.setCurrentIndex(index)
+        self.navigation_combo.blockSignals(True)
+        self.navigation_combo.setCurrentIndex(index)
+        self.navigation_combo.blockSignals(False)
+
+    def _update_navigation_layout(self):
+        compact = self.width() < 1000
+        self.navigation_list.setVisible(not compact)
+        self.navigation_combo.setVisible(compact)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "navigation_list"):
+            self._update_navigation_layout()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._reports_first_paint:
+            self._reports_first_paint = True
+            if self.navigation_combo.currentData() == "reports":
+                QTimer.singleShot(0, self._ensure_reports_workspace)
+
+    @property
+    def reports_workspace(self):
+        return self._ensure_reports_workspace()
+
+    def _ensure_reports_workspace(self):
+        """Create the sole owner on entry, preserving startup's first-paint boundary."""
+        if self._reports_workspace is None:
+            from metroliza.ui.parsing_dialog import ReportsWorkspace
+            from metroliza.ui.report_planner import PLANNER_ACTION_STYLE
+
+            host = ReportsWorkspace(self.reports_page)
+            host.operation_start_allowed = self._report_start_allowed
+            self._reports_workspace = host
+            self.parsing_dialog = host
+            host.source_change_requested.connect(self.set_directory)
+            host.database_change_requested.connect(self.set_db_file)
+            host.metadata_enrichment_requested.connect(self.start_metadata_enrichment_from_parsing)
+            host.state_changed.connect(self._sync_workflow_next_step)
+            host.shutdown_ready.connect(self._on_reports_shutdown_ready)
+            self._reports_layout.insertWidget(0, host, 1)
+            for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+                button.setStyleSheet(PLANNER_ACTION_STYLE)
+            host.apply_workspace_snapshot(self.workspace_context.snapshot)
+            self._sync_workflow_next_step()
+        return self._reports_workspace
+
+    def _cancel_report_operation(self):
+        if self._reports_workspace is not None:
+            self._reports_workspace._request_active_worker_cancellation()
 
     def _build_workspace_landing_page(
         self,
@@ -560,6 +707,8 @@ class MainWindow(QMainWindow):
             button = QPushButton(label)
             set_button_role(button, "primary" if index == 0 else "secondary")
             button.clicked.connect(callback)
+            if title in ("Industrial Data", "Realtime Monitor", "Tools"):
+                self._database_workflow_buttons.append(button)
             layout.addWidget(button)
         layout.addStretch(1)
         return page
@@ -567,6 +716,8 @@ class MainWindow(QMainWindow):
     def _on_workspace_snapshot_changed(self, current, _previous) -> None:
         self.directory = current.source_directory
         self.db_file = current.database_file
+        if self._reports_workspace is not None:
+            self._reports_workspace.apply_workspace_snapshot(current)
         self._sync_context_rows()
 
     def _restore_ui_preferences(self) -> None:
@@ -579,13 +730,14 @@ class MainWindow(QMainWindow):
             theme_mode = "system"
         self._set_theme_mode(theme_mode, persist=False)
 
-        navigation_index = self.ui_preferences.get(
-            "presentation/navigation/current",
-            0,
-            expected_type=int,
-        )
-        if 0 <= navigation_index < self.navigation_list.count():
-            self.navigation_list.setCurrentRow(navigation_index)
+        page_id = self.ui_preferences.get("presentation/navigation/page", "", expected_type=str)
+        if page_id:
+            self._show_workspace_page(page_id)
+        else:
+            # Existing six-page integer preferences retain their original meaning.
+            navigation_index = self.ui_preferences.get("presentation/navigation/current", 0, expected_type=int)
+            if 0 <= navigation_index < 6:
+                self.navigation_list.setCurrentRow(navigation_index)
 
         geometry = self.ui_preferences.get(
             "windows/main/geometry",
@@ -606,6 +758,7 @@ class MainWindow(QMainWindow):
     def _persist_navigation_index(self, index: int) -> None:
         if index >= 0 and hasattr(self, "ui_preferences"):
             self.ui_preferences.set("presentation/navigation/current", int(index))
+            self.ui_preferences.set("presentation/navigation/page", self.navigation_combo.itemData(index))
 
     def _sync_context_rows(self):
         source_text = self.directory if self.directory else "not selected"
@@ -619,22 +772,55 @@ class MainWindow(QMainWindow):
     def _sync_workflow_next_step(self):
         if not hasattr(self, "workflow_next_step_label"):
             return
-        has_source = bool(self.directory)
-        has_database = bool(self.db_file)
-        if has_source and has_database:
-            text = "Next step: parse reports, then export or clean the database if needed."
-            variant = "success"
-        elif has_database:
-            text = "Next step: export this database, or choose reports to add more data."
-            variant = "info"
-        elif has_source:
-            text = "Next step: select or create a database file for these reports."
-            variant = "warning"
+        reports = self._reports_workspace
+        busy = reports is not None and not reports.can_change_workspace()
+        if busy:
+            caption = "View active report operation"
+        elif not self.directory:
+            caption = "Choose reports in Reports"
+        elif not self.db_file:
+            caption = "Choose database in Reports"
+        elif reports is not None and reports.parse_button.isEnabled():
+            caption = "Continue selected import in Reports"
         else:
-            text = "Next step: choose reports and create or select a database."
+            caption = "Review reports in Reports"
+        self.home_next_action.setText(caption)
+        self.home_next_action.setAccessibleName(caption)
+        if reports is not None:
+            guidance = reports.readiness_label.text()
+            variant = reports.readiness_label.property("statusVariant")
+        else:
+            guidance = (
+                "Select a source and database to review reports." if not self.directory
+                else "Select or create a database before reviewing reports." if not self.db_file
+                else "Ready to review. No database changes are made until you import."
+            )
             variant = "warning"
-        self.workflow_next_step_label.setText(text)
+        self.workflow_next_step_label.setText(guidance)
         set_status_variant(self.workflow_next_step_label, variant)
+        self.home_cancel_report.setVisible(busy)
+        self.home_report_progress.setVisible(busy)
+        phase = "Reviewing reports" if busy and reports.preflight_thread is not None else "Processing selected reports"
+        self.home_report_progress.setText(f"{phase}: {reports._operation_progress}%" if busy else "")
+        outcome = reports.report_planner.outcome.toPlainText() if reports is not None else ""
+        summary = " · ".join(line for line in outcome.splitlines() if line)[:300]
+        self.home_report_result.setText(summary)
+        self.home_report_result.setVisible(bool(summary))
+        for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+            button.setEnabled(bool(self.db_file) and not busy)
+        for button in self._database_workflow_buttons:
+            button.setEnabled(not busy)
+        self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
+
+    def _pdf_execution_available(self, *, from_reports=False):
+        """GUI-thread admission for shell PDF work, across all databases.
+
+        Reports serializes its own workers, including cooperative reader stops.
+        Shell enrichment must also wait for every one of those workers to exit.
+        """
+        if self.is_metadata_enrichment_active():
+            return False
+        return from_reports or self._reports_workspace is None or self._reports_workspace.pdf_workers_idle()
 
     def is_metadata_enrichment_active(self):
         return (
@@ -644,6 +830,13 @@ class MainWindow(QMainWindow):
 
     def launch_metadata_enrichment(self):
         """Start modeless OCR metadata enrichment for the selected database."""
+        if not self._report_database_action_allowed():
+            return
+        if not self._pdf_execution_available():
+            self.metadata_enrichment_status_label.setText("Wait for the active PDF operation to finish")
+            self.metadata_enrichment_status_label.setVisible(True)
+            set_status_variant(self.metadata_enrichment_status_label, "warning")
+            return
         try:
             from metroliza.parsing.metadata_enrichment_thread import MetadataEnrichmentThread
 
@@ -680,6 +873,7 @@ class MainWindow(QMainWindow):
 
     def _clear_metadata_enrichment_thread(self):
         self.metadata_enrichment_thread = None
+        self._sync_workflow_next_step()
 
     def stop_metadata_enrichment(self):
         try:
@@ -698,7 +892,7 @@ class MainWindow(QMainWindow):
 
     def on_metadata_enrichment_finished(self):
         try:
-            self.enrich_metadata_action.setEnabled(True)
+            self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
             self.cancel_metadata_enrichment_button.setEnabled(False)
             self.cancel_metadata_enrichment_button.setVisible(False)
             if self.metadata_enrichment_error_message:
@@ -720,8 +914,7 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def closeEvent(self, event):
-        if self.is_metadata_enrichment_active():
-            self.stop_metadata_enrichment()
+        if not self._background_shutdown_allows_close():
             event.ignore()
             return
         realtime_dialog = self.realtime_monitoring_dialog
@@ -732,10 +925,16 @@ class MainWindow(QMainWindow):
                     callable(deferred_check) and deferred_check()
                 )
                 if not self._close_deferred_for_realtime:
-                    self.workspace_notice_label.setText(
-                        "Metroliza close was cancelled because Realtime Monitor kept "
-                        "unsaved source changes. Resolve them and try again."
-                    )
+                    cleanup_check = getattr(realtime_dialog, "dashboard_cleanup_retry_required", None)
+                    if callable(cleanup_check) and cleanup_check():
+                        self.workspace_notice_label.setText(
+                            "Private dashboard storage could not be removed. Close again to retry."
+                        )
+                    else:
+                        self.workspace_notice_label.setText(
+                            "Metroliza close was cancelled because Realtime Monitor kept "
+                            "unsaved source changes. Resolve them and try again."
+                        )
                     set_status_variant(self.workspace_notice_label, "warning")
                     self.workspace_notice_label.setVisible(True)
                 event.ignore()
@@ -791,7 +990,50 @@ class MainWindow(QMainWindow):
         self._cleanup_realtime_session_db()
         self.ui_preferences.set("windows/main/geometry", self.saveGeometry())
         self._persist_navigation_index(self.navigation_list.currentRow())
+        self._stop_feature_import_warmup()
         super().closeEvent(event)
+
+    def _background_shutdown_allows_close(self):
+        if self._defer_close_for_filter_loaders():
+            return False
+        if not self._reports_shutdown_allows_close():
+            return False
+        if self.is_metadata_enrichment_active():
+            self.stop_metadata_enrichment()
+            return False
+        return True
+
+    def _reports_shutdown_allows_close(self):
+        if self._reports_workspace is None or self._reports_workspace.request_shutdown():
+            self._close_deferred_for_reports = False
+            return True
+        self._close_deferred_for_reports = True
+        self.workspace_notice_label.setText("Waiting for the report operation to stop before closing Metroliza.")
+        self.workspace_notice_label.show()
+        return False
+
+    def _defer_close_for_filter_loaders(self):
+        from metroliza.ui.filter_values_loader import cancel_filter_loaders
+
+        if cancel_filter_loaders():
+            return False
+        if not getattr(self, "_filter_close_retry_scheduled", False):
+            self._filter_close_retry_scheduled = True
+            QTimer.singleShot(10, self._retry_close_after_filter_loaders)
+        self.workspace_notice_label.setText(
+            "Waiting for filter values to stop safely before closing Metroliza."
+        )
+        self.workspace_notice_label.show()
+        return True
+
+    def _retry_close_after_filter_loaders(self):
+        self._filter_close_retry_scheduled = False
+        self.close()
+
+    def _on_reports_shutdown_ready(self):
+        if self._close_deferred_for_reports:
+            self._close_deferred_for_reports = False
+            QTimer.singleShot(0, self.close)
 
     def _show_close_blocked_notice(
         self,
@@ -887,55 +1129,28 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label.setVisible(True)
 
     def launch_parsing_dialog(self):
-        """Launch or focus parsing without silently closing other workflows."""
-        try:
-            from metroliza.ui.parsing_dialog import ParsingDialog
-
-            if self._is_qwidget_type(ParsingDialog):
-                def create_parsing(snapshot):
-                    dialog = ParsingDialog(
-                        self,
-                        snapshot.source_directory,
-                        snapshot.database_file,
-                    )
-                    enrichment_signal = getattr(dialog, "metadata_enrichment_requested", None)
-                    if enrichment_signal is not None:
-                        enrichment_signal.connect(self.start_metadata_enrichment_from_parsing)
-                    return dialog
-
-                self.parsing_dialog = self._open_coordinated_window(
-                    "parsing",
-                    create_parsing,
-                    context_policy=WindowContextPolicy.KEEP,
-                )
-            elif not self.parsing_dialog or not self.parsing_dialog.isVisible():
-                self.parsing_dialog = ParsingDialog(self, self.directory, self.db_file)
-                enrichment_signal = getattr(self.parsing_dialog, "metadata_enrichment_requested", None)
-                if enrichment_signal is not None:
-                    enrichment_signal.connect(self.start_metadata_enrichment_from_parsing)
-                self.parsing_dialog.show()
-            self.parsing_dialog.raise_()
-            self.parsing_dialog.activateWindow()
-        except Exception as e:
-            self.log_and_exit(e)
+        """Compatibility action: focus the one persistent Reports owner."""
+        self._show_workspace_page("reports")
+        self.reports_workspace.focus_primary_action()
+        return self.reports_workspace
 
     def start_metadata_enrichment_from_parsing(self, db_file):
-        """Receive a successful light import request and start modeless enrichment."""
-        try:
-            if db_file:
-                self.set_db_file(db_file)
-            self.launch_metadata_enrichment()
-        except Exception as e:
-            self.log_and_exit(e)
+        if db_file != self.workspace_context.snapshot.database_file:
+            self.workspace_notice_label.setText("Report completion belongs to a different database.")
+            self.workspace_notice_label.show()
+            return
+        self.launch_metadata_enrichment()
 
     def launch_modifydb_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.modify_db import ModifyDB
 
             if self._is_qwidget_type(ModifyDB):
                 self.modifydb_dialog = self._open_coordinated_window(
                     "modify_database",
-                    lambda snapshot: ModifyDB(self, snapshot.database_file),
+                    lambda snapshot: ModifyDB(self, snapshot.database_file, modal=False),
                     context_policy=WindowContextPolicy.CLOSE,
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                 )
@@ -944,12 +1159,15 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("modifydb_dialog", self.modifydb_dialog)
                 self.modifydb_dialog.show()
 
+            self.modifydb_dialog.database_change_allowed = self._report_context_change_allowed
             self.modifydb_dialog.raise_()
             self.modifydb_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
 
     def launch_export_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.export_dialog import ExportDialog
 
@@ -965,6 +1183,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("export_dialog", self.export_dialog)
                 self.export_dialog.show()
 
+            self.export_dialog.database_change_allowed = self._report_context_change_allowed
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
         except Exception as e:
@@ -1002,6 +1221,8 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def launch_industrial_data_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.industrial_data_dialog import IndustrialDataDialog
 
@@ -1020,12 +1241,15 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("industrial_data_dialog", self.industrial_data_dialog)
                 self.industrial_data_dialog.show()
 
+            self.industrial_data_dialog.database_change_allowed = self._report_context_change_allowed
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
 
     def launch_realtime_industrial_monitoring_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             dashboard_db_path, using_session_db = self._realtime_dashboard_db_file()
             from metroliza.ui.realtime_industrial_monitoring_dialog import (
@@ -1060,6 +1284,7 @@ class MainWindow(QMainWindow):
                     dialog.shutdown_complete.connect(
                         self._on_realtime_monitoring_shutdown_complete
                     )
+                    self._connect_realtime_shutdown_cleanup_failure(dialog)
                     dialog.database_work_idle.connect(self._retry_pending_realtime_rebind)
                     return dialog
 
@@ -1080,6 +1305,7 @@ class MainWindow(QMainWindow):
                 self.realtime_monitoring_dialog.shutdown_complete.connect(
                     self._on_realtime_monitoring_shutdown_complete
                 )
+                self._connect_realtime_shutdown_cleanup_failure(self.realtime_monitoring_dialog)
                 self.realtime_monitoring_dialog.database_work_idle.connect(
                     self._retry_pending_realtime_rebind
                 )
@@ -1098,6 +1324,27 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Real-time industrial monitoring opened.", 5000)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _connect_realtime_shutdown_cleanup_failure(self, dialog) -> None:
+        cleanup_failed = getattr(dialog, "shutdown_cleanup_failed", None)
+        if cleanup_failed is not None:
+            cleanup_failed.connect(self._on_realtime_shutdown_cleanup_failed)
+
+    def _on_realtime_shutdown_cleanup_failed(self) -> None:
+        if self.sender() is not self.realtime_monitoring_dialog:
+            return
+        retry_root_close = self._close_deferred_for_realtime
+        self._close_deferred_for_realtime = False
+        if not retry_root_close:
+            return
+        self._close_deferred_for_children = False
+        self._deferred_close_blockers.clear()
+        self._deferred_child_close_retry_scheduled = False
+        self.workspace_notice_label.setText(
+            "Private dashboard storage could not be removed. Close again to retry."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.setVisible(True)
 
     def _on_realtime_monitoring_shutdown_complete(self) -> None:
         retry_root_close = self._close_deferred_for_realtime
@@ -1185,14 +1432,15 @@ class MainWindow(QMainWindow):
         *,
         forbidden_destination: str | Path | None = None,
     ) -> tuple[bool, Path | None]:
+        from metroliza.industrial.industrial_cache_target import temporary_cache_contents_summary
+
         counts = self._realtime_session_disposable_counts()
-        persisted_rows = sum(counts.values())
-        if persisted_rows < 1:
+        if not any(counts.values()):
             return True, None
         choice = QMessageBox.question(
             self,
             "Temporary realtime data",
-            f"The temporary realtime session contains {persisted_rows:,} persisted data row(s). "
+            f"The temporary realtime session contains {temporary_cache_contents_summary(counts)}. "
             "Save a separate durable archive before removing the session?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
@@ -1339,6 +1587,8 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def launch_characteristic_mapping_dialog(self):
+        if not self._report_database_action_allowed():
+            return
         try:
             from metroliza.ui.characteristic_mapping_dialog import CharacteristicMappingDialog
 
@@ -1349,6 +1599,8 @@ class MainWindow(QMainWindow):
 
     def set_db_file(self, db_file):
         try:
+            if not self._report_context_change_allowed():
+                return False
             if self.industrial_data_dialog and self.industrial_data_dialog.isVisible():
                 updated = self.industrial_data_dialog.update_db_file(db_file)
                 if updated is False:
@@ -1357,7 +1609,7 @@ class MainWindow(QMainWindow):
                     )
                     set_status_variant(self.workspace_notice_label, "warning")
                     self.workspace_notice_label.setVisible(True)
-                    return
+                    return False
             self.workspace_notice_label.setVisible(False)
             recovery_result = self._recover_abandoned_realtime_staging(db_file)
             self.workspace_context.set_database_file(db_file)
@@ -1394,13 +1646,13 @@ class MainWindow(QMainWindow):
                     f"{recovery_result.get('rows_discarded', 0)} row(s) discarded.",
                     8000,
                 )
+            return True
         except Exception as e:
             self.log_and_exit(e)
 
     def _workflows_using_previous_database(self, database_file) -> tuple[str, ...]:
         labels = []
         for label, dialog in (
-            ("Report import", self.parsing_dialog),
             ("Export", self.export_dialog),
             ("Database editor", self.modifydb_dialog),
         ):
@@ -1430,9 +1682,71 @@ class MainWindow(QMainWindow):
 
     def set_directory(self, directory):
         try:
+            if directory != self.directory and not self._report_context_change_allowed():
+                return False
             self.workspace_context.set_source_directory(directory)
+            return True
         except Exception as e:
             self.log_and_exit(e)
+
+    def _report_context_change_allowed(self):
+        if self._reports_workspace is None or self._reports_workspace.can_change_workspace():
+            return True
+        self.workspace_notice_label.setText("Finish or cancel the report operation before changing its source or database.")
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _report_database_action_allowed(self):
+        if self._reports_workspace is None or self._reports_workspace.can_change_workspace():
+            return True
+        self.workspace_notice_label.setText("Finish or cancel the report operation before starting another database workflow.")
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _report_start_allowed(self):
+        """Keep existing same-database windows safe without closing their work."""
+        if getattr(self.export_dialog, "database_context_transition_active", False):
+            self.statusBar().showMessage(
+                "Report start was blocked during Export database selection.", 5000
+            )
+            return False
+        blockers = []
+        if not self._pdf_execution_available(from_reports=True):
+            blockers.append("metadata enrichment")
+        if self.db_file:
+            blockers.extend(self._same_database_workflow_labels())
+        if not blockers:
+            return True
+        self.workspace_notice_label.setText(
+            f"Finish or close {', '.join(blockers)} before reviewing or importing reports in this database."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _same_database_workflow_labels(self):
+        """Collect visible workflow owners of this report database or an unknown one."""
+        blockers = []
+        for label, dialog in (
+            ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
+            ("Industrial Data", self.industrial_data_dialog),
+            ("Realtime Monitor", self.realtime_monitoring_dialog),
+        ):
+            if dialog is None:
+                continue
+            try:
+                if not dialog.isVisible():
+                    continue
+            except RuntimeError:
+                continue
+            databases = tuple(path for path in (
+                getattr(dialog, "db_file", None), getattr(dialog, "report_db_file", None),
+            ) if path)
+            if not databases or any(Path(path).resolve() == Path(self.db_file).resolve() for path in databases):
+                blockers.append(label)
+        return blockers
 
     def _track_modeless_dialog(self, attribute: str, dialog) -> None:
         if hasattr(dialog, "setAttribute"):

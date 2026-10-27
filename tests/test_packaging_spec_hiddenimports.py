@@ -56,12 +56,13 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
     assert "copy_metadata" in spec_text
     assert 'collect_required_runtime_assets(\n        "rapidocr"\n    )' in spec_text
     assert 'collect_required_runtime_assets("onnxruntime")' in spec_text
-    assert 'collect_required_runtime_assets(\n        "openvino"\n    )' in spec_text
+    assert 'collect_required_runtime_assets(\n            "openvino"\n        )' in spec_text
+    assert "flavor_includes_openvino(resolve_build_flavor())" in spec_text
     assert 'collect_required_runtime_assets("cv2")' in spec_text
     assert 'collect_required_runtime_assets("numpy")' in spec_text
     assert 'collect_optional_distribution_metadata("rapidocr")' in spec_text
     assert 'collect_optional_distribution_metadata("onnxruntime")' in spec_text
-    assert 'collect_optional_distribution_metadata("openvino")' in spec_text
+    assert 'openvino_metadata = collect_optional_distribution_metadata("openvino")' in spec_text
     assert 'collect_optional_distribution_metadata("opencv-python")' in spec_text
     assert 'collect_optional_distribution_metadata("numpy")' in spec_text
     assert "collect_optional_vendored_model_data(root_dir)" in spec_text
@@ -80,6 +81,10 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
 def test_windows_pyinstaller_build_validates_ocr_packaging_inputs():
     script_text = Path("build_windows_exe.ps1").read_text(encoding="utf-8")
 
+    assert "@('-3.11', '-m', 'venv', $venvDir)" in script_text
+    assert "@('-3', '-m', 'venv', $venvDir)" not in script_text
+    assert "sys.version_info[:2] == (3, 11)" in script_text
+    assert "Assert-BuildPythonVersion" in script_text
     assert "[ValidateSet('onefile', 'onedir', 'both')]" in script_text
     assert "[string]$Mode = 'both'" in script_text
     assert "packaging/metroliza_onefile.spec" in script_text

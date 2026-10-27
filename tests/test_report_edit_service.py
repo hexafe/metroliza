@@ -112,3 +112,66 @@ def test_report_edit_service_rejects_unknown_flavor_and_normalization_field(tmp_
             storage_flavor="current",
             normalization_changes={"unknown": (("new", "old"),)},
         )
+
+
+def test_literal_custom_dispatch_and_error_order(tmp_path):
+    events = []
+
+    class Repository:
+        def update_report_metadata_fields(self, record_id, fields):
+            events.append(('report', record_id, dict(fields)))
+
+        def update_measurement_fields(self, record_id, fields):
+            events.append(('measurement', record_id, dict(fields)))
+            raise TypeError('literal custom failure')
+
+    def factory(database):
+        events.append(('factory', database))
+        return Repository()
+
+    service = ReportEditService('literal.db', repository_factory=factory)
+    with pytest.raises(TypeError, match='literal custom failure'):
+        service.apply_changes(
+            storage_flavor='current', normalization_changes={},
+            report_updates=((42, {'comment': 'reviewed'}), (43, {})),
+            measurement_updates=((7, {'header': 'WIDTH'}), (8, {'header': 'never'})),
+        )
+    assert events == [
+        ('factory', 'literal.db'), ('report', 42, {'comment': 'reviewed'}),
+        ('report', 43, {}), ('measurement', 7, {'header': 'WIDTH'}),
+    ]
+
+
+def test_literal_noop_and_normalization_failure_do_not_dispatch(tmp_path):
+    events = []
+    database = str(tmp_path / 'missing.db')
+    service = ReportEditService(database, repository_factory=lambda path: events.append(path))
+    service.apply_changes(storage_flavor='current', normalization_changes={})
+    assert events == []
+    assert not (tmp_path / 'missing.db').exists()
+    with pytest.raises(ValueError, match='normalization fields'):
+        service.apply_changes(storage_flavor='current', normalization_changes={'invalid': ()},
+                              report_updates=((1, {'comment': 'never'}),))
+    assert events == []
+
+
+def test_literal_service_subclass_keeps_virtual_hooks(tmp_path):
+    events = []
+
+    class Service(ReportEditService):
+        def build_normalization_update_statements(self, flavor, changes):
+            events.append(('normalize', flavor, changes))
+            return []
+
+        def validate_record_update_methods(self, repository, reports, measurements):
+            events.append(('validate', reports, measurements))
+
+        def apply_record_updates(self, repository, reports, measurements):
+            events.append(('apply', reports, measurements))
+
+    service = Service('unused.db', repository_factory=lambda path: object())
+    service.apply_changes(storage_flavor='current', normalization_changes={},
+                          report_updates=((1, {'comment': 'value'}),))
+    assert events == [('normalize', 'current', {}),
+                      ('validate', ((1, {'comment': 'value'}),), ()),
+                      ('apply', ((1, {'comment': 'value'}),), ())]

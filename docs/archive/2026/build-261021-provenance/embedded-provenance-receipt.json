@@ -1,0 +1,17 @@
+{
+  "source_EXE": "metroliza_2026.09rc1_261021_launcher.exe",
+  "source_EXE_sha256": "b643bb15389674c5010ade05cc6f9ea2a4e300bddcd52272ac9b00c578aaeae9",
+  "source_commit": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+  "payload_manifest_sha256": "422eef1e2a52d68e89037314332eb5cfbbb64825e72478d118abf9861d353e44",
+  "payload_file_count": 2156,
+  "extracted": [
+    {
+      "payload_path": "_internal/metroliza/app/build_provenance.json",
+      "archived_name": "embedded-build_provenance.json",
+      "bytes": 252,
+      "sha256": "94a71da7d8beca8b23fa065869a891bd62d82759d8999e2632e2d4c9f154fe35"
+    }
+  ],
+  "execution": "read_only_binary_parsing; no EXE executed",
+  "BUILD_INFO_presence": false
+}

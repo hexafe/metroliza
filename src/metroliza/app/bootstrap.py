@@ -1,3 +1,4 @@
+import gc
 import logging
 import os
 import sys
@@ -33,6 +34,7 @@ from metroliza.shared.diagnostic_events import (
     build_exception_diagnostic_event,
 )
 from metroliza.shared.logging_utils import ensure_application_logging
+from metroliza.shared.diagnostic_transport import supervised_invocation_id
 
 VERSION_DATE = VersionDate.VERSION_DATE
 STARTUP_SMOKE_ENV = "METROLIZA_STARTUP_SMOKE"
@@ -63,7 +65,11 @@ def _begin_startup_context():
     # Clearing first also isolates a nested invocation when UUID generation fails.
     token = _STARTUP_INVOCATION.set(None)
     try:
-        _STARTUP_INVOCATION.set(_StartupInvocation())
+        context = _StartupInvocation()
+        supervised_id = supervised_invocation_id()
+        if supervised_id is not None:
+            context.invocation_id = supervised_id
+        _STARTUP_INVOCATION.set(context)
     except Exception:
         pass
     return token
@@ -262,8 +268,13 @@ def log_runtime_provenance(logger: logging.Logger) -> None:
         pass
 
 
-def get_or_create_qapplication():
-    """Return the active QApplication, creating it when startup has not done so yet."""
+def get_or_create_qapplication(*, gui_gc: bool = True):
+    """Return the active QApplication, creating it when startup has not done so yet.
+
+    GUI flows (the application and the qualification flows that open windows and start
+    workers) get the GUI-thread garbage-collection policy of ``metroliza.app.gc_policy``.
+    Modes without a Qt event loop, such as the startup smoke, pass ``gui_gc=False``.
+    """
     record_event("qapplication_import_start")
     from PyQt6.QtWidgets import QApplication
 
@@ -271,12 +282,19 @@ def get_or_create_qapplication():
     existing_app = QApplication.instance()
     if existing_app is not None:
         record_event("qapplication_reused")
-        return existing_app
+        app = existing_app
+    else:
+        record_event("qapplication_create_start")
+        app = QApplication(sys.argv)
+        record_event("qapplication_create_done")
+    if gui_gc:
+        from metroliza.app.gc_policy import install as install_gui_gc
 
-    record_event("qapplication_create_start")
-    app = QApplication(sys.argv)
-    record_event("qapplication_create_done")
+        install_gui_gc(app)
     return app
+
+
+EXIT_AFTER_WARMUP_ENV = "METROLIZA_STARTUP_EXIT_AFTER_WARMUP"
 
 
 def _schedule_startup_ui_smoke_exit(app) -> None:
@@ -285,9 +303,56 @@ def _schedule_startup_ui_smoke_exit(app) -> None:
 
     def record_and_quit() -> None:
         record_event("first_event_loop_tick")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("first_event_loop_tick")
         app.quit()
 
     QTimer.singleShot(0, record_and_quit)
+
+
+def _schedule_after_first_event_loop_tick(callback) -> None:
+    """Run ``callback`` on the first Qt event-loop turn after the window was shown."""
+    from PyQt6.QtCore import QTimer
+
+    QTimer.singleShot(0, callback)
+
+
+def _schedule_splash_finish_then_warmup(app, splash, main_window) -> None:
+    """Close the splash once the main window is painted, then warm feature imports.
+
+    Feature-module warmup only prepares tools the user has not opened yet, so it
+    must not keep the splash on screen. Warmup starts after the splash is gone and
+    reports progress through the main window status bar only (the splash status
+    callback is deliberately not wired up).
+    """
+
+    def warmup_finished() -> None:
+        record_event("launch_ui_warmup_finished")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("warmup_finished")
+        # Measurement aid: leave once the window is fully usable (first useful screen).
+        if os.getenv(EXIT_AFTER_WARMUP_ENV) == "1":
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, app.quit)
+
+    def finish_splash_and_start_warmup() -> None:
+        record_event("main_window_first_paint_tick")
+        try:
+            # Flush the pending paint of the freshly shown window before the
+            # splash disappears so the user never sees an empty frame.
+            app.processEvents()
+            splash.finish(main_window)
+            record_event("splash_finished_after_first_paint")
+        finally:
+            main_window.schedule_feature_import_warmup(
+                delay_ms=0,
+                on_finished=warmup_finished,
+            )
+
+    _schedule_after_first_event_loop_tick(finish_splash_and_start_warmup)
 
 
 def log_and_exit(exception: Exception) -> None:
@@ -307,7 +372,7 @@ def run_startup_smoke_mode(logger: logging.Logger) -> int:
 
     logger.info("Startup smoke mode enabled (%s): beginning non-interactive init", STARTUP_SMOKE_ENV)
     _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
-    app = get_or_create_qapplication()
+    app = get_or_create_qapplication(gui_gc=False)
     _startup_event(StartupCallsite.QAPPLICATION_READY)
     _startup_event(StartupCallsite.SMOKE_WORK)
     _ = LicenseKeyManager.generate_hardware_id()
@@ -347,6 +412,12 @@ def launch_ui(
     _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
     app = get_or_create_qapplication()
     _startup_event(StartupCallsite.QAPPLICATION_READY)
+    from metroliza.app.gc_policy import install as install_gui_gc
+
+    install_gui_gc(app)
+    from metroliza.app.startup_stall_probe import install_if_requested
+
+    install_if_requested(app)
     splash = create_startup_splash(app, ui_smoke_mode=config.startup_ui_smoke_mode)
     close_bootloader_splash(phase="qt_splash_ready")
     splash.show_message("Checking license...", phase="license")
@@ -397,14 +468,12 @@ def launch_ui(
         splash.finish(main_window)
         _schedule_startup_ui_smoke_exit(app)
     else:
-        main_window.schedule_feature_import_warmup(
-            delay_ms=0,
-            on_finished=lambda: splash.finish(main_window),
-            status_callback=lambda message: splash.show_message(message, phase="warmup"),
-        )
+        _schedule_splash_finish_then_warmup(app, splash, main_window)
     record_event("event_loop_enter")
     _startup_event(StartupCallsite.EVENT_LOOP_EXEC_REQUEST, StartupOutcome.STARTUP_COMPLETED)
     exit_code = app.exec()
+    # All quit handlers have finished; collect remaining Qt cycles on the GUI thread.
+    gc.collect()
     record_event("event_loop_exit", exit_code=exit_code)
     return exit_code
 

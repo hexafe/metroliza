@@ -7,19 +7,76 @@ can shadow the canonical ``metroliza`` package during hidden-import analysis.
 
 from __future__ import annotations
 
-from pathlib import Path
+import os
 import sys
+from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
+if not getattr(sys, "frozen", False):
+    ROOT_DIR = Path(__file__).resolve().parents[1]
+    src_text = str(ROOT_DIR / "src")
+    if src_text in sys.path:
+        sys.path.remove(src_text)
+    sys.path.insert(0, src_text)
 
-src_text = str(SRC_DIR)
-if src_text in sys.path:
-    sys.path.remove(src_text)
-sys.path.insert(0, src_text)
+from metroliza.shared.compute_worker import use_native_windows_version  # noqa: E402
+
+# Install the same native fallback for ordinary and qualified packaged parents
+# before bootstrap or lazy NumPy/platform users can invoke cmd /c ver.
+use_native_windows_version()
+
+from metroliza.shared.diagnostic_startup_probe import mark  # noqa: E402
+
+QUALIFICATION_GATE_ENV = "METROLIZA_STARTUP_SMOKE"
+
+mark("child_entry")
+
+from metroliza.shared.diagnostic_transport import (  # noqa: E402
+    attach_child_recorder,
+    supervised_mode_requested,
+)
+
+recorder = attach_child_recorder()
+mark("child_attach_returned")
+if supervised_mode_requested():
+    try:
+        from metroliza.shared.logging_utils import ensure_application_logging
+
+        ensure_application_logging()
+    except Exception:
+        pass
 
 from metroliza.app.bootstrap import run_application  # noqa: E402
 
+mark("child_bootstrap_imported")
 
 if __name__ == "__main__":
-    raise SystemExit(run_application())
+    try:
+        code = run_application()
+        # Every qualification scenario is gated on METROLIZA_STARTUP_SMOKE=1. Check that
+        # gate before importing the harness, so an ordinary user's clean exit never
+        # imports test-only code (an import failure there would turn exit 0 into a crash).
+        if code == 0 and os.environ.get(QUALIFICATION_GATE_ENV) == "1":
+            from metroliza.app.diagnostic_qualification import requested_scenario, run_qualification
+
+            scenario = requested_scenario()
+            if scenario is not None:
+                code = run_qualification(scenario)
+            else:
+                from metroliza.app.windows_candidate_qualification import (
+                    requested_scenario as requested_candidate_scenario,
+                    run_qualification as run_candidate_qualification,
+                )
+
+                if os.environ.get("METROLIZA_COMPUTE_QUALIFICATION_ROOT"):
+                    from metroliza.app.compute_worker_qualification import run_qualification as run_compute_qualification
+
+                    code = run_compute_qualification()
+                elif requested_candidate_scenario() is not None:
+                    code = run_candidate_qualification()
+        raise SystemExit(code)
+    finally:
+        if recorder is not None:
+            try:
+                recorder.close()
+            except Exception:
+                pass

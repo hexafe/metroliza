@@ -197,3 +197,256 @@ def test_manual_linking_dialog_search_and_auto_refresh(monkeypatch, tmp_path):
     dialog.refresh_auto_links()
     assert "1 accepted, 2 ambiguous, 3 unmatched" in dialog.status_label.text()
     dialog.close()
+
+
+def _wait_auto_links(dialog):
+    from PyQt6.QtTest import QTest
+
+    for _ in range(1000):
+        if getattr(dialog, "_auto_link_thread", None) is None:
+            return
+        _app().processEvents()
+        QTest.qWait(5)
+    pytest.fail("auto link refresh did not finish")
+
+
+def test_auto_link_refresh_literal_unmatched_output(tmp_path):
+    _app()
+    db_path = _prepare_linking_db(tmp_path)
+    dialog = IndustrialLinkingDialog(db_file=db_path)
+    dialog.refresh_auto_links()
+    _wait_auto_links(dialog)
+    assert dialog.status_label.text() == (
+        "Auto links refreshed: 0 accepted, 0 ambiguous, 1 unmatched."
+    )
+    with sqlite_connection_scope(db_path) as conn:
+        assert conn.execute("SELECT * FROM industrial_link_candidates").fetchall() == []
+    dialog.close()
+
+
+def test_auto_link_custom_callback_literal_error(monkeypatch, tmp_path):
+    _app()
+    calls, warnings = [], []
+
+    def custom(db_file):
+        calls.append(db_file)
+        raise ValueError("literal password=abc Unicode: Ω")
+
+    monkeypatch.setattr(industrial_linking_dialog, "materialize_industrial_report_links", custom)
+    monkeypatch.setattr(industrial_linking_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    path = _prepare_linking_db(tmp_path)
+    dialog = IndustrialLinkingDialog(db_file=path)
+    dialog.refresh_auto_links()
+    assert calls == [path]
+    assert warnings == ["Could not refresh auto links: literal password=abc Unicode: Ω"]
+    dialog.close()
+
+
+def test_native_auto_link_worker_owns_write_and_terminal_lifetime(monkeypatch, tmp_path):
+    import threading
+
+    from PyQt6 import sip
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtTest import QTest
+
+    from metroliza.ui import detached_threads
+
+    app = _app()
+    entered, release = threading.Event(), threading.Event()
+    original_run = industrial_linking_dialog._AutoLinkThread.run
+    owners = []
+
+    def held_run(worker):
+        owners.append(QThread.currentThread() is app.thread())
+        entered.set()
+        if not release.wait(5):
+            worker.error = "test barrier timed out"
+            return
+        original_run(worker)
+
+    monkeypatch.setattr(industrial_linking_dialog._AutoLinkThread, "run", held_run)
+    dialog = IndustrialLinkingDialog(db_file=_prepare_linking_db(tmp_path))
+    dialog.show()
+    dialog.refresh_auto_links()
+    worker = dialog._auto_link_thread
+    try:
+        assert entered.wait(2)
+        assert detached_threads.is_registered(worker)
+        assert detached_threads._QUIT_BLOCKERS[id(worker)] is worker
+        assert not dialog.auto_link_button.isEnabled()
+        dialog.refresh_auto_links()
+        assert dialog._auto_link_thread is worker
+        assert dialog.close() is False
+        dialog.accept()
+        dialog.reject()
+        assert dialog.isVisible()
+        QTest.qWait(1100)
+        assert dialog._auto_link_progress.isVisible()
+        assert not detached_threads.wait_for_all(10)
+    finally:
+        release.set()
+        _wait_auto_links(dialog)
+    assert owners == [False]
+    assert dialog.status_label.text() == "Auto links refreshed: 0 accepted, 0 ambiguous, 1 unmatched."
+    assert not detached_threads.is_registered(worker)
+    QTest.qWait(10)
+    assert sip.isdeleted(worker)
+    assert dialog.auto_link_button.isEnabled()
+    dialog.close()
+
+
+@pytest.mark.parametrize("failure", ["construct", "start", "service"])
+def test_auto_link_failures_release_once_with_literal_error(monkeypatch, tmp_path, failure):
+    _app()
+    warnings = []
+    monkeypatch.setattr(industrial_linking_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    dialog = IndustrialLinkingDialog(db_file=_prepare_linking_db(tmp_path))
+    if failure == "construct":
+        def fail(_path):
+            raise ValueError("constructor Ω")
+        monkeypatch.setattr(industrial_linking_dialog, "_AutoLinkThread", fail)
+    elif failure == "start":
+        def fail(_worker):
+            raise ValueError("start Ω")
+        monkeypatch.setattr(industrial_linking_dialog._AutoLinkThread, "start", fail)
+    else:
+        # A real default-service SQLite failure, without replacing its dispatch.
+        dialog.db_file = str(tmp_path / "missing" / "reports.db")
+    dialog.refresh_auto_links()
+    _wait_auto_links(dialog)
+    assert len(warnings) == 1
+    expected = {"construct": "constructor Ω", "start": "start Ω", "service": "unable to open database file"}
+    assert warnings == ["Could not refresh auto links: " + expected[failure]]
+    assert dialog._auto_link_thread is None
+    assert dialog._auto_link_progress is None
+    assert dialog.auto_link_button.isEnabled()
+    dialog.close()
+
+
+def test_native_auto_link_drops_result_after_database_replacement(monkeypatch, tmp_path):
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+    _app()
+    original_run = industrial_linking_dialog._AutoLinkThread.run
+
+    def held_run(worker):
+        entered.set()
+        if release.wait(5):
+            original_run(worker)
+
+    monkeypatch.setattr(industrial_linking_dialog._AutoLinkThread, "run", held_run)
+    path = _prepare_linking_db(tmp_path)
+    dialog = IndustrialLinkingDialog(db_file=path)
+    old_status = dialog.status_label.text()
+    dialog.refresh_auto_links()
+    try:
+        assert entered.wait(2)
+        dialog.db_file = str(tmp_path / "other.db")
+    finally:
+        release.set()
+        _wait_auto_links(dialog)
+    assert dialog.status_label.text() == old_status
+    with sqlite_connection_scope(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM industrial_join_rules").fetchone() == (1,)
+    dialog.close()
+
+
+def test_auto_link_subclass_retains_synchronous_dispatch(tmp_path):
+    _app()
+
+    class CustomDialog(IndustrialLinkingDialog):
+        def _apply_auto_link_summary(self, _summary):
+            pytest.fail("new helper must not dispatch a preexisting subclass hook")
+
+    dialog = CustomDialog(db_file=_prepare_linking_db(tmp_path))
+    dialog.refresh_auto_links()
+    assert dialog.status_label.text() == "Auto links refreshed: 0 accepted, 0 ambiguous, 1 unmatched."
+    assert not hasattr(dialog, "_auto_link_thread")
+    dialog.close()
+
+
+def test_stale_completion_identity_preserves_current_request():
+    from types import SimpleNamespace
+    from metroliza.ui.industrial_linking_dialog import IndustrialLinkingDialog
+
+    current, stale = object(), object()
+    owner = SimpleNamespace(_auto_link_thread=current)
+    IndustrialLinkingDialog._auto_links_finished(owner, stale)
+    assert owner._auto_link_thread is current
+
+
+def test_successful_native_operation_normal_owner_close_and_quit(tmp_path):
+    import subprocess
+    import sys
+    script = r"""
+from contextlib import closing
+from pathlib import Path
+from threading import Event, Timer
+from time import monotonic
+import shutil, sqlite3, sys
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QMessageBox
+from metroliza.app.bootstrap import get_or_create_qapplication
+from metroliza.ui import detached_threads
+from tests.test_industrial_linking_dialog import _prepare_linking_db
+app = get_or_create_qapplication(); app.setQuitOnLastWindowClosed(False)
+path = _prepare_linking_db(Path(sys.argv[1]))
+QMessageBox.question = lambda *args: QMessageBox.StandardButton.Discard
+entered, release = Event(), Event()
+beats, closed = [], []
+def dump(database):
+    with closing(sqlite3.connect(database)) as connection:
+        return list(connection.iterdump())
+from metroliza.ui import industrial_linking_dialog as module
+from metroliza.industrial import industrial_join_service
+industrial_join_service.utc_timestamp = lambda: "2026-01-05T12:00:00+00:00"
+Dialog, Worker = module.IndustrialLinkingDialog, module._AutoLinkThread
+dialog = Dialog(db_file=path)
+oracle = str(Path(sys.argv[1]) / "oracle.db"); shutil.copyfile(path, oracle)
+summary = module.materialize_industrial_report_links(oracle)
+assert (summary.accepted_links, summary.ambiguous_reports, summary.unmatched_reports) == (0, 0, 1)
+expected = dump(oracle)
+original_finish = Dialog._auto_links_finished
+def finish(owner, worker):
+    original_finish(owner, worker)
+    assert owner._auto_link_thread is None
+    assert owner.status_label.text() == "Auto links refreshed: 0 accepted, 0 ambiguous, 1 unmatched."
+    assert owner.close()
+    closed.append(1)
+    app.quit()
+Dialog._auto_links_finished = finish
+start = dialog.refresh_auto_links
+field = '_auto_link_thread'
+original_run = Worker.run
+def held_run(worker):
+    entered.set()
+    assert release.wait(9), "native operation barrier expired"
+    original_run(worker)
+Worker.run = held_run
+def quit_after_start():
+    if not entered.is_set():
+        QTimer.singleShot(5, quit_after_start); return
+    worker = getattr(dialog, field)
+    assert worker is not None and worker.isRunning()
+    assert detached_threads._QUIT_BLOCKERS[id(worker)] is worker
+    print('actual operation work started', flush=True)
+    Timer(5.2, release.set).start()
+    app.quit()
+heartbeat = QTimer(); heartbeat.timeout.connect(lambda: beats.append(1)); heartbeat.start(10)
+started = monotonic()
+QTimer.singleShot(0, start)
+QTimer.singleShot(5, quit_after_start)
+QTimer.singleShot(12000, lambda: app.exit(99))
+assert app.exec() == 0
+assert entered.is_set() and release.is_set() and closed == [1]
+assert monotonic() - started > 5 and len(beats) > 100
+assert not detached_threads.running_threads() and not dialog.isVisible()
+assert dump(path) == expected
+print('native normal close and saved-reopen complete', len(beats), len(expected), flush=True)
+"""
+    child = subprocess.run([sys.executable, '-c', script, str(tmp_path)], capture_output=True, text=True, timeout=20)
+    print('industrial actual child exit', child.returncode, child.stdout, child.stderr)
+    assert child.returncode == 0, child.stdout + child.stderr
+    assert 'native normal close and saved-reopen complete' in child.stdout
+    assert 'QWaitCondition' not in child.stderr

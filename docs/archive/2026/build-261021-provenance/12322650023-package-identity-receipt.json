@@ -1,0 +1,299 @@
+{
+  "baseline_valid": true,
+  "copy_mode": "identity_files_only",
+  "created_utc": "2026-10-21T04:56:57Z",
+  "github_run_id": "39545859603",
+  "github_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+  "identity_files": [
+    "_internal/base_library.zip",
+    "_internal/metroliza/app/build_provenance.json",
+    "_internal/python311.dll",
+    "metroliza.exe",
+    "metroliza_application.exe",
+    "metroliza_compute_worker.exe",
+    "metroliza_ocr_worker.exe",
+    "supervision_manifest.json"
+  ],
+  "issue": 1111,
+  "judging": "none: scenarios are recorded, not accepted or rejected by this tool",
+  "manifest_git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+  "onedir_name": "metroliza_P_2026.09rc1(261021)_onedir",
+  "package_identity_has_component_field": true,
+  "platform": {
+    "python": "3.11.9",
+    "release": "10",
+    "system": "Windows",
+    "version": "10.0.26100"
+  },
+  "scenarios": [
+    {
+      "detail": "",
+      "elapsed_seconds": 0.17,
+      "exit_code": null,
+      "extras": {},
+      "facts": {
+        "component": {
+          "file_attributes": "0x00000020",
+          "kind": "file",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 40061108
+        },
+        "root": {
+          "file_attributes": "0x00000010",
+          "kind": "directory",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 4096
+        }
+      },
+      "identity": {
+        "component": null,
+        "git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+        "reason": "verified",
+        "valid": true
+      },
+      "key": "baseline",
+      "number": 1,
+      "status": "recorded",
+      "title": "Untouched copy of the built onedir"
+    },
+    {
+      "detail": "",
+      "elapsed_seconds": 0.81,
+      "exit_code": null,
+      "extras": {
+        "component_name": "_internal/python311.dll"
+      },
+      "facts": {
+        "component": {
+          "file_attributes": "0x00000020",
+          "kind": "file",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 5800217
+        },
+        "root": {
+          "file_attributes": "0x00000010",
+          "kind": "directory",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 4096
+        }
+      },
+      "identity": {
+        "component": "_internal/python311.dll",
+        "git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+        "reason": "component_modified",
+        "valid": false
+      },
+      "key": "modified_component",
+      "number": 2,
+      "status": "recorded",
+      "title": "One component modified (one byte appended)"
+    },
+    {
+      "detail": "",
+      "elapsed_seconds": 0.12,
+      "exit_code": null,
+      "extras": {
+        "component_name": "metroliza_ocr_worker.exe"
+      },
+      "facts": {
+        "component": {
+          "error": "FileNotFoundError",
+          "winerror": 2
+        },
+        "root": {
+          "file_attributes": "0x00000010",
+          "kind": "directory",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 4096
+        }
+      },
+      "identity": {
+        "component": "metroliza_ocr_worker.exe",
+        "git_sha": "unknown",
+        "reason": "component_missing",
+        "valid": false
+      },
+      "key": "missing_component",
+      "number": 3,
+      "status": "recorded",
+      "title": "One component missing (OCR worker)"
+    },
+    {
+      "detail": "",
+      "elapsed_seconds": 0.08,
+      "exit_code": null,
+      "extras": {
+        "component_name": "supervision_manifest.json"
+      },
+      "facts": {
+        "component": {
+          "error": "FileNotFoundError",
+          "winerror": 2
+        },
+        "root": {
+          "file_attributes": "0x00000010",
+          "kind": "directory",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 4096
+        }
+      },
+      "identity": {
+        "component": "supervision_manifest.json",
+        "git_sha": "unknown",
+        "reason": "manifest_missing",
+        "valid": false
+      },
+      "key": "missing_manifest",
+      "number": 4,
+      "status": "recorded",
+      "title": "supervision_manifest.json missing"
+    },
+    {
+      "detail": "",
+      "elapsed_seconds": 0.17,
+      "exit_code": null,
+      "extras": {
+        "component_name": "_internal/metroliza/app/build_provenance.json",
+        "manifest_git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+        "provenance_git_sha": "ffffffffffffffffffffffffffffffffffffffff"
+      },
+      "facts": {
+        "component": {
+          "file_attributes": "0x00000020",
+          "kind": "file",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 226
+        },
+        "root": {
+          "file_attributes": "0x00000010",
+          "kind": "directory",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 4096
+        }
+      },
+      "identity": {
+        "component": "_internal/metroliza/app/build_provenance.json",
+        "git_sha": "unknown",
+        "reason": "provenance_mismatch",
+        "valid": false
+      },
+      "key": "provenance_mismatch",
+      "number": 5,
+      "status": "recorded",
+      "title": "Two-version mix: other build SHA in build_provenance.json"
+    },
+    {
+      "detail": "",
+      "elapsed_seconds": 8.36,
+      "exit_code": 0,
+      "extras": {
+        "smoke": {
+          "elapsed_seconds": 8.36,
+          "exit_code": 0,
+          "qualification_complete": true,
+          "timed_out": false
+        }
+      },
+      "facts": {
+        "component": {
+          "file_attributes": "0x00000020",
+          "kind": "file",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 40061108
+        },
+        "root": {
+          "file_attributes": "0x00000010",
+          "kind": "directory",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 4096
+        }
+      },
+      "identity": {
+        "component": null,
+        "git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+        "reason": "verified",
+        "valid": true
+      },
+      "key": "supervised_smoke",
+      "number": 6,
+      "status": "recorded",
+      "title": "Supervised startup smoke from an untouched full copy"
+    },
+    {
+      "detail": "",
+      "elapsed_seconds": 0.12,
+      "exit_code": null,
+      "extras": {
+        "component_name": "metroliza_compute_worker.exe"
+      },
+      "facts": {
+        "component": {
+          "error": "FileNotFoundError",
+          "winerror": 2
+        },
+        "root": {
+          "file_attributes": "0x00000010",
+          "kind": "directory",
+          "name_surrogate": false,
+          "nlink": 1,
+          "reparse_point": false,
+          "reparse_tag": "0x00000000",
+          "reparse_tag_name": "-",
+          "size": 4096
+        }
+      },
+      "identity": {
+        "component": "metroliza_compute_worker.exe",
+        "git_sha": "unknown",
+        "reason": "component_missing",
+        "valid": false
+      },
+      "key": "missing_compute",
+      "number": 7,
+      "status": "recorded",
+      "title": "Compute worker missing"
+    }
+  ],
+  "schema_version": 1,
+  "tool": "qualify_package_identity"
+}

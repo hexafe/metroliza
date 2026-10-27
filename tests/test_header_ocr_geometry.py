@@ -99,3 +99,131 @@ def test_convert_ocr_records_to_header_items_scales_boxes_and_preserves_diagnost
     text_item = _as_text_item(item)
     assert text_item.text == "REFERENCE"
     assert text_item.x0 == pytest.approx(20.0)
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_native_mixed_image_geometry_matches_literal_dict_contract(rotation):
+    """Image block indices include intervening text blocks, even on rotated pages."""
+    from io import BytesIO
+
+    from PIL import Image
+    from metroliza.parsing.header_ocr_geometry import _block_candidates
+    from metroliza.parsing.pdf_backend import require_pdf_backend
+
+    image = BytesIO()
+    Image.new("RGB", (20, 10), "red").save(image, format="PNG")
+    with require_pdf_backend().open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_text((20, 20), "first text")
+        page.insert_image((30, 40, 570, 120), stream=image.getvalue(), keep_proportion=False)
+        page.insert_text((20, 160), "second text")
+        page.insert_image((30, 170, 570, 200), stream=image.getvalue(), keep_proportion=False)
+        page.insert_image((30, 500, 570, 600), stream=image.getvalue(), keep_proportion=False)
+        page.set_rotation(rotation)
+        # Pass fixed unrotated bounds to expose the mixed-block index independently.
+        candidates = _block_candidates(page, page_width=600, page_height=800,
+                                       top_limit_fraction=0.24, min_width_fraction=0.45)
+        assert candidates == [
+            {"index": 1, "bbox": (30.0, 40.0, 570.0, 120.0),
+             "width": 540.0, "height": 80.0, "area": 43200.0},
+            {"index": 3, "bbox": (30.0, 170.0, 570.0, 200.0),
+             "width": 540.0, "height": 30.0, "area": 16200.0},
+        ]
+        class DictPage:
+            rect = page.rect
+
+            def get_text(self, mode):
+                return page.get_text(mode)
+
+        # The adapter deliberately retains the original dict path as an oracle.
+        assert select_header_crop(page) == select_header_crop(DictPage())
+
+
+def test_geometry_backend_error_keeps_empty_candidates():
+    from metroliza.parsing.header_ocr_geometry import _block_candidates
+
+    class BrokenPage:
+        def get_text(self, mode):
+            raise RuntimeError("broken image dictionary")
+
+    assert _block_candidates(BrokenPage(), page_width=600, page_height=800,
+                             top_limit_fraction=0.24, min_width_fraction=0.45) == []
+
+
+@pytest.mark.parametrize("image_bbox", [(-10, 40, 590, 120), (10, -10, 590, 120),
+                                         (10, 40, 610, 120), (10, 740, 590, 830),
+                                         (700, 40, 1280, 120), (-700, 40, -100, 120)])
+def test_native_partially_clipped_image_keeps_original_dict_geometry(image_bbox):
+    from io import BytesIO
+    from PIL import Image
+    from metroliza.parsing.pdf_backend import require_pdf_backend
+
+    image = BytesIO()
+    Image.new("RGB", (20, 10), "blue").save(image, format="PNG")
+    with require_pdf_backend().open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_text((20, 20), "text before image")
+        page.insert_image(image_bbox, stream=image.getvalue(), keep_proportion=False)
+        page.insert_image((30, 130, 570, 180), stream=image.getvalue(), keep_proportion=False)
+
+        class DictPage:
+            rect = page.rect
+
+            def get_text(self, mode):
+                return page.get_text(mode)
+
+        assert select_header_crop(page) == select_header_crop(DictPage())
+
+
+def test_native_custom_dictionary_guard_keeps_original_dispatch():
+    from metroliza.parsing.pdf_backend import require_pdf_backend
+
+    class TrapDict(dict):
+        def __contains__(self, key):
+            pytest.fail("native guard must not invoke custom dictionary membership")
+
+    with require_pdf_backend().open() as document:
+        page = document.new_page(width=600, height=800)
+        page.__dict__ = TrapDict(page.__dict__)
+        assert select_header_crop(page).source == "top_band"
+
+
+@pytest.mark.parametrize("stateful", [False, True])
+def test_native_raw_method_key_keeps_single_lookup_and_geometry(stateful):
+    from io import BytesIO
+    from PIL import Image
+    from metroliza.parsing.header_ocr_geometry import _block_candidates
+    from metroliza.parsing.pdf_backend import require_pdf_backend
+
+    events = []
+    callbacks_per_lookup = None
+
+    class Key(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            result = (stateful and callbacks_per_lookup is not None
+                      and len(events) >= callbacks_per_lookup)
+            events.append(result)
+            return result
+
+    image = BytesIO()
+    Image.new("RGB", (20, 10), "red").save(image, format="PNG")
+    with require_pdf_backend().open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_image((30, 40, 570, 120), stream=image.getvalue(), keep_proportion=False)
+        object.__getattribute__(page, "__dict__")[Key("get_text")] = None
+        assert events == []
+        # One original attribute lookup may compare the same raw key more than
+        # once, depending on the interpreter's hash-table probe sequence.
+        original_blocks = page.get_text("dict")["blocks"]
+        assert original_blocks[0]["bbox"] == (30.0, 40.0, 570.0, 120.0)
+        callbacks_per_lookup = len(events)
+        assert callbacks_per_lookup > 0
+        assert events == [False] * callbacks_per_lookup
+        events.clear()
+        actual = _block_candidates(page, page_width=600, page_height=800,
+                                   top_limit_fraction=0.24, min_width_fraction=0.45)
+        assert actual == [{"index": 0, "bbox": (30.0, 40.0, 570.0, 120.0),
+                           "width": 540.0, "height": 80.0, "area": 43200.0}]
+        assert events == [False] * callbacks_per_lookup

@@ -1,10 +1,32 @@
 # Branching strategy
 
 This document defines the lightweight branching model used for Metroliza development and release
-work. The current branch transition and automatic evidence are recorded in
+work. Current RC roles and qualification are recorded in [release status](release_status.md).
+The historical branch transition and automatic evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md).
 
-## 0) Active repository state — decision 2026-08-22
+## 0) Active repository state — decision 2026-10-27
+
+Under [#1153](https://github.com/hexafe/metroliza/issues/1153), integrate #1109, #1142, the accepted
+STEP2+STEP3 aggregate and refreshed #1063 into develop using merge commits, then cut
+`release/2026.09-rc1` from the accepted final develop. Exact commits, trees and gates are in that
+execution ledger. Current candidate source is distinct from final packaged qualification.
+
+Keep seven refs after the finite cleanup: master, develop, release/2026.09-rc1, historical rc2,
+historical release/2026.06-rc2, and the dependency branches for #972/#973. The two historical refs
+and two dependency branches are named exceptions to the ordinary small branch set. They remain
+until their own lifecycle/update criteria are met. No master promotion or published release.
+
+Final build identity and Windows packaged EXE acceptance are pending. Before RC distribution,
+qualify the exact final artifact per release_status and the RC checklist; do not reuse historical
+build261021 metadata. Archive source/provenance separately. Preserve history, retained recovery
+refs, original adverse receipts and expected-old-SHA deletion guards.
+
+Newly admitted release work must select its base explicitly: normally `develop`, or the current
+`release/2026.09-rc1` after its source cut. The June base selection in the historical decision below
+applies only to explicitly admitted historical cycle work; it is not the current RC default.
+
+## 0.1) Historical repository state — decision 2026-08-22
 
 - `develop` is the canonical branch for new Issue-driven development.
 - `release/2026.06-rc2` is the frozen release-candidate/evidence branch for
@@ -44,7 +66,7 @@ must be reconciled into `develop` and any active release line where applicable.
 ### `master`
 
 `master`: current production-ready branch and historical/default production anchor. It represents
-the last accepted production state; the current `2026.06 RC2` candidate is not approved for
+the last accepted production state; the historical `2026.06 RC2` candidate is not approved for
 promotion while #901 remains open. Only reviewed, release-owner-approved candidate merges and
 minimal production hotfixes belong here.
 
@@ -63,9 +85,17 @@ Integration branch for active Issue-driven development:
 
 Normal Issue branches start from and target `develop`.
 
+### `release/2026.09-rc1`
+
+Current candidate source/evidence line, cut from accepted develop under #1153. Only approved
+release fixes, qualification evidence and reviewed candidate metadata belong here after freeze.
+Reconcile accepted fixes into develop. Final build/EXE qualification and release-owner Go remain
+separate from the source cut and repository cleanup.
+
 ### `release/2026.06-rc2`
 
-Frozen stabilization/evidence branch for the current candidate. Allowed changes are limited to:
+Historical frozen stabilization/evidence branch; retain it unchanged for separate #901/#924
+cycle closure. The following original restrictions continue for explicitly admitted historical fixes. Allowed changes are limited to:
 
 - release-blocking defects;
 - packaging/clean-machine fixes;
@@ -119,8 +149,8 @@ branches instead of one product-wide change set.
 ## 3) Release and hotfix naming
 
 - Release candidate branches: `release/YYYY.MM-rcN`
-  - Current: `release/2026.06-rc2`
-  - Future example: `release/2026.09-rc1`
+  - Current: `release/2026.09-rc1`
+  - Historical retained example: `release/2026.06-rc2`
 - Hotfix branches: `hotfix/<version>-<description>`
   - Example: `hotfix/2026.09.1-startup-fix`
 

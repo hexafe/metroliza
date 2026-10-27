@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import time
 
 import pytest
 
 try:
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import QPoint, Qt
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QComboBox, QMessageBox, QWidget  # noqa: F401
 
@@ -58,6 +59,125 @@ def _app():
     global _QT_APP
     _QT_APP = QApplication.instance() or QApplication([])
     return _QT_APP
+
+
+def test_wide_cache_reports_source_rows_without_grouping_growth(tmp_path, monkeypatch):
+    from metroliza.industrial import industrial_analytics_workflow as workflow
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionAggregationState, ProductionChartSelection, ProductionMetricSelection,
+    )
+    from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
+    from metroliza.tabular.tabular_analytics_service import apply_tabular_grouping
+    from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+
+    _app()
+    monkeypatch.setattr(industrial_data_dialog, "default_industrial_source_config_path",
+                        lambda: tmp_path / "sources.yaml")
+    dialog = IndustrialDataDialog()
+    repository = IndustrialDataRepository(dialog.db_file)
+    profile = repository.upsert_source_profile(
+        profile_key="wide", profile_name="Wide synthetic", source_db_alias="wide",
+        database_type="sqlite", source_object_name="events",
+    )
+    repository.upsert_industrial_records_from_rows(
+        source_profile_id=profile.id, source_db_alias=profile.source_db_alias,
+        rows=(
+            {"source_record_key": f"row-{i}", **{f"metric_{j}": j for j in range(162)}}
+            for i in range(128)
+        ),
+    )
+    before = industrial_data_dialog.disposable_cache_counts(dialog.db_file)
+    assert before["industrial_records"] == 128
+    assert before["industrial_record_values"] == 20736
+    assert sum(before.values()) == 20865
+    loaded = load_industrial_cache_tabular_result(dialog.db_file)
+    after_summary = industrial_data_dialog.disposable_cache_counts(dialog.db_file)
+    grouping = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe, column_mapping=loaded.column_mapping,
+        sqlite_store=loaded.sqlite_store,
+    )
+    try:
+        dialog._refresh_storage_lifecycle()
+        assert "128 cached source row(s)" in dialog.storage_lifecycle_label.text()
+        grouping._apply_group_assignments({1: ("Selected", "#123456")})
+        assignments = grouping._materialize_grouping_dataframe()
+        for _attempt in range(3):
+            frame = loaded.sqlite_store.read_dataframe(columns=("source_row_number", "metric_0"))
+            grouped = apply_tabular_grouping(frame, assignments)
+            assert len(grouped.dataframe) == 128
+            assert grouped.dataframe["GROUP"].tolist().count("Selected") == 1
+        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == after_summary
+        dialog._refresh_storage_lifecycle()
+        assert "128 cached source row(s)" in dialog.storage_lifecycle_label.text()
+        prompts = []
+
+        def discard(_parent, _title, message, *_args):
+            prompts.append(message)
+            return QMessageBox.StandardButton.Discard
+
+        monkeypatch.setattr(QMessageBox, "question", discard)
+        assert dialog._resolve_temporary_cache_before_discard(dialog.cache_target)
+        assert "128 cached source row(s)" in prompts[0]
+
+        def fail_export(**kwargs):
+            Path(kwargs["output_file"]).write_bytes(b"partial workbook")
+            raise OSError("synthetic workbook failure")
+
+        # Keep the full request/materialization/export path; rendering is not
+        # relevant to storage accounting and is covered by the artifact tests.
+        monkeypatch.setattr(workflow, "_write_dashboard", lambda **_kwargs: {})
+        monkeypatch.setattr(workflow, "export_tabular_analytics_workbook", fail_export)
+        with pytest.raises(OSError, match="synthetic workbook failure"):
+            workflow.run_tabular_file_analytics(
+                input_file=dialog.db_file, tabular_load_result=loaded,
+                output_dashboard_file=str(tmp_path / "failed.html"),
+                output_workbook_file=str(tmp_path / "failed.xlsx"),
+                grouping_df=assignments,
+                metric_selection=(ProductionMetricSelection("metric_0"),),
+                aggregation_state=ProductionAggregationState(time_bucket="none"),
+                chart_selection=ProductionChartSelection(groupstats=False),
+            )
+        assert not list(tmp_path.glob(".*.tmp.xlsx"))
+        assert not (tmp_path / "failed.xlsx").exists()
+        assert industrial_data_dialog.disposable_cache_counts(dialog.db_file) == after_summary
+    finally:
+        assignment_store = grouping._sqlite_grouping_assignment_store()
+        grouping.reject()
+        assert assignment_store._connection is None
+        view_name = loaded.sqlite_store.table_name
+        loaded.sqlite_store.cleanup()
+        with sqlite_connection_scope(dialog.db_file) as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = ?", (view_name,),
+            ).fetchall() == []
+        monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+        cache_path = Path(dialog.db_file)
+        dialog.close()
+        assert not cache_path.exists()
+
+
+def test_temporary_cache_without_source_rows_still_warns_about_stored_configuration(tmp_path, monkeypatch):
+    _app()
+    monkeypatch.setattr(industrial_data_dialog, "default_industrial_source_config_path",
+                        lambda: tmp_path / "sources.yaml")
+    dialog = IndustrialDataDialog()
+    repository = IndustrialDataRepository(dialog.db_file)
+    repository.upsert_source_profile(
+        profile_key="synthetic", profile_name="Synthetic", source_db_alias="synthetic",
+        database_type="sqlite", source_object_name="events",
+    )
+    prompts = []
+
+    def discard(_parent, _title, message, *_args):
+        prompts.append(message)
+        return QMessageBox.StandardButton.Discard
+
+    monkeypatch.setattr(QMessageBox, "question", discard)
+    dialog._refresh_storage_lifecycle()
+    assert "stored configuration" in dialog.storage_lifecycle_label.text()
+    dialog.close()
+    assert "stored configuration" in prompts[0]
+    assert not Path(dialog.db_file).exists()
 
 
 def _populate_industrial_cache(database: str) -> None:
@@ -615,6 +735,72 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     dialog.close()
 
 
+def test_launcher_status_content_is_full_height_and_scroll_reachable(tmp_path):
+    app = _app()
+    dialog = IndustrialDataDialog(db_file=str(tmp_path / "metroliza.db"))
+    dialog.show()
+    app.processEvents()
+    try:
+        scroll = dialog.content_scroll
+        status_labels = (
+            dialog.storage_lifecycle_label,
+            dialog.workflow_label,
+            dialog.sync_summary_label,
+            dialog.cache_label,
+            dialog.sync_filter_label,
+            dialog.analytics_status_label,
+            dialog.status_label,
+        )
+        assert scroll.verticalScrollBar().maximum() > 0
+        assert all(label.height() >= label.sizeHint().height() for label in status_labels)
+
+        scroll.ensureWidgetVisible(dialog.status_label)
+        app.processEvents()
+        top_left = dialog.status_label.mapTo(scroll.viewport(), QPoint(0, 0))
+        assert 0 <= top_left.y()
+        assert top_left.y() + dialog.status_label.height() <= scroll.viewport().height()
+
+        dialog.sync_button.setFocus()
+        QTest.keyClick(dialog.sync_button, Qt.Key.Key_Tab)
+        focused = QApplication.focusWidget()
+        assert focused is not None
+        assert focused.isVisibleTo(dialog)
+        assert focused.isEnabled()
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
+def test_source_profile_status_and_form_are_scroll_reachable(tmp_path):
+    app = _app()
+    dialog = IndustrialSourceProfilesDialog(
+        db_file=str(tmp_path / "metroliza.db"),
+        config_path=tmp_path / "industrial_sources.yaml",
+    )
+    dialog.show()
+    app.processEvents()
+    try:
+        scroll = dialog.form_scroll
+        assert dialog.status_label.height() >= dialog.status_label.sizeHint().height()
+        assert scroll.verticalScrollBar().maximum() > 0
+
+        scroll.ensureWidgetVisible(dialog.timestamp_column_edit)
+        app.processEvents()
+        top_left = dialog.timestamp_column_edit.mapTo(scroll.viewport(), QPoint(0, 0))
+        assert 0 <= top_left.y()
+        assert top_left.y() + dialog.timestamp_column_edit.height() <= scroll.viewport().height()
+
+        dialog.timestamp_column_edit.setFocus()
+        QTest.keyClick(dialog.timestamp_column_edit, Qt.Key.Key_Tab)
+        focused = QApplication.focusWidget()
+        assert focused is not None
+        assert focused.isVisibleTo(dialog)
+        assert focused.isEnabled()
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
 def test_sync_dialog_labels_bounded_access_check_clearly(tmp_path):
     _app()
     db_path = str(tmp_path / "metroliza.db")
@@ -689,6 +875,11 @@ def test_launcher_analytics_uses_csv_summary_tabular_cache_workflow(monkeypatch,
     dialog.analysis_source_combo.setCurrentIndex(source_index)
 
     dialog.open_analytics_dialog()
+    # The cache view is built in a background thread; the analytics dialog opens when it is ready.
+    deadline = time.monotonic() + 20
+    while "executed" not in launched and time.monotonic() < deadline:
+        _app().processEvents()
+        time.sleep(0.01)
 
     assert launched["parent"] is dialog
     assert launched["db_file"] == db_path
@@ -1227,3 +1418,30 @@ def test_reference_paste_parser_accepts_common_user_formats():
         "REF6",
     )
     assert parse_reference_values("REF1 REF1,REF2") == ("REF1", "REF2")
+
+
+def test_unreadable_temporary_cache_reports_unknown_contents_and_requires_decision(tmp_path, monkeypatch):
+    _app()
+    monkeypatch.setattr(industrial_data_dialog, "default_industrial_source_config_path",
+                        lambda: tmp_path / "sources.yaml")
+    dialog = IndustrialDataDialog()
+    prompts = []
+
+    def unreadable(_path):
+        raise OSError("synthetic unreadable cache")
+
+    def cancel(_parent, _title, message, *_args):
+        prompts.append(message)
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(industrial_data_dialog, "disposable_cache_counts", unreadable)
+    monkeypatch.setattr(QMessageBox, "question", cancel)
+    try:
+        dialog._refresh_storage_lifecycle()
+        assert not dialog._resolve_temporary_cache_before_discard(dialog.cache_target)
+        assert "temporary cache could not be read" in prompts[0]
+        assert "temporary cache could not be read" in dialog.storage_lifecycle_label.text()
+        assert Path(dialog.db_file).exists()
+    finally:
+        monkeypatch.setattr(QMessageBox, "question", lambda *_a: QMessageBox.StandardButton.Discard)
+        dialog.close()

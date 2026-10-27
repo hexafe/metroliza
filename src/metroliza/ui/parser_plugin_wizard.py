@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PosixPath, WindowsPath
+from time import monotonic
+from types import MethodType
 
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QThread, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
@@ -13,6 +15,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLineEdit,
+    QLabel,
     QListWidget,
     QPushButton,
     QVBoxLayout,
@@ -32,6 +35,7 @@ from metroliza.parsing.parser_profile_handoff import (
     write_profile_validation_artifact,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui import detached_threads
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
@@ -42,9 +46,52 @@ from metroliza.ui.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+from metroliza.ui.worker_progress_dialog import (
+    create_delayed_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
 
 
 create_llm_handoff_workspace = create_profile_handoff_workspace
+
+
+def _native_dialog_state(dialog):
+    if type(dialog) is not ParserPluginWizardDialog:
+        return None
+    state = dialog.__dict__
+    keys = tuple(state)
+    return state if all(type(key) is str for key in keys) else None
+
+
+def _native_validation_widget(widget, cls, methods):
+    if type(widget) is not cls:
+        return False
+    state = widget.__dict__
+    if any(type(key) is not str for key in tuple(state)):
+        return False
+    return not any(name in state for name in methods)
+
+
+class _ProfileValidationThread(QThread):
+    """Own one immutable workspace request through the unchanged artifact writer."""
+
+    def __init__(self, workspace, source_workspace, writer):
+        super().__init__()
+        self.workspace = workspace
+        self.source_workspace = source_workspace
+        self.writer = writer
+        self.result = None
+        self.error = None
+
+    def run(self):
+        try:
+            self.result = self.writer(self.workspace)
+        except Exception as error:
+            self.error = error
+
+    def release(self):
+        detached_threads.discard(self)
+        self.deleteLater()
 
 
 class ParserPluginWizardDialog(QDialog):
@@ -54,6 +101,9 @@ class ParserPluginWizardDialog(QDialog):
         super().__init__(parent)
         self.home = home
         self.last_handoff_workspace: HandoffWorkspace | None = None
+        self._validation_thread = None
+        self._validation_progress = None
+        self._validation_closed = False
         self.setWindowTitle("Parser Profiles")
         configure_window_size(self, minimum=(520, 420), initial=(620, 520))
 
@@ -235,17 +285,114 @@ class ParserPluginWizardDialog(QDialog):
             self.result_label.setText(f"Package check failed. Evidence: {output}")
             set_status_variant(self.result_label, "warning")
 
+    def _validation_snapshot(
+        self, workspace, getter, writer, *,
+        _default_getter=_current_workspace, _default_writer=write_profile_validation_artifact,
+    ):
+        state = _native_dialog_state(self)
+        if state is None or type(workspace) is not HandoffWorkspace:
+            return None
+        if type(getter) is not MethodType or getter.__self__ is not self or getter.__func__ is not _default_getter:
+            return None
+        if writer is not _default_writer or not _native_validation_widget(
+            state.get("result_label"), QLabel, ("setText", "property", "setProperty"),
+        ):
+            return None
+        controls = ("create_button", "check_package_button", "validate_button",
+                    "diagnose_button", "repair_button", "install_button")
+        if any(not _native_validation_widget(state.get(name), QPushButton, ("isEnabled", "setEnabled"))
+               for name in controls):
+            return None
+        fields = workspace.__dict__
+        if any(type(key) is not str for key in tuple(fields)):
+            return None
+        paths = tuple(fields.get(name) for name in ("root", "profile_path", "handoff_path", "expected_results_path"))
+        if any(type(path) is not PosixPath and type(path) is not WindowsPath for path in paths):
+            return None
+        return HandoffWorkspace(*paths)
+
     def validate_handoff_profile(self):
-        workspace = self._current_workspace()
+        action_started_at = monotonic()
+        state = _native_dialog_state(self)
+        if state is not None and state.get("_validation_thread") is not None:
+            return
+        getter = self._current_workspace
+        workspace = getter()
         if workspace is None:
             return
-        output, passed = write_profile_validation_artifact(workspace)
+        writer = write_profile_validation_artifact
+        snapshot = ParserPluginWizardDialog._validation_snapshot(self, workspace, getter, writer)
+        if snapshot is not None:
+            ParserPluginWizardDialog._start_validation(self, snapshot, workspace, writer, action_started_at)
+            return
+        output, passed = writer(workspace)
+        ParserPluginWizardDialog._apply_validation_result(self, output, passed)
+
+    def _apply_validation_result(self, output, passed):
         if passed:
             self.result_label.setText(f"Validation passed. Evidence: {output}")
             set_status_variant(self.result_label, "success")
         else:
             self.result_label.setText(f"Validation failed. Evidence: {output}")
             set_status_variant(self.result_label, "warning")
+
+    def _start_validation(self, snapshot, workspace, writer, action_started_at):
+        thread = _ProfileValidationThread(snapshot, workspace, writer)
+        progress, _label, bar, _movie = create_delayed_worker_progress_dialog(
+            self, window_title="Validate parser profile", initial_status_text="Validating parser profile...",
+            on_cancel=lambda: None, action_started_at=action_started_at, cancellable=False,
+        )
+        bar.setRange(0, 0)
+        self._validation_thread = thread
+        self._validation_progress = progress
+        self._validation_closed = False
+        self._validation_controls = tuple((widget, widget.isEnabled()) for widget in (
+            self.create_button, self.check_package_button, self.validate_button,
+            self.diagnose_button, self.repair_button, self.install_button,
+        ))
+        for widget, _enabled in self._validation_controls:
+            widget.setEnabled(False)
+        detached_threads.register(thread, defer_quit=True, owner=self, on_finished=ParserPluginWizardDialog._finish_validation)
+        detached_threads.run_when_finished([thread], thread.release)
+        try:
+            thread.start()
+        except Exception:
+            detached_threads.discard(thread)
+            ParserPluginWizardDialog._release_validation(self)
+            raise
+        progress.show()
+
+    def _release_validation(self):
+        self._validation_thread = None
+        dismiss_worker_progress_dialog(self._validation_progress)
+        self._validation_progress = None
+        for widget, enabled in self._validation_controls:
+            widget.setEnabled(enabled)
+        self._validation_controls = ()
+
+    def _finish_validation(self, thread):
+        if thread is not self._validation_thread:
+            return
+        ParserPluginWizardDialog._release_validation(self)
+        if self._validation_closed or self.last_handoff_workspace is not thread.source_workspace:
+            return
+        if thread.error is not None:
+            self.result_label.setText(str(thread.error))
+            set_status_variant(self.result_label, "warning")
+        else:
+            ParserPluginWizardDialog._apply_validation_result(self, *thread.result)
+
+    def done(self, result):
+        self._validation_closed = True
+        dismiss_worker_progress_dialog(self._validation_progress)
+        self._validation_progress = None
+        super().done(result)
+
+    def closeEvent(self, event):
+        self._validation_closed = True
+        dismiss_worker_progress_dialog(self._validation_progress)
+        self._validation_progress = None
+        super().closeEvent(event)
 
     def diagnose_handoff_profile(self):
         workspace = self._current_workspace()

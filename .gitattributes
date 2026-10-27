@@ -1,0 +1,10 @@
+# These hash-pinned parser fixtures intentionally contain CRLF and blank/trim
+# lexemes. Preserve their bytes on Windows and permit their authored whitespace.
+tests/fixtures/windows_candidate/finite-source.csv -text whitespace=-blank-at-eol,cr-at-eol
+tests/fixtures/windows_candidate/integer-precision.csv -text whitespace=-blank-at-eol,cr-at-eol
+
+# Preserve the upstream byte-identity control on Windows checkouts.
+tests/fixtures/packaging/pyi_rth_setuptools_6_22_3.py text eol=lf
+
+# STEP3 audit PoC diffs are stored verbatim (blank context lines end in a space).
+docs/engineering/performance-boost-step3-poc/*.patch -whitespace

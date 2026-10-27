@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from contextvars import ContextVar, copy_context
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 import math
 import re
+from threading import Lock
 from typing import Any
 
 import numpy as np
 
 from metroliza.shared.env_utils import FALSE_VALUES, TRUE_VALUES, env_bool
+from metroliza.charts.chart_numeric_helpers import finite_array as _finite_array
 from metroliza.charts.chart_numeric_helpers import finite_float_list as _finite_float_list
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from metroliza.charts.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
@@ -62,7 +65,9 @@ class HistogramStatsTable:
 @dataclass
 class _HistogramTableCache:
     rows: dict[tuple[bytes, str | None, str | None], tuple[tuple[str, str], ...]]
+    fits: dict[tuple[Any, ...], Any] = field(default_factory=dict)
     payload_bytes: int = 0
+    lock: Any = field(default_factory=Lock)
 
 
 _histogram_table_cache: ContextVar[_HistogramTableCache | None] = ContextVar(
@@ -72,10 +77,11 @@ _histogram_table_cache: ContextVar[_HistogramTableCache | None] = ContextVar(
 
 @contextmanager
 def histogram_stats_request():
-    """Reuse immutable table rows only within one analytics request.
+    """Reuse table rows and distribution fits only within one analytics request.
 
-    Each nested request owns a separate bounded cache. Reset and clear on every
-    exit, including cancellation; source validation remains outside this helper.
+    Each nested request owns a separate cache: bounded table rows and compact
+    fit results without source populations. Reset and clear on every exit,
+    including cancellation; source validation remains outside this helper.
     """
     cache = _HistogramTableCache(rows={})
     token = _histogram_table_cache.set(cache)
@@ -84,6 +90,7 @@ def histogram_stats_request():
     finally:
         _histogram_table_cache.reset(token)
         cache.rows.clear()
+        cache.fits.clear()
         cache.payload_bytes = 0
 
 
@@ -101,14 +108,16 @@ def _request_histogram_table_rows(
         None if lsl is None else float(lsl).hex(),
         None if usl is None else float(usl).hex(),
     )
-    if key in cache.rows:
-        return cache.rows[key]
+    with cache.lock:
+        if key in cache.rows:
+            return cache.rows[key]
     rows = _histogram_table_rows_from_plotstats(values, lsl=lsl, usl=usl)
     payload_bytes = len(key[0]) + sum(len(text.encode("utf-8")) for row in rows for text in row)
-    if (rows and len(cache.rows) < _HISTOGRAM_TABLE_CACHE_MAX_ENTRIES
-            and cache.payload_bytes + payload_bytes <= _HISTOGRAM_TABLE_CACHE_MAX_BYTES):
-        cache.rows[key] = rows
-        cache.payload_bytes += payload_bytes
+    with cache.lock:
+        if (rows and key not in cache.rows and len(cache.rows) < _HISTOGRAM_TABLE_CACHE_MAX_ENTRIES
+                and cache.payload_bytes + payload_bytes <= _HISTOGRAM_TABLE_CACHE_MAX_BYTES):
+            cache.rows[key] = rows
+            cache.payload_bytes += payload_bytes
     return rows
 
 
@@ -187,13 +196,16 @@ def build_dashboard_plotly_spec(
     title: str,
     theme: str | Mapping[str, Any] | None = None,
     static: bool = True,
+    preview_only: bool = False,
 ) -> dict[str, Any] | None:
     """Build a bounded Plotly spec through hexafe-plotstats dashboard adapters.
 
     The package dependency is optional at import time for development and tests.
     Callers keep their existing static-image fallback when this returns ``None``.
+    Only settings previews opt into discarding unused artifact fit tables.
     """
 
+    preview_only = preview_only and _plain_preview_histogram_inputs(payload, title=title)
     payload = _payload_with_active_statistical_limits(payload)
     payload = _payload_with_resolved_histogram_bin_count(payload)
     payload_type = str(payload.get("type") or "").strip().casefold()
@@ -216,6 +228,8 @@ def build_dashboard_plotly_spec(
             title=title,
             theme="light" if isinstance(theme, Mapping) else str(theme or "light"),
             static=static,
+            _histogram_bins_resolved=_plain_histogram_payload(payload),
+            _preview_only=preview_only,
         )
         if spec:
             return spec
@@ -557,22 +571,30 @@ def build_plotstats_dashboard_spec(
     title: str,
     theme: str = "light",
     static: bool = True,
+    _histogram_bins_resolved: bool = False,
+    _preview_only: bool = False,
 ) -> dict[str, Any] | None:
     """Build an HTML-dashboard Plotly spec through the new artifact contract."""
 
+    _preview_only = _preview_only and _plain_preview_histogram_inputs(payload, title=title)
     payload = _payload_with_active_statistical_limits(payload)
-    payload = _payload_with_resolved_histogram_bin_count(payload)
+    if not _histogram_bins_resolved:
+        payload = _payload_with_resolved_histogram_bin_count(payload)
     dashboard_theme = metroliza_dashboard_plotstats_theme()
     dashboard_theme["dashboard_theme"] = str(theme or "light")
-    artifact = build_chart_artifact(
-        payload,
-        target="html_dashboard",
-        title=title,
-        theme=dashboard_theme,
-        include_plotly=True,
-        include_png=False,
-        static=static,
-    )
+    artifact = _preview_histogram_artifact(
+        payload, title=title, theme=dashboard_theme, static=static,
+    ) if _preview_only else None
+    if artifact is None:
+        artifact = build_chart_artifact(
+            payload,
+            target="html_dashboard",
+            title=title,
+            theme=dashboard_theme,
+            include_plotly=True,
+            include_png=False,
+            static=static,
+        )
     if not artifact:
         return None
     spec = artifact.get("plotly_spec")
@@ -694,6 +716,48 @@ def build_histogram_stats_table(
     return HistogramStatsTable(title=str(title or "Parameter"), rows=rows, backend=resolved_backend)
 
 
+class _HistogramThreadsUnavailable(Exception):
+    pass
+
+
+def _bounded_histogram_tables(pool, build, groups):
+    tables = []
+    for start in range(0, len(groups), 3):
+        batch = groups[start:start + 3]
+        try:
+            futures = [pool.submit(copy_context().run, build, group) for group in batch]
+        except (OSError, RuntimeError) as exc:
+            raise _HistogramThreadsUnavailable from exc
+        tables.extend(table for future in futures if (table := future.result()) is not None)
+    return tables
+
+
+def build_histogram_stats_tables(
+    groups, *, backend="metroliza", lsl=None, usl=None,
+) -> list[HistogramStatsTable]:
+    """Compute full-data tables with at most three joined threads/pending jobs.
+
+    Input and result order stay unchanged. Request-local cache state is copied
+    explicitly; its byte/entry accounting is locked and released by the caller's
+    existing request context. No renderer or pyplot state runs in these threads.
+    """
+    def build(group):
+        label, values = group
+        return build_histogram_stats_table(values, title=label, backend=backend, lsl=lsl, usl=usl)
+
+    groups = list(groups)
+    if len(groups) < 2 or sum(len(values) for _label, values in groups) < 5_000:
+        tables = map(build, groups)
+        return [table for table in tables if table is not None]
+    with ThreadPoolExecutor(max_workers=min(3, len(groups)), thread_name_prefix="histogram-stats") as pool:
+        try:
+            return _bounded_histogram_tables(pool, build, groups)
+        except _HistogramThreadsUnavailable:
+            # Join any started workers before falling back on thread exhaustion.
+            pass
+    return [table for group in groups if (table := build(group)) is not None]
+
+
 def render_histogram_png(
     values: Iterable[Any],
     *,
@@ -753,7 +817,7 @@ def _render_with_hexafe_plotstats(
 
     configure_headless_matplotlib()
     try:
-        from hexafe_plotstats import HistogramConfig, build_histogram_payload, render_histogram
+        from hexafe_plotstats import HistogramConfig, render_histogram
         from hexafe_plotstats.models.common import SpecLimits
         from hexafe_plotstats.models.payloads import TableRow
     except Exception:
@@ -761,7 +825,7 @@ def _render_with_hexafe_plotstats(
 
     try:
         spec_limits = SpecLimits(lsl=lsl, nominal=_nominal_from_limits(lsl, usl), usl=usl)
-        payload = build_histogram_payload(
+        payload = _request_histogram_payload(
             values,
             spec_limits=spec_limits,
             config=HistogramConfig(bins=bin_count, density=False, include_fit=True),
@@ -840,22 +904,66 @@ def _render_with_metroliza_fallback(
     )
 
 
+def _request_histogram_payload(values, *, spec_limits, config, metadata=None):
+    """Share the fixed default distribution fit, independently of histogram bins.
+
+    Fingerprint the complete ordered float64 population and all limits. Full and
+    sampled populations therefore never alias. Only compact fit/table results are
+    retained, not raw populations; their lifetime is one analytics request. The
+    adapter always uses plotstats' default DistributionConfig without overrides.
+    Histogram bins/density do not enter that fit configuration.
+    """
+    from concurrent.futures import Future
+    from hashlib import sha256
+
+    from hexafe_plotstats import build_histogram_payload
+
+    cache = _histogram_table_cache.get()
+    if cache is None or not config.include_fit:
+        return build_histogram_payload(values, spec_limits=spec_limits, config=config, metadata=metadata)
+    key = (
+        sha256(values.tobytes()).digest(), values.shape, values.dtype.str,
+        tuple(None if value is None else float(value).hex()
+              for value in (spec_limits.lsl, spec_limits.nominal, spec_limits.usl)),
+        config.include_kde_reference,
+    )
+    with cache.lock:
+        pending = cache.fits.get(key)
+        owner = pending is None
+        if owner:
+            pending = Future()
+            cache.fits[key] = pending
+    if owner:
+        try:
+            payload = build_histogram_payload(values, spec_limits=spec_limits, config=config, metadata=metadata)
+            pending.set_result((payload.fit, payload.table_rows, payload.warnings))
+            return payload
+        except BaseException as exc:
+            # Wake existing waiters and allow a later attempt after a failed build.
+            pending.set_exception(exc)
+            with cache.lock:
+                cache.fits.pop(key, None)
+            raise
+    fit, table_rows, warnings = pending.result()
+    payload = build_histogram_payload(
+        values, spec_limits=spec_limits, config=replace(config, include_fit=False), metadata=metadata,
+    )
+    return replace(payload, fit=fit, table_rows=table_rows, warnings=warnings)
+
+
 def _histogram_table_rows_from_plotstats(
     values: np.ndarray,
     *,
     lsl: float | None = None,
     usl: float | None = None,
 ) -> tuple[tuple[str, str], ...]:
-    from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
-
-    configure_headless_matplotlib()
     try:
-        from hexafe_plotstats import HistogramConfig, build_histogram_payload
+        from hexafe_plotstats import HistogramConfig
         from hexafe_plotstats.models.common import SpecLimits
     except Exception:
         return ()
     try:
-        payload = build_histogram_payload(
+        payload = _request_histogram_payload(
             values,
             spec_limits=SpecLimits(lsl=lsl, nominal=_nominal_from_limits(lsl, usl), usl=usl),
             config=HistogramConfig(density=False, include_fit=True),
@@ -967,7 +1075,7 @@ def _draw_stats_table(table_ax, stats_table: HistogramStatsTable) -> None:
 
 def _figure_png_bytes(fig) -> bytes:
     image = BytesIO()
-    fig.savefig(image, format="png", dpi=150, bbox_inches="tight")
+    fig.savefig(image, format="png", dpi=150, bbox_inches="tight", pil_kwargs={"compress_level": 4})
     image.seek(0)
     return image.getvalue()
 
@@ -984,7 +1092,7 @@ def _close_plotstats_figure(render_result) -> None:
 
 
 def _finite_values(values: Iterable[Any] | Any) -> np.ndarray:
-    return np.asarray(_finite_float_list(values), dtype=float)
+    return _finite_array(values)
 
 
 def _coerce_float(value: Any) -> float:
@@ -1431,6 +1539,113 @@ def _matches_reference_value(value: float, reference_values: list[float]) -> boo
         math.isclose(float(value), float(reference), rel_tol=1e-9, abs_tol=1e-12)
         for reference in reference_values
     )
+
+
+def _plain_string_key_dict(value: Any) -> bool:
+    return type(value) is dict and all(type(key) is str for key in value)
+
+
+def _plain_preview_histogram_inputs(payload: Mapping[str, Any], *, title: Any) -> bool:
+    """Keep raw callback provenance before limit normalization copies mappings.
+
+    Population eligibility is checked later, without another population pass.
+    Only metadata consumed by the discarded grouped statistics is checked here.
+    """
+    if not _plain_string_key_dict(payload) or type(title) is not str:
+        return False
+    if payload.get("title") is not None and type(payload["title"]) is not str:
+        return False
+    values = []
+    for key in ("limits", "spec_limits"):
+        limits = payload.get(key)
+        if limits is None:
+            continue
+        if not _plain_string_key_dict(limits):
+            return False
+        values.extend(value for name, value in limits.items() if not (name == "spec_type" and type(value) is str))
+    if payload.get("limits") is None:
+        values.extend(payload.get(key) for key in ("lsl", "nominal", "usl"))
+    return all(_plain_preview_histogram_limit(value) for value in values)
+
+
+def _plain_preview_histogram_limit(value: Any) -> bool:
+    """Recognize one callback-free limit without converting unsupported values."""
+    if value is None:
+        return True
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _plain_histogram_payload(payload: Mapping[str, Any]) -> bool:
+    """Recognize callback-free populations before bypassing repeated work."""
+    if not _plain_string_key_dict(payload) or type(payload.get("type")) is not str:
+        return False
+    if payload["type"].strip().casefold() != "histogram":
+        return False
+    groups = payload.get("groups")
+    if groups is None:
+        populations = [payload.get("values")]
+    elif type(groups) is list and groups and all(
+        _plain_string_key_dict(group) and type(group.get("group")) is str for group in groups
+    ):
+        populations = [group.get("values") for group in groups]
+    else:
+        return False
+    for values in populations:
+        if type(values) is not list or not values or not all(
+            type(value) is float and math.isfinite(value) for value in values
+        ):
+            return False
+    for key in ("limits", "spec_limits"):
+        limits = payload.get(key)
+        if limits is not None and (not _plain_string_key_dict(limits) or not all(
+            (name == "spec_type" and type(value) is str) or value is None
+            or (type(value) is float and math.isfinite(value))
+            for name, value in limits.items()
+        )):
+            return False
+    return True
+
+
+def _preview_histogram_artifact(payload, *, title, theme, static):
+    """Project only the grouped Plotly result explicitly consumed by previews.
+
+    These optional dependency helpers are the artifact builder's exact rendering
+    pipeline. Older/incompatible packages and unsupported inputs keep the full
+    artifact path; analytics callers never opt into this projection.
+    """
+    if not _plain_histogram_payload(payload) or not payload.get("groups"):
+        return None
+    try:
+        from hexafe_plotstats.adapters.metroliza import (
+            _groups_from_histogram_payload,
+            _grouped_histogram_excel_data,
+            _grouped_histogram_plotly_spec,
+        )
+    except Exception:
+        return None
+    if not all(callable(helper) for helper in (
+        _groups_from_histogram_payload, _grouped_histogram_excel_data, _grouped_histogram_plotly_spec,
+    )):
+        return None
+    try:
+        normalized = _payload_with_active_statistical_limits(payload)
+        if not normalized.get("title"):
+            normalized["title"] = title
+        groups = _groups_from_histogram_payload(normalized)
+        excel_data = _grouped_histogram_excel_data(normalized, groups)
+        spec = _grouped_histogram_plotly_spec(
+            normalized, groups, excel_data=excel_data, theme=theme, static=static,
+        )
+        return {"plotly_spec": spec} if _valid_plotly_spec(spec) else {}
+    except Exception:
+        # Match a failed artifact attempt: the outer wrapper now reaches its
+        # existing general adapter/fallback, without retrying this helper here.
+        return {}
 
 
 def _payload_with_resolved_histogram_bin_count(payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -2441,10 +2656,17 @@ def _canonical_legend_key(trace: Mapping[str, Any]) -> tuple[str, float | None] 
     if parsed is not None:
         label, parsed_value = parsed
         return _canonical_legend_key_from_parts(name, label, parsed_value)
+    label = _canonical_legend_label(_semantic_trace_label_base(name))
+    if label is None and _plain_string_key_dict(trace) and all(
+        trace.get(axis) is None or (
+            type(trace.get(axis)) in (list, tuple)
+            and all(type(value) is float for value in trace[axis])
+        ) for axis in ("x", "y")
+    ):
+        return None
     axis, value = _constant_line_axis_and_value(trace)
     if axis is None and value is None:
         return None
-    label = _canonical_legend_label(_semantic_trace_label_base(name))
     if label is None:
         return None
     return _canonical_legend_key_from_parts(name, label, value)
@@ -2800,6 +3022,7 @@ __all__ = [
     "build_chart_artifact",
     "build_dashboard_plotly_spec",
     "build_histogram_stats_table",
+    "build_histogram_stats_tables",
     "build_plotstats_dashboard_spec",
     "metroliza_dashboard_plotstats_theme",
     "normalize_distribution_stat_legend",

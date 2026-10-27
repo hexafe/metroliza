@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Maintainer  
-Last reviewed: 2026-09-26
+Last reviewed: 2026-10-27 (RC roles; dependency policy retained from 2026-10-22)
 
 ## 1. Core rule: Issue first
 
@@ -25,6 +25,8 @@ The branch decision and exact validation evidence are recorded in
 Keep the remote branch set intentionally small: `master`, `develop`, at most the currently active
 `release/*` line, and branches that are heads of genuinely active PRs. Temporary delivery
 integration/acceptance branches are explicit exceptions, not a permanent layer.
+The [2026-10-27 branch decision](../release_checks/branching_strategy.md)
+names the two retained historical RC refs and post-RC dependency branches as current finite exceptions.
 
 Branches are disposable work refs. PRs, commit/tree SHAs, CI runs, artifacts and tags preserve
 history/evidence; keeping an old branch name does not add evidence. Merge closeout marks the source
@@ -41,14 +43,16 @@ and expected-old-value guards.
 - Create feature, fix, refactor, test, security, documentation, and chore branches from `develop`
   unless the Issue is explicitly release-specific.
 - Normal pull requests target `develop`.
-- Broad new work must not target `rc2`, `release/2026.06-rc2`, or the current production `master`.
+- Broad new work must not target `release/2026.09-rc1`, `rc2`, `release/2026.06-rc2`, or the current production `master`.
 
 ### Current release candidate
 
-- `release/2026.06-rc2` is the frozen candidate/evidence branch for
-  `2026.06 RC2 (build 260711)`.
+- `release/2026.09-rc1` is the current source candidate/evidence line under
+  [#1153](https://github.com/hexafe/metroliza/issues/1153), cut from accepted develop after the ordered integrations.
+- Final candidate build identity and packaged Windows acceptance are pending; qualify the exact artifact before RC distribution.
+- `rc2` and `release/2026.06-rc2` are retained historical evidence, with separate #901/#924 cycle closure.
 - Only release-blocking fixes, packaging/evidence work, release metadata/notes, and narrowly
-  approved security/legal changes target this branch.
+  approved security/legal changes target `release/2026.09-rc1`.
 - Every accepted release-line change is reconciled into `develop` through a reviewed PR or an
   explicitly recorded equivalent; do not allow a release-only fix to disappear from future work.
 
@@ -60,7 +64,7 @@ and expected-old-value guards.
   clean-machine Windows, Google, notices, and legal evidence receives a release-owner Go decision.
 - No force-push, history rewrite, or synthetic branch reconciliation is permitted.
 - GitHub still presents `master` as the default branch, so select the PR base explicitly:
-  `develop` for normal work or `release/2026.06-rc2` for approved release work.
+  `develop` for normal work or `release/2026.09-rc1` for approved current release work.
 
 ### PR template publication
 
@@ -285,6 +289,25 @@ for status.
 
 ## 6. Validation tiers
 
+### Dependency versions and updates
+
+Pin the direct dependencies listed in `requirements*.txt` to exact versions; retain immutable commit
+references for Git dependencies. CI and packaging consume those files. Keep duplicate requirements
+consistent across runtime, development, build and optional environments. These pins cover the listed
+dependencies; they do not lock every transitive dependency or the complete build toolchain.
+
+Review upstream releases periodically and before adopting a dependency feature. An update proposal
+records the old/new versions, release notes, security fixes, useful features, compatibility changes,
+and expected benefit. Change the pins deliberately in a separate update PR, run Tier 3 validation
+and output-equivalence checks, and measure affected flows when performance may change. Rebuild and
+qualify affected packages before accepting the new dependency version. Security fixes receive prompt
+review. A newly published release alone does not change the accepted pins.
+
+The PO adopted this policy in [STEP3 Issue #1151](https://github.com/hexafe/metroliza/issues/1151)
+on 2026-10-22 after an open XlsxWriter range selected a new release with different XLSX internals.
+STEP3 freezes runtime/development versions from its validated environment and records separate
+provenance and verification limits for build and optional dependencies.
+
 ### Tier 0 — Documentation/process only
 
 Use when no code, runtime configuration, packaging, or generated artifact changes.
@@ -369,7 +392,7 @@ A commit should be understandable without reading the entire diff. Avoid message
 
 ## 8. Release workflow
 
-Current RC2 flow:
+Historical June RC2 flow (preserved for separate cycle closure):
 
 1. normal development proceeds on Issue branches from `develop`;
 2. `release/2026.06-rc2` is frozen for release fixes/evidence only;
@@ -380,7 +403,7 @@ Current RC2 flow:
 7. the production result is synchronized back to `develop`;
 8. `rc2` can then be retired through an explicit cleanup decision.
 
-Future normal flow:
+Current September RC1 and future normal flow:
 
 1. develop features/refactors on Issue branches from `develop`;
 2. cut `release/YYYY.MM-rcN` when scope freezes;

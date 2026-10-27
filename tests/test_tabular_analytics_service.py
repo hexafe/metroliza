@@ -2314,3 +2314,355 @@ def test_tabular_column_filter_grouped_integer_literals(tmp_path, backend, opera
             assert connection.execute("SELECT *, typeof(code) FROM tabular_rows ORDER BY rowid").fetchall() == before
     finally:
         canonical_tabular_service.cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("assigned", [False, True])
+def test_apply_tabular_grouping_keeps_renamed_default_on_sparse_row_table(assigned):
+    from metroliza.analytics.row_table import RowTable
+    from metroliza.exporting.export_grouping_utils import set_default_group_label
+
+    grouping = RowTable(rows=((1, "Selected"),) if assigned else (), columns=("REPORT_ID", "GROUP"))
+    set_default_group_label(grouping, "Rest")
+    frame = pd.DataFrame({"source_row_number": [1, 2], "measurement": [10, 20]})
+    result = apply_tabular_grouping(frame, grouping.copy())
+    assert result.dataframe["GROUP"].tolist() == (["Selected", "Rest"] if assigned else ["Rest", "Rest"])
+    assert result.applied
+
+
+def test_numeric_chunk_conversion_matches_scalar_parser():
+    import numpy as np
+    from metroliza.tabular import tabular_analytics_service as service
+
+    values = ["1.0000000000000002", "-0.0", "1e-320", "1e309", "NaN", "", None,
+              "1_000", "001", "1,234.50", "bad", "１２", " 2.5 "]
+    for decimal in (".", ","):
+        # Freeze the scalar oracle before the vectorized loader is introduced.
+        expected = [service._parse_tabular_number(value, decimal=decimal) for value in values]
+        assert expected[0] == (1.0000000000000002 if decimal == "." else 10000000000000002.0)
+        assert expected[1] == 0.0 and np.signbit(expected[1])
+        assert expected[3:7] == [None, None, None, None]
+
+        actual = service._parse_tabular_numbers(
+            [service._display_cell_text(value) if value is not None else None for value in values],
+            decimal=decimal,
+        )
+        assert actual == expected
+        assert np.signbit(actual[1])
+        clean = [
+            "1.0000000000000002", "-0.0", "1e-320", "1e309", "NaN", "１２",
+            "0.30000000000000004", "0.306610199380709547156",
+        ]
+        chunks = [
+            clean,
+            ["1,5\x00", "2.5\x00", "  -0,0  ", " １２,５ ", " ٢.٥ "],
+            [None, " 1,5 ", "-0,0", "１２,５"],
+        ]
+        for chunk in chunks:
+            converted = service._parse_tabular_numbers(chunk, decimal=decimal)
+            for value, actual_value in zip(chunk, converted):
+                expected_value = service._parse_tabular_number(value, decimal=decimal)
+                assert actual_value == expected_value, (decimal, repr(value))
+                if expected_value == 0:
+                    assert np.signbit(actual_value) == np.signbit(expected_value)
+
+
+@pytest.mark.parametrize("decimal", [".", ","])
+def test_numeric_primitive_conversion_does_not_restart_a_bad_column(monkeypatch, decimal):
+    service = canonical_tabular_service
+    values = ["0.30000000000000004", "-0.0", "bad", None, "", "1,234.5", "1.5\x00", "１２", "1e309"]
+    expected = [service._parse_tabular_number(value, decimal=decimal) for value in values]
+
+    def unexpected_scalar_restart(*args, **kwargs):
+        raise AssertionError("primitive column restarted through the scalar fallback")
+
+    monkeypatch.setattr(service, "_parse_tabular_number", unexpected_scalar_restart)
+    actual = service._parse_tabular_numbers(values, decimal=decimal)
+    assert [value.hex() if value is not None else None for value in actual] == [
+        value.hex() if value is not None else None for value in expected
+    ]
+
+
+def test_numeric_conversion_retains_unsupported_string_callbacks():
+    service = canonical_tabular_service
+    events = []
+
+    class Text(str):
+        def __float__(self):
+            events.append("float")
+            raise ValueError("synthetic conversion refusal")
+
+        def __str__(self):
+            events.append("str")
+            return " 1.5 "
+
+    # NumPy attempts the original object before the scalar fallback coerces it.
+    assert service._parse_tabular_numbers([Text("1.5")], decimal=".") == [1.5]
+    assert events == ["float", "str"]
+
+
+def test_numeric_conversion_retains_list_and_decimal_subclass_dispatch(monkeypatch):
+    import numpy as np
+
+    service = canonical_tabular_service
+    calls = []
+    original = np.asarray
+
+    class TextList(list):
+        pass
+
+    class Decimal(str):
+        pass
+
+    def tracked_array(*args, **kwargs):
+        calls.append("array")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(np, "asarray", tracked_array)
+    for values, decimal in ((TextList(["1.5", "bad"]), "."), (["1.5", "bad"], Decimal("."))):
+        assert service._parse_tabular_numbers(values, decimal=decimal) == [1.5, None]
+    assert calls == ["array", "array"]
+
+
+@pytest.mark.parametrize("text", [
+    "", "0", "00", "+01", "-01", "++01", "--01", "+-01", "1.0", "1e3",
+    " 001 ", "１２３", "٠١", "000000000000000", "123456789012345", "1234567890123456",
+    "１２３４５６７８９０１２３４５６", "123456789012345x", "1234567890123456\n",
+])
+def test_identifier_precheck_retains_original_unicode_and_lexeme_rules(text):
+    import re
+
+    normalized = str(text or "").strip()
+    digits = normalized.lstrip("+-")
+    expected = bool(re.fullmatch(r"[+-]?\d+", normalized)) and (
+        (len(digits) > 1 and digits.startswith("0")) or len(digits) > 15
+    )
+    assert canonical_tabular_service._looks_like_identifier_number(text) is expected
+
+
+def test_normalized_text_keeps_object_coercion_callbacks():
+    service = canonical_tabular_service
+    events = []
+
+    class Cell:
+        def __str__(self):
+            events.append("str")
+            return " 1.5 "
+
+    value = Cell()
+    assert service._normalized_cell_text(value) == "1.5"
+    assert events == ["str"]
+    events.clear()
+    assert service._display_cell_text(value) == "1.5"
+    assert events == ["str"]
+    assert service._normalized_cell_text(None) == ""
+
+
+def test_prepared_metric_stats_preserve_first_seen_order_samples_and_file_reservations():
+    service = canonical_tabular_service
+    expected, actual = {}, {}
+    columns = ("a", "b", "code", "timestamp", "reference")
+    files = [
+        (("timestamp", "reference"), [
+            {"a": None, "b": "1", "code": "001", "timestamp": "2026-05-01", "reference": "R1"},
+            {"a": "bad", "b": "-0.0", "code": "1234567890123456"},
+            {"a": "2", "b": "1", "code": "12"},
+        ]),
+        (("a", "reference"), [
+            {"a": "3", "b": "2", "code": "13", "timestamp": "1"},
+            {"a": "4", "b": "3", "code": "14", "timestamp": "2"},
+            {"a": "5", "b": "4", "code": "15", "timestamp": "bad"},
+            {"a": "6", "b": "5", "code": "16", "timestamp": "3"},
+        ]),
+    ]
+    for reserved, rows in files:
+        prepared = [(column, actual.get(column)) for column in columns if column not in reserved]
+        for row in rows:
+            numbers = {column: service._parse_tabular_number(row.get(column)) for column in columns}
+            service._update_metric_stats_from_row(expected, row, source_columns=columns,
+                                                   reserved_columns=reserved, decimal=".", numeric_values=numbers)
+            service._update_prepared_metric_stats(prepared, actual, row, numeric_values=numbers)
+    assert list(actual) == list(expected) == ["b", "code", "a", "timestamp"]
+    assert actual == expected
+    assert actual["b"]["sample_values"] == ["1", "-0.0", "2", "3", "4"]
+    assert service._metric_candidates_from_stats(actual, numeric_threshold=0, min_numeric_count=0) == (
+        service._metric_candidates_from_stats(expected, numeric_threshold=0, min_numeric_count=0)
+    )
+
+
+def test_selected_timestamp_parse_is_reused_only_for_its_own_date_shadow(tmp_path, monkeypatch):
+    service = canonical_tabular_service
+    path = tmp_path / "date_sources.csv"
+    path.write_text("Date,Other Date,Metric\n2026-05-01,2026-06-01,1\n2026-05-02,2026-06-02,2\n", encoding="utf-8")
+    loading = False
+    parsed = []
+    original = service._parse_tabular_datetime
+
+    def progress(event):
+        nonlocal loading
+        if event["stage"] == "loading_file":
+            loading = True
+        elif event["stage"] == "indexing":
+            loading = False
+
+    def parse(value, *, dayfirst=False):
+        if loading:
+            parsed.append(value)
+        return original(value, dayfirst=dayfirst)
+
+    monkeypatch.setattr(service, "_parse_tabular_datetime", parse)
+    loaded = service.load_tabular_analytics_file(path, timestamp_column="Date", progress_callback=progress)
+    try:
+        assert parsed == ["2026-05-01", "2026-06-01", "2026-05-02", "2026-06-02"]
+        store = loaded.sqlite_store
+        with closing(sqlite3.connect(store.path)) as connection:
+            assert connection.execute(
+                'SELECT process_datetime, "__date_filter_date", "__date_filter_other_date" '
+                'FROM tabular_rows ORDER BY source_row_number'
+            ).fetchall() == [
+                ("2026-05-01 00:00:00", "2026-05-01 00:00:00", "2026-06-01 00:00:00"),
+                ("2026-05-02 00:00:00", "2026-05-02 00:00:00", "2026-06-02 00:00:00"),
+            ]
+    finally:
+        service.cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_literal_count_search_and_date_oracle(tmp_path):
+    """Freeze typed outputs before changing SQLite query shapes."""
+    from datetime import date
+
+    path = tmp_path / "literal.csv"
+    pd.DataFrame({
+        "Line": [" A ", None, "Żółć", "100%", "a_b", "A"],
+        "Station": ["S1", "S2", "S3", "S4", "S5", "S1"],
+        "When": ["2025-01-01", "2025-01-03", "bad", "", "2025-01-02", "2025-01-04"],
+    }).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    store = loaded.sqlite_store
+    try:
+        assert store.count_source_row_numbers([6, 1, 1, None, 99]) == 2
+        assert store.count_source_row_numbers([], grouping_filter_expression="invalid") == 0
+        assert store.count_source_row_numbers([1, 2, 6], column_filters=(
+            TabularColumnFilter("line", selected_values=("A",)),
+        )) == 2
+        assert store.date_bounds("when") == (date(2025, 1, 1), date(2025, 1, 4))
+        assert store.date_bounds("absent") is None
+        for search, expected in [("a | s1", True), ("%", True), ("_", True), ("żółć", False), ("absent", False)]:
+            assert store.has_rows_for_group_search(("line", "station"), search_text=search) is expected
+        assert store.has_rows_for_group_search(("absent",), search_text="absent") is True
+        assert store.has_rows_for_group_search(("line",), search_text="A", grouping_filter_expression="station = 'S2'") is True
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_count_uses_one_source_scan_and_cleans_temp_tables(tmp_path, monkeypatch):
+    path = tmp_path / "count.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    original = canonical_tabular_service.sqlite_connection_scope
+    statements = []
+    connections = []
+    @contextmanager
+    def traced(*args, **kwargs):
+        with original(*args, **kwargs) as connection:
+            connection.set_trace_callback(statements.append)
+            connections.append(connection)
+            try:
+                yield connection
+            finally:
+                assert not connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'temp_source_rows_%'").fetchall()
+    monkeypatch.setattr(canonical_tabular_service, "sqlite_connection_scope", traced)
+    try:
+        assert loaded.sqlite_store.count_source_row_numbers([*range(1, 3001), 1]) == 3
+        assert sum(s.startswith('SELECT COUNT(*) FROM "tabular_rows"') for s in statements) == 1
+        with pytest.raises(OverflowError):
+            loaded.sqlite_store.count_source_row_numbers([2**80])
+        assert loaded.sqlite_store.count_source_row_numbers([3, 1]) == 2
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_search_existence_does_not_group_and_custom_store_keeps_hook(tmp_path, monkeypatch):
+    from dataclasses import fields
+    path = tmp_path / "search.csv"
+    pd.DataFrame({"Part": ["A", "A", "B"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    original = canonical_tabular_service.TabularSqliteStore._grouped_search_query
+    calls = []
+    def traced(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        calls.append(result[0])
+        return result
+    monkeypatch.setattr(canonical_tabular_service.TabularSqliteStore, "_grouped_search_query", traced)
+    class CustomStore(canonical_tabular_service.TabularSqliteStore):
+        pass
+    try:
+        assert loaded.sqlite_store.has_rows_for_group_search(("part",), search_text="A")
+        assert "GROUP BY" not in calls[-1]
+        custom = CustomStore(**{f.name: getattr(loaded.sqlite_store, f.name) for f in fields(loaded.sqlite_store) if f.init})
+        assert custom.has_rows_for_group_search(("part",), search_text="A")
+        assert "GROUP BY" in calls[-1]
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_date_and_count_custom_store_keep_general_path(tmp_path):
+    from dataclasses import fields
+    from datetime import date
+    path = tmp_path / "custom.csv"
+    pd.DataFrame({"When": ["2025-01-01", "2025-01-02"], "Value": [1, 2]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    calls = []
+    class Mapping(dict):
+        def get(self, *args):
+            calls.append(args)
+            return super().get(*args)
+    class CustomStore(canonical_tabular_service.TabularSqliteStore):
+        pass
+    kwargs = {f.name: getattr(loaded.sqlite_store, f.name) for f in fields(loaded.sqlite_store) if f.init}
+    kwargs['date_filter_columns'] = Mapping(kwargs['date_filter_columns'])
+    store = CustomStore(**kwargs)
+    try:
+        assert store.date_bounds("when") == (date(2025, 1, 1), date(2025, 1, 2))
+        assert calls == [("when", "when")]
+        assert store.count_source_row_numbers([*range(1, 3000), 2]) == 2
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("affinity, expected, filtered", [
+    ("TEXT", 4, 3), ("BLOB", 2, 1), ("INTEGER", 6, 4), ("NUMERIC", 6, 4),
+])
+def test_t23a_source_id_affinity_keeps_literal_parameter_semantics(tmp_path, monkeypatch, affinity, expected, filtered):
+    path = str(tmp_path / "affinity.sqlite")
+    scope = canonical_tabular_service.sqlite_connection_scope
+    with scope(path) as connection:
+        with connection:
+            connection.execute(f'CREATE TABLE source_rows (source_row_number {affinity}, label TEXT)')
+            connection.executemany('INSERT INTO source_rows VALUES (?,?)', zip(
+                ("001", "1.0", "1", 1, "2", None, "bad", 2),
+                ("KEEP", "DROP", "KEEP", "KEEP", "KEEP", "KEEP", "DROP", "DROP"),
+            ))
+            connection.execute('CREATE INDEX source_id_index ON source_rows(source_row_number)')
+    plans = []
+    class PlanConnection:
+        def __init__(self, connection):
+            self.connection = connection
+        def execute(self, query, params=()):
+            if query.startswith('SELECT COUNT(*) FROM "source_rows"'):
+                plans.append(self.connection.execute('EXPLAIN QUERY PLAN ' + query, params).fetchall())
+            return self.connection.execute(query, params)
+        def executemany(self, *args):
+            return self.connection.executemany(*args)
+    @contextmanager
+    def planned(*args, **kwargs):
+        with scope(*args, **kwargs) as connection:
+            yield PlanConnection(connection)
+            assert not connection.execute("SELECT name FROM sqlite_temp_master WHERE name LIKE 'temp_source_rows_%'").fetchall()
+    store = canonical_tabular_service.TabularSqliteStore(
+        path=path, table_name="source_rows", columns=("source_row_number", "label"),
+        source_columns=("label",), row_count=8, owns_file=False,
+    )
+    monkeypatch.setattr(canonical_tabular_service, "sqlite_connection_scope", planned)
+    assert store.count_source_row_numbers([2, 1, 1]) == expected
+    assert any('USING COVERING INDEX source_id_index' in row[-1] for row in plans[0])
+    assert store.count_source_row_numbers([2, 1, 1], column_filters=(TabularColumnFilter("label", selected_values=("KEEP",)),)) == filtered

@@ -13,8 +13,10 @@ import sqlite3
 import sys
 import tempfile
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
+from metroliza.exporting.export_grouping_utils import get_default_group_label
 from metroliza.analytics.row_table import RowTable, coerce_to_row_table
 from metroliza.reports.db import (
     QueryResult,
@@ -37,6 +39,7 @@ from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
     ProductionMetricSelection,
 )
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 try:
     from metroliza.shared.grouping_filter_core import (
@@ -53,6 +56,7 @@ if TYPE_CHECKING:
 
 
 _SAFE_COLUMN_RE = re.compile(r"[^A-Za-z0-9_]+")
+_IDENTIFIER_INTEGER_RE = re.compile(r"[+-]?\d+")
 _TIMESTAMP_HINTS = (
     "timestamp",
     "time_stamp",
@@ -134,13 +138,6 @@ _COMPILED_SQLITE_FILTER_COLUMN_ATTRS = ("columns", "referenced_columns", "source
 TabularProgressCallback = Callable[[dict[str, Any]], None]
 TabularCancelCheck = Callable[[], bool]
 _HeaderIdentity = tuple[str, int]
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()
@@ -832,6 +829,7 @@ class TabularSqliteStore:
             grouping_filter=grouping_filter,
             grouping_filter_expression=grouping_filter_expression,
             grouping_filter_aliases=grouping_filter_aliases,
+            **({"_group_rows": False} if type(self) is TabularSqliteStore else {}),
         )
         search = str(search_text or "").strip().casefold()
         if not grouped_query or not search:
@@ -1059,21 +1057,31 @@ class TabularSqliteStore:
         )
         filter_clause = filter_where.removeprefix(" WHERE ")
         row_column = _quote_identifier("source_row_number")
-        total = 0
         with sqlite_connection_scope(self.path) as connection:
-            for start in range(0, len(normalized_ids), 900):
-                chunk = normalized_ids[start : start + 900]
-                placeholders = ", ".join("?" for _row_id in chunk)
-                row_clause = f"{row_column} IN ({placeholders})"
+            if type(self) is not TabularSqliteStore:
+                return _count_sqlite_source_id_chunks(
+                    connection, self.table_name, row_column, normalized_ids, filter_clause, filter_params,
+                )
+            # A keyed relation avoids repeating the source/filter scan for every
+            # parameter chunk, including wide industrial views without row indexes.
+            table = _quote_identifier(f"temp_source_rows_{uuid.uuid4().hex}")
+            try:
+                connection.execute(f"CREATE TEMP TABLE {table} (row_id INTEGER PRIMARY KEY)")
+                connection.executemany(
+                    f"INSERT INTO {table} (row_id) VALUES (?)",
+                    ((row_id,) for row_id in normalized_ids),
+                )
+                # IN-list parameters have no affinity. Unary + preserves that
+                # comparison contract for TEXT/BLOB-backed custom row scopes.
+                row_clause = f"{row_column} IN (SELECT +row_id FROM {table})"
                 where_parts = [part for part in (filter_clause, row_clause) if part]
                 query = (
                     f"SELECT COUNT(*) FROM {_quote_identifier(self.table_name)} "
                     f"WHERE {' AND '.join(where_parts)}"
                 )
-                total += int(
-                    connection.execute(query, [*filter_params, *chunk]).fetchone()[0] or 0
-                )
-        return total
+                return int(connection.execute(query, filter_params).fetchone()[0] or 0)
+            finally:
+                connection.execute(f"DROP TABLE IF EXISTS {table}")
 
     def _sqlite_column_filter_clause(
         self,
@@ -1145,10 +1153,17 @@ class TabularSqliteStore:
         if column not in self.columns:
             return None
         date_expr = self._sqlite_date_filter_expr(column)
+        raw_guard = ""
+        if (
+            type(self) is TabularSqliteStore and type(column) is str
+            and type(self.date_filter_columns) is dict
+            and all(type(key) is str and type(value) is str for key, value in self.date_filter_columns.items())
+        ):
+            raw_guard = f"{_quote_identifier(self.date_filter_columns.get(column, column))} IS NOT NULL AND "
         query = (
             f"SELECT MIN({date_expr}), MAX({date_expr}) "
             f"FROM {_quote_identifier(self.table_name)} "
-            f"WHERE {date_expr} IS NOT NULL"
+            f"WHERE {raw_guard}{date_expr} IS NOT NULL"
         )
         with sqlite_connection_scope(self.path) as connection:
             lower, upper = connection.execute(query).fetchone()
@@ -1279,6 +1294,7 @@ class TabularSqliteStore:
         grouping_filter: Any = None,
         grouping_filter_expression: str | None = None,
         grouping_filter_aliases: Mapping[str, str] | None = None,
+        _group_rows: bool = True,
     ) -> tuple[str, list[Any]]:
         normalized_columns = tuple(str(column) for column in columns if str(column) in self.columns)
         if not normalized_columns:
@@ -1304,6 +1320,8 @@ class TabularSqliteStore:
             f"FROM {_quote_identifier(self.table_name)}{where_sql}"
         )
         label_expr = " || ' | ' || ".join(_quote_identifier(alias) for alias in aliases)
+        if not _group_rows:
+            return f"SELECT {label_expr} AS label FROM ({inner_query})", params
         grouped_query = (
             f"SELECT {', '.join(_quote_identifier(alias) for alias in aliases)}, "
             f"COUNT(*) AS row_count, {label_expr} AS label "
@@ -1367,12 +1385,21 @@ class TabularSqliteStore:
         with sqlite_connection_scope(self.path) as connection:
             records = connection.execute(query, params).fetchall()
         if not records:
+            # Distinguish an absent scope cache from a search/page with no hits.
+            # Missing derived facets fall back to the current Summary view.
             count_query = (
-                f"SELECT COUNT(*) FROM {_quote_identifier(self.value_facet_table)} {where_sql}"
+                "SELECT COUNT(*), "
+                f"(SELECT 1 FROM {_quote_identifier(self.value_facet_table)} "
+                "WHERE scope_key = ? LIMIT 1) "
+                f"FROM {_quote_identifier(self.value_facet_table)} {where_sql}"
             )
             with sqlite_connection_scope(self.path) as connection:
-                total = int(connection.execute(count_query, params).fetchone()[0] or 0)
-            return [], total
+                total, available = connection.execute(
+                    count_query, (self.value_facet_scope_key, *params),
+                ).fetchone()
+            if available is None:
+                return None
+            return [], int(total or 0)
         total = int(records[0][2] or 0)
         rows = [
             {
@@ -1867,6 +1894,15 @@ def _load_tabular_files_into_sqlite(
                 _raise_if_tabular_load_cancelled(cancel_check)
                 path = spec["path"]
                 csv_config = spec["csv_config"]
+                decimal = str(csv_config.get("decimal") or ".")
+                reserved = {
+                    "source_row_number", "source_file", "source_sheet", "process_datetime", "reference",
+                    spec["timestamp_field"], spec["reference_field"],
+                }
+                prepared_metric_stats = [
+                    (column, metric_stats.get(column))
+                    for column in source_columns if column not in reserved
+                ]
                 file_row_count = 0
                 _emit_tabular_load_progress(
                     progress_callback,
@@ -1878,17 +1914,16 @@ def _load_tabular_files_into_sqlite(
                     rows_loaded=row_number,
                 )
                 batch: list[tuple[Any, ...]] = []
-                chunk_started_at = time.perf_counter()
-                for raw_row in _iter_tabular_source_rows(
-                    path,
-                    csv_config=csv_config,
-                    sheet_name=spec["sheet_name"],
+                for normalized_row, parsed_numeric_values in _iter_normalized_numeric_rows(
+                    _iter_tabular_source_rows(
+                        path, csv_config=csv_config, sheet_name=spec["sheet_name"],
+                    ),
+                    normalized_columns=spec["normalized_columns"],
+                    decimal=decimal,
+                    cancel_check=cancel_check,
+                    record_timing=_record_load_timing,
                 ):
-                    _record_load_timing("chunk_read", chunk_started_at)
                     _raise_if_tabular_load_cancelled(cancel_check)
-                    normalize_started_at = time.perf_counter()
-                    normalized_row = _normalize_raw_row(spec["normalized_columns"], raw_row)
-                    _record_load_timing("chunk_normalize", normalize_started_at)
                     row_started_at = time.perf_counter()
                     row_number += 1
                     file_row_count += 1
@@ -1904,7 +1939,7 @@ def _load_tabular_files_into_sqlite(
                         "source_row_number": row_number,
                         "source_file": path.name,
                         "process_datetime": _sqlite_datetime_text_value(parsed_timestamp),
-                        "reference": _display_cell_text(
+                        "reference": _normalized_cell_text(
                             normalized_row.get(spec["reference_field"])
                             if spec["reference_field"] is not None
                             else ""
@@ -1912,33 +1947,25 @@ def _load_tabular_files_into_sqlite(
                     }
                     if include_source_sheet:
                         row_data["source_sheet"] = str(spec["sheet_name"] or "")
-                    decimal = str(csv_config.get("decimal") or ".")
-                    parsed_numeric_values: dict[str, float | None] = {}
                     for column in source_columns:
-                        raw_text = _display_cell_text(normalized_row.get(column))
-                        parsed_number = (
-                            _parse_tabular_number(raw_text, decimal=decimal) if raw_text else None
-                        )
-                        parsed_numeric_values[column] = parsed_number
+                        raw_text = _normalized_cell_text(normalized_row.get(column))
+                        parsed_number = parsed_numeric_values.get(column)
                         row_data[column] = raw_text or None
                         numeric_storage_column = numeric_filter_columns.get(column)
                         if numeric_storage_column is not None:
                             row_data[numeric_storage_column] = parsed_number
                     for column, storage_column in date_filter_columns.items():
+                        value = normalized_row.get(column)
                         row_data[storage_column] = _sqlite_datetime_text_value(
-                            _parse_tabular_datetime(normalized_row.get(column))
+                            parsed_timestamp
+                            if column == spec["timestamp_field"] and (type(value) is str or value is None)
+                            else _parse_tabular_datetime(value)
                         )
                     metric_stats_started_at = time.perf_counter()
-                    _update_metric_stats_from_row(
+                    _update_prepared_metric_stats(
+                        prepared_metric_stats,
                         metric_stats,
                         row_data,
-                        source_columns=tuple(source_columns),
-                        reserved_columns=tuple(
-                            column
-                            for column in (spec["timestamp_field"], spec["reference_field"])
-                            if column is not None
-                        ),
-                        decimal=decimal,
                         numeric_values=parsed_numeric_values,
                     )
                     _record_load_timing("metric_stats", metric_stats_started_at)
@@ -1960,7 +1987,6 @@ def _load_tabular_files_into_sqlite(
                             rows_loaded=row_number,
                         )
                         batch = []
-                    chunk_started_at = time.perf_counter()
                 if batch:
                     write_started_at = time.perf_counter()
                     connection.executemany(insert_sql, batch)
@@ -2389,6 +2415,11 @@ def _display_cell_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _normalized_cell_text(value: Any) -> str:
+    """Reuse plain text already normalized by the row reader; retain other coercions."""
+    return value if type(value) is str else _display_cell_text(value)
+
+
 def _infer_timestamp_column_from_rows(
     rows: Iterable[Mapping[str, Any]],
     columns: Iterable[str],
@@ -2461,12 +2492,126 @@ def _parse_tabular_number(value: Any, *, decimal: str = ".") -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _parse_tabular_numbers(texts: list[str | None], *, decimal: str) -> list[float | None]:
+    """Parse primitive cells once; retain NumPy/scalar dispatch for other inputs.
+
+    Primitive strings retain float's binary64, locale, blank and non-finite
+    rules without restarting a mixed column. Other input types keep the original
+    NumPy attempt and scalar fallback, including their callback/error order.
+    """
+    import numpy as np
+
+    if type(texts) is list and type(decimal) is str and all(
+        value is None or type(value) is str for value in texts
+    ):
+        return _parse_normalized_number_texts(texts, decimal=decimal)
+
+    original_texts = texts
+    # Keep Python strings: fixed-width NumPy strings discard trailing NULs,
+    # which float() must reject just as the scalar parser does.
+    if decimal == ",":
+        texts = [value.replace(".", "").replace(",", ".") if value is not None else None
+                 for value in texts]
+    elif any("," in value for value in texts if value is not None):
+        texts = [value.replace(",", "") if value is not None else None for value in texts]
+    text = np.asarray(texts, dtype=object)
+    try:
+        with np.errstate(over="ignore", invalid="ignore"):
+            numbers = text.astype(np.float64)
+    except ValueError:
+        return [_parse_tabular_number(value, decimal=decimal) for value in original_texts]
+    result = numbers.astype(object)
+    result[~np.isfinite(numbers)] = None
+    return result.tolist()
+
+
+def _parse_normalized_number_texts(texts: list[str | None], *, decimal: str) -> list[float | None]:
+    """A bad primitive cell does not restart conversion of the complete column."""
+    if decimal == ",":
+        texts = [value.replace(".", "").replace(",", ".") if value is not None else None
+                 for value in texts]
+    else:
+        texts = [value.replace(",", "") if value is not None else None for value in texts]
+    result: list[float | None] = []
+    for text in texts:
+        try:
+            number = float(text) if text is not None else math.nan
+        except ValueError:
+            result.append(None)
+        else:
+            result.append(number if math.isfinite(number) else None)
+    return result
+
+
+def _iter_normalized_numeric_rows(
+    rows: Iterable[tuple[Any, ...]], *, normalized_columns: tuple[str, ...],
+    decimal: str, cancel_check: TabularCancelCheck | None,
+    record_timing: Callable[[str, float], None],
+):
+    """Bound conversion memory independently of source size and SQLite batches."""
+    from itertools import islice
+
+    iterator = iter(rows)
+    while True:
+        _raise_if_tabular_load_cancelled(cancel_check)
+        read_started_at = time.perf_counter()
+        chunk = list(islice(iterator, min(TABULAR_SQLITE_CHUNK_ROWS, 4096)))
+        record_timing("chunk_read", read_started_at)
+        if not chunk:
+            return
+        normalize_started_at = time.perf_counter()
+        normalized = [_normalize_raw_row(normalized_columns, row) for row in chunk]
+        numeric_columns = [
+            _parse_tabular_numbers([row[column] for row in normalized], decimal=decimal)
+            for column in normalized_columns
+        ]
+        record_timing("chunk_normalize", normalize_started_at)
+        if not normalized_columns:
+            for row in normalized:
+                yield row, {}
+            continue
+        for row, numbers in zip(normalized, zip(*numeric_columns), strict=True):
+            yield row, dict(zip(normalized_columns, numbers, strict=True))
+
+
 def _looks_like_identifier_number(value: str) -> bool:
     text = str(value or "").strip()
-    if not re.fullmatch(r"[+-]?\d+", text):
-        return False
+    if type(text) is not str:
+        if not _IDENTIFIER_INTEGER_RE.fullmatch(text):
+            return False
+        digits = text.lstrip("+-")
+        return (len(digits) > 1 and digits.startswith("0")) or len(digits) > 15
+    return _normalized_text_looks_like_identifier(text)
+
+
+def _normalized_text_looks_like_identifier(text: str) -> bool:
     digits = text.lstrip("+-")
-    return (len(digits) > 1 and digits.startswith("0")) or len(digits) > 15
+    if not ((len(digits) > 1 and digits.startswith("0")) or len(digits) > 15):
+        return False
+    return _IDENTIFIER_INTEGER_RE.fullmatch(text) is not None
+
+
+def _update_prepared_metric_stats(
+    prepared: list[tuple[str, dict[str, Any] | None]],
+    metric_stats: dict[str, dict[str, Any]],
+    row: Mapping[str, Any],
+    *,
+    numeric_values: Mapping[str, float | None],
+) -> None:
+    """Keep row/sample order while reusing each file's metric columns and counters."""
+    for index, (column, stats) in enumerate(prepared):
+        text = _normalized_cell_text(row.get(column))
+        if not text:
+            continue
+        if stats is None:
+            stats = {"non_null_count": 0, "numeric_count": 0, "sample_values": [], "sample_value_set": set()}
+            metric_stats[column] = stats
+            prepared[index] = (column, stats)
+        stats["non_null_count"] += 1
+        identifier = (_normalized_text_looks_like_identifier if type(text) is str else _looks_like_identifier_number)
+        if numeric_values.get(column) is not None and not identifier(text):
+            stats["numeric_count"] += 1
+        _append_metric_sample_text(stats, text)
 
 
 def _update_metric_stats_from_row(
@@ -3441,6 +3586,19 @@ def _legacy_preview_if_pandas_is_already_loaded(table: RowTable) -> Any:
     return _restore_sqlite_dataframe(dataframe)
 
 
+def _count_sqlite_source_id_chunks(connection, table_name, row_column, row_ids, filter_clause, filter_params):
+    """Retain the parameterized count path for custom stores."""
+    total = 0
+    for start in range(0, len(row_ids), 900):
+        chunk = row_ids[start : start + 900]
+        placeholders = ", ".join("?" for _ in chunk)
+        row_clause = f"{row_column} IN ({placeholders})"
+        where_parts = [part for part in (filter_clause, row_clause) if part]
+        query = f"SELECT COUNT(*) FROM {_quote_identifier(table_name)} WHERE {' AND '.join(where_parts)}"
+        total += int(connection.execute(query, [*filter_params, *chunk]).fetchone()[0] or 0)
+    return total
+
+
 def _sqlite_like_pattern(
     value: str,
     *,
@@ -4321,10 +4479,11 @@ def apply_tabular_grouping(
 ) -> TabularGroupingResult:
     """Apply manual DataGrouping assignments to a CSV/Excel analytics dataframe."""
 
+    default_group = get_default_group_label(grouping_df, fallback=default_group)
     frame = dataframe.copy()
     diagnostics: list[ProductionAnalyticsDiagnostic] = []
     grouping_records = _tabular_grouping_records(grouping_df)
-    if not grouping_records:
+    if not grouping_records and default_group == TABULAR_DEFAULT_GROUP:
         return TabularGroupingResult(dataframe=frame)
 
     if "source_row_number" not in frame.columns:
@@ -4337,7 +4496,7 @@ def apply_tabular_grouping(
         )
         return TabularGroupingResult(dataframe=frame, diagnostics=tuple(diagnostics))
 
-    if not any(
+    if grouping_records and not any(
         _first_present(row, ("REPORT_ID", "report_id", "SAMPLE_NUMBER", "sample_number")) is not None
         for row in grouping_records
     ):
@@ -4360,7 +4519,7 @@ def apply_tabular_grouping(
         group_label = str(_first_present(row, ("GROUP", "group")) or default_group).strip()
         assignment[source_row] = group_label or default_group
 
-    if not assignment:
+    if grouping_records and not assignment:
         diagnostics.append(
             ProductionAnalyticsDiagnostic(
                 severity="warning",
@@ -4467,6 +4626,7 @@ def export_tabular_analytics_workbook(
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
 
+    from metroliza.tabular.tabular_xlsx_writer import write_tabular_dataframe
     from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
     from metroliza.industrial.industrial_analytics_workbook import groupstats_result_dataframe
     from metroliza.industrial.industrial_analytics_workbook_charts import (
@@ -4492,20 +4652,16 @@ def export_tabular_analytics_workbook(
         engine_kwargs=pandas_xlsxwriter_engine_kwargs(),
     ) as writer:
         table_sheet = unique_sheet_name("Table Data", used_names)
-        safe_dataframe.to_excel(writer, sheet_name=table_sheet, index=False)
+        write_tabular_dataframe(safe_dataframe, writer, table_sheet)
         sheet_names.append(table_sheet)
 
         if safe_aggregation_frame is not None and not safe_aggregation_frame.empty:
             aggregate_sheet = unique_sheet_name("Aggregates", used_names)
-            safe_aggregation_frame.to_excel(writer, sheet_name=aggregate_sheet, index=False)
+            write_tabular_dataframe(safe_aggregation_frame, writer, aggregate_sheet)
             sheet_names.append(aggregate_sheet)
 
         summary_sheet = unique_sheet_name("Metrics", used_names)
-        _metric_summary_dataframe(safe_dataframe, metric_candidates).to_excel(
-            writer,
-            sheet_name=summary_sheet,
-            index=False,
-        )
+        write_tabular_dataframe(_metric_summary_dataframe(safe_dataframe, metric_candidates), writer, summary_sheet)
         sheet_names.append(summary_sheet)
 
         add_analytics_workbook_charts(
@@ -4521,15 +4677,11 @@ def export_tabular_analytics_workbook(
 
         if groupstats_result is not None and groupstats_result.metrics:
             stats_sheet = unique_sheet_name("Groupstats", used_names)
-            groupstats_result_dataframe(groupstats_result).to_excel(
-                writer,
-                sheet_name=stats_sheet,
-                index=False,
-            )
+            write_tabular_dataframe(groupstats_result_dataframe(groupstats_result), writer, stats_sheet)
             sheet_names.append(stats_sheet)
 
         diagnostics_sheet = unique_sheet_name("Diagnostics", used_names)
-        diagnostics_dataframe(diagnostics).to_excel(writer, sheet_name=diagnostics_sheet, index=False)
+        write_tabular_dataframe(diagnostics_dataframe(diagnostics), writer, diagnostics_sheet)
         sheet_names.append(diagnostics_sheet)
 
         parameter_sheet_count = 0
@@ -4538,11 +4690,7 @@ def export_tabular_analytics_workbook(
                 if candidate.field_name not in safe_dataframe.columns:
                     continue
                 parameter_sheet = unique_sheet_name(candidate.display_label, used_names)
-                _parameter_dataframe(safe_dataframe, candidate.field_name).to_excel(
-                    writer,
-                    sheet_name=parameter_sheet,
-                    index=False,
-                )
+                write_tabular_dataframe(_parameter_dataframe(safe_dataframe, candidate.field_name), writer, parameter_sheet)
                 sheet_names.append(parameter_sheet)
                 parameter_sheet_count += 1
 

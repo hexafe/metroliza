@@ -128,6 +128,18 @@ class TestDbUtils(unittest.TestCase):
 
         self.assertEqual(rows, [("alpha",), ("beta",)])
 
+    def test_immutable_snapshot_scope_preserves_bytes_closes_and_creates_no_sidecars(self):
+        before = Path(self.db_path).read_bytes()
+        with sqlite_readonly_connection_scope(self.db_path, immutable=True) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone(), (2,))
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute("DELETE FROM sample")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+        self.assertEqual(Path(self.db_path).read_bytes(), before)
+        for suffix in ("-wal", "-shm", "-journal"):
+            self.assertFalse(Path(self.db_path + suffix).exists())
+
     def test_sqlite_query_only_connection_scope_blocks_writes_and_closes(self):
         original = Path(self.db_path).read_bytes()
         with sqlite_query_only_connection_scope(self.db_path) as connection:
@@ -230,6 +242,77 @@ class TestDbUtils(unittest.TestCase):
         self.assertEqual(batches[0].columns, ('id', 'name'))
         self.assertEqual(batches[0].row_count, 2)
         self.assertEqual(batches[0].offset, 0)
+
+    def test_cancellable_batches_equal_normal_batches(self):
+        query = 'SELECT id, name FROM sample ORDER BY id'
+        expected = list(iter_sql_query_batches(self.db_path, query, batch_size=1))
+        actual = list(iter_sql_query_batches(self.db_path, query, batch_size=1, should_cancel=lambda: False))
+
+        self.assertEqual(actual, expected)
+        self.assertEqual([batch.offset for batch in actual], [0, 1])
+
+    def test_cancellable_batches_preserve_sql_errors(self):
+        with self.assertRaises(sqlite3.OperationalError):
+            list(iter_sql_query_batches(self.db_path, 'SELECT missing FROM sample', should_cancel=lambda: False))
+
+    def test_cancellable_batches_do_not_replace_caller_connection_handlers(self):
+        with closing(sqlite3.connect(self.db_path)) as connection, self.assertRaises(ValueError):
+            list(iter_sql_query_batches(self.db_path, 'SELECT 1', connection=connection, should_cancel=lambda: False))
+
+    def test_closing_partial_batches_closes_the_cursor_before_its_connection(self):
+        events = []
+        connect = sqlite3.connect
+
+        class TrackedCursor(sqlite3.Cursor):
+            def close(self):
+                events.append('cursor')
+                super().close()
+
+        class TrackedConnection(sqlite3.Connection):
+            def cursor(self):
+                return super().cursor(factory=TrackedCursor)
+
+            def close(self):
+                events.append('connection')
+                super().close()
+
+        def tracked_connect(*args, **kwargs):
+            return connect(*args, **kwargs, factory=TrackedConnection)
+
+        with mock.patch('metroliza.reports.db.sqlite3.connect', tracked_connect):
+            batches = iter_sql_query_batches(self.db_path, 'SELECT * FROM sample', batch_size=1, should_cancel=lambda: False)
+            try:
+                next(batches)
+                events.clear()
+            finally:
+                batches.close()
+            self.assertEqual(events, ['cursor', 'connection'])
+
+    def test_cancellable_batches_resume_after_an_exclusive_lock_is_released(self):
+        locked, release = threading.Event(), threading.Event()
+
+        def hold_lock():
+            with closing(sqlite3.connect(self.db_path)) as connection:
+                connection.execute('BEGIN EXCLUSIVE')
+                locked.set()
+                release.wait(5)
+                connection.rollback()
+
+        writer = threading.Thread(target=hold_lock)
+        writer.start()
+        unlock = threading.Timer(0.2, release.set)
+        try:
+            self.assertTrue(locked.wait(5))
+            unlock.start()
+            batches = list(iter_sql_query_batches(
+                self.db_path, 'SELECT id, name FROM sample ORDER BY id', batch_size=1, should_cancel=lambda: False
+            ))
+            self.assertEqual([batch.rows for batch in batches], [((1, 'alpha'),), ((2, 'beta'),)])
+            self.assertEqual([batch.offset for batch in batches], [0, 1])
+        finally:
+            release.set()
+            unlock.cancel()
+            writer.join()
 
     def test_read_sql_dataframe_compatibility_wrapper_returns_dataframe(self):
         result = read_sql_dataframe(self.db_path, 'SELECT id, name FROM sample ORDER BY id')

@@ -1,170 +1,72 @@
-# Release Status — Active Operations
+# Release status — 2026.09 RC1 source candidate
 
 - Status: Active release status hub
 - Owner: Release maintainer
-- Last reviewed: 2026-08-22
-- Current release identity: `2026.06 RC2 (build 260711)`
+- Last reviewed: 2026-10-27
 
-Use this page for the current release state. Exact decision evidence belongs in the linked
-release-check documents. Historical run-by-run detail remains in those documents and in git history;
-it is not repeated indefinitely in this active hub.
+The Product Owner selected `release/2026.09-rc1` as the current RC source line under
+[#1153](https://github.com/hexafe/metroliza/issues/1153). Cut it from accepted `develop` after
+the ordered #1109, #1142, STEP2+STEP3 and #1063 integrations. The live execution ledger records
+the actual merge commits, final branch cut and cleanup receipts. This source-line decision does
+not distribute or publish a packaged candidate.
 
-## Current decision
+## Current decisions
 
-| Decision | State | Evidence / owner |
+| Item | State | Evidence / next gate |
 |---|---|---|
-| Automatic candidate content | **Passed** | [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md), CI run `32585291955` |
-| Development branch transition | **Go** | `develop` is the canonical development base |
-| Frozen candidate branch | **Active** | `release/2026.06-rc2` |
-| Stable promotion to `master` | **No-Go** | blocked by #901 manual packaged/Windows/Google/notices/legal evidence |
-| Stable tag | **No-Go** | may be created only after the release-owner Go decision |
-| Security exception review | **Open** | #906 before baseline expiry on 2026-10-31 |
+| Integration order | #1109, #1142, one STEP2+STEP3 aggregate, #1063; merge commits | #1153, current-base checks and independent reviews per merge |
+| Current RC source line | `release/2026.09-rc1` | Cut from accepted final develop; exact SHA/tree in #1153 |
+| STEP3 delivery | Complete with disclosed limits | [Immutable report](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/engineering/performance-boost-step3.md) |
+| Final packaged Windows EXE / candidate acceptance | **NOT_RUN** | Build and qualify the exact final candidate before distribution to testers or release |
+| Final build identity | **NOT_ASSIGNED** | Assign and synchronize exactly six build digits in a separate packaging/candidate packet |
+| Promotion to master / published release | **Not authorized by #1153** | Full RC checklist and release-owner Go required |
+| Historical RC lines | Retained, cycle closure pending | `rc2` and `release/2026.06-rc2`, separate #901/#924 decisions |
+| Dependency upgrades #972/#973 | Deferred until after RC | Refresh separately, preserve STEP3 exact dependency pins |
+| Security exception review #906 | Open | Selected STEP3 baseline earliest expiry 2026-11-23; verify the actual baseline before every gate and renew before expiry. The issue's original 2026-10-31 deadline is historical, not a new waiver |
 
-## Candidate identity and branches
+The code's inherited version metadata currently reads `2026.09 RC1 (build 261020)`. That is
+the existing source metadata, not a new final-candidate artifact identity. Historical test
+build 261021 is separately archived under
+`archive/repo-cleanup-2026-10-27/build/step2-rc1-261021`; do not merge that old build-number
+commit into the final RC. The unpublished archive container preserves original binaries,
+sidecar provenance, the actual embedded `build_provenance.json` and exact hashes. No standalone
+`BUILD_INFO.txt` exists in that launcher payload. Archival retention is not candidate qualification.
+
+## Qualification required before RC distribution or release
+
+**PR-blocking CI gates** are defined in [`../ci-policy.md`](../ci-policy.md).
+**Release-blocking manual evidence gates** are defined in [`release_candidate_checklist.md`](./release_candidate_checklist.md).
+Google conversion smoke is intentionally local-only and remains release-blocking for promotion.
 
 Release line metadata is canonical in `src/metroliza/app/version.py`:
+`RELEASE_VERSION` defines the release line, `VERSION_DATE` its six-digit build identity,
+and `CURRENT_RELEASE_HIGHLIGHT` the synchronized release summary. Run
+`python scripts/sync_release_metadata.py --check` before recording candidate evidence.
 
-- `RELEASE_VERSION` defines the release version;
-- `VERSION_DATE` defines the release date;
-- `CURRENT_RELEASE_HIGHLIGHT` defines the current release summary.
+Follow the [timeless checklist](release_candidate_checklist.md) and
+[Windows candidate protocol](windows_candidate_acceptance.md). Bind evidence to final source
+commit/tree, synchronized build identity, resolved dependency/toolchain inventory, BUILD_INFO,
+the actual archive and EXE hashes, and the exact tested artifact. Include clean-machine/AV,
+launcher startup/fallback/repair/second instance, worker pools, parser/OCR, SQLite, dashboard,
+XLSX and candidate acceptance. Record applicable Google/live-service, notices/legal,
+rollback and release-owner decisions. Ordinary Windows core PASS is source evidence.
 
-Validate those values and their synchronized consumers with:
+STEP3 measurements retain their actual cohorts 93641f82/75ea71c5/18d67f59, separate indices 14/18/23,
+large-export n=1, and separately completed Group Analysis postcheck. They are not reruns on a
+final packaged EXE. T26 remains WITHHELD. No new Linux campaign is implied by this source-line cut.
 
-```bash
-python scripts/sync_release_metadata.py --check
-```
+Historical C07, Windows publication and Industrial post-test139 remain separate UNKNOWN incidents.
+The passing ordinary CI does not establish their cause or repair. #1110, #1143, #1144 and #1147
+retain their actual follow-up criteria; #1153 does not close them by changing branches.
 
-Current branch roles:
+Operational evidence remains in the [Google smoke log](google_conversion_smoke.md),
+[late-scope triage](implementation_item_triage.md) and [testing runbook](open_testing_runbook.md).
+Stable promotion and a stable tag remain No-Go without the applicable manual gates and release-owner Go.
 
-- `develop` — normal Issue-driven development;
-- `release/2026.06-rc2` — frozen candidate and promotion-evidence line;
-- `rc2` — retained transition/reference branch, no new routine work;
-- `master` — unchanged historical/default production branch pending promotion.
+## Historical June RC2 evidence
 
-Validated branch-point content before the #900 decision documentation:
-
-- final governance commit: `a03bbdacbd6c308acf46ca31c16d0dd2caeab304`;
-- final tree: `dc10e028332cb311cb0b2c110deecee2841b9799`;
-- parent product commit: `202690eb21087314a3c8000aa3ebdb58a1a09c1b`;
-- CI-tested synthetic merge: `0a3f2b982f827466f214cede76995a5bf3effa14`;
-- CI-tested tree: `dc10e028332cb311cb0b2c110deecee2841b9799`.
-
-The tested synthetic merge and final governance merge have the same tree SHA, so the automatic
-results apply to the exact selected repository content. The branch-transition PR itself is
-documentation-only and must also complete normal exact-tree CI before #900 closes.
-
-## Gate sources
-
-- **PR-blocking CI gates** are defined in [`../ci-policy.md`](../ci-policy.md) and must be green for
-  merge readiness on the exact pull-request content.
-- **Release-blocking manual evidence gates** are defined in [`release_candidate_checklist.md`](./release_candidate_checklist.md)
-  and must be complete before a candidate can be promoted.
-- Google conversion smoke is intentionally local-only and remains release-blocking for promotion;
-  a green hosted CI run does not satisfy that evidence gate.
-
-## Current automatic evidence
-
-Pull-request CI run `32585291955` completed successfully:
-
-| Gate | Result |
-|---|---|
-| Compile check and parser-profile self-service smoke | Passed |
-| Ruff full repository | Passed |
-| Selected strict mypy boundaries | Passed |
-| Release metadata consistency | Passed |
-| Secret scan and release hygiene | Passed |
-| Dependency/security audit, including pinned sibling packages | Passed |
-| Main test suite | `3030 passed, 21 skipped, 8 warnings, 98 subtests passed` |
-| Additional real-Qt append shards | Passed |
-| Aggregate line coverage | `83.80%` |
-| Canonical `src/metroliza` line coverage | `85.72%` |
-| Blocking coverage threshold | `80%` — passed |
-| Native wheel builds/imports and chart/parser/export parity smoke | Passed |
-| Windows core path/SQLite/metadata smoke | Passed |
-| CMM parser performance guardrail | Passed |
-| Performance trend check | Passed |
-
-Normal PR CI intentionally skipped the manual/opt-in packaged Windows startup and packaging lanes.
-Live Google conversion is also a separate local/manual release gate. These skipped lanes do not
-invalidate automatic CI, but they cannot be used as promotion evidence.
-
-## Current promotion blockers — #901
-
-Before a Go decision for `master` or a stable tag, the exact final candidate must have:
-
-- approved PyInstaller and Nuitka builds;
-- artifact hashes plus staged/verified third-party notices and dependency inventory;
-- packaged parser/OCR, SQLite, dashboard, realtime, workbook, and export smoke;
-- clean-machine Windows launch and startup/readiness evidence;
-- secure live Google conversion smoke, validation, cleanup, cancellation/failure behavior, and
-  preserved local `.xlsx` fallback;
-- release-owner/legal review for PyQt/Qt, PyMuPDF, Rust crates, and generated notices;
-- any release-line fix rerun through the applicable exact-head automatic and manual gates.
-
-Issue #901 is the executable work item and evidence checklist for these blockers. None is silently
-waived by the branch transition.
-
-## Active release documents
-
-- [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md)
-  — exact automatic evidence, branch decision, and promotion no-go.
-- [`release_candidate_checklist.md`](./release_candidate_checklist.md)
-  — primary release-candidate gate and sign-offs.
-- [`implementation_item_triage.md`](./implementation_item_triage.md)
-  — must-fix/defer/late-scope decisions.
-- [`google_conversion_smoke.md`](./google_conversion_smoke.md)
-  — required live Google conversion evidence log.
-- [`open_testing_runbook.md`](./open_testing_runbook.md)
-  — manual/open-testing execution guidance.
-- [`branching_strategy.md`](./branching_strategy.md)
-  — active branch roles and merge directions.
-- [`rc2_audit_pass2_release_check_2026-07-11.md`](./rc2_audit_pass2_release_check_2026-07-11.md)
-  — build `260711` implementation audit and pre-transition local evidence.
-- [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md)
-  — parser performance policy and failure triage.
-
-## Release-line operating rules
-
-- Normal work starts from and targets `develop`.
-- Candidate fixes/evidence start from and target `release/2026.06-rc2`.
-- Every accepted candidate fix is reconciled into `develop`.
-- No new feature, broad refactor, visual redesign, or convenience dependency upgrade enters the
-  frozen candidate.
-- A late-scope exception requires an explicit triage record, release-owner approval, test evidence,
-  and rollback/deferral option; it does not waive manual release gates.
-- `master` and stable tags remain untouched until the final Go decision.
-- GitHub still presents `master` as the default branch; choose PR bases explicitly.
-
-## Historical evidence index
-
-The following documents remain the durable source for earlier implementation and release evidence:
-
-- [`rc2_full_repo_hardening_2026-07-09.md`](./rc2_full_repo_hardening_2026-07-09.md)
-- [`rc2_pandas_free_sqlite_performance_2026-06-23.md`](./rc2_pandas_free_sqlite_performance_2026-06-23.md)
-- [`ui_overlap_layout_audit_2026-06-19.md`](./ui_overlap_layout_audit_2026-06-19.md)
-- [`realtime_industrial_performance_check_2026-06-17.md`](./realtime_industrial_performance_check_2026-06-17.md)
-- [`realtime_industrial_optimization_check_2026-06-16.md`](./realtime_industrial_optimization_check_2026-06-16.md)
-- [`realtime_monitor_ui_ux_audit_2026-06-15.md`](./realtime_monitor_ui_ux_audit_2026-06-15.md)
-- [`rc5_rc_audit_evidence_2026-06-12.md`](./rc5_rc_audit_evidence_2026-06-12.md)
-- [`rc5_parser_ux_release_closeout_2026-06-11.md`](./rc5_parser_ux_release_closeout_2026-06-11.md)
-- [`rc5_industrial_data_csv_summary_followup_2026-06-10.md`](./rc5_industrial_data_csv_summary_followup_2026-06-10.md)
-- [`rc5_dashboard_industrial_cache_check_2026-06-09.md`](./rc5_dashboard_industrial_cache_check_2026-06-09.md)
-- [`full_module_audit_2026-06-08.md`](./full_module_audit_2026-06-08.md)
-- [`rc2_performance_optimization_check_2026-05-20.md`](./rc2_performance_optimization_check_2026-05-20.md)
-- [`rc2_release_audit_2026-05-17.md`](./rc2_release_audit_2026-05-17.md)
-
-Older exact run IDs and counts are historical evidence, not the current candidate decision. Use the
-linked documents and git history when investigating them.
-
-## Status update rule
-
-Update this page whenever one of these changes:
-
-- final candidate branch/commit/tree;
-- automatic CI conclusion or coverage threshold;
-- manual promotion blocker status;
-- release-owner Go/No-Go;
-- branch role or release identity.
-
-Keep the hub concise. Put full logs, artifact hashes, screenshots, environment descriptions, and
-sign-offs in the dedicated evidence document or Issue.
+The [2026-08-22 transition decision](rc2_branch_transition_decision_2026-08-22.md) remains valid
+historical evidence. Original release-status content is preserved at
+[the STEP3 snapshot](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/release_checks/release_status.md).
+It does not designate June RC2 as the current candidate after this decision. Both historical
+refs remain unchanged. No abandonment, promotion, tag movement or cycle closeout is implied.

@@ -110,11 +110,14 @@ def test_modifydb_loads_legacy_database_without_report_metadata(tmp_path):
         dialog = ModifyDB(parent=None, db_file={json.dumps(str(db_path))})
         try:
             app.processEvents()
+            rows_before_tab_shown = dialog.measurement_records_table.rowCount()
+            dialog.ensure_record_tables_loaded()
             print(json.dumps({{
                 "storage_flavor": dialog._storage_flavor,
                 "reference_rows": dialog.reference_table.rowCount(),
                 "sample_rows": dialog.part_number_table.rowCount(),
                 "header_rows": dialog.header_table.rowCount(),
+                "rows_before_tab_shown": rows_before_tab_shown,
                 "report_rows": dialog.report_records_table.rowCount(),
                 "measurement_rows": dialog.measurement_records_table.rowCount(),
                 "first_reference": dialog.reference_table.item(0, 0).text(),
@@ -131,6 +134,7 @@ def test_modifydb_loads_legacy_database_without_report_metadata(tmp_path):
         "reference_rows": 2,
         "sample_rows": 2,
         "header_rows": 2,
+        "rows_before_tab_shown": 0,
         "report_rows": 2,
         "measurement_rows": 2,
         "first_reference": "REF-A",
@@ -146,6 +150,9 @@ def test_modifydb_applies_normalization_to_legacy_database(tmp_path):
         f"""
         import json
         import sqlite3
+        from time import monotonic
+        from PyQt6 import sip
+        from PyQt6.QtCore import QEvent
         from contextlib import closing
         from PyQt6.QtWidgets import QApplication, QMessageBox
         from modules.modify_db import ModifyDB
@@ -153,11 +160,24 @@ def test_modifydb_applies_normalization_to_legacy_database(tmp_path):
         app = QApplication.instance() or QApplication([])
         QMessageBox.information = lambda *args, **kwargs: None
         dialog = ModifyDB(parent=None, db_file={json.dumps(str(db_path))})
+        errors = []
+        dialog.log_and_exit = errors.append
         try:
             app.processEvents()
             dialog.reference_table.item(0, 1).setText("REF-A2")
+            dialog.normalize_tab_widget.setCurrentIndex(2)
             dialog.header_table.item(0, 1).setText("HEIGHT2")
             dialog.apply_changes()
+            thread = getattr(dialog, "_edit_thread", None)
+            deadline = monotonic() + 10
+            while getattr(dialog, "_edit_thread", None) is not None and monotonic() < deadline:
+                app.processEvents()
+            assert getattr(dialog, "_edit_thread", None) is None
+            assert dialog._changes_committed and not errors
+            if thread is not None:
+                assert sip.isdeleted(thread) or thread.isFinished()
+                app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                assert sip.isdeleted(thread)
 
             with closing(sqlite3.connect({json.dumps(str(db_path))})) as connection, connection:
                 references = connection.execute("SELECT REFERENCE FROM REPORTS ORDER BY ID").fetchall()
@@ -190,6 +210,7 @@ def test_modifydb_loads_current_database_after_schema_bootstrap(tmp_path):
         dialog = ModifyDB(parent=None, db_file={json.dumps(str(db_path))})
         try:
             app.processEvents()
+            dialog.ensure_record_tables_loaded()
             print(json.dumps({{
                 "storage_flavor": dialog._storage_flavor,
                 "reference_rows": dialog.reference_table.rowCount(),

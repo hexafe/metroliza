@@ -38,7 +38,7 @@ class ExportOptions:
     generate_html_dashboard: bool = False
     include_industrial_context: bool = False
     allow_non_essential_chart_skipping: bool = False
-    chart_worker_count: int = 2
+    chart_worker_count: int = 4
     chart_worker_queue_size: int = 4
     group_analysis_level: str = "off"
     group_analysis_scope: str = "auto"

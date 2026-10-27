@@ -151,12 +151,19 @@ a durable project decision. Record it in an Issue, pull request, ADR or active d
 
 ## Repository and branch state
 
-Decision date: 2026-08-22. The authoritative rationale and release evidence are in the
+Current decision: 2026-10-27 under [#1153](https://github.com/hexafe/metroliza/issues/1153).
+`release/2026.09-rc1` is the current RC source line, cut from accepted develop after the ordered
+integrations. Final build identity and packaged Windows acceptance remain pending. The two June
+RC2 refs are retained historical evidence with separate #901/#924 cycle closure. No master
+promotion or published release is authorized.
+
+Historical branch-transition decision date: 2026-08-22. The authoritative rationale and release evidence are in the
 [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
 and the active [release status](../release_checks/release_status.md).
 
 - `develop` is the canonical branch for normal Issue-driven development and integration.
-- `release/2026.06-rc2` is the frozen release-candidate and evidence branch.
+- `release/2026.09-rc1` is the current RC source/evidence branch; distribution needs final artifact qualification.
+- `release/2026.06-rc2` is a retained historical frozen evidence branch.
 - `rc2` is a temporary historical transition/reference alias, not a routine development base.
 - `master` remains the current production/history anchor and is unchanged pending the separate
   [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
@@ -178,7 +185,7 @@ product requirement / evidence
 ### Working rules
 
 - Start meaningful implementation from an Issue with testable acceptance criteria.
-- Branch normal work from and target `develop`; use `release/2026.06-rc2` only for approved
+- Branch normal work from and target `develop`; use `release/2026.09-rc1` only for approved
   release fixes and evidence.
 - Use one primary Issue/outcome per pull request; split broad work before coding.
 - Keep behavior changes separate from structural refactors.

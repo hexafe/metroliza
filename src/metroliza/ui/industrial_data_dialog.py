@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import sqlite3
+from functools import partial
+import weakref
+
+from PyQt6 import sip
+
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -11,7 +18,9 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QMenu,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
 
 from metroliza.industrial.industrial_data_repository import (
@@ -24,11 +33,15 @@ from metroliza.industrial.industrial_cache_target import (
     cleanup_temporary_industrial_cache,
     create_temporary_industrial_cache_target,
     disposable_cache_counts,
+    temporary_cache_contents_summary as _temporary_cache_contents_summary,
     existing_metroliza_cache_target,
     persist_temporary_industrial_cache,
     resolve_industrial_cache_destination,
 )
-from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
+from metroliza.industrial.industrial_tabular_bridge import (
+    IndustrialCacheLoadCanceled,
+    load_industrial_cache_tabular_result,
+)
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog
 from metroliza.ui.industrial_export_dialog import IndustrialExportDialog
@@ -42,6 +55,7 @@ from metroliza.industrial.industrial_source_config import (
 )
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.industrial_sync_dialog import IndustrialSyncDialog
+
 from metroliza.industrial.industrial_workers import (
     IndustrialExportThread as IndustrialExportThread,
     IndustrialLinkRefreshThread,
@@ -49,6 +63,9 @@ from metroliza.industrial.industrial_workers import (
 )
 from metroliza.industrial.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
 from metroliza.industrial.oznak_adapter import get_oznak_adapter_status
+from metroliza.reports.db import _is_transient_sqlite_error, sqlite_query_only_connection_scope
+from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result
+from metroliza.ui import detached_threads
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
@@ -60,6 +77,157 @@ from metroliza.ui.ui_foundation import (
     status_chip,
     update_path_field,
 )
+from metroliza.ui.worker_progress_dialog import (
+    create_delayed_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
+
+_NATIVE_ANALYTICS_DIALOG = IndustrialAnalyticsDialog
+
+OZNAK_CHECKING_TEXT = "Oznak connector: checking..."
+ANALYTICS_LOADING_TEXT = "Loading industrial cache for CSV Summary..."
+ANALYTICS_LOAD_CANCELED_TEXT = "Loading the industrial cache for CSV Summary was canceled."
+# Compatibility constant; cancellation no longer joins on the GUI thread.
+BACKGROUND_STOP_WAIT_MS = 2000
+_CACHE_LOAD_ATTEMPTS = 3
+
+
+def _format_oznak_status(status) -> str:
+    """Return the Oznak connector status line for an adapter status."""
+
+    if not status.available:
+        return f"Unavailable ({status.error})"
+    version = status.version or "unknown version"
+    fetch_state = "fetch ready" if status.fetch_available else "fetch unavailable"
+    contract_state = "contracts ready" if status.contracts_available else "contracts incomplete"
+    sql_state = "SQL ready" if status.raw_sql_available else "SQL unavailable"
+    return f"{version}, {contract_state}, {fetch_state}, {sql_state}"
+
+
+class _OznakStatusThread(QThread):
+    """Check the Oznak adapter off the GUI thread; importing the package is slow."""
+
+    status_text_ready = pyqtSignal(str)
+
+    def release(self) -> None:
+        """Drop the registry reference once the thread has finished."""
+        detached_threads.discard(self)
+
+    def run(self) -> None:
+        try:
+            text = _format_oznak_status(get_oznak_adapter_status())
+        except Exception as exc:
+            text = f"Unavailable ({exc})"
+        if vars(self).get("_defer_delivery", False):
+            self._pending_status = text
+        else:
+            self.status_text_ready.emit(text)
+
+
+class _AnalyticsCacheLoadThread(QThread):
+    """Build the CSV Summary tabular view of the industrial cache off the GUI thread."""
+
+    loaded = pyqtSignal(int, object)
+    failed = pyqtSignal(int, object)
+
+    def __init__(self, *, request_id: int, db_file: str, source_profile_ids):
+        super().__init__()
+        self.request_id = request_id
+        self.db_file = db_file
+        self.source_profile_ids = source_profile_ids
+
+    def release(self) -> None:
+        """Drop the registry reference once the thread has finished."""
+        detached_threads.discard(self)
+
+    def _load(self):
+        # The load opens its own SQLite connections. Transient lock errors are retried like
+        # execute_with_retry does; a failed attempt rolled its transaction back.
+        for attempt in range(_CACHE_LOAD_ATTEMPTS):
+            try:
+                return load_industrial_cache_tabular_result(
+                    self.db_file,
+                    source_profile_ids=self.source_profile_ids,
+                    cancel_check=self.isInterruptionRequested,
+                )
+            except sqlite3.OperationalError as exc:
+                if (
+                    attempt >= _CACHE_LOAD_ATTEMPTS - 1
+                    or self.isInterruptionRequested()
+                    or not _is_transient_sqlite_error(exc)
+                ):
+                    raise
+                QThread.msleep(100 * (attempt + 1))
+        raise RuntimeError("unreachable")  # pragma: no cover
+
+    def run(self) -> None:
+        try:
+            result = self._load()
+        except IndustrialCacheLoadCanceled:
+            return
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                if vars(self).get("_defer_delivery", False):
+                    self._pending_error = exc
+                else:
+                    self.failed.emit(self.request_id, exc)
+            return
+        if vars(self).get("_defer_delivery", False):
+            self._pending_result = result
+            return
+        if self.isInterruptionRequested():
+            # Nobody owns the result any more: drop its view from the cache.
+            try:
+                cleanup_tabular_load_result(result)
+            except Exception:
+                pass
+            return
+        self.loaded.emit(self.request_id, result)
+
+
+def _release_background_thread(thread_ref, owner_ref) -> None:
+    thread = thread_ref()
+    if thread is not None:
+        try:
+            result = vars(thread).pop("_pending_result", None)
+            if result is not None:
+                cleanup_tabular_load_result(result)
+        finally:
+            owner = owner_ref()
+            if owner is not None and not sip.isdeleted(owner):
+                owner._cache_holding_threads = [held for held in owner._cache_holding_threads if held is not thread]
+            thread.deleteLater()
+
+
+def _deliver_background_thread(owner, thread) -> None:
+    if sip.isdeleted(owner):
+        return
+    if type(thread) is _OznakStatusThread:
+        text = vars(thread).pop("_pending_status", None)
+        if owner._oznak_status_thread is thread and text is not None:
+            owner._on_oznak_status_ready(text)
+        return
+    error = vars(thread).pop("_pending_error", None)
+    has_result = "_pending_result" in vars(thread)
+    result = vars(thread).pop("_pending_result", None)
+    if error is not None:
+        owner._on_analytics_cache_failed(thread.request_id, error)
+    elif has_result:
+        owner._on_analytics_cache_loaded(thread.request_id, result)
+
+
+def _register_background_thread(thread, owner) -> bool:
+    native = type(thread) in (_OznakStatusThread, _AnalyticsCacheLoadThread)
+    if native:
+        thread._defer_delivery = True
+        detached_threads.register(thread, defer_quit=True, owner=owner,
+                                  on_finished=_deliver_background_thread)
+        detached_threads.run_when_finished(
+            (thread,), partial(_release_background_thread, weakref.ref(thread), weakref.ref(owner)))
+    else:
+        detached_threads.register(thread)
+        thread.finished.connect(thread.release)
+    return native
 
 
 class IndustrialDataDialog(QDialog):
@@ -68,6 +236,7 @@ class IndustrialDataDialog(QDialog):
     def __init__(self, parent=None, db_file: str | None = None):
         super().__init__(parent)
         self.report_db_file = db_file
+        self.database_change_allowed = None
         self._workspace_db_file = db_file
         self.cache_target: IndustrialCacheTarget = (
             existing_metroliza_cache_target(db_file)
@@ -77,6 +246,13 @@ class IndustrialDataDialog(QDialog):
         self.db_file = self.cache_target.cache_db_file
         self.config_path = default_industrial_source_config_path()
         self.link_refresh_thread = None
+        self._analytics_load_thread: _AnalyticsCacheLoadThread | None = None
+        self._cache_holding_threads: list[_AnalyticsCacheLoadThread] = []
+        self._analytics_load_request_id = 0
+        self._analytics_load_context: tuple[int | None, str] | None = None
+        self._analytics_progress_dialog = None
+        self._oznak_status_thread: _OznakStatusThread | None = None
+        self._oznak_status_text: str | None = None
         self.source_window = None
         self.sync_window = None
         self.export_window = None
@@ -105,7 +281,7 @@ class IndustrialDataDialog(QDialog):
         self.workflow_steps_label = section_label(
             "1  Source   ·   2  Test access   ·   3  Fetch cache   ·   4  Analyze"
         )
-        self.oznak_label = status_chip("Oznak connector: checking...", "neutral")
+        self.oznak_label = status_chip(OZNAK_CHECKING_TEXT, "neutral")
         self.workflow_label = status_chip(
             "Source -> Access -> Cache -> CSV Summary: checking...",
             "neutral",
@@ -168,6 +344,7 @@ class IndustrialDataDialog(QDialog):
         self._configure_accessibility()
         self.refresh_status()
         apply_metroliza_theme(self)
+        self._preserve_status_label_heights()
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -175,6 +352,17 @@ class IndustrialDataDialog(QDialog):
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Industrial data"))
+
+        # The lifecycle/status rows remain persistent operator context.  Keep
+        # their full label heights in a scrollable content surface so the
+        # launcher stays reachable on compact working areas without clipping
+        # text or replacing information with transient messages.
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setWidgetResizable(True)
+        content = QWidget(self.content_scroll)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -248,7 +436,23 @@ class IndustrialDataDialog(QDialog):
 
         row += 1
         grid.addWidget(self.status_label, row, 0, 1, 3)
-        layout.addLayout(grid)
+        self._persistent_status_labels = (
+            self.storage_lifecycle_label,
+            self.oznak_label,
+            self.workflow_label,
+            self.sync_summary_label,
+            self.cache_label,
+            self.sources_label,
+            self.sync_filter_label,
+            self.export_filter_label,
+            self.grouping_label,
+            self.export_options_label,
+            self.analytics_status_label,
+            self.status_label,
+        )
+        content_layout.addLayout(grid)
+        self.content_scroll.setWidget(content)
+        layout.addWidget(self.content_scroll, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -263,22 +467,34 @@ class IndustrialDataDialog(QDialog):
         actions.addWidget(self.close_button)
         layout.addLayout(actions)
 
+    def _preserve_status_label_heights(self) -> None:
+        """Let the scroll surface preserve themed status-label text heights."""
+
+        for status_label in self._persistent_status_labels:
+            status_label.setMinimumHeight(status_label.sizeHint().height())
+        content = self.content_scroll.widget()
+        content.setMinimumHeight(content.layout().sizeHint().height())
+
     def update_db_file(self, db_file: str | None) -> bool:
         """Point an already-open dialog at the current main-window database."""
 
         if db_file:
-            updated = self._set_cache_target(existing_metroliza_cache_target(db_file))
+            updated = self._set_cache_target(existing_metroliza_cache_target(db_file), guard_workspace=True)
         else:
-            updated = self._set_cache_target(create_temporary_industrial_cache_target())
+            updated = self._set_cache_target(create_temporary_industrial_cache_target(), guard_workspace=True)
         if not updated:
             return False
         self._workspace_db_file = db_file
         self.refresh_status()
         return True
 
-    def _set_cache_target(self, target: IndustrialCacheTarget) -> bool:
+    def _set_cache_target(self, target: IndustrialCacheTarget, *, guard_workspace: bool = False) -> bool:
         previous = getattr(self, "cache_target", None)
-        if previous is not None and previous != target and self._link_refresh_owns_context():
+        if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
+            if previous is None or previous.cache_db_file != target.cache_db_file:
+                cleanup_temporary_industrial_cache(target)
+            return False
+        if previous is not None and previous != target and self._background_work_owns_context():
             if previous.cache_db_file != target.cache_db_file:
                 cleanup_temporary_industrial_cache(target)
             self._show_link_refresh_context_guard()
@@ -290,7 +506,10 @@ class IndustrialDataDialog(QDialog):
             ):
                 cleanup_temporary_industrial_cache(target)
                 return False
-            cleanup_temporary_industrial_cache(previous)
+            if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
+                cleanup_temporary_industrial_cache(target)
+                return False
+            self._cleanup_temporary_cache(previous)
         self.cache_target = target
         self.db_file = target.cache_db_file
         self.report_db_file = target.report_db_file
@@ -307,7 +526,7 @@ class IndustrialDataDialog(QDialog):
     def use_temporary_cache(self) -> None:
         """Switch industrial caching to a disposable session SQLite file."""
 
-        if self._link_refresh_owns_context():
+        if self._background_work_owns_context():
             self._show_link_refresh_context_guard()
             return
         if self._set_cache_target(create_temporary_industrial_cache_target()):
@@ -316,7 +535,9 @@ class IndustrialDataDialog(QDialog):
     def select_database_file(self) -> None:
         """Select an existing Metroliza database used for cache and links."""
 
-        if self._link_refresh_owns_context():
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return
+        if self._background_work_owns_context():
             self._show_link_refresh_context_guard()
             return
         filename, _ = QFileDialog.getOpenFileName(
@@ -328,7 +549,7 @@ class IndustrialDataDialog(QDialog):
         if not filename:
             return
 
-        if not self._set_cache_target(existing_metroliza_cache_target(filename)):
+        if not self._set_cache_target(existing_metroliza_cache_target(filename), guard_workspace=True):
             return
         self._workspace_db_file = filename
         parent = self.parent()
@@ -339,7 +560,7 @@ class IndustrialDataDialog(QDialog):
     def create_database_file(self) -> None:
         """Create durable storage, preserving any populated temporary cache."""
 
-        if self._link_refresh_owns_context():
+        if self._background_work_owns_context():
             self._show_link_refresh_context_guard()
             return
         filename, _ = QFileDialog.getSaveFileName(
@@ -370,7 +591,7 @@ class IndustrialDataDialog(QDialog):
             return
         finally:
             cleanup_temporary_industrial_cache(generated_target)
-        cleanup_temporary_industrial_cache(previous)
+        self._cleanup_temporary_cache(previous)
         self.cache_target = target
         self.db_file = target.cache_db_file
         self.report_db_file = target.report_db_file
@@ -385,11 +606,10 @@ class IndustrialDataDialog(QDialog):
         counts = self._temporary_cache_lifecycle_counts(target)
         if not any(counts.values()):
             return True
-        persisted_rows = sum(counts.values())
         choice = QMessageBox.question(
             self,
             "Temporary industrial data",
-            f"This temporary cache contains {persisted_rows:,} persisted data row(s). "
+            f"This temporary cache contains {_temporary_cache_contents_summary(counts)}. "
             "Save it before removing the temporary files?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
@@ -476,12 +696,10 @@ class IndustrialDataDialog(QDialog):
 
     def _refresh_storage_lifecycle(self) -> None:
         if self.cache_target.is_temporary:
-            persisted_rows = sum(
-                self._temporary_cache_lifecycle_counts(self.cache_target).values()
-            )
-            if persisted_rows:
+            counts = self._temporary_cache_lifecycle_counts(self.cache_target)
+            if any(counts.values()):
                 self.storage_lifecycle_label.setText(
-                    f"Temporary storage · {persisted_rows:,} persisted data row(s) will be "
+                    f"Temporary storage · {_temporary_cache_contents_summary(counts)} will be "
                     "deleted when this window closes. Save cache as… to keep them."
                 )
                 set_status_variant(self.storage_lifecycle_label, "danger")
@@ -497,7 +715,8 @@ class IndustrialDataDialog(QDialog):
             self.create_database_button.setText("Create...")
 
     def _refresh_filter_and_grouping_status(self) -> None:
-        self.oznak_label.setText(self._format_oznak_status())
+        self.oznak_label.setText(self._oznak_status_text or OZNAK_CHECKING_TEXT)
+        self._start_oznak_status_check()
         self.sync_filter_label.setText(self._sync_scope_summary())
         self.export_filter_label.setText(self.export_filter_state.summary())
         self.grouping_label.setText(self.grouping_state.summary())
@@ -669,15 +888,37 @@ class IndustrialDataDialog(QDialog):
         )
 
     @staticmethod
-    def _format_oznak_status() -> str:
-        status = get_oznak_adapter_status()
-        if not status.available:
-            return f"Unavailable ({status.error})"
-        version = status.version or "unknown version"
-        fetch_state = "fetch ready" if status.fetch_available else "fetch unavailable"
-        contract_state = "contracts ready" if status.contracts_available else "contracts incomplete"
-        sql_state = "SQL ready" if status.raw_sql_available else "SQL unavailable"
-        return f"{version}, {contract_state}, {fetch_state}, {sql_state}"
+    def _format_oznak_status(status) -> str:
+        return _format_oznak_status(status)
+
+    def _start_oznak_status_check(self) -> None:
+        """Compute the adapter status in a background thread, once per dialog."""
+
+        if self._oznak_status_text is not None or self._oznak_status_thread is not None:
+            return
+        thread = _OznakStatusThread()
+        self._oznak_status_thread = thread
+        _register_background_thread(thread, self)
+        thread.status_text_ready.connect(self._on_oznak_status_ready)
+        thread.start()
+
+    def _on_oznak_status_ready(self, text: str) -> None:
+        self._oznak_status_thread = None
+        self._oznak_status_text = text
+        self.oznak_label.setText(text)
+        # The status row keeps the height of its final text, as when the text was known at construction.
+        self._preserve_status_label_heights()
+
+    def _stop_oznak_status_check(self) -> None:
+        thread = self._oznak_status_thread
+        self._oznak_status_thread = None
+        if thread is None:
+            return
+        try:
+            thread.status_text_ready.disconnect(self._on_oznak_status_ready)
+        except (TypeError, RuntimeError):
+            pass
+        thread.requestInterruption()
 
     @staticmethod
     def _format_workflow_strip(
@@ -835,16 +1076,106 @@ class IndustrialDataDialog(QDialog):
         self.refresh_status()
 
     def open_analytics_dialog(self) -> None:
+        if self._analytics_load_thread is not None:
+            return
         source_profile_id = self.analysis_source_combo.currentData()
         source_profile_ids = (int(source_profile_id),) if source_profile_id is not None else None
-        try:
-            loaded = load_industrial_cache_tabular_result(
-                self.db_file,
-                source_profile_ids=source_profile_ids,
-            )
-        except Exception as exc:
-            QMessageBox.warning(self, self.windowTitle(), f"Could not load industrial cache: {exc}")
+        source_label = self.analysis_source_combo.currentText().strip()
+        source_suffix = f" ({source_label})" if source_label and source_profile_id is not None else ""
+        self._analytics_load_request_id += 1
+        self._analytics_load_context = (source_profile_id, source_suffix)
+        self._analytics_progress_dialog, _label, progress_bar, _gif = create_delayed_worker_progress_dialog(
+            self,
+            window_title=ANALYTICS_LOADING_TEXT,
+            initial_status_text=f"{ANALYTICS_LOADING_TEXT}\nPreparing the cached rows\nETA --",
+            on_cancel=self._cancel_analytics_load,
+        )
+        progress_bar.setRange(0, 0)
+        thread = _AnalyticsCacheLoadThread(
+            request_id=self._analytics_load_request_id,
+            db_file=self.db_file,
+            source_profile_ids=source_profile_ids,
+        )
+        self._analytics_load_thread = thread
+        _register_background_thread(thread, self)
+        self._cache_holding_threads.append(thread)
+        thread.loaded.connect(self._on_analytics_cache_loaded)
+        thread.failed.connect(self._on_analytics_cache_failed)
+        self._set_action_buttons_enabled(cache_available=bool(self.db_file))
+        thread.start()
+        self._analytics_progress_dialog.show()
+
+    def is_loading_analytics_cache(self) -> bool:
+        """Return True while the CSV Summary view of the cache is being built in the background."""
+
+        return self._analytics_load_thread is not None
+
+    def _dismiss_analytics_progress_dialog(self) -> None:
+        progress_dialog = self._analytics_progress_dialog
+        self._analytics_progress_dialog = None
+        if progress_dialog is not None:
+            dismiss_worker_progress_dialog(progress_dialog)
+            progress_dialog.deleteLater()
+
+    def _stop_analytics_load(self) -> None:
+        """Invalidate delivery and interrupt the load, retaining its native owner."""
+
+        self._analytics_load_request_id += 1
+        self._dismiss_analytics_progress_dialog()
+        thread = self._analytics_load_thread
+        self._analytics_load_thread = None
+        self._analytics_load_context = None
+        if thread is None:
             return
+        for signal, slot in (
+            (thread.loaded, self._on_analytics_cache_loaded),
+            (thread.failed, self._on_analytics_cache_failed),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        thread.requestInterruption()
+        if thread not in self._cache_holding_threads:
+            self._cache_holding_threads.append(thread)
+
+    def _cleanup_temporary_cache(self, target: IndustrialCacheTarget | None) -> None:
+        """Remove a temporary cache once no detached loader can still hold the file open."""
+
+        holding = [thread for thread in self._cache_holding_threads if detached_threads.is_registered(thread)]
+        self._cache_holding_threads = holding
+        if not holding:
+            cleanup_temporary_industrial_cache(target)
+            return
+        detached_threads.run_when_finished(holding, lambda: cleanup_temporary_industrial_cache(target))
+
+    def _cancel_analytics_load(self) -> None:
+        self._stop_analytics_load()
+        self._set_action_buttons_enabled(cache_available=bool(self.db_file))
+        self.status_label.setText(ANALYTICS_LOAD_CANCELED_TEXT)
+        set_status_variant(self.status_label, "neutral")
+
+    def _finish_analytics_load(self):
+        """Release the load state after a result; return the context captured at the click."""
+
+        context = self._analytics_load_context
+        self._analytics_load_thread = None
+        self._analytics_load_context = None
+        self._dismiss_analytics_progress_dialog()
+        self._set_action_buttons_enabled(cache_available=bool(self.db_file))
+        return context
+
+    def _on_analytics_cache_failed(self, request_id, exc) -> None:
+        if request_id != self._analytics_load_request_id or self._analytics_load_thread is None:
+            return
+        self._finish_analytics_load()
+        QMessageBox.warning(self, self.windowTitle(), f"Could not load industrial cache: {exc}")
+
+    def _on_analytics_cache_loaded(self, request_id, loaded) -> None:
+        if request_id != self._analytics_load_request_id or self._analytics_load_thread is None:
+            cleanup_tabular_load_result(loaded)
+            return
+        _source_profile_id, source_suffix = self._finish_analytics_load()
         if int(getattr(loaded, "row_count", 0) or 0) <= 0:
             QMessageBox.warning(
                 self,
@@ -852,8 +1183,6 @@ class IndustrialDataDialog(QDialog):
                 "Fetch industrial data into the local cache before creating CSV Summary analytics.",
             )
             return
-        source_label = self.analysis_source_combo.currentText().strip()
-        source_suffix = f" ({source_label})" if source_label and source_profile_id is not None else ""
         self.analytics_window = IndustrialAnalyticsDialog(
             self,
             db_file=self.db_file,
@@ -865,8 +1194,21 @@ class IndustrialDataDialog(QDialog):
             ),
             presentation_mode="industrial_cache",
         )
-        self.analytics_window.exec()
-        self.refresh_status()
+        analytics_window = self.analytics_window
+        analytics_window.exec()
+        # A custom dialog retains its old lifetime contract. For the native dialog,
+        # modal return plus cleared worker references proves its callbacks/waits have
+        # settled. A programmatic accept with pending work keeps the original owner.
+        if (type(analytics_window) is _NATIVE_ANALYTICS_DIALOG
+                and not sip.isdeleted(analytics_window)
+                and analytics_window.tabular_load_thread is None
+                and analytics_window.analytics_thread is None):
+            analytics_window._set_tabular_load_result(None)
+            analytics_window.deleteLater()
+            if not sip.isdeleted(self) and self.analytics_window is analytics_window:
+                self.analytics_window = None
+        if not sip.isdeleted(self):
+            self.refresh_status()
 
     def open_links_dialog(self) -> None:
         if not self.report_db_file:
@@ -916,6 +1258,11 @@ class IndustrialDataDialog(QDialog):
         self.link_refresh_thread = None
         self._set_action_buttons_enabled(cache_available=bool(self.db_file))
 
+    def _background_work_owns_context(self) -> bool:
+        """Return whether a worker still uses the report/cache context."""
+
+        return self._link_refresh_owns_context() or self._analytics_load_thread is not None
+
     def _link_refresh_owns_context(self) -> bool:
         """Return whether a refresh worker still owns the report/cache context."""
 
@@ -924,9 +1271,14 @@ class IndustrialDataDialog(QDialog):
         return self.link_refresh_thread is not None
 
     def _show_link_refresh_context_guard(self) -> None:
-        self.status_label.setText(
-            "Wait for report-to-production link refresh to finish before changing storage."
-        )
+        if not self._link_refresh_owns_context():
+            self.status_label.setText(
+                "Wait for the CSV Summary cache load to finish before changing storage."
+            )
+        else:
+            self.status_label.setText(
+                "Wait for report-to-production link refresh to finish before changing storage."
+            )
         set_status_variant(self.status_label, "warning")
 
     def set_sync_filter_state(self, state: IndustrialFilterState) -> None:
@@ -969,13 +1321,9 @@ class IndustrialDataDialog(QDialog):
                 self.analysis_source_combo.setEnabled(False)
                 return
             self.analysis_source_combo.addItem(f"All sources ({int(total_records):,} rows)", None)
+            records_by_profile = self._cached_record_counts_by_profile(repository)
             for profile in profiles:
-                try:
-                    source_records = repository.summarize_counts(
-                        source_profile_id=profile.id
-                    ).records
-                except Exception:
-                    source_records = 0
+                source_records = records_by_profile.get(profile.id, 0)
                 if source_records <= 0:
                     continue
                 self.analysis_source_combo.addItem(
@@ -988,6 +1336,19 @@ class IndustrialDataDialog(QDialog):
             self.analysis_source_combo.setEnabled(True)
         finally:
             self.analysis_source_combo.blockSignals(False)
+
+    @staticmethod
+    def _cached_record_counts_by_profile(repository: IndustrialDataRepository) -> dict[int, int]:
+        """Count cached records per source profile with one grouped query."""
+
+        try:
+            with sqlite_query_only_connection_scope(str(repository.database)) as connection:
+                rows = connection.execute(
+                    "SELECT source_profile_id, COUNT(*) FROM industrial_records GROUP BY source_profile_id"
+                ).fetchall()
+        except Exception:
+            return {}
+        return {int(profile_id): int(count) for profile_id, count in rows}
 
     def _format_config_source_status(self) -> str:
         try:
@@ -1005,7 +1366,7 @@ class IndustrialDataDialog(QDialog):
             return False
 
     def _set_action_buttons_enabled(self, *, cache_available: bool) -> None:
-        refresh_active = self._link_refresh_owns_context()
+        refresh_active = self._background_work_owns_context()
         storage_change_enabled = not refresh_active
         cache_action_enabled = bool(cache_available and not refresh_active)
         self.select_database_button.setEnabled(storage_change_enabled)
@@ -1062,6 +1423,31 @@ class IndustrialDataDialog(QDialog):
         self.setTabOrder(self.refresh_links_button, self.links_button)
         self.setTabOrder(self.links_button, self.close_button)
 
+    def _stop_background_threads(self) -> None:
+        """Cancel background delivery without joining either worker on the GUI thread."""
+
+        self._stop_analytics_load()
+        self._stop_oznak_status_check()
+
+    def _stop_threads_and_resolve_cache(self, target: IndustrialCacheTarget | None) -> bool:
+        """Stop the background threads, then settle the temporary cache; False keeps the dialog open.
+
+        When the user cancels the save/discard question the dialog stays open, so a CSV Summary load that
+        was stopped for the close is reported as canceled and the action buttons are restored.
+        """
+
+        analytics_load_stopped = self._analytics_load_thread is not None
+        self._stop_background_threads()
+        if self._resolve_temporary_cache_before_discard(target):
+            return True
+        if analytics_load_stopped:
+            self._set_action_buttons_enabled(cache_available=bool(self.db_file))
+            self.status_label.setText(ANALYTICS_LOAD_CANCELED_TEXT)
+            set_status_variant(self.status_label, "neutral")
+        if self._oznak_status_text is None:
+            self._start_oznak_status_check()
+        return False
+
     def reject(self) -> None:
         if self._link_refresh_owns_context():
             QMessageBox.information(
@@ -1071,9 +1457,9 @@ class IndustrialDataDialog(QDialog):
             )
             return
         target = getattr(self, "cache_target", None)
-        if not self._resolve_temporary_cache_before_discard(target):
+        if not self._stop_threads_and_resolve_cache(target):
             return
-        cleanup_temporary_industrial_cache(target)
+        self._cleanup_temporary_cache(target)
         super().reject()
 
     def closeEvent(self, event) -> None:
@@ -1086,8 +1472,8 @@ class IndustrialDataDialog(QDialog):
             event.ignore()
             return
         target = getattr(self, "cache_target", None)
-        if not self._resolve_temporary_cache_before_discard(target):
+        if not self._stop_threads_and_resolve_cache(target):
             event.ignore()
             return
-        cleanup_temporary_industrial_cache(target)
+        self._cleanup_temporary_cache(target)
         super().closeEvent(event)

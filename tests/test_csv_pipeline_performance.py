@@ -440,3 +440,200 @@ def test_benchmark_worker_requires_resource_before_setup(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "WORKER_REQUIRES_RESOURCE_OK" in result.stdout
     assert not (tmp_path / "output").exists()
+
+
+def test_small_csv_analytics_preserves_complete_artifacts(tmp_path, monkeypatch):
+    """Compare all artifacts and require one shared fit per series/population."""
+    import importlib
+
+    histogram = importlib.import_module("hexafe_plotstats.payloads.histogram")
+    original_fit = histogram.fit_distribution
+    fits = []
+
+    def capture_fit(*args, **kwargs):
+        result = original_fit(*args, **kwargs)
+        fits.append(result)
+        return result
+
+    monkeypatch.setattr(histogram, "fit_distribution", capture_fit)
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionChartSelection, ProductionMetricSelection,
+    )
+    from metroliza.industrial.industrial_analytics_workflow import run_tabular_file_analytics
+
+    source = tmp_path / "parity.csv"
+    source.write_text("PART,DIM\n" + "".join(
+        f"P{i},{value}\n" for i, value in enumerate(
+            (1.2, 1.4, 1.7, 2.1, 2.2, 2.6, 1.8, 2.3, 2.7, 1.6), start=1,
+        )
+    ))
+    for name in ("baseline", "candidate"):
+        output = tmp_path / name
+        output.mkdir()
+        fits.clear()
+        with monkeypatch.context() as patch:
+            if name == "baseline":
+                import hexafe_plotstats
+
+                patch.setattr(adapter, "_request_histogram_payload",
+                              hexafe_plotstats.build_histogram_payload)
+                patch.setattr(adapter, "_request_histogram_table_rows",
+                              adapter._histogram_table_rows_from_plotstats)
+            run_tabular_file_analytics(
+                input_file=str(source), output_dashboard_file=str(output / "dashboard.html"),
+                output_workbook_file=str(output / "workbook.xlsx"), reference_column="PART",
+                metric_selection=(ProductionMetricSelection("dim", lsl=1.0, usl=3.0),),
+                chart_selection=ProductionChartSelection(
+                    time_series=True, histogram=True, violin=True, box=True, groupstats=False,
+                ),
+            )
+        assert len(fits) == (3 if name == "baseline" else 1)
+        if name == "baseline":
+            baseline_fits = tuple(fits)
+        else:
+            assert all(fit == fits[0] for fit in baseline_fits)
+        workbook = openpyxl.load_workbook(output / "workbook.xlsx", read_only=True)
+        try:
+            assert list(workbook["Metrics"].values)[1][2:] == (
+                10, 1.96, 1.95, 0.5015531433014407, 1.2, 2.7,
+            )
+            rows = workbook["Table Data"].iter_rows(values_only=True)
+            headers = next(rows)
+            assert [row[headers.index("dim")] for row in rows] == [
+                1.2, 1.4, 1.7, 2.1, 2.2, 2.6, 1.8, 2.3, 2.7, 1.6,
+            ]
+        finally:
+            workbook.close()
+    assert compare_artifacts(tmp_path / "baseline", tmp_path / "candidate")["equal"]
+
+
+def test_request_fit_reuses_population_across_bins_and_density(monkeypatch):
+    import importlib
+
+    from hexafe_plotstats import HistogramConfig, build_histogram_payload
+    from hexafe_plotstats.models.common import SpecLimits
+
+    histogram = importlib.import_module("hexafe_plotstats.payloads.histogram")
+    original_fit = histogram.fit_distribution
+    calls = []
+
+    def fit(*args, **kwargs):
+        calls.append(tuple(args[0]))
+        return original_fit(*args, **kwargs)
+
+    values = np.linspace(1.0, 3.0, 25)
+    limits = SpecLimits(lsl=0.5, nominal=2.0, usl=3.5)
+    configs = [HistogramConfig(bins=3, density=False), HistogramConfig(bins=7, density=True)]
+    expected = [build_histogram_payload(values, spec_limits=limits, config=config) for config in configs]
+    monkeypatch.setattr(histogram, "fit_distribution", fit)
+    # Fit reuse must remain effective even when the table-row cache is full.
+    monkeypatch.setattr(adapter, "_HISTOGRAM_TABLE_CACHE_MAX_ENTRIES", 0)
+    with adapter.histogram_stats_request():
+        for config, reference in zip(configs, expected, strict=True):
+            actual = adapter._request_histogram_payload(values, spec_limits=limits, config=config)
+            assert actual == reference
+        assert len(calls) == 1
+        adapter._request_histogram_payload(values[::2], spec_limits=limits, config=configs[0])
+        adapter._request_histogram_payload(values[::-1], spec_limits=limits, config=configs[0])
+        adapter._request_histogram_payload(values, spec_limits=SpecLimits(), config=configs[0])
+        assert len(calls) == 4
+        retained = adapter._histogram_table_cache.get()
+    assert not retained.fits
+    with adapter.histogram_stats_request():
+        adapter._request_histogram_payload(values, spec_limits=limits, config=configs[0])
+    assert len(calls) == 5
+
+
+def test_request_fit_single_flight_in_copied_worker_contexts(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+    import importlib
+    from threading import Event
+
+    from hexafe_plotstats import HistogramConfig
+    from hexafe_plotstats.models.common import SpecLimits
+
+    histogram = importlib.import_module("hexafe_plotstats.payloads.histogram")
+    original_fit = histogram.fit_distribution
+    entered, release = Event(), Event()
+    calls = []
+
+    def fit(*args, **kwargs):
+        calls.append(tuple(args[0]))
+        entered.set()
+        assert release.wait(10)
+        return original_fit(*args, **kwargs)
+
+    monkeypatch.setattr(histogram, "fit_distribution", fit)
+    with adapter.histogram_stats_request(), ThreadPoolExecutor(max_workers=3) as pool:
+        def build():
+            return adapter._request_histogram_payload(
+                np.linspace(1.0, 3.0, 25), spec_limits=SpecLimits(), config=HistogramConfig(),
+            )
+
+        first = pool.submit(copy_context().run, build)
+        assert entered.wait(10)
+        rest = [pool.submit(copy_context().run, build) for _ in range(2)]
+        release.set()
+        results = [future.result() for future in [first, *rest]]
+        assert results[0] == results[1] == results[2]
+        assert len(calls) == 1
+
+
+def test_request_fit_failed_build_is_not_retained(monkeypatch):
+    import hexafe_plotstats
+
+    from hexafe_plotstats import HistogramConfig
+    from hexafe_plotstats.models.common import SpecLimits
+
+    original = hexafe_plotstats.build_histogram_payload
+    calls = []
+
+    def build(*args, **kwargs):
+        calls.append(None)
+        if len(calls) == 1:
+            raise RuntimeError("temporary build failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(hexafe_plotstats, "build_histogram_payload", build)
+    with adapter.histogram_stats_request():
+        with pytest.raises(RuntimeError, match="temporary build failure"):
+            adapter._request_histogram_payload(
+                np.array([1.0, 2.0]), spec_limits=SpecLimits(), config=HistogramConfig(),
+            )
+        assert not adapter._histogram_table_cache.get().fits
+        for _ in range(2):
+            adapter._request_histogram_payload(
+                np.array([1.0, 2.0]), spec_limits=SpecLimits(), config=HistogramConfig(),
+            )
+        assert len(calls) == 3
+
+
+def test_concurrent_analytics_requests_do_not_share_fits(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import importlib
+
+    from hexafe_plotstats import HistogramConfig
+    from hexafe_plotstats.models.common import SpecLimits
+
+    histogram = importlib.import_module("hexafe_plotstats.payloads.histogram")
+    original_fit = histogram.fit_distribution
+    calls = []
+
+    def fit(*args, **kwargs):
+        calls.append(tuple(args[0]))
+        return original_fit(*args, **kwargs)
+
+    def run():
+        with adapter.histogram_stats_request():
+            payloads = [adapter._request_histogram_payload(
+                np.linspace(1.0, 3.0, 25), spec_limits=SpecLimits(), config=HistogramConfig(),
+            ) for _ in range(2)]
+            assert payloads[0] == payloads[1]
+            return payloads[0]
+
+    monkeypatch.setattr(histogram, "fit_distribution", fit)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: run(), range(2)))
+    assert results[0] == results[1]
+    assert len(calls) == 2

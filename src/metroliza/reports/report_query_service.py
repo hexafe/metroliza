@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from metroliza.reports.db import quote_identifier
 from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
 from metroliza.shared.grouping_filter_core import (
     DateFilterSpec,
@@ -643,18 +644,66 @@ def build_measurement_filter_query(
 
 
 def build_distinct_value_query(column_name, *, source_view=_MEASUREMENT_EXPORT_VIEW, filter_query=None):
-    normalized_filter_query = _normalize_sql_query(filter_query)
-    if normalized_filter_query:
-        if source_view == _MEASUREMENT_EXPORT_VIEW and not _is_export_scoped_query(normalized_filter_query):
-            source = f"({build_measurement_export_query(normalized_filter_query)}) AS filtered_data"
+    source = _canonical_report_choice_source(column_name, source_view, filter_query)
+    normalized_filter_query = _distinct_filter_scope(column_name, source_view, filter_query)
+    if source is None:
+        if normalized_filter_query:
+            if source_view == _MEASUREMENT_EXPORT_VIEW and not _is_export_scoped_query(normalized_filter_query):
+                source = f"({build_measurement_export_query(normalized_filter_query)}) AS filtered_data"
+            else:
+                source = f"({normalized_filter_query}) AS filtered_data"
         else:
-            source = f"({normalized_filter_query}) AS filtered_data"
-    else:
-        source = source_view
+            source = _unfiltered_distinct_source(column_name, source_view)
 
+    quoted_column = quote_identifier(column_name)
     return (
-        f'SELECT DISTINCT "{column_name}" AS value '
+        f'SELECT DISTINCT {quoted_column} AS value '
         f'FROM {source} '
-        f'WHERE "{column_name}" IS NOT NULL AND TRIM(CAST("{column_name}" AS TEXT)) <> \'\' '
+        f'WHERE {quoted_column} IS NOT NULL AND TRIM(CAST({quoted_column} AS TEXT)) <> \'\' '
         f'ORDER BY value'
     )
+
+
+def _canonical_report_choice_source(column_name, source_view, filter_query):
+    # Raw exact types prevent eligibility checks from dispatching custom string
+    # methods. Arbitrary SQL can project different values for the same report;
+    # neither its text fragments nor its REPORT_ID column prove equivalence.
+    if type(filter_query) is not str or type(column_name) is not str or type(source_view) is not str:
+        return None
+    if source_view != _REPORT_OVERVIEW_VIEW or column_name.upper() not in {
+        "REFERENCE", "PART_NAME", "REVISION", "TEMPLATE_VARIANT", "SAMPLE_NUMBER",
+        "OPERATOR_NAME", "SAMPLE_NUMBER_KIND", "FILENAME", "PARSER_ID", "TEMPLATE_FAMILY",
+    }:
+        return None
+    if filter_query != build_measurement_export_query():
+        return None
+    projection = 'file_name AS "FILENAME"' if column_name.upper() == "FILENAME" else quote_identifier(column_name)
+    # The overview keeps the same source/report joins and active location choice.
+    # EXISTS preserves the full export's exclusion of reports without measurements;
+    # the unscoped overview intentionally continues to include those reports.
+    return (
+        f"(SELECT {projection} FROM {_REPORT_OVERVIEW_VIEW} AS reports "
+        "WHERE EXISTS (SELECT 1 FROM report_measurements AS meas "
+        "WHERE meas.report_id = reports.report_id)) AS report_choices"
+    )
+
+
+def _distinct_filter_scope(column_name, source_view, filter_query):
+    normalized = _normalize_sql_query(filter_query)
+    # ExportDialog supplies this canonical unfiltered export even on first open.
+    if source_view == _MEASUREMENT_EXPORT_VIEW and column_name.upper() in {"AX", "HEADER", "STATUS_CODE"}:
+        if normalized == _normalize_sql_query(build_measurement_export_query()):
+            return None
+    return normalized
+
+
+def _unfiltered_distinct_source(column_name, source_view):
+    if source_view == _MEASUREMENT_EXPORT_VIEW and column_name.upper() in {"AX", "HEADER", "STATUS_CODE"}:
+        # LEFT JOINs cannot change DISTINCT measurement values. Keep both inner
+        # joins so old orphan measurements/reports remain excluded.
+        return (
+            "report_measurements AS meas "
+            "JOIN parsed_reports AS pr ON pr.id = meas.report_id "
+            "JOIN source_files AS sf ON sf.id = pr.source_file_id"
+        )
+    return quote_identifier(source_view)

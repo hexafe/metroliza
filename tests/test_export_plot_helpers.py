@@ -4046,3 +4046,367 @@ class TestExportPlotHelpers(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_density_line_literal_seaborn_equivalence(monkeypatch):
+    """The optimized curve must preserve PNGs, ordering and legend state."""
+    from functools import partial
+    from io import BytesIO
+    from metroliza.exporting import export_data_thread as module
+
+    # Float-normalized integer groups bootstrap a CI. Control only the test's
+    # public seaborn RNG, identically for the reference and candidate paths.
+    if module._HAS_SEABORN:
+        monkeypatch.setattr(module.sns, 'lineplot', partial(module.sns.lineplot, seed=0))
+
+    cases = [([], []), ([1.], [2.]), ([0., 1., 2.], [1., 3., 2.]),
+             ([2., 0., 1.], [1., 3., 2.]), ([0., 0., 1.], [1., 3., 2.]),
+             (np.array([2**60, 2**60 + 1, 2**60 + 2]), [1., 2., 3.]),
+             (np.array([2**64 - 3, 2**64 - 2, 2**64 - 1], dtype=np.uint64), [1., 2., 3.]),
+             (pd.Series([0., 1., 2.], name='Position'), pd.Series([1., 3., 2.], name='Density'))]
+    for dtype in (np.float16, np.float32, np.float64):
+        cases.append((np.array([0., .3, .9], dtype=dtype), np.array([.2, .4, .3], dtype=dtype)))
+    for x, y in cases:
+        for style in ({}, dict(color='#765432', alpha=.35, linewidth=2.3, linestyle='--')):
+            captures = []
+            for reference in (True, False):
+                with matplotlib.rc_context():
+                    fig, ax = plt.subplots(figsize=(4, 3))
+                    ax.plot([0., 2.], [0., 1.], label='Existing')
+                    options = dict(color=module.SUMMARY_PLOT_PALETTE['density_line'],
+                                   alpha=1., linewidth=1.4, linestyle='-') | style
+                    if reference and module._HAS_SEABORN:
+                        module.sns.lineplot(x=x, y=y, ax=ax, **options)
+                    else:
+                        assert module.render_density_line(ax, x, y, **style) is ax
+                    ax.legend()
+                    output = BytesIO()
+                    fig.savefig(output, format='png')
+                    captures.append((output.getvalue(), ax.get_xlim(), ax.get_ylim(),
+                                     ax.get_legend_handles_labels()[1],
+                                     [(line.get_xdata().tolist(), line.get_ydata().tolist())
+                                      for line in ax.lines]))
+                    plt.close(fig)
+            assert captures[0] == captures[1]
+    assert module.render_density_line(None, [], []) is None
+
+
+def test_density_line_fast_path_keeps_general_and_no_seaborn_paths():
+    from metroliza.exporting import export_data_thread as module
+
+    fig, ax = plt.subplots()
+    try:
+        with mock.patch.object(module.sns, 'lineplot', wraps=module.sns.lineplot) as general:
+            module.render_density_line(ax, np.linspace(0., 1., 101), np.ones(101))
+            general.assert_not_called()
+            for x, y in [([], []), ([1.], [2.]), ([2., 1.], [3., 4.]),
+                         ([1., 1.], [2., 3.]), ([0., 1.], [2., np.nan]),
+                         ([2**60, 2**60 + 1], [1., 2.]),
+                         ([0., 1.], [1., 2.]),
+                         (np.array([0., 1.], dtype=np.float32), np.ones(2)),
+                         (np.array([0., 1.], dtype=np.float16), np.ones(2))]:
+                module.render_density_line(ax, x, y)
+            assert general.call_count == 9
+        with mock.patch.object(module, '_HAS_SEABORN', False), mock.patch.object(module.sns, 'lineplot') as general:
+            module.render_density_line(ax, [2., 1.], [3., 4.])
+            general.assert_not_called()
+            assert ax.lines[-1].get_xdata().tolist() == [2., 1.]
+    finally:
+        plt.close(fig)
+
+
+def _capture_density_axis_scene(renderer, mode):
+    from io import BytesIO
+    import random
+    from matplotlib.units import ConversionInterface
+
+    np_state, random_state = np.random.get_state(), random.getstate()
+    fig, ax = plt.subplots(figsize=(4, 3))
+    try:
+        np.random.seed(123)
+        random.seed(123)
+        rng = np.random.get_state()
+        before_rng = (rng[0], rng[1].tobytes(), rng[2:], random.getstate())
+        x = np.array([.1, .3, .9, 1.3, 2.3])
+        y = np.array([.2, .4, .3, .8, .6])
+        if mode in ('log', 'symlog'):
+            options = {'linthresh': .07} if mode == 'symlog' else {}
+            ax.set_xscale(mode, **options)
+            ax.set_yscale(mode, **options)
+        if mode == 'units':
+            ax.xaxis.set_converter(ConversionInterface())
+            ax.xaxis.set_units('synthetic-mm')
+        ax.set_xlabel('Existing x')
+        ax.set_ylabel('Existing y')
+        ax.plot([.1, 2.3], [.1, .9], label='Existing')
+        if mode == 'fixed':
+            ax.set_xlim(.05, 3.)
+            ax.set_ylim(.05, 1.)
+        renderer(ax, x, y, color='#765432', alpha=.35, linewidth=2.3, linestyle='--')
+        density = ax.lines[-1]
+        state = {
+            'line_data': [(v.dtype.str, v.shape, v.tobytes())
+                          for v in (density.get_xdata(), density.get_ydata())],
+            'limits': (ax.get_xlim(), ax.get_ylim()),
+            'labels': (ax.get_xlabel(), ax.get_ylabel()),
+            'autoscale': (ax.get_autoscalex_on(), ax.get_autoscaley_on()),
+            'dataLim': ax.dataLim.get_points().tobytes(),
+        }
+        rng = np.random.get_state()
+        state['rng'] = (rng[0], rng[1].tobytes(), rng[2:], random.getstate())
+        assert state['rng'] == before_rng
+        empty_bands = [all(path.vertices.size == 0 for path in band.get_paths())
+                       for band in ax.collections]
+        ax.plot([.2, 2.], [.3, .4], label='Next')
+        state['next_color'] = ax.lines[-1].get_color()
+        ax.legend()
+        state['legend'] = [text.get_text() for text in ax.get_legend().get_texts()]
+        stream = BytesIO()
+        fig.savefig(stream, format='png')
+        state['png'] = stream.getvalue()
+        return state, empty_bands
+    finally:
+        plt.close(fig)
+        np.random.set_state(np_state)
+        random.setstate(random_state)
+
+
+def test_density_line_axes_and_consumed_state_are_literal():
+    from metroliza.exporting import export_data_thread as module
+
+    def reference(ax, x, y, **style):
+        module.sns.lineplot(x=x, y=y, ax=ax, **style)
+
+    for mode in ('linear', 'fixed', 'log', 'symlog', 'units'):
+        expected, expected_bands = _capture_density_axis_scene(reference, mode)
+        actual, actual_bands = _capture_density_axis_scene(module.render_density_line, mode)
+        assert actual == expected, mode
+        assert expected_bands == [True]  # Seaborn's singleton CI band has no paths.
+        # The eligible direct curve omits only this empty, unconsumed collection.
+        assert actual_bands == ([] if mode in ('linear', 'fixed') else [True])
+
+
+def test_density_line_never_preconverts_unsupported_or_no_seaborn_input():
+    from metroliza.exporting import export_data_thread as module
+
+    class CallbackInput:
+        def __init__(self):
+            self.calls = 0
+
+        def __array__(self, dtype=None, copy=None):
+            self.calls += 1
+            return np.array([.1, .3, .9], dtype=dtype)
+
+    values = CallbackInput()
+    fig, ax = plt.subplots()
+    try:
+        with mock.patch.object(module.sns, 'lineplot') as general:
+            module.render_density_line(ax, values, values)
+            general.assert_called_once()
+            assert values.calls == 0
+        with mock.patch.object(module, '_HAS_SEABORN', False), mock.patch.object(ax, 'plot') as direct:
+            module.render_density_line(ax, values, values)
+            direct.assert_called_once()
+            assert values.calls == 0
+    finally:
+        plt.close(fig)
+
+
+def test_histogram_annotation_layout_pngs_match_prepared_figure():
+    from io import BytesIO
+    from metroliza.exporting import export_data_thread as module
+
+    for layout in (None, 'tight', 'constrained'):
+        captures = []
+        for prepared in (True, False):
+            fig, ax = plt.subplots(figsize=(6, 4), layout=layout)
+            ax.plot([0., 10.], [0., 1.])
+            ax.table(cellText=[['Average', '1.234'], ['NOK', '0%']], loc='bottom')
+            title = module.render_histogram_figure_title(fig, 'Synthetic collision / table')
+            renderer = _render_histogram_annotations_before_t03 if prepared else module.render_histogram_annotations
+            renderer(
+                ax, [dict(x=x, kind=kind, text=f'{kind} = {x}', color='black', priority=i)
+                     for i, (x, kind) in enumerate([(5., 'mean'), (5.01, 'usl'), (0., 'lsl')])],
+                annotation_fontsize=9,
+                annotation_box=dict(boxstyle='round,pad=.2', fc='white', title_artist=title),
+            )
+            output = BytesIO()
+            fig.savefig(output, format='png')
+            captures.append(output.getvalue())
+            plt.close(fig)
+        assert captures[0] == captures[1], layout
+
+
+def _render_histogram_annotations_before_t03(ax, annotation_specs, *, annotation_fontsize, annotation_box):
+    """Frozen pre-T03 annotation geometry and full-figure preparation oracle."""
+    from metroliza.exporting.export_data_thread import (
+        _resolve_figure_fonts, _uses_symbol_font_fallback, resolve_edge_safe_label_anchor,
+    )
+    def _resolve_plot_rect_display_bounds(fig, plot_rect):
+        if not isinstance(plot_rect, dict):
+            return None
+        try:
+            left = float(plot_rect['x']) * float(fig.bbox.width)
+            bottom = float(plot_rect['y']) * float(fig.bbox.height)
+            right = left + (float(plot_rect['width']) * float(fig.bbox.width))
+            top = bottom + (float(plot_rect['height']) * float(fig.bbox.height))
+        except (KeyError, TypeError, ValueError):
+            return None
+        return left, right, bottom, top
+
+    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=92.0, extra_side_px=8.0):
+        bounds = _resolve_plot_rect_display_bounds(fig, plot_rect)
+        if bounds is None:
+            return None
+        left, right, bottom, top = bounds
+        return (
+            left + float(extra_side_px),
+            right - float(extra_side_px),
+            bottom + 2.0,
+            top + float(extra_top_px),
+        )
+
+    def _bbox_fits_plot_rect(bbox, bounds, *, padding_px=2.0):
+        if bbox is None or bounds is None:
+            return True
+        left, right, bottom, top = bounds
+        return (
+            bbox.x0 >= (left + padding_px)
+            and bbox.x1 <= (right - padding_px)
+            and bbox.y0 >= (bottom + padding_px)
+            and bbox.y1 <= (top - padding_px)
+        )
+
+    def _build_candidate_offsets(annotation_kind):
+        if annotation_kind == 'mean':
+            return [(0.0, 0.0), (0.0, -6.0), (0.0, -12.0), (-8.0, -6.0), (8.0, -6.0)]
+        if annotation_kind in {'lsl', 'usl'}:
+            return [
+                (0.0, 0.0),
+                (-8.0, -6.0),
+                (8.0, -6.0),
+                (-12.0, -10.0),
+                (12.0, -10.0),
+                (0.0, -14.0),
+            ]
+        return [(0.0, 0.0), (0.0, -6.0), (0.0, -12.0)]
+
+    def _resolve_ha_from_offset(default_ha, x_offset_points):
+        if x_offset_points > 6.0:
+            return 'left'
+        if x_offset_points < -6.0:
+            return 'right'
+        return default_ha
+
+    rendered = []
+    transform = ax.get_xaxis_transform()
+    figure = ax.figure
+    x_min, x_max = ax.get_xlim()
+    plot_rect = annotation_box.get('plot_rect') if isinstance(annotation_box, dict) else None
+    title_artist = annotation_box.get('title_artist') if isinstance(annotation_box, dict) else None
+    plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
+    # Resolve axes transforms once. Text/Annotation.get_window_extent updates
+    # candidate geometry (including leader lines) without drawing the figure.
+    _resolve_figure_fonts(figure)
+    figure.draw_without_rendering()
+    renderer = figure.canvas.get_renderer()
+    title_bbox = None
+    if title_artist is not None:
+        title_bbox = title_artist.get_window_extent(renderer=renderer)
+    priority_sorted = sorted(
+        list(enumerate(annotation_specs or [])),
+        key=lambda item: (-int(item[1].get('priority', 100)), item[0]),
+    )
+    accepted = {}
+    accepted_bboxes = []
+    accepted_rows = []
+    for index, annotation in priority_sorted:
+        annotation_kind = str(annotation.get('kind') or '').lower()
+        resolved_ha = annotation.get('ha', 'center')
+        x_offset_points = 0.0
+        if annotation_kind in {'lsl', 'usl'}:
+            edge_anchor = resolve_edge_safe_label_anchor(
+                annotation.get('x'),
+                x_min,
+                x_max,
+            )
+            edge_ha = edge_anchor.get('ha', 'center')
+            edge_offset_points = float(edge_anchor.get('x_offset_points', 0.0))
+            if edge_offset_points != 0.0:
+                resolved_ha = edge_ha
+                x_offset_points = edge_offset_points
+        placed_artist = None
+        placed_bbox = None
+        annotation_row = annotation.get('row_index')
+        base_y_axes = annotation.get('text_y_axes', 1.02)
+        for extra_x_offset, extra_y_offset in _build_candidate_offsets(annotation_kind):
+            total_x_offset = x_offset_points + float(extra_x_offset)
+            candidate_ha = _resolve_ha_from_offset(resolved_ha, total_x_offset)
+            needs_leader_line = abs(total_x_offset) >= 8.0 or abs(float(extra_y_offset)) >= 6.0
+            candidate_fontfamily = 'DejaVu Sans' if _uses_symbol_font_fallback(annotation['text']) else None
+            if abs(total_x_offset) < 1e-9 and abs(float(extra_y_offset)) < 1e-9:
+                candidate_artist = ax.text(
+                    annotation['x'],
+                    base_y_axes,
+                    annotation['text'],
+                    transform=transform,
+                    color=annotation['color'],
+                    ha=candidate_ha,
+                    va='bottom',
+                    fontsize=annotation_fontsize,
+                    bbox={k: v for k, v in annotation_box.items() if k not in {'plot_rect', 'title_artist'}},
+                    zorder=10,
+                    clip_on=False,
+                    fontfamily=candidate_fontfamily,
+                )
+            else:
+                candidate_artist = ax.annotate(
+                    annotation['text'],
+                    xy=(annotation['x'], base_y_axes),
+                    xycoords=transform,
+                    xytext=(total_x_offset, float(extra_y_offset)),
+                    textcoords='offset points',
+                    color=annotation['color'],
+                    ha=candidate_ha,
+                    va='bottom',
+                    fontsize=annotation_fontsize,
+                    bbox={k: v for k, v in annotation_box.items() if k not in {'plot_rect', 'title_artist'}},
+                    arrowprops=(
+                        {
+                            'arrowstyle': '-',
+                            'color': annotation['color'],
+                            'linewidth': 0.75,
+                            'alpha': 0.65,
+                            'shrinkA': 0,
+                            'shrinkB': 2,
+                        }
+                        if needs_leader_line
+                        else None
+                    ),
+                    zorder=10,
+                    clip_on=False,
+                    fontfamily=candidate_fontfamily,
+                )
+            candidate_bbox = candidate_artist.get_window_extent(renderer=renderer)
+            is_safe = _bbox_fits_plot_rect(candidate_bbox, plot_rect_bounds)
+            if is_safe and title_bbox is not None and candidate_bbox.overlaps(title_bbox):
+                is_safe = False
+            if is_safe and accepted_bboxes:
+                if any(candidate_bbox.overlaps(existing_bbox) for existing_bbox in accepted_bboxes):
+                    is_safe = False
+            if is_safe:
+                placed_artist = candidate_artist
+                placed_bbox = candidate_bbox
+                break
+            candidate_artist.remove()
+
+        if placed_artist is not None:
+            accepted[index] = placed_artist
+            accepted_bboxes.append(placed_bbox)
+            accepted_rows.append(annotation_row)
+
+    for index, _annotation in enumerate(annotation_specs or []):
+        text_artist = accepted.get(index)
+        if text_artist is not None:
+            rendered.append(text_artist)
+    return rendered

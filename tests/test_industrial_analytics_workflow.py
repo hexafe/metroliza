@@ -1055,3 +1055,64 @@ def test_run_production_cache_analytics_cancel_removes_temp_outputs(tmp_path) ->
     assert not workbook_file.exists()
     assert not list(tmp_path.glob(".production_analytics.*.tmp.html"))
     assert not list(tmp_path.glob(".production_analytics.*.tmp.xlsx"))
+
+
+def test_grouping_snapshot_survives_load_recursion_with_same_rows(monkeypatch, tmp_path):
+    from metroliza.industrial import contracts
+    from metroliza.tabular.contracts import _GroupingSnapshotOwner
+    input_file = tmp_path / 'table.csv'
+    input_file.write_text('Length mm\n10\n20\n', encoding='utf-8')
+    source = pd.DataFrame({'REPORT_ID': [1, 1], 'GROUP': ['A', 'B']})
+    source.attrs['default_group_label'] = 'Rest'
+    owner = _GroupingSnapshotOwner()
+    values, snapshot = owner.capture(source)
+    def unexpected(*args):
+        raise AssertionError('immutable grouping was revalidated')
+    monkeypatch.setattr(contracts, 'validate_grouping_df', unexpected)
+    source.loc[:, 'GROUP'] = 'changed'
+    workbook = tmp_path / 'result.xlsx'
+    result = run_tabular_file_analytics(
+        input_file=str(input_file), output_dashboard_file=str(tmp_path / 'result.html'),
+        output_workbook_file=str(workbook),
+        metric_selection=(ProductionMetricSelection('length_mm'),),
+        chart_selection=ProductionChartSelection(time_series=False, histogram=False,
+                                                violin=False, box=False, groupstats=False),
+        grouping_df=values, _grouping_snapshot=snapshot,
+    )
+    assert result.row_count == 2
+    assert result.metric_count == 1
+    data = pd.read_excel(workbook, sheet_name='Table Data')
+    assert list(data['GROUP']) == ['B', 'Rest']
+    assert list(data['length_mm']) == [10, 20]
+    assert Path(result.html_dashboard_path).stat().st_size > 0
+
+
+@pytest.mark.parametrize("stage", ["manifest", "writer"])
+def test_dashboard_cancellation_is_forwarded_and_translated(monkeypatch, tmp_path, stage):
+    from metroliza.industrial.industrial_analytics_dashboard import DashboardCancelled
+    entered = []
+    def never_cancel():
+        return False
+    def build(**kwargs):
+        assert kwargs["cancel_check"] is never_cancel
+        entered.append("manifest")
+        if stage == "manifest":
+            raise DashboardCancelled("manifest stopped")
+        return {}
+    def write(*args, **kwargs):
+        assert kwargs["cancel_check"] is never_cancel
+        entered.append("writer")
+        Path(args[1]).write_text("partial")
+        raise DashboardCancelled("writer stopped")
+    monkeypatch.setattr(workflow_module, "build_production_dashboard_manifest", build)
+    monkeypatch.setattr(workflow_module, "write_production_dashboard", write)
+    with pytest.raises(AnalyticsCancelled, match="stopped"):
+        workflow_module._write_dashboard(
+            frame=pd.DataFrame({"v": [1.]}), metrics=(),
+            aggregation=ProductionAggregationState(), aggregated=None,
+            groupstats=workflow_module.ProductionGroupstatsResult(),
+            charts=ProductionChartSelection(), cohort=ReferenceCohortState(), diagnostics=(),
+            output_dashboard_file=str(tmp_path / "result.html"),
+            dashboard_title="Title", dashboard_subtitle="Subtitle", cancel_check=never_cancel)
+    assert entered == (["manifest"] if stage == "manifest" else ["manifest", "writer"])
+    assert not list(tmp_path.iterdir())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic
 
 from dataclasses import replace
 import inspect
@@ -67,10 +68,14 @@ from metroliza.exporting.export_dialog_service import build_export_artifact_link
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+from metroliza.analytics.row_table import RowTable
+from metroliza.tabular.contracts import _GroupingSnapshotOwner, _ValidatedGroupingSnapshot
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
     TABULAR_GROUP_COLUMN,
+    TabularAnalyticsLoadResult,
     TabularColumnFilter,
+    TabularSqliteStore,
     build_tabular_file_grouping_dataframe,
     cleanup_tabular_load_result,
     count_tabular_materialized_rows,
@@ -92,10 +97,27 @@ from metroliza.ui.ui_foundation import (
 )
 try:
     from metroliza.ui.worker_progress_dialog import (
+        dismiss_worker_progress_dialog,
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
-    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog as _create_worker_progress_dialog
+
+    def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel, **_kwargs):
+        return _create_worker_progress_dialog(
+            parent, window_title=window_title, initial_status_text=initial_status_text, on_cancel=on_cancel,
+        )
+
+    def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
+        if dialog is None:
+            return
+        close_method = getattr(dialog, "reject" if rejected else "accept", None)
+        if callable(close_method):
+            close_method()
+            return
+        close = getattr(dialog, "close", None)
+        if callable(close):
+            close()
 
 SOURCE_PRODUCTION_CACHE = "production_cache"
 SOURCE_TABULAR_FILE = "tabular_file"
@@ -663,8 +685,11 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
         self.tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
         self.tabular_filter_expression = ""
+        self._tabular_row_count_cache: tuple[object, tuple, int] | None = None
         self.df_for_grouping = None
         self.grouping_applied = False
+        self._grouping_snapshot_owner = _GroupingSnapshotOwner()
+        self._pending_grouping_snapshot: _ValidatedGroupingSnapshot | None = None
         self._auto_group_selected_files = False
         self._tabular_reload_notice = ""
         self.dashboard_interactivity_options = DashboardInteractivityOptions()
@@ -1489,6 +1514,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
 
     def _clear_tabular_grouping(self) -> None:
+        self._grouping_snapshot_owner.invalidate()
         self.df_for_grouping = None
         self.grouping_applied = False
         self._set_groupstats_output_checked(False)
@@ -1504,6 +1530,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if current is not None and current is not loaded:
             cleanup_tabular_load_result(current)
         self.tabular_load_result = loaded
+        self._tabular_row_count_cache = None
 
     def _selected_input_files(self) -> tuple[str, ...]:
         if self.input_files:
@@ -1522,16 +1549,86 @@ class IndustrialAnalyticsDialog(QDialog):
             preview = f"{preview}, +{len(names) - 3} more"
         return f"{len(names)} CSV files: {preview}"
 
-    def _tabular_filtered_row_count(self) -> int:
-        if self.tabular_load_result is None:
-            return 0
-        return count_tabular_materialized_rows(
-            self.tabular_load_result,
-            filter_columns=self.tabular_filter_columns,
-            selected_filter_keys=self.tabular_filter_keys,
-            column_filters=self.tabular_column_filters,
-            row_filter_expression=self.tabular_filter_expression,
+    def _tabular_filter_state_key(self) -> tuple:
+        return (
+            tuple(self.tabular_filter_columns or ()),
+            tuple(tuple(keys) for keys in (self.tabular_filter_keys or ())),
+            tuple(self.tabular_column_filters or ()),
+            str(self.tabular_filter_expression or ""),
         )
+
+    def _tabular_scope_revision(self, *, include_filter: bool = True):
+        """Snapshot native scope metadata; custom inputs retain the general path."""
+        loaded = self.tabular_load_result
+        if type(loaded) is not TabularAnalyticsLoadResult or type(loaded.sqlite_store) is not TabularSqliteStore:
+            return None
+        if type(self.tabular_column_filters) is not tuple and type(self.tabular_column_filters) is not list:
+            return None
+        store = loaded.sqlite_store
+        if type(store.path) is not str or any(type(item) is not TabularColumnFilter for item in self.tabular_column_filters):
+            return None
+        token = _literal_cache_token((
+            (store.path, store.table_name, store.columns, store.date_filter_columns,
+             store.numeric_filter_columns, store.metric_columns, loaded.column_mapping),
+            (self.tabular_filter_columns, self.tabular_filter_keys,
+             tuple(vars(item) for item in self.tabular_column_filters), self.tabular_filter_expression),
+        ))
+        if token is None:
+            return None
+        if not include_filter:
+            # Row-count memoization keeps its original filter-state equality;
+            # population summaries use the full typed token and fresh counts.
+            token = token[0]
+        try:
+            family = []
+            for path in (Path(store.path), Path(f"{store.path}-wal")):
+                stat = path.stat() if path.exists() else None
+                family.append((stat.st_ino, stat.st_size, stat.st_mtime_ns) if stat else None)
+        except OSError:
+            return None
+        return token, tuple(family)
+
+    def _tabular_group_values(self):
+        grouping = self.df_for_grouping
+        revision = _native_grouping_revision(grouping)
+        cached = getattr(self, "_tabular_group_values_cache", None)
+        if revision is not None and cached is not None and cached[0] == revision:
+            return cached[1]
+        groups = grouping.get("GROUP", []) if hasattr(grouping, "get") else []
+        values = tuple(sorted({str(value).strip() for value in groups if str(value).strip()}))
+        self._tabular_group_values_cache = (revision, values) if revision is not None else None
+        return values
+
+    def _tabular_filtered_row_count(self) -> int:
+        """Return the filtered row count, computed once per load result and filter state."""
+
+        loaded = self.tabular_load_result
+        if loaded is None:
+            return 0
+        state = self._tabular_filter_state_key()
+        revision = IndustrialAnalyticsDialog._tabular_scope_revision(self, include_filter=False)
+        cached = self._tabular_row_count_cache
+        if cached is not None and cached[0] is loaded and cached[1] == (state, revision):
+            return cached[2]
+        if (
+            self.is_industrial_cache_presentation
+            and not any(state)
+            and loaded.sqlite_store is not None
+            and loaded.row_count is not None
+        ):
+            # The industrial bridge counted this exact scope while it built the view; an
+            # unfiltered state needs no second pass over the wide view.
+            count = int(loaded.row_count)
+        else:
+            count = count_tabular_materialized_rows(
+                loaded,
+                filter_columns=self.tabular_filter_columns,
+                selected_filter_keys=self.tabular_filter_keys,
+                column_filters=self.tabular_column_filters,
+                row_filter_expression=self.tabular_filter_expression,
+            )
+        self._tabular_row_count_cache = (loaded, (state, revision), count)
+        return count
 
     def clear_tabular_filter_and_groups(self) -> None:
         if self.is_production_source:
@@ -1621,6 +1718,7 @@ class IndustrialAnalyticsDialog(QDialog):
         return f"Cached production rows: {counts.records}; sources: {counts.source_profiles}"
 
     def select_input_file(self) -> None:
+        action_started_at = monotonic()
         filenames, _ = QFileDialog.getOpenFileNames(
             self,
             "Open CSV or Excel data",
@@ -1657,7 +1755,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._populate_tabular_sheet_options()
         self._reset_tabular_column_options()
         self._reset_group_options(())
-        self.show_tabular_load_screen()
+        self.show_tabular_load_screen(action_started_at=action_started_at)
 
     def _confirm_auto_group_selected_files(self, selected_files: tuple[str, ...]) -> bool:
         if len(selected_files) <= 1:
@@ -1773,6 +1871,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self._sync_ui_state()
 
     def load_metrics(self) -> None:
+        action_started_at = monotonic()
         try:
             if self.is_production_source:
                 if not self.db_file:
@@ -1796,7 +1895,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 self.source_label.setText(self._cache_summary())
                 self._sync_filter_summary()
             else:
-                self.show_tabular_load_screen()
+                self.show_tabular_load_screen(action_started_at=action_started_at)
                 return
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not load metrics: {exc}")
@@ -1959,10 +2058,12 @@ class IndustrialAnalyticsDialog(QDialog):
         return TabularAnalyticsGroupingDialog(parent, **kwargs)
 
     def set_df_for_grouping(self, df) -> None:
+        self._grouping_snapshot_owner.invalidate()
         self.df_for_grouping = df
         self._sync_grouping_summary()
 
     def set_grouping_applied(self, applied: bool) -> None:
+        self._grouping_snapshot_owner.invalidate()
         self.grouping_applied = bool(applied)
         if not self.grouping_applied:
             self.df_for_grouping = None
@@ -1997,12 +2098,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self.grouping_summary_label.setText("Groups: not applied")
             set_status_variant(self.grouping_summary_label, "neutral")
             return
-        groups = (
-            self.df_for_grouping.get("GROUP", [])
-            if hasattr(self.df_for_grouping, "get")
-            else []
-        )
-        group_values = sorted({str(value).strip() for value in groups if str(value).strip()})
+        group_values = IndustrialAnalyticsDialog._tabular_group_values(self)
         has_population = self._tabular_grouping_has_population(set(group_values))
         custom_groups = [value for value in group_values if value != TABULAR_DEFAULT_GROUP]
         if custom_groups:
@@ -2029,6 +2125,12 @@ class IndustrialAnalyticsDialog(QDialog):
             or "GROUP" not in self.df_for_grouping.columns
         ):
             return False
+        revision = _native_grouping_revision(self.df_for_grouping)
+        scope = IndustrialAnalyticsDialog._tabular_scope_revision(self)
+        key = (revision, scope) if revision is not None and scope is not None else None
+        cached = getattr(self, "_tabular_population_cache", None)
+        if key is not None and cached is not None and cached[0] == key:
+            return cached[1]
         total_rows = count_tabular_materialized_rows(
             self.tabular_load_result,
             filter_columns=self.tabular_filter_columns,
@@ -2063,7 +2165,9 @@ class IndustrialAnalyticsDialog(QDialog):
             grouping_filter_expression=self.tabular_filter_expression,
             grouping_filter_aliases=self.tabular_load_result.column_mapping,
         )
-        return assigned_count < total_rows
+        result = assigned_count < total_rows
+        self._tabular_population_cache = (key, result) if key is not None else None
+        return result
 
     def _filtered_tabular_dataframe(self):
         if self.tabular_load_result is None:
@@ -2079,13 +2183,13 @@ class IndustrialAnalyticsDialog(QDialog):
     def _tabular_filter_summary(self) -> tuple[str, str]:
         if self.tabular_load_result is None:
             return "No row filter", "neutral"
-        row_count = self._tabular_filtered_row_count()
         if (
             not self.tabular_column_filters
             and not self.tabular_filter_expression
             and (not self.tabular_filter_columns or not self.tabular_filter_keys)
         ):
             return f"All rows ({tabular_load_result_row_count(self.tabular_load_result)})", "neutral"
+        row_count = self._tabular_filtered_row_count()
         label_lookup = {
             normalized: original
             for original, normalized in self.tabular_load_result.column_mapping.items()
@@ -2210,8 +2314,11 @@ class IndustrialAnalyticsDialog(QDialog):
             return 0
         if not self.grouping_applied or self.df_for_grouping is None or self.df_for_grouping.empty:
             return 0
-        groups = self.df_for_grouping.get("GROUP", [])
-        values = {str(value).strip() for value in groups if str(value).strip()}
+        if type(self.df_for_grouping) is RowTable:
+            values = set(IndustrialAnalyticsDialog._tabular_group_values(self))
+        else:
+            groups = self.df_for_grouping.get("GROUP", [])
+            values = {str(value).strip() for value in groups if str(value).strip()}
         if self._tabular_grouping_has_population(values):
             values.add(TABULAR_DEFAULT_GROUP)
         return len(values)
@@ -2386,14 +2493,20 @@ class IndustrialAnalyticsDialog(QDialog):
             set_status_variant(self.readiness_label, "warning")
 
     def handle_start_button(self) -> None:
+        action_started_at = monotonic()
         if not self.metric_candidates:
             self.load_metrics()
         self._sync_ui_state()
         if not self.start_button.isEnabled():
             return
-        self.show_loading_screen()
+        self._analytics_action_started_at = action_started_at
+        try:
+            self.show_loading_screen()
+        finally:
+            self._analytics_action_started_at = None
 
-    def show_tabular_load_screen(self) -> None:
+    def show_tabular_load_screen(self, *, action_started_at=None) -> None:
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.is_production_source:
             self.load_metrics()
             return
@@ -2419,6 +2532,7 @@ class IndustrialAnalyticsDialog(QDialog):
                     "ETA --",
                 ),
                 on_cancel=self.cancel_tabular_load,
+                action_started_at=action_started_at,
             )
         )
         self.loading_bar.setRange(0, 0)
@@ -2455,8 +2569,10 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_tabular_load_finished(self, loaded) -> None:
-        self._close_worker_progress()
-        self._apply_tabular_load_result(loaded)
+        try:
+            self._apply_tabular_load_result(loaded)
+        finally:
+            self._close_worker_progress()
 
     def on_tabular_load_error(self, message: str) -> None:
         self._close_worker_progress()
@@ -2483,20 +2599,17 @@ class IndustrialAnalyticsDialog(QDialog):
         thread = self.sender()
         progress = self._worker_progress.get(thread)
         if progress is not None:
-            progress[0].close()
+            self._dispose_worker_progress(thread)
         elif thread is None and hasattr(self, "loading_dialog"):
             # Direct handler calls have no signal sender.
-            self.loading_dialog.close()
+            dismiss_worker_progress_dialog(self.loading_dialog)
 
     def _dispose_worker_progress(self, thread) -> None:
         progress = self._worker_progress.pop(thread, None)
         if progress is None:
             return
         dialog, _label, _bar, movie = progress
-        # Closing only hides the dialog; its parent still owns the running movie.
-        movie.stop()
-        dialog.close()
-        dialog.deleteLater()
+        dismiss_worker_progress_dialog(dialog)
         for name, widget in zip(
             ("loading_dialog", "loading_label", "loading_bar", "loading_gif"), progress
         ):
@@ -2504,6 +2617,11 @@ class IndustrialAnalyticsDialog(QDialog):
                 delattr(self, name)
 
     def _build_analytics_request(self, *, require_runnable: bool = False) -> IndustrialAnalyticsRequest:
+        snapshot = self._pending_grouping_snapshot
+        if snapshot is not None and snapshot.source_id != id(
+            self.df_for_grouping if self.grouping_applied else None
+        ):
+            raise ValueError("Grouping snapshot is stale or does not match its source.")
         return validate_industrial_analytics_request(
             IndustrialAnalyticsRequest(
                 source_kind=self.source_kind,
@@ -2531,7 +2649,10 @@ class IndustrialAnalyticsDialog(QDialog):
                 tabular_filter_keys=self.tabular_filter_keys,
                 tabular_column_filters=self.tabular_column_filters,
                 tabular_filter_expression=self.tabular_filter_expression,
-                grouping_df=self.df_for_grouping if self.grouping_applied else None,
+                grouping_df=(snapshot.assignments if snapshot is not None
+                             else self.df_for_grouping if self.grouping_applied else None),
+                _grouping_snapshot=snapshot,
+                _grouping_owner=self._grouping_snapshot_owner,
                 dashboard_visual_settings=self.dashboard_visual_settings,
                 dashboard_interactivity_options=self.dashboard_interactivity_options,
             ),
@@ -2540,6 +2661,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def create_analytics_thread(self) -> IndustrialAnalyticsThread:
         request = self._build_analytics_request()
+        snapshot = request._grouping_snapshot
         return IndustrialAnalyticsThread(
             source_kind=request.source_kind,
             db_file=request.db_file,
@@ -2561,12 +2683,18 @@ class IndustrialAnalyticsDialog(QDialog):
             tabular_column_filters=request.tabular_column_filters,
             tabular_filter_expression=request.tabular_filter_expression,
             dashboard_detail_mode=request.dashboard_detail_mode,
-            grouping_df=self.df_for_grouping if self.grouping_applied else None,
+            grouping_df=(request.grouping_df if snapshot is not None
+                         else self.df_for_grouping if self.grouping_applied else None),
+            _grouping_snapshot=snapshot,
+            **({"grouping_default_group_label": request.grouping_default_group_label}
+               if snapshot is not None else {}),
             dashboard_visual_settings=request.dashboard_visual_settings,
             dashboard_interactivity_options=request.dashboard_interactivity_options,
         )
 
     def show_loading_screen(self) -> None:
+        action_started_at = getattr(self, "_analytics_action_started_at", None)
+        action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.tabular_load_thread is not None or self.analytics_thread is not None:
             return
         try:
@@ -2588,10 +2716,19 @@ class IndustrialAnalyticsDialog(QDialog):
                     "ETA --",
                 ),
                 on_cancel=self.cancel_analytics,
+                action_started_at=action_started_at,
             )
         )
         self.loading_bar.setRange(0, 0)
-        self.analytics_thread = self.create_analytics_thread()
+        self._pending_grouping_snapshot = request._grouping_snapshot
+        try:
+            self.analytics_thread = self.create_analytics_thread()
+        except ValueError as exc:
+            self._close_worker_progress()
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        finally:
+            self._pending_grouping_snapshot = None
         self._worker_progress[self.analytics_thread] = (
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
         )
@@ -2655,6 +2792,7 @@ class IndustrialAnalyticsDialog(QDialog):
             QMessageBox.information(self, self.windowTitle(), "Wait for analytics generation to finish.")
             return
         self._set_tabular_load_result(None)
+        self._grouping_snapshot_owner.invalidate()
         super().reject()
 
     def closeEvent(self, event) -> None:
@@ -2669,7 +2807,56 @@ class IndustrialAnalyticsDialog(QDialog):
             event.ignore()
             return
         self._set_tabular_load_result(None)
+        self._grouping_snapshot_owner.invalidate()
         super().closeEvent(event)
+
+
+def _literal_cache_token(value):
+    """Copy only exact native values without hashing or comparing custom keys."""
+    if type(value) is float:
+        return (float, float.hex(value))
+    if any(type(value) is native for native in (str, int, bool, type(None))):
+        return (type(value), value)
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            return None
+        value = tuple(value.items())
+    if type(value) is not tuple and type(value) is not list:
+        return None
+    parts = tuple(_literal_cache_token(item) for item in value)
+    return None if any(item is None for item in parts) else parts
+
+
+_NATIVE_GROUPING_PRODUCERS = tuple(
+    (name, vars(RowTable)[name]) for name in ("get", "__getitem__", "iter_rows", "row_mapping")
+)
+
+
+def _native_grouping_revision(grouping):
+    if type(grouping) is not RowTable:
+        return None
+    namespace = vars(RowTable)
+    if namespace.get("__getattribute__", object.__getattribute__) is not object.__getattribute__:
+        return None
+    if any(namespace.get(name) is not method for name, method in _NATIVE_GROUPING_PRODUCERS):
+        return None
+    raw = vars(grouping)
+    if type(raw) is not dict or any(type(name) is not str for name in raw):
+        return None
+    if any(name in raw for name, _ in _NATIVE_GROUPING_PRODUCERS):
+        return None
+    columns, rows = grouping.columns, grouping.rows
+    if type(columns) is not tuple or any(type(column) is not str for column in columns):
+        return None
+    if type(rows) is not tuple or any(
+        type(row) is not tuple
+        or any(not any(type(value) is native for native in (str, int, float, bool, type(None))) for value in row)
+        for row in rows
+    ):
+        return None
+    # Payload identity distinguishes equal-but-differently-rendered primitives
+    # (1/True, +0/-0). Retained tuple references prevent identity reuse.
+    return id(columns), id(rows), columns, rows
 
 
 def _tabular_load_columns(loaded) -> tuple[str, ...]:

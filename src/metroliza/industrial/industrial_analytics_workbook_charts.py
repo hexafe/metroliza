@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Any, Protocol
+from typing import Protocol
 
 import numpy as np
+
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
+from metroliza.charts.full_data_violin import full_data_violin
 
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
@@ -25,13 +28,6 @@ from metroliza.charts.xlsx_chart_utils import (
 configure_headless_matplotlib()
 
 import matplotlib.pyplot as plt  # noqa: E402
-
-
-class _LazyPandas:
-    def __getattr__(self, name: str) -> Any:
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()
@@ -450,8 +446,8 @@ def _insert_matplotlib_distribution_image(
     try:
         positions = np.arange(1, len(values) + 1)
         if chart_type == "violin":
-            parts = ax.violinplot(
-                values,
+            parts = full_data_violin(
+                ax, values,
                 positions=positions,
                 showmeans=False,
                 showmedians=True,

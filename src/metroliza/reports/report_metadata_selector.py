@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 import re
 from typing import Mapping, Sequence
@@ -53,6 +54,14 @@ def _collapse_spaces(value: str) -> str:
     return _SPACE_RE.sub(" ", value.strip())
 
 
+# Label normalisation is a pure str -> str function that is applied to every header token and every
+# profile alias, so the bounded caches keep repeated words (labels, separators) from being re-normalised.
+_LABEL_TEXT_CACHE_SIZE = 16384
+_LABEL_WORDS_CACHE_SIZE = 4096
+_LABEL_INDEX_CACHE_SIZE = 32
+
+
+@lru_cache(maxsize=_LABEL_TEXT_CACHE_SIZE)
 def _normalize_label_text(value: str) -> str:
     text = _collapse_spaces(canonicalize_header_label(value) or value).upper()
     return text.rstrip(":.")
@@ -123,15 +132,16 @@ def _filename_parts(file_name: str) -> tuple[str | None, str | None, str | None,
     return parsed.reference, parsed.report_date, parsed.part_name, parsed.sample_tail
 
 
-def _label_lookup(profile: MetadataProfile, field_name: str) -> dict[str, str]:
-    aliases = profile.label_aliases.get(field_name, ())
+def _label_lookup(field_name: str, aliases: Sequence[str]) -> dict[str, str]:
     exact_label = field_name.replace("_", " ").upper()
     lookup = {exact_label: "header_exact"}
     for alias in aliases:
-        lookup[_normalize_label_text(alias)] = "header_alias" if _normalize_label_text(alias) != exact_label else "header_exact"
+        normalized_alias = _normalize_label_text(alias)
+        lookup[normalized_alias] = "header_alias" if normalized_alias != exact_label else "header_exact"
     return lookup
 
 
+@lru_cache(maxsize=_LABEL_WORDS_CACHE_SIZE)
 def _label_words(label_text: str) -> tuple[str, ...]:
     return tuple(part for part in _normalize_label_text(label_text).split() if part)
 
@@ -140,48 +150,84 @@ def _is_label_separator(value: str) -> bool:
     return _normalize_label_text(value) in {"", ":", "-", ":-"}
 
 
+@dataclass(frozen=True)
+class _LabelIndex:
+    """Header label lookups for one profile alias set; built once and shared read-only.
+
+    ``exact`` maps a normalised label to ``(field_name, source_type)``; when several fields define the
+    same label the first field in profile order wins, as in the former per-field scan.
+    ``multi_word`` maps the first word of every multi-word label to ``(field_name, source_type, words)``
+    in profile order, so a label spread over several header items is only tried where its first word matches.
+    """
+
+    exact: dict[str, tuple[str, str]]
+    multi_word: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]]
+
+
+_LabelAliasKey = tuple[tuple[str, tuple[str, ...]], ...]
+
+
+def _label_alias_key(profile: MetadataProfile) -> _LabelAliasKey:
+    """Immutable identity of a profile's label aliases (content, not object identity)."""
+    return tuple((field_name, tuple(aliases)) for field_name, aliases in profile.label_aliases.items())
+
+
+@lru_cache(maxsize=_LABEL_INDEX_CACHE_SIZE)
+def _build_label_index(alias_key: _LabelAliasKey) -> _LabelIndex:
+    exact: dict[str, tuple[str, str]] = {}
+    multi_word: dict[str, list[tuple[str, str, tuple[str, ...]]]] = {}
+    for field_name, aliases in alias_key:
+        for label_text, source_type in _label_lookup(field_name, aliases).items():
+            exact.setdefault(label_text, (field_name, source_type))
+            words = _label_words(label_text)
+            if len(words) > 1:
+                multi_word.setdefault(words[0], []).append((field_name, source_type, words))
+    return _LabelIndex(exact=exact, multi_word={first: tuple(entries) for first, entries in multi_word.items()})
+
+
+def _label_index(profile: MetadataProfile) -> _LabelIndex:
+    return _build_label_index(_label_alias_key(profile))
+
+
 def _match_label_at(
     row: Sequence[HeaderTextItem],
     index: int,
-    profile: MetadataProfile,
+    label_index: _LabelIndex,
 ) -> tuple[str, str, str, int] | None:
     if index >= len(row):
         return None
 
     token_label = _normalize_label_text(row[index].text)
-    best_match: tuple[str, str, str, int] | None = None
-    for field_name in profile.label_aliases:
-        label_lookup = _label_lookup(profile, field_name)
-        if token_label in label_lookup:
-            consumed = index + 1
-            while consumed < len(row) and _is_label_separator(row[consumed].text):
-                consumed += 1
-            return field_name, label_lookup[token_label], row[index].text, consumed - index
+    exact_match = label_index.exact.get(token_label)
+    if exact_match is not None:
+        field_name, source_type = exact_match
+        consumed = index + 1
+        while consumed < len(row) and _is_label_separator(row[consumed].text):
+            consumed += 1
+        return field_name, source_type, row[index].text, consumed - index
 
-        for label_text, source_type in label_lookup.items():
-            words = _label_words(label_text)
-            if len(words) <= 1:
-                continue
-            position = index
-            matched_items: list[HeaderTextItem] = []
-            for word in words:
-                if position >= len(row):
-                    matched_items = []
-                    break
-                if _normalize_label_text(row[position].text) != word:
-                    matched_items = []
-                    break
-                matched_items.append(row[position])
-                position += 1
-            if not matched_items:
-                continue
-            while position < len(row) and _is_label_separator(row[position].text):
-                matched_items.append(row[position])
-                position += 1
-            label_value = _collapse_spaces(" ".join(item.text for item in matched_items))
-            consumed_count = position - index
-            if best_match is None or consumed_count > best_match[3]:
-                best_match = (field_name, source_type, label_value, consumed_count)
+    best_match: tuple[str, str, str, int] | None = None
+    for field_name, source_type, words in label_index.multi_word.get(token_label, ()):
+        position = index
+        matched_items: list[HeaderTextItem] = []
+        for word in words:
+            if position >= len(row):
+                matched_items = []
+                break
+            if _normalize_label_text(row[position].text) != word:
+                matched_items = []
+                break
+            matched_items.append(row[position])
+            position += 1
+        if not matched_items:
+            continue
+        while position < len(row) and _is_label_separator(row[position].text):
+            matched_items.append(row[position])
+            position += 1
+        label_value = _collapse_spaces(" ".join(item.text for item in matched_items))
+        consumed_count = position - index
+        if best_match is None or consumed_count > best_match[3]:
+            best_match = (field_name, source_type, label_value, consumed_count)
 
     return best_match
 
@@ -235,6 +281,7 @@ def _value_candidates_from_rows(
 ) -> list[MetadataCandidate]:
     candidates: list[MetadataCandidate] = []
     header_region = "page1_header_band"
+    label_index = _label_index(profile)
     for row in rows:
         normalized_row = [item for item in row if item.text.strip()]
         if not normalized_row:
@@ -244,7 +291,7 @@ def _value_candidates_from_rows(
         index = 0
         while index < len(normalized_row):
             token = normalized_row[index]
-            label_match = _match_label_at(normalized_row, index, profile)
+            label_match = _match_label_at(normalized_row, index, label_index)
             if label_match is None:
                 index += 1
                 continue
@@ -254,7 +301,7 @@ def _value_candidates_from_rows(
             value_items: list[HeaderTextItem] = []
             lookahead = index + consumed_count
             while lookahead < len(normalized_row):
-                if _match_label_at(normalized_row, lookahead, profile) is not None:
+                if _match_label_at(normalized_row, lookahead, label_index) is not None:
                     break
                 next_item = normalized_row[lookahead]
                 value_tokens.append(next_item.text)

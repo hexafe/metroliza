@@ -18,10 +18,12 @@ can preserve them.
 
 ## Header OCR runtime
 
-Metroliza's packaged header OCR path uses RapidOCR with ONNX Runtime by default,
-OpenVINO as a selectable CPU acceleration backend, and a small set of vendored
-ONNX model files listed in `src/metroliza/resources/ocr_models/rapidocr/README.md`. The packaged
+Metroliza's packaged header OCR path uses RapidOCR with ONNX Runtime and a small
+set of vendored ONNX model files listed in `src/metroliza/resources/ocr_models/rapidocr/README.md`. The packaged
 application uses local model files and does not download OCR models at runtime.
+OpenVINO is a selectable CPU acceleration backend for benchmarking only: it is
+shipped in explicit benchmark build flavors (`METROLIZA_BUILD_FLAVOR=benchmark`)
+and is not part of user builds.
 
 | Component | License / notice | Project |
 | --- | --- | --- |
@@ -94,6 +96,17 @@ statrs, and rayon. The exact resolved transitive crate versions, sources, and
 declared license metadata are recorded in the build `260711` inventory linked
 above. Preserve all license files emitted by Cargo/wheel tooling in the release
 notice bundle.
+
+## Native launcher
+
+The native Windows launcher (`packaging/launcher`) decodes its embedded loading
+animation for the startup splash with these crates (versions from
+`packaging/launcher/Cargo.lock`).
+
+| Component | License / notice | Project |
+| --- | --- | --- |
+| gif 0.13.3 | MIT OR Apache-2.0 | https://github.com/image-rs/image-gif |
+| weezl 0.1.12 (LZW decoder used by gif) | MIT OR Apache-2.0 | https://github.com/image-rs/weezl |
 
 ## Release packaging obligations
 

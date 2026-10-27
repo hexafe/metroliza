@@ -1,9 +1,11 @@
 import unittest
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
 
 from modules.distribution_fit_service import fit_measurement_distribution
+
 
 from modules.export_query_service import RowTable
 from modules.export_summary_utils import (
@@ -148,3 +150,58 @@ class TestExportSummaryUtils(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+def test_to_numeric_array_literal_conversion_and_copy_contract():
+    from decimal import Decimal
+    from metroliza.exporting.export_summary_utils import _is_missing_value, _to_numeric_array
+
+    cases = [[], [None, '', 'bad', '0.30000000000000004', Decimal('1.25'), -0., np.inf],
+             np.array(1.), np.array([[1., 2.], [3., np.nan]]),
+             np.array([0x7ff0000000000001, 0xfff8000000000001], dtype=np.uint64).view(np.float64),
+             np.array([0x7f800001, 0xffc00001], dtype=np.uint32).view(np.float32),
+             np.array([True, False]), np.array([1, 2]),
+             np.array(['1.5\x00', 'nan', '1.25']), np.array([None, Decimal('2')], dtype=object)]
+    for dtype in (np.float16, np.float32, np.float64, np.longdouble):
+        cases.extend([np.array([1., -0., np.nan, np.inf, -np.inf], dtype=dtype),
+                      np.array([1., 2., 3., 4.], dtype=dtype)[::2], np.array([], dtype=dtype)])
+    for values in cases:
+        results = []
+        for reference in (True, False):
+            with warnings.catch_warnings(record=True) as emitted:
+                warnings.simplefilter('always')
+                try:
+                    if reference:
+                        numeric = []
+                        for value in values:
+                            if _is_missing_value(value):
+                                continue
+                            try:
+                                value = float(value)
+                            except (TypeError, ValueError):
+                                continue
+                            if np.isfinite(value):
+                                numeric.append(value)
+                        result = np.asarray(numeric, dtype=float)
+                    else:
+                        result = _to_numeric_array(values)
+                    assert not isinstance(values, np.ndarray) or not np.shares_memory(result, values)
+                    outcome = (result.dtype.str, result.shape, result.tobytes())
+                except (TypeError, ValueError) as exc:
+                    outcome = (type(exc), str(exc))
+                results.append((outcome, [(type(w.message), str(w.message)) for w in emitted]))
+        assert results[0] == results[1]
+
+
+def test_to_numeric_array_fast_path_and_scalar_fallback():
+    from unittest import mock
+    from metroliza.exporting import export_summary_utils as module
+
+    for dtype in (np.float16, np.float32, np.float64):
+        values = np.array([1., -0., np.nan, np.inf, -np.inf], dtype=dtype)
+        values.flags.writeable = False
+        with mock.patch.object(module, '_is_missing_value', side_effect=AssertionError('scalar conversion')):
+            assert module._to_numeric_array(values).tobytes() == np.array([1., -0.]).tobytes()
+    with mock.patch.object(module, '_is_missing_value', wraps=module._is_missing_value) as scalar:
+        module._to_numeric_array(np.array([1., 2.], dtype=np.longdouble))
+        module._to_numeric_array([None, '2'])
+        assert scalar.call_count == 4

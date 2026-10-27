@@ -3,6 +3,10 @@ param([Parameter(Mandatory=$true)][string]$ConfigPath)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$phasePath = Join-Path ([IO.Path]::GetDirectoryName($ConfigPath)) 'phase.jsonl'
+$record = @{schema_version=1; stage='shell_entered'} | ConvertTo-Json -Compress
+[IO.File]::AppendAllText($phasePath, $record + [Environment]::NewLine,
+    [Text.UTF8Encoding]::new($false))
 $config = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
 $ready = [Threading.EventWaitHandle]::OpenExisting($config.ready)
 $hold = [Threading.EventWaitHandle]::OpenExisting($config.hold)

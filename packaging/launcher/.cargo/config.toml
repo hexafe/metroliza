@@ -1,0 +1,5 @@
+# Statically link the C runtime on MSVC so the launcher runs on machines without the VC++
+# redistributable. Cargo reads this file only when invoked from this directory
+# (build_windows_launcher_exe.ps1 does that).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

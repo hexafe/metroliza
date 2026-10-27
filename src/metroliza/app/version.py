@@ -1,11 +1,37 @@
-RELEASE_VERSION = "2026.06rc2"
-VERSION_DATE = "260711"
+RELEASE_VERSION = "2026.09rc1"
+VERSION_DATE = "261020"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-CURRENT_RELEASE_HIGHLIGHT = "Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates."
-PUBLIC_VERSION_LABEL = "2026.06 RC2 (build 260711)"
+CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import."
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261020)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Much faster start on Windows: the app unpacks once per version, and later starts open the main window in about a second<br>
+    - A smaller download: unused OCR acceleration and video components are no longer bundled<br>
+    - Fast report import is about 2.5 times faster<br>
+    - After review, report metadata (reference, part name, sample number, date) is read automatically into the import table, where you can correct it or run OCR for selected reports; your corrections are kept<br>
+    - The dark theme is applied correctly when the app starts<br>
+    - The splash screen closes as soon as the main window is visible<br>
+    - A missing or damaged program file is repaired automatically, or the message names the affected file<br>
+    - Modify Database opens instantly and searches quickly, even with hundreds of thousands of measurements<br>
+    - Excel exports are about twice as fast and use much less memory; Extended plots export uses several processor cores and CSV Summary export is faster too<br>
+    - Importing reports on Windows saves them to the database much faster<br>
+    - Multi-page reports in very large imports (more than 2048 reports at once) are read the same way as other imports, without extra measurement groups at page breaks<br>
+    - The filter window opens instantly, loads its choices in the background and reuses them while the database is unchanged<br>
+    - Canceling an export right after it starts stops at once, without loading all measurements first<br>
+    - Creating an analysis in CSV Summary works after applying groups to Industrial Data, and a renamed default group is kept in the dashboard and workbook<br>
+    - Industrial Data temporary storage shows how many rows were fetched, and opening CSV Summary for different sources no longer makes the temporary file grow each time<br>
+    - A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>
+    - Choose PDF reports before import and reopen saved measurements without repeating completed work<br>
+    - Filters and grouping keep numeric results consistent between the table and analysis views<br>
+    - Excel exports preserve chart titles and series names as literal text<br>
+    - Reports follow the selected app theme, including after a theme change<br>
+    - Reports without a reference remain exportable, while group comparisons identify missing references<br>
+    - The Help menu opens private incident reports for preview and export when a supervised run fails<br>
+    - Canceling active work protects completed database and workbook output<br>
+
+    <br><b>Archive:</b><br>
+    <br><b>Version 2026.06rc2 (build 260711):</b><br>
     - Large Google Sheets conversions now use bounded resumable chunks, retry transient failures, and clean up created Drive files when cancellation or validation prevents a usable result<br>
     - Parser profile installs and reloads now publish one locked generation at a time, so concurrent imports never observe half-written profile or approval state<br>
     - Realtime dashboard refreshes now read one consistent SQLite snapshot, batch related lookups, bound timeline rows before joins, and reject stale source-health updates<br>
@@ -58,8 +84,6 @@ release_notes = f"""
     - Parser plugin handoff packages now have stronger tests that require local API contract content and small step-by-step prompts for LLM-assisted plugin work<br>
     - Realtime rollout docs now include operator concepts, production safety checks, synthetic replay evidence, source lag review, and rollback steps<br>
     - The About dialog now stays focused on the duck animation, version, author, and GitHub project link<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.05rc5 (build 260612):</b><br>
     - Saved report updates are safer if a database write fails partway through<br>

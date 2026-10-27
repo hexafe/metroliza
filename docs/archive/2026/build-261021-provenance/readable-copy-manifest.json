@@ -1,0 +1,25 @@
+{
+  "normalization": "CRLF to LF for repository-readable copies only; original byte-exact evidence is retained in GitHub archive assets",
+  "files": [
+    {
+      "path": "12322835269-metroliza_2026.09rc1_261021_launcher.exe.provenance.json",
+      "original_sha256": "c1cea8b8c5bdae0a62118b68fd42ff65f3fe7d90c844bd632d5e2c026657817f",
+      "readable_LF_sha256": "6f714756c698f4e163d623e22cd5e4d7cfb1d0c36ca01c8c2c6054c889d5e648"
+    },
+    {
+      "path": "12322650023-package-identity-receipt.json",
+      "original_sha256": "20ab38f22776feecd4821f8050f5d6c84486d563e61acab643b40d1d52dc1a38",
+      "readable_LF_sha256": "4d60e01b2f76bacffc73473d10045b79f7b80dc0c48cb2b60d549ab2a8d34d02"
+    },
+    {
+      "path": "embedded-build_provenance.json",
+      "original_sha256": "94a71da7d8beca8b23fa065869a891bd62d82759d8999e2632e2d4c9f154fe35",
+      "readable_LF_sha256": "b9035b38916b0fd1bb76a6bd7e0f981f23fac98967eedfaeb724cccc6b6d33f7"
+    },
+    {
+      "path": "12321824323-compute-workers.json",
+      "original_sha256": "0040cc3cdb4a7e8c472df429a898d2826393532b8892204af53492eceb83d559",
+      "readable_LF_sha256": "1e268a38b6b3963506b1a2b8acd557e959841a8f1b820d6a5b1443d72543f300"
+    }
+  ]
+}

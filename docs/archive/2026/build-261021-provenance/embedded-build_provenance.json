@@ -1,0 +1,9 @@
+{
+  "built_at_utc": "2026-10-21T04:48:30Z",
+  "dirty": false,
+  "git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+  "packager": "pyinstaller",
+  "python_version": "3.11.9",
+  "release_label": "2026.09rc1(261021)",
+  "schema_version": 1
+}

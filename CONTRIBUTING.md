@@ -6,7 +6,7 @@
 - Start from a GitHub Issue and follow [`docs/project/development_workflow.md`](docs/project/development_workflow.md).
 - Use [`docs/project/roadmap.md`](docs/project/roadmap.md) for current priorities; old roadmap checklists do not schedule work by themselves.
 - Branch normal development from `develop` and target pull requests at `develop`.
-- Branch only approved release fixes/evidence from `release/2026.06-rc2` and target that release branch; reconcile accepted release changes into `develop`.
+- Branch only approved current release fixes/evidence from `release/2026.09-rc1` and target that release branch; reconcile accepted release changes into `develop`.
 - Do not start new routine work from `rc2` or the current production `master`; neither is the
   development base.
 - GitHub currently presents `master` as the default branch, so select the pull-request base explicitly.
@@ -15,7 +15,9 @@
 - Keep remote branches short-lived: normally only `master`, `develop`, the active `release/*` line, and current PR heads should exist. A branch is work-in-progress, not evidence storage.
 - After merge, mark the source branch for retirement unless a named live consumer per the [cleanup gate](docs/release_checks/branching_strategy.md#cleanup-gate) requires that exact ref; record the consumer and retirement trigger. Physical deletion follows that gate: complete live-consumer checks and clean-repository recovery fetch of the exact commit/tree for every branch, including merged and squashed branches, then a Product-Owner-approved finite exact-ref/full-SHA manifest and expected-old-value guards. Do not create branches for reviewers, agents, test attempts, checkpoints, or backlog ideas.
 
-The exact branch decision and automated evidence are recorded in
+The current RC source roles and qualification state are recorded in
+[`docs/release_checks/release_status.md`](docs/release_checks/release_status.md) and
+[#1153](https://github.com/hexafe/metroliza/issues/1153). The historical branch-transition evidence is recorded in
 [`docs/release_checks/rc2_branch_transition_decision_2026-08-22.md`](docs/release_checks/rc2_branch_transition_decision_2026-08-22.md).
 
 ## Setup

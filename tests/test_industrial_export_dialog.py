@@ -398,3 +398,54 @@ def test_export_dialog_live_mode_validates_credentials_and_profiles(tmp_path):
     with pytest.raises(ValueError, match="password"):
         dialog._read_live_credentials()
     dialog.close()
+
+
+@pytest.mark.parametrize("wait_ms", [50, 1100])
+def test_cache_indicator_is_delayed_busy_and_released_with_cancel(monkeypatch, tmp_path, wait_ms):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent, QThread, pyqtSignal
+    from PyQt6.QtGui import QMovie
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QMessageBox
+
+    class Worker(QThread):
+        result_ready = pyqtSignal(dict)
+        error_occurred = pyqtSignal(str)
+        cancelled = pyqtSignal(str)
+        update_label = pyqtSignal(str)
+        running = False
+        cancel_requested = False
+
+        def start(self):
+            self.running = True
+
+        def isRunning(self):  # noqa: N802
+            return self.running
+
+        def cancel(self):
+            self.cancel_requested = True
+
+    _app()
+    dialog = IndustrialExportDialog(db_file=str(tmp_path / "cache.sqlite"))
+    worker = Worker()
+    monkeypatch.setattr(dialog, "create_export_thread", lambda: worker)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: None)
+    try:
+        dialog.show_loading_screen()
+        progress, movie = dialog.loading_dialog, dialog.loading_gif
+        assert dialog.loading_bar.minimum() == dialog.loading_bar.maximum() == 0
+        assert not progress.isVisible()
+        assert movie.state() == QMovie.MovieState.NotRunning
+        QTest.qWait(wait_ms)
+        assert progress.isVisible() == (wait_ms > 1000)
+        dialog.cancel_export()
+        assert worker.cancel_requested
+        worker.cancelled.emit("Cancelled")
+        worker.running = False
+        worker.finished.emit()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(progress)
+        assert not hasattr(dialog, "loading_dialog")
+    finally:
+        worker.running = False
+        dialog.close()
