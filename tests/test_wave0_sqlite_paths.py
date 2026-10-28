@@ -5,6 +5,14 @@ from types import SimpleNamespace
 import pytest
 
 
+from PyQt6 import QtCore as _REAL_QTCORE, QtGui as _REAL_QTGUI, QtWidgets as _REAL_QTWIDGETS  # noqa: E402
+
+# Captured at collection time, before any isolated suite can replace them in sys.modules.
+_REAL_QT_MODULES = {
+    "PyQt6.QtCore": _REAL_QTCORE,
+    "PyQt6.QtGui": _REAL_QTGUI,
+    "PyQt6.QtWidgets": _REAL_QTWIDGETS,
+}
 _QT_NAMES = ("QDialog", "QFileDialog", "QWidget", "QObject", "QThread", "QMessageBox", "QTimer")
 
 
@@ -18,8 +26,7 @@ def _purge_stub_bound_modules():
     """
     import sys
 
-    from PyQt6 import QtCore, QtWidgets
-
+    QtCore, QtWidgets = _REAL_QTCORE, _REAL_QTWIDGETS
     real = {name: getattr(QtWidgets, name, None) or getattr(QtCore, name, None) for name in _QT_NAMES}
     stale = [
         name for name, module in tuple(sys.modules.items())
@@ -35,9 +42,15 @@ def _purge_stub_bound_modules():
 
 
 @pytest.fixture(autouse=True)
-def _real_qt_bound_modules():
+def _real_qt_bound_modules(monkeypatch):
+    import sys
+
+    for name, module in _REAL_QT_MODULES.items():
+        if sys.modules.get(name) is not module:
+            monkeypatch.setitem(sys.modules, name, module)
     _purge_stub_bound_modules()
     yield
+    _purge_stub_bound_modules()
 
 
 @pytest.mark.parametrize("suffix", [".sqlite", ".sqlite3", ".DB", ".db", ""])
