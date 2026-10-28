@@ -658,3 +658,51 @@ def test_hardlink_exdev_fallback_never_copies_into_final_name(monkeypatch, tmp_p
     monkeypatch.setattr(publication.os, "link", lambda *_: (_ for _ in ()).throw(OSError(errno.EXDEV, "cross-device")))
     publication.publish_output(temporary, target)
     assert target.read_bytes() == b"complete NOK workbook" and not temporary.exists()
+
+
+def test_html_only_dashboard_creates_missing_output_directory(tmp_path):
+    from metroliza.charts.export_html_dashboard import write_export_html_dashboard
+    from metroliza.exporting.output_publication import write_dashboard_safely
+
+    target = tmp_path / "new" / "nested" / "dashboard.html"
+    result = write_dashboard_safely(
+        write_export_html_dashboard, output_path=target,
+        assets_dir=target.with_name("dashboard_assets"), sections=[],
+    )
+    assert Path(result["html_dashboard_path"]) == target
+    assert target.is_file()
+    assert not [path for path in target.parent.iterdir() if path.name.startswith(".metroliza-export-")]
+
+
+def test_google_fallback_dashboard_cancel_reports_cancellation(tmp_path, monkeypatch):
+    from metroliza.exporting import export_data_thread as module
+    from metroliza.exporting.google_drive_export import GoogleDriveExportError
+    from metroliza.exporting.output_publication import OutputPublicationCanceled
+    from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+    request = ExportRequest(
+        paths=AppPaths(db_file=str(tmp_path / "reports.db"), excel_file=str(tmp_path / "out.xlsx")),
+        options=ExportOptions(export_target="google_sheets_drive_convert", generate_html_dashboard=True),
+    )
+    thread = module.ExportDataThread(request)
+    thread.get_export_backend = lambda: SimpleNamespace(run=lambda _thread: True)
+
+    def upload_fails(*_args, **_kwargs):
+        raise GoogleDriveExportError("NOK upload failed")
+
+    def dashboard_canceled():
+        thread.export_canceled = True
+        raise OutputPublicationCanceled()
+
+    monkeypatch.setattr(module, "upload_and_convert_workbook", upload_fails)
+    thread._write_html_dashboard_if_requested = dashboard_canceled
+    canceled, completed, errors = [], [], []
+    thread.canceled.connect(lambda: canceled.append(True))
+    thread.completed.connect(lambda: completed.append(True))
+    thread.error_occurred.connect(errors.append)
+
+    thread.run()
+
+    assert canceled == [True]
+    assert completed == []
+    assert errors == []

@@ -200,6 +200,7 @@ def _write_dashboard_once(writer, *, consents, should_cancel, **kwargs):
 
     target = Path(kwargs["output_path"])
     assets = Path(kwargs["assets_dir"])
+    target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".metroliza-export-", dir=target.parent) as scratch:
         stage = Path(scratch)
         staged_kwargs = dict(kwargs, output_path=stage / target.name, assets_dir=stage / assets.name)

@@ -5135,7 +5135,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(build_three_line_status(f"Warning: {e}", "Exporting data...", "ETA --"))
                 self._update_completion_chart_telemetry()
-                self._write_html_dashboard_if_requested()
+                try:
+                    self._write_html_dashboard_if_requested()
+                except OutputPublicationCanceled:
+                    # Raised inside this handler, so the sibling cancel clause cannot catch it.
+                    self.export_canceled = True
+                    self._check_canceled()
+                    return
                 self._update_completion_chart_telemetry()
                 self._emit_stage_progress('finalize', 1.0)
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
