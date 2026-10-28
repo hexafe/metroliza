@@ -853,9 +853,12 @@ class MainWindow(QMainWindow):
 
             self.metadata_enrichment_thread = MetadataEnrichmentThread(self.db_file)
             self.metadata_enrichment_error_message = None
+            self.metadata_enrichment_warnings = []
+            self.metadata_enrichment_status_label.setToolTip("")
             self.metadata_enrichment_thread.update_label.connect(self.metadata_enrichment_status_label.setText)
             self.metadata_enrichment_thread.update_progress.connect(self.metadata_enrichment_progress_bar.setValue)
             self.metadata_enrichment_thread.error_occurred.connect(self.on_metadata_enrichment_error)
+            self.metadata_enrichment_thread.warning.connect(self.on_metadata_enrichment_warning)
             self.metadata_enrichment_thread.enrichment_finished.connect(self.on_metadata_enrichment_finished)
             self.metadata_enrichment_thread.finished.connect(self._clear_metadata_enrichment_thread)
 
@@ -867,13 +870,35 @@ class MainWindow(QMainWindow):
             self.cancel_metadata_enrichment_button.setEnabled(True)
             self.cancel_metadata_enrichment_button.setVisible(True)
             self.enrich_metadata_action.setEnabled(False)
+            self._start_metadata_enrichment_progress()
             self.metadata_enrichment_thread.start()
         except Exception as e:
             self.log_and_exit(e)
 
     def _clear_metadata_enrichment_thread(self):
+        from metroliza.ui.worker_progress_dialog import dismiss_worker_progress_dialog
+
+        progress = getattr(self, "_metadata_enrichment_progress_dialog", None)
+        dismiss_worker_progress_dialog(progress)
+        self._metadata_enrichment_progress_dialog = None
         self.metadata_enrichment_thread = None
         self._sync_workflow_next_step()
+
+    def _start_metadata_enrichment_progress(self):
+        from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog
+
+        dialog, label, bar, _movie = create_delayed_worker_progress_dialog(
+            self, window_title="Metadata enrichment",
+            initial_status_text="Metadata enrichment\nFinding reports to enrich\nETA --",
+            on_cancel=self.stop_metadata_enrichment,
+        )
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        self._metadata_enrichment_progress_dialog = dialog
+        self.metadata_enrichment_thread.update_label.connect(label.setText)
+        self.metadata_enrichment_thread.update_progress.connect(bar.setValue)
+        self.metadata_enrichment_thread.warning.connect(label.setText)
+        self.metadata_enrichment_thread.error_occurred.connect(label.setText)
+        dialog.show()
 
     def stop_metadata_enrichment(self):
         try:
@@ -890,14 +915,30 @@ class MainWindow(QMainWindow):
         self.metadata_enrichment_status_label.setText(f"Metadata enrichment failed: {message}")
         set_status_variant(self.metadata_enrichment_status_label, "danger")
 
+    def on_metadata_enrichment_warning(self, message):
+        warnings = getattr(self, "metadata_enrichment_warnings", [])
+        if len(warnings) < 20:
+            warnings.append(str(message)[:500])
+        elif len(warnings) == 20:
+            warnings.append("Further warnings omitted from this preview; see the failed/skipped counts.")
+        self.metadata_enrichment_warnings = warnings
+        self.metadata_enrichment_status_label.setToolTip("\n".join(warnings))
+        self.metadata_enrichment_status_label.setText(str(message)[:500])
+        set_status_variant(self.metadata_enrichment_status_label, "warning")
+
     def on_metadata_enrichment_finished(self):
         try:
             self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
             self.cancel_metadata_enrichment_button.setEnabled(False)
             self.cancel_metadata_enrichment_button.setVisible(False)
             if self.metadata_enrichment_error_message:
+                result = getattr(self.metadata_enrichment_thread, "result", None)
+                detail = ""
+                if result is not None:
+                    self._show_metadata_enrichment_result(result)
+                    detail = f"\n{self.metadata_enrichment_status_label.text()}"
                 self.metadata_enrichment_status_label.setText(
-                    f"Metadata enrichment failed: {self.metadata_enrichment_error_message}"
+                    f"Metadata enrichment failed: {self.metadata_enrichment_error_message}{detail}"
                 )
                 set_status_variant(self.metadata_enrichment_status_label, "danger")
                 return
@@ -905,13 +946,38 @@ class MainWindow(QMainWindow):
                 return
             result = getattr(self.metadata_enrichment_thread, "result", None)
             if result is not None:
-                self.metadata_enrichment_progress_bar.setValue(100)
-                self.metadata_enrichment_status_label.setText(
-                    f"Metadata enrichment complete: {result.enriched_files}/{result.total_files} reports updated"
-                )
-                set_status_variant(self.metadata_enrichment_status_label, "success")
+                self._show_metadata_enrichment_result(result)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _show_metadata_enrichment_result(self, result):
+        failed = getattr(result, "failed_files", 0)
+        skipped = getattr(result, "skipped_files", 0)
+        processed = result.enriched_files + failed + skipped
+        remaining = max(0, result.total_files - processed)
+        cancelled = getattr(result, "cancellation_requested", False)
+        warnings = getattr(self, "metadata_enrichment_warnings", [])
+        counts = (
+            f"{processed} of {result.total_files} processed, {result.enriched_files} updated kept; "
+            f"{failed} failed, {skipped} skipped, {remaining} not processed"
+        )
+        variant = "warning"
+        if getattr(result, "termination_reason", None) == "failed":
+            text, variant = f"Failed — {counts}", "danger"
+        elif cancelled:
+            text = f"Cancelled — {counts}"
+        elif failed or skipped or remaining or warnings:
+            text = f"Completed with warnings — {counts}"
+        elif not result.total_files:
+            text, variant = "No reports need metadata enrichment", "info"
+        else:
+            text = f"Metadata enrichment complete: {result.enriched_files}/{result.total_files} reports updated"
+            variant = "success"
+        progress = int(100 * processed / result.total_files) if result.total_files else 0
+        self.metadata_enrichment_progress_bar.setValue(100 if variant == "success" else min(99, progress))
+        self.metadata_enrichment_status_label.setText(text)
+        self.metadata_enrichment_status_label.setToolTip("\n".join([counts, *warnings]))
+        set_status_variant(self.metadata_enrichment_status_label, variant)
 
     def closeEvent(self, event):
         if not self._background_shutdown_allows_close():

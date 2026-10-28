@@ -321,7 +321,7 @@ def test_metadata_actions_live_in_one_keyboard_reachable_menu_on_the_action_row(
     assert button.menu() is planner.metadata_menu and button.focusPolicy() != Qt.FocusPolicy.NoFocus
     assert button.accessibleName() == "Metadata actions"
     assert [a.text() for a in planner.metadata_menu.actions()] == [
-        "Copy to checked", "Reset to detected", "Stop metadata read",
+        "Copy to checked", "Undo copy to checked", "Reset to detected", "Stop metadata read",
     ]
     assert all(a.toolTip() for a in planner.metadata_menu.actions())
     # No third toolbar row: OCR and the menu share the row of the selection buttons.

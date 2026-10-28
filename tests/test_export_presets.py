@@ -1,9 +1,12 @@
+import importlib
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 from modules.contracts import validate_export_options
 from modules.export_preset_utils import (
     EXPORT_PRESET_DEFAULT,
@@ -122,6 +125,7 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._missing = object()
+        cls._modules_before_stubs = set(sys.modules)
         cls._saved_modules = {
             module_name: sys.modules.get(module_name)
             for module_name in [
@@ -140,6 +144,13 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
                 'metroliza.shared.custom_logger',
                 'metroliza.ui.export_dialog',
             ]
+        }
+        # Imports also bind children on their parent packages. Restoring only
+        # sys.modules leaves `from metroliza.ui import export_dialog` pointing
+        # at the copy imported with QDialog/QFileDialog stubs.
+        cls._saved_package_attrs = {
+            name: getattr(sys.modules.get(name.rpartition('.')[0]), name.rpartition('.')[2], cls._missing)
+            for name in cls._saved_modules
         }
         cls._saved_module_attrs = {
             ('modules.export_data_thread', 'ExportDataThread'): getattr(sys.modules.get('modules.export_data_thread'), 'ExportDataThread', cls._missing),
@@ -235,6 +246,17 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
     def tearDownClass(cls):
         sys.modules.pop('modules.export_dialog', None)
         sys.modules.pop('metroliza.ui.export_dialog', None)
+        # Modules first imported while PyQt6 was stubbed (export_dialog and its UI helpers) hold
+        # stub base classes; drop them and their parent-package bindings so later tests
+        # re-import the real modules.
+        for module_name in set(sys.modules) - cls._modules_before_stubs:
+            if not module_name.startswith(('metroliza.', 'modules.')):
+                continue
+            sys.modules.pop(module_name, None)
+            package_name, _, attr_name = module_name.rpartition('.')
+            package = sys.modules.get(package_name)
+            if package is not None and attr_name in vars(package):
+                delattr(package, attr_name)
         for (module_name, attr_name), original_value in cls._saved_module_attrs.items():
             module = sys.modules.get(module_name)
             if module is None:
@@ -249,6 +271,63 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
                 sys.modules.pop(module_name, None)
             else:
                 sys.modules[module_name] = original_module
+        for module_name, original_value in cls._saved_package_attrs.items():
+            package_name, _, attr_name = module_name.rpartition('.')
+            package = sys.modules.get(package_name)
+            if package is None:
+                continue
+            if original_value is cls._missing:
+                vars(package).pop(attr_name, None)
+            else:
+                setattr(package, attr_name, original_value)
+
+
+@pytest.mark.parametrize("preloaded", [True, False], ids=["preloaded", "first-import"])
+def test_export_preset_stub_cleanup_restores_import_state(monkeypatch, preloaded):
+    from PyQt6 import QtWidgets
+
+    canonical_name = "metroliza.ui.export_dialog"
+    legacy_name = "modules.export_dialog"
+    real_module = importlib.import_module(canonical_name)
+    assert importlib.import_module(legacy_name) is real_module
+    packages = {
+        canonical_name: importlib.import_module("metroliza.ui"),
+        legacy_name: importlib.import_module("modules"),
+    }
+    # Register the starting state so even a failing cleanup regression cannot
+    # poison later tests in this process.
+    for name, package in packages.items():
+        monkeypatch.setitem(sys.modules, name, real_module)
+        monkeypatch.setattr(package, "export_dialog", real_module)
+        if not preloaded:
+            monkeypatch.delitem(sys.modules, name)
+            monkeypatch.delattr(package, "export_dialog")
+
+    class Probe(_ExportPresetFlowStubCase):
+        pass
+
+    Probe.setUpClass()
+    try:
+        stub_module = importlib.import_module(legacy_name)
+        assert stub_module is not real_module
+        assert stub_module.QDialog is object
+        assert stub_module.QFileDialog is object
+    finally:
+        Probe.tearDownClass()
+
+    assert sys.modules["PyQt6.QtWidgets"] is QtWidgets
+    for name, package in packages.items():
+        if preloaded:
+            assert sys.modules[name] is real_module
+            assert vars(package)["export_dialog"] is real_module
+        else:
+            assert name not in sys.modules
+            assert "export_dialog" not in vars(package)
+    if preloaded:
+        from metroliza.ui import export_dialog
+
+        assert export_dialog.QDialog is QtWidgets.QDialog
+        assert export_dialog.QFileDialog is QtWidgets.QFileDialog
 
 
 class TestExportPresetFlowIntegration(_ExportPresetFlowStubCase):

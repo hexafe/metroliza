@@ -478,6 +478,8 @@ class ModifyDB(QDialog):
 
     def select_db_file(self):
         """Select a database file and load editable values into each table."""
+        from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
+
         if vars(self).get("_save_in_progress", False):
             return
         try:
@@ -489,13 +491,12 @@ class ModifyDB(QDialog):
                 return
             """Open a file dialog to select a database file"""
             filename, _ = QFileDialog.getOpenFileName(
-                self, "Select a database file", "", "SQLite database (*.db);;All files (*)"
+                self, "Select a database file", "", SQLITE_FILE_FILTER
             )
             if filename:
                 if self.database_change_allowed is not None and not self.database_change_allowed():
                     return
-                if not filename.endswith(".db"):
-                    filename += ".db"
+                filename = sqlite_database_path(filename)
                 logger.info("Selected DB file: %s", filename)
                 self.db_file = filename
                 ModifyDB._refresh_tables_for_view(self)

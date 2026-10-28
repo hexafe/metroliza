@@ -111,7 +111,10 @@ def test_export_cancel_and_error_after_terminal_dismissal(qapplication_session, 
 
     request = SimpleNamespace(
         paths=SimpleNamespace(excel_file=str(tmp_path / "output.xlsx"), html_dashboard_file=None),
-        options=SimpleNamespace(violin_plot_min_samplesize=6, summary_plot_scale=0),
+        options=SimpleNamespace(
+            violin_plot_min_samplesize=6, summary_plot_scale=0,
+            export_target="excel_xlsx", generate_html_dashboard=False,
+        ),
     )
     monkeypatch.setattr(module, "build_validated_export_request", lambda **kwargs: request)
     monkeypatch.setattr(module, "create_export_data_thread", CleaningExportThread)
