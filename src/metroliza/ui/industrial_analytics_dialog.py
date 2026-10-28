@@ -8,7 +8,7 @@ from time import monotonic
 from dataclasses import replace
 import inspect
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QThread, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -1850,7 +1850,10 @@ class IndustrialAnalyticsDialog(QDialog):
             if old_state == canonical_filter_state(loaded, filters, expression):
                 return
             reconciled = _run_csv_scope_query(
-                self, lambda: preview_filter_change(loaded, previous_grouping, filters, expression),
+                self, lambda: preview_filter_change(
+                    loaded, previous_grouping, filters, expression,
+                    cancel_check=QThread.currentThread().isInterruptionRequested,
+                ),
                 "Checking group memberships for the new filter",
             )
         except (KeyError, RuntimeError, ValueError) as exc:

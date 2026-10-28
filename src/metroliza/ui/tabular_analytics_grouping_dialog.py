@@ -272,7 +272,7 @@ def _run_csv_scope_query(parent, operation, stage):
     was_enabled = parent.isEnabled()
     parent.setEnabled(False)
     progress.setEnabled(True)
-    parent._scope_query_running = True
+    parent._scope_query_running = getattr(parent, "_scope_query_running", 0) + 1
     try:
         thread.start()
         timer.start(10)
@@ -284,7 +284,7 @@ def _run_csv_scope_query(parent, operation, stage):
             raise RuntimeError(str(thread.error)) from thread.error
         return thread.result
     finally:
-        parent._scope_query_running = False
+        parent._scope_query_running -= 1
         parent.setEnabled(was_enabled)
         thread.deleteLater()
 
@@ -345,6 +345,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_page_offset = 0
         self._selector_total_rows = 0
         self._selector_preview_request_id = 0
+        self._selector_preview_rendered_request_id = None
         self._selector_preview_threads: list[_SqliteSelectorPreviewThread] = []
         self._selector_preview_close_action: str | None = None
         self._selector_preview_join_timer = QTimer(self)
@@ -1234,7 +1235,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         try:
             count = _run_csv_scope_query(self, self._scope_row_count, "Counting matching rows")
         except RuntimeError as exc:
-            QMessageBox.information(self, self.windowTitle(), f"Could not count matching rows: {exc}. Nothing assigned.")
+            QMessageBox.information(self, self.windowTitle(), f"Could not count matching rows: {exc}. Press Enter to retry.")
             return None
         if revision != self._scope_query_revision:
             return None
@@ -1640,11 +1641,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_preview_loading_dialog.show()
 
     def _cancel_sqlite_selector_preview(self) -> None:
-        self._invalidate_sqlite_selector_preview()
         if self._selector_preview_loading_label is not None:
             self._selector_preview_loading_label.setText(
                 "Canceling group preview...\nWaiting for the current SQLite read to stop\nETA --"
             )
+        self._invalidate_sqlite_selector_preview()
         self.selector_preview_label.setText("Group preview canceled.")
         set_status_variant(self.selector_preview_label, "warning")
         self._close_selector_preview_loading_dialog()
@@ -1718,6 +1719,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_preview_request_id += 1
         for thread in self._selector_preview_threads:
             thread.requestInterruption()
+        self._close_selector_preview_loading_dialog()
 
     def _defer_close_for_sqlite_selector_preview(self, action: str) -> bool:
         if not self._selector_preview_threads:
@@ -2008,7 +2010,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._ensure_group_color_integrity()
 
     def create_group(self, initial_group_name: str | None = None) -> None:
-        if self._pending_search_names():
+        if self._row_scope_search_pending():
             QMessageBox.information(self, self.windowTitle(), "Not applied — press Enter before assigning rows.")
             return
         if self._is_sqlite_backed():
@@ -2049,8 +2051,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def assign_filtered_rows(self, initial_group_name: str | None = None) -> None:
         if isinstance(initial_group_name, bool):
             initial_group_name = None
-        if self._pending_search_names():
-            QMessageBox.information(self, self.windowTitle(), "Not applied — press Enter in each changed search before assigning rows.")
+        if self._row_scope_search_pending():
+            QMessageBox.information(self, self.windowTitle(), "Not applied — press Enter in the matching-row search before assigning rows.")
             return
         state = self._selector_filter_state()
         if state.mode == "invalid":
@@ -2076,7 +2078,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         group_name = self._filtered_assignment_target(initial_group_name, row_count)
         if not group_name:
             return
-        if revision != self._scope_query_revision or self._pending_search_names():
+        if revision != self._scope_query_revision or self._row_scope_search_pending():
             QMessageBox.information(self, self.windowTitle(), "Search scope changed. Nothing assigned; apply the current text and try again.")
             return
         if self._is_sqlite_backed():
@@ -2129,11 +2131,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def _apply_selector_filter(self) -> None:
         if self._applied_selector_filter_text == self._selector_filter_input_text():
+            if self._selector_preview_rendered_request_id != self._selector_preview_request_id and not any(
+                thread.request_id == self._selector_preview_request_id for thread in self._selector_preview_threads
+            ):
+                self._refresh_selectors()
             if self._applied_scope_count is None:
                 self._sync_status(recompute_counts=False, recompute_scope=True)
             self._sync_search_scope_state()
             return
         self._applied_selector_filter_text = self._selector_filter_input_text()
+        self._scope_query_revision += 1
         self._invalidate_selector_cache()
         self._selector_page_offset = 0
         self._refresh_selectors()
@@ -2147,19 +2154,20 @@ class TabularAnalyticsGroupingDialog(QDialog):
             ("matching rows", self.selector_search, self._applied_selector_filter_text),
         ) if drafts.get(name, applied) != applied]
 
+    def _row_scope_search_pending(self) -> bool:
+        return self._selector_filter_input_text() != self._applied_selector_filter_text
+
     def _search_input_changed(self, *_args, selector=False) -> None:
         self._search_draft_texts = {
             "columns": self.column_search.text().strip(),
             "selected columns": self.selected_column_search.text().strip(),
             "matching rows": self.selector_search.text().strip(),
         }
-        self._scope_query_revision += 1
-        if selector:
-            self._invalidate_sqlite_selector_preview()
         self._sync_search_scope_state()
 
     def _sync_search_scope_state(self) -> None:
         pending = self._pending_search_names()
+        row_pending = self._row_scope_search_pending()
         state = self._selector_filter_state()
         predicate = state.text[:160] or "all rows"
         count = self._applied_scope_count
@@ -2169,9 +2177,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
             text = f"Not applied — press Enter ({', '.join(pending)}). {text}"
         self.search_scope_label.setText(text)
         set_status_variant(self.search_scope_label, "warning" if pending or state.mode == "invalid" else "info")
-        self.assign_filtered_rows_button.setEnabled(not pending and state.mode != "invalid" and count is not None and count > 0)
+        self.assign_filtered_rows_button.setEnabled(not row_pending and state.mode != "invalid" and count is not None and count > 0)
         self.create_group_button.setEnabled(
-            not pending and bool(self.selector_columns and self.selected_selector_keys) and state.mode != "invalid"
+            not row_pending and bool(self.selector_columns and self.selected_selector_keys) and state.mode != "invalid"
         )
 
     def _cached_selector_preview_rows(
@@ -2372,6 +2380,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         preview_rows: list[dict[str, object]],
         total_rows: int,
     ) -> None:
+        self._selector_preview_rendered_request_id = self._selector_preview_request_id
         self._selector_total_rows = int(total_rows)
         selected_keys = set(self.selected_selector_keys)
         color_map, mixed_keys = self._selector_color_map(preview_rows)

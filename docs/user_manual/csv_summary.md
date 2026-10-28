@@ -146,8 +146,9 @@ text searches visible value labels. Expressions such as `Supplier=SUPPLIER AND V
 filter the source rows. Text filters support `*` wildcards, and `IN` lists can match
 several values at once, such as `Part IN (body*, cap)` or `Sample IN (1, 2, 3)`.
 Field names and operators in these expressions are not case-sensitive.
-Press **Enter** to apply each changed search. Until then, **Not applied — press Enter**
-blocks assignment; the status shows the applied predicate and matching row count.
+Press **Enter** to apply each changed search. Pending matching-row text blocks assignment;
+pending Columns or Selected columns searches only affect their column lists. The status
+shows **Not applied — press Enter**, the applied predicate and matching row count.
 **Assign all filtered rows** applies that scope across all matching pages and shows its
 row count in the group-name prompt. Reapplying an unchanged row filter keeps groups;
 changing it keeps compatible members by row ID and asks before dropping memberships.
