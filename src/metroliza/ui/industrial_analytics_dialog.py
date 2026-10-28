@@ -67,7 +67,8 @@ from metroliza.industrial.industrial_workers import IndustrialAnalyticsThread, T
 from metroliza.exporting.export_dialog_service import build_export_artifact_link_line
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
-from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog, _run_csv_scope_query
+from metroliza.tabular.csv_summary_scope import canonical_filter_state, preview_filter_change
 from metroliza.analytics.row_table import RowTable
 from metroliza.tabular.contracts import _GroupingSnapshotOwner, _ValidatedGroupingSnapshot
 from metroliza.tabular.tabular_analytics_service import (
@@ -531,8 +532,8 @@ class MetricLimitsDialog(QDialog):
             name_item.setData(Qt.ItemDataRole.UserRole, metric.field_name)
             self.table.setItem(row, 0, name_item)
             lsl, usl = self._limits.get(metric.field_name, (metric.lsl, metric.usl))
-            self.table.setItem(row, 1, QTableWidgetItem("" if lsl is None else f"{lsl:g}"))
-            self.table.setItem(row, 2, QTableWidgetItem("" if usl is None else f"{usl:g}"))
+            self.table.setItem(row, 1, QTableWidgetItem("" if lsl is None else str(lsl)))
+            self.table.setItem(row, 2, QTableWidgetItem("" if usl is None else str(usl)))
 
         self.status_label = status_chip(
             "Leave one side blank for one-sided tolerance; leave both blank for no limits.",
@@ -557,6 +558,7 @@ class MetricLimitsDialog(QDialog):
         footer.addWidget(self.apply_button)
         layout.addLayout(footer)
         self._committed_limits_signature = self._limits_signature()
+        self._initial_limits, _error = self._parsed_limits()
         self.table.itemChanged.connect(lambda _item: self._sync_validation())
         configure_dialog_button_roles(
             primary=self.apply_button,
@@ -599,7 +601,7 @@ class MetricLimitsDialog(QDialog):
                 return {}, f"Invalid numeric limit for {metric_item.text()}."
             if lsl is not None and usl is not None and lsl >= usl:
                 return {}, f"LSL must be lower than USL for {metric_item.text()}."
-            if field_name and (lsl is not None or usl is not None):
+            if field_name:
                 parsed[field_name] = (lsl, usl)
         return parsed, ""
 
@@ -623,7 +625,7 @@ class MetricLimitsDialog(QDialog):
         if error:
             self._sync_validation()
             return
-        self._limits = parsed
+        self._limits = {field: value for field, value in parsed.items() if value != self._initial_limits.get(field)}
         self._committed_limits_signature = self._limits_signature()
         self.accept()
 
@@ -1838,11 +1840,46 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        self.tabular_column_filters = dialog.get_column_filters()
-        self.tabular_filter_expression = dialog.get_filter_expression()
+        filters = dialog.get_column_filters()
+        expression = dialog.get_filter_expression()
+        loaded = self.tabular_load_result
+        previous_grouping = self.df_for_grouping
+        try:
+            old_state = canonical_filter_state(loaded, self.tabular_column_filters, self.tabular_filter_expression,
+                                               self.tabular_filter_columns, self.tabular_filter_keys)
+            if old_state == canonical_filter_state(loaded, filters, expression):
+                return
+            reconciled = _run_csv_scope_query(
+                self, lambda: preview_filter_change(loaded, previous_grouping, filters, expression),
+                "Checking group memberships for the new filter",
+            )
+        except (KeyError, RuntimeError, ValueError) as exc:
+            QMessageBox.warning(self, self.windowTitle(), f"Could not apply row filter: {exc}")
+            return
+        if reconciled is None:
+            return
+        if self.tabular_load_result is not loaded or self.df_for_grouping is not previous_grouping:
+            QMessageBox.warning(self, self.windowTitle(), "CSV source or groups changed. Apply the filter again.")
+            return
+        grouping, dropped_rows, dropped_groups, row_count, has_population = reconciled
+        if dropped_rows and QMessageBox.question(
+            self, "Change row filter?",
+            f"{dropped_rows} row(s) in {dropped_groups} group(s) will lose membership. "
+            "Compatible members and colours will be kept. Apply this filter?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self.tabular_column_filters = filters
+        self.tabular_filter_expression = expression
         self.tabular_filter_columns = ()
         self.tabular_filter_keys = ()
-        self._clear_tabular_grouping()
+        if self.grouping_applied:
+            self._grouping_snapshot_owner.invalidate()
+            self.df_for_grouping = grouping
+        state = self._tabular_filter_state_key()
+        revision = self._tabular_scope_revision(include_filter=False)
+        self._tabular_row_count_cache = (loaded, (state, revision), row_count)
+        self._tabular_population_cache = ((_native_grouping_revision(grouping), self._tabular_scope_revision()), has_population)
         self._sync_filter_summary()
         self._sync_ui_state()
 
@@ -1990,7 +2027,7 @@ class IndustrialAnalyticsDialog(QDialog):
         dialog = MetricLimitsDialog(self, metrics=metrics, limits=self.metric_spec_limits)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        self.metric_spec_limits = dialog.limits()
+        self.metric_spec_limits.update(dialog.limits())
         self._sync_ui_state()
 
     def open_grouping_dialog(self) -> None:
@@ -2116,6 +2153,8 @@ class IndustrialAnalyticsDialog(QDialog):
         group_values = set(group_values or ())
         if TABULAR_DEFAULT_GROUP in group_values:
             return True
+        if self.tabular_load_result is not None and self.tabular_load_result.sqlite_store is None and self.df_for_grouping is not None:
+            return self._tabular_filtered_row_count() > len(set(self.df_for_grouping["REPORT_ID"]))
         if (
             self.tabular_load_result is None
             or self.tabular_load_result.sqlite_store is None
@@ -2783,6 +2822,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
 
     def reject(self) -> None:
+        if getattr(self, "_scope_query_running", False):
+            return
         thread = self.tabular_load_thread
         if thread is not None and thread.isRunning():
             QMessageBox.information(self, self.windowTitle(), "Wait for CSV/Excel loading to finish.")
@@ -2796,6 +2837,9 @@ class IndustrialAnalyticsDialog(QDialog):
         super().reject()
 
     def closeEvent(self, event) -> None:
+        if getattr(self, "_scope_query_running", False):
+            event.ignore()
+            return
         thread = self.tabular_load_thread
         if thread is not None and thread.isRunning():
             QMessageBox.information(self, self.windowTitle(), "Wait for CSV/Excel loading to finish.")
