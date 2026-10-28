@@ -55,7 +55,32 @@ def wait_import_finished(app, operation, *, seconds=45.0, require_success=True):
 
 
 def run_ui_import(workspace, app):
-    deadline = time.monotonic() + 45.0
+    from metroliza.app.windows_candidate_qualification import DEADLINES_S
+
+    deadline = time.monotonic() + DEADLINES_S["import"]
     operation = click_import(workspace)
     wait_import_started(app, operation, seconds=max(0, deadline - time.monotonic()))
     return wait_import_finished(app, operation, seconds=max(0, deadline - time.monotonic()))
+
+
+def slice_failure_codes(error, failure_type, *, import_code, cleanup_code):
+    """Project import/cleanup errors to fixed slice codes without private text."""
+    from metroliza.app.windows_candidate_native_check import CLEANUP_FAILURES, ReportOwnerCleanupFailure
+    from metroliza.app.windows_candidate_qualification import ScenarioFailure
+
+    cleanup = []
+    if isinstance(error, ReportOwnerCleanupFailure):
+        code = error.cleanup_failure
+        cleanup = [cleanup_code, code if type(code) is str and code in CLEANUP_FAILURES
+                   else "candidate_report_cleanup_failed"]
+        error = error.primary
+    if error is None:
+        return cleanup
+    if isinstance(error, failure_type):
+        primary = [str(error)]
+    elif isinstance(error, (ImportSyncFailure, ScenarioFailure)):
+        code = str(error)
+        primary = [import_code, code if code in IMPORT_FAILURES else "import_worker_error"]
+    else:
+        primary = ["unexpected_exception"]
+    return primary + cleanup

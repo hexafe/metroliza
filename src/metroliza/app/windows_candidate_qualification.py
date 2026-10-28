@@ -706,10 +706,21 @@ def run_qualification() -> int:
         if isinstance(error, ReportOwnerCleanupFailure):
             receipt["cleanup_failure"] = error.cleanup_failure
             error = error.primary or error
-        failure = str(error) if isinstance(error, (ScenarioFailure, ImportSyncFailure, ReportOwnerCleanupFailure)) else type(error).__name__
+        failure = str(error) if isinstance(error, (ScenarioFailure, ImportSyncFailure, ReportOwnerCleanupFailure)) else _bounded_exception_class(error)
         if root is not None:
             _atomic_json(root / "windows-candidate-result.json", _failed_core_receipt(receipt, failure))
         return 21
+
+
+def _bounded_exception_class(error):
+    """Keep subclass names and exception text out of the public protocol."""
+    import sqlite3
+
+    for allowed in (FileNotFoundError, PermissionError, sqlite3.OperationalError,
+                    TypeError, ValueError, KeyError, OSError, RuntimeError, AssertionError):
+        if isinstance(error, allowed):
+            return allowed.__name__
+    return "RuntimeError"
 
 
 if __name__ == "__main__":

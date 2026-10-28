@@ -319,8 +319,10 @@ def run_import_guard_checks(scratch_directory: str | Path, fixture_directory: st
         _require(all(status == "passed" for status in result["facets"].values()),
                  "facet_incomplete")
         result["status"] = "passed"
-    except ImportGuardsFailure as error:
-        result["error_codes"].append(str(error))
-    except Exception:
-        result["error_codes"].append("unexpected_exception")
+    except Exception as error:
+        from metroliza.app.windows_candidate_import_sync import slice_failure_codes
+        result["error_codes"].extend(slice_failure_codes(
+            error, ImportGuardsFailure, import_code="guard_import_failed",
+            cleanup_code="window_cleanup_failed",
+        ))
     return result

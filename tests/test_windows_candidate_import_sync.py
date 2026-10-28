@@ -7,7 +7,7 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QCoreApplication, QEvent, QTimer
 
 from metroliza.app import windows_candidate_inference as inference
 from metroliza.app import windows_candidate_native_check as native
@@ -15,6 +15,12 @@ from metroliza.app import windows_candidate_qualification as core
 from metroliza.ui import parsing_dialog as ui
 
 FIXTURES = Path(__file__).parent / "fixtures/windows_candidate/reports"
+
+
+def _delete_closed_window(window, app):
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
 
 @pytest.fixture
@@ -59,6 +65,7 @@ def reviewed(tmp_path, qapplication_session, metadata_barrier):
     finally:
         metadata_barrier[1].set()
         native.close_report_owner(window, app)
+        _delete_closed_window(window, app)
 
 
 def test_core_observes_queued_import_before_reading_worker(tmp_path, qapplication_session, metadata_barrier, monkeypatch):
@@ -78,6 +85,7 @@ def test_core_observes_queued_import_before_reading_worker(tmp_path, qapplicatio
     def close(window, app):
         release.set()
         original_close(window, app)
+        _delete_closed_window(window, app)
 
     monkeypatch.setattr(core, "_select_exact_reports", select)
     monkeypatch.setattr(native, "close_report_owner", close)
@@ -186,6 +194,7 @@ def test_specific_import_survives_fast_completion_error_and_running_cancel(
 
 
 def test_cleanup_preserves_primary_failure_in_producer_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(native, "_UNJOINED_OWNERS", [])
     monkeypatch.setattr(core, "requested_scenario", lambda: "core")
     monkeypatch.setattr(core, "_root", lambda: tmp_path)
     monkeypatch.setattr(core, "_fixture_dir", lambda: FIXTURES)
@@ -210,6 +219,7 @@ def test_cleanup_preserves_primary_failure_in_producer_receipt(tmp_path, monkeyp
 
 
 def test_inference_retains_import_substage_and_cleanup(tmp_path, monkeypatch):
+    monkeypatch.setattr(native, "_UNJOINED_OWNERS", [])
     monkeypatch.setattr(inference, "_stage_reports", lambda *args: (tmp_path, {}))
 
     def fail(*args):
@@ -319,3 +329,162 @@ def test_worker_start_error_is_terminal_without_a_deleted_thread_handle(reviewed
     assert operation.failed and operation.terminal and operation.worker is None
     with pytest.raises(ImportSyncFailure, match="^import_worker_error$"):
         wait_import_started(app, operation)
+
+
+@pytest.mark.parametrize("blocked_by", ["admission", "preflight", "parser"])
+def test_deferred_import_rejected_before_start_is_terminal_cancelled(reviewed, monkeypatch, blocked_by):
+    from metroliza.app.windows_candidate_import_sync import ImportSyncFailure, click_import, wait_import_started
+
+    app, _window, workspace = reviewed
+    operation = click_import(workspace)
+    assert workspace._start_pending and operation.worker is None
+    # Re-enter the exact queued callback after admission/ownership has changed.
+    with monkeypatch.context() as patch:
+        if blocked_by == "admission":
+            patch.setattr(workspace, "operation_start_allowed", lambda: False)
+        else:
+            patch.setattr(workspace, "preflight_thread" if blocked_by == "preflight" else "parse_thread", object())
+        workspace.show_loading_screen(_operation=operation)
+    assert operation.terminal and operation.cancelled and operation.worker is None
+    with pytest.raises(ImportSyncFailure, match="^import_cancelled$"):
+        wait_import_started(app, operation, seconds=0)
+
+
+def test_cancel_requests_worker_stop_before_readiness_sync_failure():
+    events = []
+
+    def sync():
+        events.append("sync")
+        raise RuntimeError("SYNTHETIC_PRIVATE_SYNC_TEXT")
+
+    workspace = SimpleNamespace(
+        _drop_pending_starts=lambda: events.append("drop"),
+        _sync_readiness_state=sync,
+        parse_thread=SimpleNamespace(isRunning=lambda: True,
+                                     stop_parsing=lambda: events.append("cancel")),
+        log_and_exit=lambda _error: events.append("handled"),
+    )
+    ui._ReportOperations.stop_parsing(workspace)
+    assert events == ["drop", "cancel", "sync", "handled"]
+    assert workspace.parsing_canceled
+
+
+@pytest.mark.parametrize(("module_name", "entry", "slice_code"), [
+    ("import_guards", "run_import_guard_checks", "guard_import_failed"),
+    ("lifecycle_checks", "run_lifecycle_checks", "seed_import_failed"),
+    ("shell_checks", "run_shell_checks", "shell_import_failed"),
+])
+@pytest.mark.parametrize("failure", [
+    "import_not_accepted", "import_start_deadline", "import_deadline",
+    "import_worker_error", "import_cancelled", "import_result_missing",
+    "import_worker_join_deadline", "SYNTHETIC_PRIVATE_IMPORT_TEXT",
+])
+def test_slice_import_failures_remain_closed_and_precise(
+    tmp_path, monkeypatch, module_name, entry, slice_code, failure,
+):
+    from importlib import import_module
+    from metroliza.app import bootstrap
+
+    module = import_module("metroliza.app.windows_candidate_" + module_name)
+    monkeypatch.setattr(bootstrap, "get_or_create_qapplication",
+                        lambda: SimpleNamespace(platformName=lambda: "offscreen"))
+
+    def fail(*args, **kwargs):
+        if "deadline" in failure:
+            raise core.ScenarioFailure(failure)
+        from metroliza.app.windows_candidate_import_sync import ImportSyncFailure
+        raise ImportSyncFailure(failure)
+
+    monkeypatch.setattr(module, "_run", fail)
+    result = getattr(module, entry)(tmp_path, FIXTURES)
+    expected = "import_worker_error" if failure.startswith("SYNTHETIC") else failure
+    assert result["status"] == "failed"
+    assert result["error_codes"] == [slice_code, expected]
+    assert "SYNTHETIC_PRIVATE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(("module_name", "entry", "closer", "slice_code", "cleanup_code"), [
+    ("lifecycle_checks", "run_lifecycle_checks", "_close_seed_owner",
+     "seed_import_failed", "seed_window_cleanup_failed"),
+    ("shell_checks", "run_shell_checks", "_close_shell_owner",
+     "shell_import_failed", "window_owner_cleanup_failed"),
+])
+@pytest.mark.parametrize("primary_failed", [True, False])
+def test_slice_cleanup_retains_primary_and_both_closed_codes(
+    tmp_path, monkeypatch, module_name, entry, closer, slice_code, cleanup_code, primary_failed,
+):
+    from importlib import import_module
+    from metroliza.app import bootstrap
+
+    module = import_module("metroliza.app.windows_candidate_" + module_name)
+    monkeypatch.setattr(native, "_UNJOINED_OWNERS", [])
+    monkeypatch.setattr(module, "_RETAINED_WINDOWS", [])
+    app = SimpleNamespace(platformName=lambda: "offscreen", processEvents=lambda: None)
+    monkeypatch.setattr(bootstrap, "get_or_create_qapplication", lambda: app)
+    owner = SimpleNamespace(close=lambda: False)
+
+    def fail(*args, **kwargs):
+        try:
+            if primary_failed:
+                raise core.ScenarioFailure("import_worker_error")
+        finally:
+            getattr(module, closer)(owner, app)
+
+    monkeypatch.setattr(module, "_run", fail)
+    result = getattr(module, entry)(tmp_path, FIXTURES)
+    assert result["status"] == "failed"
+    assert result["error_codes"] == (
+        ([slice_code, "import_worker_error"] if primary_failed else [])
+        + [cleanup_code, "candidate_report_owner_close_refused"]
+    )
+    assert module._RETAINED_WINDOWS == [owner]
+
+
+@pytest.mark.parametrize("kind", ["reopen", "unknown", "value"])
+def test_cleanup_wrapped_primary_class_is_allowlisted_by_host(tmp_path, monkeypatch, kind):
+    from metroliza.app.windows_candidate_reopen import ReopenScenarioFailure
+    from metroliza.shared import diagnostic_runtime_audit
+    from scripts import qualify_windows_candidate_core as driver
+
+    class PrivateFailure(Exception):
+        pass
+
+    primary = {"reopen": ReopenScenarioFailure, "unknown": PrivateFailure, "value": ValueError}[kind]
+    monkeypatch.setattr(native, "_UNJOINED_OWNERS", [])
+    monkeypatch.setattr(core, "requested_scenario", lambda: "core")
+    monkeypatch.setattr(core, "_root", lambda: tmp_path)
+    monkeypatch.setattr(core, "_fixture_dir", lambda: FIXTURES)
+    monkeypatch.setattr(core, "_ocr_fixture", lambda: FIXTURES / "report-0.pdf")
+    monkeypatch.setattr(core, "_runtime_provenance", lambda: {"source_sha": "1" * 40})
+    monkeypatch.setattr(diagnostic_runtime_audit, "wait_for_host_ready", lambda: None)
+    monkeypatch.setattr(native, "run_with_native_mode", lambda operation: operation())
+
+    def execute(*args):
+        try:
+            raise primary("SYNTHETIC_PRIVATE_PRIMARY_TEXT")
+        finally:
+            native.close_report_owner(SimpleNamespace(close=lambda: False), SimpleNamespace(processEvents=lambda: None))
+
+    monkeypatch.setattr(core, "_execute_core_checks", execute)
+    assert core.run_qualification() == 21
+    failed = json.loads((tmp_path / "windows-candidate-result.json").read_text())
+    assert failed["failure"] == ("RuntimeError" if kind == "unknown" else "ValueError")
+    assert failed["cleanup_failure"] == "candidate_report_owner_close_refused"
+    assert "SYNTHETIC_PRIVATE" not in json.dumps(failed)
+    assert driver._child_failure_observation(tmp_path)["receipt_state"] == "valid_allowlisted"
+
+
+def test_ui_import_uses_the_receipted_import_deadline(monkeypatch):
+    from metroliza.app import windows_candidate_import_sync as sync
+
+    monkeypatch.setitem(core.DEADLINES_S, "import", 17.0)
+    monkeypatch.setattr(sync, "time", SimpleNamespace(monotonic=lambda: 100.0))
+    operation = object()
+    budgets = []
+    monkeypatch.setattr(sync, "click_import", lambda _workspace: operation)
+    monkeypatch.setattr(sync, "wait_import_started",
+                        lambda _app, observed, *, seconds: budgets.append((observed, seconds)))
+    monkeypatch.setattr(sync, "wait_import_finished",
+                        lambda _app, observed, *, seconds: budgets.append((observed, seconds)))
+    sync.run_ui_import(object(), object())
+    assert budgets == [(operation, 17.0), (operation, 17.0)]

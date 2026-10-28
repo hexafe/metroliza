@@ -1319,9 +1319,10 @@ class _ReportOperations:
     def show_loading_screen(self, *, import_plan=None, action_started_at=None, _operation=None):
         """Start a plan; direct legacy callers retain the atomic compatibility adapter."""
         action_started_at = monotonic() if action_started_at is None else action_started_at
-        if self.preflight_thread is not None or self.parse_thread is not None:
-            return
-        if self.operation_start_allowed is not None and not self.operation_start_allowed():
+        if (self.preflight_thread is not None or self.parse_thread is not None
+                or (self.operation_start_allowed is not None and not self.operation_start_allowed())):
+            if _operation is not None:
+                _operation.terminal = _operation.cancelled = True
             return
         _operation = self._accept_import_operation(_operation)
         if _operation is None:
@@ -1421,7 +1422,6 @@ class _ReportOperations:
             self._drop_pending_starts()
             # Request cooperative cancellation and return immediately to keep UI responsive
             self.parsing_canceled = True
-            self._sync_readiness_state()
             if self.parse_thread is not None and self.parse_thread.isRunning():
                 self.parse_thread.stop_parsing()
                 loading_label = getattr(self, "loading_label", None)
@@ -1433,6 +1433,7 @@ class _ReportOperations:
                             "ETA --",
                         )
                     )
+            self._sync_readiness_state()
         except Exception as e:
             self.log_and_exit(e)
 

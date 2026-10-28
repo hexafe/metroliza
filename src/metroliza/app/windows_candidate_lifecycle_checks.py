@@ -77,12 +77,14 @@ def _new_window(child: Path, label: str):
 
 
 def _close_seed_owner(window, app) -> None:
-    from metroliza.app.windows_candidate_native_check import close_report_owner
+    from metroliza.app.windows_candidate_native_check import close_report_owner, ReportOwnerCleanupFailure
 
     try:
         close_report_owner(window, app)
     except Exception as error:
         _RETAINED_WINDOWS.append(window)
+        if isinstance(error, ReportOwnerCleanupFailure):
+            raise
         raise LifecycleChecksFailure("seed_window_cleanup_failed") from error
 
 
@@ -415,8 +417,10 @@ def run_lifecycle_checks(scratch_directory: str | Path,
         _require(all(value == "passed" for value in result["facets"].values()),
                  "facet_incomplete")
         result["status"] = "passed"
-    except LifecycleChecksFailure as error:
-        result["error_codes"].append(str(error))
-    except Exception:
-        result["error_codes"].append("unexpected_exception")
+    except Exception as error:
+        from metroliza.app.windows_candidate_import_sync import slice_failure_codes
+        result["error_codes"].extend(slice_failure_codes(
+            error, LifecycleChecksFailure, import_code="seed_import_failed",
+            cleanup_code="seed_window_cleanup_failed",
+        ))
     return result
