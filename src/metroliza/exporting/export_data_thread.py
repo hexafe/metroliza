@@ -3636,6 +3636,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         validated_request = validate_export_request(export_request)
         self.replace_outputs = validated_request.replace_outputs
+        self.copy_output_from = getattr(validated_request, "copy_output_from", None)
         self._summary_render_options = validated_request.options
         self.db_file = validated_request.paths.db_file
         self.excel_file = validated_request.paths.excel_file
@@ -3869,6 +3870,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 _write_export_html_dashboard,
                 consents=getattr(self, "replace_outputs", ()),
                 should_cancel=lambda: self.export_canceled,
+                copy_from=(self.copy_output_from if html_only_export else self.html_dashboard_file)
+                if getattr(self, "copy_output_from", None) else None,
                 excel_file=self.excel_file,
                 output_path=self.html_dashboard_file,
                 assets_dir=self.html_dashboard_assets_dir,
@@ -3965,6 +3968,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._record_stage_timing('dashboard_finalization', elapsed)
 
         self.completion_metadata.update(dashboard_result)
+        if html_only_export and dashboard_result["html_dashboard_path"] != self.html_dashboard_file:
+            self.html_dashboard_file = dashboard_result["html_dashboard_path"]
+            self.html_dashboard_assets_dir = str(_resolve_html_dashboard_assets_dir(self.html_dashboard_file))
+            self._primary_output_file = self.html_dashboard_file
         self.completion_metadata['dashboard_finalization_s'] = float(
             self._stage_timings.get('dashboard_finalization', 0.0)
         )

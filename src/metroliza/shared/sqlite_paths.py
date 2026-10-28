@@ -9,11 +9,11 @@ SQLITE_FILE_FILTER = "SQLite database (" + " ".join(
 
 
 def sqlite_database_path(selected: str, *, creating: bool = False) -> str:
-    """Keep opened paths exact; add .db only to a new extensionless name.
+    """Keep opened paths exact; append .db to new names without a SQLite suffix.
 
     The chooser may return an existing extensionless database even in Save mode.
     Resolving a path here must never create storage or rewrite that selection.
     """
-    if selected and creating and not Path(selected).suffix and not Path(selected).is_file():
+    if selected and creating and Path(selected).suffix.lower() not in SQLITE_SUFFIXES and not Path(selected).is_file():
         return f"{selected}.db"
     return selected

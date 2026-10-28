@@ -23,7 +23,7 @@ def test_new_extensionless_sqlite_name_only_gets_db_when_creating(tmp_path):
     name = str(tmp_path / "new")
     assert sqlite_database_path(name) == name
     assert sqlite_database_path(name, creating=True) == f"{name}.db"
-    assert sqlite_database_path(f"{name}.custom", creating=True) == f"{name}.custom"
+    assert sqlite_database_path(f"{name}.custom", creating=True) == f"{name}.custom.db"
     assert not list(tmp_path.iterdir())
 
 
@@ -34,6 +34,20 @@ def test_source_directory_default_can_propose_a_new_sibling_database(tmp_path):
     source.mkdir()
     assert sqlite_database_path(str(source), creating=True) == f"{source}.db"
     assert list(tmp_path.iterdir()) == [source]
+
+
+@pytest.mark.parametrize("name", ["Line 1.2", "run.v2", "quality.custom", "RUN.SQLITE3", "line.DB"])
+def test_new_sqlite_names_append_db_only_for_unrecognized_suffix(tmp_path, name):
+    from metroliza.shared.sqlite_paths import SQLITE_SUFFIXES, sqlite_database_path
+    from pathlib import Path
+
+    selected = str(tmp_path / name)
+    expected = selected if Path(name).suffix.lower() in SQLITE_SUFFIXES else f"{selected}.db"
+    assert sqlite_database_path(selected, creating=True) == expected
+    assert sqlite_database_path(selected) == selected
+    assert not list(tmp_path.iterdir())
+    Path(selected).write_bytes(b"existing NOK SQLite sentinel")
+    assert sqlite_database_path(selected, creating=True) == selected
 
 
 @pytest.mark.parametrize("caller", ["export", "parsing", "modify", "mapping"])

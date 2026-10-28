@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 import xlsxwriter
 
-from metroliza.exporting.output_publication import publish_output
+from metroliza.exporting.output_publication import output_paths, publish_output, retry_output_copy
 
 from metroliza.exporting.xlsx_bulk_sheet import (
     BulkPlanBuilder,
@@ -783,13 +783,30 @@ class ExcelExportBackend:
             return ExportStageOutcome.canceled()
 
         try:
-            publish_output(
-                temp_path, target_path,
-                consents=getattr(thread, "replace_outputs", ()),
-                replace=self.replace_workbook,
+            published_path, _result = retry_output_copy(
+                lambda path: publish_output(
+                    temp_path, path, consents=getattr(thread, "replace_outputs", ()), replace=self.replace_workbook,
+                ),
+                target_path, copy_from=getattr(thread, "copy_output_from", None),
+                dashboard=bool(getattr(thread, "html_dashboard_file", None)),
             )
         except BaseException as error:
             _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise
 
+        _record_workbook_path(thread, published_path)
         return outcome
+
+
+def _record_workbook_path(thread, published_path):
+    """Keep sidecars and completion links bound to the actual copy destination."""
+    if hasattr(thread, "completion_metadata"):
+        thread.completion_metadata["published_output_path"] = str(published_path)
+    if Path(thread.excel_file) == published_path:
+        return
+    thread.excel_file = str(published_path)
+    thread._primary_output_file = str(published_path)
+    if getattr(thread, "html_dashboard_file", None):
+        html_path = output_paths(published_path, dashboard=True)[-1]
+        thread.html_dashboard_file = str(html_path)
+        thread.html_dashboard_assets_dir = str(html_path.with_name(f"{html_path.stem}_assets"))

@@ -203,7 +203,7 @@ class ReportPlanner(QWidget):
         # The other metadata actions live in one menu so the toolbar keeps two rows.
         self.metadata_menu = QMenu(self)
         self.metadata_menu.setToolTipsVisible(True)
-        self.metadata_menu.aboutToShow.connect(self._update_metadata_actions)
+        self.metadata_menu.aboutToShow.connect(lambda: self._update_metadata_actions(include_copy_counts=True))
         self.copy_to_checked = self._add_menu_action("Copy to checked", self.copy_current_value_to_checked)
         self.undo_copy_action = self._add_menu_action("Undo copy to checked", self.undo_copy)
         self.reset_to_detected = self._add_menu_action("Reset to detected", self.reset_current_row)
@@ -430,7 +430,10 @@ class ReportPlanner(QWidget):
 
     def undo_copy(self):
         count = self.model.undo_copy()
-        self.set_metadata_status(f"Restored previous metadata for {count} reports.")
+        skipped = self.model.last_copy_undo_skipped
+        self.set_metadata_status(
+            f"Restored previous metadata for {count} reports; {skipped} skipped because they changed after copying."
+        )
 
     def reset_current_row(self):
         row, _field = self.current_metadata_cell()
@@ -467,19 +470,21 @@ class ReportPlanner(QWidget):
         menu = self.build_columns_menu()
         menu.exec(self.table.horizontalHeader().mapToGlobal(position))
 
-    def _update_metadata_actions(self, *_args):
+    def _update_metadata_actions(self, *_args, include_copy_counts=False):
         row, field_name = self.current_metadata_cell()
         usable = not self._busy and self.model.valid
         editable = row is not None and row.editable
         can_copy = usable and editable and self._worker_mode is None and bool(row.value(field_name))
         self.copy_to_checked.setEnabled(can_copy)
         self.undo_copy_action.setEnabled(usable and self._worker_mode is None and self.model.can_undo_copy)
-        if can_copy:
+        if can_copy and include_copy_counts:
             counts = self.model.copy_scope_counts(field_name, self._visible_report_ids(), row.value(field_name))
             self.copy_to_checked.setText(
                 f"Copy {FIELD_LABELS[field_name]} '{str(row.value(field_name))[:60]}' to "
                 f"{counts['checked']} checked ({counts['hidden']} hidden, {counts['overwrites']} manual)"
             )
+        elif can_copy:
+            self.copy_to_checked.setText(f"Copy {FIELD_LABELS[field_name]} to checked")
         else:
             self.copy_to_checked.setText("Copy to checked")
         self.copy_to_checked.setToolTip(

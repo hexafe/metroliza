@@ -1421,7 +1421,7 @@ class ExportDialog(QDialog):
         if choice == "cancel":
             return None
         if choice == "replace":
-            return replace(request, replace_outputs=consents)
+            return replace(request, replace_outputs=consents, copy_output_from=None)
         copy_paths = output_paths(copy_path, html_only=html_only, dashboard=request.options.generate_html_dashboard)
         paths_contract = replace(
             request.paths,
@@ -1430,7 +1430,7 @@ class ExportDialog(QDialog):
         )
         self.excel_file = copy_path
         self._set_path_field_value(self.excel_file_text_label, copy_path)
-        return replace(request, paths=paths_contract, replace_outputs=())
+        return replace(request, paths=paths_contract, replace_outputs=(), copy_output_from=str(primary))
 
     def _choose_output_collision(self, database, paths, conflicts, copy_path):
         prompt = QMessageBox(self)
@@ -1510,7 +1510,7 @@ class ExportDialog(QDialog):
                 result_path = (
                     completion_metadata.get("html_dashboard_path")
                     if export_target == "html_dashboard"
-                    else self.excel_file
+                    else completion_metadata.get("published_output_path", self.excel_file)
                 )
                 outcome_kwargs = {
                     "excel_file": result_path,
@@ -1545,7 +1545,7 @@ class ExportDialog(QDialog):
             result_path = (
                 completion_metadata.get('html_dashboard_path')
                 if export_target == 'html_dashboard'
-                else self.excel_file
+                else completion_metadata.get('published_output_path', self.excel_file)
             )
             outcome_kwargs = {
                 "excel_file": result_path,

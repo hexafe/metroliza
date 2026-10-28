@@ -31,6 +31,7 @@ from metroliza.reports.report_metadata_review import (
     ROW_READY,
     ReviewRow,
     apply_value_to_rows,
+    normalize_review_value,
 )
 from metroliza.ui import report_planner_metadata as meta
 from metroliza.ui import ui_theme_tokens as tokens
@@ -216,6 +217,7 @@ class ReportPlannerModel(QAbstractTableModel):
         self._location_indexes: tuple[QModelIndex, ...] = ()
         self._meta_rows: dict[str, ReviewRow] = {}
         self._copy_undo = None
+        self.last_copy_undo_skipped = 0
         self._row_by_occurrence: dict[str, int] = {}
         self._meta_attention_ids: set[str] = set()
         self._meta_missing_reference_ids: set[str] = set()
@@ -364,14 +366,16 @@ class ReportPlannerModel(QAbstractTableModel):
         return count
 
     def copy_scope_counts(self, field_name, visible_ids, text):
-        """Describe all checked rows and manual corrections at risk before copying."""
-        selected = self._selected_occurrence_ids
+        """Describe the checked editable scope using the same normalization as copy."""
+        rows = [row for row in self.selected_metadata_rows() if row.editable]
+        selected = {row.occurrence_id for row in rows}
+        value, _error = normalize_review_value(field_name, text)
         return {
             "checked": len(selected),
             "hidden": len(selected - set(visible_ids)),
             "overwrites": sum(
-                row.cells[field_name].user_set and row.cells[field_name].user_value != text
-                for row in self.selected_metadata_rows() if row.editable
+                row.cells[field_name].user_set and row.cells[field_name].user_value != value
+                for row in rows
             ),
         }
 
@@ -380,26 +384,42 @@ class ReportPlannerModel(QAbstractTableModel):
         return self._copy_undo is not None
 
     def undo_copy(self):
-        """Restore the previous cells by occurrence identity, independent of the proxy."""
+        """Restore manual fields only where the post-copy cell is still unchanged."""
+        self.last_copy_undo_skipped = 0
         if self._copy_undo is None:
             return 0
         field_name, previous = self._copy_undo
         self._copy_undo = None
-        for occurrence_id, cell in previous.items():
-            self._meta_rows[occurrence_id].cells[field_name] = cell
+        restored = 0
+        for occurrence_id, (manual_before, after) in previous.items():
+            row = self._meta_rows.get(occurrence_id)
+            if row is None or row.cells[field_name] != after:
+                self.last_copy_undo_skipped += 1
+                continue
+            cell = row.cells[field_name]
+            cell.user_set, cell.user_value = manual_before
+            restored += 1
             self._row_changed(occurrence_id, notify=False)
         self.metadata_changed.emit()
-        return len(previous)
+        return restored
 
     def copy_value_to_checked(self, field_name: str, text: str, *, occurrence_ids=None) -> tuple[int, str | None]:
         """Set ``text`` as a manual value on every checked, editable report."""
 
         allowed = self._selected_occurrence_ids if occurrence_ids is None else set(occurrence_ids)
         rows = [row for row in self.selected_metadata_rows() if row.editable and row.occurrence_id in allowed]
-        previous = {row.occurrence_id: replace(row.cells[field_name]) for row in rows}
+        previous = {
+            row.occurrence_id: (row.cells[field_name].user_set, row.cells[field_name].user_value)
+            for row in rows
+        }
         changed, error = apply_value_to_rows(rows, field_name, text)
         if not error:
-            self._copy_undo = (field_name, previous) if previous else None
+            snapshots = {
+                row.occurrence_id: (previous[row.occurrence_id], replace(row.cells[field_name]))
+                for row in rows
+                if previous[row.occurrence_id] != (row.cells[field_name].user_set, row.cells[field_name].user_value)
+            }
+            self._copy_undo = (field_name, snapshots) if snapshots else None
             for row in rows:
                 self._row_changed(row.occurrence_id, notify=False)
             self.metadata_changed.emit()

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+import errno
+import time
 import zipfile
 
 import pytest
@@ -381,3 +383,233 @@ def test_locked_dashboard_replace_keeps_old_html_assets_and_cleans_new_generatio
     assert target.read_text() == "old NOK dashboard"
     assert (assets / "old.png").read_bytes() == b"old NOK asset"
     assert set(tmp_path.iterdir()) == {target, assets, tmp_path / f".{target.name}.publish.lock"}
+
+
+def test_dashboard_assets_transient_windows_permission_error_is_retried(monkeypatch, tmp_path):
+    from metroliza.charts.export_html_dashboard import write_export_html_dashboard
+    from metroliza.exporting import output_publication as publication
+
+    target = tmp_path / "dashboard.html"
+    rename = publication.os.rename
+    attempts = []
+
+    def temporarily_locked(source, destination):
+        if Path(source).is_dir():
+            attempts.append(Path(destination))
+            if len(attempts) == 1:
+                raise PermissionError(5, "simulated AV directory handle")
+        return rename(source, destination)
+
+    monkeypatch.setattr(publication.os, "rename", temporarily_locked)
+    result = publication.write_dashboard_safely(
+        write_export_html_dashboard, output_path=target,
+        assets_dir=tmp_path / "dashboard_assets", sections=[], source_label="NOK",
+    )
+    assert target.is_file() and Path(result["html_dashboard_assets_path"]).is_dir()
+    assert len(attempts) == 2
+    assert "NOK" in target.read_text()
+
+
+@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EXDEV, errno.EMLINK, errno.ENOTSUP])
+def test_publication_without_hardlink_support_uses_exclusive_copy(monkeypatch, tmp_path, error_number):
+    from metroliza.exporting import output_publication as publication
+
+    temporary, target = tmp_path / "stage.xlsx", tmp_path / "output.xlsx"
+    temporary.write_bytes(b"complete NOK workbook")
+    monkeypatch.setattr(publication, "_WINDOWS", False)
+
+    def unsupported(*_):
+        raise OSError(error_number, "hard links unsupported")
+
+    monkeypatch.setattr(publication.os, "link", unsupported)
+    publication.publish_output(temporary, target)
+    assert target.read_bytes() == b"complete NOK workbook"
+    assert not temporary.exists()
+    temporary.write_bytes(b"other workbook")
+    with pytest.raises(FileExistsError, match="Save a copy"):
+        publication.publish_output(temporary, target)
+    assert target.read_bytes() == b"complete NOK workbook"
+    assert temporary.read_bytes() == b"other workbook"
+
+
+def test_unsupported_hardlinks_do_not_blame_excel_for_folder_permissions(monkeypatch, tmp_path):
+    from metroliza.exporting import output_publication as publication
+
+    temporary, target = tmp_path / "stage.xlsx", tmp_path / "output.xlsx"
+    temporary.write_bytes(b"complete NOK workbook")
+    open_file = Path.open
+
+    def denied(path, mode="r", *args, **kwargs):
+        if path == target and mode == "xb":
+            raise PermissionError(13, "folder write denied")
+        return open_file(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(publication, "_WINDOWS", False)
+    monkeypatch.setattr(publication.os, "link", lambda *_: (_ for _ in ()).throw(PermissionError(1, "unsupported")))
+    monkeypatch.setattr(Path, "open", denied)
+    with pytest.raises(OSError) as error:
+        publication.publish_output(temporary, target)
+    assert "Excel" not in str(error.value)
+    assert temporary.read_bytes() == b"complete NOK workbook"
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("dashboard", [False, True])
+def test_save_copy_retries_publication_race_and_reports_actual_workbook(tmp_path, qapplication_session, dashboard):
+    from metroliza.exporting.contracts import validate_export_request
+    from metroliza.exporting.export_backends import ExcelExportBackend
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.ui.export_dialog import ExportDialog
+
+    target = tmp_path / "out.xlsx"
+    target.write_bytes(b"last complete NOK workbook")
+    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), _request("selected.db", target, dashboard=dashboard))
+    worker = ExportDataThread(validate_export_request(request))
+    first_copy = Path(worker.excel_file)
+    worker.run_export_pipeline = _export_thread(first_copy, race=True).run_export_pipeline
+    assert ExcelExportBackend().run(worker)
+    actual = tmp_path / "out (3).xlsx"
+    assert Path(worker.excel_file) == actual
+    assert Path(worker._primary_output_file) == actual
+    assert worker.completion_metadata["published_output_path"] == str(actual)
+    assert actual.is_file()
+    assert first_copy.read_bytes() == b"created by another operation"
+    assert target.read_bytes() == b"last complete NOK workbook"
+    if dashboard:
+        assert Path(worker.html_dashboard_file) == tmp_path / "out (3)_dashboard.html"
+        assert Path(worker.html_dashboard_assets_dir) == tmp_path / "out (3)_dashboard_assets"
+
+
+def test_save_copy_html_only_retries_race_after_render(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.charts.export_html_dashboard import write_export_html_dashboard
+    from metroliza.exporting import export_data_thread
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.ui.export_dialog import ExportDialog
+
+    target = tmp_path / "dashboard.html"
+    target.write_text("last complete NOK dashboard")
+    request = ExportRequest(AppPaths("selected.db", html_dashboard_file=str(target)), ExportOptions(export_target="html_dashboard"))
+    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), request)
+    worker = export_data_thread.ExportDataThread(request)
+    occupied = tmp_path / "dashboard (2).html"
+    calls = []
+
+    def render(**kwargs):
+        result = write_export_html_dashboard(**kwargs)
+        calls.append(result)
+        if len(calls) == 1:
+            occupied.write_text("NOK dashboard from another operation")
+        return result
+
+    monkeypatch.setattr(export_data_thread, "_write_export_html_dashboard", render)
+    worker._write_html_dashboard_if_requested()
+    actual = tmp_path / "dashboard (3).html"
+    assert Path(worker.completion_metadata["html_dashboard_path"]) == actual
+    assert Path(worker._primary_output_file) == actual
+    assert actual.is_file()
+    assert f"<h1>{actual.name}</h1>" in actual.read_text()
+    assert target.read_text() == "last complete NOK dashboard"
+    assert occupied.read_text() == "NOK dashboard from another operation"
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("error_type,expected_attempts", [(PermissionError, 10), (OSError, 1)])
+def test_dashboard_directory_move_retry_is_bounded_and_cleans_staging(monkeypatch, tmp_path, error_type, expected_attempts):
+    from metroliza.charts.export_html_dashboard import write_export_html_dashboard
+    from metroliza.exporting import output_publication as publication
+
+    target = tmp_path / "dashboard.html"
+    target.write_text("last complete NOK dashboard")
+    attempts, delays = [], []
+
+    def locked(source, destination):
+        attempts.append((source, destination))
+        raise error_type("directory cannot move")
+
+    monkeypatch.setattr(publication.os, "rename", locked)
+    monkeypatch.setattr(time, "sleep", delays.append)
+    with pytest.raises(error_type):
+        publication.write_dashboard_safely(
+            write_export_html_dashboard, output_path=target,
+            assets_dir=tmp_path / "dashboard_assets", sections=[],
+            consents=(publication.OutputConsent.for_path(target),),
+        )
+    assert len(attempts) == expected_attempts
+    assert len(delays) == expected_attempts - 1 and sum(delays) < 2
+    assert target.read_text() == "last complete NOK dashboard"
+    assert set(tmp_path.iterdir()) == {target, tmp_path / f".{target.name}.publish.lock"}
+
+
+def test_exclusive_fallback_flushes_and_removes_partial_file_on_write_failure(monkeypatch, tmp_path):
+    from metroliza.exporting import output_publication as publication
+
+    temporary, target = tmp_path / "stage.xlsx", tmp_path / "output.xlsx"
+    temporary.write_bytes(b"complete NOK workbook")
+    monkeypatch.setattr(publication, "_WINDOWS", False)
+    monkeypatch.setattr(publication.os, "link", lambda *_: (_ for _ in ()).throw(PermissionError(1, "unsupported")))
+    syncs = []
+    fsync = publication.os.fsync
+    monkeypatch.setattr(publication.os, "fsync", lambda fd: syncs.append(fd) or fsync(fd))
+    publication.publish_output(temporary, target)
+    assert len(syncs) == 1
+    assert target.read_bytes() == b"complete NOK workbook"
+    target.unlink()
+    temporary.write_bytes(b"next NOK workbook")
+
+    def fail_copy(source, destination):
+        destination.write(b"partial NOK")
+        raise OSError("simulated full disk")
+
+    monkeypatch.setattr(publication.shutil, "copyfileobj", fail_copy)
+    with pytest.raises(OSError, match="full disk"):
+        publication.publish_output(temporary, target)
+    assert not target.exists()
+    assert temporary.read_bytes() == b"next NOK workbook"
+
+
+def test_save_copy_publication_stops_after_twenty_races_without_replacing(monkeypatch, tmp_path, qapplication_session):
+    from metroliza.exporting import export_backends
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.ui.export_dialog import ExportDialog
+
+    target = tmp_path / "out.xlsx"
+    target.write_bytes(b"last complete NOK workbook")
+    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), _request("selected.db", target))
+    worker = ExportDataThread(request)
+    worker.run_export_pipeline = _export_thread(target).run_export_pipeline
+    calls = []
+
+    def race(temporary, candidate, **kwargs):
+        calls.append(candidate)
+        candidate.write_bytes(b"NOK concurrent writer")
+        raise FileExistsError("simulated publication collision")
+
+    monkeypatch.setattr(export_backends, "publish_output", race)
+    with pytest.raises(FileExistsError):
+        export_backends.ExcelExportBackend().run(worker)
+    assert len(calls) == len(set(calls)) == 20
+    assert target.read_bytes() == b"last complete NOK workbook"
+    assert all(path.read_bytes() == b"NOK concurrent writer" for path in calls)
+    assert set(tmp_path.iterdir()) == {target, *calls}
+
+
+@pytest.mark.parametrize("terminal", ["finished", "canceled"])
+def test_copy_completion_dialog_links_to_actual_published_workbook(monkeypatch, tmp_path, qapplication_session, terminal):
+    from metroliza.ui import export_dialog
+    from tests.test_export_dialog_behavior import _build_dialog
+
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file="selected.db")
+    dialog.excel_file = tmp_path / "out (2).xlsx"
+    actual = tmp_path / "out (3).xlsx"
+    actual.write_bytes(b"complete NOK workbook")
+    dialog.export_thread = SimpleNamespace(
+        export_target="excel_xlsx", completion_metadata={"published_output_path": str(actual)},
+    )
+    seen = []
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *args, **kwargs: seen.append(kwargs))
+    try:
+        getattr(dialog, f"on_export_{terminal}")()
+        assert seen and Path(seen[0]["excel_file"]) == actual
+    finally:
+        dialog.export_thread = None
+        dialog.close()

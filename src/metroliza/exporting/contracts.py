@@ -55,6 +55,7 @@ class ExportRequest:
     filter_query: str | None = None
     grouping_df: GroupingAssignments | None = None
     replace_outputs: tuple[OutputConsent, ...] = ()
+    copy_output_from: str | None = None
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
@@ -114,6 +115,7 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         filter_query=request.filter_query,
         grouping_df=validated_grouping_df,
         replace_outputs=request.replace_outputs,
+        copy_output_from=request.copy_output_from,
     )
 
 
