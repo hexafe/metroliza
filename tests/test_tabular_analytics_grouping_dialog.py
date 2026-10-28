@@ -64,6 +64,30 @@ def _app():
     return _APP
 
 
+@pytest.fixture(autouse=True)
+def _literal_group_color_palette():
+    """Color literals assume light mode; do not inherit another module's dark theme.
+
+    Tests that explicitly mutate their dialog's base color still exercise dark-mode
+    normalization. Restore the caller's application theme after every test.
+    """
+    app = _app()
+    palette, stylesheet = app.palette(), app.styleSheet()
+    properties = {name: app.property(name) for name in
+                  ('metrolizaThemeMode', 'metrolizaDarkMode', 'metrolizaThemeManaged')}
+    app.setStyleSheet('')
+    app.setPalette(app.style().standardPalette())
+    app.setProperty('metrolizaThemeMode', 'light')
+    app.setProperty('metrolizaDarkMode', False)
+    try:
+        yield
+    finally:
+        app.setStyleSheet(stylesheet)
+        app.setPalette(palette)
+        for name, value in properties.items():
+            app.setProperty(name, value)
+
+
 @pytest.mark.parametrize("with_workbook, fail_workbook", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("default_label", ["POPULATION", "Rest"])
 def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(
@@ -391,6 +415,7 @@ def test_apply_selector_filter_refreshes_selector_scope_without_full_refresh() -
     dialog._refresh_all = lambda *args, **kwargs: calls.append("full-refresh")
     dialog._refresh_selectors = lambda *args, **kwargs: calls.append("selectors")
     dialog._sync_status = lambda **kwargs: calls.append(("status", kwargs))
+    dialog._scope_query_revision = 0
 
     dialog._apply_selector_filter()
 
@@ -818,6 +843,41 @@ def test_async_preview_disposes_its_progress_objects_after_completion(tmp_path) 
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         assert sip.isdeleted(progress)
         assert sip.isdeleted(movie)
+
+
+def test_d2_typing_round_trip_preserves_applied_async_preview_and_assignment(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, _worker, _loaded, read_allowed, _finish_allowed):
+        dialog.selector_search.setText("line=A")
+        dialog.selector_search.returnPressed.emit()
+        request = dialog._selector_preview_request_id
+        dialog.selector_search.setText("line=Ax")
+        dialog.selector_search.setText("line=A")
+        dialog.selector_search.returnPressed.emit()
+        read_allowed.set()
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert dialog.selector_list.count() == 2, "typing discarded the applied predicate's preview"
+        assert dialog._selector_preview_request_id == request
+        assert dialog._selector_preview_loading_dialog is None, "dropped request left the duck open"
+        dialog.assign_filtered_rows(initial_group_name="A only")
+        materialized = dialog._materialize_grouping_dataframe()
+        assert materialized["REPORT_ID"].tolist() == [1, 3]
+        assert materialized["GROUP"].tolist() == ["A only", "A only"]
+        # Let the assignment-triggered preview complete before fixture cleanup.
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+
+
+def test_d2_superseded_preview_closes_dialog_and_unchanged_enter_retries(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, _worker, _loaded, read_allowed, _finish_allowed):
+        progress = dialog._selector_preview_loading_dialog
+        dialog._invalidate_sqlite_selector_preview()
+        read_allowed.set()
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert dialog._selector_preview_loading_dialog is None, "superseded request kept its loading dialog"
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(progress)
+        dialog._apply_selector_filter()
+        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert dialog.selector_list.count() == 4, "no-op Enter did not restore the missing list"
 
 
 def test_async_preview_result_cannot_replace_new_invalid_filter(tmp_path) -> None:
@@ -2889,12 +2949,11 @@ def test_grouping_dialog_validation_branches_do_not_mutate_assignments(monkeypat
         dialog.create_group()
         assert dialog._temp_group_assignments == {}
 
-        dialog._applied_selector_filter_text = "NO_MATCH"
-        dialog._invalidate_selector_cache()
+        _apply_selector_search(dialog, "NO_MATCH")
         dialog.assign_filtered_rows()
         assert messages[-1] == "No rows match the current search or filter."
 
-        dialog._applied_selector_filter_text = ""
+        _apply_selector_search(dialog, "")
         dialog.assign_filtered_rows(initial_group_name="")
         assert dialog._temp_group_assignments == {}
     finally:

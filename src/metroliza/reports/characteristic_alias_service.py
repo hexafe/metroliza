@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import csv
 import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from itertools import islice
 
 from metroliza.reports.db import execute_with_retry
-from metroliza.reports.db import run_transaction_with_retry
+from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
 
 
 CHARACTERISTIC_ALIAS_TABLE = 'CHARACTERISTIC_ALIASES'
@@ -451,6 +454,7 @@ def upsert_characteristic_aliases_bulk(
     connection: sqlite3.Connection | None = None,
     retries: int = 2,
     retry_delay_s: float = 0.05,
+    join_transaction: bool = False,
 ) -> int:
     """Validate and upsert many alias mappings in one transaction."""
     normalized_rows = [
@@ -518,6 +522,7 @@ def upsert_characteristic_aliases_bulk(
         connection=connection,
         retries=retries,
         retry_delay_s=retry_delay_s,
+        join_transaction=join_transaction,
     )
 
 
@@ -549,15 +554,8 @@ def _normalized_csv_headers(fieldnames: list[str] | None) -> list[str]:
     return [str(name or '').strip() for name in (fieldnames or [])]
 
 
-def import_characteristic_aliases_csv(
-    db_path: str,
-    source_path: str,
-    *,
-    connection: sqlite3.Connection | None = None,
-    retries: int = 2,
-    retry_delay_s: float = 0.05,
-) -> int:
-    """Import alias mappings from CSV and upsert them as a batch."""
+def _read_alias_csv(source_path: str) -> list[dict]:
+    """Read and validate without writing; the reviewed rows are the saved rows."""
     with open(source_path, newline='', encoding='utf-8-sig') as csv_file:
         reader = csv.DictReader(csv_file)
         reader.fieldnames = _normalized_csv_headers(reader.fieldnames)
@@ -622,13 +620,82 @@ def import_characteristic_aliases_csv(
             total_rows_processed=(len(rows) + len({int(detail['row_number']) for detail in row_error_details})),
         )
 
+    return rows
+
+
+def import_characteristic_aliases_csv(
+    db_path: str, source_path: str, *, connection: sqlite3.Connection | None = None,
+    retries: int = 2, retry_delay_s: float = 0.05,
+) -> int:
+    """Compatibility batch API; interactive callers use a reviewed import plan."""
     return upsert_characteristic_aliases_bulk(
         db_path,
-        rows,
+        _read_alias_csv(source_path),
         connection=connection,
         retries=retries,
         retry_delay_s=retry_delay_s,
     )
+
+
+@dataclass(frozen=True)
+class AliasImportPlan:
+    rows: tuple[tuple[str, str, str, str | None], ...]
+    snapshot: tuple[tuple[tuple[int, str], ...], ...]
+    added: int
+    replaced: int
+    unchanged: int
+
+    def replacement_lines(self, limit=20):
+        limit = max(0, int(limit))
+        replacements = (f'{row[0]} [{row[2]}/{row[3] or ""}]: {old[0][1]} → {row[1]}'
+                        for row, old in zip(self.rows, self.snapshot) if old and old[0][1] != row[1])
+        lines = list(islice(replacements, limit))
+        return lines + ([f'… {self.replaced - limit} more replacement(s)'] if self.replaced > limit else [])
+
+
+def _alias_key_snapshot(cursor, rows):
+    cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='CHARACTERISTIC_ALIASES' COLLATE NOCASE")
+    if cursor.fetchone() is None:
+        return tuple(() for _ in rows)
+    snapshot = []
+    for alias, _canonical, scope, value in rows:
+        cursor.execute(
+            "SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES "
+            "WHERE alias_name=? AND scope_type=? AND scope_value IS ? ORDER BY id",
+            (alias, scope, value),
+        )
+        snapshot.append(tuple(cursor.fetchall()))
+    return tuple(snapshot)
+
+
+def preview_characteristic_aliases_csv(db_path: str, source_path: str) -> AliasImportPlan:
+    rows = tuple(tuple(row[field] for field in CSV_ALIAS_HEADERS) for row in _read_alias_csv(source_path))
+    snapshot = tuple(() for _ in rows)
+    if Path(db_path).exists():
+        with sqlite_readonly_connection_scope(db_path) as connection:
+            cursor = connection.cursor()
+            try:
+                cursor.execute("BEGIN")
+                snapshot = _alias_key_snapshot(cursor, rows)
+            finally:
+                cursor.close()
+    added = sum(not old for old in snapshot)
+    replaced = sum(bool(old) and old[0][1] != row[1] for row, old in zip(rows, snapshot))
+    return AliasImportPlan(rows, snapshot, added, replaced, len(rows) - added - replaced)
+
+
+def apply_characteristic_alias_import(db_path: str, plan: AliasImportPlan, *, replace: bool = False) -> int:
+    """Recheck all affected keys under the write lock before the first mutation."""
+    def operation(cursor):
+        cursor.execute("BEGIN IMMEDIATE")
+        if _alias_key_snapshot(cursor, plan.rows) != plan.snapshot:
+            raise ValueError("Mappings changed after preview. Nothing was imported; preview the CSV again.")
+        rows = [dict(zip(CSV_ALIAS_HEADERS, row)) for row, old in zip(plan.rows, plan.snapshot)
+                if not old or (replace and old[0][1] != row[1])]
+        return upsert_characteristic_aliases_bulk(
+            db_path, rows, connection=cursor.connection, join_transaction=True,
+        )
+    return run_transaction_with_retry(db_path, operation)
 
 
 def upsert_characteristic_alias(

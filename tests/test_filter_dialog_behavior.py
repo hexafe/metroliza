@@ -193,13 +193,13 @@ def test_reference_header_controls_search_and_distinct_population(monkeypatch):
 
         calls = {}
         dialog._list_selection_utils = types.SimpleNamespace(
-            preserve_selection_during_filter=lambda list_widget, search_text: calls.update(
-                {"list_widget": list_widget, "search_text": search_text}
+            preserve_selection_during_filter=lambda list_widget, search_text, **kwargs: calls.update(
+                {"list_widget": list_widget, "search_text": search_text, **kwargs}
             )
         )
         dialog.search_list_widgets(dialog.header_list, "h2")
 
-        assert calls == {"list_widget": dialog.header_list, "search_text": "h2"}
+        assert calls == {"list_widget": dialog.header_list, "search_text": "h2", "visibility_only": True}
     finally:
         dialog.close()
 

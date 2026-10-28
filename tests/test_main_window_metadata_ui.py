@@ -721,6 +721,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         class FakeResult:
             enriched_files = 2
             total_files = 3
+            skipped_files = 1
 
         class FakeThread:
             result = FakeResult()
@@ -740,8 +741,9 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertTrue(window.enrich_metadata_action.isEnabled())
             self.assertFalse(window.cancel_metadata_enrichment_button.isEnabled())
             self.assertTrue(window.cancel_metadata_enrichment_button.isHidden())
-            self.assertEqual(window.metadata_enrichment_progress_bar.value(), 100)
-            self.assertIn("2/3 reports updated", window.metadata_enrichment_status_label.text())
+            self.assertLess(window.metadata_enrichment_progress_bar.value(), 100)
+            self.assertIn("Completed with warnings", window.metadata_enrichment_status_label.text())
+            self.assertIn("2 updated kept", window.metadata_enrichment_status_label.text())
         finally:
             window.metadata_enrichment_thread = None
             window.close()

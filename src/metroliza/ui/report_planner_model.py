@@ -8,6 +8,8 @@ atomic import candidate there, but it is not selectable in this review UI.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from collections.abc import Iterable
 import re
 
@@ -29,6 +31,7 @@ from metroliza.reports.report_metadata_review import (
     ROW_READY,
     ReviewRow,
     apply_value_to_rows,
+    normalize_review_value,
 )
 from metroliza.ui import report_planner_metadata as meta
 from metroliza.ui import ui_theme_tokens as tokens
@@ -213,6 +216,8 @@ class ReportPlannerModel(QAbstractTableModel):
         self._location_sort_keys: tuple[bytes, ...] = ()
         self._location_indexes: tuple[QModelIndex, ...] = ()
         self._meta_rows: dict[str, ReviewRow] = {}
+        self._copy_undo = None
+        self.last_copy_undo_skipped = 0
         self._row_by_occurrence: dict[str, int] = {}
         self._meta_attention_ids: set[str] = set()
         self._meta_missing_reference_ids: set[str] = set()
@@ -360,12 +365,66 @@ class ReportPlannerModel(QAbstractTableModel):
         self._row_changed(occurrence_id)
         return count
 
-    def copy_value_to_checked(self, field_name: str, text: str) -> tuple[int, str | None]:
+    def copy_scope_counts(self, field_name, visible_ids, text):
+        """Describe the checked editable scope using the same normalization as copy."""
+        rows = [row for row in self.selected_metadata_rows() if row.editable]
+        selected = {row.occurrence_id for row in rows}
+        value, _error = normalize_review_value(field_name, text)
+        return {
+            "checked": len(selected),
+            "hidden": len(selected - set(visible_ids)),
+            "overwrites": sum(
+                row.cells[field_name].user_set and row.cells[field_name].user_value != value
+                for row in rows
+            ),
+        }
+
+    @property
+    def can_undo_copy(self):
+        return self._copy_undo is not None
+
+    def undo_copy(self):
+        """Restore manual fields only where the post-copy cell is still unchanged."""
+        self.last_copy_undo_skipped = 0
+        if self._copy_undo is None:
+            return 0
+        field_name, previous = self._copy_undo
+        self._copy_undo = None
+        restored = 0
+        for occurrence_id, (manual_before, after) in previous.items():
+            row = self._meta_rows.get(occurrence_id)
+            if row is None or row.cells[field_name] != after:
+                self.last_copy_undo_skipped += 1
+                continue
+            cell = row.cells[field_name]
+            # The copy may clear a conflicting OCR suggestion; restore it with the manual value.
+            cell.user_set, cell.user_value, cell.ocr_suggestion = manual_before
+            restored += 1
+            self._row_changed(occurrence_id, notify=False)
+        self.metadata_changed.emit()
+        return restored
+
+    def copy_value_to_checked(self, field_name: str, text: str, *, occurrence_ids=None) -> tuple[int, str | None]:
         """Set ``text`` as a manual value on every checked, editable report."""
 
-        rows = [row for row in self.selected_metadata_rows() if row.editable]
+        allowed = self._selected_occurrence_ids if occurrence_ids is None else set(occurrence_ids)
+        rows = [row for row in self.selected_metadata_rows() if row.editable and row.occurrence_id in allowed]
+        previous = {
+            row.occurrence_id: (
+                row.cells[field_name].user_set,
+                row.cells[field_name].user_value,
+                row.cells[field_name].ocr_suggestion,
+            )
+            for row in rows
+        }
         changed, error = apply_value_to_rows(rows, field_name, text)
         if not error:
+            snapshots = {
+                row.occurrence_id: (previous[row.occurrence_id], replace(row.cells[field_name]))
+                for row in rows
+                if previous[row.occurrence_id][:2] != (row.cells[field_name].user_set, row.cells[field_name].user_value)
+            }
+            self._copy_undo = (field_name, snapshots) if snapshots else None
             for row in rows:
                 self._row_changed(row.occurrence_id, notify=False)
             self.metadata_changed.emit()
@@ -447,6 +506,7 @@ class ReportPlannerModel(QAbstractTableModel):
         if not isinstance(result, ParsePreflightResult):
             raise TypeError("result must be a ParsePreflightResult")
         self.beginResetModel()
+        self._copy_undo = None
         self._review = result
         # QString's default case-sensitive ordering compares UTF-16 code units.
         # The location is immutable for this review; avoid thousands of Python/Qt
@@ -469,6 +529,7 @@ class ReportPlannerModel(QAbstractTableModel):
     def invalidate(self) -> None:
         """Drop a stale review and all selections before its inputs change."""
 
+        self._copy_undo = None
         had_selection = bool(self._selected_occurrence_ids)
         had_review = self._review is not None
         if had_review:

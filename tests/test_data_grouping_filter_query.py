@@ -510,6 +510,13 @@ class _FakeSignalListWidget(_FakeListWidget):
         self.name = name
         self.itemSelectionChanged = _FakeSignal()
         self.itemDoubleClicked = _FakeSignal()
+        self.event_filters = []
+
+    def installEventFilter(self, event_filter):
+        self.event_filters.append(event_filter)
+
+    def viewport(self):
+        return self
 
 
 class _FakeButton:

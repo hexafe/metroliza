@@ -12,6 +12,7 @@ import pytest
 
 from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from metroliza.exporting.execution import ExportOutcomeKind, ExportStageOutcome
+from metroliza.exporting.output_publication import OutputConsent
 from metroliza.exporting import xlsx_parallel_package as packaging
 from xlsxwriter.contenttypes import ContentTypes
 
@@ -89,6 +90,7 @@ class TestExcelExportBackend(unittest.TestCase):
             target_path.write_text('old workbook', encoding='utf-8')
             thread = _Thread(str(target_path))
 
+            thread.replace_outputs = (OutputConsent.for_path(target_path),)
             outcome = _Backend().run(thread)
 
             self.assertEqual(outcome, ExportStageOutcome.completed())

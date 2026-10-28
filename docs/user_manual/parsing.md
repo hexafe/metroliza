@@ -12,7 +12,8 @@ active operation and last outcome during the session.
    from their contents by the installed parsers. Cancelling the folder picker still offers
    the existing archive picker.
 2. Choose an existing or new **Database file** with **Browse**. A destination is required
-   before review; a missing `.db` suffix is added by the picker.
+   before review. Existing file names are kept exactly, including `.sqlite`, `.sqlite3`
+   and uppercase extensions. Only a new name without an extension receives `.db`.
 3. Choose **Metadata detail**.
 4. Click **Review reports**. This inspects report contents without writing to the destination
    or running OCR. Review can be cancelled in its progress window.

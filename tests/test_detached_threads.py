@@ -36,6 +36,7 @@ _TIMEOUT_S = 20
 def _run_native_script(script, *args, timeout=10):
     source = Path(detached_threads.__file__).resolve()
     environment = os.environ.copy()
+    environment["PYTHONFAULTHANDLER"] = "1"
     environment["PYTHONPATH"] = str(source.parents[2])
     prologue = f"""from pathlib import Path
 from metroliza.ui import detached_threads as _source_registry
@@ -474,7 +475,69 @@ import sys
 from metroliza.ui import detached_threads
 assert not any(name.startswith('PyQt6') for name in sys.modules)
 assert detached_threads.QUIT_WAIT_TOTAL_MS == 5000
-'''], capture_output=True, text=True, timeout=10)
+assert detached_threads.shutdown()
+assert not any(name.startswith('PyQt6') for name in sys.modules)
+'''], env={**os.environ, "PYTHONFAULTHANDLER": "1"}, capture_output=True, text=True, timeout=10)
+    assert child.returncode == 0, child.stdout + child.stderr
+
+
+@pytest.mark.parametrize('start_failure', [False, True])
+def test_c2_gui_delivery_disconnects_owner_after_terminal_completion(qapplication_session, monkeypatch, start_failure):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QObject
+
+    owner = QObject()
+    worker = _GatedThread(threading.Event())
+    delivered = []
+    abandoned = []
+    real_abandon = detached_threads._abandon_delivery
+    def observe_abandon(*args):
+        abandoned.append(True)
+        real_abandon(*args)
+    monkeypatch.setattr(detached_threads, '_abandon_delivery', observe_abandon)
+    baseline = owner.receivers(owner.destroyed)
+    detached_threads.register(worker, defer_quit=True, owner=owner,
+                              on_finished=lambda current_owner, thread: delivered.append(current_owner is owner))
+    assert owner.receivers(owner.destroyed) > baseline
+    if start_failure:
+        detached_threads.discard(worker)
+    else:
+        worker.release.set()
+        worker.start()
+        assert worker.wait(5000)
+        assert _wait_until(lambda: not detached_threads.is_registered(worker))
+    try:
+        assert delivered == ([] if start_failure else [True])
+        abandoned.clear()
+        sip.delete(owner)
+        assert abandoned == [], 'terminal operation left a callback on the owner'
+        assert '_metroliza_delivery_owner' not in vars(worker)
+    finally:
+        sip.delete(worker)
+        if not sip.isdeleted(owner):
+            sip.delete(owner)
+
+
+def test_c2_quit_controller_is_released_on_gui_before_loop_returns():
+    script = '''
+from PyQt6 import sip
+from PyQt6.QtCore import QThread, QTimer
+from PyQt6.QtWidgets import QApplication
+from metroliza.ui import detached_threads as registry
+app = QApplication([])
+app.setQuitOnLastWindowClosed(False)
+destroyed = []
+for attempt in range(2):
+    controller = registry._quit_deferral()
+    controller.destroyed.connect(lambda: destroyed.append(QThread.currentThread() == app.thread()))
+    QTimer.singleShot(0, app.quit)
+    assert app.exec() == 0
+    assert sip.isdeleted(controller), 'Quit controller retained until Python finalization'
+    assert not hasattr(app, '_metroliza_detached_quit')
+assert destroyed == [True, True], destroyed
+print('QUIT CONTROLLER GUI CLEANUP PASS', destroyed, flush=True)
+'''
+    child = _run_native_script(script)
     assert child.returncode == 0, child.stdout + child.stderr
 
 

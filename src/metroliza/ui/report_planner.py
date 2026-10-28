@@ -11,7 +11,7 @@ from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMenu, QPlainTextEdit, QPushButton, QSizePolicy, QTableView, QVBoxLayout, QWidget,
+    QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QTableView, QVBoxLayout, QWidget,
 )
 
 from metroliza.parsing.preflight import ParsePreflightStatus
@@ -203,7 +203,9 @@ class ReportPlanner(QWidget):
         # The other metadata actions live in one menu so the toolbar keeps two rows.
         self.metadata_menu = QMenu(self)
         self.metadata_menu.setToolTipsVisible(True)
+        self.metadata_menu.aboutToShow.connect(lambda: self._update_metadata_actions(include_copy_counts=True))
         self.copy_to_checked = self._add_menu_action("Copy to checked", self.copy_current_value_to_checked)
+        self.undo_copy_action = self._add_menu_action("Undo copy to checked", self.undo_copy)
         self.reset_to_detected = self._add_menu_action("Reset to detected", self.reset_current_row)
         self.stop_action = self._add_menu_action("Stop metadata read", self.stop_requested.emit)
         self.stop_action.setToolTip("Stop after the current report. Values already read are kept.")
@@ -382,7 +384,14 @@ class ReportPlanner(QWidget):
         if not value:
             self.set_metadata_status("The current cell is empty; there is nothing to copy.", "warning")
             return
-        changed, error = self.model.copy_value_to_checked(field_name, value)
+        visible_ids = self._visible_report_ids()
+        counts = self.model.copy_scope_counts(field_name, visible_ids, value)
+        scope = self._choose_copy_scope(field_name, value, counts) if counts["hidden"] or counts["overwrites"] else "all"
+        if scope == "cancel":
+            return
+        changed, error = self.model.copy_value_to_checked(
+            field_name, value, occurrence_ids=visible_ids if scope == "visible" else None,
+        )
         if error:
             self.set_metadata_status(error, "warning")
             return
@@ -390,6 +399,40 @@ class ReportPlanner(QWidget):
             f"{FIELD_LABELS[field_name]} copied to {changed} checked report"
             f"{'' if changed == 1 else 's'}.",
             "success",
+        )
+
+    def _visible_report_ids(self):
+        return {
+            self.proxy.data(self.proxy.index(row, 0), Qt.ItemDataRole.UserRole)
+            for row in range(self.proxy.rowCount())
+        }
+
+    def _choose_copy_scope(self, field_name, value, counts):
+        prompt = QMessageBox(self)
+        prompt.setWindowTitle("Copy metadata to checked reports")
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        prompt.setText(
+            f"{FIELD_LABELS[field_name]} (value preview): {str(value)[:300]}\n"
+            f"{counts['checked']} checked, {counts['hidden']} hidden; "
+            f"{counts['overwrites']} existing manual corrections may be overwritten.\n"
+            "Choose which checked editable reports to update. Undo copy restores the previous values and markers."
+        )
+        all_rows = prompt.addButton(
+            f"Copy to all {counts['checked']} checked ({counts['hidden']} hidden)",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        visible = prompt.addButton("Copy to visible checked only", QMessageBox.ButtonRole.ActionRole)
+        cancel = prompt.addButton(QMessageBox.StandardButton.Cancel)
+        prompt.setDefaultButton(cancel)
+        prompt.setEscapeButton(cancel)
+        prompt.exec()
+        return "all" if prompt.clickedButton() is all_rows else "visible" if prompt.clickedButton() is visible else "cancel"
+
+    def undo_copy(self):
+        count = self.model.undo_copy()
+        skipped = self.model.last_copy_undo_skipped
+        self.set_metadata_status(
+            f"Restored previous metadata for {count} reports; {skipped} skipped because they changed after copying."
         )
 
     def reset_current_row(self):
@@ -427,12 +470,23 @@ class ReportPlanner(QWidget):
         menu = self.build_columns_menu()
         menu.exec(self.table.horizontalHeader().mapToGlobal(position))
 
-    def _update_metadata_actions(self, *_args):
+    def _update_metadata_actions(self, *_args, include_copy_counts=False):
         row, field_name = self.current_metadata_cell()
         usable = not self._busy and self.model.valid
         editable = row is not None and row.editable
         can_copy = usable and editable and self._worker_mode is None and bool(row.value(field_name))
         self.copy_to_checked.setEnabled(can_copy)
+        self.undo_copy_action.setEnabled(usable and self._worker_mode is None and self.model.can_undo_copy)
+        if can_copy and include_copy_counts:
+            counts = self.model.copy_scope_counts(field_name, self._visible_report_ids(), row.value(field_name))
+            self.copy_to_checked.setText(
+                f"Copy {FIELD_LABELS[field_name]} '{str(row.value(field_name))[:60]}' to "
+                f"{counts['checked']} checked ({counts['hidden']} hidden, {counts['overwrites']} manual)"
+            )
+        elif can_copy:
+            self.copy_to_checked.setText(f"Copy {FIELD_LABELS[field_name]} to checked")
+        else:
+            self.copy_to_checked.setText("Copy to checked")
         self.copy_to_checked.setToolTip(
             "Copy this cell's value to the same field of every checked report "
             "(counts as a manual edit)."

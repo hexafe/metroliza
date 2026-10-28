@@ -632,6 +632,10 @@ def build_measurement_filter_query(
 
     if has_nok_only:
         query += " AND has_nok = 1"
+    date_from = date.fromisoformat(str(date_from)[:10]) if date_from else None
+    date_to = date.fromisoformat(str(date_to)[:10]) if date_to else None
+    if date_from and date_to and date_from > date_to:
+        raise ValueError("From must be on or before To.")
     if date_from:
         query += f" AND report_date >= '{_escape_sql_literal(date_from)}'"
     if date_to:
