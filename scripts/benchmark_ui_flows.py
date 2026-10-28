@@ -510,7 +510,20 @@ class ModifyDbApply(Scenario):
         ctx.mark("apply_returned")
 
     def done(self, ctx):
-        return "apply_returned" in ctx.marks
+        if "apply_returned" not in ctx.marks or getattr(self.dialog, "_save_in_progress", False):
+            return False
+        thread = getattr(self.dialog, "_edit_thread", None)
+        if thread is not None:
+            try:
+                if not thread.isFinished():
+                    return False
+            except RuntimeError:
+                # Coordinated windows delete on close; native cleanup can already
+                # have deleted the retained thread wrapper before the next poll.
+                pass
+        if not self.dialog._changes_committed:
+            raise RuntimeError("Modify Database did not save the confirmed edits")
+        return True
 
 
 def _export_dialog(ctx: Context, db_name: str):

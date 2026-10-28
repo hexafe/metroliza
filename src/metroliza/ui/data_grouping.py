@@ -59,6 +59,10 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from PyQt6.QtCore import Qt
+try:
+    from PyQt6.QtCore import QEvent
+except ImportError:  # Compatibility with narrow Qt test stubs.
+    QEvent = None
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import(
@@ -725,6 +729,10 @@ class DataGrouping(QDialog):
                 qt_namespace=Qt,
             )
 
+            for pane in (self.part_list, self.part_group_list):
+                if QEvent is not None:
+                    pane.installEventFilter(self)
+                    pane.viewport().installEventFilter(self)
             self.create_group_button.clicked.connect(self.create_group)
             self.rename_group_button.clicked.connect(self.rename_group)
             self.remove_from_group_button.clicked.connect(self.remove_from_group)
@@ -1896,6 +1904,7 @@ class DataGrouping(QDialog):
 
             selected_part_group = self.part_group_list.currentItem() is not None
             self.remove_from_group_button.setEnabled(selected_group and not is_default_group and selected_part_group)
+            self.create_group_button.setEnabled(self._has_groupable_selection())
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -1941,16 +1950,35 @@ class DataGrouping(QDialog):
         ]
 
     def _selected_groupable_part_keys(self):
+        for name in ("part_list", "part_group_list"):
+            if self._list_or_viewport_has_focus(self._safe_attr(self, name)):
+                self._last_active_part_pane = name
+        active = self._safe_attr(self, "_last_active_part_pane")
+        if active in ("part_list", "part_group_list"):
+            active_keys = self._selected_part_keys_from_list(self._safe_attr(self, active))
+            if active_keys:
+                return active_keys
+            self._last_active_part_pane = None
         part_keys = self._selected_part_keys_from_list(self._safe_attr(self, "part_list"))
         group_part_keys = self._selected_part_keys_from_list(self._safe_attr(self, "part_group_list"))
-        if self._list_or_viewport_has_focus(self._safe_attr(self, "part_group_list")) and group_part_keys:
-            return group_part_keys
         if part_keys:
+            self._last_active_part_pane = "part_list"
             return part_keys
+        if group_part_keys:
+            self._last_active_part_pane = "part_group_list"
         return group_part_keys
 
     def _has_groupable_selection(self):
         return bool(self._selected_groupable_part_keys())
+
+    def eventFilter(self, watched, event):
+        """Remember the last parts pane before focus moves to an action button."""
+        if QEvent is not None and event.type() in (QEvent.Type.FocusIn, QEvent.Type.MouseButtonPress):
+            for name in ("part_list", "part_group_list"):
+                pane = self._safe_attr(self, name)
+                if pane is not None and (watched is pane or watched is pane.viewport()):
+                    self._last_active_part_pane = name
+        return super().eventFilter(watched, event)
 
     def create_group(self, initial_group_name=""):
         """Handle `create_group` for `DataGrouping`.
@@ -1975,10 +2003,12 @@ class DataGrouping(QDialog):
                 selected_group = (self._selected_group_name() or "").strip()
                 if selected_group and selected_group != self.default_group:
                     default_name = selected_group
+            source = ("Parts in selected group" if self._safe_attr(self, "_last_active_part_pane") == "part_group_list"
+                      else "Parts in selected reference")
             new_group_name, ok_pressed = QInputDialog.getText(
                 self,
                 "New group",
-                "Enter group name:",
+                f"Enter group name for {len(target_group_keys)} selected parts from {source}:",
                 text=default_name,
             )
             new_group_name = (new_group_name or "").strip()
@@ -2024,6 +2054,16 @@ class DataGrouping(QDialog):
         try:
             selected_group = self._selected_group_name()
             new_group_name, ok_pressed = QInputDialog.getText(self, "Rename group", f"Enter new name for '{selected_group}':")
+            new_group_name = (new_group_name or "").strip()
+            if not ok_pressed or not selected_group or not new_group_name or new_group_name == str(selected_group).strip():
+                return
+            # Group identity is case-sensitive, matching create/add and SQL scope.
+            existing_names = set(self.df['GROUP'].dropna().astype(str))
+            existing_names.add(str(self.default_group))
+            existing_names.update((self._safe_attr(self, "_group_display_to_name") or {}).values())
+            if new_group_name in map(str.strip, existing_names):
+                QMessageBox.warning(self, "Group name already exists", f"A group named '{new_group_name}' already exists.")
+                return
 
             if ok_pressed and selected_group and new_group_name:
                 existing_color = self.df.loc[self.df['GROUP'] == selected_group, self.group_color_column].iloc[-1]
@@ -2101,6 +2141,7 @@ class DataGrouping(QDialog):
     def _create_group_from_selected_reference(self):
         reference_name = self._selected_reference_name()
         self._select_visible_parts_for_grouping()
+        self._last_active_part_pane = "part_list"
         self.create_group(initial_group_name=self._suggested_scope_group_name(reference_name))
 
     def _suggested_scope_group_name(self, reference_name=None):

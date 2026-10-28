@@ -181,6 +181,11 @@ alias_name,canonical_name,scope_type,scope_value
 
 Use **Import CSV** to load name matches from a CSV file.
 
+Before saving, review the Added / Replaced / Unchanged counts and the old → new names
+for replacements. **Import only new** is the default; **Import and replace N** explicitly
+allows replacements. Cancel saves nothing. If affected rules change after preview, the
+import aborts without saving; preview the CSV again.
+
 This is useful when you already maintain a mapping list externally or want to load many matches at once.
 
 Use:

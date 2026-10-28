@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+import os
 import sqlite3
 import threading
 import time
@@ -969,7 +970,7 @@ assert not detached_threads.is_registered(worker)
 assert .08 <= elapsed < 1, elapsed
 print(f"T25 normal_quit_native_completion_s={elapsed:.6f}")
 '''
-    completed = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=10)
+    completed = subprocess.run([sys.executable, "-c", code], env={**os.environ, "PYTHONFAULTHANDLER": "1"}, capture_output=True, text=True, timeout=10)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     print(completed.stdout, end="")
 
@@ -1009,7 +1010,7 @@ assert worker.wait(1000)
 records.cancel_load_thread(worker)
 assert worker.isFinished()
 '''
-    completed = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=5)
+    completed = subprocess.run([sys.executable, "-c", code], env={**os.environ, "PYTHONFAULTHANDLER": "1"}, capture_output=True, text=True, timeout=5)
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
@@ -1236,7 +1237,7 @@ assert result==([], [hook], "loaded", 4, False), result
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join(map(str, (source_root / "src", source_root, Path(__file__).resolve().parents[1])))
     result = subprocess.run([sys.executable, "-c", code, hook, str(tmp_path / "copy.sqlite"), str(source_root)],
-                            cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10)
+                            cwd=tmp_path, env={**environment, "PYTHONFAULTHANDLER": "1"}, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -1297,5 +1298,5 @@ assert not observed['running_at_cancel_return'] and observed['wait_calls'][0]==(
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join(map(str, (source_root / "src", source_root)))
     completed = subprocess.run([sys.executable, "-c", code, str(source_root), str(tmp_path / "live.sqlite")],
-                               cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10)
+                               cwd=tmp_path, env={**environment, "PYTHONFAULTHANDLER": "1"}, capture_output=True, text=True, timeout=10)
     assert completed.returncode == 0, completed.stdout + completed.stderr

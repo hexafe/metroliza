@@ -63,6 +63,70 @@ def test_existing_csv_fixture_is_repeatable(tmp_path):
     assert len(original.splitlines()) == 25
 
 
+@pytest.mark.parametrize('started,pending,committed', [
+    (False, False, False), (True, True, False), (True, False, True), (True, False, False),
+])
+def test_modify_db_benchmark_waits_for_durable_apply(started, pending, committed):
+    scenario = harness.ModifyDbApply()
+    thread = Namespace(isFinished=lambda: False) if pending else None
+    scenario.dialog = Namespace(_edit_thread=thread, _changes_committed=committed)
+    context = Namespace(marks={'apply_returned': 1} if started else {})
+    if started and not pending and not committed:
+        with pytest.raises(RuntimeError, match='did not save'):
+            scenario.done(context)
+    else:
+        assert scenario.done(context) is (started and not pending and committed)
+
+
+@pytest.mark.parametrize('committed', [False, True])
+def test_modify_db_benchmark_handles_deleted_native_save_thread(committed):
+    class DeletedThread:
+        def isFinished(self):
+            raise RuntimeError('wrapped C/C++ object has been deleted')
+
+    scenario = harness.ModifyDbApply()
+    scenario.dialog = Namespace(_edit_thread=DeletedThread(), _changes_committed=committed)
+    context = Namespace(marks={'apply_returned': 1})
+    if committed:
+        assert scenario.done(context)
+    else:
+        with pytest.raises(RuntimeError, match='did not save'):
+            scenario.done(context)
+
+
+def test_modify_db_benchmark_waits_for_queued_gui_outcome():
+    scenario = harness.ModifyDbApply()
+    scenario.dialog = Namespace(_edit_thread=Namespace(isFinished=lambda: True),
+                                _save_in_progress=True, _changes_committed=False)
+    assert scenario.done(Namespace(marks={'apply_returned': 1})) is False
+
+
+def test_modify_db_benchmark_waits_for_real_saved_database_after_coordinated_close(tmp_path):
+    from contextlib import closing
+    import json
+    from pathlib import Path
+    import sqlite3
+    import subprocess
+    import sys
+
+    data, home = tmp_path / 'data', tmp_path / 'home'
+    data.mkdir()
+    home.mkdir()
+    harness._prepare_report_db(data / 'db_small.sqlite', 2, 1, 3)
+    output, retained = tmp_path / 'result.json', tmp_path / 'retained'
+    env = harness.private_environment(home)
+    env['MPLCONFIGDIR'] = str(home / 'mpl')
+    command = [sys.executable, str(Path(harness.__file__).resolve()), 'run', '--scenario', 'modify_db_apply',
+               '--data-dir', str(data), '--db', 'db_small.sqlite', '--out', str(output),
+               '--keep-output', str(retained)]
+    result = subprocess.run(command, env=env, cwd=home, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(output.read_text())['status'] == 'ok'
+    with closing(sqlite3.connect(retained / 'db_small.sqlite')) as connection:
+        names = connection.execute('SELECT reference FROM report_metadata').fetchall()
+        assert any(name.endswith('_RENAMED') for (name,) in names)
+
+
 def test_existing_workbook_identity_contract(tmp_path):
     frame = pd.DataFrame({"metric": [1.5, -0.0, float("inf"), None],
                           "label": ["alpha", "=literal", "https://example.invalid", "omega"]})

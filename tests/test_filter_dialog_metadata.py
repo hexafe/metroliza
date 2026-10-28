@@ -339,7 +339,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
 
             ensure_report_schema.assert_not_called()
 
-    def test_reference_selection_change_clears_selected_headers(self):
+    def test_reference_selection_change_does_not_clear_selected_headers(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         fake_db = types.ModuleType("modules.db")
         fake_db.execute_with_retry = lambda *_args, **_kwargs: []
@@ -375,7 +375,7 @@ class TestFilterDialogMetadata(unittest.TestCase):
             with patch.object(module, "build_measurement_filter_query", return_value="SELECT * FROM vw_measurement_export WHERE 1=1 AND reference IN ('REF1')"):
                 dialog.on_reference_selection_changed()
 
-            self.assertEqual(cleared["count"], 1)
+            self.assertEqual(cleared["count"], 0)
             self.assertIn("reference IN ('REF1')", captured["query"])
 
 
