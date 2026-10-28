@@ -14,6 +14,7 @@ scenario can be replayed against the pre-change implementation to regenerate ``e
 from __future__ import annotations
 
 from contextlib import closing
+from copy import deepcopy
 import json
 from pathlib import Path
 import sqlite3
@@ -373,6 +374,48 @@ def load_golden():
     return json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
 
 
+def _valid_legacy_scenario(scenario):
+    """Retain the golden journey, changing only the forbidden MEAS edit and its search."""
+    scenario = deepcopy(scenario)
+    for op in scenario['ops']:
+        if op.get('text') == 'bad':
+            op['text'] = '10.3'
+        elif op.get('text') == 'BAD':
+            op['text'] = '10.3'
+    expected = scenario['expected']
+    for key in ('summary', 'confirmation_text'):
+        expected[key] = expected[key].replace('"bad"', '"10.3"')
+    for payload in (expected, expected['apply_payload'][0]):
+        fields = next(fields for key, fields in payload['measurement_updates'] if key == 13)
+        assert fields['meas'] == 'bad'
+        fields['meas'] = 10.3
+    for _statement, params in expected['statements']:
+        if params == [None, 'bad', 13]:
+            params[1] = 10.3
+    measurement = next(row for row in expected['database_after_apply']['MEASUREMENTS'] if row[0] == 13)
+    assert measurement[7] == 'bad'
+    measurement[7] = 10.3
+    for filtered in expected['filters']:
+        if filtered['text'] == 'BAD':
+            filtered['text'] = '10.3'
+    return scenario
+
+
+def _without_equivalent_numeric_edits(scenario):
+    scenario = deepcopy(scenario)
+    expected = scenario['expected']
+    for label, record_id, field, value in (('NOM', 104, 'nominal', 10.0), ('DEV', 109, 'dev', -0.15)):
+        redundant = f'Measurement rows.{label}: "{value}" -> "{value}" (MEASUREMENT_ID={record_id})\n'
+        for key in ('summary', 'confirmation_text'):
+            assert redundant in expected[key]
+            expected[key] = expected[key].replace(redundant, '')
+        for payload in (expected, expected['apply_payload'][0]):
+            updates = payload['measurement_updates']
+            assert [record_id, {field: value}] in updates
+            updates.remove([record_id, {field: value}])
+    return scenario
+
+
 # --------------------------------------------------------------------------------------
 # Tests
 # --------------------------------------------------------------------------------------
@@ -384,9 +427,38 @@ def test_record_edits_reproduce_pre_model_view_behaviour(name, tmp_path):
     scenario = load_golden()["scenarios"][name]
     assert scenario["expected"], "golden file has no captured expectations"
 
+    if name == "legacy":
+        scenario = _valid_legacy_scenario(scenario)
+    elif name == "current":
+        scenario = _without_equivalent_numeric_edits(scenario)
+
     actual = run_scenario(scenario["flavor"], scenario["ops"], ScenarioDriver(), tmp_path)
 
     assert actual == scenario["expected"]
+
+
+def test_legacy_invalid_measurement_rejects_entire_scenario(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.ui.modify_db import ModifyDB
+
+    scenario = load_golden()['scenarios']['legacy']
+    database = tmp_path / 'invalid-legacy.db'
+    DATABASE_BUILDERS['legacy'](database)
+    before = _dump_database(database, 'legacy')
+    dialog = ModifyDB(db_file=str(database), modal=False)
+    dialog.ensure_record_tables_loaded()
+    errors = []
+    monkeypatch.setattr(dialog, '_report_save_error', errors.append)
+    try:
+        for op in scenario['ops']:
+            _run_op(dialog, ScenarioDriver(), op, {"selections": [], "filters": [], "checkpoints": {}})
+        dialog.apply_changes()
+        assert len(errors) == 1
+        assert 'MEASUREMENT_ID=13, MEAS: Invalid number' in str(errors[0])
+        assert _dump_database(database, 'legacy') == before
+        assert dialog.has_pending_changes()
+    finally:
+        dialog._discard_confirmed = True
+        dialog.close()
 
 
 def test_golden_scenarios_exercise_every_edit_kind():

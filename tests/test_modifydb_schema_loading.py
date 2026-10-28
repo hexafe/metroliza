@@ -65,6 +65,7 @@ def _create_legacy_database(db_path):
 
 def _run_probe(script):
     env = os.environ.copy()
+    env["PYTHONFAULTHANDLER"] = "1"
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["QT_STYLE_OVERRIDE"] = "Fusion"
     try:
