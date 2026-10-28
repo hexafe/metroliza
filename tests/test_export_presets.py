@@ -122,6 +122,7 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._missing = object()
+        cls._modules_before_stubs = set(sys.modules)
         cls._saved_modules = {
             module_name: sys.modules.get(module_name)
             for module_name in [
@@ -235,6 +236,17 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
     def tearDownClass(cls):
         sys.modules.pop('modules.export_dialog', None)
         sys.modules.pop('metroliza.ui.export_dialog', None)
+        # Modules first imported while PyQt6 was stubbed (export_dialog and its UI helpers) hold
+        # stub base classes; drop them and their parent-package bindings so later tests
+        # re-import the real modules.
+        for module_name in set(sys.modules) - cls._modules_before_stubs:
+            if not module_name.startswith(('metroliza.', 'modules.')):
+                continue
+            sys.modules.pop(module_name, None)
+            package_name, _, attr_name = module_name.rpartition('.')
+            package = sys.modules.get(package_name)
+            if package is not None and attr_name in vars(package):
+                delattr(package, attr_name)
         for (module_name, attr_name), original_value in cls._saved_module_attrs.items():
             module = sys.modules.get(module_name)
             if module is None:
