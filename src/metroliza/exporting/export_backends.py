@@ -802,6 +802,8 @@ def _record_workbook_path(thread, published_path):
     """Keep sidecars and completion links bound to the actual copy destination."""
     if hasattr(thread, "completion_metadata"):
         thread.completion_metadata["published_output_path"] = str(published_path)
+        if "local_xlsx_path" in thread.completion_metadata:
+            thread.completion_metadata["local_xlsx_path"] = str(published_path)
     if Path(thread.excel_file) == published_path:
         return
     thread.excel_file = str(published_path)

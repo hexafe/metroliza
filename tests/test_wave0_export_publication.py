@@ -472,6 +472,7 @@ def test_save_copy_retries_publication_race_and_reports_actual_workbook(tmp_path
     assert Path(worker.excel_file) == actual
     assert Path(worker._primary_output_file) == actual
     assert worker.completion_metadata["published_output_path"] == str(actual)
+    assert worker.completion_metadata["local_xlsx_path"] == str(actual)
     assert actual.is_file()
     assert first_copy.read_bytes() == b"created by another operation"
     assert target.read_bytes() == b"last complete NOK workbook"

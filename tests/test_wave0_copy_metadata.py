@@ -70,8 +70,6 @@ def test_copy_deliberate_scope_includes_hidden_or_visible_only_and_undo_restores
     planner.proxy.sort(planner.model.LOCATION_COLUMN, Qt.SortOrder.DescendingOrder)
     planner.search.setText("c.pdf")
     planner.undo_copy()
-    if scope == "all":
-        before["c.pdf"].ocr_suggestion = None  # Undo never writes OCR fields.
     assert {key: row.cells["reference"] for key, row in planner.model.metadata_rows.items()} == before
     assert not planner.model.can_undo_copy
 
@@ -105,14 +103,16 @@ def test_copy_undo_preserves_changes_after_copy(planner, mutation):
     assert not model.can_undo_copy
 
 
-def test_copy_undo_restores_only_manual_fields_and_never_ocr_suggestions(planner):
+def test_copy_undo_restores_ocr_conflict_cleared_by_the_copy(planner):
     row = planner.model.metadata_row("c.pdf")
+    suggestion_before = row.cells["reference"].ocr_suggestion
+    assert suggestion_before == "SOURCE"
     planner.model.copy_value_to_checked("reference", "SOURCE")
     assert row.cells["reference"].ocr_suggestion is None
     planner.undo_copy()
     assert row.value("reference") == "DETECTED"
     assert not row.cells["reference"].user_set
-    assert row.cells["reference"].ocr_suggestion is None
+    assert row.cells["reference"].ocr_suggestion == suggestion_before
 
 
 def test_copy_counts_exclude_checked_noneditable_rows_and_normalize_values(planner):

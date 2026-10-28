@@ -397,7 +397,8 @@ class ReportPlannerModel(QAbstractTableModel):
                 self.last_copy_undo_skipped += 1
                 continue
             cell = row.cells[field_name]
-            cell.user_set, cell.user_value = manual_before
+            # The copy may clear a conflicting OCR suggestion; restore it with the manual value.
+            cell.user_set, cell.user_value, cell.ocr_suggestion = manual_before
             restored += 1
             self._row_changed(occurrence_id, notify=False)
         self.metadata_changed.emit()
@@ -409,7 +410,11 @@ class ReportPlannerModel(QAbstractTableModel):
         allowed = self._selected_occurrence_ids if occurrence_ids is None else set(occurrence_ids)
         rows = [row for row in self.selected_metadata_rows() if row.editable and row.occurrence_id in allowed]
         previous = {
-            row.occurrence_id: (row.cells[field_name].user_set, row.cells[field_name].user_value)
+            row.occurrence_id: (
+                row.cells[field_name].user_set,
+                row.cells[field_name].user_value,
+                row.cells[field_name].ocr_suggestion,
+            )
             for row in rows
         }
         changed, error = apply_value_to_rows(rows, field_name, text)
@@ -417,7 +422,7 @@ class ReportPlannerModel(QAbstractTableModel):
             snapshots = {
                 row.occurrence_id: (previous[row.occurrence_id], replace(row.cells[field_name]))
                 for row in rows
-                if previous[row.occurrence_id] != (row.cells[field_name].user_set, row.cells[field_name].user_value)
+                if previous[row.occurrence_id][:2] != (row.cells[field_name].user_set, row.cells[field_name].user_value)
             }
             self._copy_undo = (field_name, snapshots) if snapshots else None
             for row in rows:
