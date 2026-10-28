@@ -407,3 +407,25 @@ def test_f03_native_gui_review_cancel_only_new_and_replace(tmp_path, qapplicatio
         assert names['NEW'] == 'Added name'
     assert plans, 'Import must show a preview before any upsert'
     dialog.close()
+
+
+@pytest.mark.parametrize("text", ["1e999999999", "3e0", "1E2"])
+def test_c2_integer_fields_reject_exponent_notation(text):
+    from metroliza.reports.report_repository import validate_manual_number
+
+    with pytest.raises(ValueError):
+        validate_manual_number(text, integer=True)
+
+
+@pytest.mark.parametrize("text", ["1,234e0", "1e9999", "1.5e1000"])
+def test_c2_float_rejects_ambiguous_mantissa_and_unbounded_exponent(text):
+    from metroliza.reports.report_repository import validate_manual_number
+
+    with pytest.raises(ValueError):
+        validate_manual_number(text)
+
+
+def test_c2_float_keeps_bounded_exponent():
+    from metroliza.reports.report_repository import validate_manual_number
+
+    assert validate_manual_number("1,5e2") == 150.0

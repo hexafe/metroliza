@@ -284,9 +284,11 @@ def validate_manual_number(value: Any, *, integer: bool = False) -> float | int 
     if value is None or value == "":
         return None
     text = str(value).strip()
-    if re.fullmatch(r"[+-]?[1-9]\d{0,2},\d{3}", text):
+    mantissa = re.split(r"[eE]", text, maxsplit=1)[0]
+    if re.fullmatch(r"[+-]?[1-9]\d{0,2},\d{3}", mantissa):
         raise ValueError(f"Invalid number {value!r}; ambiguous: use 1.234 or 1234")
-    pattern = r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?"
+    exponent = r"" if integer else r"(?:[eE][+-]?\d{1,3})?"
+    pattern = r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)" + exponent
     if not re.fullmatch(pattern, text):
         raise ValueError(f"Invalid number {value!r}; use a decimal dot or comma without thousands separators")
     if integer:
