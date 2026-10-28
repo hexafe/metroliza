@@ -5,6 +5,41 @@ from types import SimpleNamespace
 import pytest
 
 
+_QT_NAMES = ("QDialog", "QFileDialog", "QWidget", "QObject", "QThread", "QMessageBox", "QTimer")
+
+
+def _purge_stub_bound_modules():
+    """Drop metroliza/legacy modules still bound to Qt stubs left by earlier isolated tests.
+
+    Some suites import UI modules while PyQt6 is stubbed; if a stale module (or its
+    parent-package binding) survives, ``from metroliza.ui import export_dialog`` would
+    return classes such as ``QFileDialog = object``. These regressions need the real
+    modules, so stale ones are removed and re-imported on demand.
+    """
+    import sys
+
+    from PyQt6 import QtCore, QtWidgets
+
+    real = {name: getattr(QtWidgets, name, None) or getattr(QtCore, name, None) for name in _QT_NAMES}
+    stale = [
+        name for name, module in tuple(sys.modules.items())
+        if module is not None and name.startswith(("metroliza.", "modules."))
+        and any(name_ in vars(module) and vars(module)[name_] is not real[name_] for name_ in _QT_NAMES)
+    ]
+    for name in stale:
+        sys.modules.pop(name, None)
+        package_name, _, attr = name.rpartition(".")
+        package = sys.modules.get(package_name)
+        if package is not None and attr in vars(package):
+            delattr(package, attr)
+
+
+@pytest.fixture(autouse=True)
+def _real_qt_bound_modules():
+    _purge_stub_bound_modules()
+    yield
+
+
 @pytest.mark.parametrize("suffix", [".sqlite", ".sqlite3", ".DB", ".db", ""])
 def test_existing_sqlite_path_is_exact_and_browsing_creates_nothing(tmp_path, suffix):
     from metroliza.shared.sqlite_paths import sqlite_database_path
