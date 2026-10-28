@@ -410,8 +410,9 @@ def test_dashboard_assets_transient_windows_permission_error_is_retried(monkeypa
     assert "NOK" in target.read_text()
 
 
-@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EXDEV, errno.EMLINK, errno.ENOTSUP])
-def test_publication_without_hardlink_support_uses_exclusive_copy(monkeypatch, tmp_path, error_number):
+@pytest.mark.parametrize("kernel_noreplace", [True, False])
+@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EMLINK, errno.ENOTSUP])
+def test_publication_without_hardlink_support_is_atomic_and_no_clobber(monkeypatch, tmp_path, error_number, kernel_noreplace):
     from metroliza.exporting import output_publication as publication
 
     temporary, target = tmp_path / "stage.xlsx", tmp_path / "output.xlsx"
@@ -422,6 +423,15 @@ def test_publication_without_hardlink_support_uses_exclusive_copy(monkeypatch, t
         raise OSError(error_number, "hard links unsupported")
 
     monkeypatch.setattr(publication.os, "link", unsupported)
+    if not kernel_noreplace:
+        monkeypatch.setattr(publication, "_rename_noreplace", lambda *_: False)
+    open_file = Path.open
+
+    def never_write_final_name(path, mode="r", *args, **kwargs):
+        assert not (Path(path) == target and any(flag in mode for flag in "wxa")), "final name must not receive partial content"
+        return open_file(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", never_write_final_name)
     publication.publish_output(temporary, target)
     assert target.read_bytes() == b"complete NOK workbook"
     assert not temporary.exists()
@@ -437,16 +447,14 @@ def test_unsupported_hardlinks_do_not_blame_excel_for_folder_permissions(monkeyp
 
     temporary, target = tmp_path / "stage.xlsx", tmp_path / "output.xlsx"
     temporary.write_bytes(b"complete NOK workbook")
-    open_file = Path.open
 
-    def denied(path, mode="r", *args, **kwargs):
-        if path == target and mode == "xb":
-            raise PermissionError(13, "folder write denied")
-        return open_file(path, mode, *args, **kwargs)
+    def denied(*_args, **_kwargs):
+        raise PermissionError(13, "folder write denied")
 
     monkeypatch.setattr(publication, "_WINDOWS", False)
     monkeypatch.setattr(publication.os, "link", lambda *_: (_ for _ in ()).throw(PermissionError(1, "unsupported")))
-    monkeypatch.setattr(Path, "open", denied)
+    monkeypatch.setattr(publication, "_rename_noreplace", lambda *_: False)
+    monkeypatch.setattr(publication.os, "rename", denied)
     with pytest.raises(OSError) as error:
         publication.publish_output(temporary, target)
     assert "Excel" not in str(error.value)
@@ -541,27 +549,14 @@ def test_dashboard_directory_move_retry_is_bounded_and_cleans_staging(monkeypatc
     assert set(tmp_path.iterdir()) == {target, tmp_path / f".{target.name}.publish.lock"}
 
 
-def test_exclusive_fallback_flushes_and_removes_partial_file_on_write_failure(monkeypatch, tmp_path):
+def test_hardlink_fallback_failure_leaves_no_final_file(monkeypatch, tmp_path):
     from metroliza.exporting import output_publication as publication
 
     temporary, target = tmp_path / "stage.xlsx", tmp_path / "output.xlsx"
-    temporary.write_bytes(b"complete NOK workbook")
+    temporary.write_bytes(b"next NOK workbook")
     monkeypatch.setattr(publication, "_WINDOWS", False)
     monkeypatch.setattr(publication.os, "link", lambda *_: (_ for _ in ()).throw(PermissionError(1, "unsupported")))
-    syncs = []
-    fsync = publication.os.fsync
-    monkeypatch.setattr(publication.os, "fsync", lambda fd: syncs.append(fd) or fsync(fd))
-    publication.publish_output(temporary, target)
-    assert len(syncs) == 1
-    assert target.read_bytes() == b"complete NOK workbook"
-    target.unlink()
-    temporary.write_bytes(b"next NOK workbook")
-
-    def fail_copy(source, destination):
-        destination.write(b"partial NOK")
-        raise OSError("simulated full disk")
-
-    monkeypatch.setattr(publication.shutil, "copyfileobj", fail_copy)
+    monkeypatch.setattr(publication, "_rename_noreplace", lambda *_: (_ for _ in ()).throw(OSError(errno.ENOSPC, "simulated full disk")))
     with pytest.raises(OSError, match="full disk"):
         publication.publish_output(temporary, target)
     assert not target.exists()

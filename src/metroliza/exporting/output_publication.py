@@ -82,25 +82,40 @@ def retry_output_copy(operation, target, *, copy_from=None, html_only=False, das
             target = free_copy_path(copy_from, html_only=html_only, dashboard=dashboard)
 
 
-def _copy_exclusively(temporary, target):
-    """Support filesystems without hard links while retaining exclusive creation."""
-    created = None
+_RENAME_NOREPLACE = 1
+_AT_FDCWD = -100
+
+
+def _rename_noreplace(temporary, target):
+    """Linux ``renameat2(RENAME_NOREPLACE)``: atomic and never replaces; False if unsupported."""
     try:
-        with temporary.open("rb") as source, target.open("xb") as destination:
-            stat = os.fstat(destination.fileno())
-            created = stat.st_dev, stat.st_ino
-            shutil.copyfileobj(source, destination)
-            destination.flush()
-            os.fsync(destination.fileno())
-    except BaseException:
-        if created is not None:
-            try:
-                stat = target.lstat()
-                if (stat.st_dev, stat.st_ino) == created:
-                    target.unlink()
-            except OSError:
-                pass  # Preserve the original write failure.
-        raise
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (AttributeError, OSError):
+        return False
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    if renameat2(_AT_FDCWD, os.fsencode(temporary), _AT_FDCWD, os.fsencode(target), _RENAME_NOREPLACE) == 0:
+        return True
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP}:
+        return False
+    raise OSError(error_number, os.strerror(error_number), str(target))
+
+
+def _rename_without_hardlink(temporary, target):
+    """Publish complete content atomically where hard links are unavailable (e.g. vfat/exFAT/CIFS).
+
+    The final name never holds partial content. Without kernel no-replace support
+    an existence check precedes the atomic rename; only a writer racing inside
+    that window could still be replaced (documented limitation).
+    """
+    if _rename_noreplace(temporary, target):
+        return
+    if os.path.lexists(target):
+        raise FileExistsError(errno.EEXIST, "Output already exists", str(target))
+    os.rename(temporary, target)
 
 
 def _publish_new_output(temporary, target):
@@ -110,9 +125,10 @@ def _publish_new_output(temporary, target):
     try:
         os.link(temporary, target)
     except OSError as exc:
-        if exc.errno not in {errno.EPERM, errno.ENOTSUP, errno.EXDEV, errno.EMLINK}:
+        if exc.errno not in {errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV, errno.EMLINK}:
             raise
-        _copy_exclusively(temporary, target)
+        _rename_without_hardlink(temporary, target)
+        return
     temporary.unlink()
 
 
@@ -122,7 +138,8 @@ def publish_output(temporary, target, *, consents=(), replace=None):
     Windows rename refuses an existing destination; on POSIX a hard link provides
     atomic no-clobber publication on the same filesystem. Explicit replacement
     retains temp-file + os.replace publication. Filesystems without hard links use
-    an exclusive create and a flushed copy, without replacing an existing entry.
+    an atomic no-replace rename (see ``_rename_without_hardlink``); the final name
+    never receives partial content.
     """
     temporary, target = Path(temporary), Path(target)
     consent = next((item for item in consents if item.path == _entry_path(target)), None)
