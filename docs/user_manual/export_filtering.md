@@ -183,7 +183,9 @@ In plain language:
 
 This means the header choices are not completely independent from reference choices.
 
-If a header seems to disappear, check the selected references first.
+Selected headers stay in the filter when references change. Headers unavailable for the
+current references are retained and named in a visible notice. Searching changes only
+which choices are visible; it does not clear conditions.
 
 ## Date filtering
 
@@ -193,6 +195,8 @@ The dialog includes two date controls:
 - **MEASUREMENT DATE TO**
 
 These let you limit the export to a date range.
+FROM must be on or before TO; equal dates are valid. A reversed range blocks Apply and
+shows a message beside the dates while preserving both entries.
 
 ### Select today
 
@@ -261,6 +265,8 @@ Use this when `VAL1` exists in multiple references but only the `REF1` measureme
 ### What does SELECT ALL mean?
 
 **SELECT ALL** means “do not narrow by this list.”
+Selecting a concrete value clears **SELECT ALL**, and selecting **SELECT ALL** clears
+concrete values. Older saved drafts containing both retain the concrete values.
 
 If you leave a list on **SELECT ALL**, that dimension stays broad.
 
