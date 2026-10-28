@@ -42,7 +42,7 @@ from metroliza.shared.diagnostic_incident import (
 )
 from metroliza.shared.diagnostic_package import MANIFEST_NAME, inspect_package
 from metroliza.shared.diagnostic_startup_probe import PHASES, PROBE_DIRECTORY
-from metroliza.shared.diagnostic_ring import RingLoss
+from metroliza.shared.diagnostic_ring import DEFAULT_MAX_EVENTS, RingLoss
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_wire import decode_event
 
@@ -324,6 +324,7 @@ class QualificationFailure(RuntimeError):
         native_observation: _NativeIdentityObservation | None = None,
         startup_phases: tuple[str, ...] | None = None,
         concurrent_phases: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
+        flood_observation: dict[str, object] | None = None,
     ) -> None:
         if failure_id not in FAILURE_IDS:
             failure_id = "scenario_failed"
@@ -354,6 +355,7 @@ class QualificationFailure(RuntimeError):
         )
         self.startup_phases = startup_phases
         self.concurrent_phases = concurrent_phases
+        self.flood_observation = flood_observation
         super().__init__(failure_id)
 
     def set_native_phase(self, phase: str) -> None:
@@ -395,6 +397,7 @@ def _run_driver_phase(stage: str, action: Callable[[], _T]) -> _T:
             native_observation=error.native_observation,
             startup_phases=error.startup_phases,
             concurrent_phases=error.concurrent_phases,
+            flood_observation=error.flood_observation,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -424,6 +427,7 @@ def _scenario_step(reason: str, action: Callable[[], _T]) -> _T:
             native_observation=error.native_observation,
             startup_phases=error.startup_phases,
             concurrent_phases=error.concurrent_phases,
+            flood_observation=error.flood_observation,
         ) from None
     except Exception:
         raise QualificationFailure(
@@ -490,6 +494,7 @@ class QualificationResult:
     native_observation: _NativeIdentityObservation | None = None
     startup_phases: tuple[str, ...] | None = None
     concurrent_phases: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+    flood_observation: dict[str, object] | None = None
 
 
 def _attempt_cleanup(action: Callable[[], None]) -> None:
@@ -3470,9 +3475,11 @@ def _newest_incident(store: IncidentStore, previous: set[uuid.UUID]):
 
 def _flood_failure_reason(incident) -> str:
     """Retain only a closed channel/counter class when synthetic loss is absent."""
-    channel = incident.observation.channel
+    return _flood_channel_failure_reason(incident.observation.channel, incident.ring_loss)
+
+
+def _flood_channel_failure_reason(channel: ChannelState, loss: RingLoss) -> str:
     if channel is ChannelState.LOSS_OBSERVED:
-        loss = incident.ring_loss
         if loss.counters_saturated or any(getattr(loss, field) for field in (
             "count_evicted_events", "byte_evicted_events", "age_evicted_events",
             "operation_evicted_events",
@@ -3484,6 +3491,24 @@ def _flood_failure_reason(incident) -> str:
         ChannelState.INCOMPLETE: "flood_channel_incomplete",
         ChannelState.INVALID: "flood_channel_invalid",
     }.get(channel, "flood_loss_unobserved")
+
+
+def _flood_observation(incident) -> dict[str, object]:
+    """Project a validated incident without event bytes, IDs, paths or raw text.
+
+    A zero source counter with source_loss_known=False is unknown, not zero loss.
+    Missing ended and ring rejection are independent evidence; retain both on FAIL.
+    """
+    observation = incident.observation
+    return {
+        "channel": observation.channel.value,
+        "handshake": observation.handshake.value,
+        "clean_terminal_received": observation.clean_terminal_received,
+        "source_loss_known": observation.source_loss_known,
+        "source_dropped": observation.source_dropped,
+        "retained_events": len(incident.events),
+        "ring_loss": {field: getattr(incident.ring_loss, field) for field in RING_LOSS_FIELDS},
+    }
 
 
 def _wait_newest_incident(
@@ -4229,12 +4254,17 @@ def _valid_failure_detail(detail: object) -> bool:
         type(detail) is dict
         and {"stage", "reason"} <= detail_keys
         and detail_keys <= {
-            "stage", "reason", "child_stage", "exit_code", "native_observation", "startup_phases", "concurrent_phases"
+            "stage", "reason", "child_stage", "exit_code", "native_observation", "startup_phases", "concurrent_phases", "flood_observation"
         }
         and type(detail["stage"]) is str
         and type(detail["reason"]) is str
         and detail["stage"] in QUALIFICATION_FAILURE_STAGES
         and detail["reason"] in QUALIFICATION_FAILURE_REASONS
+        and (
+            "flood_observation" not in detail
+            or detail["stage"] == "flood"
+            and _valid_flood_observation(detail["flood_observation"], detail["reason"])
+        )
         and (
             "child_stage" not in detail
             or type(detail["child_stage"]) is str
@@ -4281,6 +4311,48 @@ def _valid_failure_detail(detail: object) -> bool:
                 )
             )
         )
+    )
+
+
+def _valid_flood_observation(value: object, reason: str) -> bool:
+    if type(value) is not dict or set(value) != {
+        "channel", "handshake", "clean_terminal_received", "source_loss_known",
+        "source_dropped", "retained_events", "ring_loss",
+    }:
+        return False
+    if (type(value["channel"]) is not str or value["channel"] not in {
+        "complete", "incomplete", "invalid", "loss_observed",
+    } or type(value["handshake"]) is not str
+            or value["handshake"] not in {item.value for item in HandshakeState}):
+        return False
+    if (type(value["clean_terminal_received"]) is not bool
+            or type(value["source_loss_known"]) is not bool
+            or type(value["source_dropped"]) is not int
+            or not 0 <= value["source_dropped"] <= 2**32 - 1
+            or type(value["retained_events"]) is not int
+            or not 0 <= value["retained_events"] <= DEFAULT_MAX_EVENTS):
+        return False
+    terminal = value["clean_terminal_received"]
+    if (terminal != value["source_loss_known"]
+            or terminal and (value["handshake"] != "accepted"
+                            or value["channel"] not in {"complete", "loss_observed"})
+            or value["channel"] == "complete" and not terminal
+            or not terminal and value["source_dropped"] != 0):
+        return False
+    loss = value["ring_loss"]
+    if not _valid_flood_ring_loss(loss):
+        return False
+    return reason == _flood_channel_failure_reason(ChannelState(value["channel"]), RingLoss(**loss))
+
+
+def _valid_flood_ring_loss(loss: object) -> bool:
+    if type(loss) is not dict or set(loss) != set(RING_LOSS_FIELDS):
+        return False
+    counters = [loss[key] for key in RING_LOSS_FIELDS if key != "counters_saturated"]
+    return (
+        type(loss["counters_saturated"]) is bool
+        and all(type(count) is int and 0 <= count <= 2**32 - 1 for count in counters)
+        and (not loss["counters_saturated"] or 2**32 - 1 in counters)
     )
 
 
@@ -4868,7 +4940,8 @@ class _QualificationRunner:
             incident.observation.channel is ChannelState.LOSS_OBSERVED and not explicit_loss
         ):
             raise QualificationFailure(
-                "incident_invalid", qualification_reason=_flood_failure_reason(incident)
+                "incident_invalid", qualification_reason=_flood_failure_reason(incident),
+                flood_observation=_flood_observation(incident),
             )
         self.flood_loss = {
             "source_dropped": incident.observation.source_dropped,
@@ -5777,6 +5850,7 @@ def qualify_windows_diagnostics(
             native_observation=error.native_observation,
             startup_phases=error.startup_phases,
             concurrent_phases=error.concurrent_phases,
+            flood_observation=error.flood_observation,
         )
     except Exception:
         cleanup_status = "not_attempted"
@@ -5838,10 +5912,12 @@ def _failure_detail(
     native_observation: _NativeIdentityObservation | None,
     startup_phases: tuple[str, ...] | None = None,
     concurrent_phases: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
+    flood_observation: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "stage": stage,
         "reason": reason,
+        **({"flood_observation": flood_observation} if flood_observation is not None else {}),
         **({"child_stage": child_stage} if child_stage is not None else {}),
         **({"exit_code": exit_code} if exit_code is not None else {}),
         **({"startup_phases": list(startup_phases)} if startup_phases is not None else {}),
@@ -5891,6 +5967,7 @@ def main(argv: list[str] | None = None) -> int:
                             result.native_observation,
                             result.startup_phases,
                             result.concurrent_phases,
+                            result.flood_observation,
                         ),
                         "qualification_cleanup": result.qualification_cleanup,
                         "package": None,

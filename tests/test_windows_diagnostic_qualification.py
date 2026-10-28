@@ -6476,8 +6476,12 @@ def test_flood_rejection_identifies_only_its_fixed_observation_boundary(monkeypa
         monkeypatch.setattr(qualification, "_newest_incident", unavailable)
     else:
         incident = SimpleNamespace(
-            observation=SimpleNamespace(channel=ChannelState.COMPLETE, source_dropped=0),
+            observation=IncidentObservation(
+                LaunchState.STARTED, HandshakeState.ACCEPTED, ChannelState.COMPLETE,
+                0, TerminationState.OBSERVED_EXIT, True, 0, True, 100,
+            ),
             ring_loss=RingLoss(),
+            events=(),
         )
         monkeypatch.setattr(qualification, "_newest_incident", lambda *_args: incident)
 
@@ -6504,6 +6508,116 @@ def test_flood_failure_class_is_closed_and_retained_without_event_payload(channe
     )
     assert qualification._flood_failure_reason(incident) == reason
     assert qualification._valid_failure_detail({"stage": "flood", "reason": reason})
+
+
+def _incomplete_flood_incident():
+    return SimpleNamespace(
+        observation=IncidentObservation(
+            LaunchState.STARTED, HandshakeState.ACCEPTED, ChannelState.INCOMPLETE,
+            0, TerminationState.OBSERVED_EXIT, False, 0, False, 100,
+        ),
+        ring_loss=RingLoss(normal_count_dropped_events=17, terminal_dropped_events=3),
+        events=(b"SYNTHETIC_PRIVATE_EVENT_TEXT",),
+        private_path="SYNTHETIC_PRIVATE_PATH",
+    )
+
+
+def _expected_flood_observation():
+    return {
+        "channel": "incomplete", "handshake": "accepted",
+        "clean_terminal_received": False, "source_loss_known": False,
+        "source_dropped": 0, "retained_events": 1,
+        "ring_loss": {
+            field: getattr(_incomplete_flood_incident().ring_loss, field)
+            for field in qualification.RING_LOSS_FIELDS
+        },
+    }
+
+
+@pytest.mark.parametrize("cleanup_failed", (False, True))
+def test_flood_failure_receipt_preserves_observation_and_cleanup(tmp_path, monkeypatch, cleanup_failed):
+    artifact, output = tmp_path / "artifact", tmp_path / "output"
+    artifact.mkdir()
+    runner = object.__new__(qualification._QualificationRunner)
+    runner.store = object()
+    runner._scenario = lambda *_args: None
+    monkeypatch.setattr(qualification, "_reports", lambda _store: ())
+    monkeypatch.setattr(qualification, "_newest_incident", lambda *_args: _incomplete_flood_incident())
+    monkeypatch.setattr(qualification, "_parser", lambda: SimpleNamespace(
+        parse_args=lambda _args: SimpleNamespace(artifact_dir=artifact, output_dir=output),
+    ))
+    monkeypatch.setattr(qualification, "_qualification_payload", lambda *_args: (
+        qualification._run_driver_phase("flood", runner.run_flood)
+    ))
+    if cleanup_failed:
+        monkeypatch.setattr(qualification, "_remove_owned_development_artifacts", lambda *_args: False)
+    with monkeypatch.context() as platform_patch:
+        platform_patch.setattr(qualification.os, "name", "nt")
+        exit_code = qualification.main([])
+
+    assert exit_code == 1
+    receipt_text = (output / qualification.OUTPUT_NAME).read_text(encoding="ascii")
+    receipt = json.loads(receipt_text)
+    assert receipt["qualification_failure"] == {
+        "stage": "flood", "reason": "flood_channel_incomplete",
+        "flood_observation": _expected_flood_observation(),
+    }
+    assert receipt["status"] == "failed"
+    assert receipt["failure_id"] == "incident_invalid"
+    assert receipt["qualification_cleanup"] == ("failed" if cleanup_failed else "complete")
+    assert receipt["metrics"] is None
+    assert "SYNTHETIC_PRIVATE" not in receipt_text
+    qualification._validate_output_payload(receipt)
+
+
+def test_flood_failure_validator_accepts_closed_observation():
+    assert qualification._valid_failure_detail({
+        "stage": "flood", "reason": "flood_channel_incomplete",
+        "flood_observation": _expected_flood_observation(),
+    })
+
+
+@pytest.mark.parametrize("field,value", [
+    ("path", "SYNTHETIC_PRIVATE_PATH"), ("events", ["SYNTHETIC_PRIVATE_TEXT"]),
+    ("channel", "SYNTHETIC_PRIVATE_CHANNEL"), ("channel", ["incomplete"]),
+    ("handshake", "SYNTHETIC_PRIVATE_HANDSHAKE"), ("handshake", []),
+    ("clean_terminal_received", 0), ("clean_terminal_received", True),
+    ("source_loss_known", 0), ("source_loss_known", True),
+    ("source_dropped", True), ("source_dropped", -1), ("source_dropped", 2**32),
+    ("source_dropped", 1), ("retained_events", True), ("retained_events", -1),
+    ("retained_events", 2001), ("ring_loss", []),
+])
+def test_flood_failure_validator_rejects_unsafe_or_inconsistent_observation(field, value):
+    observation = _expected_flood_observation()
+    observation[field] = value
+    assert not qualification._valid_failure_detail({
+        "stage": "flood", "reason": "flood_channel_incomplete",
+        "flood_observation": observation,
+    })
+
+
+@pytest.mark.parametrize("field,value", [
+    ("path", "SYNTHETIC_PRIVATE_PATH"), ("invalid_events", True),
+    ("invalid_events", -1), ("invalid_events", 2**32),
+    ("counters_saturated", 1), ("counters_saturated", True),
+])
+def test_flood_failure_validator_rejects_unsafe_loss_fields(field, value):
+    observation = _expected_flood_observation()
+    observation["ring_loss"][field] = value
+    assert not qualification._valid_failure_detail({
+        "stage": "flood", "reason": "flood_channel_incomplete",
+        "flood_observation": observation,
+    })
+
+
+@pytest.mark.parametrize("stage,reason", [
+    ("runner", "flood_channel_incomplete"), ("flood", "flood_channel_invalid"),
+    ("flood", "flood_incident_unavailable"),
+])
+def test_flood_failure_evidence_requires_matching_stage_and_reason(stage, reason):
+    assert not qualification._valid_failure_detail({
+        "stage": stage, "reason": reason, "flood_observation": _expected_flood_observation(),
+    })
 
 
 def test_concurrent_probe_child_receipt_mismatch_retains_valid_public_failure(tmp_path, monkeypatch):

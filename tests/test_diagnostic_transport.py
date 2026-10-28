@@ -397,3 +397,97 @@ def test_packaged_diagnostic_close_failure_does_not_replace_application_result(
 
     assert code == 7
     assert calls == ["logging", "application", "close"]
+
+
+@pytest.fixture
+def recorder_receiver_pair():
+    from metroliza.app.diagnostic_supervisor import _Receiver
+
+    child_in, parent_out = os.pipe()
+    parent_in, child_out = os.pipe()
+    session, token = uuid.uuid4().hex, secrets.token_hex(32)
+    receiver = _Receiver(parent_in, parent_out, session, token)
+    recorder = diagnostic_transport.ChildRecorder(child_in, child_out)
+    receiver.thread.start()
+    write_frame(parent_out, control_bytes("challenge", session_id=session, token=token))
+    try:
+        assert recorder.start()
+        yield recorder, receiver
+    finally:
+        recorder.close(timeout=2)
+        receiver.thread.join(2)
+        assert not recorder._worker.is_alive()
+        assert not receiver.thread.is_alive()
+
+
+def _recorder_startup_payload(recorder):
+    from metroliza.shared.diagnostic_events import (
+        StartupCallsite, StartupDiagnosticEvent, StartupMode, StartupOutcome,
+    )
+    from metroliza.shared.diagnostic_wire import encode_event
+
+    return encode_event(StartupDiagnosticEvent(
+        recorder.invocation_id, uuid.uuid4(), 1, StartupMode.UNKNOWN,
+        StartupCallsite.BOOTSTRAP, StartupOutcome.INVOCATION_STARTED,
+    ))
+
+
+def test_contended_producer_omits_clean_terminal_even_after_full_drain(recorder_receiver_pair):
+    recorder, receiver = recorder_receiver_pair
+    locked, release = threading.Event(), threading.Event()
+
+    def hold_queue_lock():
+        with recorder._lock:
+            locked.set()
+            release.wait(2)
+
+    holder = threading.Thread(target=hold_queue_lock)
+    holder.start()
+    try:
+        assert locked.wait(1)
+        assert not recorder.enqueue_bytes(_recorder_startup_payload(recorder))
+        assert recorder._unquantified_loss
+        assert recorder.dropped == 0  # Unknown loss must not become a fabricated exact count.
+    finally:
+        release.set()
+        holder.join(2)
+    assert not holder.is_alive()
+    recorder.close(timeout=2)
+    receiver.thread.join(2)
+    assert not recorder._worker.is_alive()
+    assert not receiver.thread.is_alive()
+    assert receiver.handshake == "accepted"
+    assert receiver.channel == "incomplete"
+    assert not receiver.clean_terminal
+    assert not receiver.source_loss_known
+
+
+def test_recorder_close_budget_does_not_prove_terminal_sent(recorder_receiver_pair, monkeypatch):
+    recorder, receiver = recorder_receiver_pair
+    entered, release = threading.Event(), threading.Event()
+    original = diagnostic_transport.write_frame
+
+    def held_write(descriptor, payload):
+        if b'"event_code":' in payload:
+            entered.set()
+            if not release.wait(2):
+                raise OSError("synthetic_test_barrier_timeout")
+        original(descriptor, payload)
+
+    monkeypatch.setattr(diagnostic_transport, "write_frame", held_write)
+    try:
+        assert recorder.enqueue_bytes(_recorder_startup_payload(recorder))
+        assert entered.wait(1)
+        recorder.close(timeout=0)
+        assert recorder._worker.is_alive()
+        assert receiver.channel == "incomplete"
+        assert not receiver.clean_terminal
+    finally:
+        release.set()
+        recorder._worker.join(2)
+        receiver.thread.join(2)
+    assert not recorder._worker.is_alive()
+    assert not receiver.thread.is_alive()
+    assert receiver.channel == "complete"
+    assert receiver.clean_terminal
+    assert receiver.source_loss_known
