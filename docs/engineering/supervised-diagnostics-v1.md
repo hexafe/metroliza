@@ -108,10 +108,14 @@ supersedes pending live history, preserving this bound. RSS, startup,
 idle writes, flood/drop behavior and publication intervals are measured separately by the Windows driver.
 
 Queue admission never waits for disk, UI or pipe writes. A full queue records bounded drops.
-Contention that cannot be counted exactly leaves terminal loss evidence unknown instead of
-claiming an exact zero. Partial, wrong-session, malformed, flooded and broken channels cannot
+Queue contention and capacity rejection increment an exact, separately locked saturating counter;
+a drained recorder sends `ended(dropped=N)`. Close waits for writer completion, budgeting 0.25 seconds
+per remaining frame (queue plus one in-flight frame and terminal, at most 64.5 seconds total).
+Stalled/broken writes can still leave terminal loss unknown; the outer process deadline still applies.
+Partial, wrong-session, malformed, flooded and broken channels cannot
 produce a complete-history claim. A receiver may outlive its bounded drain as a daemon when an
-inherited handle is retained; its stop flag prevents later frames from changing the returned snapshot.
+inherited handle is retained; `receiver_drain_incomplete` records an unfinished drain as INCOMPLETE,
+and its stop flag prevents later frames from changing the returned snapshot.
 
 One bounded worker owns all marker, incident and resolution filesystem calls. The application
 process is created before marker admission; handshake callbacks only enqueue lifecycle controls.

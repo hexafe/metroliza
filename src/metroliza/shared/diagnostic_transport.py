@@ -159,14 +159,15 @@ def _close_windows_handles(handles: list[int]) -> None:
 
 
 class ChildRecorder:
-    """A bounded nonblocking producer queue; only its daemon writes transport."""
+    """A bounded producer queue; only its daemon writes transport."""
 
     def __init__(self, incoming: int, outgoing: int):
         self.invocation_id: uuid.UUID | None = None
         self.connected = False
         self.qualified = False
         self.dropped = 0
-        self._unquantified_loss = False
+        # This lock protects only one saturating increment/read, never queue or I/O work.
+        self._loss_lock = threading.Lock()
         self._incoming = incoming
         self._outgoing = outgoing
         self._fd_lock = threading.Lock()
@@ -224,15 +225,14 @@ class ChildRecorder:
         except Exception:
             return False
         if not self._lock.acquire(blocking=False):
-            # Do not pretend a raced read/modify/write is an exact loss count.
-            self._unquantified_loss = True
+            self._drop()
             return False
         try:
             count_cap = MAX_QUEUE_EVENTS if terminal else MAX_QUEUE_EVENTS - RESERVED_EVENTS
             byte_cap = MAX_QUEUE_BYTES if terminal else MAX_QUEUE_BYTES - RESERVED_BYTES
             if (not self.connected or self._closing or len(self._queue) >= count_cap
                     or self._bytes + len(payload) > byte_cap):
-                self.dropped = min(MAX_COUNTER, self.dropped + 1)
+                self._drop()
                 return False
             self._queue.append((payload, terminal))
             self._bytes += len(payload)
@@ -241,13 +241,29 @@ class ChildRecorder:
         finally:
             self._lock.release()
 
+    def _drop(self) -> None:
+        with self._loss_lock:
+            self.dropped = min(MAX_COUNTER, self.dropped + 1)
+
     def close(self, timeout: float = 0.25) -> None:
-        self._closing = True
-        self._wake.set()
+        """Wait for writer completion, budgeting timeout per remaining frame.
+
+        At most the queued frames, one in-flight frame and ended remain. A synchronous
+        pipe write has no portable latency bound (nor does a bounded queue imply one).
+        Share the remaining frames' budgets: freeing pipe capacity may require reading
+        several buffered frames before even one blocked write can finish. This finite
+        allowance is a shutdown policy, not a pipe latency guarantee. At defaults it
+        is at most 258 * 0.25 s; the external process watchdog remains authoritative.
+        Callers must stop producers before closing; later calls are outside this stream.
+        """
+        with self._lock:
+            self._closing = True
+            remaining = len(self._queue) + 2
+            self._wake.set()
         if self._worker.ident is None:
             self._close_channels()
             return
-        self._worker.join(timeout)
+        self._worker.join(timeout * remaining)
 
     def _close_channels(self) -> None:
         with self._fd_lock:
@@ -286,11 +302,13 @@ class ChildRecorder:
                     entry = self._queue.popleft() if self._queue else None
                     if entry is not None:
                         self._bytes -= len(entry[0])
+                    closing = self._closing
                 if entry is not None:
                     write_frame(self._outgoing, entry[0])
-                elif self._closing:
-                    if not self._unquantified_loss:
-                        write_frame(self._outgoing, control_bytes("ended", dropped=self.dropped))
+                elif closing:
+                    with self._loss_lock:
+                        dropped = self.dropped
+                    write_frame(self._outgoing, control_bytes("ended", dropped=dropped))
                     break
                 else:
                     self._wake.wait(0.1)

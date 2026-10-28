@@ -432,7 +432,7 @@ def _recorder_startup_payload(recorder):
     ))
 
 
-def test_contended_producer_omits_clean_terminal_even_after_full_drain(recorder_receiver_pair):
+def test_contended_producer_counts_exact_loss_and_sends_clean_terminal(recorder_receiver_pair):
     recorder, receiver = recorder_receiver_pair
     locked, release = threading.Event(), threading.Event()
 
@@ -446,8 +446,7 @@ def test_contended_producer_omits_clean_terminal_even_after_full_drain(recorder_
     try:
         assert locked.wait(1)
         assert not recorder.enqueue_bytes(_recorder_startup_payload(recorder))
-        assert recorder._unquantified_loss
-        assert recorder.dropped == 0  # Unknown loss must not become a fabricated exact count.
+        assert recorder.dropped == 1
     finally:
         release.set()
         holder.join(2)
@@ -457,9 +456,68 @@ def test_contended_producer_omits_clean_terminal_even_after_full_drain(recorder_
     assert not recorder._worker.is_alive()
     assert not receiver.thread.is_alive()
     assert receiver.handshake == "accepted"
-    assert receiver.channel == "incomplete"
-    assert not receiver.clean_terminal
-    assert not receiver.source_loss_known
+    assert receiver.channel == "loss_observed"
+    assert receiver.clean_terminal
+    assert receiver.source_loss_known
+    assert receiver.source_dropped == 1
+
+
+@pytest.mark.parametrize("initial", [0, diagnostic_transport.MAX_COUNTER - 2])
+def test_concurrent_contended_admissions_have_exact_saturating_count(recorder_receiver_pair, initial):
+    recorder, receiver = recorder_receiver_pair
+    recorder.dropped = initial
+    payload = _recorder_startup_payload(recorder)
+    barrier = threading.Barrier(9)
+
+    def produce():
+        barrier.wait()
+        for _ in range(1000):
+            assert not recorder.enqueue_bytes(payload)
+
+    workers = [threading.Thread(target=produce) for _ in range(8)]
+    with recorder._lock:
+        for worker in workers:
+            worker.start()
+        barrier.wait()
+        for worker in workers:
+            worker.join(5)
+            assert not worker.is_alive()
+    recorder.close(timeout=2)
+    receiver.thread.join(2)
+    assert receiver.source_dropped == min(diagnostic_transport.MAX_COUNTER, initial + 8000)
+    assert receiver.clean_terminal
+    assert receiver.source_loss_known
+
+
+def test_recorder_close_waits_for_progressing_queue_until_terminal(recorder_receiver_pair, monkeypatch):
+    import time
+
+    recorder, receiver = recorder_receiver_pair
+    entered, release = threading.Event(), threading.Event()
+    original = diagnostic_transport.write_frame
+
+    def slow_write(descriptor, payload):
+        if b'"event_code":' in payload:
+            entered.set()
+            assert release.wait(2)
+            time.sleep(0.02)  # Test-only pipe latency: 32 frames exceed the old total budget.
+        original(descriptor, payload)
+
+    monkeypatch.setattr(diagnostic_transport, "write_frame", slow_write)
+    try:
+        assert recorder.enqueue_bytes(_recorder_startup_payload(recorder))
+        assert entered.wait(1)
+        for _ in range(31):
+            assert recorder.enqueue_bytes(_recorder_startup_payload(recorder))
+        release.set()
+        recorder.close()
+        assert not recorder._worker.is_alive()
+        receiver.thread.join(2)
+        assert not receiver.thread.is_alive()
+        assert receiver.clean_terminal
+        assert receiver.source_loss_known
+    finally:
+        release.set()
 
 
 def test_recorder_close_budget_does_not_prove_terminal_sent(recorder_receiver_pair, monkeypatch):
@@ -491,3 +549,55 @@ def test_recorder_close_budget_does_not_prove_terminal_sent(recorder_receiver_pa
     assert receiver.channel == "complete"
     assert receiver.clean_terminal
     assert receiver.source_loss_known
+
+
+@pytest.mark.parametrize("queued", [0, diagnostic_transport.MAX_QUEUE_EVENTS])
+def test_close_budget_covers_only_bounded_remaining_frames(queued):
+    recorder = diagnostic_transport.ChildRecorder(-1, -1)
+    budgets = []
+    recorder._worker = types.SimpleNamespace(ident=1, join=budgets.append)
+    recorder._queue.extend([(b"{}", True)] * queued)
+    recorder.close()
+    assert budgets == [0.25 * (queued + 2)]  # One in-flight frame plus ended.
+    assert budgets[0] <= 64.5
+    assert recorder._closing
+
+
+def test_close_cannot_end_after_empty_pop_before_last_admission(recorder_receiver_pair, monkeypatch):
+    import time
+
+    recorder, receiver = recorder_receiver_pair
+    emptied, release = threading.Event(), threading.Event()
+    original_lock = recorder._lock
+
+    class EmptyPopBarrier:
+        def acquire(self, *args, **kwargs):
+            return original_lock.acquire(*args, **kwargs)
+
+        def release(self):
+            original_lock.release()
+
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *args):
+            self.release()
+            if threading.current_thread() is recorder._worker and not emptied.is_set():
+                emptied.set()
+                assert release.wait(2)
+
+    monkeypatch.setattr(recorder, "_lock", EmptyPopBarrier())
+    recorder._wake.set()
+    try:
+        assert emptied.wait(1)
+        assert recorder.enqueue_bytes(_recorder_startup_payload(recorder))
+        recorder.close(timeout=0)
+    finally:
+        release.set()
+    recorder._worker.join(2)
+    receiver.thread.join(2)
+    assert not recorder._worker.is_alive()
+    assert not receiver.thread.is_alive()
+    assert receiver.clean_terminal
+    assert len(receiver.ring.snapshot(now=time.monotonic()).events) == 1

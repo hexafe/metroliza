@@ -248,29 +248,104 @@ def test_concurrent_real_instances_keep_their_own_event_history():
         }
 
 
-def test_contended_source_counter_is_unknown_instead_of_a_fabricated_exact_zero():
+def test_contended_source_counter_is_exact_after_clean_terminal():
     result = launch_supervised(_command("contended"))
     assert result.exit_code == 0
-    assert result.channel == "incomplete"
-    assert not result.source_loss_known
-    assert not result.clean_terminal_received
+    assert result.channel == "loss_observed"
+    assert result.source_loss_known
+    assert result.clean_terminal_received
+    assert result.source_dropped == 1
 
 
 def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
     from metroliza.app.diagnostic_supervisor import _Receiver
 
     receive = _Receiver._receive
+    receivers = []
     def slow_receive(self, payload):
+        if self not in receivers:
+            receivers.append(self)
         time.sleep(0.02)
         return receive(self, payload)
     monkeypatch.setattr(_Receiver, "_receive", slow_receive)
     started = time.monotonic()
     result = launch_supervised(_command("full_queue"))
-    assert time.monotonic() - started < 4
+    for receiver in receivers:
+        receiver.thread.join(3)
+        assert not receiver.thread.is_alive()
+    # 256 queued frames plus in-flight/terminal at 20 ms each can exceed 4 s.
+    assert time.monotonic() - started < 10
     assert result.exit_code == 0
-    assert result.channel in {"incomplete", "loss_observed"}
+    if result.receiver_drain_incomplete:
+        # The deliberately slow receiver may still have kernel-buffered frames after exit.
+        assert result.channel == "incomplete"
+        assert not result.clean_terminal_received
+        assert not result.source_loss_known
+    else:
+        assert result.channel == "loss_observed"
+        assert result.clean_terminal_received
     assert result.needs_incident
     assert result.history.total_bytes <= 2 * 1024 * 1024
+
+
+def test_pending_receiver_drain_is_flagged_and_snapshot_stays_frozen(monkeypatch):
+    import threading
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    entered, release = threading.Event(), threading.Event()
+    receivers = []
+    receive = supervisor._Receiver._receive
+
+    def held_receive(self, payload):
+        receivers.append(self)
+        entered.set()
+        assert release.wait(5)
+        return receive(self, payload)
+
+    monkeypatch.setattr(supervisor._Receiver, "_receive", held_receive)
+    monkeypatch.setattr(supervisor, "DRAIN_SECONDS", 0)
+    try:
+        result = launch_supervised(_command("normal"))
+        assert entered.is_set()
+        assert getattr(result, "receiver_drain_incomplete", False) is True
+        assert result.channel == "incomplete"
+        assert not result.clean_terminal_received
+        assert result.needs_incident
+        assert result.history.events == ()
+    finally:
+        release.set()
+        for receiver in receivers:
+            receiver.thread.join(2)
+            assert not receiver.thread.is_alive()
+    assert receivers[0].ring.snapshot(now=time.monotonic()).events == ()
+
+
+def test_finalized_terminal_is_not_misreported_as_pending_receiver_drain(monkeypatch):
+    import threading
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    release = threading.Event()
+    receivers = []
+    original = supervisor._Receiver._run
+
+    def held_cleanup(self):
+        original(self)
+        receivers.append(self)
+        assert release.wait(5)
+
+    monkeypatch.setattr(supervisor._Receiver, "_run", held_cleanup)
+    try:
+        result = supervisor.launch_supervised(_command("normal"))
+        assert result.channel == "complete"
+        assert result.clean_terminal_received
+        assert result.source_loss_known
+        assert not result.receiver_drain_incomplete
+        assert not result.needs_incident
+    finally:
+        release.set()
+        for receiver in receivers:
+            receiver.thread.join(2)
+            assert not receiver.thread.is_alive()
 
 
 def test_supervisor_loss_does_not_kill_or_replay_child_write(tmp_path):

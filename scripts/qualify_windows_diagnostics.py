@@ -3508,6 +3508,7 @@ def _flood_observation(incident) -> dict[str, object]:
         "source_dropped": observation.source_dropped,
         "retained_events": len(incident.events),
         "ring_loss": {field: getattr(incident.ring_loss, field) for field in RING_LOSS_FIELDS},
+        **({"receiver_drain_incomplete": True} if observation.receiver_drain_incomplete else {}),
     }
 
 
@@ -4315,10 +4316,16 @@ def _valid_failure_detail(detail: object) -> bool:
 
 
 def _valid_flood_observation(value: object, reason: str) -> bool:
-    if type(value) is not dict or set(value) != {
+    if type(value) is not dict or set(value) - {"receiver_drain_incomplete"} != {
         "channel", "handshake", "clean_terminal_received", "source_loss_known",
         "source_dropped", "retained_events", "ring_loss",
     }:
+        return False
+    if "receiver_drain_incomplete" in value and (
+        value["receiver_drain_incomplete"] is not True or value["channel"] != "incomplete"
+        or value["clean_terminal_received"] is not False
+        or value["source_loss_known"] is not False
+    ):
         return False
     if (type(value["channel"]) is not str or value["channel"] not in {
         "complete", "incomplete", "invalid", "loss_observed",

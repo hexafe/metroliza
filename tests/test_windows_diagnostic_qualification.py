@@ -6535,14 +6535,21 @@ def _expected_flood_observation():
 
 
 @pytest.mark.parametrize("cleanup_failed", (False, True))
-def test_flood_failure_receipt_preserves_observation_and_cleanup(tmp_path, monkeypatch, cleanup_failed):
+@pytest.mark.parametrize("drain_incomplete", (False, True))
+def test_flood_failure_receipt_preserves_observation_and_cleanup(
+    tmp_path, monkeypatch, cleanup_failed, drain_incomplete,
+):
+    from dataclasses import replace
+
     artifact, output = tmp_path / "artifact", tmp_path / "output"
     artifact.mkdir()
     runner = object.__new__(qualification._QualificationRunner)
     runner.store = object()
     runner._scenario = lambda *_args: None
     monkeypatch.setattr(qualification, "_reports", lambda _store: ())
-    monkeypatch.setattr(qualification, "_newest_incident", lambda *_args: _incomplete_flood_incident())
+    incident = _incomplete_flood_incident()
+    incident.observation = replace(incident.observation, receiver_drain_incomplete=drain_incomplete)
+    monkeypatch.setattr(qualification, "_newest_incident", lambda *_args: incident)
     monkeypatch.setattr(qualification, "_parser", lambda: SimpleNamespace(
         parse_args=lambda _args: SimpleNamespace(artifact_dir=artifact, output_dir=output),
     ))
@@ -6560,7 +6567,10 @@ def test_flood_failure_receipt_preserves_observation_and_cleanup(tmp_path, monke
     receipt = json.loads(receipt_text)
     assert receipt["qualification_failure"] == {
         "stage": "flood", "reason": "flood_channel_incomplete",
-        "flood_observation": _expected_flood_observation(),
+        "flood_observation": {
+            **_expected_flood_observation(),
+            **({"receiver_drain_incomplete": True} if drain_incomplete else {}),
+        },
     }
     assert receipt["status"] == "failed"
     assert receipt["failure_id"] == "incident_invalid"
@@ -6574,6 +6584,27 @@ def test_flood_failure_validator_accepts_closed_observation():
     assert qualification._valid_failure_detail({
         "stage": "flood", "reason": "flood_channel_incomplete",
         "flood_observation": _expected_flood_observation(),
+    })
+
+
+def test_flood_receiver_drain_flag_survives_projection_and_remains_failure():
+    from dataclasses import replace
+
+    incident = _incomplete_flood_incident()
+    incident.observation = replace(incident.observation, receiver_drain_incomplete=True)
+    observed = qualification._flood_observation(incident)
+    assert observed == {**_expected_flood_observation(), "receiver_drain_incomplete": True}
+    assert qualification._flood_failure_reason(incident) == "flood_channel_incomplete"
+    assert qualification._valid_failure_detail({
+        "stage": "flood", "reason": "flood_channel_incomplete", "flood_observation": observed,
+    })
+
+
+@pytest.mark.parametrize("value", [False, 0, 1, "SYNTHETIC_PRIVATE_TEXT", {}, []])
+def test_flood_receiver_drain_flag_rejects_noncanonical_or_unsafe_values(value):
+    observed = {**_expected_flood_observation(), "receiver_drain_incomplete": value}
+    assert not qualification._valid_failure_detail({
+        "stage": "flood", "reason": "flood_channel_incomplete", "flood_observation": observed,
     })
 
 
