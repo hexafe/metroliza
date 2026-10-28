@@ -411,7 +411,7 @@ def test_dashboard_assets_transient_windows_permission_error_is_retried(monkeypa
 
 
 @pytest.mark.parametrize("kernel_noreplace", [True, False])
-@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EMLINK, errno.ENOTSUP])
+@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EMLINK, errno.ENOTSUP, errno.EOPNOTSUPP])
 def test_publication_without_hardlink_support_is_atomic_and_no_clobber(monkeypatch, tmp_path, error_number, kernel_noreplace):
     from metroliza.exporting import output_publication as publication
 
@@ -432,7 +432,14 @@ def test_publication_without_hardlink_support_is_atomic_and_no_clobber(monkeypat
         return open_file(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", never_write_final_name)
+    moves = []
+    real_rename, real_noreplace = publication.os.rename, publication._rename_noreplace
+    monkeypatch.setattr(publication.os, "rename", lambda src, dst: moves.append(("rename", Path(src), Path(dst))) or real_rename(src, dst))
+    if kernel_noreplace:
+        monkeypatch.setattr(publication, "_rename_noreplace", lambda src, dst: moves.append(("noreplace", Path(src), Path(dst))) or real_noreplace(src, dst))
     publication.publish_output(temporary, target)
+    # The final name is only ever produced by one whole-file rename of the complete staged file.
+    assert [(src, dst) for _kind, src, dst in moves] == [(temporary, target)]
     assert target.read_bytes() == b"complete NOK workbook"
     assert not temporary.exists()
     temporary.write_bytes(b"other workbook")
@@ -609,3 +616,45 @@ def test_copy_completion_dialog_links_to_actual_published_workbook(monkeypatch, 
     finally:
         dialog.export_thread = None
         dialog.close()
+
+
+@pytest.mark.parametrize(("error_number", "supported"), [
+    (errno.EINVAL, False), (errno.ENOSYS, False), (errno.ENOTSUP, False), (errno.EOPNOTSUPP, False),
+    (errno.EEXIST, None), (errno.EACCES, None),
+])
+def test_rename_noreplace_errno_mapping(monkeypatch, tmp_path, error_number, supported):
+    import ctypes
+    from metroliza.exporting import output_publication as publication
+
+    def renameat2(*_args):
+        return -1
+
+    fake_libc = type("FakeLibc", (), {})()
+    fake_libc.renameat2 = renameat2
+    monkeypatch.setattr(ctypes, "CDLL", lambda *_a, **_k: fake_libc)
+    monkeypatch.setattr(ctypes, "get_errno", lambda: error_number)
+    if supported is False:
+        assert publication._rename_noreplace(tmp_path / "a", tmp_path / "b") is False
+    else:
+        expected = FileExistsError if error_number == errno.EEXIST else PermissionError
+        with pytest.raises(expected):
+            publication._rename_noreplace(tmp_path / "a", tmp_path / "b")
+
+
+def test_rename_noreplace_missing_symbol_falls_back(monkeypatch, tmp_path):
+    import ctypes
+    from metroliza.exporting import output_publication as publication
+
+    monkeypatch.setattr(ctypes, "CDLL", lambda *_a, **_k: object())
+    assert publication._rename_noreplace(tmp_path / "a", tmp_path / "b") is False
+
+
+def test_hardlink_exdev_fallback_never_copies_into_final_name(monkeypatch, tmp_path):
+    from metroliza.exporting import output_publication as publication
+
+    temporary, target = tmp_path / "stage.xlsx", tmp_path / "output.xlsx"
+    temporary.write_bytes(b"complete NOK workbook")
+    monkeypatch.setattr(publication, "_WINDOWS", False)
+    monkeypatch.setattr(publication.os, "link", lambda *_: (_ for _ in ()).throw(OSError(errno.EXDEV, "cross-device")))
+    publication.publish_output(temporary, target)
+    assert target.read_bytes() == b"complete NOK workbook" and not temporary.exists()
