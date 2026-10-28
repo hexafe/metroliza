@@ -1000,7 +1000,7 @@
   "sev": "P2",
   "category": "keyboard",
   "window": "Cała aplikacja",
-  "finding": "Brak jakichkolwiek skrótów klawiszowych i mnemoników Alt (0 × QShortcut/setShortcut/QKeySequence/StandardKey, 0 × '&' w etykietach); tylko lokalne Enter/Spacja/Delete/F2 w 6 oknach.",
+  "finding": "Brak spójnego zestawu globalnych komend klawiszowych i mnemoników Alt (0 × QShortcut/setShortcut/QKeySequence/StandardKey, 0 × '&' w etykietach); istnieje tylko lokalna obsługa Enter/Return, Spacji i Delete/Backspace w kilku widokach oraz domyślne zachowania Qt.",
   "evidence": "grep w src/metroliza; main_window.py:436–503",
   "impact": "",
   "recommendation": "Mały, sprawdzony pod kątem kolizji zestaw skrótów (Ctrl+1…7, Ctrl+O, Ctrl+R, Ctrl+I, Ctrl+E, Ctrl+F, F1) i mnemoniki Alt.",

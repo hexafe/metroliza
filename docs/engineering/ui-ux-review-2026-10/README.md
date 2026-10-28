@@ -4,7 +4,7 @@
 
 ## Streszczenie
 
-**Wniosek.** Metroliza jest bezpieczna w warstwie danych i przewidywalna technicznie. Codzienny ekspert płaci jednak za to kliknięciami, codziennym odtwarzaniem ustawień i szukaniem wyniku. W kilku miejscach UI potrafi też po cichu zmienić zakres eksportu albo dane.
+**Wniosek.** Metroliza ma solidne fundamenty techniczne (przegląd przed importem, atomowy zapis skoroszytu, kooperacyjne anulowanie), ale **nie można jej dziś nazwać bezpieczną w warstwie danych**: Modify DB potrafi zapisać pustą wartość (NULL) zamiast wpisanej liczby (A5-F01) i zostawić częściowo zapisany batch po błędzie (A5-F02). Codzienny ekspert płaci przy tym kliknięciami, codziennym odtwarzaniem ustawień i szukaniem wyniku. W kilku miejscach UI potrafi też po cichu zmienić zakres eksportu albo dane.
 
 **Liczby.**
 - 26 okien;
@@ -35,7 +35,7 @@
   - Pięć stron paska bocznego to jedno zdanie i jeden przycisk, a menu Tools tylko przełącza stronę.
   - CSV Summary i dopasowanie nazw są modalne.
   - Okna bazy i okna CSV obsługuje się inaczej (role przycisków, wyszukiwanie, usuwanie członków).
-  - **W całej aplikacji nie ma ani jednego skrótu klawiszowego.**
+  - **Brak spójnego zestawu globalnych komend klawiszowych i mnemoników Alt.** Istnieje tylko lokalna obsługa klawiszy w kilku widokach (np. Enter, Spacja, Delete/Backspace) i domyślne zachowania Qt.
 - **Dashboardy.** Pierwszy ekran pokazuje ustawienia zamiast wyników. Jest kilkadziesiąt chipów nawigacji, powtarzające się karty „brak limitów”, zwinięte porównanie grup i tylko 6 kolorów grup.
 
 ### Najszybsze wygrane (do 1 dnia każda)
@@ -118,6 +118,9 @@ Wysiłek: **S** (do 1 dnia), **M** (kilka dni), **L** (większa przebudowa).
 - Zrzuty to Linux z Qt Fusion i czcionką Liberation Sans zamiast Segoe UI. Wygląd na Windows (styl natywny, czcionki, okna wyboru plików) może się różnić, dlatego oceniamy układ, hierarchię, przepływ i teksty, a nie piksele.
 - Liczby kliknięć wyliczono z kodu i są dolnymi granicami.
 - Kilka stanów (anulowanie, błędy, częściowe wyniki) przeanalizowano tylko w kodzie, co zaznaczono przy ustaleniach.
+- Analiza kodu nie jest reprodukcją w UI: ustalenia oznaczone `code-only` potwierdzono w kodzie i sondami funkcji, a nie przejściem przez okno.
+- Testy dokumentacji i spójności repozytorium nie są testami aplikacji, a zrzuty z Linux offscreen nie kwalifikują zachowania na Windows (natywne okna plików, blokady plików przez Excel, fokus, skalowanie).
+- Szacunki liczby aktywacji (np. ~8–9 po fali 1) są prognozą z kodu, nie zmierzonym wynikiem.
 - Dane syntetyczne nie zawierały żadnego wyniku NOK, więc prezentację NOK oceniono z reguł i kodu.
 - Eksport z Group Analysis i pełnym skoroszytem na 120 i 30 raportach nie skończył się w limitach 20 i 7 minut. Stos pokazał aktywne renderowanie wykresów podsumowań w puli procesów, a nie zawieszenie. To nie był kontrolowany pomiar wydajności, więc nie traktujemy tego jako ustalenia, tylko jako sygnał do sprawdzenia w programie wydajności.
 
@@ -198,7 +201,7 @@ Liczby wyliczono z kodu i są dolnymi granicami, bez wpisywania tekstu i nawigac
 
 ### 3.1 Ocena ogólna
 
-Metroliza jest **bezpieczna w warstwie danych i przewidywalna w warstwie technicznej**:
+Metroliza jest **przewidywalna w warstwie technicznej** i ma kilka mocnych zabezpieczeń danych. Nie jest jednak bezpieczna w warstwie danych bez zastrzeżeń: ręczna edycja w Modify DB potrafi zapisać NULL zamiast wpisanej liczby (A5-F01), a zapis wielu zmian nie jest jedną transakcją (A5-F02). Mocne strony:
 - przegląd raportów przed importem;
 - atomowy zapis skoroszytu;
 - anulowanie, które czeka na bezpieczny moment;
@@ -217,7 +220,7 @@ Okna jasno mówią, do czego służą. Słabiej wspierają **szybką, powtarzaln
 | Układ i hierarchia | 3,2 | Gęsto i spokojnie; kluczowe podsumowania bywają poniżej widocznej części okna. |
 | Efektywność eksperta | 3,0 | Brak pamięci ustawień, ostatnich plików i szybkiego dostępu do wyniku. |
 | Informacja zwrotna i stany | 3,0 | Postęp i wynik w osobnych, modalnych oknach; część stanów końcowych jest myląca. |
-| Klawiatura i dostępność | 2,7 | Zero skrótów w całej aplikacji; niepełna kolejność Tab i nazwy kontrolek. |
+| Klawiatura i dostępność | 2,7 | Brak spójnych globalnych komend i mnemoników (są tylko lokalne Enter/Spacja/Delete/Backspace); niepełna kolejność Tab i nazwy kontrolek. |
 | **Zapobieganie błędom** | **2,5** | Najsłabszy wymiar: ciche nadpisania, utrata pracy, rozszerzenie zakresu bez sygnału. |
 
 ### 3.2 Wzorzec 1: UI potrafi po cichu zmienić dane albo zakres (6 × P1 i pokrewne P2)
@@ -286,7 +289,7 @@ Do tego dochodzi terminologia: „Database file” i „Select DB file”, „Ex
 
 ### 3.7 Wzorzec 6: klawiatura i dostępność
 
-- **Brak skrótów.** W całym `src/metroliza` nie ma **ani jednego** skrótu (`QShortcut`, `setShortcut`, `QKeySequence`) ani mnemonika Alt. Jest tylko lokalna obsługa Enter, Spacji, Delete i F2 w sześciu oknach (**C-F01**, **A1-F07**). Dla eksperta, który codziennie wykonuje te same kroki, to istotna strata.
+- **Brak spójnego zestawu globalnych komend i mnemoników.** W `src/metroliza` nie ma globalnych skrótów (`QShortcut`, `setShortcut`, `QKeySequence`, `StandardKey`) ani mnemoników Alt w etykietach. Istnieje natomiast lokalna obsługa klawiszy w kilku widokach: Enter/Return (np. planer raportów, Modify DB, listy wyboru), Spacja (planer), Delete/Backspace (filtr, listy wyboru), a także domyślne zachowania kontrolek Qt (**C-F01**, **A1-F07**). Dla eksperta, który codziennie wykonuje te same kroki, to istotna strata.
 - **Kolejność Tab i nazwy kontrolek.** Kolejność Tab jest niepełna albo nienaturalna. W Reports fokus przechodzi przez dolne akcje, zanim dojdzie do źródła (**A1-F06**, **A2-F10**). Pola ścieżek, listy i tabele często nie mają nazw dla czytników ekranu (**A3-F07**, **A4-F11**, **A5-F11**, **A6-F09**).
 - **Akcje bez przycisku.** Zmiana nazwy wielu wartości w Modify DB działa tylko przez Enter (**A5-F08**). Dodanie kolumny w grupowaniu CSV działa tylko przez podwójne kliknięcie (**A6b-F05**).
 
@@ -673,11 +676,16 @@ Zrzuty stosu co minutę pokazywały aktywne renderowanie wykresów podsumowań w
 
 | Fala | Cel | Zawartość | Wysiłek łącznie |
 |---|---|---|---|
-| **0. Bezpieczeństwo danych w UI** | Żadnych cichych nadpisań i zmian zakresu | 6 ustaleń P1 i pokrewne P2 z tabeli w 3.2. Prawie wszystkie są lokalne (S/M): walidacja, nazwanie skutku, cofnięcie, jedna transakcja. Do tego A4-F05 i A4-F10 | ~2 tygodnie |
-| **1. Codzienna ścieżka** | Z ~16 do ~8–9 aktywacji w PDF→Excel | „Otwórz skoroszyt / dashboard” i pasek „Ostatni wynik” (A3-F04, A6-F11). Export jako krok po imporcie (A1-F08). Ostatnie bazy i foldery, menu File (C-F02). Nazwa wyjścia z datą i jawne „Zastąp” (A3-F01). Zakresy dat w filtrze. Pozycje menu Tools otwierają okna (A1-F05). Skróty i mnemoniki (C-F01) | ~2 tygodnie |
+| **0. Bezpieczeństwo danych w UI** | Żadnych cichych nadpisań i zmian zakresu | **16 pozycji: 6 × P1 + 9 × P2 + A4-F10 jako P3** (lista niżej). Prawie wszystkie są lokalne (S/M): walidacja, nazwanie skutku, cofnięcie, jedna transakcja | ~2 tygodnie |
+| **1. Codzienna ścieżka** | Cel: z ~16 do szacowanych ~8–9 aktywacji w PDF→Excel (szacunek z kodu, nie wynik) | „Otwórz skoroszyt / dashboard” i pasek „Ostatni wynik” (A3-F04, A6-F11). Export jako krok po imporcie (A1-F08). Ostatnie bazy i foldery, menu File (C-F02). Nazwa wyjścia z datą i jawne „Zastąp” (A3-F01). Zakresy dat w filtrze. Pozycje menu Tools otwierają okna (A1-F05). Skróty i mnemoniki (C-F01) | ~2 tygodnie |
 | **2. Pamięć ustawień** | Jutro kontynuuję dzisiejszą pracę | Zapamiętywanie bezpiecznych ustawień Exportu (A3-F06). Zapis i wczytanie grupowania (A4-F07). Receptury CSV Summary i „Użyj ostatnich” (A6-F04). Zachowywanie zgodnych grup i limitów (A6-F02, A6-F03) | ~2–3 tygodnie |
 | **3. Przebudowy okien** | Gęstość i czytelność | Home jako „pulpit dnia” (R1). Reports z tabelą wyniku i paskiem operacji (R2). Grupowanie na tabelach (R5). Modify DB z licznikiem zmian (R6). Dashboard „najpierw wyniki” (R8). Arkusz „Review” w Excelu (R9) | ~4–6 tygodni |
 | **4. Spójność i dostępność** | Jeden język w całej aplikacji | Polityka ról przycisków (C-F05, A1-F10). Terminologia (A1-F09). CSV Summary i dopasowanie nazw niemodalne (C-F03). Kolejność Tab i nazwy (A2-F10, A3-F07, A4-F11, A5-F11, A6-F09). Instrukcje (A4-F09, A6b-F08, A8-F02, A1-F11) | ~1–2 tygodnie, równolegle |
+
+**Zakres fali 0 (jawna lista, 16 pozycji).** Identyfikatory zostają bez zmian; ustalenia scalone (A1-F01 w A2-F03, A6-F02 w A6b-F01) nie są osobnymi zadaniami.
+- **P1 (6):** A3-F01, A2-F03, A4-F01, A5-F01, A5-F02, A6b-F02.
+- **P2 (9):** A2-F01, A5-F05, A2-F02, A4-F02, A4-F03, A4-F05, A5-F03, A6-F01, A6b-F01.
+- **P3 (1):** A4-F10, wyłącznie walidacja zakresu dat „od ≤ do”. Szybkie okresy dat zostają w fali 1.
 
 Szacunki są orientacyjne, dla jednej osoby z Codexem. Fale 0 i 1 dają największy zwrot: usuwają ryzyko złych danych i skracają codzienną ścieżkę.
 
@@ -920,7 +928,7 @@ Ważność jest **po kontroli precyzji i scaleniu duplikatów**. Kolumna „Pier
 | A8-F02 | P2 | P2 | IndustrialSourceProfilesDialog | The manual directs users to a “connection-check action in the source setup,” but the source editor has no test/check control; its available actions are New source, Close and Save source. The actual **Check access** action is in the separate Fetch industrial data dialog. | Align the manual with the actual two-step sequence (“Save source, then open Fetch to cache and choose Check access”). Keep the source editor’s saved-state handoff consistent with that wording. | S |  |  |
 | A9-F01 | P2 | P2 | RealtimeIndustrialMonitoringDialog | The multi-line Signal columns editor is only 30 logical pixels high in the captured Setup view, displaying roughly one mapping line at a time. This conflicts with its multi-line syntax and intended 96-pixel minimum, making review and editing of several signals slower and easier to misread. | Preserve a visibly multi-line editor (at least three mapping lines) and check its effective height at the minimum window size and 150% laptop layout. Keep advanced settings collapsed by default, and make the source-save action easy to reach. | S |  |  |
 | A9-F02 | P2 | P2 | ParserPluginWizardDialog | After creating a handoff folder, Check Package, Validate, Diagnose, Repair Prompt and Install all become enabled together. Install therefore looks like a peer/next action before the manual’s package-check and review sequence. The install backend does revalidate, so this is a misleading workflow cue rather than a confirmed unsafe install path. | Reflect readiness in the action states: allow Check Package first, Validate once inputs exist, and Install only after package and validation pass; surface Diagnose as the indicated review step where selection ambiguity requires it. Keep the backend validation… | M |  |  |
-| C-F01 | P2 | P2 | Cała aplikacja | Brak jakichkolwiek skrótów klawiszowych i mnemoników Alt (0 × QShortcut/setShortcut/QKeySequence/StandardKey, 0 × '&' w etykietach); tylko lokalne Enter/Spacja/Delete/F2 w 6 oknach. | Mały, sprawdzony pod kątem kolizji zestaw skrótów (Ctrl+1…7, Ctrl+O, Ctrl+R, Ctrl+I, Ctrl+E, Ctrl+F, F1) i mnemoniki Alt. | S | CONFIRMED | A1-F07 |
+| C-F01 | P2 | P2 | Cała aplikacja | Brak spójnego zestawu globalnych komend klawiszowych i mnemoników Alt (0 × QShortcut/setShortcut/QKeySequence/StandardKey, 0 × '&' w etykietach); istnieje tylko lokalna obsługa Enter/Return, Spacji i Delete/Backspace w kilku widokach oraz domyślne zachowania Qt. | Mały, sprawdzony pod kątem kolizji zestaw skrótów (Ctrl+1…7, Ctrl+O, Ctrl+R, Ctrl+I, Ctrl+E, Ctrl+F, F1) i mnemoniki Alt. | S | CONFIRMED | A1-F07 |
 | C-F02 | P2 | P2 | MainWindow / Reports / Export | Brak listy ostatnich baz, folderów i plików; okno główne nie ma menu File (menu: Tools, View, Help). Każda sesja zaczyna się od okien wyboru plików. | Ostatnie bazy i foldery w Reports i na Home; menu File z Open database i Recent. | M | CONFIRMED |  |
 | C-F06 | P2 | P2 | Dashboard CSV Summary (HTML) | Pierwszy ekran to kafelki konfiguracji (Filters, Aggregation, Dashboard interactivity, Large group layers) obok liczników; wyniki zaczynają się niżej. Kafelek interaktywności to długie zdanie dużą czcionką. | Pierwszy ekran: wyniki (tabela uwagi); ustawienia do zwiniętych Notatek z przebiegu. | M |  |  |
 | C-F07 | P2 | P2 | Dashboard CSV Summary (HTML) | Bez limitów specyfikacji Key takeaways powtarzają dla każdej metryki tę samą parę kart (Capability not evaluated / Supply lower, nominal and upper specs) – 16 kart dla 8 metryk. | Jeden zbiorczy komunikat o braku limitów z listą metryk; karty tylko dla rzeczywistych wniosków. | S |  |  |
