@@ -61,7 +61,7 @@ def test_current_repository_validation_fails_before_normalization_commit(tmp_pat
     assert _rows(database, "SELECT reference FROM report_metadata") == [("A",)]
 
 
-def test_current_normalization_commit_precedes_repository_update_failure(tmp_path):
+def test_current_normalization_rolls_back_on_repository_update_failure(tmp_path):
     database = str(tmp_path / "current-boundary.db")
     _create_database(
         database,
@@ -95,7 +95,7 @@ def test_current_normalization_commit_precedes_repository_update_failure(tmp_pat
             measurement_updates=((7, {"header": "WIDTH"}),),
         )
 
-    assert _rows(database, "SELECT reference FROM report_metadata") == [("A2",)]
+    assert _rows(database, "SELECT reference FROM report_metadata") == [("A",)]
     assert repository.report_updates == [(42, {"comment": "reviewed"})]
 
 

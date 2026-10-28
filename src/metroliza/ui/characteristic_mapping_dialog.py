@@ -35,6 +35,8 @@ from metroliza.reports.characteristic_alias_service import (
     export_characteristic_aliases_csv,
     fetch_all_characteristic_aliases,
     import_characteristic_aliases_csv,
+    preview_characteristic_aliases_csv,
+    apply_characteristic_alias_import,
     normalize_scope_type,
     upsert_characteristic_alias,
 )
@@ -106,16 +108,27 @@ def _native_alias_csv(owner):
 class _AliasCsvThread(QThread):
     """Own one immutable path request; result/error delivery remains on the GUI."""
 
+    preview_ready = pyqtSignal(object)
+
     def __init__(self, operation, db_file, filename):
         super().__init__()
         self.operation, self.db_file, self.filename = operation, db_file, filename
         self.producer = _DEFAULT_ALIAS_IMPORT if operation == 'import' else _DEFAULT_ALIAS_EXPORT
         self.count, self.error, self.discard_result = None, None, False
+        self.reviewed = threading.Event()
+        self.choice = None
 
     def run(self):
         try:
-            _DEFAULT_ALIAS_SCHEMA(self.db_file)
-            self.count = self.producer(self.db_file, self.filename)
+            if self.operation == 'import':
+                plan = preview_characteristic_aliases_csv(self.db_file, self.filename)
+                self.preview_ready.emit(plan)
+                self.reviewed.wait()
+                if self.choice is not None and not self.discard_result:
+                    self.count = apply_characteristic_alias_import(self.db_file, plan, replace=self.choice)
+            else:
+                _DEFAULT_ALIAS_SCHEMA(self.db_file)
+                self.count = self.producer(self.db_file, self.filename)
         except Exception as exc:
             self.error = exc
 
@@ -1216,14 +1229,20 @@ class CharacteristicMappingDialog(QDialog):
             return
 
         def produce():
-            ensure_characteristic_alias_schema(self.db_file)
-            return import_characteristic_aliases_csv(self.db_file, filename)
+            if import_characteristic_aliases_csv is not _DEFAULT_ALIAS_IMPORT:
+                ensure_characteristic_alias_schema(self.db_file)
+                return import_characteristic_aliases_csv(self.db_file, filename)
+            plan = preview_characteristic_aliases_csv(self.db_file, filename)
+            choice = self._confirm_alias_import(plan)
+            return None if choice is None else apply_characteristic_alias_import(self.db_file, plan, replace=choice)
 
         CharacteristicMappingDialog._apply_alias_import(self, produce)
 
     def _apply_alias_import(self, producer):
         try:
             imported_count = producer()
+            if imported_count is None:
+                return
             self.load_aliases()
             QMessageBox.information(self, 'Import complete', f'Imported {imported_count} mapping row(s).')
         except CharacteristicAliasImportValidationError as exc:
@@ -1316,6 +1335,9 @@ class CharacteristicMappingDialog(QDialog):
         try:
             thread = _AliasCsvThread(operation, self.db_file, filename)
             self._alias_csv_thread = thread
+            if operation == 'import':
+                thread.preview_ready.connect(self._review_alias_import)
+                self.destroyed.connect(lambda _=None, worker=thread: worker.reviewed.set())
             self._alias_csv_controls = tuple((getattr(self, name), getattr(self, name).isEnabled())
                                              for name in _ALIAS_CSV_CONTROLS)
             # A disabled action with an existing selection is an intentional restriction.
@@ -1354,6 +1376,46 @@ class CharacteristicMappingDialog(QDialog):
                 raise error
             apply = CharacteristicMappingDialog._apply_alias_import if operation == 'import' else CharacteristicMappingDialog._apply_alias_export
             apply(self, failed)
+
+    def _confirm_alias_import(self, plan):
+        box = QMessageBox(self)
+        box.setWindowTitle('Review mapping import')
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(f'Added: {plan.added} / Replaced: {plan.replaced} / Unchanged: {plan.unchanged}\n\n'
+                    + '\n'.join(plan.replacement_lines()))
+        only_new = box.addButton('Import only new', QMessageBox.ButtonRole.AcceptRole)
+        replace = box.addButton(f'Import and replace {plan.replaced}', QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(only_new)
+        box.setEscapeButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if sip.isdeleted(box):
+            return None
+        if box.clickedButton() is only_new:
+            return False
+        return True if box.clickedButton() is replace else None
+
+    def _review_alias_import(self, plan):
+        thread = self._alias_csv_thread
+        if thread is None:
+            return
+        try:
+            dismiss_worker_progress_dialog(self._alias_csv_progress)
+            self._alias_csv_progress = None
+            if not thread.discard_result and self.db_file == thread.db_file:
+                thread.choice = self._confirm_alias_import(plan)
+            if thread.choice is not None and not sip.isdeleted(self):
+                self._alias_csv_progress, _, bar, _ = create_delayed_worker_progress_dialog(
+                    self, window_title='Import name matches', initial_status_text='Applying reviewed mappings atomically…',
+                    on_cancel=lambda: None, cancellable=False,
+                )
+                bar.setRange(0, 0)
+                self._alias_csv_progress.show()
+        except Exception as exc:
+            thread.choice = None
+            thread.error = exc.with_traceback(None)
+        finally:
+            thread.reviewed.set()
 
     def _release_alias_csv(self):
         self._alias_csv_thread = None

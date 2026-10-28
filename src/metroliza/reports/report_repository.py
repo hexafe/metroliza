@@ -12,6 +12,8 @@ import os
 from typing import Any, Callable, Iterable
 
 from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
+import math
+import re
 from metroliza.reports.import_persist_profile import measure_persist_stage, persist_stage
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
@@ -272,6 +274,24 @@ def _coerce_float(value: Any) -> float | None:
         return None
 
 
+def validate_manual_number(value: Any, *, integer: bool = False) -> float | int | None:
+    """Normalize manual numeric edits; only an explicit empty value clears a cell.
+
+    Import coercion deliberately remains tolerant. Manual edits accept a single decimal
+    comma or dot, never mixed/grouped separators, infinities or NaNs.
+    """
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    pattern = r"[+-]?\d+" if integer else r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?"
+    if not re.fullmatch(pattern, text):
+        raise ValueError(f"Invalid number {value!r}; use a decimal dot or comma without thousands separators")
+    number = int(text) if integer else float(text.replace(",", "."))
+    if not math.isfinite(number):
+        raise ValueError(f"Invalid number {value!r}; a finite number is required")
+    return number
+
+
 def _coerce_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -428,6 +448,7 @@ class ReportRepository:
     def __init__(self, database: str, *, connection=None):
         self.database = database
         self.connection = connection
+        self.join_edit_transaction = False
 
     def ensure_schema(self) -> None:
         ensure_report_schema(self.database, connection=self.connection)
@@ -1196,7 +1217,7 @@ class ReportRepository:
 
         normalized_fields = dict(fields)
         if "stats_count_int" in normalized_fields:
-            normalized_fields["stats_count_int"] = _coerce_int(normalized_fields["stats_count_int"])
+            normalized_fields["stats_count_int"] = validate_manual_number(normalized_fields["stats_count_int"], integer=True)
         elif "stats_count_raw" in normalized_fields:
             normalized_fields["stats_count_int"] = _coerce_int(normalized_fields["stats_count_raw"])
 
@@ -1321,7 +1342,10 @@ class ReportRepository:
             if identity_changed and new_identity_hash:
                 self._persist_semantic_duplicate_warnings(cursor, int(report_id), new_identity_hash)
 
-        run_transaction_with_retry(self.database, _update, connection=self.connection)
+        run_transaction_with_retry(
+            self.database, _update, connection=self.connection,
+            join_transaction=self.join_edit_transaction,
+        )
 
     @staticmethod
     def _prepare_measurement_field_updates(fields: dict[str, Any]) -> dict[str, Any]:
@@ -1331,9 +1355,9 @@ class ReportRepository:
 
         normalized_fields = dict(fields)
         for field_name in MEASUREMENT_FLOAT_FIELDS.intersection(normalized_fields):
-            normalized_fields[field_name] = _coerce_float(normalized_fields[field_name])
+            normalized_fields[field_name] = validate_manual_number(normalized_fields[field_name])
         for field_name in MEASUREMENT_INT_FIELDS.intersection(normalized_fields):
-            normalized_fields[field_name] = _coerce_int(normalized_fields[field_name])
+            normalized_fields[field_name] = validate_manual_number(normalized_fields[field_name], integer=True)
         if "row_order" in normalized_fields and normalized_fields["row_order"] is None:
             raise ValueError("row_order must be an integer")
         if "is_nok" in normalized_fields:
@@ -1473,7 +1497,10 @@ class ReportRepository:
             self._apply_measurement_field_updates(cursor, measurement_id, update_values)
             self._refresh_measurement_summary(cursor, int(measurement["report_id"]), now=now)
 
-        run_transaction_with_retry(self.database, _update, connection=self.connection)
+        run_transaction_with_retry(
+            self.database, _update, connection=self.connection,
+            join_transaction=self.join_edit_transaction,
+        )
 
     def _persist_semantic_duplicate_warnings(self, cursor, report_id: int, identity_hash: str | None) -> int:
         if not identity_hash:

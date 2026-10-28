@@ -9,6 +9,15 @@ from metroliza.ui.modify_db import ModifyDB
 from metroliza.ui.modify_db_records import RecordTableModel
 
 
+def _wait_edit(dialog):
+    from PyQt6.QtTest import QTest
+    for _ in range(1000):
+        if vars(dialog).get('_edit_thread') is None:
+            return
+        QTest.qWait(10)
+    pytest.fail('save worker did not complete')
+
+
 def _record_table(specs, rows):
     """Build a record-table stand-in from ``(original, current)`` cell pairs per row.
 
@@ -129,10 +138,11 @@ class TestModifyDbRecordUpdates(unittest.TestCase):
             'Report records.COMMENT: "old comment" -> NULL (REPORT_ID=42)',
         )
 
-    def test_record_value_coercion_preserves_invalid_float_text(self):
+    def test_record_value_coercion_rejects_invalid_float_text(self):
         self.assertIsNone(ModifyDB._coerce_record_value("", "float"))
         self.assertEqual(ModifyDB._coerce_record_value("10.5", "float"), 10.5)
-        self.assertEqual(ModifyDB._coerce_record_value("not-a-number", "float"), "not-a-number")
+        with self.assertRaises(ValueError):
+            ModifyDB._coerce_record_value("not-a-number", "float")
         self.assertEqual(ModifyDB._coerce_record_id("bad-id"), None)
 
     def test_apply_changes_delegates_collected_payload_to_report_edit_service(self):
@@ -198,7 +208,8 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_literal_custom_repository_factory_and_callbacks_stay_on_gui(tmp_path, qapplication_session, monkeypatch):
+@pytest.mark.parametrize('factory_hook', ['method', 'global'])
+def test_literal_custom_repository_factory_and_callbacks_stay_on_gui(tmp_path, qapplication_session, monkeypatch, factory_hook):
     import threading
     from metroliza.ui import modify_db
     from tests.test_modifydb_parity import _build_current_database
@@ -221,7 +232,10 @@ def test_literal_custom_repository_factory_and_callbacks_stay_on_gui(tmp_path, q
         events.append(('factory', dialog.db_file, threading.get_ident()))
         return Repository()
 
-    dialog._create_report_repository = factory
+    if factory_hook == 'method':
+        dialog._create_report_repository = factory
+    else:
+        monkeypatch.setattr(modify_db, 'ReportRepository', lambda _database: factory())
     monkeypatch.setattr(modify_db.QMessageBox, 'information',
                         lambda _parent, title, _text: events.append(('message', title, threading.get_ident())))
     dialog.apply_changes()
@@ -249,7 +263,7 @@ def _editable_dialog(tmp_path, monkeypatch, flavor='current'):
     return dialog, database, model, column, messages, errors
 
 
-def test_default_apply_is_synchronous_and_closes_with_identical_saved_rows(tmp_path, qapplication_session, monkeypatch):
+def test_default_apply_uses_worker_and_closes_with_identical_saved_rows(tmp_path, qapplication_session, monkeypatch):
     from contextlib import closing
     import sqlite3
     import threading
@@ -263,7 +277,8 @@ def test_default_apply_is_synchronous_and_closes_with_identical_saved_rows(tmp_p
         return original_connect(*args, **kwargs)
     monkeypatch.setattr(db, 'connect_sqlite', connect)
     dialog.apply_changes()
-    assert owner_threads and set(owner_threads) == {threading.get_ident()}
+    _wait_edit(dialog)
+    assert owner_threads and threading.get_ident() not in owner_threads
     assert errors == [] and messages == [('Changes applied', 'Changes have been applied successfully.')]
     assert dialog._changes_committed and not dialog.isVisible()
     with closing(sqlite3.connect(database)) as connection:
@@ -276,6 +291,7 @@ def test_default_legacy_apply_and_noop_keep_exact_messages(tmp_path, qapplicatio
 
     dialog, database, _model, _column, messages, errors = _editable_dialog(tmp_path, monkeypatch, 'legacy')
     dialog.apply_changes()
+    _wait_edit(dialog)
     assert not errors and dialog._changes_committed
     with closing(sqlite3.connect(database)) as connection:
         assert connection.execute('SELECT REFERENCE FROM REPORTS WHERE ID=1').fetchone() == ('SNAPSHOT',)
@@ -287,7 +303,7 @@ def test_default_legacy_apply_and_noop_keep_exact_messages(tmp_path, qapplicatio
     clean.close()
 
 
-def test_synchronous_error_keeps_prior_commit_and_ui_error_callback_on_gui(tmp_path, qapplication_session, monkeypatch):
+def test_save_error_rolls_back_batch_and_ui_error_callback_runs_on_gui(tmp_path, qapplication_session, monkeypatch):
     from contextlib import closing
     import sqlite3
     import threading
@@ -298,11 +314,12 @@ def test_synchronous_error_keeps_prior_commit_and_ui_error_callback_on_gui(tmp_p
     dialog.log_and_exit = lambda error: callbacks.append((str(error), threading.get_ident()))
     gui = threading.get_ident()
     dialog.apply_changes()
+    _wait_edit(dialog)
     assert callbacks == [('Measurement 999999 does not exist', gui)]
     assert errors == [] and messages == [] and not dialog._changes_committed
     assert dialog.isVisible() and dialog.apply_button.isEnabled() and dialog.tab_widget.isEnabled()
     with closing(sqlite3.connect(database)) as connection:
-        assert connection.execute('SELECT reference FROM report_metadata WHERE report_id=1').fetchone() == ('SNAPSHOT',)
+        assert connection.execute('SELECT reference FROM report_metadata WHERE report_id=1').fetchone() == ('REF-A',)
     dialog._discard_confirmed = True
     dialog.close()
 
@@ -347,19 +364,19 @@ errors = []
 dialog.log_and_exit = lambda error: errors.append(str(error))
 def apply_and_quit():
     dialog.apply_changes()
-    if partial_error:
-        dialog._discard_confirmed = True
-        dialog.close()
     app.quit()
 QTimer.singleShot(0, apply_and_quit)
 QTimer.singleShot(10000, lambda: app.exit(99))
 assert app.exec() == 0
+if partial_error:
+    dialog._discard_confirmed = True
+    dialog.close()
 assert errors == (['Measurement 999999 does not exist'] if partial_error else [])
 assert dialog._changes_committed == (not partial_error)
 assert not dialog.isVisible()
 with closing(sqlite3.connect(path)) as connection:
     assert connection.execute('SELECT DISTINCT reference FROM report_metadata WHERE reference=?',
-                              ('SHUTDOWN',)).fetchall() == [('SHUTDOWN',)]
+                              ('SHUTDOWN',)).fetchall() == ([] if partial_error else [('SHUTDOWN',)])
 print('public synchronous normal close; saved-reopen identical', partial_error, flush=True)
 """
     result = subprocess.run([sys.executable, '-c', script, str(tmp_path / 'shutdown.db'), str(partial_error)],

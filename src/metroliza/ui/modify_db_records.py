@@ -20,6 +20,8 @@ from PyQt6.QtCore import QAbstractTableModel, QCoreApplication, QModelIndex, Qt,
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QTableView, QWidget
 
 from metroliza.reports.db import iter_sql_query_batches
+from metroliza.reports.report_repository import validate_manual_number
+from metroliza.reports.report_edit_service import ReportEditService
 from metroliza.ui import detached_threads
 
 
@@ -159,6 +161,17 @@ class RecordTableModel(QAbstractTableModel):
             return self.text_at(self.source_row(index.row()), index.column())
         if role == Qt.ItemDataRole.UserRole:
             return self.original_value(self.source_row(index.row()), index.column())
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return self.validation_error(self.source_row(index.row()), index.column())
+        return None
+
+    def validation_error(self, row, column):
+        if column not in self._edits.get(row, {}) or self._specs[column].get("value_type") != "float":
+            return None
+        try:
+            validate_manual_number(self.text_at(row, column))
+        except ValueError as exc:
+            return str(exc)
         return None
 
     def flags(self, index):
@@ -377,6 +390,21 @@ class RecordLoadThread(QThread):
                 self._pending_delivery = ("loaded", rows)
             else:
                 self.loaded.emit(self._kind, self._generation, rows)
+
+
+class RecordSaveThread(QThread):
+    """Open, transact and close SQLite exclusively on the saving thread."""
+
+    def __init__(self, database, payload):
+        super().__init__()
+        self.database, self.payload, self.error = database, payload, None
+
+    def run(self):
+        try:
+            ReportEditService(self.database).apply_changes(**self.payload)
+        except Exception as exc:
+            # Do not retain this QThread through the worker frame in a traceback cycle.
+            self.error = exc.with_traceback(None)
 
 
 _NATIVE_RECORD_CLASS = RecordLoadThread

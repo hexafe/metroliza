@@ -38,6 +38,10 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
         if PYQT_IMPORT_ERROR is not None:
             raise unittest.SkipTest(f'PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}')
         cls.app = QApplication.instance() or QApplication([])
+        # Existing import scenarios deliberately accept the newly required review.
+        review = patch.object(CharacteristicMappingDialog, '_confirm_alias_import', return_value=True)
+        review.start()
+        cls.addClassCleanup(review.stop)
 
     def _wait_for_source_load(self, dialog, timeout_s=10.0):
         deadline = time.monotonic() + timeout_s
@@ -1093,7 +1097,8 @@ class TestAliasCsvBaseline(unittest.TestCase):
                 self.owner.import_mappings()
                 self.assertEqual(self.service.fetch_all_characteristic_aliases(str(self.db)), expected)
                 self.assertEqual(self.owner.alias_table.rowCount(), 3)
-        self.assertEqual(calls, ['load', ('Import complete', 'Imported 3 mapping row(s).')] * 2)
+        self.assertEqual(calls, ['load', ('Import complete', 'Imported 3 mapping row(s).'),
+                                 'load', ('Import complete', 'Imported 0 mapping row(s).')])
         before = self.snapshot()
         self.assertEqual(before['rows'], [
             (1, 'z', 'Zed', 'global', None, None, None),
@@ -1366,7 +1371,8 @@ class TestAliasCsvBackground(unittest.TestCase):
                 worker = stack.enter_context(patch.object(native, '_AliasCsvThread'))
                 self.owner.import_mappings()
                 worker.assert_not_called()
-                info.assert_called_once_with(self.owner, 'Import complete', 'Imported 1 mapping row(s).')
+                count = 0 if mode in ('class-hook', 'filename') else 1
+                info.assert_called_once_with(self.owner, 'Import complete', f'Imported {count} mapping row(s).')
                 self.assertEqual(comparisons, [])
                 for key in tuple(vars(self.owner)):
                     if type(key) is Key:
@@ -1418,7 +1424,7 @@ class TestAliasCsvBackground(unittest.TestCase):
             self.wait(lambda: self.owner._alias_csv_thread is None)
         self.assertIsInstance(logger.call_args.args[0], self.service.CharacteristicAliasImportValidationError)
         self.assertIn('canonical_name is required at row 2', self.owner.findChildren(QMessageBox)[-1].detailedText())
-        self.assertEqual(self.service.fetch_all_characteristic_aliases(str(self.db)), [])
+        self.assertFalse(self.db.exists())  # Validation/preview must not create a database.
         before = self.native.detached_threads.running_threads()
         with patch.object(self.native._AliasCsvThread, 'start', side_effect=RuntimeError('start failed')), patch.object(
             self.native.QFileDialog, 'getOpenFileName', return_value=(str(self.source), ''),
@@ -1587,7 +1593,9 @@ def test_csv_close_preserves_durable_import_order(tmp_path, qapplication_session
         try:
             with patch.object(service, 'upsert_characteristic_aliases_bulk', held), patch.object(
                 native.QFileDialog, 'getOpenFileName', return_value=(str(source), ''),
-            ), patch.object(native.QMessageBox, 'information'):
+            ), patch.object(native.QMessageBox, 'information'), patch.object(
+                native.CharacteristicMappingDialog, '_confirm_alias_import', return_value=True,
+            ):
                 owner.import_mappings()
                 thread = getattr(owner, '_alias_csv_thread', None)
                 deadline = time.monotonic() + 8
@@ -1698,6 +1706,7 @@ def test_alias_csv_native_normal_quit_and_owner_close_process(tmp_path):
         service.ensure_characteristic_alias_schema(db)
         if operation=='export':service.upsert_characteristic_alias(db,'DIA','Diameter','global')
         app=QApplication([]);install(app);owner=native.CharacteristicMappingDialog(db_file='');owner.db_file=db;owner.show()
+        native.CharacteristicMappingDialog._confirm_alias_import=lambda self,plan:True
         started=Event();real_run=native._AliasCsvThread.run;events=[];beats=[]
         def held(thread):
             started.set();time.sleep(5.2);real_run(thread)
@@ -1713,7 +1722,8 @@ def test_alias_csv_native_normal_quit_and_owner_close_process(tmp_path):
         assert events[0]==('started-visible',True),events
         assert len(beats)>100,len(beats)
         assert not native.detached_threads.running_threads()
-        assert service.fetch_all_characteristic_aliases(db)==[{'alias_name':'DIA','canonical_name':'Diameter','scope_type':'global','scope_value':None}]
+        expected=[] if operation=='import' and mode=='close' else [{'alias_name':'DIA','canonical_name':'Diameter','scope_type':'global','scope_value':None}]
+        assert service.fetch_all_characteristic_aliases(db)==expected
         if operation=='export':assert target.read_bytes()==b'alias_name,canonical_name,scope_type,scope_value\\r\\nDIA,Diameter,global,\\r\\n'
         assert len(events)==(1 if mode=='close' else 2),events
         owner.close();print('NATIVE PASS',operation,mode,events,len(beats),flush=True)

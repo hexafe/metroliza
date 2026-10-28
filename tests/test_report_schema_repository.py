@@ -1340,7 +1340,7 @@ def test_measurement_export_view_exposes_measurement_id(tmp_path):
     assert export_measurement_id == measurement_id
 
 
-def test_literal_edit_service_preserves_partial_commits_and_failed_record_rollback(tmp_path):
+def test_edit_service_rolls_back_earlier_records_when_later_record_fails(tmp_path):
     import pytest
     from metroliza.reports.report_edit_service import ReportEditService
 
@@ -1360,7 +1360,7 @@ def test_literal_edit_service_preserves_partial_commits_and_failed_record_rollba
                                  (measurement_id, {'header': 'never reached'})),
         )
     with closing(sqlite3.connect(database)) as connection:
-        assert connection.execute('SELECT comment FROM report_metadata').fetchall() == [('committed first',)]
+        assert connection.execute('SELECT comment FROM report_metadata').fetchall() == [(None,)]
         assert connection.execute('SELECT raw_measurement_json FROM report_measurements').fetchall() == [(original,)]
         assert connection.execute('PRAGMA integrity_check').fetchone() == ('ok',)
 
@@ -1404,5 +1404,4 @@ def test_literal_edit_service_transaction_commit_rollback_close_order(tmp_path, 
             report_updates=((report_id, {'comment': 'first'}), (report_id, {'comment': 'second'})),
             measurement_updates=((999999, {'header': 'missing'}),),
         )
-    assert events == ['open', 'commit', 'close', 'open', 'commit', 'close',
-                      'open', 'commit', 'close', 'open', 'rollback', 'close']
+    assert events == ['open', 'rollback', 'close']

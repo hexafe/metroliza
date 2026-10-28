@@ -384,6 +384,27 @@ def test_record_edits_reproduce_pre_model_view_behaviour(name, tmp_path):
     scenario = load_golden()["scenarios"][name]
     assert scenario["expected"], "golden file has no captured expectations"
 
+    if name == "legacy":
+        # The historical golden deliberately stored "bad" in MEAS. #1159 forbids
+        # that write. Keep the historical fixture and verify rejection and no writes.
+        from metroliza.ui.modify_db import ModifyDB
+        database = tmp_path / 'invalid-legacy.db'
+        DATABASE_BUILDERS['legacy'](database)
+        before = _dump_database(database, 'legacy')
+        dialog = ModifyDB(db_file=str(database), modal=False)
+        dialog.ensure_record_tables_loaded()
+        try:
+            for op in scenario['ops']:
+                _run_op(dialog, ScenarioDriver(), op, {"selections": [], "filters": [], "checkpoints": {}})
+            with pytest.raises(ValueError, match='MEASUREMENT_ID=13, MEAS: Invalid number'):
+                dialog.collect_measurement_record_updates()
+            assert _dump_database(database, 'legacy') == before
+            assert dialog.has_pending_changes()
+        finally:
+            dialog._discard_confirmed = True
+            dialog.close()
+        return
+
     actual = run_scenario(scenario["flavor"], scenario["ops"], ScenarioDriver(), tmp_path)
 
     assert actual == scenario["expected"]

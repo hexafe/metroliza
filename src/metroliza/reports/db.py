@@ -403,6 +403,16 @@ def execute_many_with_retry(
     )
 
 
+def _run_in_borrowed_transaction(connection, operation):
+    if connection is None or not connection.in_transaction:
+        raise ValueError("Joining a transaction requires an active borrowed connection")
+    cursor = connection.cursor(**persist_sqlite_options(cursor=True))
+    try:
+        return operation(cursor)
+    finally:
+        cursor.close()
+
+
 def run_transaction_with_retry(
     db_path: str,
     operation: Callable[[sqlite3.Cursor], T],
@@ -410,8 +420,21 @@ def run_transaction_with_retry(
     connection: sqlite3.Connection | None = None,
     retries: int = 2,
     retry_delay_s: float = 0.05,
+    join_transaction: bool = False,
 ) -> T:
-    """Run a cursor operation in a transaction with retry on transient SQLite errors."""
+    """Run a cursor operation in a transaction with transient-error retry.
+
+    The default retains commit/rollback ownership even for a borrowed connection.
+    ``join_transaction=True`` requires an active borrowed transaction and leaves
+    commit, rollback and retry of the complete unit to its outer owner.
+    """
+    if join_transaction:
+        # The outer owner retries the entire unit, and owns rollback/commit as well.
+        return _run_in_borrowed_transaction(connection, operation)
+    return _retry_transaction(db_path, operation, connection, retries, retry_delay_s)
+
+
+def _retry_transaction(db_path, operation, connection, retries, retry_delay_s):
     attempts = retries + 1
 
     for attempt in range(attempts):
