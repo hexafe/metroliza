@@ -64,6 +64,30 @@ def _app():
     return _APP
 
 
+@pytest.fixture(autouse=True)
+def _literal_group_color_palette():
+    """Color literals assume light mode; do not inherit another module's dark theme.
+
+    Tests that explicitly mutate their dialog's base color still exercise dark-mode
+    normalization. Restore the caller's application theme after every test.
+    """
+    app = _app()
+    palette, stylesheet = app.palette(), app.styleSheet()
+    properties = {name: app.property(name) for name in
+                  ('metrolizaThemeMode', 'metrolizaDarkMode', 'metrolizaThemeManaged')}
+    app.setStyleSheet('')
+    app.setPalette(app.style().standardPalette())
+    app.setProperty('metrolizaThemeMode', 'light')
+    app.setProperty('metrolizaDarkMode', False)
+    try:
+        yield
+    finally:
+        app.setStyleSheet(stylesheet)
+        app.setPalette(palette)
+        for name, value in properties.items():
+            app.setProperty(name, value)
+
+
 @pytest.mark.parametrize("with_workbook, fail_workbook", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("default_label", ["POPULATION", "Rest"])
 def test_industrial_sqlite_grouping_creates_correct_dashboard_and_workbook(

@@ -114,9 +114,11 @@ class ListSelectionUtils:
         canonical_text_getter=None,
         *,
         include_item_text=True,
+        visibility_only=False,
     ):
         selected_items = list_widget.selectedItems()
-        list_widget.clearSelection()
+        if not visibility_only:
+            list_widget.clearSelection()
 
         normalized_search_text = str(search_text or "").lower()
 
@@ -136,8 +138,9 @@ class ListSelectionUtils:
                 and (not canonical_text or normalized_search_text not in canonical_text)
             )
 
-        for item in selected_items:
-            item.setSelected(True)
+        if not visibility_only:
+            for item in selected_items:
+                item.setSelected(True)
 
 
 class GroupingShortcutBindings:
