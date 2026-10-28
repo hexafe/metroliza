@@ -1904,6 +1904,7 @@ class DataGrouping(QDialog):
 
             selected_part_group = self.part_group_list.currentItem() is not None
             self.remove_from_group_button.setEnabled(selected_group and not is_default_group and selected_part_group)
+            self.create_group_button.setEnabled(self._has_groupable_selection())
             self._refresh_selection_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -1954,7 +1955,10 @@ class DataGrouping(QDialog):
                 self._last_active_part_pane = name
         active = self._safe_attr(self, "_last_active_part_pane")
         if active in ("part_list", "part_group_list"):
-            return self._selected_part_keys_from_list(self._safe_attr(self, active))
+            active_keys = self._selected_part_keys_from_list(self._safe_attr(self, active))
+            if active_keys:
+                return active_keys
+            self._last_active_part_pane = None
         part_keys = self._selected_part_keys_from_list(self._safe_attr(self, "part_list"))
         group_part_keys = self._selected_part_keys_from_list(self._safe_attr(self, "part_group_list"))
         if part_keys:
@@ -2054,7 +2058,9 @@ class DataGrouping(QDialog):
             if not ok_pressed or not selected_group or not new_group_name or new_group_name == str(selected_group).strip():
                 return
             # Group identity is case-sensitive, matching create/add and SQL scope.
-            existing_names = self.df['GROUP'].dropna().astype(str).unique()
+            existing_names = set(self.df['GROUP'].dropna().astype(str))
+            existing_names.add(str(self.default_group))
+            existing_names.update((self._safe_attr(self, "_group_display_to_name") or {}).values())
             if new_group_name in map(str.strip, existing_names):
                 QMessageBox.warning(self, "Group name already exists", f"A group named '{new_group_name}' already exists.")
                 return

@@ -289,6 +289,7 @@ class FilterDialog(QDialog):
             self.date_to_calendar.setDate(QDate.currentDate())
             self.date_to_calendar.setMinimumWidth(100)
             self.date_error_label = QLabel("")
+            ui_foundation.set_status_variant(self.date_error_label, "danger")
             self.header_availability_label = QLabel("")
             self.header_availability_label.setTextFormat(Qt.TextFormat.PlainText)
             self.header_availability_label.setWordWrap(True)
@@ -456,8 +457,8 @@ class FilterDialog(QDialog):
         footer_layout.addWidget(self.date_to_label, 2, 0)
         footer_layout.addWidget(self.date_to_calendar, 2, 1)
         footer_layout.addWidget(self.select_today_button, 2, 2)
-        footer_layout.addWidget(self.filter_summary_label, 3, 0, 1, 3)
-        footer_layout.addWidget(self.date_error_label, 4, 0, 1, 3)
+        footer_layout.addWidget(self.date_error_label, 3, 0, 1, 3)
+        footer_layout.addWidget(self.filter_summary_label, 4, 0, 1, 3)
 
         action_layout = QtWidgets.QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
@@ -742,6 +743,7 @@ class FilterDialog(QDialog):
             self.expression_input.setText(expression)
         self.update_selected_headers()
         self._refresh_filter_summary()
+        self.on_reference_selection_changed()
 
     def _retain_saved_header_choices(self, selected_values):
         if not selected_values or getattr(self, "header_list", None) is None:
@@ -785,6 +787,7 @@ class FilterDialog(QDialog):
         if self._discard_gate_active:
             return False
         if not self._is_dirty():
+            self._stop_value_load()
             return True
         if self.isVisible():
             self._discard_gate_active = True
@@ -797,6 +800,7 @@ class FilterDialog(QDialog):
                 self._discard_gate_active = False
             if not allowed:
                 return False
+        self._stop_value_load()
         committed = getattr(self, "_committed_draft_snapshot", None)
         if committed is not None:
             self._restore_draft_snapshot(committed)
@@ -805,15 +809,10 @@ class FilterDialog(QDialog):
     def reject(self):
         if not self._discard_draft_if_allowed():
             return
-        self._stop_value_load()
+        # Discard already cancelled the old draft request. Let the committed
+        # scope refresh finish for this retained dialog, without a hidden duck.
+        self._dismiss_value_progress()
         super().reject()
-
-    def closeEvent(self, event):
-        if not self._discard_draft_if_allowed():
-            event.ignore()
-            return
-        self._stop_value_load()
-        super().closeEvent(event)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -870,6 +869,8 @@ class FilterDialog(QDialog):
         if summary_label is None or not hasattr(summary_label, "setText"):
             return
         if not self._validate_date_range():
+            summary_label.setText("Invalid date range: From must be on or before To.")
+            ui_foundation.set_status_variant(summary_label, "danger")
             self._set_filter_apply_enabled(False)
             return
         if getattr(self, "_values_loading", False) or getattr(self, "_values_error", False):
@@ -914,8 +915,14 @@ class FilterDialog(QDialog):
             summary_text += " | NOK only"
         if expression_text:
             summary_text += " | Advanced expression"
+        unavailable_count = sum(
+            item.data(Qt.ItemDataRole.UserRole) == "unavailable"
+            for item in self.header_list.selectedItems()
+        )
+        if unavailable_count:
+            summary_text += f" | Unavailable headers: {unavailable_count} (may return 0 rows)"
         summary_label.setText(summary_text)
-        ui_foundation.set_status_variant(summary_label, "success")
+        ui_foundation.set_status_variant(summary_label, "warning" if unavailable_count else "success")
 
     def _delete_selected_headers(self):
         selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
@@ -1040,6 +1047,10 @@ class FilterDialog(QDialog):
             widget.blockSignals(blocked)
         self.update_selected_headers()
         self._finish_value_load()
+        # Full loads restore references with signals blocked. Reapply their
+        # header scope only once; header-only results must not start a loop.
+        if "reference_list" in values and self._selected_value_count(self.reference_list):
+            self.on_reference_selection_changed()
 
     def _filter_values_failed(self, request_id, exception):
         if request_id != self._value_request or self._values_closed:
@@ -1069,8 +1080,8 @@ class FilterDialog(QDialog):
             else:
                 if getattr(self, "_value_loader", None) is not None:
                     self._stop_value_load()
-                    self._values_closed = False
                     self._finish_value_load()
+                self._values_closed = False
                 self._receive_filter_values(self._value_request, {
                     "header_list": tuple(
                         self.all_headers_list.item(row).text()
