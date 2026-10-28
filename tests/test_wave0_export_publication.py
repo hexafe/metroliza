@@ -8,8 +8,6 @@ import zipfile
 
 import pytest
 
-from tests.test_wave0_sqlite_paths import _real_qt_bound_modules  # noqa: F401  (autouse fixture)
-
 
 def _export_thread(target, *, cancel=False, race=False):
     def pipeline(writer):
