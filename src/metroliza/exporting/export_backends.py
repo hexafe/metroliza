@@ -16,6 +16,8 @@ from typing import Any, Protocol
 
 import xlsxwriter
 
+from metroliza.exporting.output_publication import publish_output
+
 from metroliza.exporting.xlsx_bulk_sheet import (
     BulkPlanBuilder,
     BulkRowsWorksheet,
@@ -776,12 +778,16 @@ class ExcelExportBackend:
             _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise
 
-        if not outcome:
+        if not outcome or getattr(thread, "export_canceled", False):
             self.remove_temporary_workbook(temp_path)
-            return outcome
+            return ExportStageOutcome.canceled()
 
         try:
-            self.replace_workbook(temp_path, target_path)
+            publish_output(
+                temp_path, target_path,
+                consents=getattr(thread, "replace_outputs", ()),
+                replace=self.replace_workbook,
+            )
         except BaseException as error:
             _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise

@@ -41,6 +41,7 @@ from matplotlib.font_manager import FontProperties
 from metroliza.workers.export_thread_runtime import QCoreApplication, QThread, pyqtSignal
 
 from metroliza.exporting.contracts import ExportRequest, validate_export_request
+from metroliza.exporting.output_publication import OutputPublicationCanceled, write_dashboard_safely
 from metroliza.exporting.export_summary_render_pool import (
     SummaryRenderPool,
     apply_summary_render_result,
@@ -3634,6 +3635,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         super().__init__()
 
         validated_request = validate_export_request(export_request)
+        self.replace_outputs = validated_request.replace_outputs
         self._summary_render_options = validated_request.options
         self.db_file = validated_request.paths.db_file
         self.excel_file = validated_request.paths.excel_file
@@ -3863,7 +3865,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         )
         self._emit_stage_progress('finalize', 0.45)
         try:
-            dashboard_result = _write_export_html_dashboard(
+            dashboard_result = write_dashboard_safely(
+                _write_export_html_dashboard,
+                consents=getattr(self, "replace_outputs", ()),
+                should_cancel=lambda: self.export_canceled,
                 excel_file=self.excel_file,
                 output_path=self.html_dashboard_file,
                 assets_dir=self.html_dashboard_assets_dir,
@@ -3881,6 +3886,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 plotly_visual_settings=self.dashboard_plotly_visual_settings,
                 dashboard_visual_settings=self.dashboard_visual_settings,
             )
+        except OutputPublicationCanceled:
+            raise
         except Exception as exc:
             elapsed = time.perf_counter() - dashboard_start
             self._record_stage_timing('dashboard_finalization', elapsed)
@@ -5019,6 +5026,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 diagnostic_cancelled = not bool(local_outcome)
                 self.completion_metadata["local_export_outcome"] = local_outcome.kind.value
                 if not local_outcome:
+                    self._check_canceled()
                     return
                 diagnostic.stage(WorkflowStage.OUTPUT_PUBLISHED)
 
@@ -5110,7 +5118,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._update_completion_chart_telemetry()
             self._emit_stage_progress('finalize', 1.0)
             emit_completed_after_cleanup = True
-        except GoogleDriveCanceledError:
+        except (GoogleDriveCanceledError, OutputPublicationCanceled):
             self.export_canceled = True
             self._check_canceled()
             return

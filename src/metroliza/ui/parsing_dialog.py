@@ -843,18 +843,18 @@ class _ReportOperations:
     @pyqtSlot()
     def select_database(self):
         """Select or create the destination database and update parent state."""
+        from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
+
         try:
             # Open a dialog to select a database file
             # options = QFileDialog.Options()
             # options |= QFileDialog.DontUseNativeDialog
             default_name = self.directory # + "/" + [part for part in self.directory.split("/") if part][-1]
-            if not default_name.endswith(".db"):
-                    default_name += ".db"
+            default_name = sqlite_database_path(default_name, creating=True)
             filename, _ = QFileDialog.getSaveFileName(self, "Select database", f"{default_name}",
-                                                    "SQLite3 database (*.db);;All Files (*)")#, options=options)
+                                                    SQLITE_FILE_FILTER)
             if filename:
-                if not filename.endswith(".db"):
-                    filename += ".db"
+                filename = sqlite_database_path(filename, creating=True)
                 if self._external_context:
                     self.database_change_requested.emit(filename)
                     return

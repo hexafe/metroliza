@@ -728,17 +728,20 @@ class CharacteristicMappingDialog(QDialog):
             self.metric_empty_label.setVisible(False)
 
     def select_db_file(self):
+        from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
+
         if _alias_csv_busy(self):
             return
         filename, _ = QFileDialog.getOpenFileName(
             self,
             'Select a database file',
             str(self.db_file or ''),
-            'SQLite database (*.db *.sqlite *.sqlite3);;All files (*)',
+            SQLITE_FILE_FILTER,
         )
         if not filename:
             return
 
+        filename = sqlite_database_path(filename)
         self.db_file = filename
         self.db_path_input.setText(filename)
         if self.parent() is not None and hasattr(self.parent(), 'set_db_file'):

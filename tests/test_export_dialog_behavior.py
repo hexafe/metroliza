@@ -474,7 +474,10 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
 
         export_request = types.SimpleNamespace(
             paths=types.SimpleNamespace(excel_file=str(tmp_path / "validated.xlsx"), html_dashboard_file=None),
-            options=types.SimpleNamespace(violin_plot_min_samplesize=7, summary_plot_scale=3),
+            options=types.SimpleNamespace(
+                violin_plot_min_samplesize=7, summary_plot_scale=3,
+                export_target="excel_xlsx", generate_html_dashboard=False,
+            ),
         )
         validation_calls = {}
         monkeypatch.setattr(

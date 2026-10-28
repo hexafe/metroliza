@@ -3330,7 +3330,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
 
             with mock.patch(
-                'modules.export_data_thread._write_export_html_dashboard',
+                'modules.export_data_thread.write_dashboard_safely',
                 return_value={
                     'html_dashboard_path': str(dashboard_file),
                     'html_dashboard_assets_path': str(Path(tmpdir) / 'out_dashboard_assets'),
@@ -3430,7 +3430,8 @@ class TestExportBackendSmoke(unittest.TestCase):
         thread.update_label.connect(lambda text: labels.append(text))
         thread.update_progress.connect(lambda value: progress_values.append(value))
 
-        self.assertTrue(_Backend().run(thread))
+        with mock.patch('metroliza.exporting.export_backends.publish_output'):
+            self.assertTrue(_Backend().run(thread))
 
         self.assertIn('workbook_close', thread._stage_timings)
         self.assertGreaterEqual(thread._stage_timings['workbook_close'], 0.0)

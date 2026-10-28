@@ -1,8 +1,10 @@
 """Export dialog UI, export option builders, and completion message helpers."""
 
 from time import monotonic
+from dataclasses import replace
 
 from metroliza.shared.progress_status import build_three_line_status
+from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
 from metroliza.ui.filter_dialog import FilterDialog
 from metroliza.ui.data_grouping import DataGrouping
 import metroliza.shared.custom_logger as custom_logger
@@ -15,6 +17,9 @@ from metroliza.exporting.export_dialog_service import (
     build_validated_export_request,
 )
 from metroliza.exporting.export_outcomes import sanitize_export_diagnostics
+from metroliza.exporting.output_publication import (
+    OutputConsent, conflicting_outputs, free_copy_path, output_paths,
+)
 from metroliza.exporting.export_preset_utils import (
     build_export_options_for_preset,
     get_export_preset_id_for_label,
@@ -1117,10 +1122,9 @@ class ExportDialog(QDialog):
             if self.database_change_allowed is not None and not self.database_change_allowed():
                 return
             filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
-                                                    "SQLite database (*.db);;All files (*)")
+                                                    SQLITE_FILE_FILTER)
             if filename:
-                if not filename.endswith(".db"):
-                    filename += ".db"
+                filename = sqlite_database_path(filename)
                 logger.info("Selected database file: %s", filename)
                 if not self._update_database_context(filename):
                     return
@@ -1367,6 +1371,9 @@ class ExportDialog(QDialog):
             self.excel_file = Path(output_path)
             if hasattr(self, "excel_file_text_label"):
                 self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            export_request = self._confirm_output_publication(export_request)
+            if export_request is None:
+                return
             self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
             self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
 
@@ -1399,6 +1406,51 @@ class ExportDialog(QDialog):
             self.loading_dialog.show()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _confirm_output_publication(self, request):
+        """Decide afresh for every operation; never store replacement consent on the dialog."""
+        html_only = request.options.export_target == "html_dashboard"
+        primary = request.paths.html_dashboard_file if html_only else request.paths.excel_file
+        paths = output_paths(primary, html_only=html_only, dashboard=request.options.generate_html_dashboard)
+        conflicts = conflicting_outputs(paths)
+        if not conflicts:
+            return request
+        consents = tuple(OutputConsent.for_path(path) for path in paths if path.exists())
+        copy_path = free_copy_path(primary, html_only=html_only, dashboard=request.options.generate_html_dashboard)
+        choice = self._choose_output_collision(request.paths.db_file, paths, conflicts, copy_path)
+        if choice == "cancel":
+            return None
+        if choice == "replace":
+            return replace(request, replace_outputs=consents)
+        copy_paths = output_paths(copy_path, html_only=html_only, dashboard=request.options.generate_html_dashboard)
+        paths_contract = replace(
+            request.paths,
+            excel_file=None if html_only else str(copy_path),
+            html_dashboard_file=str(copy_paths[-1]) if html_only or request.options.generate_html_dashboard else None,
+        )
+        self.excel_file = copy_path
+        self._set_path_field_value(self.excel_file_text_label, copy_path)
+        return replace(request, paths=paths_contract, replace_outputs=())
+
+    def _choose_output_collision(self, database, paths, conflicts, copy_path):
+        prompt = QMessageBox(self)
+        prompt.setWindowTitle("Export output already exists")
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        existing_preview = "\n".join(str(path) for path in conflicts[:10])
+        if len(conflicts) > 10:
+            existing_preview += f"\n... {len(conflicts) - 10} more existing asset generations"
+        prompt.setText(
+            f"Database: {database}\nTarget: " + "\n".join(str(path) for path in paths)
+            + "\nExisting outputs: " + existing_preview
+            + f"\nSave a copy as: {copy_path}\nReplace applies only to this export and these files."
+        )
+        copy = prompt.addButton("Save a copy", QMessageBox.ButtonRole.AcceptRole)
+        overwrite = prompt.addButton("Replace", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = prompt.addButton(QMessageBox.StandardButton.Cancel)
+        prompt.setDefaultButton(copy)
+        prompt.setEscapeButton(cancel)
+        prompt.exec()
+        return "copy" if prompt.clickedButton() is copy else "replace" if prompt.clickedButton() is overwrite else "cancel"
 
 
     def _dismiss_loading_progress(self, *, rejected=False):
