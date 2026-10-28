@@ -258,7 +258,8 @@ def test_contended_source_counter_is_exact_after_clean_terminal():
 
 
 def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
-    from metroliza.app.diagnostic_supervisor import _Receiver
+    from metroliza.app.diagnostic_supervisor import DRAIN_SECONDS, _Receiver
+    from metroliza.shared.diagnostic_transport import CLOSE_MAX_SECONDS
 
     receive = _Receiver._receive
     receivers = []
@@ -268,22 +269,26 @@ def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
         time.sleep(0.02)
         return receive(self, payload)
     monkeypatch.setattr(_Receiver, "_receive", slow_receive)
-    started = time.monotonic()
-    result = launch_supervised(_command("full_queue"))
+    authenticated = []
+    result = launch_supervised(
+        _command("full_queue"),
+        on_authenticated=lambda _session: authenticated.append(time.monotonic()),
+    )
+    assert len(authenticated) == 1
+    elapsed = time.monotonic() - authenticated[0]
     for receiver in receivers:
         receiver.thread.join(3)
         assert not receiver.thread.is_alive()
-    # 256 queued frames plus in-flight/terminal at 20 ms each can exceed 4 s.
-    assert time.monotonic() - started < 10
+    # This deliberately sub-budget reader takes ~5 s for a full queue. Shutdown
+    # must respect the byte cap, then the unchanged receiver cap. One extra second
+    # covers the child's 0.05-s fixture preparation, enqueueing and scheduling.
+    # Start after authentication so Windows interpreter startup is not timed.
+    assert elapsed < CLOSE_MAX_SECONDS + DRAIN_SECONDS + 1
     assert result.exit_code == 0
-    if result.receiver_drain_incomplete:
-        # The deliberately slow receiver may still have kernel-buffered frames after exit.
-        assert result.channel == "incomplete"
-        assert not result.clean_terminal_received
-        assert not result.source_loss_known
-    else:
-        assert result.channel == "loss_observed"
-        assert result.clean_terminal_received
+    assert result.receiver_drain_incomplete
+    assert result.channel == "incomplete"
+    assert not result.clean_terminal_received
+    assert not result.source_loss_known
     assert result.needs_incident
     assert result.history.total_bytes <= 2 * 1024 * 1024
 

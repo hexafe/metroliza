@@ -7,8 +7,10 @@ import json
 import os
 import struct
 import threading
+import time
 import uuid
 from collections import deque
+from itertools import count
 
 from metroliza.shared.diagnostic_wire import MAX_EVENT_BYTES, encode_event
 
@@ -19,6 +21,9 @@ MAX_QUEUE_EVENTS = 256
 RESERVED_EVENTS = 16
 RESERVED_BYTES = 16 * 1024
 MAX_COUNTER = 2**32 - 1
+CLOSE_PROGRESS_SECONDS = 1.0
+# Queue payload + queue framing + one in-flight frame + largest control frame.
+CLOSE_MAX_SECONDS = (MAX_QUEUE_BYTES + 4 * MAX_QUEUE_EVENTS + MAX_FRAME_BYTES + 4 + 512 + 4) / (64 * 1024)
 _recorder: ChildRecorder | None = None
 _supervised_requested = False
 
@@ -165,9 +170,8 @@ class ChildRecorder:
         self.invocation_id: uuid.UUID | None = None
         self.connected = False
         self.qualified = False
-        self.dropped = 0
-        # This lock protects only one saturating increment/read, never queue or I/O work.
-        self._loss_lock = threading.Lock()
+        self._losses = count()
+        self._completed_frames = 0
         self._incoming = incoming
         self._outgoing = outgoing
         self._fd_lock = threading.Lock()
@@ -242,28 +246,52 @@ class ChildRecorder:
             self._lock.release()
 
     def _drop(self) -> None:
-        with self._loss_lock:
-            self.dropped = min(MAX_COUNTER, self.dropped + 1)
+        next(self._losses)
 
-    def close(self, timeout: float = 0.25) -> None:
-        """Wait for writer completion, budgeting timeout per remaining frame.
+    @property
+    def dropped(self) -> int:
+        """CPython/GIL: integer count.next and count.__reduce__ run in C without
+        releasing the GIL or calling Python. No producer lock or Python read/modify/
+        write can deadlock on same-thread reentry or lose concurrent increments.
+        Snapshot the next value without consuming it; MAX_COUNTER means at least.
+        This relies on the supported GIL-enabled CPython runtime.
+        """
+        return min(MAX_COUNTER, self._losses.__reduce__()[1][0])
 
-        At most the queued frames, one in-flight frame and ended remain. A synchronous
-        pipe write has no portable latency bound (nor does a bounded queue imply one).
-        Share the remaining frames' budgets: freeing pipe capacity may require reading
-        several buffered frames before even one blocked write can finish. This finite
-        allowance is a shutdown policy, not a pipe latency guarantee. At defaults it
-        is at most 258 * 0.25 s; the external process watchdog remains authoritative.
-        Callers must stop producers before closing; later calls are outside this stream.
+    @dropped.setter
+    def dropped(self, value: int) -> None:
+        # Preserve explicit counter initialization used by synthetic callers;
+        # callers must quiesce producers before resetting a recorder's counter.
+        self._losses = count(value)
+
+    def close(self, timeout: float = CLOSE_PROGRESS_SECONDS) -> None:
+        """Join in progress windows (default 1 s), with a 4.094-s hard total cap.
+
+        Continue only if a whole frame completed in the preceding window. One second
+        allows a reader to free a pipe buffer, including Windows' small anonymous
+        buffers, by consuming several short frames (the 20-ms/frame control needs
+        more than 0.25 s). This is a shutdown policy, not a portable latency promise.
+        The cap budgets MAX_QUEUE_BYTES + 4*MAX_QUEUE_EVENTS framing + MAX_FRAME_BYTES
+        + 4 in flight + 512 + 4 terminal bytes at minimum 64 KiB/s: 268296/65536 s.
+        A stalled writer costs one window; a progressing writer never exceeds the
+        cap. Neither expiry proves ended was sent. Callers must quiesce producers:
+        rejections racing the final counter snapshot may or may not appear in ended;
+        later rejections cannot appear. MAX_COUNTER reports at least that many drops.
         """
         with self._lock:
             self._closing = True
-            remaining = len(self._queue) + 2
             self._wake.set()
         if self._worker.ident is None:
             self._close_channels()
             return
-        self._worker.join(timeout * remaining)
+        deadline = time.monotonic() + CLOSE_MAX_SECONDS
+        completed = self._completed_frames
+        while True:
+            self._worker.join(max(0, min(timeout, deadline - time.monotonic())))
+            if (not self._worker.is_alive() or self._completed_frames == completed
+                    or time.monotonic() >= deadline):
+                return
+            completed = self._completed_frames
 
     def _close_channels(self) -> None:
         with self._fd_lock:
@@ -305,10 +333,11 @@ class ChildRecorder:
                     closing = self._closing
                 if entry is not None:
                     write_frame(self._outgoing, entry[0])
+                    self._completed_frames += 1
                 elif closing:
-                    with self._loss_lock:
-                        dropped = self.dropped
+                    dropped = self.dropped
                     write_frame(self._outgoing, control_bytes("ended", dropped=dropped))
+                    self._completed_frames += 1
                     break
                 else:
                     self._wake.wait(0.1)

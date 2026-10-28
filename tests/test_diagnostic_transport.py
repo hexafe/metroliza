@@ -2,6 +2,7 @@ import os
 import runpy
 import secrets
 import struct
+import subprocess
 import sys
 import types
 import threading
@@ -520,6 +521,37 @@ def test_recorder_close_waits_for_progressing_queue_until_terminal(recorder_rece
         release.set()
 
 
+def test_slow_small_pipe_progress_delivers_ended(recorder_receiver_pair, monkeypatch):
+    import time
+
+    recorder, receiver = recorder_receiver_pair
+    if sys.platform == "linux":
+        import fcntl
+
+        # Match a small Windows anonymous buffer, rather than assume Linux 64 KiB.
+        assert fcntl.fcntl(recorder._outgoing, fcntl.F_SETPIPE_SZ, 4096) == 4096
+    receive = receiver._receive
+
+    def slow_receive(payload):
+        time.sleep(0.02)  # The same B2 slow-reader control, within the hard byte cap.
+        return receive(payload)
+
+    monkeypatch.setattr(receiver, "_receive", slow_receive)
+    payload = _recorder_startup_payload(recorder)
+    with recorder._lock:
+        recorder._queue.extend([(payload, True)] * 64)
+        recorder._bytes = len(payload) * 64
+    started = time.monotonic()
+    recorder.close()
+    assert not recorder._worker.is_alive()
+    receiver.thread.join(2)
+    assert not receiver.thread.is_alive()
+    assert receiver.clean_terminal
+    assert receiver.source_loss_known
+    assert recorder._completed_frames == 65
+    assert time.monotonic() - started < 3  # 65 * 20 ms + bounded scheduling allowance.
+
+
 def test_recorder_close_budget_does_not_prove_terminal_sent(recorder_receiver_pair, monkeypatch):
     recorder, receiver = recorder_receiver_pair
     entered, release = threading.Event(), threading.Event()
@@ -551,16 +583,106 @@ def test_recorder_close_budget_does_not_prove_terminal_sent(recorder_receiver_pa
     assert receiver.source_loss_known
 
 
-@pytest.mark.parametrize("queued", [0, diagnostic_transport.MAX_QUEUE_EVENTS])
-def test_close_budget_covers_only_bounded_remaining_frames(queued):
+def test_close_stops_after_one_window_without_completed_frame():
+    import time
+
     recorder = diagnostic_transport.ChildRecorder(-1, -1)
     budgets = []
-    recorder._worker = types.SimpleNamespace(ident=1, join=budgets.append)
-    recorder._queue.extend([(b"{}", True)] * queued)
+    recorder._worker = types.SimpleNamespace(ident=1, join=budgets.append, is_alive=lambda: True)
+    recorder._queue.extend([(b"{}", True)] * diagnostic_transport.MAX_QUEUE_EVENTS)
+    started = time.monotonic()
     recorder.close()
-    assert budgets == [0.25 * (queued + 2)]  # One in-flight frame plus ended.
-    assert budgets[0] <= 64.5
+    assert len(budgets) == 1
+    assert 0.25 <= budgets[0] <= 1
+    assert time.monotonic() - started < 1
     assert recorder._closing
+
+
+def test_close_hard_cap_even_with_continuing_frame_progress(monkeypatch):
+    clock = [0.0]
+    budgets = []
+    recorder = diagnostic_transport.ChildRecorder(-1, -1)
+    recorder._completed_frames = 0
+
+    def join(window):
+        budgets.append(window)
+        clock[0] += window
+        recorder._completed_frames += 1
+
+    monkeypatch.setattr(diagnostic_transport, "time", types.SimpleNamespace(monotonic=lambda: clock[0]), raising=False)
+    recorder._worker = types.SimpleNamespace(ident=1, join=join, is_alive=lambda: True)
+    recorder.close()
+    wire_bound = (diagnostic_transport.MAX_QUEUE_BYTES + 4 * diagnostic_transport.MAX_QUEUE_EVENTS
+                  + diagnostic_transport.MAX_FRAME_BYTES + 4 + 512 + 4)
+    assert len(budgets) > 1
+    assert sum(budgets) == pytest.approx(wire_bound / (64 * 1024))
+    assert sum(budgets) < 5
+
+
+def test_stalled_full_pipe_close_returns_within_one_progress_window(recorder_receiver_pair, monkeypatch):
+    import time
+
+    recorder, receiver = recorder_receiver_pair
+    entered, release = threading.Event(), threading.Event()
+    original = diagnostic_transport.write_frame
+
+    def stalled_write(descriptor, payload):
+        if b'"event_code":' in payload:
+            entered.set()
+            if not release.wait(5):
+                raise OSError("synthetic_test_barrier_timeout")
+        original(descriptor, payload)
+
+    monkeypatch.setattr(diagnostic_transport, "write_frame", stalled_write)
+    try:
+        assert recorder.enqueue_bytes(_recorder_startup_payload(recorder))
+        assert entered.wait(1)
+        with recorder._lock:
+            payload = _recorder_startup_payload(recorder)
+            recorder._queue.extend([(payload, True)] * diagnostic_transport.MAX_QUEUE_EVENTS)
+            recorder._bytes = len(payload) * diagnostic_transport.MAX_QUEUE_EVENTS
+        started = time.monotonic()
+        recorder.close()
+        elapsed = time.monotonic() - started
+        assert elapsed < 1.5  # One 1-s progress window plus 0.5-s scheduler tolerance.
+        assert recorder._worker.is_alive()
+        assert not receiver.clean_terminal
+    finally:
+        release.set()
+        recorder._worker.join(3)
+        receiver.thread.join(3)
+    assert not recorder._worker.is_alive()
+    assert not receiver.thread.is_alive()
+
+
+def test_drop_allows_same_thread_reentry_without_deadlock():
+    # Interrupt a Python line inside the old locked increment; the new single C
+    # next() has no interruptible Python interior. The child confines old deadlock.
+    program = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from metroliza.shared.diagnostic_transport import ChildRecorder
+recorder = ChildRecorder(-1, -1)
+lines = 0
+reentered = False
+def trace(frame, event, arg):
+    global lines, reentered
+    if frame.f_code is ChildRecorder._drop.__code__ and not reentered:
+        if event == "line":
+            lines += 1
+        if lines >= 2 or event == "return":
+            reentered = True
+            recorder._drop()
+    return trace
+sys.settrace(trace)
+recorder._drop()
+sys.settrace(None)
+assert reentered
+assert recorder.dropped == 2
+'''
+    source = str(Path(diagnostic_transport.__file__).resolve().parents[2])
+    completed = subprocess.run([sys.executable, "-c", program, source], timeout=3, check=False)
+    assert completed.returncode == 0
 
 
 def test_close_cannot_end_after_empty_pop_before_last_admission(recorder_receiver_pair, monkeypatch):

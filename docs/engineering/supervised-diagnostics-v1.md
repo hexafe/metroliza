@@ -108,9 +108,21 @@ supersedes pending live history, preserving this bound. RSS, startup,
 idle writes, flood/drop behavior and publication intervals are measured separately by the Windows driver.
 
 Queue admission never waits for disk, UI or pipe writes. A full queue records bounded drops.
-Queue contention and capacity rejection increment an exact, separately locked saturating counter;
-a drained recorder sends `ended(dropped=N)`. Close waits for writer completion, budgeting 0.25 seconds
-per remaining frame (queue plus one in-flight frame and terminal, at most 64.5 seconds total).
+Queue contention and capacity rejection increment an exact lock-free counter on supported
+GIL-enabled CPython: integer `itertools.count` advancement and snapshot run in C without releasing
+the GIL or calling Python, including on same-thread reentry. The wire snapshot saturates at
+MAX_COUNTER (`4294967295`), meaning **at least** that many rejections. A drained recorder sends
+`ended(dropped=N)`. Callers must quiesce producers before close; a rejection racing the final counter
+snapshot may or may not be included in `ended`, and a later rejection cannot be included.
+Close joins the writer in 1-second progress windows and continues only if its completed-frame
+counter advanced. This window allows several small-frame reads to free one pipe buffer, including
+Windows' small default anonymous buffer; the 20-ms/frame slow-reader control can need more than
+0.25 seconds before a blocked write completes. The hard total cap is
+`(262144 + 4*256 + 4608 + 4 + 512 + 4) / 65536 = 4.0938720703125` seconds: maximum queued
+payload plus queue framing, one in-flight frame and the largest terminal control, at a stated minimum
+64 KiB/s. This is a shutdown allowance, not a guaranteed OS throughput or scheduling latency.
+A stalled writer costs one window; a progressing drain can use the total cap. Slower drains may
+expire and remain incomplete; neither expiry nor a successful join alone proves receiver completion.
 Stalled/broken writes can still leave terminal loss unknown; the outer process deadline still applies.
 Partial, wrong-session, malformed, flooded and broken channels cannot
 produce a complete-history claim. A receiver may outlive its bounded drain as a daemon when an
