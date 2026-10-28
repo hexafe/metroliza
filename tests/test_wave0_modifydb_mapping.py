@@ -81,6 +81,91 @@ def test_f01_cell_reason_and_untouched_cell(qapplication_session):
     assert model.has_edits and model.original_value(0, 1) == 10.0
 
 
+@pytest.mark.parametrize('text', ['1,234', '12,500', '-999,000', '+12,500', '999,999'])
+def test_c2_ambiguous_comma_rejected_by_api(tmp_path, text):
+    path, repository, _report, _other, ids = _database(tmp_path)
+    before = _dump(path)
+    with pytest.raises(ValueError, match='ambiguous: use 1.234 or 1234'):
+        repository.update_measurement_fields(ids[0], {'meas': text})
+    assert _dump(path) == before
+
+
+@pytest.mark.parametrize('text', ['1,234', '12,500', '-999,000', '+12,500', '999,999'])
+def test_c2_ambiguous_comma_cell_reason(qapplication_session, text):
+    model = _model()
+    model.setData(model.index(0, 1), text)
+    dialog = ModifyDB.__new__(ModifyDB)
+    table = type('Table', (), {'model': lambda self: model})()
+    with pytest.raises(ValueError, match='MEASUREMENT_ID=1, MEAS:.*ambiguous'):
+        dialog.collect_record_table_updates(table, 'measurement_id')
+    assert 'ambiguous: use 1.234 or 1234' in model.data(model.index(0, 1), Qt.ItemDataRole.ToolTipRole)
+
+
+@pytest.mark.parametrize('text,expected', [('10,25', 10.25), ('0,125', .125), ('1,5', 1.5),
+                                         ('1234,5', 1234.5), ('1,2345', 1.2345)])
+def test_c2_unambiguous_comma_round_trips(tmp_path, qapplication_session, text, expected):
+    test_f01_preview_equals_persisted_value(tmp_path, qapplication_session, text, expected)
+
+
+@pytest.mark.parametrize('field', ['page_number', 'row_order', 'stats_count_int'])
+@pytest.mark.parametrize('value', [3.0, '3.0', '3', 3])
+def test_c2_integral_number_api_tolerance(tmp_path, field, value):
+    path, repository, report, _other, ids = _database(tmp_path)
+    if field == 'stats_count_int':
+        repository.update_report_metadata_fields(report, {field: value})
+        query, key = 'SELECT stats_count_int FROM report_metadata WHERE report_id=?', report
+    else:
+        repository.update_measurement_fields(ids[0], {field: value})
+        query, key = f'SELECT {field} FROM report_measurements WHERE id=?', ids[0]
+    with closing(sqlite3.connect(path)) as connection:
+        assert connection.execute(query, (key,)).fetchone() == (3,)
+
+
+@pytest.mark.parametrize('field', ['page_number', 'row_order', 'stats_count_int'])
+@pytest.mark.parametrize('value', [3.5, '3.5', 'bad', 'NaN'])
+def test_c2_fractional_integer_api_rejected_atomically(tmp_path, field, value):
+    path, repository, report, _other, ids = _database(tmp_path)
+    before = _dump(path)
+    update, key = ((repository.update_report_metadata_fields, report) if field == 'stats_count_int'
+                   else (repository.update_measurement_fields, ids[0]))
+    with pytest.raises(ValueError, match='Invalid number'):
+        update(key, {field: value})
+    assert _dump(path) == before
+
+
+@pytest.mark.parametrize('text', ['10,25', '10.250', '1.025e1'])
+def test_c2_equivalent_numeric_cell_is_not_an_edit(qapplication_session, text):
+    model = _model(10.25)
+    model.setData(model.index(0, 1), text)
+    table = type('Table', (), {'model': lambda self: model})()
+    dialog = ModifyDB.__new__(ModifyDB)
+    assert dialog.collect_record_table_updates(table, 'measurement_id') == []
+    assert not model.has_edits
+
+
+def test_c2_equivalent_number_apply_leaves_database_and_overrides_unchanged(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.ui import modify_db
+
+    path, _repository, _report, _other, _ids = _database(tmp_path)
+    before = _dump(path)
+    dialog = ModifyDB(db_file=path, modal=False)
+    dialog.ensure_record_tables_loaded()
+    model = dialog.measurement_records_table.model()
+    column = next(i for i, spec in enumerate(model.specs) if spec['field'] == 'meas')
+    model.setData(model.index(0, column), '10,0')
+    messages = []
+    monkeypatch.setattr(modify_db.QMessageBox, 'information', lambda *args: messages.append(args[1:]))
+    try:
+        dialog.apply_changes()
+        _wait_edit(dialog)
+        assert messages == [('No changes', 'No changes were detected.')]
+        assert not dialog._changes_committed and not model.has_edits
+        assert _dump(path) == before
+    finally:
+        dialog._discard_confirmed = True
+        dialog.close()
+
+
 def test_f02_rollback_after_first_real_measurement_mutation(tmp_path, monkeypatch):
     path, repository, report, _other, ids = _database(tmp_path)
     before = _dump(path)
@@ -95,15 +180,23 @@ def test_f02_rollback_after_first_real_measurement_mutation(tmp_path, monkeypatc
         mutations.append(measurement_id)
 
     monkeypatch.setattr(ReportRepository, '_apply_measurement_field_updates', staticmethod(fail_second))
+    used_repositories = []
+
+    def repository_factory(database):
+        used = ReportRepository(database)
+        used_repositories.append(used)
+        return used
+
     with pytest.raises(RuntimeError, match='after real mutation'):
-        ReportEditService(path).apply_changes(
+        ReportEditService(path, repository_factory=repository_factory).apply_changes(
             storage_flavor='current', normalization_changes={'header': [('NORMALIZED', 'Feature 1')]},
             report_updates=[(report, {'reference': 'NEW-ID'})],
             measurement_updates=[(ids[0], {'meas': 20, 'outtol': 0}), (ids[1], {'meas': 30})],
         )
     assert mutations == [ids[0]]
     assert _dump(path) == before
-    assert repository.connection is None
+    assert len(used_repositories) == 1
+    assert used_repositories[0].connection is None
 
 
 def test_f02_success_updates_raw_json_status_identity_and_duplicates(tmp_path):

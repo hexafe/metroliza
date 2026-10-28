@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from pathlib import Path
 import hashlib
@@ -283,10 +284,17 @@ def validate_manual_number(value: Any, *, integer: bool = False) -> float | int 
     if value is None or value == "":
         return None
     text = str(value).strip()
-    pattern = r"[+-]?\d+" if integer else r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?"
+    if re.fullmatch(r"[+-]?[1-9]\d{0,2},\d{3}", text):
+        raise ValueError(f"Invalid number {value!r}; ambiguous: use 1.234 or 1234")
+    pattern = r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?"
     if not re.fullmatch(pattern, text):
         raise ValueError(f"Invalid number {value!r}; use a decimal dot or comma without thousands separators")
-    number = int(text) if integer else float(text.replace(",", "."))
+    if integer:
+        number = Decimal(text.replace(",", "."))
+        if not number.is_finite() or number != number.to_integral_value():
+            raise ValueError(f"Invalid number {value!r}; an integer is required")
+        return int(number)
+    number = float(text.replace(",", "."))
     if not math.isfinite(number):
         raise ValueError(f"Invalid number {value!r}; a finite number is required")
     return number

@@ -37,6 +37,23 @@ _HOOKED_APPS: list = []
 _QUIT_BLOCKERS: dict[int, object] = {}
 
 
+def delete_on_owner_thread(obj) -> None:
+    """Release a terminal operation's QObject even after its event loop has stopped.
+
+    Call only after leaving the object's callbacks and, for QThreads, after native
+    completion via ``run_when_finished``. Deferred deletion alone needs another
+    event-loop turn and can leave wrappers alive until Python finalization.
+    """
+    from PyQt6 import sip
+    from PyQt6.QtCore import QThread
+
+    if obj is None or sip.isdeleted(obj):
+        return
+    if QThread.currentThread() != obj.thread():
+        raise RuntimeError("Operation cleanup must run on its QObject owner thread")
+    sip.delete(obj)
+
+
 def _is_finished(thread) -> bool:
     try:
         return bool(thread.isFinished())
@@ -61,7 +78,9 @@ def register(thread, *, defer_quit: bool = False, owner=None, on_finished=None) 
             raise ValueError("GUI completion requires an owner and Quit deferral")
         thread._metroliza_delivery_pending = True
         thread_ref = weakref.ref(thread)
-        owner.destroyed.connect(functools.partial(_abandon_delivery, thread_ref))
+        owner_callback = functools.partial(_abandon_delivery, thread_ref)
+        thread._metroliza_delivery_owner = (weakref.ref(owner), owner_callback)
+        owner.destroyed.connect(owner_callback)
         thread.finished.connect(functools.partial(_consume_delivery, weakref.ref(owner), thread_ref, on_finished))
     if defer_quit:
         _quit_deferral()
@@ -76,7 +95,20 @@ def _abandon_delivery(thread_ref, *_args) -> None:
     thread = thread_ref()
     if thread is not None and not vars(thread).get("_metroliza_delivery_active", False):
         thread._metroliza_delivery_pending = False
+        _disconnect_delivery_owner(thread)
         discard(thread)
+
+
+def _disconnect_delivery_owner(thread) -> None:
+    connection = vars(thread).pop("_metroliza_delivery_owner", None)
+    if connection is not None:
+        owner_ref, callback = connection
+        owner = owner_ref()
+        if owner is not None:
+            try:
+                owner.destroyed.disconnect(callback)
+            except (RuntimeError, TypeError):  # owner destruction already removed the connection
+                pass
 
 
 def _consume_delivery(owner_ref, thread_ref, callback) -> None:
@@ -133,6 +165,7 @@ def discard(thread) -> None:
     unstarted = opted_in and _unstarted(thread)
     if unstarted:
         thread._metroliza_delivery_pending = False
+        _disconnect_delivery_owner(thread)
     if thread in _REGISTERED and (_settled(thread) or unstarted):
         _REGISTERED.discard(thread)
         _QUIT_BLOCKERS.pop(id(thread), None)
@@ -234,7 +267,24 @@ def shutdown(total_timeout_ms: int = QUIT_WAIT_TOTAL_MS) -> bool:
 
     stopped = wait_for_all(total_timeout_ms)
     _run_ready_deferred(force=True)
+    if stopped and not _REGISTERED:
+        _release_quit_deferral()
     return stopped
+
+
+def _release_quit_deferral() -> None:
+    """Dispose the application-owned filter/timer on GUI, before Qt's exit cleanup."""
+    if not _HOOKED_APPS:
+        return  # keep direct headless shutdown independent of Qt imports
+    from PyQt6.QtCore import QCoreApplication
+
+    app = QCoreApplication.instance()
+    controller = getattr(app, "_metroliza_detached_quit", None)
+    if controller is not None:
+        controller.timer.stop()
+        app.removeEventFilter(controller)
+        delattr(app, "_metroliza_detached_quit")
+        delete_on_owner_thread(controller)
 
 
 def _quit_deferral():
@@ -250,6 +300,7 @@ def _quit_deferral():
 
     controller = _create_quit_deferral(app, QEvent, QObject, QTimer)
     app._metroliza_detached_quit = controller
+    _install_quit_hook()
     return controller
 
 

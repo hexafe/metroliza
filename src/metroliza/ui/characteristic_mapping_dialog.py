@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import csv
+from functools import partial
 import sqlite3
 import threading
 import time
+import weakref
 
 from PyQt6 import sip
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -123,8 +125,10 @@ class _AliasCsvThread(QThread):
             if self.operation == 'import':
                 plan = preview_characteristic_aliases_csv(self.db_file, self.filename)
                 self.preview_ready.emit(plan)
-                self.reviewed.wait()
-                if self.choice is not None and not self.discard_result:
+                while not self.reviewed.wait(0.1):
+                    if self.isInterruptionRequested() or self.discard_result:
+                        return
+                if self.choice is not None and not self.discard_result and not self.isInterruptionRequested():
                     self.count = apply_characteristic_alias_import(self.db_file, plan, replace=self.choice)
             else:
                 _DEFAULT_ALIAS_SCHEMA(self.db_file)
@@ -136,6 +140,30 @@ class _AliasCsvThread(QThread):
         if self.error is not None:
             raise self.error
         return self.count
+
+    def cancel_review(self, *_args):
+        self.discard_result = True
+        self.requestInterruption()
+        self.reviewed.set()
+
+
+def _cancel_alias_review(thread_ref, *_args):
+    thread = thread_ref()
+    if thread is not None and not sip.isdeleted(thread):
+        thread.cancel_review()
+
+
+def _delete_alias_csv_thread(owner_ref, thread_ref):
+    thread, owner = thread_ref(), owner_ref()
+    if thread is None or sip.isdeleted(thread):
+        return
+    cancel = vars(thread).pop('_cancel_review_callback', None)
+    if cancel is not None:
+        QCoreApplication.instance().aboutToQuit.disconnect(cancel)
+        if owner is not None and not sip.isdeleted(owner):
+            owner.destroyed.disconnect(cancel)
+    thread.error = None
+    detached_threads.delete_on_owner_thread(thread)
 
 
 def _has_selected_db_file(db_file: str) -> bool:
@@ -1254,7 +1282,10 @@ class CharacteristicMappingDialog(QDialog):
             details_box.setText(message)
             details_box.setDetailedText(full_report)
             details_box.setStandardButtons(QMessageBox.StandardButton.Ok)
-            details_box.exec()
+            try:
+                details_box.exec()
+            finally:
+                detached_threads.delete_on_owner_thread(details_box)
 
             if _alias_csv_busy(self) and sip.isdeleted(self):
                 return
@@ -1337,7 +1368,9 @@ class CharacteristicMappingDialog(QDialog):
             self._alias_csv_thread = thread
             if operation == 'import':
                 thread.preview_ready.connect(self._review_alias_import)
-                self.destroyed.connect(lambda _=None, worker=thread: worker.reviewed.set())
+                thread._cancel_review_callback = partial(_cancel_alias_review, weakref.ref(thread))
+                self.destroyed.connect(thread._cancel_review_callback)
+                QCoreApplication.instance().aboutToQuit.connect(thread._cancel_review_callback)
             self._alias_csv_controls = tuple((getattr(self, name), getattr(self, name).isEnabled())
                                              for name in _ALIAS_CSV_CONTROLS)
             # A disabled action with an existing selection is an intentional restriction.
@@ -1353,7 +1386,8 @@ class CharacteristicMappingDialog(QDialog):
                 control.setEnabled(False)
             detached_threads.register(thread, defer_quit=True, owner=self,
                                       on_finished=CharacteristicMappingDialog._finish_alias_csv)
-            detached_threads.run_when_finished([thread], thread.deleteLater)
+            detached_threads.run_when_finished(
+                [thread], partial(_delete_alias_csv_thread, weakref.ref(self), weakref.ref(thread)))
             cleanup_registered = True
             self._alias_csv_progress, _, bar, _ = create_delayed_worker_progress_dialog(
                 self, window_title=f'{operation.title()} name matches',
@@ -1368,7 +1402,7 @@ class CharacteristicMappingDialog(QDialog):
                 if thread is not None:
                     detached_threads.discard(thread)
                     if not cleanup_registered:
-                        thread.deleteLater()
+                        _delete_alias_csv_thread(weakref.ref(self), weakref.ref(thread))
                 CharacteristicMappingDialog._release_alias_csv(self)
             else:
                 thread.discard_result = True
@@ -1388,20 +1422,29 @@ class CharacteristicMappingDialog(QDialog):
         box.addButton(QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(only_new)
         box.setEscapeButton(QMessageBox.StandardButton.Cancel)
-        box.exec()
-        if sip.isdeleted(box):
-            return None
-        if box.clickedButton() is only_new:
-            return False
-        return True if box.clickedButton() is replace else None
+        try:
+            box.exec()
+            if sip.isdeleted(box):
+                return None
+            if box.clickedButton() is only_new:
+                return False
+            return True if box.clickedButton() is replace else None
+        finally:
+            detached_threads.delete_on_owner_thread(box)
 
     def _review_alias_import(self, plan):
-        thread = self._alias_csv_thread
-        if thread is None:
-            return
+        thread = self.sender()
+        if not isinstance(thread, _AliasCsvThread):
+            thread = self._alias_csv_thread
         try:
-            dismiss_worker_progress_dialog(self._alias_csv_progress)
+            if thread is None or thread is not self._alias_csv_thread:
+                if thread is not None:
+                    thread.choice = None
+                return
+            progress = self._alias_csv_progress
+            dismiss_worker_progress_dialog(progress)
             self._alias_csv_progress = None
+            detached_threads.delete_on_owner_thread(progress)
             if not thread.discard_result and self.db_file == thread.db_file:
                 thread.choice = self._confirm_alias_import(plan)
             if thread.choice is not None and not sip.isdeleted(self):
@@ -1415,7 +1458,8 @@ class CharacteristicMappingDialog(QDialog):
             thread.choice = None
             thread.error = exc.with_traceback(None)
         finally:
-            thread.reviewed.set()
+            if thread is not None:
+                thread.reviewed.set()
 
     def _release_alias_csv(self):
         self._alias_csv_thread = None
@@ -1423,9 +1467,11 @@ class CharacteristicMappingDialog(QDialog):
         controls, self._alias_csv_controls = self._alias_csv_controls, ()
         selection, self._alias_csv_selection_controls = self._alias_csv_selection_controls, ()
         # A result message runs a nested event loop and can destroy the whole owner.
+        if progress is not None and not sip.isdeleted(progress):
+            dismiss_worker_progress_dialog(progress)
+            detached_threads.delete_on_owner_thread(progress)
         if sip.isdeleted(self):
             return
-        dismiss_worker_progress_dialog(progress)
         for control, enabled in controls:
             control.setEnabled(enabled)
         for control, unrestricted in selection:
@@ -1457,7 +1503,7 @@ class CharacteristicMappingDialog(QDialog):
         if _alias_csv_busy(self):
             # Retain the modal database admission until this earlier request is durable.
             self._alias_csv_close_result = result
-            self._alias_csv_thread.discard_result = True
+            self._alias_csv_thread.cancel_review()
             return True
         return False
 

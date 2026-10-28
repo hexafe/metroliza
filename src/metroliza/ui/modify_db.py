@@ -19,7 +19,7 @@ from metroliza.ui import detached_threads
 import PyQt6.QtWidgets as QtWidgets
 import logging
 import sqlite3
-from metroliza.shared.custom_logger import CustomLogger
+from metroliza.shared.custom_logger import CustomLogger, LOG_ONLY
 from metroliza.reports.db import (
     execute_select_with_columns,
     quote_identifier,
@@ -478,6 +478,8 @@ class ModifyDB(QDialog):
 
     def select_db_file(self):
         """Select a database file and load editable values into each table."""
+        if vars(self).get("_save_in_progress", False):
+            return
         try:
             if self.database_change_allowed is not None and not self.database_change_allowed():
                 return
@@ -1074,7 +1076,7 @@ class ModifyDB(QDialog):
 
     def apply_changes(self):
         """Collect table edits and delegate persistence to the report edit service."""
-        if vars(self).get("_edit_thread") is not None:
+        if vars(self).get("_edit_thread") is not None or vars(self).get("_save_in_progress", False):
             return
         try:
             normalization_changes = {
@@ -1107,9 +1109,11 @@ class ModifyDB(QDialog):
             self.close()
 
     def _report_save_error(self, error):
-        self.log_and_exit(error)
-        if getattr(self.log_and_exit, "__func__", None) is ModifyDB.log_and_exit:
-            QMessageBox.critical(self, "Nothing was saved", f"Nothing was saved. Pending edits were kept.\n\n{error}")
+        if getattr(self.log_and_exit, "__func__", None) is not ModifyDB.log_and_exit:
+            self.log_and_exit(error)
+            return
+        CustomLogger(error, reraise=False, behavior=LOG_ONLY)
+        QMessageBox.critical(self, "Nothing was saved", f"Nothing was saved. Pending edits were kept.\n\n{error}")
 
     def _apply_edit_payload(self, payload):
         native = ("_changes_committed" in vars(self)
@@ -1122,25 +1126,31 @@ class ModifyDB(QDialog):
         if not native:
             self._create_report_edit_service().apply_changes(**payload)
             return True
-        thread = RecordSaveThread(self.db_file, payload)
-        progress, _, bar, _ = create_delayed_worker_progress_dialog(
-            self, window_title="Apply database changes", initial_status_text="Saving confirmed edits in one transaction…",
-            on_cancel=lambda: None, cancellable=False,
-        )
-        bar.setRange(0, 0)
-        self._edit_thread, self._edit_progress = thread, progress
+        self._save_in_progress = True
+        self._edit_thread, self._edit_progress = None, None
         self._edit_controls = [(control, control.isEnabled()) for control in
                                (self.tab_widget, self.select_db_button, self.apply_button, self.undo_button)]
         for control, _enabled in self._edit_controls:
             control.setEnabled(False)
-        self._save_in_progress = True
-        detached_threads.register(thread, defer_quit=True, owner=self, on_finished=ModifyDB._finish_edit)
-        detached_threads.run_when_finished((thread,), partial(_release_edit, weakref.ref(self), weakref.ref(thread)))
+        thread = None
         try:
+            thread = RecordSaveThread(self.db_file, payload)
+            self._edit_thread = thread
+            progress, _, bar, _ = create_delayed_worker_progress_dialog(
+                self, window_title="Apply database changes", initial_status_text="Saving confirmed edits in one transaction…",
+                on_cancel=lambda: None, cancellable=False,
+            )
+            self._edit_progress = progress
+            bar.setRange(0, 0)
+            detached_threads.register(thread, defer_quit=True, owner=self, on_finished=ModifyDB._finish_edit)
+            detached_threads.run_when_finished((thread,), partial(_release_edit, weakref.ref(self), weakref.ref(thread)))
             progress.show()
             thread.start()
         except Exception:
-            detached_threads.discard(thread)
+            if thread is not None:
+                detached_threads.discard(thread)
+            if self._save_in_progress:
+                _release_edit(weakref.ref(self), weakref.ref(thread) if thread is not None else lambda: None)
             raise
         return False
 
@@ -1149,8 +1159,10 @@ class ModifyDB(QDialog):
             return
         self._save_in_progress = False
         error, thread.error = thread.error, None
-        dismiss_worker_progress_dialog(self._edit_progress, rejected=error is not None)
+        progress = self._edit_progress
+        dismiss_worker_progress_dialog(progress, rejected=error is not None)
         self._edit_progress = None
+        detached_threads.delete_on_owner_thread(progress)
         if error is not None:
             self._report_save_error(error)
         else:
@@ -1385,10 +1397,11 @@ def _release_edit(owner_ref, thread_ref):
         owner._edit_thread = None
         owner._save_in_progress = False
         dismiss_worker_progress_dialog(owner._edit_progress)
+        detached_threads.delete_on_owner_thread(owner._edit_progress)
         owner._edit_progress = None
         for control, enabled in owner._edit_controls:
             control.setEnabled(enabled)
         owner._edit_controls = []
     if thread is not None:
         thread.error = None
-        thread.deleteLater()
+        detached_threads.delete_on_owner_thread(thread)

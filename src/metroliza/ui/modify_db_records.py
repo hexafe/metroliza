@@ -197,7 +197,7 @@ class RecordTableModel(QAbstractTableModel):
             return False
         source = self.source_row(index.row())
         text = str(value)
-        if text == display_value(self._rows[source][column]):
+        if self._matches_original(source, column, text):
             row_edits = self._edits.get(source)
             if row_edits is not None:
                 row_edits.pop(column, None)
@@ -209,6 +209,17 @@ class RecordTableModel(QAbstractTableModel):
             self._haystack[source] = self._current_haystack(source)
         self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
         return True
+
+    def _matches_original(self, source, column, text):
+        original = self._rows[source][column]
+        if text == display_value(original):
+            return True
+        if self._specs[column].get("value_type") == "float":
+            try:
+                return validate_manual_number(text) == validate_manual_number(original)
+            except ValueError:
+                pass
+        return False
 
     # -- row identity ---------------------------------------------------------------
     @property
@@ -403,8 +414,9 @@ class RecordSaveThread(QThread):
         try:
             ReportEditService(self.database).apply_changes(**self.payload)
         except Exception as exc:
-            # Do not retain this QThread through the worker frame in a traceback cycle.
-            self.error = exc.with_traceback(None)
+            # The GUI consumes and clears the error after native completion; keep
+            # its worker traceback intact for the diagnostic logger.
+            self.error = exc
 
 
 _NATIVE_RECORD_CLASS = RecordLoadThread
