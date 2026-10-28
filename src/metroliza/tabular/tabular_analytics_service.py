@@ -3468,9 +3468,11 @@ def _normalized_tabular_column_filters_for_columns(
         )
         date_mode = item.date_mode if item.date_mode in {"from", "to", "between"} else "any"
         date_operator = str(item.date_operator or "").strip()
+        date_operator = _SQLITE_DATE_OPERATOR_SQL.get(date_operator.casefold(), date_operator)
         if date_operator not in _TABULAR_DATE_OPERATORS:
             date_operator = None
         numeric_operator = str(item.numeric_operator or "").strip()
+        numeric_operator = _SQLITE_NUMBER_OPERATOR_SQL.get(numeric_operator.casefold(), numeric_operator)
         if numeric_operator not in _TABULAR_NUMERIC_OPERATORS:
             numeric_operator = None
         numeric_value = _parse_tabular_filter_number(item.numeric_value)
