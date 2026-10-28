@@ -285,11 +285,11 @@ def validate_manual_number(value: Any, *, integer: bool = False) -> float | int 
         return None
     text = str(value).strip()
     mantissa = re.split(r"[eE]", text, maxsplit=1)[0]
-    if re.fullmatch(r"[+-]?[1-9]\d{0,2},\d{3}", mantissa):
+    if re.fullmatch(r"[+-]?[1-9]\d{0,2},\d{3}", mantissa, flags=re.ASCII):
         raise ValueError(f"Invalid number {value!r}; ambiguous: use 1.234 or 1234")
     exponent = r"" if integer else r"(?:[eE][+-]?\d{1,3})?"
     pattern = r"[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)" + exponent
-    if not re.fullmatch(pattern, text):
+    if not re.fullmatch(pattern, text, flags=re.ASCII):
         raise ValueError(f"Invalid number {value!r}; use a decimal dot or comma without thousands separators")
     if integer:
         number = Decimal(text.replace(",", "."))

@@ -429,3 +429,11 @@ def test_c2_float_keeps_bounded_exponent():
     from metroliza.reports.report_repository import validate_manual_number
 
     assert validate_manual_number("1,5e2") == 150.0
+
+
+@pytest.mark.parametrize("text", ["٣", "١,٢٣٤", "１０,５"])
+def test_c2_manual_numbers_require_ascii_digits(text):
+    from metroliza.reports.report_repository import validate_manual_number
+
+    with pytest.raises(ValueError):
+        validate_manual_number(text)
