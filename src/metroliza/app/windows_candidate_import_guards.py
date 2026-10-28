@@ -167,12 +167,10 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
             window._show_workspace_page(page)
             _require(window.reports_workspace is workspace and model.selected_ids == selected,
                      "navigation_selection_lost")
-        workspace.parse_button.click()
-        first_worker = workspace.parse_thread
-        _require(first_worker is not None, "first_import_worker_missing")
-        _wait(app, lambda: workspace.parse_thread is None, seconds=45.0,
-              code="first_import_deadline")
-        first_outcome = first_worker.last_parse_result
+        from metroliza.app.windows_candidate_import_sync import (
+            click_import, run_ui_import, wait_import_finished, wait_import_started,
+        )
+        first_outcome = run_ui_import(workspace, app)
         _require(first_outcome is not None and first_outcome.imported_files == 2
                  and first_outcome.intentionally_excluded_files == 3,
                  "hidden_selection_import_outcome")
@@ -196,15 +194,9 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
         drift_path = reports / drift_name
         original_bytes = drift_path.read_bytes()
         _select_names(model, {drift_name})
-        drift_worker = None
         try:
             drift_path.write_bytes(b"changed synthetic source after review")
-            workspace.parse_button.click()
-            drift_worker = workspace.parse_thread
-            _require(drift_worker is not None, "drift_worker_missing")
-            _wait(app, lambda: workspace.parse_thread is None, seconds=45.0,
-                  code="drift_import_deadline")
-            drift_outcome = drift_worker.last_parse_result
+            drift_outcome = run_ui_import(workspace, app)
             _require(drift_outcome is not None and drift_outcome.imported_files == 0
                      and drift_outcome.preflight_changed_files == 1,
                      "drift_not_rejected")
@@ -240,17 +232,18 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
             return real_batch(*args, **kwargs)
 
         with patch.object(parse_reports_thread, "parse_new_reports", gated_batch):
-            workspace.parse_button.click()
-            active_worker = workspace.parse_thread
-            _require(active_worker is not None, "active_import_worker_missing")
+            operation = click_import(workspace)
+            active_worker = wait_import_started(app, operation, seconds=15.0)
             _wait(app, entered.is_set, seconds=15.0, code="active_import_barrier_deadline")
             _require(active_worker.isRunning() and window.isVisible(),
                      "active_import_not_running")
             _require(window.close() is False and window.isVisible()
                      and workspace.is_close_deferred(), "active_close_not_deferred")
             release.set()
-            _wait(app, lambda: workspace.parse_thread is None and not window.isVisible(),
-                  seconds=45.0, code="active_close_deadline")
+            close_deadline = time.monotonic() + 45.0
+            wait_import_finished(app, operation, seconds=45.0, require_success=False)
+            _wait(app, lambda: not window.isVisible(),
+                  seconds=max(0, close_deadline - time.monotonic()), code="active_close_deadline")
         active_outcome = active_worker.last_parse_result
         _require(active_outcome is not None and active_outcome.imported_files == 0
                  and active_outcome.cancelled_files >= 1,

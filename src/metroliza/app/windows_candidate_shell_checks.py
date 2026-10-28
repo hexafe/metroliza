@@ -264,12 +264,8 @@ def _run(scratch: Path, fixtures: Path, app, expected_dpr: float | None,
 
         selected_names = {f"REF001_2024-01-01_{number}.pdf" for number in (1, 3)}
         _select_names(model, selected_names)
-        workspace.parse_button.click()
-        worker = workspace.parse_thread
-        _require(worker is not None, "import_worker_missing")
-        _wait(app, lambda: workspace.parse_thread is None, seconds=45.0,
-              code="import_deadline")
-        outcome = worker.last_parse_result
+        from metroliza.app.windows_candidate_import_sync import run_ui_import
+        outcome = run_ui_import(workspace, app)
         _require(outcome is not None and outcome.imported_files == 2
                  and outcome.intentionally_excluded_files == 3,
                  "import_outcome_mismatch")

@@ -179,16 +179,8 @@ def _seed_report_database(app, child: Path, reports: Path) -> Path:
         model = workspace.report_planner.model
         _require(model.valid and model.counts["ready"] == 5, "seed_review_mismatch")
         _select_names(model, {"REF001_2024-01-01_1.pdf", "REF001_2024-01-01_3.pdf"})
-        workspace.parse_button.click()
-        # A fast metadata reader can still own a PDF after preflight finishes.
-        # Import queues behind its cancellation; observe that handoff first.
-        _wait(app, lambda: workspace.parse_thread is not None, seconds=30.0,
-              code="seed_import_start_deadline")
-        worker = workspace.parse_thread
-        _require(worker is not None, "seed_import_worker_missing")
-        _wait(app, lambda: workspace.parse_thread is None, seconds=45.0,
-              code="seed_import_deadline")
-        outcome = worker.last_parse_result
+        from metroliza.app.windows_candidate_import_sync import run_ui_import
+        outcome = run_ui_import(workspace, app)
         _require(outcome is not None and outcome.imported_files == 2,
                  "seed_import_outcome")
     finally:
