@@ -298,7 +298,10 @@ def run_with_store(argv: list[str], *, store: IncidentStore, git_sha: str = "unk
         on_authenticated=publisher.authenticate,
         on_operation_failure=publisher.submit,
     )
-    return LaunchDelivery(observed, publisher.close(observed))
+    mark("publisher_close_entered")
+    status = publisher.close(observed)
+    mark("publisher_close_returned")
+    return LaunchDelivery(observed, status)
 
 
 def _persist_unstarted_bounded(
@@ -390,4 +393,5 @@ def main() -> int:
     else:
         mark("notice_not_required")
     code = delivery.observation.exit_code
+    mark("launcher_exit_zero" if code == 0 else "launcher_exit_nonzero")
     return code if code is not None else 1

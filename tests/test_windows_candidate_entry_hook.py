@@ -71,6 +71,48 @@ def test_candidate_qualification_runs_only_after_diagnostic_gate_declines(monkey
     assert events == ["bootstrap", "candidate_requested", "candidate_run", "recorder_close"]
 
 
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_successful_candidate_system_exit_preserves_zero_through_recorder_close(
+    monkeypatch, tmp_path, close_fails,
+):
+    from metroliza.shared import diagnostic_startup_probe as probe
+    from scripts.qualify_windows_diagnostics import _startup_phases
+
+    (tmp_path / probe.PROBE_DIRECTORY).mkdir()
+    for name, value in {
+        "METROLIZA_STARTUP_SMOKE": "1", "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION": "1",
+        "METROLIZA_DIAGNOSTIC_STARTUP_PROBE": "1", "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT": str(tmp_path),
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", raising=False)
+
+    class Recorder:
+        def close(self):
+            if close_fails:
+                raise RuntimeError("PRIVATE_SENTINEL")
+
+    monkeypatch.setitem(sys.modules, "metroliza.shared.diagnostic_transport", _module(
+        attach_child_recorder=Recorder, supervised_mode_requested=lambda: False,
+    ))
+    monkeypatch.setitem(sys.modules, "metroliza.app.bootstrap", _module(run_application=lambda: 0))
+    monkeypatch.setitem(sys.modules, "metroliza.app.diagnostic_qualification", _module(
+        requested_scenario=lambda: None, run_qualification=lambda scenario: 0,
+    ))
+    monkeypatch.setitem(sys.modules, "metroliza.app.windows_candidate_qualification", _module(
+        requested_scenario=lambda: "core", run_qualification=lambda: 0,
+    ))
+    with pytest.raises(SystemExit) as exited:
+        runpy.run_path(str(ENTRY), run_name="__main__")
+    assert exited.value.code == 0
+    phases = _startup_phases(tmp_path)
+    assert "child_exit_zero" in phases
+    assert "child_qualification_returned" in phases
+    assert "child_recorder_close_entered" in phases
+    assert ("child_recorder_close_returned" in phases) is (not close_fails)
+    assert ("child_recorder_close_failed" in phases) is close_fails
+    assert all(p.stat().st_size == 0 for p in (tmp_path / probe.PROBE_DIRECTORY).iterdir())
+
+
 def test_recorder_closes_when_bootstrap_fails_before_all_qualification_gates(monkeypatch):
     code, events = _run_entry(
         monkeypatch, startup_code=7, diagnostic_scenario="diagnostic", candidate_scenario="core"

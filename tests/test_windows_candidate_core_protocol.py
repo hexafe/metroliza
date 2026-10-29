@@ -350,12 +350,13 @@ def test_launcher_observer_rejects_expired_deadline_without_claiming_an_exit(tmp
 
 
 @pytest.mark.parametrize("cleanup_failed", [False, True])
-@pytest.mark.parametrize("receipt_present", [False, True])
+@pytest.mark.parametrize("receipt_present", [False, True, "success"])
 def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     tmp_path, monkeypatch, cleanup_failed, receipt_present,
 ) -> None:
     closes = []
     ready = []
+    success_receipt = dict(payload(), schema="metroliza-windows-candidate-core-v1", scenario="core")
 
     class Process:
         def __init__(self, root):
@@ -366,9 +367,12 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
                 "schema_version": 1, "scenario": "core", "stage": "startup_ready",
             })
             producer._atomic_json(self.root / driver.STAGE_FILE, {
-                "schema_version": 1, "scenario": "core", "stage": "fixture_validation", "source_sha": SHA,
+                "schema_version": 1, "scenario": "core",
+                "stage": "complete" if receipt_present == "success" else "fixture_validation", "source_sha": SHA,
             })
-            if receipt_present:
+            if receipt_present == "success":
+                producer._atomic_json(self.root / driver.SCENARIO_FILE, success_receipt)
+            elif receipt_present:
                 producer._atomic_json(self.root / driver.SCENARIO_FILE, {
                     "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
                     "scenario": "core", "status": "failed", "stage": "fixture_validation",
@@ -390,6 +394,11 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
 
     class Api:
         def launch(self, _executable, environment, _cwd, owned=None, expected_images=None):
+            probe = Path(environment["METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT"])
+            assert probe != Path(environment[producer.ROOT_ENV])
+            assert environment["METROLIZA_DIAGNOSTIC_STARTUP_PROBE"] == "1"
+            assert "METROLIZA_DIAGNOSTIC_QUALIFICATION" not in environment
+            (probe / "startup-phases" / "child_wait_nonzero").touch()
             process = Process(Path(environment[producer.ROOT_ENV]))
             owned.append(process)
             return process
@@ -425,6 +434,7 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     ), observation)
     expected_reason = (
         "private_process_cleanup_failed_at_runtime_observation" if cleanup_failed
+        else "post_success_nonzero_exit" if receipt_present == "success"
         else "package_scenario_nonzero_exit_fixture_dir_invalid" if receipt_present
         else "package_scenario_nonzero_exit_receipt_missing"
     )
@@ -434,21 +444,24 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
                      else {"name": "runtime_observation"})
     assert observation == {
         "observed_process": "requested_launcher_handle", "observed_exit_code": 7,
-        "startup_marker": "observed", "receipt_state": "valid_allowlisted" if receipt_present else "missing",
-        "stage_marker_state": "valid", "producer_stage": "fixture_validation",
-        "allowlisted_failure": "fixture_dir_invalid" if receipt_present else "unavailable",
+        "startup_marker": "observed", "receipt_state": (
+            "valid_success" if receipt_present == "success" else "valid_allowlisted" if receipt_present else "missing"),
+        "stage_marker_state": "valid", "producer_stage": "complete" if receipt_present == "success" else "fixture_validation",
+        "allowlisted_failure": "fixture_dir_invalid" if receipt_present is True else "unavailable",
         "owned_cleanup": "failed" if cleanup_failed else "complete", "private_cleanup": "complete",
+        "startup_phases": ["child_wait_nonzero"],
     }
-    payload = driver._failed_diagnostic_payload(observation, stage, failures[0], SHA)
-    assert payload["stage_marker_state"] == "valid"
-    assert payload["failure_category"] == (
+    diagnostic_payload = driver._failed_diagnostic_payload(observation, stage, failures[0], SHA)
+    assert diagnostic_payload["stage_marker_state"] == "valid"
+    assert diagnostic_payload["failure_category"] == (
         "cleanup_failure" if cleanup_failed else
+        "post_success_nonzero_exit" if receipt_present == "success" else
         "allowlisted_producer_failure" if receipt_present else "unclassified_nonzero_exit"
     )
     diagnostic = tmp_path / "diagnostic"
     diagnostic.mkdir()
-    driver._write_failed_diagnostic(diagnostic, payload)
-    assert driver._json(diagnostic / driver.FAILED_DIAGNOSTIC_FILE, driver.MAX_FAILED_DIAGNOSTIC_BYTES) == payload
+    driver._write_failed_diagnostic(diagnostic, diagnostic_payload)
+    assert driver._json(diagnostic / driver.FAILED_DIAGNOSTIC_FILE, driver.MAX_FAILED_DIAGNOSTIC_BYTES) == diagnostic_payload
     assert "SYNTHETIC_PRIVATE_PATH" not in (diagnostic / driver.FAILED_DIAGNOSTIC_FILE).read_text()
 
 
@@ -471,6 +484,30 @@ def test_failed_diagnostic_drops_untrusted_values(tmp_path) -> None:
     assert payload["failure_category"] == "closed_driver_failure"
     assert payload["probe_unavailable_sources"] == ["expected_file_system_openconsole"]
     assert len(content.encode("ascii")) <= driver.MAX_FAILED_DIAGNOSTIC_BYTES
+
+
+@pytest.mark.parametrize("phases", [
+    ["PRIVATE_SENTINEL"], [True], "child_entry", ["child_entry", "child_entry"],
+    ["child_entry"] * 10000, [["child_entry"]],
+])
+def test_failed_diagnostic_rejects_unclosed_process_phases(tmp_path, phases):
+    value = driver._failed_diagnostic_payload(
+        {"startup_phases": phases}, {}, driver.CandidateFailure("PRIVATE_SENTINEL"), SHA,
+    )
+    assert value["startup_phases"] == []
+    driver._write_failed_diagnostic(tmp_path, value)
+    assert "PRIVATE_SENTINEL" not in (tmp_path / driver.FAILED_DIAGNOSTIC_FILE).read_text()
+
+
+def test_all_process_phases_fit_bounded_failure_receipt(tmp_path):
+    from metroliza.shared.diagnostic_startup_probe import PHASES
+
+    value = driver._failed_diagnostic_payload(
+        {"startup_phases": list(reversed(PHASES))}, {}, driver.CandidateFailure("closed"), SHA,
+    )
+    assert value["startup_phases"] == list(PHASES)
+    driver._write_failed_diagnostic(tmp_path, value)
+    assert (tmp_path / driver.FAILED_DIAGNOSTIC_FILE).stat().st_size <= driver.MAX_FAILED_DIAGNOSTIC_BYTES
 
 
 def test_downstream_failure_preserves_validated_success_receipt_and_fixed_probe_reason(tmp_path) -> None:
@@ -633,6 +670,36 @@ def payload():
             for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json"), strict=True)
         },
     }
+
+
+def test_post_success_nonzero_exit_is_valid_receipt_but_still_fails(tmp_path):
+    receipt = dict(payload(), schema="metroliza-windows-candidate-core-v1", scenario="core")
+    producer._atomic_json(tmp_path / driver.SCENARIO_FILE, receipt)
+    observed = driver._child_failure_observation(tmp_path, SHA)
+    assert observed == {
+        "receipt_state": "valid_success", "producer_stage": "complete",
+        "allowlisted_failure": "unavailable", "reason": "post_success_nonzero_exit",
+    }
+    retained = dict(observed, observed_process="requested_launcher_handle", observed_exit_code=4294967295)
+    bounded = driver._failed_diagnostic_payload(
+        retained, {"name": "runtime_observation"}, driver.CandidateFailure(observed["reason"]), SHA,
+    )
+    assert bounded["status"] == "failed"
+    assert bounded["failure_category"] == "post_success_nonzero_exit"
+    assert bounded["observed_process"] == "requested_launcher_handle"
+    assert bounded["observed_exit_code"] == 4294967295
+
+
+@pytest.mark.parametrize("field,value", [
+    ("checks", {}), ("source_sha", "2" * 40), ("stage", "selected_import"),
+    ("packaged", False), ("qpa", "offscreen"), ("schema_version", True),
+    ("schema", "PRIVATE_SENTINEL"), ("scenario", "reopen"),
+])
+def test_post_success_nonzero_exit_rejects_invalid_success_receipt(tmp_path, field, value):
+    receipt = dict(payload(), schema="metroliza-windows-candidate-core-v1", scenario="core")
+    receipt[field] = value
+    producer._atomic_json(tmp_path / driver.SCENARIO_FILE, receipt)
+    assert driver._child_failure_observation(tmp_path, SHA)["receipt_state"] == "invalid"
 
 
 def native_observation(runtime_context="packaged", mode="default"):

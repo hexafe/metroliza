@@ -23,6 +23,13 @@ PHASES = (
     "storage_marker_retained", "storage_marker_resolved", "storage_cancelled",
     "storage_invalid", "storage_not_found", "storage_lock_unavailable", "storage_root_unavailable",
     "storage_quota_exceeded", "storage_io_failed", "storage_destination_exists",
+    "child_application_returned", "child_qualification_returned",
+    "child_exit_zero", "child_exit_nonzero", "child_main_failed",
+    "child_recorder_close_entered", "child_recorder_close_returned", "child_recorder_close_failed",
+    "child_wait_zero", "child_wait_nonzero",
+    "receiver_drain_incomplete", "receiver_drain_not_flagged",
+    "publisher_close_entered", "publisher_close_returned",
+    "launcher_exit_zero", "launcher_exit_nonzero",
 )
 PROBE_DIRECTORY = "startup-phases"
 
@@ -30,7 +37,8 @@ PROBE_DIRECTORY = "startup-phases"
 def mark(phase: str) -> None:
     if (type(phase) is not str or phase not in PHASES
             or os.getenv("METROLIZA_STARTUP_SMOKE") != "1"
-            or os.getenv("METROLIZA_DIAGNOSTIC_QUALIFICATION") not in {"normal", "concurrent"}
+            or (os.getenv("METROLIZA_DIAGNOSTIC_QUALIFICATION") not in {"normal", "concurrent"}
+                and os.getenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION") != "1")
             or os.getenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") != "1"):
         return
     try:

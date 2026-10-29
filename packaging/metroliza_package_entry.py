@@ -24,7 +24,7 @@ from metroliza.shared.compute_worker import use_native_windows_version  # noqa: 
 # before bootstrap or lazy NumPy/platform users can invoke cmd /c ver.
 use_native_windows_version()
 
-from metroliza.shared.diagnostic_startup_probe import mark  # noqa: E402
+from metroliza.shared.diagnostic_startup_probe import mark, mark_error  # noqa: E402
 
 QUALIFICATION_GATE_ENV = "METROLIZA_STARTUP_SMOKE"
 
@@ -52,6 +52,7 @@ mark("child_bootstrap_imported")
 if __name__ == "__main__":
     try:
         code = run_application()
+        mark("child_application_returned")
         # Every qualification scenario is gated on METROLIZA_STARTUP_SMOKE=1. Check that
         # gate before importing the harness, so an ordinary user's clean exit never
         # imports test-only code (an import failure there would turn exit 0 into a crash).
@@ -73,10 +74,20 @@ if __name__ == "__main__":
                     code = run_compute_qualification()
                 elif requested_candidate_scenario() is not None:
                     code = run_candidate_qualification()
+            mark("child_qualification_returned")
+        mark("child_exit_zero" if code == 0 else "child_exit_nonzero")
         raise SystemExit(code)
+    except Exception as error:
+        mark("child_main_failed")
+        mark_error(error)
+        raise
     finally:
         if recorder is not None:
+            mark("child_recorder_close_entered")
             try:
                 recorder.close()
-            except Exception:
+                mark("child_recorder_close_returned")
+            except Exception as error:
+                mark("child_recorder_close_failed")
+                mark_error(error)
                 pass

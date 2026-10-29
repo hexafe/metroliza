@@ -51,6 +51,70 @@ def test_persisted_receiver_drain_flag_reaches_store_and_qualifier(tmp_path):
     assert _flood_failure_reason(incident) == "flood_channel_incomplete"
 
 
+@pytest.mark.parametrize("iteration", range(3))
+def test_successful_heavy_child_with_held_receiver_persists_without_changing_exit(
+    tmp_path, monkeypatch, iteration,
+):
+    """Fixed three-run portable discriminator; no frozen/Windows claim."""
+    from metroliza.app import diagnostic_launcher as launcher
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    entered, release = threading.Event(), threading.Event()
+    receivers = []
+    receive = supervisor._Receiver._receive
+
+    def held_receive(self, payload):
+        receivers.append(self)
+        entered.set()
+        assert release.wait(15)
+        return receive(self, payload)
+
+    monkeypatch.setattr(supervisor._Receiver, "_receive", held_receive)
+    monkeypatch.setattr(supervisor, "DRAIN_SECONDS", 0)
+    store = IncidentStore(tmp_path / "incidents")
+    child = Path(supervisor.__file__).resolve().parents[3] / "tests" / "fixtures" / "diagnostic_child.py"
+    try:
+        delivery = run_with_store([sys.executable, str(child), "full_queue"], store=store)
+        assert entered.is_set()
+        assert delivery.observation.exit_code == 0
+        assert delivery.observation.receiver_drain_incomplete
+        assert delivery.storage_status is StoreStatus.SAVED
+        reports = store.list_reports().reports
+        assert len(reports) == 1
+        incident = store.load(reports[0].report_id).incident
+        assert incident.observation.exit_code == 0
+        assert incident.observation.receiver_drain_incomplete
+        # Exercise the real main's post-processing and exit propagation too.
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        monkeypatch.setattr(launcher, "IncidentStore", lambda: store)
+        monkeypatch.setattr(launcher, "run_with_store", lambda *a, **kw: delivery)
+        assert launcher.main() == 0
+    finally:
+        release.set()
+        for receiver in receivers:
+            receiver.thread.join(5)
+            assert not receiver.thread.is_alive()
+
+
+@pytest.mark.parametrize("exit_code", [0, -1, 4294967295])
+def test_drain_incident_accepts_exit_range_and_main_propagates_child_result(tmp_path, monkeypatch, exit_code):
+    from metroliza.app import diagnostic_launcher as launcher
+    from metroliza.app.diagnostic_supervisor import SupervisedResult
+
+    observed = SupervisedResult(
+        uuid.uuid4().hex, "started", "accepted", "incomplete", exit_code, "observed_exit",
+        False, 0, False, DiagnosticRing().snapshot(now=time.monotonic()), 100, True,
+    )
+    store = IncidentStore(tmp_path / "incidents")
+    assert launcher.persist_observation(store, observed, "unknown") is StoreStatus.SAVED
+    incident = store.load(store.list_reports().reports[0].report_id).incident
+    assert incident.observation.exit_code == exit_code
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setattr(launcher, "IncidentStore", lambda: store)
+    monkeypatch.setattr(launcher, "run_with_store", lambda *a, **kw: launcher.LaunchDelivery(observed, StoreStatus.SAVED))
+    assert launcher.main() == exit_code
+
+
 def _completion_scheduler(monkeypatch):
     """Functional persistence tests use event completion, not a disk-latency SLA.
 

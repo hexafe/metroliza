@@ -33,6 +33,16 @@ def test_probe_requires_all_synthetic_opt_ins(probe_root, monkeypatch, name, val
     assert qualifier._startup_phases(probe_root) == ()
 
 
+def test_core_probe_uses_separate_private_root_without_diagnostic_scenario(probe_root, monkeypatch):
+    monkeypatch.delenv("METROLIZA_DIAGNOSTIC_QUALIFICATION")
+    monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", "1")
+    probe.mark("supervision_returned")
+    assert qualifier._startup_phases(probe_root) == ("supervision_returned",)
+    monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", "0")
+    probe.mark("persist_entered")
+    assert qualifier._startup_phases(probe_root) == ("supervision_returned",)
+
+
 def test_probe_records_only_fixed_empty_markers_without_overwriting(probe_root):
     probe.mark("launcher_entry")
     marker = probe_root / probe.PROBE_DIRECTORY / "launcher_entry"

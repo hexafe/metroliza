@@ -29,7 +29,7 @@ from scripts.verify_windows_candidate_closeout import ALL_FACETS as CLOSEOUT_CHE
 SCENARIO_FILE = "windows-candidate-result.json"
 STAGE_FILE = "core-stage.json"
 FAILED_DIAGNOSTIC_FILE = "core-failed-diagnostic.json"
-MAX_FAILED_DIAGNOSTIC_BYTES = 2048
+MAX_FAILED_DIAGNOSTIC_BYTES = 4096
 _CHILD_FAILURE_STAGES = frozenset({
     "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
     "qapplication", "selected_import", "ocr", "ocr_fixture_validation",
@@ -153,7 +153,25 @@ def _closed_unexpected_stage(stage: str) -> CandidateFailure:
     )
 
 
-def _child_failure_observation(work: Path, expected_source_sha: str | None = None) -> dict[str, str]:
+def _passed_child_receipt(payload, expected_source_sha, *, native_mode, expected_dpr) -> bool:
+    if (type(payload) is not dict or payload.get("schema") != "metroliza-windows-candidate-core-v1"
+            or payload.get("scenario") != "core" or payload.get("status") != "passed"):
+        return False
+    source = expected_source_sha if expected_source_sha is not None else payload.get("source_sha")
+    if type(source) is not str or re.fullmatch(r"[0-9a-f]{40}", source) is None:
+        return False
+    try:
+        validate_runtime_receipt(payload, source, native_mode=native_mode)
+        _validate_ui_observation(payload.get("ui_observation"), expected_dpr=expected_dpr)
+        _validate_closeout_observation(payload.get("closeout_observation"), packaged=True,
+                                      expected_dpr=expected_dpr)
+    except (CandidateFailure, ValueError, TypeError, KeyError):
+        return False
+    return True
+
+
+def _child_failure_observation(work: Path, expected_source_sha: str | None = None, *,
+                               native_mode="default", expected_dpr=1.0) -> dict[str, str]:
     observation = {
         "receipt_state": "invalid", "producer_stage": "unavailable",
         "allowlisted_failure": "unavailable", "reason": "package_scenario_nonzero_exit_receipt_invalid",
@@ -166,6 +184,10 @@ def _child_failure_observation(work: Path, expected_source_sha: str | None = Non
     except (CandidateFailure, OSError, ValueError, TypeError):
         pass
     else:
+        if _passed_child_receipt(payload, expected_source_sha, native_mode=native_mode, expected_dpr=expected_dpr):
+            observation.update(receipt_state="valid_success", producer_stage="complete",
+                               reason="post_success_nonzero_exit")
+            return observation
         if (type(payload) is dict
                 and payload.get("schema") == "metroliza-windows-candidate-core-v1"
                 and type(payload.get("schema_version")) is int and payload["schema_version"] == 1
@@ -830,6 +852,44 @@ def _closed_value(value: object, allowed: frozenset[str] | set[str], fallback: s
     return value if type(value) is str and value in allowed else fallback
 
 
+def _closed_phases(value: object) -> list[str]:
+    from metroliza.shared.diagnostic_startup_probe import PHASES
+
+    if (type(value) not in {list, tuple} or len(value) > len(PHASES)
+            or any(type(phase) is not str or phase not in PHASES for phase in value)
+            or len(set(value)) != len(value)):
+        return []
+    return [phase for phase in PHASES if phase in value]
+
+
+def _process_phases(root: Path) -> list[str]:
+    from scripts.qualify_windows_diagnostics import _startup_phases
+
+    return _closed_phases(_startup_phases(root))
+
+
+def _validate_process_phases(value: object) -> None:
+    if type(value) is not dict or set(value) != {"core", "reopen"}:
+        raise CandidateFailure("invalid_process_phase_evidence")
+    for scenario, role in (("core", "requested_launcher_handle"), ("reopen", "fresh_reopen_launcher_handle")):
+        record = value[scenario]
+        if (type(record) is not dict or set(record) != {"observed_process", "observed_exit_code", "startup_phases"}
+                or record["observed_process"] != role
+                or type(record["observed_exit_code"]) is not int or record["observed_exit_code"] != 0
+                or type(record["startup_phases"]) is not list
+                or record["startup_phases"] != _closed_phases(record["startup_phases"])):
+            raise CandidateFailure("invalid_process_phase_evidence")
+
+
+def _probe_environment(root: Path) -> dict[str, str]:
+    from metroliza.shared.diagnostic_startup_probe import PROBE_DIRECTORY
+
+    root.mkdir()
+    (root / PROBE_DIRECTORY).mkdir()
+    return {"METROLIZA_DIAGNOSTIC_STARTUP_PROBE": "1",
+            "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT": str(root)}
+
+
 def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: CandidateFailure,
                                expected_source_sha: str) -> dict:
     role = _closed_value(observation.get("observed_process"),
@@ -879,6 +939,8 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         category = "allowlisted_producer_failure"
     elif receipt_state == "valid_reopen_failed":
         category = "reopen_producer_failure"
+    elif receipt_state == "valid_success" and code not in {None, 0}:
+        category = "post_success_nonzero_exit"
     elif receipt_state in {"missing", "invalid", "valid_unclassified"}:
         category = "unclassified_nonzero_exit"
     else:
@@ -896,6 +958,7 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         "inference_failure": inference_failure, "inference_failure_stage": inference_stage,
         "cleanup_failure": cleanup_failure,
         "probe_unavailable_sources": probe_sources,
+        "startup_phases": _closed_phases(observation.get("startup_phases")),
         "owned_cleanup": owned_cleanup, "private_cleanup": private_cleanup,
     }
 
@@ -982,11 +1045,12 @@ def _validate_fresh_reopen(payload, prior, expected_source, *, packaged=True, af
 
 def _validate_fresh_reopen_evidence(value, before_hash, after_hash, expected_source, diag):
     if (type(value) is not dict
-            or set(value) != {"schema_version", "status", "process_boundary", "observation", "topology"}
+            or set(value) != {"schema_version", "status", "process_boundary", "observation", "topology", "process_phases"}
             or type(value["schema_version"]) is not int or value["schema_version"] != 1
             or value["status"] != "passed"
             or value["process_boundary"] != "new_owned_job_after_initial_job_drained"):
         raise CandidateFailure("fresh_reopen_boundary_not_proved")
+    _validate_process_phases(value["process_phases"])
     payload = value["observation"]
     observed = payload.get("observation") if type(payload) is dict else None
     database = observed.get("database") if type(observed) is dict else None
@@ -1059,7 +1123,7 @@ def _validate_reopen_sources(reports: Path):
 
 
 def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, args, deadline, output, stage,
-                      failure_observation=None):
+                      failure_observation=None, core_phases=()):
     # The first Job has fully drained before this function creates another Job.
     # A new launcher, application, root and runtime journal prove process reopen.
     stage["name"] = "fresh_reopen_prepare"
@@ -1087,6 +1151,8 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
                             METROLIZA_WINDOWS_CANDIDATE_ROOT=str(root),
                             METROLIZA_WINDOWS_CANDIDATE_REOPEN_INPUT=str(child),
                             METROLIZA_WINDOWS_CANDIDATE_REOPEN_SHA256=expected_hash)
+    probe_root = private / "reopen process probe"
+    next_environment.update(_probe_environment(probe_root))
     owned = []
     terminate = True
     if failure_observation is not None:
@@ -1127,7 +1193,13 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
         _validate_reopen_sources(child / "reports")
         verifier.assert_database(verifier._load_oracle(args.oracle), database)
         result = {"schema_version": 1, "status": "passed", "process_boundary": "new_owned_job_after_initial_job_drained",
-                  "observation": payload, "topology": topology}
+                  "observation": payload, "topology": topology,
+                  "process_phases": {
+                      "core": {"observed_process": "requested_launcher_handle", "observed_exit_code": 0,
+                               "startup_phases": _closed_phases(core_phases)},
+                      "reopen": {"observed_process": "fresh_reopen_launcher_handle",
+                                 "observed_exit_code": code, "startup_phases": _process_phases(probe_root)}}}
+        _validate_process_phases(result["process_phases"])
         destination = output / "fresh-reopen-observation.json"
         with destination.open("x", encoding="ascii") as stream:
             json.dump(result, stream, sort_keys=True)
@@ -1137,10 +1209,14 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
             "before_reopen_database": {"path": before_database.name, "sha256": expected_hash},
         }
     finally:
-        _close_private_core_owned(
-            diag, owned, terminate=terminate, stage=stage,
-            failure_observation=failure_observation,
-        )
+        try:
+            _close_private_core_owned(
+                diag, owned, terminate=terminate, stage=stage,
+                failure_observation=failure_observation,
+            )
+        finally:
+            if failure_observation is not None:
+                failure_observation["startup_phases"] = _process_phases(probe_root)
 
 
 def _validated_core_payload(work: Path, args, failure_observation: dict | None):
@@ -1188,6 +1264,8 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     environment = diag._sanitized_environment(relocated, work, state, "idle")
     environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION", None)
     environment.pop("METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT", None)
+    probe_root = private / "core process probe"
+    environment.update(_probe_environment(probe_root))
     environment.update({
         "QT_QPA_PLATFORM": "windows",
         "QT_SCALE_FACTOR": args.dpi_scale,
@@ -1220,7 +1298,9 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             failure_observation=failure_observation,
         )
         if code != 0:
-            child_failure = _child_failure_observation(work, args.expected_source_sha)
+            child_failure = _child_failure_observation(
+                work, args.expected_source_sha, native_mode=args.native_mode, expected_dpr=float(args.dpi_scale),
+            )
             stage_observation = _child_stage_observation(work, args.expected_source_sha)
             if child_failure["receipt_state"] in {"missing", "invalid"}:
                 child_failure["producer_stage"] = stage_observation["producer_stage"]
@@ -1251,6 +1331,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             private, diag=diag, relocated=relocated, environment=environment, work=work,
             prior=payload, args=args, deadline=deadline, output=output, stage=stage,
             failure_observation=failure_observation,
+            core_phases=_process_phases(probe_root),
         )
         stage["name"] = "package_integrity"
         after = diag._tree_digest(diag._package_inventory(relocated))
@@ -1280,10 +1361,14 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         terminate = False
         return artifacts
     finally:
-        _close_private_core_owned(
-            diag, owned, terminate=terminate, stage=stage,
-            failure_observation=failure_observation,
-        )
+        try:
+            _close_private_core_owned(
+                diag, owned, terminate=terminate, stage=stage,
+                failure_observation=failure_observation,
+            )
+        finally:
+            if failure_observation is not None and failure_observation.get("observed_process") != "fresh_reopen_launcher_handle":
+                failure_observation["startup_phases"] = _process_phases(probe_root)
 
 
 def qualify(args) -> dict:
