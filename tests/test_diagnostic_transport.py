@@ -108,7 +108,7 @@ def test_close_without_handshake_is_prompt_and_stops_worker(monkeypatch, stage, 
         started = time.monotonic()
         recorder.close()
         elapsed = time.monotonic() - started
-        assert elapsed < 0.3
+        assert elapsed < 0.1
         # The daemon writer may remain blocked in the handshake read; process exit releases it.
         assert not recorder.connected
         assert not recorder.qualified

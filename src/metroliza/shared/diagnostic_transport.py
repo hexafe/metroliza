@@ -280,9 +280,10 @@ class ChildRecorder:
         more than 0.25 s). This is a shutdown policy, not a portable latency promise.
         The cap budgets MAX_QUEUE_BYTES + 4*MAX_QUEUE_EVENTS framing + MAX_FRAME_BYTES
         + 4 in flight + 512 + 4 terminal bytes at minimum 64 KiB/s: 268296/65536 s.
-        A stalled writer costs at most one window after its last completed frame
-        (within the cap). Before handshake completion nothing can be delivered, so
-        close returns without a drain window. Neither expiry proves ended was sent. Callers must quiesce producers:
+        A stalled writer costs at most one further window after the window in which
+        its last frame completed (within the cap). Before handshake completion nothing
+        can be delivered, so close returns without a drain window. Neither expiry
+        proves ended was sent. Callers must quiesce producers:
         rejections racing the final counter snapshot may or may not appear in ended;
         later rejections cannot appear. MAX_COUNTER reports at least that many drops.
         """
