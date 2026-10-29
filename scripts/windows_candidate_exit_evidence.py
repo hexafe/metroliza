@@ -72,7 +72,8 @@ def valid_exit_inventory(value: object) -> bool:
     # None means absent, unreadable or invalid; never a zero-object census.
     if value is None:
         return True
-    counters = {"qt_wrappers", "qobject_parentless", "threads_alive", "daemon_threads", "deleted_wrappers"}
+    wrapper_counts = {"deleted_wrappers", "cpp_created_wrappers", "py_owned_wrappers"}
+    counters = {"qt_wrappers", "threads_alive", "daemon_threads"} | wrapper_counts
     if type(value) is not dict or set(value) != counters | {"qapp_alive", "qt_classes"}:
         return False
     if type(value["qapp_alive"]) is not bool or any(type(value[k]) is not int or not 0 <= value[k] <= 10**6 for k in counters):
@@ -83,7 +84,7 @@ def valid_exit_inventory(value: object) -> bool:
     return (len({pair[0] for pair in classes}) == len(classes)
             and classes == sorted(classes, key=lambda pair: (-pair[1], pair[0]))
             and sum(pair[1] for pair in classes) <= value["qt_wrappers"]
-            and value["qobject_parentless"] + value["deleted_wrappers"] <= value["qt_wrappers"]
+            and all(value[key] <= value["qt_wrappers"] for key in wrapper_counts)
             and value["daemon_threads"] <= value["threads_alive"])
 
 

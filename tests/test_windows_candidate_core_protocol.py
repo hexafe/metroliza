@@ -360,7 +360,8 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     private_sinks = []
     ready = []
     inventory = {"qapp_alive": False, "qt_wrappers": 1, "qt_classes": [["QIcon", 1]],
-                 "qobject_parentless": 0, "threads_alive": 1, "daemon_threads": 0, "deleted_wrappers": 0}
+                 "cpp_created_wrappers": 0, "py_owned_wrappers": 1,
+                 "threads_alive": 1, "daemon_threads": 0, "deleted_wrappers": 0}
     success_receipt = dict(payload(), schema="metroliza-windows-candidate-core-v1", scenario="core")
 
     class Process:

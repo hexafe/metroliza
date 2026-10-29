@@ -1700,6 +1700,7 @@ def test_feature_warmup_close_cancels_queue_and_bounds_join(qapplication_session
 
     window._feature_import_warmup_importer = importer
     window.schedule_feature_import_warmup(delay_ms=0, on_finished=lambda: callbacks.append(1))
+    thread = None
     try:
         _wait_for_filter_shutdown(entered.is_set)
         thread = window._feature_import_warmup_thread
@@ -1719,7 +1720,8 @@ def test_feature_warmup_close_cancels_queue_and_bounds_join(qapplication_session
         assert thread.is_alive()
     finally:
         release.set()
-        thread.join(5)
+        if thread is not None:
+            thread.join(5)
         window.close()
     assert not thread.is_alive()
     assert calls == ["one"]

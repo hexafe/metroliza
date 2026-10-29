@@ -178,17 +178,36 @@ These observations discriminate exits without establishing their root cause.
 
 Under exactly the fatal-sink gate, the package entry registers an exit inventory
 callback before its other callbacks and before `child_atexit_reached`. Atexit's
-LIFO order makes the inventory run last among these registrations. It observes
-the state at that callback, before subsequent interpreter GC/module teardown;
-it does not prove that teardown completed. It never imports Qt, collects garbage,
-deletes objects, changes SIP exit policy, or retains wrappers after returning.
-All callback errors are caught and cannot change the child's exit code.
+LIFO order makes the inventory run last among the entry's own callbacks. PyQt's
+QtCore atexit cleanup (`cleanup_on_exit` / `pyqt6_cleanup_qobjects`) runs before
+this census, as does Python's threading shutdown. Thus `qapp_alive` and the
+wrapper counts describe the state after PyQt cleanup, before subsequent
+interpreter GC/module teardown; they do not prove that teardown completed.
+The census never imports Qt, explicitly collects garbage, deletes objects,
+changes SIP exit policy, or retains wrappers after returning. Automatic GC is
+disabled for the census and its previous state is restored in `finally`,
+including on Python errors. Python callback exceptions, including
+`BaseException`, are caught and do not escape; native faults cannot be caught by
+this handler. The census adds work before finalization and perturbs timing, so
+occurrence rates are not directly comparable with earlier runs. It does not
+guarantee an unchanged process exit code.
 
 The private inventory JSON has only `qapp_alive`, `qt_wrappers`, `qt_classes`,
-`qobject_parentless`, `threads_alive`, `daemon_threads`, and `deleted_wrappers`.
-Only already-loaded PyQt6 modules are consulted. Live GC-tracked SIP wrappers,
-including deleted C++ objects, are counted up to 1000000; `sip.isdeleted` guards
-QObject parent access. The top 12 `[ClassName, count]` pairs sort by descending
+`cpp_created_wrappers`, `py_owned_wrappers`, `threads_alive`, `daemon_threads`,
+and `deleted_wrappers`. Only already-loaded PyQt6 modules are consulted.
+GC-tracked SIP wrappers, including wrappers for deleted C++ objects, are counted
+up to 1000000 using type names and wrapper-only SIP flag queries:
+`sip.isdeleted`, `not sip.ispycreated` for `cpp_created_wrappers`, and
+`sip.ispyowned` for `py_owned_wrappers`. These independent counts can overlap.
+They do not establish native object liveness: `isdeleted` may miss C++-side
+deletion of C++-created objects. No wrapper instance methods (including
+`parent()`) are called and the census does not construct Qt wrappers. The one
+permitted Qt call is the static `QCoreApplication.instance()` lookup for
+`qapp_alive`; the returned application is neither dereferenced nor retained.
+The SIP query signatures are documented in the installed `PyQt6/sip.pyi` API
+stub; their ownership/origin meanings are described in the
+[SIP ABI 13 API](https://python-sip.readthedocs.io/en/stable/abi_13.html).
+The top 12 `[ClassName, count]` pairs sort by descending
 count then name. Names must match `^[A-Za-z_][A-Za-z0-9_]{0,48}$`; all others
 count as `other`. Thread counts come from `threading.enumerate()` and share the
 1000000 cap. This is a census of GC-tracked wrappers and enumerated Python

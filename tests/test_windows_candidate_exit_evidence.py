@@ -30,7 +30,7 @@ def _fatal(**fields):
 
 
 def _inventory(**fields):
-    return {"qapp_alive": False, "qt_wrappers": 0, "qt_classes": [], "qobject_parentless": 0,
+    return {"qapp_alive": False, "qt_wrappers": 0, "qt_classes": [], "cpp_created_wrappers": 0, "py_owned_wrappers": 0,
             "threads_alive": 1, "daemon_threads": 0, "deleted_wrappers": 0, **fields}
 
 
@@ -54,7 +54,10 @@ def test_g_native_thread_recovers_main_stack_without_publishing_ident(tmp_path):
 
 
 def test_g_inventory_registered_before_marker_and_runs_last(monkeypatch, tmp_path):
+    import gc
+
     callbacks = []
+    monkeypatch.setattr(gc, "get_objects", lambda: [])
     _gates(monkeypatch, tmp_path)
     monkeypatch.setattr(atexit, "register", lambda *args: callbacks.append(args))
     monkeypatch.setitem(sys.modules, "metroliza.shared.diagnostic_transport", SimpleNamespace(
@@ -68,8 +71,87 @@ def test_g_inventory_registered_before_marker_and_runs_last(monkeypatch, tmp_pat
     for callback, *args in reversed(callbacks):
         callback(*args)
     inventory = json.loads((tmp_path / "child-exit-inventory-private.json").read_bytes())
-    assert set(inventory) == {"qapp_alive", "qt_wrappers", "qt_classes", "qobject_parentless",
+    assert set(inventory) == {"qapp_alive", "qt_wrappers", "qt_classes", "cpp_created_wrappers", "py_owned_wrappers",
                               "threads_alive", "daemon_threads", "deleted_wrappers"}
+
+
+def test_g2_census_uses_only_wrapper_flags(monkeypatch, tmp_path):
+    import gc
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+
+    dereferences, queries = [], []
+
+    class Wrapper:
+        def parent(self):
+            dereferences.append("parent")
+            raise RuntimeError("C++ object must not be accessed")
+
+    objects = [Wrapper() for _ in range(8)]
+    flags = {id(obj): (bool(i & 1), bool(i & 2), bool(i & 4)) for i, obj in enumerate(objects)}
+
+    def query(obj, index):
+        queries.append((id(obj), index))
+        return flags[id(obj)][index]
+
+    monkeypatch.setattr(gc, "get_objects", lambda: [object(), *objects])
+    monkeypatch.setitem(sys.modules, "PyQt6.sip", SimpleNamespace(
+        simplewrapper=Wrapper, isdeleted=lambda obj: query(obj, 0),
+        ispyowned=lambda obj: query(obj, 1), ispycreated=lambda obj: query(obj, 2)))
+    monkeypatch.setitem(sys.modules, "PyQt6.QtCore", SimpleNamespace(
+        QObject=Wrapper, QCoreApplication=SimpleNamespace(instance=lambda: None)))
+    fatal._write_exit_inventory(tmp_path)
+    assert dereferences == []
+    assert sorted(queries) == sorted((id(obj), flag) for obj in objects for flag in range(3))
+    result = json.loads((tmp_path / fatal.INVENTORY_FILE).read_bytes())
+    assert {key: result[key] for key in ("qt_wrappers", "deleted_wrappers", "cpp_created_wrappers",
+                                       "py_owned_wrappers")} == {
+        "qt_wrappers": 8, "deleted_wrappers": 4, "cpp_created_wrappers": 4, "py_owned_wrappers": 4,
+    }
+    assert "qobject_parentless" not in result
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("failure", [None, "heap", "write"])
+def test_g2_census_disables_gc_and_restores_state(monkeypatch, tmp_path, enabled, failure):
+    import gc
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+
+    state, during = [enabled], []
+
+    def toggle(value):
+        state[0] = value
+
+    def heap():
+        during.append(state[0])
+        if failure == "heap":
+            raise KeyboardInterrupt("synthetic")
+        return []
+
+    def write(*_args):
+        during.append(state[0])
+        if failure == "write":
+            raise SystemExit(7)
+
+    monkeypatch.setattr(gc, "isenabled", lambda: state[0])
+    monkeypatch.setattr(gc, "disable", lambda: toggle(False))
+    monkeypatch.setattr(gc, "enable", lambda: toggle(True))
+    monkeypatch.setattr(gc, "get_objects", heap)
+    monkeypatch.setattr(fatal, "_write_private", write)
+    fatal._write_exit_inventory(tmp_path)
+    assert during and not any(during)
+    assert state[0] is enabled
+
+
+def test_g2_validator_accepts_overlapping_wrapper_flags_and_rejects_parentless():
+    from scripts.windows_candidate_exit_evidence import valid_exit_inventory
+
+    # Ownership, origin and deletion are independent wrapper flags.
+    assert valid_exit_inventory(_inventory(qt_wrappers=1, deleted_wrappers=1,
+                                          cpp_created_wrappers=1, py_owned_wrappers=1))
+    legacy = _inventory()
+    del legacy["cpp_created_wrappers"], legacy["py_owned_wrappers"]
+    legacy["qobject_parentless"] = 0
+    assert not valid_exit_inventory(legacy)
 
 
 @pytest.mark.parametrize("current,main,is_main,main_frames", [
@@ -165,15 +247,24 @@ def test_g_inventory_censuses_real_wrappers_without_collecting(monkeypatch, tmp_
     parent, child, orphan, deleted = (QtCore.QObject() for _ in range(4))
     child.setParent(parent)
     sip.delete(deleted)
-    objects = [parent, child, orphan, deleted, QtGui.QIcon(), QtGui.QPixmap()]
+    dispatcher = qapplication_session.eventDispatcher()
+    objects = [parent, child, orphan, deleted, QtGui.QIcon(), QtGui.QPixmap(), dispatcher]
+    # Check the installed SIP API on known Python-/C++-created and transferred objects.
+    assert all(sip.ispycreated(obj) for obj in objects[:-1])
+    assert not sip.ispycreated(dispatcher) and not sip.ispyowned(dispatcher)
+    assert sip.ispyowned(parent) and not sip.ispyowned(child)
+    assert sip.isdeleted(deleted) and not sip.isdeleted(parent)
+    owned = sum(sip.ispyowned(obj) for obj in objects)
     monkeypatch.setattr(gc, "get_objects", lambda: objects)
     monkeypatch.setattr(gc, "collect", lambda *_a: pytest.fail("probe collected"))
     fatal._write_exit_inventory(tmp_path)
     result = read_exit_inventory(tmp_path)
     assert result is not None
-    assert {key: result[key] for key in ("qapp_alive", "qt_wrappers", "deleted_wrappers", "qobject_parentless", "qt_classes")} == {
-        "qapp_alive": True, "qt_wrappers": 6, "deleted_wrappers": 1, "qobject_parentless": 2,
-        "qt_classes": [["QObject", 4], ["QIcon", 1], ["QPixmap", 1]],
+    assert {key: result[key] for key in ("qapp_alive", "qt_wrappers", "deleted_wrappers", "cpp_created_wrappers",
+                                       "py_owned_wrappers", "qt_classes")} == {
+        "qapp_alive": True, "qt_wrappers": 7, "deleted_wrappers": 1,
+        "cpp_created_wrappers": 1, "py_owned_wrappers": owned,
+        "qt_classes": [["QObject", 4], ["QAbstractEventDispatcher", 1], ["QIcon", 1], ["QPixmap", 1]],
     }
 
 
@@ -213,7 +304,7 @@ def test_g_inventory_swallows_all_callback_failures(monkeypatch, tmp_path, error
     assert not (tmp_path / fatal.INVENTORY_FILE).exists()
 
 
-def test_g_wrapper_class_allowlist_deleted_guard_and_top12():
+def test_g_wrapper_class_allowlist_flags_and_top12():
     from metroliza.shared import diagnostic_fatal_probe as fatal
 
     class Wrapper:
@@ -222,20 +313,21 @@ def test_g_wrapper_class_allowlist_deleted_guard_and_top12():
 
     objects = [type(f"Class{i:02}", (Wrapper,), {})() for i in range(15)]
     objects += [type("PRIVATE-bad", (Wrapper,), {})(), type("x" * 50, (Wrapper,), {})()]
-    result = fatal._wrapper_inventory(objects, SimpleNamespace(simplewrapper=Wrapper, isdeleted=lambda _obj: True),
-                                      SimpleNamespace(QObject=Wrapper))
-    assert result == {"qt_wrappers": 17, "deleted_wrappers": 17, "qobject_parentless": 0,
+    result = fatal._wrapper_inventory(objects, SimpleNamespace(
+        simplewrapper=Wrapper, isdeleted=lambda _obj: True, ispyowned=lambda _obj: True, ispycreated=lambda _obj: False))
+    assert result == {"qt_wrappers": 17, "deleted_wrappers": 17, "cpp_created_wrappers": 17, "py_owned_wrappers": 17,
                       "qt_classes": [["other", 2]] + [[f"Class{i:02}", 1] for i in range(11)]}
 
 
 @pytest.mark.parametrize("change", [
     {"qapp_alive": 1}, {"qt_wrappers": True}, {"qt_wrappers": 10**6 + 1}, {"deleted_wrappers": -1},
-    {"qobject_parentless": 1}, {"daemon_threads": 2}, {"threads_alive": 1.0},
+    {"cpp_created_wrappers": 1}, {"py_owned_wrappers": 1}, {"daemon_threads": 2}, {"threads_alive": 1.0},
+    {"cpp_created_wrappers": True}, {"py_owned_wrappers": -1}, {"qobject_parentless": 0},
     {"qt_classes": [["QObject", 1]]}, {"qt_classes": [["PRIVATE-bad", 1]]},
     {"qt_classes": [["other", True]]}, {"raw": "PRIVATE"},
     {"qt_wrappers": 2, "qt_classes": [["other", 1], ["other", 1]]},
     {"qt_wrappers": 2, "qt_classes": [["Z", 1], ["A", 1]]},
-    {"qt_wrappers": 2, "deleted_wrappers": 2, "qobject_parentless": 1},
+    {"qt_wrappers": 2, "deleted_wrappers": 3},
 ])
 def test_g_inventory_validator_rejects_unclosed_values(tmp_path, change):
     from scripts.windows_candidate_exit_evidence import valid_exit_inventory
@@ -360,9 +452,11 @@ def test_g_inventory_counter_caps_without_allocating_a_million_objects(monkeypat
     class Wrapper:
         pass
 
-    sip = SimpleNamespace(simplewrapper=Wrapper, isdeleted=lambda _obj: True)
-    result = fatal._wrapper_inventory(itertools.repeat(Wrapper(), 10**6 + 1), sip, None)
-    assert result == {"qt_wrappers": 10**6, "deleted_wrappers": 10**6, "qobject_parentless": 0,
+    sip = SimpleNamespace(simplewrapper=Wrapper, isdeleted=lambda _obj: True,
+                          ispyowned=lambda _obj: False, ispycreated=lambda _obj: False)
+    result = fatal._wrapper_inventory(itertools.repeat(Wrapper(), 10**6 + 1), sip)
+    assert result == {"qt_wrappers": 10**6, "deleted_wrappers": 10**6,
+                      "cpp_created_wrappers": 10**6, "py_owned_wrappers": 0,
                       "qt_classes": [["Wrapper", 10**6]]}
 
     class Threads:
@@ -697,7 +791,8 @@ def test_worst_closed_fields_bound_frames_without_losing_exit_or_phases(tmp_path
     fatal = _fatal(present=True, kind="fatal_python_error", frames=["a"*64 + ":" + "b"*64]*12,
                    main_frames=["c"*64 + ":" + "d"*64]*6, faulting_is_main=False,
                    multiple_blocks=True, current_thread_marked=True, python_threads=32)
-    inventory = _inventory(qt_wrappers=10**6, deleted_wrappers=10**6, threads_alive=10**6,
+    inventory = _inventory(qt_wrappers=10**6, deleted_wrappers=10**6,
+                           cpp_created_wrappers=10**6, py_owned_wrappers=10**6, threads_alive=10**6,
                            daemon_threads=10**6, qt_classes=[[f"C{i:048}", 1000] for i in range(12)])
     observation = {
         "startup_phases": list(probe.PHASES), "child_fatal_observation": fatal,

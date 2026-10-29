@@ -31,12 +31,11 @@ def _write_private(root: Path, name: str, data: bytes) -> None:
         stream.write(data)
 
 
-def _wrapper_inventory(objects, sip, qtcore) -> dict:
+def _wrapper_inventory(objects, sip) -> dict:
     import re
 
-    wrappers, deleted, parentless, classes = 0, 0, 0, {}
+    wrappers, deleted, cpp_created, py_owned, classes = 0, 0, 0, 0, {}
     wrapper_type = getattr(sip, "simplewrapper", ())
-    qobject_type = getattr(qtcore, "QObject", ())
     for obj in objects:
         if not isinstance(obj, wrapper_type):
             continue
@@ -45,36 +44,45 @@ def _wrapper_inventory(objects, sip, qtcore) -> dict:
         name = name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,48}", name) else "other"
         classes[name] = classes.get(name, 0) + 1
         try:
-            if sip.isdeleted(obj):
-                deleted += 1
-            elif isinstance(obj, qobject_type) and obj.parent() is None:
-                parentless += 1
+            # These SIP queries read wrapper flags, never the wrapped C++ object.
+            deleted += bool(sip.isdeleted(obj))
+            cpp_created += not sip.ispycreated(obj)
+            py_owned += bool(sip.ispyowned(obj))
         except Exception:
-            # A wrapper can cease to own its C++ object during observation.
+            # Optional observation can be partial if a flag query fails.
             pass
         if wrappers == 10**6:
             break
-    return {"qt_wrappers": wrappers, "deleted_wrappers": deleted, "qobject_parentless": parentless,
+    return {"qt_wrappers": wrappers, "deleted_wrappers": deleted,
+            "cpp_created_wrappers": cpp_created, "py_owned_wrappers": py_owned,
             "qt_classes": [[name, count] for name, count in sorted(classes.items(), key=lambda pair: (-pair[1], pair[0]))[:12]]}
 
 
 def _write_exit_inventory(root: Path) -> None:
-    """Observe only: no Qt imports, collection, deletion or retained wrappers."""
+    """Read wrapper flags with automatic GC suspended; never call object methods."""
     try:
         import gc
-        import json
-        import sys
-        import threading
 
-        qtcore, sip = sys.modules.get("PyQt6.QtCore"), sys.modules.get("PyQt6.sip")
-        inventory = _wrapper_inventory(gc.get_objects(), sip, qtcore)
-        inventory["qapp_alive"] = qtcore is not None and qtcore.QCoreApplication.instance() is not None
-        threads = threading.enumerate()
-        inventory.update(threads_alive=min(len(threads), 10**6),
-                         daemon_threads=min(sum(thread.daemon for thread in threads), 10**6))
-        _write_private(root, INVENTORY_FILE, json.dumps(inventory, separators=(",", ":")).encode("ascii"))
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import json
+            import sys
+            import threading
+
+            qtcore, sip = sys.modules.get("PyQt6.QtCore"), sys.modules.get("PyQt6.sip")
+            inventory = _wrapper_inventory(gc.get_objects(), sip)
+            # Static lookup only: do not dereference the returned application.
+            inventory["qapp_alive"] = qtcore is not None and qtcore.QCoreApplication.instance() is not None
+            threads = threading.enumerate()
+            inventory.update(threads_alive=min(len(threads), 10**6),
+                             daemon_threads=min(sum(thread.daemon for thread in threads), 10**6))
+            _write_private(root, INVENTORY_FILE, json.dumps(inventory, separators=(",", ":")).encode("ascii"))
+        finally:
+            if was_enabled:
+                gc.enable()
     except BaseException:
-        # Optional evidence must never affect even an unsuccessful child exit.
+        # Python callback errors do not escape; native faults cannot be caught here.
         pass
 
 
