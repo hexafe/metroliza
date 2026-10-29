@@ -569,3 +569,35 @@ print(json.dumps(dict(released=released, alive=alive, second=second,
                       after=sip.isdeleted(app))), flush=True)
 ''')
     assert observed == dict(released=False, alive=True, second=True, after=True)
+
+
+def test_shutdown_child_running_thread_owned_by_hidden_window_is_not_destroyed():
+    observed = _run_teardown_child('''
+import json, threading
+from PyQt6 import sip
+from PyQt6.QtCore import QThread
+from PyQt6.QtWidgets import QWidget
+from metroliza.app import bootstrap, qt_teardown
+print(qt_teardown.__file__, flush=True)
+app = bootstrap.get_or_create_qapplication()
+release = threading.Event()
+
+class Blocked(QThread):
+    def run(self):
+        release.wait(5)
+
+window = QWidget()  # hidden top-level owning a running, unregistered thread
+worker = Blocked(window)
+worker.start()
+try:
+    released = qt_teardown.shutdown_qt(app)
+    window_alive = not sip.isdeleted(window)
+    worker_alive = not sip.isdeleted(worker)
+finally:
+    release.set()
+    worker.wait(5000)
+second = qt_teardown.shutdown_qt(app)
+print(json.dumps(dict(released=released, window_alive=window_alive,
+                      worker_alive=worker_alive, second=second)), flush=True)
+''')
+    assert observed == dict(released=False, window_alive=True, worker_alive=True, second=True)

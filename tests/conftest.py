@@ -111,6 +111,29 @@ def qapplication_session():
     return application
 
 
+def pytest_unconfigure(config):
+    """Release the session QApplication on the GUI thread before finalization.
+
+    Without this, interpreter finalization destroys the application and its
+    remaining wrappers in arbitrary order (the #1158 exit mechanism; it matches
+    the industrial-dialog batch's post-summary SIGSEGV). Tests are over, so the
+    #1119 keeper no longer needs the application.
+    """
+    if not _RETAINED_QT_APPLICATIONS:
+        return
+    application = _RETAINED_QT_APPLICATIONS[0]
+    try:
+        from PyQt6 import sip
+        from metroliza.app import qt_teardown
+
+        if sip.isdeleted(application):
+            return
+        application._metroliza_test_session_application = False
+        qt_teardown.shutdown_qt(application)
+    except Exception:
+        pass  # A stubbed or partial Qt import keeps the previous behaviour.
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_setup(item):
     yield

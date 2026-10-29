@@ -132,6 +132,13 @@ def _shutdown_gui(app, widget_type, object_type, thread_type, sip, core, event, 
     _event("qt_teardown_workers", stopped=int(stopped))
     if not stopped:
         return False
+    # Deleting a hidden hierarchy also destroys QThreads it owns; Qt aborts on a
+    # running one. Check before any deletion, and again after collection below.
+    before = _live_qobjects(widget_type, object_type, thread_type, sip, app.thread())
+    if before["running_threads"] or before["foreign_objects"]:
+        _event("qt_teardown_retained", running_threads=before["running_threads"],
+               foreign_objects=before["foreign_objects"])
+        return False
     closed = _delete_hidden_widgets(app, sip, core, event, deadline)
     _event("qt_teardown_widgets", complete=int(closed))
     if not closed:
