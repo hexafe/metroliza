@@ -13,6 +13,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from tests.test_diagnostic_startup_probe import isolated_fatal_probe as isolated_fatal_probe
+
 from metroliza.app import diagnostic_launcher as launcher
 from metroliza.app import diagnostic_supervisor as supervisor
 from metroliza.shared import diagnostic_startup_probe as probe
@@ -99,16 +101,21 @@ def test_e4_package_enables_private_faulthandler_early(monkeypatch, tmp_path):
         events.append("faulthandler")
         handles.append(file)
         assert all_threads is True
+        assert type(file) is int
+        assert not os.get_inheritable(file)
 
     monkeypatch.setattr(faulthandler, "enable", enable)
     try:
         _entry(monkeypatch, events)
         assert events == ["faulthandler", "application"]
-        assert not handles[0].closed
-        assert Path(handles[0].name).parent == tmp_path
+        assert os.fstat(handles[0]).st_size == 0
+        assert (tmp_path / fatal.FATAL_FILE).is_file()
     finally:
         for handle in handles:
-            handle.close()
+            if type(handle) is int:
+                os.close(handle)
+            else:
+                handle.close()
         if "metroliza.shared.diagnostic_fatal_probe" in sys.modules:
             monkeypatch.setattr(sys.modules["metroliza.shared.diagnostic_fatal_probe"], "_fatal_stream", None)
 
@@ -120,12 +127,15 @@ def test_e5_post_success_documentation():
 
 
 @pytest.mark.parametrize("windows", [False, True])
-@pytest.mark.parametrize("code", [-2**40, -1, 0, 3, 2**31-1, 2**31, 0xC0000005, 0xFFFFFFFE, 0xFFFFFFFF, 2**32, 2**40])
+@pytest.mark.parametrize("code", [-2**40, -2**31-1, -2**31, -1, 0, 3, 2**31-2, 2**31-1,
+                                2**31, 2**31+1, 0xC0000005, 0xFFFFFFFE, 0xFFFFFFFF, 2**32, 2**40])
 def test_dword_conversion_bounds(code, windows):
     expected = code - 2**32 if windows and 2**31 <= code <= 2**32-1 else code
     assert launcher.system_exit_code(code, windows=windows) == expected
     if 0 <= code <= 2**32-1:
         assert launcher.system_exit_code(code, windows=windows) & 0xFFFFFFFF == code
+        if windows:
+            assert -2**31 <= launcher.system_exit_code(code, windows=True) < 2**31
 
 
 def test_portable_entry_propagates_signed_dword(monkeypatch):
@@ -206,11 +216,14 @@ def test_fatal_first_line_closed(tmp_path, line, kind):
     from scripts.windows_candidate_exit_evidence import read_fatal_observation
 
     (tmp_path / FATAL_FILE).write_text(line)
-    assert read_fatal_observation(tmp_path) == {"present": True, "kind": kind, "frames": [], "truncated": False}
+    assert read_fatal_observation(tmp_path) == {
+        "present": True, "kind": kind, "frames": [], "truncated": False, "multiple_blocks": False,
+    }
 
 
 def test_maximum_fatal_frames_and_all_phases_fit(tmp_path):
-    fatal = {"present": True, "kind": "fatal_python_error", "frames": ["a"*64 + ":" + "b"*64]*12, "truncated": True}
+    fatal = {"present": True, "kind": "fatal_python_error", "frames": ["a"*64 + ":" + "b"*64]*12,
+             "truncated": True, "multiple_blocks": True}
     payload = driver._failed_diagnostic_payload(
         {"startup_phases": list(probe.PHASES), "child_fatal_observation": fatal, "observed_exit_code": 0xC0000409},
         {}, driver.CandidateFailure("closed"), "a"*40,
@@ -224,7 +237,7 @@ def test_absent_fatal_and_rejected_private_file(tmp_path):
     from metroliza.shared.diagnostic_fatal_probe import FATAL_FILE
     from scripts.windows_candidate_exit_evidence import read_fatal_observation
 
-    empty = {"present": False, "kind": "other", "frames": [], "truncated": False}
+    empty = {"present": False, "kind": "other", "frames": [], "truncated": False, "multiple_blocks": False}
     assert read_fatal_observation(tmp_path) == empty
     private = tmp_path / "private"
     private.write_text("PRIVATE")
@@ -236,33 +249,32 @@ def test_absent_fatal_and_rejected_private_file(tmp_path):
     {"kind": "PRIVATE"}, {"frames": ["/PRIVATE:secret"]}, {"frames": ["ok:f"]*13},
     {"present": 1}, {"truncated": 0}, {"raw": "PRIVATE"},
     {"present": False, "frames": ["ok:f"]},
+    {"multiple_blocks": 1}, {"multiple_blocks": None}, {"present": False, "multiple_blocks": True},
 ])
 def test_fatal_validator_rejects_unclosed_fields(tmp_path, change):
     payload = driver._failed_diagnostic_payload({}, {}, driver.CandidateFailure("closed"), "a"*40)
-    payload["child_fatal_observation"] = dict(present=True, kind="other", frames=[], truncated=False)
+    payload["child_fatal_observation"] = dict(present=True, kind="other", frames=[], truncated=False, multiple_blocks=False)
     payload["child_fatal_observation"].update(change)
     with pytest.raises(driver.CandidateFailure, match="invalid_exit_evidence"):
         driver._write_failed_diagnostic(tmp_path, payload)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Real fatal child is Windows-only; POSIX uses byte fixtures")
 def test_real_fatal_child_remains_nonzero_and_private(tmp_path, monkeypatch):
-    """One synthetic abort, core dumps disabled; no Windows runtime claim."""
+    """One native Windows access violation; never crash a POSIX process."""
     from metroliza.shared.diagnostic_fatal_probe import FATAL_FILE
     from scripts.windows_candidate_exit_evidence import read_fatal_observation
 
     _gates(monkeypatch, tmp_path)
     code = '''
-import os, runpy, sys, types
-if os.name != "nt":
-    import resource
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+import faulthandler, runpy, sys, types
 transport = types.ModuleType("metroliza.shared.diagnostic_transport")
 transport.attach_child_recorder = lambda: None
 transport.supervised_mode_requested = lambda: False
 sys.modules[transport.__name__] = transport
 bootstrap = types.ModuleType("metroliza.app.bootstrap")
 def synthetic_fatal():
-    os.abort()
+    faulthandler._read_null()
 bootstrap.run_application = synthetic_fatal
 sys.modules[bootstrap.__name__] = bootstrap
 runpy.run_path(sys.argv[1], run_name="__main__")
@@ -275,7 +287,7 @@ runpy.run_path(sys.argv[1], run_name="__main__")
     assert result.returncode != 0
     observed = read_fatal_observation(tmp_path)
     assert observed["present"] is True
-    assert observed["kind"] == "fatal_python_error"
+    assert observed["kind"] == "access_violation"
     assert any(frame.endswith(":synthetic_fatal") for frame in observed["frames"])
     assert str(ROOT) not in json.dumps(observed)
     assert (tmp_path / FATAL_FILE).is_file()
@@ -316,7 +328,8 @@ def test_worst_closed_fields_bound_frames_without_losing_exit_or_phases(tmp_path
 
     def longest(values):
         return max(values, key=len)
-    fatal = {"present": True, "kind": "fatal_python_error", "frames": ["a"*64 + ":" + "b"*64]*12, "truncated": False}
+    fatal = {"present": True, "kind": "fatal_python_error", "frames": ["a"*64 + ":" + "b"*64]*12,
+             "truncated": False, "multiple_blocks": True}
     observation = {
         "startup_phases": list(probe.PHASES), "child_fatal_observation": fatal,
         "observed_exit_code": 0xC0000409, "observed_process": "fresh_reopen_launcher_handle",
@@ -335,6 +348,7 @@ def test_worst_closed_fields_bound_frames_without_losing_exit_or_phases(tmp_path
     assert payload["observed_exit_code"] == 0xC0000409
     assert payload["observed_exit_class"] == "stack_buffer_overrun"
     assert payload["child_fatal_observation"]["truncated"] is True
+    assert payload["child_fatal_observation"]["multiple_blocks"] is True
     driver._write_failed_diagnostic(tmp_path, payload)
     assert (tmp_path / driver.FAILED_DIAGNOSTIC_FILE).stat().st_size <= 4096
 
@@ -349,4 +363,169 @@ def test_byte_limit_never_publishes_a_partial_function_name(tmp_path):
     padding = "\n" * (MAX_FATAL_BYTES - len(first + current + frame) - 3)
     (tmp_path / FATAL_FILE).write_text(first + padding + current + frame + "function_must_not_be_cut\n")
     observed = read_fatal_observation(tmp_path)
-    assert observed == {"present": True, "kind": "access_violation", "frames": [], "truncated": True}
+    assert observed == {"present": True, "kind": "other", "frames": [], "truncated": True, "multiple_blocks": False}
+
+
+def _fatal_block(kind, function=None, *, current=True):
+    header = "Current thread" if current else "Thread"
+    stack = ('  <no Python frame>\n' if function is None else
+             f'  File "C:\\PRIVATE\\module.py", line 12 in {function}\n')
+    return (f"{kind}\n\n{header} 0x123 (most recent call first):\n" + stack + "\n").encode("ascii")
+
+
+@pytest.mark.parametrize("first,last,current,frames", [
+    ("Windows fatal exception: access violation", "Windows fatal exception: access violation", True, ["module:fatal"]),
+    ("Windows fatal exception: access violation", "Windows fatal exception: stack overflow", True, ["module:fatal"]),
+    ("Windows fatal exception: access violation", "Fatal Python error: Aborted", True, ["module:fatal"]),
+    ("Windows fatal exception: access violation", "Windows fatal exception: stack overflow", False, []),
+])
+def test_e2_last_block_owns_kind_and_frames(tmp_path, first, last, current, frames):
+    from scripts import windows_candidate_exit_evidence as evidence
+
+    (tmp_path / evidence.FATAL_FILE).write_bytes(
+        _fatal_block(first, "handled") + _fatal_block(last, "fatal", current=current))
+    observed = evidence.read_fatal_observation(tmp_path)
+    assert observed["kind"] == evidence._fatal_kind(last)
+    assert observed["frames"] == frames
+    assert observed["multiple_blocks"] is True
+    assert observed["truncated"] is False
+
+
+def test_e2_native_leading_block_cannot_borrow_later_frames(tmp_path):
+    from scripts import windows_candidate_exit_evidence as evidence
+
+    (tmp_path / evidence.FATAL_FILE).write_bytes(
+        _fatal_block("Windows fatal exception: stack overflow", "native", current=False)
+        + _fatal_block("Windows fatal exception: access violation", "fatal"))
+    observed = evidence.read_fatal_observation(tmp_path)
+    assert observed["kind"] == "access_violation"
+    assert observed["frames"] == ["module:fatal"]
+    assert observed["multiple_blocks"] is True
+
+
+def test_e2_native_single_block_has_no_current_frames(tmp_path):
+    from scripts import windows_candidate_exit_evidence as evidence
+
+    (tmp_path / evidence.FATAL_FILE).write_bytes(
+        _fatal_block("Windows fatal exception: access violation", "native", current=False))
+    assert evidence.read_fatal_observation(tmp_path) == dict(
+        present=True, kind="access_violation", frames=[], truncated=False, multiple_blocks=False)
+
+
+@pytest.mark.parametrize("kind", ["Windows fatal exception: access violation", "Fatal Python error: Aborted"])
+def test_e2_no_python_frame_is_complete_empty_stack(tmp_path, kind):
+    from scripts import windows_candidate_exit_evidence as evidence
+
+    (tmp_path / evidence.FATAL_FILE).write_bytes(_fatal_block(kind))
+    observed = evidence.read_fatal_observation(tmp_path)
+    assert observed["frames"] == []
+    assert observed["truncated"] is False
+    assert observed["multiple_blocks"] is False
+
+
+def test_e2_tail_reads_at_most_64k_and_discards_partial_leading_block(tmp_path, monkeypatch):
+    import builtins
+    from scripts import windows_candidate_exit_evidence as evidence
+
+    earlier = _fatal_block("Windows fatal exception: access violation", "handled")
+    (tmp_path / evidence.FATAL_FILE).write_bytes(
+        earlier * (evidence.MAX_FATAL_BYTES // len(earlier) + 10)
+        + _fatal_block("Windows fatal exception: stack overflow", "fatal"))
+    real_open, reads = builtins.open, []
+
+    class Reader:
+        def __init__(self, *args, **kwargs):
+            self.stream = real_open(*args, **kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+        def read(self, size):
+            reads.append((self.stream.tell(), size))
+            assert 0 < size <= evidence.MAX_FATAL_BYTES
+            return self.stream.read(size)
+
+    monkeypatch.setattr(builtins, "open", Reader)
+    observed = evidence.read_fatal_observation(tmp_path)
+    assert reads[0][0] > 0
+    assert observed == dict(present=True, kind="stack_overflow", frames=["module:fatal"],
+                            truncated=True, multiple_blocks=True)
+
+
+@pytest.mark.parametrize("mode", ["normal", "concurrent"])
+def test_e2_diagnostic_modes_never_enable_fatal_sink(monkeypatch, tmp_path, mode):
+    import faulthandler
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+
+    _gates(monkeypatch, tmp_path)
+    monkeypatch.delenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION")
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", mode)
+    monkeypatch.setattr(faulthandler, "enable", lambda **_kw: pytest.fail("diagnostic-only sink enabled"))
+    fatal.enable_private_fatal_probe()
+    assert fatal._fatal_stream is None
+    assert not (tmp_path / fatal.FATAL_FILE).exists()
+
+
+def test_e2_portable_import_does_not_load_diagnostic_launcher():
+    program = '''
+import runpy, sys
+runpy.run_path(sys.argv[1], run_name="portable_import_test")
+assert "metroliza.app.diagnostic_launcher" not in sys.modules
+from metroliza.shared.exit_code import system_exit_code
+assert "metroliza.app.diagnostic_supervisor" not in sys.modules
+assert system_exit_code(0xC0000005, windows=True) == -1073741819
+'''
+    result = subprocess.run([sys.executable, "-c", program, str(ROOT / "packaging/metroliza_portable_entry.py")],
+                            cwd=ROOT, env=dict(os.environ, PYTHONPATH=str(ROOT / "src")),
+                            capture_output=True, timeout=15, check=False)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+
+@pytest.mark.parametrize("previous_enabled", [False, True])
+def test_entry_fatal_fixture_restores_handler_and_resets_sink(monkeypatch, tmp_path, previous_enabled):
+    import faulthandler
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+
+    original_enabled = faulthandler.is_enabled()
+    if previous_enabled:
+        faulthandler.enable(file=sys.__stderr__, all_threads=True)
+    else:
+        faulthandler.disable()
+    try:
+        isolation = isolated_fatal_probe.__wrapped__()
+        next(isolation)
+        try:
+            _gates(monkeypatch, tmp_path)
+            _entry(monkeypatch, [])
+            handle = fatal._fatal_stream
+            assert handle is not None
+            assert faulthandler.is_enabled()
+        finally:
+            isolation.close()
+        assert faulthandler.is_enabled() is previous_enabled
+        assert fatal._fatal_stream is None
+        with pytest.raises(OSError):
+            os.fstat(handle)
+    finally:
+        if original_enabled:
+            faulthandler.enable(file=sys.__stderr__, all_threads=True)
+        else:
+            faulthandler.disable()
+
+
+def test_e2_exit_evidence_is_in_native_windows_pytest_selection():
+    import yaml
+
+    workflow = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
+    steps = [step for step in workflow["jobs"]["windows-core-smoke"]["steps"]
+             if "tests/test_windows_candidate_exit_evidence.py" in step.get("run", "").split()]
+    assert len(steps) == 1
+    assert steps[0]["env"]["QT_QPA_PLATFORM"] == "windows"
+    assert steps[0]["env"]["METROLIZA_EXPECT_QT_PLATFORM"] == "windows"
+    assert "if" not in steps[0] and "continue-on-error" not in steps[0]

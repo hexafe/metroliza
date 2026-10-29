@@ -16,6 +16,33 @@ from scripts import qualify_windows_diagnostics as qualifier
 
 
 @pytest.fixture(autouse=True)
+def isolated_fatal_probe():
+    """Restore pytest's handler before closing any sink opened by an entry."""
+    import faulthandler
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+
+    previous_enabled = faulthandler.is_enabled()
+    previous_stream = fatal._fatal_stream
+    enable, disable = faulthandler.enable, faulthandler.disable
+    try:
+        yield
+    finally:
+        stream = fatal._fatal_stream
+        if stream is not previous_stream:
+            if previous_enabled:
+                enable(file=sys.__stderr__, all_threads=True)
+            else:
+                disable()
+            fatal._fatal_stream = previous_stream
+            if type(stream) is int:
+                os.close(stream)
+            elif stream is not None:
+                stream.close()
+        assert faulthandler.is_enabled() is previous_enabled
+        assert fatal._fatal_stream is previous_stream
+
+
+@pytest.fixture(autouse=True)
 def atexit_callbacks(monkeypatch):
     callbacks = []
     monkeypatch.setattr(atexit, "register", lambda *args: callbacks.append(args))

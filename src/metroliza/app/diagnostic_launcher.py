@@ -28,6 +28,7 @@ from metroliza.shared.diagnostic_ring import DiagnosticRing
 from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_startup_probe import mark, mark_error
 from metroliza.shared.diagnostic_wire import decode_event
+from metroliza.shared.exit_code import system_exit_code
 
 
 _PUBLISH_CLOSE_SECONDS = 0.75
@@ -352,17 +353,6 @@ def _close_launcher_splash() -> None:
         pass
 
 
-def system_exit_code(code: int, *, windows: bool | None = None) -> int:
-    """Preserve DWORD bits through CPython's signed C exit argument on Windows.
-
-    POSIX and values outside the unsigned DWORD range retain their existing
-    behavior, including CPython/platform handling of out-of-range integers.
-    """
-    if windows is None:
-        windows = os.name == "nt"
-    return code - 2**32 if windows and 2**31 <= code <= 2**32 - 1 else code
-
-
 def main() -> int:
     store = IncidentStore()
     mark("store_constructed")
@@ -407,4 +397,4 @@ def main() -> int:
     mark("launcher_exit_zero" if code == 0 else "launcher_exit_nonzero")
     if code in {-1, 4294967295}:
         mark("launcher_exit_all_ones")
-    return system_exit_code(code) if code is not None else 1
+    return system_exit_code(code, windows=os.name == "nt") if code is not None else 1

@@ -135,13 +135,21 @@ The all-ones bucket remains separate. Host validators reject unknown or
 code-inconsistent classes.
 
 Only the existing startup-probe gate plus the qualification-root environment
-enables early all-thread faulthandler capture in the application entry. The sink
-is private, held open until exit and removed with the existing private-root
-cleanup. The host reads at most 64 KiB only after owned-process cleanup completes.
+and `METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION=1` enable early all-thread
+faulthandler capture in the application entry. Diagnostic `normal` and
+`concurrent` modes alone do not enable it. The sink is a private, non-inheritable
+raw OS descriptor, held open until exit and removed with the existing private-root
+cleanup. The host reads at most the last 64 KiB only after owned-process cleanup completes.
 It retains only `child_fatal_observation`: `present`, a closed `kind`
 (`access_violation`, `stack_overflow`, `code_0x` plus eight lowercase hex digits,
 `fatal_python_error` or `other`), up to 12 `stem:function` frames from the
-Current thread stack, and `truncated`. Stem and function lengths are at most 64;
+Current thread stack, `truncated`, and the boolean `multiple_blocks` (more than
+one complete exception header observed in the retained tail). Windows can log
+handled first-chance exceptions; only the last header-led block supplies the
+kind and frames. A partial leading block is discarded. A block without a
+Current thread header has no frames; `<no Python frame>` is a complete empty
+stack. A tail cut sets `truncated`; `multiple_blocks: false` does not exclude
+earlier exceptions outside that tail. Stem and function lengths are at most 64;
 only `[A-Za-z0-9_.]` and `[A-Za-z0-9_<>]`, respectively, are accepted.
 Frames are shortened further, with `truncated: true`, if needed to preserve
 the existing failure and phase fields within the byte limit.

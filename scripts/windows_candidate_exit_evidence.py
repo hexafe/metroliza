@@ -26,14 +26,15 @@ def exit_class(code: int) -> str:
 
 
 def absent_fatal_observation() -> dict:
-    return {"present": False, "kind": "other", "frames": [], "truncated": False}
+    return {"present": False, "kind": "other", "frames": [], "truncated": False, "multiple_blocks": False}
 
 
 def valid_fatal_observation(value: object) -> bool:
-    if type(value) is not dict or set(value) != {"present", "kind", "frames", "truncated"}:
+    if type(value) is not dict or set(value) != {"present", "kind", "frames", "truncated", "multiple_blocks"}:
         return False
     kind, frames = value["kind"], value["frames"]
     return (type(value["present"]) is bool and type(value["truncated"]) is bool
+            and type(value["multiple_blocks"]) is bool
             and type(kind) is str and (kind in KINDS or re.fullmatch(r"code_0x[0-9a-f]{8}", kind) is not None)
             and type(frames) is list and len(frames) <= 12
             and all(type(frame) is str and FRAME.fullmatch(frame) is not None for frame in frames)
@@ -89,6 +90,8 @@ def _current_frames(lines: list[str]) -> tuple[list[str], bool]:
             continue
         if not line.startswith("  "):
             break
+        if line == "  <no Python frame>":
+            break
         match = re.fullmatch(r'  File "([^"\r\n]+)", line [0-9]+ in (.+)', line)
         if match is None:
             truncated = True
@@ -121,17 +124,22 @@ def read_fatal_observation(root: Path) -> dict:
             if ((opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
                     or opened.st_nlink != 1 or not stat.S_ISREG(opened.st_mode)):
                 return absent_fatal_observation()
-            data = stream.read(MAX_FATAL_BYTES + 1)
+            offset = max(0, opened.st_size - MAX_FATAL_BYTES)
+            stream.seek(offset)
+            data = stream.read(MAX_FATAL_BYTES)
     except OSError:
         return absent_fatal_observation()
-    return _parse_fatal_bytes(data)
+    return _parse_fatal_bytes(data, tail_cut=offset > 0)
 
 
-def _parse_fatal_bytes(data: bytes) -> dict:
-    lines = data[:MAX_FATAL_BYTES].decode("ascii", errors="replace").splitlines()
-    if len(data) > MAX_FATAL_BYTES and data[MAX_FATAL_BYTES - 1:MAX_FATAL_BYTES] != b"\n":
-        # Never turn a byte-cut function name into an invented valid frame.
-        lines = lines[:-1]
-    frames, truncated = _current_frames(lines[1:])
-    return {"present": True, "kind": _fatal_kind(lines[0]) if lines else "other",
-            "frames": frames, "truncated": truncated or len(data) > MAX_FATAL_BYTES}
+def _parse_fatal_bytes(data: bytes, *, tail_cut: bool = False) -> dict:
+    lines = data.decode("ascii", errors="replace").splitlines()
+    headers = [index for index, line in enumerate(lines)
+               if line.startswith(("Windows fatal exception:", "Fatal Python error:"))]
+    # Only complete header-led blocks qualify. A leading fragment in the tail
+    # cannot supply either a kind or frames to a later exception.
+    block = lines[headers[-1]:] if headers else []
+    frames, truncated = _current_frames(block[1:])
+    return {"present": True, "kind": _fatal_kind(block[0]) if block else "other",
+            "frames": frames, "truncated": truncated or tail_cut,
+            "multiple_blocks": len(headers) > 1}

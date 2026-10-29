@@ -463,6 +463,7 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
         "child_fatal_observation": {
             "present": not cleanup_failed, "kind": "other" if cleanup_failed else "access_violation",
             "frames": [] if cleanup_failed else ["module:shutdown"], "truncated": False,
+            "multiple_blocks": False,
         },
     }
     assert len(private_sinks) == 1 and not private_sinks[0].exists()

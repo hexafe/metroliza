@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from metroliza.app.version import VERSION_LABEL
-from metroliza.app.diagnostic_launcher import system_exit_code
+from metroliza.shared.exit_code import system_exit_code
 from metroliza.shared.diagnostic_package import PackageIdentity, inspect_package, package_notice
 
 PAYLOAD_DIRECTORY = "metroliza_payload"
