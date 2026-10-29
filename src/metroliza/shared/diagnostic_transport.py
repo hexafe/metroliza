@@ -7,8 +7,10 @@ import json
 import os
 import struct
 import threading
+import time
 import uuid
 from collections import deque
+from itertools import count
 
 from metroliza.shared.diagnostic_wire import MAX_EVENT_BYTES, encode_event
 
@@ -19,6 +21,9 @@ MAX_QUEUE_EVENTS = 256
 RESERVED_EVENTS = 16
 RESERVED_BYTES = 16 * 1024
 MAX_COUNTER = 2**32 - 1
+CLOSE_PROGRESS_SECONDS = 1.0
+# Queue payload + queue framing + one in-flight frame + largest control frame.
+CLOSE_MAX_SECONDS = (MAX_QUEUE_BYTES + 4 * MAX_QUEUE_EVENTS + MAX_FRAME_BYTES + 4 + 512 + 4) / (64 * 1024)
 _recorder: ChildRecorder | None = None
 _supervised_requested = False
 
@@ -159,14 +164,15 @@ def _close_windows_handles(handles: list[int]) -> None:
 
 
 class ChildRecorder:
-    """A bounded nonblocking producer queue; only its daemon writes transport."""
+    """A bounded producer queue; only its daemon writes transport."""
 
     def __init__(self, incoming: int, outgoing: int):
         self.invocation_id: uuid.UUID | None = None
         self.connected = False
         self.qualified = False
-        self.dropped = 0
-        self._unquantified_loss = False
+        self._losses = count()
+        self._loss_reads = count()
+        self._completed_frames = 0
         self._incoming = incoming
         self._outgoing = outgoing
         self._fd_lock = threading.Lock()
@@ -224,15 +230,14 @@ class ChildRecorder:
         except Exception:
             return False
         if not self._lock.acquire(blocking=False):
-            # Do not pretend a raced read/modify/write is an exact loss count.
-            self._unquantified_loss = True
+            self._drop()
             return False
         try:
             count_cap = MAX_QUEUE_EVENTS if terminal else MAX_QUEUE_EVENTS - RESERVED_EVENTS
             byte_cap = MAX_QUEUE_BYTES if terminal else MAX_QUEUE_BYTES - RESERVED_BYTES
             if (not self.connected or self._closing or len(self._queue) >= count_cap
                     or self._bytes + len(payload) > byte_cap):
-                self.dropped = min(MAX_COUNTER, self.dropped + 1)
+                self._drop()
                 return False
             self._queue.append((payload, terminal))
             self._bytes += len(payload)
@@ -241,13 +246,66 @@ class ChildRecorder:
         finally:
             self._lock.release()
 
-    def close(self, timeout: float = 0.25) -> None:
-        self._closing = True
-        self._wake.set()
+    def _drop(self) -> None:
+        next(self._losses)
+
+    @property
+    def dropped(self) -> int:
+        """CPython/GIL: each integer count next() runs in C without releasing the
+        GIL or calling Python. No producer lock or Python read/modify/write can
+        deadlock on same-thread reentry or lose concurrent increments. Serialized
+        reads advance both counters; subtracting read ticks preserves the drop total.
+        A racing drop may or may not be included; MAX_COUNTER means at least.
+        This relies on the supported GIL-enabled CPython runtime.
+        """
+        return min(MAX_COUNTER, next(self._losses) - next(self._loss_reads))
+
+    @dropped.setter
+    def dropped(self, value: int) -> None:
+        # Preserve explicit counter initialization used by synthetic callers;
+        # callers must quiesce producers AND the writer before resetting the counter.
+        if type(value) is not int:
+            raise TypeError("invalid_drop_count")
+        if value < 0:
+            raise ValueError("invalid_drop_count")
+        self._losses = count(value)
+        self._loss_reads = count()
+
+    def close(self, timeout: float = CLOSE_PROGRESS_SECONDS) -> None:
+        """Join in progress windows (default 1 s), with a 4.094-s hard total cap.
+
+        Continue only if a whole frame completed in the preceding window. One second
+        allows a reader to free a pipe buffer, including Windows' small anonymous
+        buffers, by consuming several short frames (the 20-ms/frame control needs
+        more than 0.25 s). This is a shutdown policy, not a portable latency promise.
+        The cap budgets MAX_QUEUE_BYTES + 4*MAX_QUEUE_EVENTS framing + MAX_FRAME_BYTES
+        + 4 in flight + 512 + 4 terminal bytes at minimum 64 KiB/s: 268296/65536 s.
+        A stalled writer costs at most one further window after the window in which
+        its last frame completed (within the cap). Before handshake completion nothing
+        can be delivered, so close returns without a drain window. Neither expiry
+        proves ended was sent. Callers must quiesce producers:
+        rejections racing the final counter snapshot may or may not appear in ended;
+        later rejections cannot appear. MAX_COUNTER reports at least that many drops.
+        """
+        with self._lock:
+            self._closing = True
+            self._wake.set()
+            connected = self.connected
         if self._worker.ident is None:
             self._close_channels()
             return
-        self._worker.join(timeout)
+        if not connected:
+            # No qualified channel can deliver queued events. The daemon writer may
+            # stay blocked in the handshake read; process exit releases it.
+            return
+        deadline = time.monotonic() + CLOSE_MAX_SECONDS
+        completed = self._completed_frames
+        while True:
+            self._worker.join(max(0, min(timeout, deadline - time.monotonic())))
+            if (not self._worker.is_alive() or self._completed_frames == completed
+                    or time.monotonic() >= deadline):
+                return
+            completed = self._completed_frames
 
     def _close_channels(self) -> None:
         with self._fd_lock:
@@ -286,11 +344,14 @@ class ChildRecorder:
                     entry = self._queue.popleft() if self._queue else None
                     if entry is not None:
                         self._bytes -= len(entry[0])
+                    closing = self._closing
                 if entry is not None:
                     write_frame(self._outgoing, entry[0])
-                elif self._closing:
-                    if not self._unquantified_loss:
-                        write_frame(self._outgoing, control_bytes("ended", dropped=self.dropped))
+                    self._completed_frames += 1
+                elif closing:
+                    dropped = self.dropped
+                    write_frame(self._outgoing, control_bytes("ended", dropped=dropped))
+                    self._completed_frames += 1
                     break
                 else:
                     self._wake.wait(0.1)

@@ -66,6 +66,7 @@ def persist_observation(
                 observed.source_dropped,
                 observed.source_loss_known,
                 observed.elapsed_ms,
+                observed.receiver_drain_incomplete,
             ),
             history=observed.history,
         )

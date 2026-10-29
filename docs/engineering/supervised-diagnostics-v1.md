@@ -108,10 +108,32 @@ supersedes pending live history, preserving this bound. RSS, startup,
 idle writes, flood/drop behavior and publication intervals are measured separately by the Windows driver.
 
 Queue admission never waits for disk, UI or pipe writes. A full queue records bounded drops.
-Contention that cannot be counted exactly leaves terminal loss evidence unknown instead of
-claiming an exact zero. Partial, wrong-session, malformed, flooded and broken channels cannot
+Queue contention and capacity rejection increment an exact lock-free counter on supported
+GIL-enabled CPython: each integer `next(itertools.count)` runs in C without releasing the GIL or
+calling Python, including on same-thread producer reentry. Serialized reads advance two counters
+and subtract read ticks from the total, using only `next()`; repeated reads preserve the drop count.
+The wire snapshot saturates at
+MAX_COUNTER (`4294967295`), meaning **at least** that many rejections. A drained recorder sends
+`ended(dropped=N)`. Callers must quiesce producers before close; a rejection racing the final counter
+snapshot may or may not be included in `ended`, and a later rejection cannot be included.
+Before handshake completion nothing can be delivered, so close returns without a drain
+progress window; the daemon writer may stay blocked in the handshake read until process exit.
+After handshake completion, close joins the writer in 1-second progress windows and continues
+only if its completed-frame counter advanced. This window allows several small-frame reads to
+free one pipe buffer, including Windows' small default anonymous buffer; the 20-ms/frame slow-reader control can need more than
+0.25 seconds before a blocked write completes. The hard total cap is
+`(262144 + 4*256 + 4608 + 4 + 512 + 4) / 65536 = 4.0938720703125` seconds: maximum queued
+payload plus queue framing, one in-flight frame and the largest terminal control, at a stated minimum
+64 KiB/s. This is a shutdown allowance, not a guaranteed OS throughput or scheduling latency.
+A stalled writer costs at most one further window after the window in which its last frame
+completed (within the cap).
+Slower drains may expire and remain incomplete; neither expiry nor a successful join alone proves
+receiver completion.
+Stalled/broken writes can still leave terminal loss unknown; the outer process deadline still applies.
+Partial, wrong-session, malformed, flooded and broken channels cannot
 produce a complete-history claim. A receiver may outlive its bounded drain as a daemon when an
-inherited handle is retained; its stop flag prevents later frames from changing the returned snapshot.
+inherited handle is retained; `receiver_drain_incomplete` records an unfinished drain as INCOMPLETE,
+and its stop flag prevents later frames from changing the returned snapshot.
 
 One bounded worker owns all marker, incident and resolution filesystem calls. The application
 process is created before marker admission; handshake callbacks only enqueue lifecycle controls.

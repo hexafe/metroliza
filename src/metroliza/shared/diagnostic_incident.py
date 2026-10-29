@@ -75,6 +75,7 @@ class IncidentObservation:
     source_dropped: int
     source_loss_known: bool
     elapsed_ms: int
+    receiver_drain_incomplete: bool = False
 
     def __post_init__(self) -> None:
         _observation_payload(self)
@@ -142,10 +143,18 @@ def _observation_payload(observation: IncidentObservation) -> dict[str, object]:
         "source_dropped": observation.source_dropped,
         "source_loss_known": observation.source_loss_known,
         "elapsed_ms": observation.elapsed_ms,
+        **({"receiver_drain_incomplete": True} if observation.receiver_drain_incomplete else {}),
     }
 
 
 def _validate_observation_scalars(observation: IncidentObservation) -> None:
+    if type(observation.receiver_drain_incomplete) is not bool or (
+        observation.receiver_drain_incomplete and (
+            observation.channel is not ChannelState.INCOMPLETE
+            or observation.clean_terminal_received or observation.source_loss_known
+        )
+    ):
+        raise IncidentValidationError(_INCIDENT_ERROR)
     if observation.exit_code is not None and (
         type(observation.exit_code) is not int or not -(2**31) <= observation.exit_code <= 2**32 - 1
     ):
@@ -402,8 +411,13 @@ def decode_incident(data: bytes) -> DiagnosticIncident:
                 "native_stack",
             ),
         )
+        raw_observed = values["observation"]
+        optional_drain = (
+            ("receiver_drain_incomplete",)
+            if type(raw_observed) is dict and "receiver_drain_incomplete" in raw_observed else ()
+        )
         observed = _exact_dict(
-            values["observation"],
+            raw_observed,
             (
                 "launch",
                 "handshake",
@@ -414,7 +428,7 @@ def decode_incident(data: bytes) -> DiagnosticIncident:
                 "source_dropped",
                 "source_loss_known",
                 "elapsed_ms",
-            ),
+            ) + optional_drain,
         )
         loss_values = _exact_dict(values["ring_loss"], tuple(RingLoss.__dataclass_fields__))
         raw_events = values["events"]
@@ -442,6 +456,7 @@ def decode_incident(data: bytes) -> DiagnosticIncident:
                 source_dropped=observed["source_dropped"],
                 source_loss_known=observed["source_loss_known"],
                 elapsed_ms=observed["elapsed_ms"],
+                receiver_drain_incomplete=observed.get("receiver_drain_incomplete", False),
             ),
             events=events,
             ring_loss=RingLoss(**loss_values),
