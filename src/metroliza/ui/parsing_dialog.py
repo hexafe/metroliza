@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 import logging
 from functools import partial
 import weakref
+from dataclasses import dataclass
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 try:
     from metroliza.ui.worker_progress_dialog import (
@@ -322,6 +323,17 @@ def _build_parse_completion_summary(result, db_file, enrichment_result=None, *, 
     return severity, title, message + "\n\n" + enrichment_group
 
 
+@dataclass
+class _ImportOperation:
+    """One accepted import, retained through queued start and terminal delivery."""
+
+    worker: object = None
+    result: object = None
+    failed: bool = False
+    cancelled: bool = False
+    terminal: bool = False
+
+
 class _UiThrottle:
     """Run ``apply`` at most every ``_UI_UPDATE_INTERVAL_S``; a skipped request runs on a timer.
 
@@ -478,6 +490,7 @@ class _ReportOperations:
 
         # Initialize thread and flag
         self.parse_thread = None
+        self.import_operation = None
         self.parsing_canceled = False
         self.parse_error_message = None
         self._pending_modeless_metadata_enrichment = False
@@ -769,8 +782,7 @@ class _ReportOperations:
             if keep_metadata and self._preflight_result is not None else {}
         )
         self._retire_metadata_worker()
-        self._after_metadata_idle = []
-        self._start_pending = False
+        self._drop_pending_starts()
         self._metadata_carryover = carried
         self._preflight_result = None
         self._approval_cache_key = None
@@ -1294,16 +1306,31 @@ class _ReportOperations:
             return
         self.show_loading_screen(import_plan=plan, action_started_at=action_started_at)
 
+    def _accept_import_operation(self, operation):
+        if self._close_requested or (operation is not None and operation.terminal):
+            return None
+        if operation is None:
+            if self._start_pending:
+                return None
+            operation = self.import_operation = _ImportOperation()
+        return operation
+
     @pyqtSlot()
-    def show_loading_screen(self, *, import_plan=None, action_started_at=None):
+    def show_loading_screen(self, *, import_plan=None, action_started_at=None, _operation=None):
         """Start a plan; direct legacy callers retain the atomic compatibility adapter."""
         action_started_at = monotonic() if action_started_at is None else action_started_at
-        if self.preflight_thread is not None or self.parse_thread is not None:
+        if (self.preflight_thread is not None or self.parse_thread is not None
+                or (self.operation_start_allowed is not None and not self.operation_start_allowed())):
+            if _operation is not None:
+                _operation.terminal = _operation.cancelled = True
             return
-        if self.operation_start_allowed is not None and not self.operation_start_allowed():
+        _operation = self._accept_import_operation(_operation)
+        if _operation is None:
             return
         if self._defer_until_metadata_idle(
-            lambda: self.show_loading_screen(import_plan=import_plan, action_started_at=action_started_at), user_started=True
+            lambda: self.show_loading_screen(
+                import_plan=import_plan, action_started_at=action_started_at, _operation=_operation
+            ), user_started=True
         ):
             return
         self._operation_progress = 0
@@ -1352,6 +1379,7 @@ class _ReportOperations:
             elif self._preflight_result is not None:
                 execution_request = ImportPlan.all_atomic_candidates(request, self._preflight_result)
             self.parse_thread = ParseReportsThread(execution_request)
+            _operation.worker = self.parse_thread
             self.parse_thread.finished.connect(self.on_parse_finished)
             self.parse_thread.finished.connect(
                 lambda thread=self.parse_thread: self._on_parse_thread_stopped(thread)
@@ -1364,8 +1392,12 @@ class _ReportOperations:
             self._sync_readiness_state()
             self.loading_dialog.show()
         except Exception as e:
+            _operation.failed = True
             self._dismiss_progress("loading", rejected=True)
             self._recover_worker_start_failure("parse_thread", "stop_parsing")
+            _operation.terminal = self.parse_thread is None
+            if _operation.terminal:
+                _operation.worker = None
             self._invalidate_preflight("Import could not start. Review reports again before retrying.")
             self._sync_readiness_state()
             self.scan_button.setFocus()
@@ -1387,6 +1419,7 @@ class _ReportOperations:
     def stop_parsing(self):
         """Request cooperative parser cancellation without blocking the UI."""
         try:
+            self._drop_pending_starts()
             # Request cooperative cancellation and return immediately to keep UI responsive
             self.parsing_canceled = True
             if self.parse_thread is not None and self.parse_thread.isRunning():
@@ -1400,10 +1433,14 @@ class _ReportOperations:
                             "ETA --",
                         )
                     )
+            self._sync_readiness_state()
         except Exception as e:
             self.log_and_exit(e)
 
     def _on_parse_thread_stopped(self, stopped_thread):
+        operation = getattr(self, "import_operation", None)
+        if operation is not None and operation.worker is stopped_thread:
+            operation.terminal = True
         if stopped_thread is self.parse_thread:
             self.parse_thread = None
         self._sync_readiness_state()
@@ -1443,6 +1480,7 @@ class _ReportOperations:
             close_requested = getattr(self, "_close_requested", False)
             # Retain both stage outcomes before stopped-thread cleanup or flag resets.
             result = getattr(self.parse_thread, "last_parse_result", None)
+            self._record_import_outcome(result)
             enrichment_result = getattr(self.parse_thread, "last_enrichment_result", None)
             enrichment_requested = self._embedded_enrichment_requested()
             feedback = _build_parse_completion_summary(
@@ -1491,6 +1529,13 @@ class _ReportOperations:
         except Exception as e:
             self.log_and_exit(e)
 
+    def _record_import_outcome(self, result):
+        operation = getattr(self, "import_operation", None)
+        if operation is not None and operation.worker is self.parse_thread:
+            operation.result = result
+            operation.failed = operation.failed or bool(self.parse_error_message) or bool(getattr(result, "failed_files", 0))
+            operation.cancelled = self.parsing_canceled or bool(getattr(result, "cancelled_files", 0))
+
     def _show_parse_completion(self, feedback, enrichment_requested, should_request_modeless_enrichment):
         if self.parse_error_message:
             message = self.parse_error_message
@@ -1529,7 +1574,15 @@ class _ReportOperations:
             for thread in (self.preflight_thread, self.parse_thread, *self._metadata_threads)
         )
 
+    def _drop_pending_starts(self):
+        self._after_metadata_idle = []
+        self._start_pending = False
+        operation = getattr(self, "import_operation", None)
+        if operation is not None and operation.worker is None and not operation.terminal and not operation.failed:
+            operation.cancelled = operation.terminal = True
+
     def _request_active_worker_cancellation(self):
+        self._drop_pending_starts()
         if self._thread_is_running(self.preflight_thread):
             self.stop_scanning()
         if self._thread_is_running(self.parse_thread):
@@ -1537,6 +1590,7 @@ class _ReportOperations:
         self._cancel_metadata_workers()
 
     def _defer_close_for_active_workers(self):
+        self._drop_pending_starts()
         if not self._workers_running():
             return False
         self._close_requested = True

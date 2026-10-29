@@ -205,12 +205,14 @@ def _import_oracle(database: Path) -> dict[str, Any]:
 
 
 def _close_shell_owner(window, app) -> None:
-    from metroliza.app.windows_candidate_native_check import close_report_owner
+    from metroliza.app.windows_candidate_native_check import close_report_owner, ReportOwnerCleanupFailure
 
     try:
         close_report_owner(window, app)
     except Exception as error:
         _RETAINED_WINDOWS.append(window)
+        if isinstance(error, ReportOwnerCleanupFailure):
+            raise
         raise ShellChecksFailure("window_owner_cleanup_failed") from error
 
 
@@ -264,12 +266,8 @@ def _run(scratch: Path, fixtures: Path, app, expected_dpr: float | None,
 
         selected_names = {f"REF001_2024-01-01_{number}.pdf" for number in (1, 3)}
         _select_names(model, selected_names)
-        workspace.parse_button.click()
-        worker = workspace.parse_thread
-        _require(worker is not None, "import_worker_missing")
-        _wait(app, lambda: workspace.parse_thread is None, seconds=45.0,
-              code="import_deadline")
-        outcome = worker.last_parse_result
+        from metroliza.app.windows_candidate_import_sync import run_ui_import
+        outcome = run_ui_import(workspace, app)
         _require(outcome is not None and outcome.imported_files == 2
                  and outcome.intentionally_excluded_files == 3,
                  "import_outcome_mismatch")
@@ -347,8 +345,10 @@ def run_shell_checks(scratch_directory: str | Path, fixture_directory: str | Pat
         _require(all(value == expected for name, value in result["facets"].items()
                      if name in NATIVE_FACETS), "native_facet_incomplete")
         result["status"] = "passed" if native_display else "partial"
-    except ShellChecksFailure as error:
-        result["error_codes"].append(str(error))
-    except Exception:
-        result["error_codes"].append("unexpected_exception")
+    except Exception as error:
+        from metroliza.app.windows_candidate_import_sync import slice_failure_codes
+        result["error_codes"].extend(slice_failure_codes(
+            error, ShellChecksFailure, import_code="shell_import_failed",
+            cleanup_code="window_owner_cleanup_failed",
+        ))
     return result

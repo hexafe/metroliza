@@ -8,6 +8,19 @@ from contextvars import ContextVar
 MODE_ENV = "METROLIZA_WINDOWS_CANDIDATE_NATIVE_MODE"
 _UNAVAILABLE_ACTIVE = ContextVar("candidate_unavailable_active", default=False)
 _UNJOINED_OWNERS = []
+CLEANUP_FAILURES = frozenset({
+    "candidate_report_worker_join_deadline", "candidate_report_owner_close_refused",
+    "candidate_report_cleanup_failed",
+})
+
+
+class ReportOwnerCleanupFailure(ValueError):
+    """Keep the initiating exception and a closed cleanup code independently."""
+
+    def __init__(self, primary, cleanup_failure):
+        super().__init__(cleanup_failure)
+        self.primary = primary
+        self.cleanup_failure = cleanup_failure
 
 
 class _UnjoinedNativeOwner(SystemExit):
@@ -26,10 +39,24 @@ def abort_unavailable_after_join_failure(owner) -> None:
 
 def close_report_owner(window, app) -> None:
     """Cancel and join actual report workers before unwinding the native scope."""
+    primary = sys.exception()
+    try:
+        _close_report_owner(window, app)
+    except Exception as error:
+        code = str(error) if type(error) is ValueError and str(error) in CLEANUP_FAILURES else "candidate_report_cleanup_failed"
+        raise ReportOwnerCleanupFailure(primary, code) from None
+
+
+def _close_report_owner(window, app) -> None:
     workspace = getattr(window, "_reports_workspace", None)
+    terminal_worker = getattr(getattr(workspace, "import_operation", None), "worker", None)
     workers = () if workspace is None else tuple(
         worker
-        for worker in (workspace.preflight_thread, workspace.parse_thread, *getattr(workspace, "_metadata_threads", ()))
+        for worker in (
+            workspace.preflight_thread, workspace.parse_thread,
+            terminal_worker if terminal_worker is not workspace.parse_thread else None,
+            *getattr(workspace, "_metadata_threads", ()),
+        )
         if worker is not None
     )
     if workspace is not None:

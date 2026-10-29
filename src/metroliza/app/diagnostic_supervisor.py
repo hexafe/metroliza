@@ -45,12 +45,13 @@ class SupervisedResult:
     source_loss_known: bool
     history: RingSnapshot
     elapsed_ms: int
+    receiver_drain_incomplete: bool = False
 
     @property
     def needs_incident(self) -> bool:
         return (self.launch != "started" or self.exit_code != 0
                 or self.handshake != "accepted" or not self.clean_terminal_received
-                or self.channel != "complete")
+                or self.channel != "complete" or self.receiver_drain_incomplete)
 
 
 class _Receiver:
@@ -90,14 +91,19 @@ class _Receiver:
             count = value["dropped"]
             if type(count) is not int or not 0 <= count <= MAX_COUNTER:
                 raise ValueError("invalid_control")
-            self.source_dropped, self.source_loss_known = count, True
-            self.clean_terminal = True
-            self.channel = "loss_observed" if count or self.recording_loss else "complete"
+            with self.lock:
+                if self.stop.is_set():
+                    return False
+                self.source_dropped, self.source_loss_known = count, True
+                self.clean_terminal = True
+                self.channel = "loss_observed" if count or self.recording_loss else "complete"
             return False
         fields = json.loads(payload)
         if type(fields) is not dict or fields.get("invocation_id") != self.session_id:
             raise ValueError("wrong_session")
         with self.lock:
+            if self.stop.is_set():
+                return False
             added = self.ring.add(payload, now=time.monotonic())
             if not added:
                 self.recording_loss = True
@@ -115,6 +121,11 @@ class _Receiver:
                 self.on_operation_failure(observed)
         return True
 
+    def _set_channel(self, channel: str) -> None:
+        with self.lock:
+            if not self.stop.is_set():
+                self.channel = channel
+
     def _run(self) -> None:
         try:
             self._authenticate()
@@ -130,12 +141,12 @@ class _Receiver:
                     started, count = now, 0
                 count += 1
                 if count > MAX_FRAMES_PER_SECOND:
-                    self.channel = "flooded"
+                    self._set_channel("flooded")
                     break
                 if not self._receive(payload):
                     break
         except (OSError, ValueError, TypeError, RecursionError):
-            self.channel = "invalid"
+            self._set_channel("invalid")
         finally:
             self.accepted.set()
             for fd in (self.incoming, self.outgoing):
@@ -292,7 +303,6 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         _await_handshake(receiver, on_authenticated)
         exit_code = child.wait()
         receiver.thread.join(DRAIN_SECONDS)
-        receiver.stop.set()
         termination = "posix_signal" if os.name != "nt" and exit_code < 0 else "observed_exit"
     except (OSError, RuntimeError) as error:
         mark("supervision_failed")
@@ -316,10 +326,19 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
             min(86_400_000, round((time.monotonic() - started) * 1000)),
         )
     with receiver.lock:
+        # 0.35 s is a responsiveness cap, not proof of EOF or terminal processing.
+        # Freeze both ring and control state; pending reads cannot change this receipt.
+        # A validated terminal/error already finishes the protocol even if native
+        # thread/descriptor cleanup is still returning.
+        drain_incomplete = receiver.thread.is_alive() and receiver.channel == "incomplete"
+        receiver.stop.set()
         history = receiver.ring.snapshot(now=time.monotonic())
-    return SupervisedResult(
-        session, "started" if child is not None else "failed", receiver.handshake,
-        receiver.channel, exit_code, termination, receiver.clean_terminal,
-        receiver.source_dropped, receiver.source_loss_known, history,
-        min(86_400_000, round((time.monotonic() - started) * 1000)),
-    )
+        return SupervisedResult(
+            session, "started" if child is not None else "failed", receiver.handshake,
+            "incomplete" if drain_incomplete else receiver.channel, exit_code, termination,
+            False if drain_incomplete else receiver.clean_terminal,
+            0 if drain_incomplete else receiver.source_dropped,
+            False if drain_incomplete else receiver.source_loss_known, history,
+            min(86_400_000, round((time.monotonic() - started) * 1000)),
+            drain_incomplete,
+        )

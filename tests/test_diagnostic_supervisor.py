@@ -248,29 +248,161 @@ def test_concurrent_real_instances_keep_their_own_event_history():
         }
 
 
-def test_contended_source_counter_is_unknown_instead_of_a_fabricated_exact_zero():
+def test_contended_source_counter_is_exact_after_clean_terminal():
     result = launch_supervised(_command("contended"))
     assert result.exit_code == 0
-    assert result.channel == "incomplete"
-    assert not result.source_loss_known
-    assert not result.clean_terminal_received
+    assert result.channel == "loss_observed"
+    assert result.source_loss_known
+    assert result.clean_terminal_received
+    assert result.source_dropped == 1
 
 
-def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
-    from metroliza.app.diagnostic_supervisor import _Receiver
+def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch, tmp_path):
+    from metroliza.app import diagnostic_supervisor as supervisor
+    from metroliza.app.diagnostic_supervisor import DRAIN_SECONDS, _Receiver
+    from metroliza.shared.diagnostic_transport import CLOSE_MAX_SECONDS
 
+    # Instrument only the owned child fixture, using the same system monotonic
+    # clock in both processes (including supported Windows CPython 3.11).
+    close_times = tmp_path / "close-times.json"
+    program = '''
+import json, runpy, sys, time
+from pathlib import Path
+fixture, timing_path = sys.argv[1:]
+sys.path.insert(0, str(Path(fixture).resolve().parents[2] / "src"))
+from metroliza.shared.diagnostic_transport import ChildRecorder
+close = ChildRecorder.close
+def measured_close(self, *args, **kwargs):
+    started = time.monotonic()
+    try:
+        return close(self, *args, **kwargs)
+    finally:
+        finished = time.monotonic()
+        Path(timing_path).write_text(json.dumps([started, finished]), encoding="ascii")
+ChildRecorder.close = measured_close
+sys.argv = [fixture, "full_queue"]
+runpy.run_path(fixture, run_name="__main__")
+'''
+    child_exited = []
+    spawn = supervisor._spawn_child
+
+    def measured_spawn(*args, **kwargs):
+        child = spawn(*args, **kwargs)
+        wait = child.wait
+
+        def measured_wait():
+            result = wait()
+            child_exited.append(time.monotonic())
+            return result
+
+        monkeypatch.setattr(child, "wait", measured_wait)
+        return child
+
+    monkeypatch.setattr(supervisor, "_spawn_child", measured_spawn)
     receive = _Receiver._receive
+    receivers = []
     def slow_receive(self, payload):
+        if self not in receivers:
+            receivers.append(self)
         time.sleep(0.02)
         return receive(self, payload)
     monkeypatch.setattr(_Receiver, "_receive", slow_receive)
-    started = time.monotonic()
-    result = launch_supervised(_command("full_queue"))
-    assert time.monotonic() - started < 4
+    authenticated = []
+    result = launch_supervised(
+        [sys.executable, "-c", program, str(CHILD), str(close_times)],
+        on_authenticated=lambda _session: authenticated.append(time.monotonic()),
+    )
+    assert len(authenticated) == 1
+    elapsed = time.monotonic() - authenticated[0]
+    for receiver in receivers:
+        receiver.thread.join(3)
+        assert not receiver.thread.is_alive()
     assert result.exit_code == 0
-    assert result.channel in {"incomplete", "loss_observed"}
+    close_started, close_finished = json.loads(close_times.read_text(encoding="ascii"))
+    assert len(child_exited) == 1
+    assert authenticated[0] <= close_started <= close_finished <= child_exited[0]
+    # This deliberately sub-budget reader takes ~5 s for a full queue. The total
+    # bound is the writer byte cap + receiver drain + a separate, enforced 1-s
+    # fixture/process budget: 0.05 s intentional preparation leaves at most 0.95 s
+    # for 1000 enqueues, scheduling, timing-file publication and interpreter exit.
+    # Measure both outside-close phases so the extra second cannot silently cover
+    # a fixture/child-shutdown regression. Windows interpreter startup precedes auth.
+    fixture_process_budget = 1.0
+    fixture_process_elapsed = ((close_started - authenticated[0])
+                               + (child_exited[0] - close_finished))
+    assert fixture_process_elapsed < fixture_process_budget
+    assert elapsed < CLOSE_MAX_SECONDS + DRAIN_SECONDS + fixture_process_budget
+    # Whether frames are still buffered at the post-exit snapshot depends on the
+    # platform pipe buffer: Linux (64 KiB) leaves frames for the slow reader, while
+    # Windows' small anonymous-pipe buffer is drained to EOF within DRAIN_SECONDS
+    # (observed in Windows core smoke). Either way no terminal arrived, so the
+    # channel stays incomplete. The drain flag itself is covered deterministically
+    # by test_pending_receiver_drain_is_flagged_and_snapshot_stays_frozen.
+    assert result.channel == "incomplete"
+    assert not result.clean_terminal_received
+    assert not result.source_loss_known
     assert result.needs_incident
     assert result.history.total_bytes <= 2 * 1024 * 1024
+
+
+def test_pending_receiver_drain_is_flagged_and_snapshot_stays_frozen(monkeypatch):
+    import threading
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    entered, release = threading.Event(), threading.Event()
+    receivers = []
+    receive = supervisor._Receiver._receive
+
+    def held_receive(self, payload):
+        receivers.append(self)
+        entered.set()
+        assert release.wait(5)
+        return receive(self, payload)
+
+    monkeypatch.setattr(supervisor._Receiver, "_receive", held_receive)
+    monkeypatch.setattr(supervisor, "DRAIN_SECONDS", 0)
+    try:
+        result = launch_supervised(_command("normal"))
+        assert entered.is_set()
+        assert getattr(result, "receiver_drain_incomplete", False) is True
+        assert result.channel == "incomplete"
+        assert not result.clean_terminal_received
+        assert result.needs_incident
+        assert result.history.events == ()
+    finally:
+        release.set()
+        for receiver in receivers:
+            receiver.thread.join(2)
+            assert not receiver.thread.is_alive()
+    assert receivers[0].ring.snapshot(now=time.monotonic()).events == ()
+
+
+def test_finalized_terminal_is_not_misreported_as_pending_receiver_drain(monkeypatch):
+    import threading
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    release = threading.Event()
+    receivers = []
+    original = supervisor._Receiver._run
+
+    def held_cleanup(self):
+        original(self)
+        receivers.append(self)
+        assert release.wait(5)
+
+    monkeypatch.setattr(supervisor._Receiver, "_run", held_cleanup)
+    try:
+        result = supervisor.launch_supervised(_command("normal"))
+        assert result.channel == "complete"
+        assert result.clean_terminal_received
+        assert result.source_loss_known
+        assert not result.receiver_drain_incomplete
+        assert not result.needs_incident
+    finally:
+        release.set()
+        for receiver in receivers:
+            receiver.thread.join(2)
+            assert not receiver.thread.is_alive()
 
 
 def test_supervisor_loss_does_not_kill_or_replay_child_write(tmp_path):

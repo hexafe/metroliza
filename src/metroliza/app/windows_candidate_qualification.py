@@ -356,12 +356,8 @@ def _run_core(root: Path, fixtures: Path, receipt: dict[str, Any], app) -> None:
         if workspace.parse_button.isEnabled() or database.exists():
             raise ScenarioFailure("zero_selection_guard_failed")
         _select_exact_reports(workspace)
-        workspace.parse_button.click()
-        worker = workspace.parse_thread
-        if worker is None:
-            raise ScenarioFailure("import_worker_not_started")
-        _wait(app, lambda: workspace.parse_thread is None, deadline_s=DEADLINES_S["import"], stage="import")
-        result = worker.last_parse_result
+        from metroliza.app.windows_candidate_import_sync import run_ui_import
+        result = run_ui_import(workspace, app)
         if result is None or result.imported_files != 2 or result.intentionally_excluded_files != 3:
             raise ScenarioFailure("import_count_mismatch")
         if any(_sha256(reports / name) != digest for name, digest in staged_hashes.items()):
@@ -608,8 +604,7 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     from metroliza.app.windows_candidate_inference import run_inference_checks
     _record_core_stage(root, receipt, "inference")
     inference = run_inference_checks(child, fixtures)
-    if inference.get("status") != "passed" or inference.get("facets") != {"successful_group_inference": "passed"}:
-        raise ScenarioFailure("group_inference_checks_failed")
+    _require_inference_result(receipt, inference)
     receipt["artifacts"].update(inference["artifacts"])
     receipt["facets"].update(inference["facets"])
     _record_core_stage(root, receipt, "import_guards")
@@ -623,10 +618,32 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     )
 
 
+def _require_inference_result(receipt, inference):
+    if inference.get("status") != "passed" or inference.get("facets") != {"successful_group_inference": "passed"}:
+        receipt["inference_failure"] = inference.get("failure")
+        receipt["inference_failure_stage"] = inference.get("failure_stage")
+        if "cleanup_failure" in inference:
+            receipt["cleanup_failure"] = inference["cleanup_failure"]
+        raise ScenarioFailure("group_inference_checks_failed")
+
+
 def _failed_core_receipt(receipt: dict, failure: str) -> dict:
     failed = {
         key: receipt[key] for key in ("schema", "schema_version", "scenario", "status", "stage", "source_sha")
     } | {"failure": failure}
+    from metroliza.app.windows_candidate_native_check import CLEANUP_FAILURES
+
+    if "cleanup_failure" in receipt:
+        code = receipt["cleanup_failure"]
+        failed["cleanup_failure"] = code if type(code) is str and code in CLEANUP_FAILURES else "candidate_report_cleanup_failed"
+    if failure == "group_inference_checks_failed":
+        from metroliza.app.windows_candidate_inference import FAILURE_CODES, FAILURE_STAGES
+        from metroliza.app.windows_candidate_import_sync import IMPORT_FAILURES
+
+        code = receipt.get("inference_failure")
+        stage = receipt.get("inference_failure_stage")
+        failed["inference_failure"] = code if type(code) is str and code in FAILURE_CODES | IMPORT_FAILURES | CLEANUP_FAILURES else "operation_failed"
+        failed["inference_failure_stage"] = stage if type(stage) is str and stage in FAILURE_STAGES else "unavailable"
     if failure == "literal_workbook_checks_failed":
         from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES, _SAFE_FAILURE_STAGES
 
@@ -683,10 +700,27 @@ def run_qualification() -> int:
         # The host's bounded failure reader needs only these fixed protocol
         # fields. A partial success receipt can grow beyond that reader's
         # limit and may contain paths or measurements from later slices.
-        failure = type(error).__name__ if not isinstance(error, ScenarioFailure) else str(error)
+        from metroliza.app.windows_candidate_import_sync import ImportSyncFailure
+        from metroliza.app.windows_candidate_native_check import ReportOwnerCleanupFailure
+
+        if isinstance(error, ReportOwnerCleanupFailure):
+            receipt["cleanup_failure"] = error.cleanup_failure
+            error = error.primary or error
+        failure = str(error) if isinstance(error, (ScenarioFailure, ImportSyncFailure, ReportOwnerCleanupFailure)) else _bounded_exception_class(error)
         if root is not None:
             _atomic_json(root / "windows-candidate-result.json", _failed_core_receipt(receipt, failure))
         return 21
+
+
+def _bounded_exception_class(error):
+    """Keep subclass names and exception text out of the public protocol."""
+    import sqlite3
+
+    for allowed in (FileNotFoundError, PermissionError, sqlite3.OperationalError,
+                    TypeError, ValueError, KeyError, OSError, RuntimeError, AssertionError):
+        if isinstance(error, allowed):
+            return allowed.__name__
+    return "RuntimeError"
 
 
 if __name__ == "__main__":

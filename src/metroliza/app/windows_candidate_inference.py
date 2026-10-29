@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import shutil
+import sys
 import uuid
 from pathlib import Path
 from metroliza.reports.db import sqlite_readonly_connection_scope
@@ -21,6 +22,23 @@ from typing import Any, Mapping
 
 
 SCHEMA_VERSION = 1
+FAILURE_STAGES = frozenset({
+    "fixtures", "review", "import", "cleanup", "database", "groups", "public_service", "artifact", "unavailable",
+})
+FAILURE_CODES = frozenset({
+    "scratch_root_invalid", "fixture_directory_invalid", "original_fixture_missing",
+    "staged_fixture_set_mismatch", "inference_artifact_name_collision",
+    "reports_navigation_missing", "workspace_context_rejected", "review_deadline",
+    "review_mutated_or_count_mismatch", "reviewed_filename_mismatch",
+    "selection_control_rejected", "selection_mismatch", "import_worker_not_started",
+    "import_count_mismatch", "source_preservation_failed", "database_snapshot_not_closed",
+    "persisted_filename_keyset_mismatch", "group_assignment_not_applied",
+    "grouped_metric_row_count_mismatch", "grouped_report_identity_mismatch",
+    "grouped_measurement_value_mismatch", "grouped_assignment_mismatch", "grouped_unit_mismatch",
+    "grouped_filename_keyset_mismatch", "group_analysis_not_ready", "group_analysis_metric_missing",
+    "analysis_contains_nonfinite_value", "analysis_value_not_json_safe",
+    "retained_artifact_missing", "operation_failed",
+})
 _REPORT_DATE = "2024-01-01"
 _ORIGINALS = {
     "REF001_2024-01-01_5.pdf": "report-1.pdf",
@@ -268,12 +286,13 @@ def _members_by_filename(grouped, report_ids: Mapping[str, int]) -> dict[str, di
     return observed_by_name
 
 
-def _analysis_projection(database: Path, report_ids: Mapping[str, int]) -> dict[str, Any]:
+def _analysis_projection(database: Path, report_ids: Mapping[str, int], record_stage=lambda stage: None) -> dict[str, Any]:
     from metroliza.analytics.group_analysis_service import build_group_analysis_payload
 
     grouped = _load_grouped_measurements(database, report_ids)
     observed_by_name = _members_by_filename(grouped, report_ids)
 
+    record_stage("public_service")
     analysis = build_group_analysis_payload(
         grouped,
         requested_scope="auto",
@@ -306,7 +325,7 @@ def _assert_import_result(result: Any) -> None:
         raise InferenceFailure("import_count_mismatch")
 
 
-def _run_gui_import(private: Path, reports: Path, database: Path) -> None:
+def _run_gui_import(private: Path, reports: Path, database: Path, record_stage=lambda stage: None) -> None:
     from PyQt6.QtCore import QSettings
     from metroliza.app.bootstrap import get_or_create_qapplication
     from metroliza.app.windows_candidate_qualification import DEADLINES_S, _wait
@@ -329,6 +348,7 @@ def _run_gui_import(private: Path, reports: Path, database: Path) -> None:
         workspace = window.reports_workspace
         if not window.set_directory(str(reports)) or not window.set_db_file(str(database)):
             raise InferenceFailure("workspace_context_rejected")
+        record_stage("review")
         workspace.scan_button.click()
         _wait(
             app,
@@ -341,29 +361,27 @@ def _run_gui_import(private: Path, reports: Path, database: Path) -> None:
         ):
             raise InferenceFailure("review_mutated_or_count_mismatch")
         _select_all_reports(workspace)
-        workspace.parse_button.click()
-        worker = workspace.parse_thread
-        if worker is None:
-            raise InferenceFailure("import_worker_not_started")
-        _wait(
-            app,
-            lambda: workspace.parse_thread is None,
-            deadline_s=DEADLINES_S["import"],
-            stage="import",
-        )
-        _assert_import_result(worker.last_parse_result)
+        record_stage("import")
+        from metroliza.app.windows_candidate_import_sync import run_ui_import
+        _assert_import_result(run_ui_import(workspace, app))
     finally:
         from metroliza.app.windows_candidate_native_check import close_report_owner
+        if sys.exception() is None:
+            record_stage("cleanup")
         close_report_owner(window, app)
 
 
-def _failure_result(code: str) -> dict[str, Any]:
+def _failure_result(code: str, stage: str = "unavailable") -> dict[str, Any]:
+    from metroliza.app.windows_candidate_import_sync import IMPORT_FAILURES
+    from metroliza.app.windows_candidate_native_check import CLEANUP_FAILURES
+
     return {
         "schema_version": SCHEMA_VERSION,
         "stage": "failed",
         "status": "failed",
         "facets": {"successful_group_inference": "failed"},
-        "failure": code,
+        "failure": code if code in FAILURE_CODES | IMPORT_FAILURES | CLEANUP_FAILURES else "operation_failed",
+        "failure_stage": stage if stage in FAILURE_STAGES else "unavailable",
     }
 
 
@@ -376,6 +394,12 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
     report inputs.
     """
     private: Path | None = None
+    stage = "fixtures"
+
+    def record_stage(value):
+        nonlocal stage
+        stage = value
+
     try:
         root = _require_private_root(scratch)
         private = root / f"inference-w06-{uuid.uuid4().hex}"
@@ -386,16 +410,20 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
         if database.exists() or grouping_file.exists():
             raise InferenceFailure("inference_artifact_name_collision")
 
-        _run_gui_import(private, reports, database)
+        stage = "import"
+        _run_gui_import(private, reports, database, record_stage)
+        stage = "database"
         if any(_sha256(reports / name) != digest for name, digest in source_hashes.items()):
             raise InferenceFailure("source_preservation_failed")
         report_ids = _report_ids_by_filename(database)
-        analysis = _json_safe(_analysis_projection(database, report_ids))
+        database_counts = _database_counts(database)
+        stage = "groups"
+        analysis = _json_safe(_analysis_projection(database, report_ids, record_stage))
         payload = {
             "schema_version": SCHEMA_VERSION,
             "source_hashes": source_hashes,
             "assignments": _ASSIGNMENTS,
-            "database_counts": _database_counts(database),
+            "database_counts": database_counts,
             "checks": {
                 "planner_review": "passed",
                 "selected_import": "passed",
@@ -405,6 +433,7 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
             },
             "analysis": analysis,
         }
+        stage = "artifact"
         _atomic_json(grouping_file, payload)
         if not database.is_file() or not grouping_file.is_file():
             raise InferenceFailure("retained_artifact_missing")
@@ -421,5 +450,16 @@ def run_inference_checks(scratch: Path, fixtures: Path) -> dict[str, Any]:
             },
         }
     except Exception as error:
-        code = str(error) if isinstance(error, InferenceFailure) else type(error).__name__
-        return _failure_result(code)
+        from metroliza.app.windows_candidate_import_sync import ImportSyncFailure
+        from metroliza.app.windows_candidate_native_check import ReportOwnerCleanupFailure
+        from metroliza.app.windows_candidate_qualification import ScenarioFailure
+
+        cleanup = None
+        if isinstance(error, ReportOwnerCleanupFailure):
+            cleanup = error.cleanup_failure
+            error = error.primary or error
+        code = str(error) if isinstance(error, (InferenceFailure, ImportSyncFailure, ScenarioFailure, ReportOwnerCleanupFailure)) else "operation_failed"
+        failed = _failure_result(code, stage)
+        if cleanup:
+            failed["cleanup_failure"] = cleanup
+        return failed

@@ -78,6 +78,21 @@ changing PDF bytes. The GUI selects samples 1 and 3 and verifies two imported an
 three excluded reports. Independent comparisons require exact persisted keys,
 measurements, grouping membership, exported cells and finite/precision filter IDs.
 
+Every Reports producer clicks the real Import control before waiting for metadata
+to become idle. It binds the newly accepted import operation, observes its queued
+start and terminal result within the existing 45-second import deadline, then
+confirms native worker completion. A cleared `parse_thread` alone is not evidence
+of success: fast completion, worker error and cancellation retain the outcome of
+that specific operation. Cancel and owner cleanup discard pending starts before
+canceling and joining existing workers; closing must never launch a queued import.
+
+Failed core receipts retain a bounded `cleanup_failure` alongside the primary
+`failure` when both occur. Cleanup failure always fails qualification. W06 failures
+also retain `inference_failure` and `inference_failure_stage` (fixtures, review,
+import, cleanup, database, groups, public_service or artifact), so an import failure cannot be
+mistaken for a statistical mismatch. Producer and host validate these closed
+identifiers; raw exception messages and private paths are excluded.
+
 The literal-label export additionally checks formula-looking text, non-ASCII
 labels, series caches, local references, values and limit order. A corrupted local
 cell with unchanged chart cache must fail comparison. Pre-cancel and oversized
@@ -213,6 +228,34 @@ owners' executable scenarios. Run them against the same final package identity.
 PO acceptance on controlled copies follows delivery of the full candidate.
 Release, live-data and legal/service approvals are separate. Historical SIGSEGV
 cause remains UNKNOWN.
+
+## Diagnostic flood observations
+
+A diagnostic flood failure retains an optional bounded
+`qualification_failure.flood_observation`: channel and handshake state,
+clean-terminal and source-loss-known flags, the source drop counter, ring
+counters and the retained event count. A zero source counter with unknown source
+loss does not establish zero drops. `receiver_drain_incomplete: true` records a
+receiver unfinished at the bounded post-exit snapshot; it remains
+INCOMPLETE/FAIL even when ring counters are positive. Its absence on an older
+receipt does not establish completed draining. The source drop ceiling
+4294967295 means at least that many drops.
+
+The child recorder counts every rejected event exactly, including admissions
+that meet the writer's queue lock, and a drained recorder always sends
+`ended(dropped=N)`. On close it waits in 1-second windows while the writer still
+completes frames, with a 4.094-second total allowance derived from the bounded
+queue bytes at a minimum of 64 KiB/s; before handshake completion it does not
+wait. Source tests establish these policies, not frozen Windows Quit/relaunch,
+anonymous-pipe, inherited-handle, owned Job or process-exit behavior: those
+require the same final package on Windows. The historical RC attempt-2
+`flood_channel_incomplete` failure remains causally UNKNOWN.
+
+Older builds may reject an incident that carries the new optional drain flag.
+Their store reader reports the whole listing INVALID if any incident fails
+validation, so one newer incident can hide older valid history in an older
+build. Keep the store and read it with a compatible build; this change does not
+migrate older readers or delete history.
 
 ## Combined workflow and immutable receipt gate
 

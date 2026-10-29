@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 
 import pytest
 
@@ -116,6 +117,35 @@ def test_incident_accepts_clean_terminal_with_explicit_source_loss() -> None:
     assert decoded.observation.clean_terminal_received is True
     assert decoded.observation.channel is ChannelState.LOSS_OBSERVED
     assert decoded.observation.source_dropped == 3
+
+
+def test_receiver_drain_flag_round_trips_without_changing_old_incidents():
+    original = encode_incident(_incident())
+    assert "receiver_drain_incomplete" not in json.loads(original)["observation"]
+    assert encode_incident(decode_incident(original)) == original
+    observed = replace(
+        _observation(), channel=ChannelState.INCOMPLETE, clean_terminal_received=False,
+        source_loss_known=False, receiver_drain_incomplete=True,
+    )
+    encoded = encode_incident(_incident(observation=observed))
+    assert json.loads(encoded)["observation"]["receiver_drain_incomplete"] is True
+    assert decode_incident(encoded).observation == observed
+
+
+@pytest.mark.parametrize("value", [False, 0, 1, "SYNTHETIC_PRIVATE_TEXT", {}, []])
+def test_receiver_drain_flag_rejects_noncanonical_or_unsafe_wire_values(value):
+    payload = json.loads(encode_incident(_incident(observation=replace(
+        _observation(), channel=ChannelState.INCOMPLETE, clean_terminal_received=False,
+        source_loss_known=False,
+    ))))
+    payload["observation"]["receiver_drain_incomplete"] = value
+    with pytest.raises(IncidentValidationError):
+        decode_incident(_canonical(payload))
+
+
+def test_receiver_drain_flag_cannot_claim_complete_history():
+    with pytest.raises(IncidentValidationError):
+        replace(_observation(), receiver_drain_incomplete=True)
 
 
 def test_incident_requires_loss_observed_for_ring_rejection() -> None:

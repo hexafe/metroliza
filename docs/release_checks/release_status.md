@@ -2,7 +2,7 @@
 
 - Status: Active release status hub
 - Owner: Release maintainer
-- Last reviewed: 2026-10-27
+- Last reviewed: 2026-10-29
 
 The Product Owner selected `release/2026.09-rc1` as the current RC source line under
 [#1153](https://github.com/hexafe/metroliza/issues/1153). Cut it from accepted `develop` after
@@ -18,14 +18,16 @@ not distribute or publish a packaged candidate.
 | Current RC source line | `release/2026.09-rc1` | Cut from accepted final develop; exact SHA/tree in #1153 |
 | STEP3 delivery | Complete with disclosed limits | [Immutable report](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/engineering/performance-boost-step3.md) |
 | Final packaged Windows EXE / candidate acceptance | **NOT_RUN** | Build and qualify the exact final candidate before distribution to testers or release |
-| Final build identity | **NOT_ASSIGNED** | Assign and synchronize exactly six build digits in a separate packaging/candidate packet |
+| Final build identity | Assigned `261029` | Synchronized source metadata under #1158; final packaged artifact and candidate acceptance remain **NOT_RUN** |
 | Promotion to master / published release | **Not authorized by #1153** | Full RC checklist and release-owner Go required |
 | Historical RC lines | Retained, cycle closure pending | `rc2` and `release/2026.06-rc2`, separate #901/#924 decisions |
 | Dependency upgrades #972/#973 | Deferred until after RC | Refresh separately, preserve STEP3 exact dependency pins |
 | Security exception review #906 | Open | Selected STEP3 baseline earliest expiry 2026-11-23; verify the actual baseline before every gate and renew before expiry. The issue's original 2026-10-31 deadline is historical, not a new waiver |
 
-The code's inherited version metadata currently reads `2026.09 RC1 (build 261020)`. That is
-the existing source metadata, not a new final-candidate artifact identity. Historical test
+The final RC1 candidate's source metadata is assigned `2026.09 RC1 (build 261029)` under
+#1158, replacing the inherited build 261020 label while keeping the same RC1 release line.
+This assigns source metadata only: the final packaged artifact and its acceptance remain
+**NOT_RUN** until artifact-bound evidence is recorded. Historical test
 build 261021 is separately archived under
 `archive/repo-cleanup-2026-10-27/build/step2-rc1-261021`; do not merge that old build-number
 commit into the final RC. The unpublished archive container preserves original binaries,
