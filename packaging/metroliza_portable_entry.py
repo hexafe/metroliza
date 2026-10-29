@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from metroliza.app.version import VERSION_LABEL
+from metroliza.app.diagnostic_launcher import system_exit_code
 from metroliza.shared.diagnostic_package import PackageIdentity, inspect_package, package_notice
 
 PAYLOAD_DIRECTORY = "metroliza_payload"
@@ -127,7 +128,7 @@ def main() -> int:
         if not synthetic:
             ctypes.windll.user32.MessageBoxW(None, message, "Metroliza", 0x10)
         return 1
-    return result
+    return system_exit_code(result, windows=os.name == "nt")
 
 
 if __name__ == "__main__":

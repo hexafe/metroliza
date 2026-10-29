@@ -354,7 +354,10 @@ def test_launcher_observer_rejects_expired_deadline_without_claiming_an_exit(tmp
 def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     tmp_path, monkeypatch, cleanup_failed, receipt_present,
 ) -> None:
+    from metroliza.shared.diagnostic_fatal_probe import FATAL_FILE
+
     closes = []
+    private_sinks = []
     ready = []
     success_receipt = dict(payload(), schema="metroliza-windows-candidate-core-v1", scenario="core")
 
@@ -387,6 +390,12 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
 
         def close(self, *, terminate):
             closes.append(terminate)
+            # The private sink is populated only as the owned process closes.
+            sink = self.probe / FATAL_FILE
+            sink.write_text('Windows fatal exception: access violation\n\n'
+                            'Current thread 0x123 (most recent call first):\n'
+                            '  File "C:\\PRIVATE\\module.py", line 12 in shutdown\n')
+            private_sinks.append(sink)
             def cleanup():
                 if cleanup_failed:
                     raise OSError("SYNTHETIC_PRIVATE_PATH")
@@ -400,6 +409,7 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
             assert "METROLIZA_DIAGNOSTIC_QUALIFICATION" not in environment
             (probe / "startup-phases" / "child_wait_nonzero").touch()
             process = Process(Path(environment[producer.ROOT_ENV]))
+            process.probe = probe
             owned.append(process)
             return process
 
@@ -450,7 +460,12 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
         "allowlisted_failure": "fixture_dir_invalid" if receipt_present is True else "unavailable",
         "owned_cleanup": "failed" if cleanup_failed else "complete", "private_cleanup": "complete",
         "startup_phases": ["child_wait_nonzero"],
+        "child_fatal_observation": {
+            "present": not cleanup_failed, "kind": "other" if cleanup_failed else "access_violation",
+            "frames": [] if cleanup_failed else ["module:shutdown"], "truncated": False,
+        },
     }
+    assert len(private_sinks) == 1 and not private_sinks[0].exists()
     diagnostic_payload = driver._failed_diagnostic_payload(observation, stage, failures[0], SHA)
     assert diagnostic_payload["stage_marker_state"] == "valid"
     assert diagnostic_payload["failure_category"] == (

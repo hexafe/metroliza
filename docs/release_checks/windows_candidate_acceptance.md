@@ -101,6 +101,56 @@ does not establish that the success receipt was written. Invalid, missing or
 source-mismatched receipts retain their existing failure classification. There
 are no host retries or increased deadlines.
 
+### Post-success process exits
+
+The Python supervisor and portable envelope convert Windows child DWORDs in
+`0x80000000..0xffffffff` to signed int32 before `SystemExit`, preserving the
+bits through CPython's signed C exit argument, including Python 3.11. POSIX and
+integers outside the DWORD range retain their existing platform behavior.
+This fixes launcher exit-code masking; it does not suppress termination or
+qualify a nonzero exit as success.
+
+Failed diagnostics retain the exact `observed_exit_code` and, for every nonzero
+code, a consistent `observed_exit_class` from this closed table:
+
+| DWORD | Class |
+| --- | --- |
+| `0xC0000005` | `access_violation` |
+| `0xC0000409` | `stack_buffer_overrun` |
+| `0xC0000374` | `heap_corruption` |
+| `0xC00000FD` | `stack_overflow` |
+| `0xC000001D` | `illegal_instruction` |
+| `0xC0000008` | `invalid_handle` |
+| `0xC0000142` | `dll_init_failed` |
+| `0xC000013A` | `control_c_exit` |
+| `0xE06D7363` | `cpp_exception` |
+| `3` | `abort_3` |
+| `0xFFFFFFFF` | `all_ones` |
+| Other `0xC0000000..0xFFFFFFFE` | `other_ntstatus_error` |
+| Any remaining nonzero DWORD | `other_nonzero` |
+
+`child_wait_ntstatus_error` and `child_wait_high_bit_other` distinguish
+`0xC0000000..0xFFFFFFFE` and `0x80000000..0xBFFFFFFF` at the child handle.
+The all-ones bucket remains separate. Host validators reject unknown or
+code-inconsistent classes.
+
+Only the existing startup-probe gate plus the qualification-root environment
+enables early all-thread faulthandler capture in the application entry. The sink
+is private, held open until exit and removed with the existing private-root
+cleanup. The host reads at most 64 KiB only after owned-process cleanup completes.
+It retains only `child_fatal_observation`: `present`, a closed `kind`
+(`access_violation`, `stack_overflow`, `code_0x` plus eight lowercase hex digits,
+`fatal_python_error` or `other`), up to 12 `stem:function` frames from the
+Current thread stack, and `truncated`. Stem and function lengths are at most 64;
+only `[A-Za-z0-9_.]` and `[A-Za-z0-9_<>]`, respectively, are accepted.
+Frames are shortened further, with `truncated: true`, if needed to preserve
+the existing failure and phase fields within the byte limit.
+Paths, line numbers, raw text and other threads are excluded from public
+evidence, which remains bounded to 4096 bytes. Faults after
+`_PyFaulthandler_Fini`, including late finalization or DLL unload, cannot be
+captured: `present: false` is valid and is recorded explicitly. These
+observations discriminate exits without establishing their root cause.
+
 Core runs enable the opt-in startup probe in a separate owned private directory,
 leaving the scenario's initially empty root intact. The host retains only fixed
 phase names from empty, regular, single-link, non-reparse marker files. Phases
@@ -121,6 +171,8 @@ boundary was reached, absence is inconclusive, and array order is the allowlist
 order rather than an event timeline. Probes perturb timing and cannot establish
 the cause of an earlier uninstrumented exit. No raw text, paths or exception
 messages are retained in this phase evidence.
+
+### Further core observations
 
 The literal-label export additionally checks formula-looking text, non-ASCII
 labels, series caches, local references, values and limit order. A corrupted local
