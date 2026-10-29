@@ -1803,7 +1803,7 @@ def test_runner_launch_transfer_interrupt_closes_every_registered_process(
     runner.private_root.mkdir()
     runner.store = object()
     runner.results = {}
-    runner.deadline = time.monotonic() + 1
+    runner.deadline = time.monotonic() + _FAKE_PROCESS_DEADLINE_S
     runner._root = lambda label: qualification._prepare_work_root(
         runner.private_root, label
     )
@@ -5201,7 +5201,7 @@ def test_direct_ui_smoke_uses_normal_application_window_and_clean_close(
     runner.state_base = tmp_path / "state"
     runner.application = runner.artifact / "metroliza_application.exe"
     runner.launcher = runner.artifact / "metroliza.exe"
-    runner.deadline = time.monotonic() + 1
+    runner.deadline = time.monotonic() + _FAKE_PROCESS_DEADLINE_S
     runner.store = object()
     runner.results = {}
     for path in (runner.artifact, runner.state_base):
@@ -5564,7 +5564,7 @@ def test_idle_early_exit_retains_exact_mode_and_numeric_code(
     runner.state_base = tmp_path / "state"
     runner.application = runner.artifact / "metroliza_application.exe"
     runner.launcher = runner.artifact / "metroliza.exe"
-    runner.deadline = time.monotonic() + 1
+    runner.deadline = time.monotonic() + _FAKE_PROCESS_DEADLINE_S
     runner.api = _FakeApi(3221225477, "ready")
     runner.results = {}
     work = tmp_path / "work"
@@ -6455,7 +6455,7 @@ def test_concurrent_exit_success_still_requires_two_actual_incidents(tmp_path, m
     runner.api = object()
     runner.launcher = tmp_path / "metroliza.exe"
     runner.artifact = runner.state_base = tmp_path
-    runner.deadline = time.monotonic() + 1
+    runner.deadline = time.monotonic() + _FAKE_PROCESS_DEADLINE_S
     runner.results = {}
     roots = iter(_concurrent_roots(tmp_path))
     runner._root = lambda _label: next(roots)
