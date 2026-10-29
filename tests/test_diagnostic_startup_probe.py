@@ -16,6 +16,36 @@ from scripts import qualify_windows_diagnostics as qualifier
 
 
 @pytest.fixture(autouse=True)
+def isolated_fatal_probe():
+    """Keep pytest's own faulthandler target; close any sink an entry opened.
+
+    In-process entries get a recording ``faulthandler.enable`` so they never
+    retarget the real handler (a later hard crash would lose its traceback).
+    The real enable path is covered by the Windows-only fatal-child test.
+    """
+    import faulthandler
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+
+    previous_enabled = faulthandler.is_enabled()
+    previous_stream = fatal._fatal_stream
+    real_enable = faulthandler.enable
+    faulthandler.enable = lambda *args, **kwargs: None
+    try:
+        yield
+    finally:
+        faulthandler.enable = real_enable
+        stream = fatal._fatal_stream
+        if stream is not previous_stream:
+            fatal._fatal_stream = previous_stream
+            if type(stream) is int:
+                os.close(stream)
+            elif stream is not None:
+                stream.close()
+        assert faulthandler.is_enabled() is previous_enabled
+        assert fatal._fatal_stream is previous_stream
+
+
+@pytest.fixture(autouse=True)
 def atexit_callbacks(monkeypatch):
     callbacks = []
     monkeypatch.setattr(atexit, "register", lambda *args: callbacks.append(args))

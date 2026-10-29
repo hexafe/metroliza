@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_diagnostic_startup_probe import isolated_fatal_probe as isolated_fatal_probe
+
 
 ENTRY = Path(__file__).resolve().parents[1] / "packaging" / "metroliza_package_entry.py"
 

@@ -262,6 +262,10 @@ def _mark_child_exit(exit_code: int) -> None:
     mark("child_wait_zero" if exit_code == 0 else "child_wait_nonzero")
     if exit_code in {-1, 4294967295}:
         mark("child_wait_all_ones")
+    elif 0xC0000000 <= exit_code <= 0xFFFFFFFE:
+        mark("child_wait_ntstatus_error")
+    elif 2**31 <= exit_code <= 0xBFFFFFFF:
+        mark("child_wait_high_bit_other")
 
 
 def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
