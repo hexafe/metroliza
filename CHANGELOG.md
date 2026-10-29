@@ -1,6 +1,17 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261020) — current version
+## 2026.09 RC1 (build 261029) — current version
+- Exporting to an existing workbook asks you to Save a copy (the default, such as `name (2).xlsx`), Replace, or Cancel; a workbook open in Excel keeps its old contents.
+- Report metadata enrichment now reports canceled, failed, and skipped reports instead of showing a green 100% completion.
+- Opening an existing `.sqlite`, `.sqlite3`, or `.DB` database keeps the exact file you selected.
+- Copy to checked shows how many hidden values will be copied and existing values overwritten, and you can undo the change.
+- Searching filter choices keeps selected headers; All and specific values cannot be selected together, and a From date later than To is blocked.
+- Renaming a group to an existing name is rejected, and Create-or-add uses the last active pane.
+- Modify Database accepts an unambiguous decimal comma and shows the interpreted value before saving; invalid numbers are blocked and all changes are saved together or none are saved.
+- Mapping CSV import previews Added, Replaced, and Unchanged entries and imports only new entries by default.
+- CSV Summary requires Enter to apply a filter before assigning matching rows, keeps groups when Apply makes no changes, and keeps limits for deselected metrics.
+
+## 2026.09 RC1 (build 261020)
 - Much faster start on Windows: the app unpacks once per version into the local app data folder; later starts open the main window in about a second.
 - Smaller download: unused OCR acceleration (OpenVINO), video and software-OpenGL components are no longer bundled.
 - Fast report import is about 2.5 times faster.
