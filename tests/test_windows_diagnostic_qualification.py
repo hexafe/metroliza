@@ -29,6 +29,12 @@ from scripts import qualify_windows_diagnostics as qualification
 TEST_NATIVE_ANCHOR = r"\Device\HarddiskVolume7\fixed\application.exe"
 
 
+
+# Deadline for scenarios driven by fake processes that exit at once. The deadline
+# is not under test there; one second of wall time flaked on a loaded Windows
+# runner (run 40922648287), turning the expected reason into scenario_timeout.
+_FAKE_PROCESS_DEADLINE_S = 30
+
 class _TokenWinTypes:
     HANDLE = ctypes.c_void_p
     BOOL = ctypes.c_long
@@ -1739,7 +1745,7 @@ def test_scenario_launch_transfer_interrupt_closes_registered_process(
             qualification._run_scenario.__code__, "process", primary,
             lambda: qualification._run_scenario(
                 _Api(), tmp_path / "app.exe", tmp_path, tmp_path, tmp_path,
-                "normal", time.monotonic() + 1,
+                "normal", time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
                 expected_exit=0, expected_stage="complete",
             ),
         )
@@ -1848,7 +1854,7 @@ def test_driver_phase_preserves_safe_early_process_exit_evidence(
                 work,
                 state,
                 "normal",
-                time.monotonic() + 1,
+                time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
                 expected_exit=0,
                 expected_stage="complete",
             ),
@@ -5301,7 +5307,7 @@ def test_direct_scenario_failure_identifies_closed_operation_before_cleanup(
             "direct_normal_1",
             lambda: qualification._run_scenario(
                 _Api(), tmp_path / "app.exe", tmp_path, tmp_path, tmp_path,
-                "normal", time.monotonic() + 1,
+                "normal", time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
                 expected_exit=0, expected_stage="complete",
             ),
         )
@@ -5340,7 +5346,7 @@ def test_direct_scenario_final_stage_mismatch_names_receipt_operation(
             "direct_normal_1",
             lambda: qualification._run_scenario(
                 api, tmp_path / "app.exe", tmp_path, tmp_path, tmp_path,
-                "normal", time.monotonic() + 1,
+                "normal", time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
                 expected_exit=0, expected_stage="complete",
             ),
         )
@@ -5521,7 +5527,7 @@ def test_concurrent_wrong_exit_retains_only_observed_numeric_code(tmp_path) -> N
             _concurrent_roots(tmp_path),
             (1, 1),
             tmp_path,
-            time.monotonic() + 1,
+            time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
         )
 
     assert caught.value.failure_id == "scenario_failed"
@@ -5539,7 +5545,7 @@ def test_ui_process_exit_mismatch_retains_observed_numeric_code(tmp_path) -> Non
             lambda: qualification._finish_process_without_receipt(
                 process,
                 tmp_path,
-                time.monotonic() + 1,
+                time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
                 0,
             ),
         )
@@ -6421,7 +6427,7 @@ def test_concurrent_probe_retains_both_final_outcomes_without_claiming_missing_i
     with pytest.raises(qualification.QualificationFailure) as caught:
         qualification._finish_concurrent_processes(
             (_FakeProcess(9, supervised=True), _FakeProcess(9, supervised=True)),
-            roots, (1, 1), tmp_path, time.monotonic() + 1,
+            roots, (1, 1), tmp_path, time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
         )
     assert caught.value.qualification_reason == "launcher_storage_not_saved"
     assert caught.value.concurrent_phases == (("storage_" + first_status,), ("storage_saved",))
@@ -6661,7 +6667,7 @@ def test_concurrent_probe_child_receipt_mismatch_retains_valid_public_failure(tm
     with pytest.raises(qualification.QualificationFailure) as caught:
         qualification._finish_concurrent_processes(
             (_FakeProcess(9, supervised=True), _FakeProcess(9, supervised=True)),
-            roots, (1, 1), tmp_path, time.monotonic() + 1,
+            roots, (1, 1), tmp_path, time.monotonic() + _FAKE_PROCESS_DEADLINE_S,
         )
     error = caught.value
     assert error.qualification_stage == "concurrent_1"
