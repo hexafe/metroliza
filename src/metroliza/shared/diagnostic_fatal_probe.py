@@ -11,6 +11,9 @@ FATAL_FILE = "child-fatal-private.txt"
 MAIN_THREAD_FILE = "child-main-thread-private.txt"
 INVENTORY_FILE = "child-exit-inventory-private.json"
 _fatal_stream: int | None = None
+# Binary on Windows: a text-mode CRT descriptor would write "\r\n".
+_PRIVATE_FLAGS = (os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+                  | getattr(os, "O_BINARY", 0))
 
 
 def _private_root() -> Path | None:
@@ -26,7 +29,7 @@ def _private_root() -> Path | None:
 
 
 def _write_private(root: Path, name: str, data: bytes) -> None:
-    descriptor = os.open(root / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    descriptor = os.open(root / name, _PRIVATE_FLAGS, 0o600)
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(data)
 
@@ -128,7 +131,7 @@ def enable_private_fatal_probe() -> None:
             return
         # Exclusive creation, restricted mode on POSIX, inherited private-root
         # ACL on Windows. Do not truncate or follow any pre-existing sink.
-        stream = os.open(root / FATAL_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        stream = os.open(root / FATAL_FILE, _PRIVATE_FLAGS, 0o600)
         os.set_inheritable(stream, False)
         import faulthandler
         import threading

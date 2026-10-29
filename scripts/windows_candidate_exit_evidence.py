@@ -181,8 +181,8 @@ def read_fatal_observation(root: Path) -> dict:
     raw = _read_private_bytes(root / FATAL_FILE, MAX_FATAL_BYTES, tail=True)
     if raw is None or not raw[0]:
         return absent_fatal_observation()
-    ident = _read_private_bytes(root / MAIN_THREAD_FILE, 31)
-    match = re.fullmatch(rb"main_thread=0x([0-9a-f]{16})\n", ident[0]) if ident is not None and not ident[1] else None
+    ident = _read_private_bytes(root / MAIN_THREAD_FILE, 32)
+    match = re.fullmatch(rb"main_thread=0x([0-9a-f]{16})\r?\n", ident[0]) if ident is not None and not ident[1] else None
     main_ident = int(match[1], 16) if match is not None else None
     return _parse_fatal_bytes(raw[0], tail_cut=raw[1], main_ident=main_ident)
 

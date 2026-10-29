@@ -160,12 +160,13 @@ def test_g2_validator_accepts_overlapping_wrapper_flags_and_rejects_parentless()
     (None, "0000000000000123", "unknown", ["module:main"]),
     ("456", None, "unknown", []),
 ])
-def test_g_faulting_thread_identity_uses_only_last_block(tmp_path, current, main, is_main, main_frames):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_g_faulting_thread_identity_uses_only_last_block(tmp_path, current, main, is_main, main_frames, newline):
     from metroliza.shared.diagnostic_fatal_probe import MAIN_THREAD_FILE
     from scripts import windows_candidate_exit_evidence as evidence
 
     if main is not None:
-        (tmp_path / MAIN_THREAD_FILE).write_text(f"main_thread=0x{main}\n")
+        (tmp_path / MAIN_THREAD_FILE).write_bytes(f"main_thread=0x{main}{newline}".encode())
     header = "Current thread" if current == "123" else "Thread"
     raw = (_fatal_block("Windows fatal exception: stack overflow", "handled")
            + b"Windows fatal exception: access violation\n\n"
