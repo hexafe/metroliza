@@ -109,8 +109,10 @@ idle writes, flood/drop behavior and publication intervals are measured separate
 
 Queue admission never waits for disk, UI or pipe writes. A full queue records bounded drops.
 Queue contention and capacity rejection increment an exact lock-free counter on supported
-GIL-enabled CPython: integer `itertools.count` advancement and snapshot run in C without releasing
-the GIL or calling Python, including on same-thread reentry. The wire snapshot saturates at
+GIL-enabled CPython: each integer `next(itertools.count)` runs in C without releasing the GIL or
+calling Python, including on same-thread producer reentry. Serialized reads advance two counters
+and subtract read ticks from the total, using only `next()`; repeated reads preserve the drop count.
+The wire snapshot saturates at
 MAX_COUNTER (`4294967295`), meaning **at least** that many rejections. A drained recorder sends
 `ended(dropped=N)`. Callers must quiesce producers before close; a rejection racing the final counter
 snapshot may or may not be included in `ended`, and a later rejection cannot be included.

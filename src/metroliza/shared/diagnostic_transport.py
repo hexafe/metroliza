@@ -171,6 +171,7 @@ class ChildRecorder:
         self.connected = False
         self.qualified = False
         self._losses = count()
+        self._loss_reads = count()
         self._completed_frames = 0
         self._incoming = incoming
         self._outgoing = outgoing
@@ -250,19 +251,21 @@ class ChildRecorder:
 
     @property
     def dropped(self) -> int:
-        """CPython/GIL: integer count.next and count.__reduce__ run in C without
-        releasing the GIL or calling Python. No producer lock or Python read/modify/
-        write can deadlock on same-thread reentry or lose concurrent increments.
-        Snapshot the next value without consuming it; MAX_COUNTER means at least.
+        """CPython/GIL: each integer count next() runs in C without releasing the
+        GIL or calling Python. No producer lock or Python read/modify/write can
+        deadlock on same-thread reentry or lose concurrent increments. Serialized
+        reads advance both counters; subtracting read ticks preserves the drop total.
+        A racing drop may or may not be included; MAX_COUNTER means at least.
         This relies on the supported GIL-enabled CPython runtime.
         """
-        return min(MAX_COUNTER, self._losses.__reduce__()[1][0])
+        return min(MAX_COUNTER, next(self._losses) - next(self._loss_reads))
 
     @dropped.setter
     def dropped(self, value: int) -> None:
         # Preserve explicit counter initialization used by synthetic callers;
         # callers must quiesce producers before resetting a recorder's counter.
         self._losses = count(value)
+        self._loss_reads = count()
 
     def close(self, timeout: float = CLOSE_PROGRESS_SECONDS) -> None:
         """Join in progress windows (default 1 s), with a 4.094-s hard total cap.

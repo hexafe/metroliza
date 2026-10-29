@@ -7,6 +7,8 @@ import sys
 import types
 import threading
 import uuid
+import warnings
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -431,6 +433,42 @@ def _recorder_startup_payload(recorder):
         recorder.invocation_id, uuid.uuid4(), 1, StartupMode.UNKNOWN,
         StartupCallsite.BOOTSTRAP, StartupOutcome.INVOCATION_STARTED,
     ))
+
+
+@pytest.mark.parametrize("initial", [0, diagnostic_transport.MAX_COUNTER - 2])
+def test_drop_counter_avoids_deprecated_reduce(monkeypatch, initial):
+    class DeprecatingCount(count):
+        def __reduce__(self):
+            # Exercise the newer-interpreter warning contract even on Python 3.11.
+            warnings.warn("count.__reduce__ is deprecated", DeprecationWarning)
+            return super().__reduce__()
+
+    monkeypatch.setattr(diagnostic_transport, "count", DeprecatingCount, raising=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        recorder = diagnostic_transport.ChildRecorder(-1, -1)
+        recorder.invocation_id = uuid.uuid4()
+        recorder.dropped = initial
+        payload = _recorder_startup_payload(recorder)
+        for drops in range(1, 5):
+            assert not recorder.enqueue_bytes(payload)
+            assert recorder.dropped == min(diagnostic_transport.MAX_COUNTER, initial + drops)
+
+
+@pytest.mark.parametrize("initial", [0, diagnostic_transport.MAX_COUNTER - 2])
+def test_drop_counter_repeated_reads_preserve_value_and_reset(initial):
+    recorder = diagnostic_transport.ChildRecorder(-1, -1)
+    recorder.invocation_id = uuid.uuid4()
+    recorder.dropped = initial
+    payload = _recorder_startup_payload(recorder)
+    for drops in range(5):
+        expected = min(diagnostic_transport.MAX_COUNTER, initial + drops)
+        assert [recorder.dropped for _ in range(10)] == [expected] * 10
+        assert not recorder.enqueue_bytes(payload)
+    recorder.dropped = 7
+    assert [recorder.dropped for _ in range(10)] == [7] * 10
+    assert not recorder.enqueue_bytes(payload)
+    assert recorder.dropped == 8
 
 
 def test_contended_producer_counts_exact_loss_and_sends_clean_terminal(recorder_receiver_pair):
