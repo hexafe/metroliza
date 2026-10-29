@@ -32,6 +32,25 @@ _FIXTURE_SETUP_MARKERS = (
 )
 
 
+def test_persisted_receiver_drain_flag_reaches_store_and_qualifier(tmp_path):
+    from metroliza.app.diagnostic_launcher import persist_observation
+    from metroliza.app.diagnostic_supervisor import SupervisedResult
+    from scripts.qualify_windows_diagnostics import _flood_observation, _flood_failure_reason
+
+    store = IncidentStore(tmp_path / "incidents")
+    observed = SupervisedResult(
+        uuid.uuid4().hex, "started", "accepted", "incomplete", 0, "observed_exit",
+        False, 0, False, DiagnosticRing().snapshot(now=time.monotonic()), 100, True,
+    )
+    assert persist_observation(store, observed, "unknown") is StoreStatus.SAVED
+    listed = store.list_reports()
+    assert len(listed.reports) == 1
+    incident = store.load(listed.reports[0].report_id).incident
+    assert incident.observation.receiver_drain_incomplete is True
+    assert _flood_observation(incident)["receiver_drain_incomplete"] is True
+    assert _flood_failure_reason(incident) == "flood_channel_incomplete"
+
+
 def _completion_scheduler(monkeypatch):
     """Functional persistence tests use event completion, not a disk-latency SLA.
 
