@@ -184,6 +184,27 @@ order rather than an event timeline. Probes perturb timing and cannot establish
 the cause of an earlier uninstrumented exit. No raw text, paths or exception
 messages are retained in this phase evidence.
 
+### Faulting module evidence
+
+The combined Windows job always attempts a bounded Application log query after
+the core/fallback steps, from its recorded UTC job start. Event 1000 from
+`Application Error` supplies the faulting module; Event 1001 is not queried
+because it adds no required closed field. `fault-events/fault-events.json`
+(schema version 1) retains at most eight events, newest first, for exact packaged
+application, launcher, OCR worker and compute worker basenames. The query reads
+at most 64 events; `truncated` also signals that this query cap was reached.
+
+Only the allowlisted application basename, validated module basename and numeric
+version, normalized hexadecimal exception/offset, and whole seconds since job
+start survive reduction. Invalid module names become `other`; invalid versions
+and hex values become `unavailable`. No paths, users, SIDs, report IDs, raw event
+text or dumps are retained. Query/parse failures produce `status: unavailable`
+with a closed reason token. This optional evidence never changes qualification
+outcomes: every nonzero process exit still fails. Events are associated by name
+and time window, not by a retained PID; a matching module is a diagnostic lead,
+not proof of the root cause or of which scenario faulted. Missing/delayed Windows
+events do not prove absence of a fault.
+
 ### Further core observations
 
 The literal-label export additionally checks formula-looking text, non-ASCII
