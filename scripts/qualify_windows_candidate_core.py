@@ -25,6 +25,10 @@ import time
 from pathlib import Path
 
 from scripts.verify_windows_candidate_closeout import ALL_FACETS as CLOSEOUT_CHECKS
+from scripts.windows_candidate_exit_evidence import (
+    absent_fatal_observation, bound_fatal_frames, exit_class, retain_fatal_observation,
+    valid_exit_evidence, valid_fatal_observation,
+)
 
 SCENARIO_FILE = "windows-candidate-result.json"
 STAGE_FILE = "core-stage.json"
@@ -945,11 +949,15 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         category = "unclassified_nonzero_exit"
     else:
         category = "closed_driver_failure"
-    return {
+    return bound_fatal_frames({
         "schema_version": 1, "status": "failed",
         "source_sha": expected_source_sha if type(expected_source_sha) is str
         and re.fullmatch(r"[0-9a-f]{40}", expected_source_sha) else "unavailable",
         "observed_process": role, "observed_exit_code": code,
+        **({"observed_exit_class": exit_class(code)} if code not in {None, 0} else {}),
+        "child_fatal_observation": (observation["child_fatal_observation"]
+                                    if valid_fatal_observation(observation.get("child_fatal_observation"))
+                                    else absent_fatal_observation()),
         "host_stage": host_stage, "startup_marker": marker,
         "producer_stage": producer_stage, "stage_marker_state": stage_marker_state,
         "receipt_state": receipt_state,
@@ -960,10 +968,12 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         "probe_unavailable_sources": probe_sources,
         "startup_phases": _closed_phases(observation.get("startup_phases")),
         "owned_cleanup": owned_cleanup, "private_cleanup": private_cleanup,
-    }
+    }, MAX_FAILED_DIAGNOSTIC_BYTES)
 
 
 def _write_failed_diagnostic(output: Path, payload: dict) -> None:
+    if not valid_exit_evidence(payload):
+        raise CandidateFailure("invalid_exit_evidence")
     data = (json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode("ascii")
     if len(data) > MAX_FAILED_DIAGNOSTIC_BYTES:
         raise CandidateFailure("failed_diagnostic_too_large")
@@ -1218,6 +1228,7 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
         finally:
             if failure_observation is not None:
                 failure_observation["startup_phases"] = _process_phases(probe_root)
+                retain_fatal_observation(failure_observation, probe_root)
 
 
 def _validated_core_payload(work: Path, args, failure_observation: dict | None):
@@ -1370,6 +1381,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         finally:
             if failure_observation is not None and failure_observation.get("observed_process") == "requested_launcher_handle":
                 failure_observation["startup_phases"] = _process_phases(probe_root)
+                retain_fatal_observation(failure_observation, probe_root)
 
 
 def qualify(args) -> dict:

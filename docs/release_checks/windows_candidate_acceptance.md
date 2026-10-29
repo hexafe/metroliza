@@ -101,6 +101,68 @@ does not establish that the success receipt was written. Invalid, missing or
 source-mismatched receipts retain their existing failure classification. There
 are no host retries or increased deadlines.
 
+### Post-success process exits
+
+The Python supervisor and portable envelope convert Windows child DWORDs in
+`0x80000000..0xffffffff` to signed int32 before `SystemExit`, preserving the
+bits through CPython's signed C exit argument, including Python 3.11. POSIX and
+integers outside the DWORD range retain their existing platform behavior.
+This fixes launcher exit-code masking; it does not suppress termination or
+qualify a nonzero exit as success.
+
+Failed diagnostics retain the exact `observed_exit_code` and, for every nonzero
+code, a consistent `observed_exit_class` from this closed table:
+
+| DWORD | Class |
+| --- | --- |
+| `0xC0000005` | `access_violation` |
+| `0xC0000409` | `stack_buffer_overrun` |
+| `0xC0000374` | `heap_corruption` |
+| `0xC00000FD` | `stack_overflow` |
+| `0xC000001D` | `illegal_instruction` |
+| `0xC0000008` | `invalid_handle` |
+| `0xC0000142` | `dll_init_failed` |
+| `0xC000013A` | `control_c_exit` |
+| `0xE06D7363` | `cpp_exception` |
+| `3` | `abort_3` |
+| `0xFFFFFFFF` | `all_ones` |
+| Other `0xC0000000..0xFFFFFFFE` | `other_ntstatus_error` |
+| Any remaining nonzero DWORD | `other_nonzero` |
+
+`child_wait_ntstatus_error` and `child_wait_high_bit_other` distinguish
+`0xC0000000..0xFFFFFFFE` and `0x80000000..0xBFFFFFFF` at the child handle.
+The all-ones bucket remains separate. Host validators reject unknown or
+code-inconsistent classes.
+
+Only the existing startup-probe gate plus the qualification-root environment
+and `METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION=1` enable early all-thread
+faulthandler capture in the application entry. Diagnostic `normal` and
+`concurrent` modes alone do not enable it. The sink is a private, non-inheritable
+raw OS descriptor, held open until exit and removed with the existing private-root
+cleanup. The host reads at most the last 64 KiB only after owned-process cleanup completes.
+It retains only `child_fatal_observation`: `present`, a closed `kind`
+(`access_violation`, `stack_overflow`, `code_0x` plus eight lowercase hex digits,
+`fatal_python_error` or `other`), up to 12 `stem:function` frames from the
+Current thread stack, `truncated`, and the boolean `multiple_blocks` (more than
+one complete exception header observed in the retained tail). Windows can log
+handled first-chance exceptions; only the last header-led block supplies the
+kind and frames. A partial leading block is discarded. A block without a
+Current thread header has no frames; `<no Python frame>` is a complete empty
+stack. A tail cut sets `truncated`; `multiple_blocks: false` does not exclude
+earlier exceptions outside that tail. Stem and function lengths are at most 64;
+only `[A-Za-z0-9_.]` and `[A-Za-z0-9_<>]`, respectively, are accepted.
+Frames are shortened further, with `truncated: true`, if needed to preserve
+the existing failure and phase fields within the byte limit.
+Paths, line numbers, raw text and other threads are excluded from public
+evidence, which remains bounded to 4096 bytes. Faults after
+`_PyFaulthandler_Fini`, including late finalization or DLL unload, cannot be
+captured: `present: false` is valid and is recorded explicitly. Because a
+handled first-chance exception is also logged, `present: true` with a matching
+`observed_exit_class` does not prove that the retained block is the terminating
+fault: a late fault, or a fail-fast that bypasses the vectored handler
+(for example `0xC0000409`/`0xC0000374`), leaves only the earlier handled block.
+These observations discriminate exits without establishing their root cause.
+
 Core runs enable the opt-in startup probe in a separate owned private directory,
 leaving the scenario's initially empty root intact. The host retains only fixed
 phase names from empty, regular, single-link, non-reparse marker files. Phases
@@ -121,6 +183,8 @@ boundary was reached, absence is inconclusive, and array order is the allowlist
 order rather than an event timeline. Probes perturb timing and cannot establish
 the cause of an earlier uninstrumented exit. No raw text, paths or exception
 messages are retained in this phase evidence.
+
+### Further core observations
 
 The literal-label export additionally checks formula-looking text, non-ASCII
 labels, series caches, local references, values and limit order. A corrupted local

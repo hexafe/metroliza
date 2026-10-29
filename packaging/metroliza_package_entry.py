@@ -19,6 +19,10 @@ if not getattr(sys, "frozen", False):
         sys.path.remove(src_text)
     sys.path.insert(0, src_text)
 
+from metroliza.shared.diagnostic_fatal_probe import enable_private_fatal_probe  # noqa: E402
+
+enable_private_fatal_probe()
+
 from metroliza.shared.compute_worker import use_native_windows_version  # noqa: E402
 
 # Install the same native fallback for ordinary and qualified packaged parents

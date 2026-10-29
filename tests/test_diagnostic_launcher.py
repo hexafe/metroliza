@@ -117,7 +117,7 @@ def test_drain_incident_accepts_exit_range_and_main_propagates_child_result(tmp_
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     monkeypatch.setattr(launcher, "IncidentStore", lambda: store)
     monkeypatch.setattr(launcher, "run_with_store", lambda *a, **kw: launcher.LaunchDelivery(observed, StoreStatus.SAVED))
-    assert launcher.main() == exit_code
+    assert launcher.main() == launcher.system_exit_code(exit_code)
 
 
 @pytest.mark.parametrize("exit_code", [0, 7, -1, 4294967295])
@@ -193,7 +193,7 @@ def test_launcher_exit_all_ones_bucket_preserves_other_exit_buckets(monkeypatch,
         SimpleNamespace(exit_code=exit_code), StoreStatus.SAVED,
     ))
     monkeypatch.setattr(launcher, "mark", marks.append)
-    assert launcher.main() == (exit_code if exit_code is not None else 1)
+    assert launcher.main() == (launcher.system_exit_code(exit_code) if exit_code is not None else 1)
     assert ("launcher_exit_zero" in marks) is (exit_code == 0)
     assert ("launcher_exit_nonzero" in marks) is (exit_code != 0)
     assert ("launcher_exit_all_ones" in marks) is (exit_code in {-1, 4294967295})
