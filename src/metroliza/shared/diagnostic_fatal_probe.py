@@ -44,7 +44,7 @@ def _wrapper_inventory(objects, sip) -> dict:
         name = name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,48}", name) else "other"
         classes[name] = classes.get(name, 0) + 1
         try:
-            # These SIP queries read wrapper flags, never the wrapped C++ object.
+            # SIP flag queries on the wrapper; no Qt method of the object is called.
             deleted += bool(sip.isdeleted(obj))
             cpp_created += not sip.ispycreated(obj)
             py_owned += bool(sip.ispyowned(obj))
@@ -56,6 +56,23 @@ def _wrapper_inventory(objects, sip) -> dict:
     return {"qt_wrappers": wrappers, "deleted_wrappers": deleted,
             "cpp_created_wrappers": cpp_created, "py_owned_wrappers": py_owned,
             "qt_classes": [[name, count] for name, count in sorted(classes.items(), key=lambda pair: (-pair[1], pair[0]))[:12]]}
+
+
+def _live_application_wrapper(objects, sip, app_type) -> bool:
+    """Whether an existing, not-deleted application wrapper is in the census.
+
+    A type check plus a wrapper flag only: ``QCoreApplication.instance()`` could
+    build a new wrapper and run sub-class conversion on the C++ object.
+    """
+    if not app_type:
+        return False
+    for obj in objects:
+        try:
+            if isinstance(obj, app_type) and not sip.isdeleted(obj):
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def _write_exit_inventory(root: Path) -> None:
@@ -71,9 +88,11 @@ def _write_exit_inventory(root: Path) -> None:
             import threading
 
             qtcore, sip = sys.modules.get("PyQt6.QtCore"), sys.modules.get("PyQt6.sip")
-            inventory = _wrapper_inventory(gc.get_objects(), sip)
-            # Static lookup only: do not dereference the returned application.
-            inventory["qapp_alive"] = qtcore is not None and qtcore.QCoreApplication.instance() is not None
+            objects = gc.get_objects()
+            inventory = _wrapper_inventory(objects, sip)
+            inventory["qapp_alive"] = _live_application_wrapper(
+                objects, sip, getattr(qtcore, "QCoreApplication", ()) if qtcore is not None else ())
+            del objects
             threads = threading.enumerate()
             inventory.update(threads_alive=min(len(threads), 10**6),
                              daemon_threads=min(sum(thread.daemon for thread in threads), 10**6))

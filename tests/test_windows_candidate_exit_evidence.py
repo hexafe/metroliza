@@ -248,7 +248,7 @@ def test_g_inventory_censuses_real_wrappers_without_collecting(monkeypatch, tmp_
     child.setParent(parent)
     sip.delete(deleted)
     dispatcher = qapplication_session.eventDispatcher()
-    objects = [parent, child, orphan, deleted, QtGui.QIcon(), QtGui.QPixmap(), dispatcher]
+    objects = [parent, child, orphan, deleted, QtGui.QIcon(), QtGui.QPixmap(), qapplication_session, dispatcher]
     # Check the installed SIP API on known Python-/C++-created and transferred objects.
     assert all(sip.ispycreated(obj) for obj in objects[:-1])
     assert not sip.ispycreated(dispatcher) and not sip.ispyowned(dispatcher)
@@ -257,14 +257,19 @@ def test_g_inventory_censuses_real_wrappers_without_collecting(monkeypatch, tmp_
     owned = sum(sip.ispyowned(obj) for obj in objects)
     monkeypatch.setattr(gc, "get_objects", lambda: objects)
     monkeypatch.setattr(gc, "collect", lambda *_a: pytest.fail("probe collected"))
+    calls = []
+    real_instance = QtCore.QCoreApplication.instance
+    monkeypatch.setattr(QtCore.QCoreApplication, "instance", staticmethod(lambda: calls.append(1) or real_instance()))
     fatal._write_exit_inventory(tmp_path)
+    assert calls == []
     result = read_exit_inventory(tmp_path)
     assert result is not None
     assert {key: result[key] for key in ("qapp_alive", "qt_wrappers", "deleted_wrappers", "cpp_created_wrappers",
                                        "py_owned_wrappers", "qt_classes")} == {
-        "qapp_alive": True, "qt_wrappers": 7, "deleted_wrappers": 1,
+        "qapp_alive": True, "qt_wrappers": 8, "deleted_wrappers": 1,
         "cpp_created_wrappers": 1, "py_owned_wrappers": owned,
-        "qt_classes": [["QObject", 4], ["QAbstractEventDispatcher", 1], ["QIcon", 1], ["QPixmap", 1]],
+        "qt_classes": [["QObject", 4], ["QAbstractEventDispatcher", 1], ["QApplication", 1], ["QIcon", 1],
+                       ["QPixmap", 1]],
     }
 
 
@@ -302,6 +307,19 @@ def test_g_inventory_swallows_all_callback_failures(monkeypatch, tmp_path, error
     monkeypatch.setattr(gc, "get_objects", fail)
     fatal._write_exit_inventory(tmp_path)
     assert not (tmp_path / fatal.INVENTORY_FILE).exists()
+
+
+def test_g_application_liveness_uses_existing_wrappers_only():
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+
+    class App:
+        pass
+
+    live, gone = App(), App()
+    sip = SimpleNamespace(isdeleted=lambda obj: obj is gone)
+    assert fatal._live_application_wrapper([object(), gone, live], sip, App) is True
+    assert fatal._live_application_wrapper([gone], sip, App) is False
+    assert fatal._live_application_wrapper([live], sip, ()) is False
 
 
 def test_g_wrapper_class_allowlist_flags_and_top12():

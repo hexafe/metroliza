@@ -198,12 +198,15 @@ and `deleted_wrappers`. Only already-loaded PyQt6 modules are consulted.
 GC-tracked SIP wrappers, including wrappers for deleted C++ objects, are counted
 up to 1000000 using type names and wrapper-only SIP flag queries:
 `sip.isdeleted`, `not sip.ispycreated` for `cpp_created_wrappers`, and
-`sip.ispyowned` for `py_owned_wrappers`. These independent counts can overlap.
+`sip.ispyowned` for `py_owned_wrappers`. These are intended to read wrapper
+state; that they never touch the C++ object on every PyQt6-sip build is not
+independently verified. These independent counts can overlap.
 They do not establish native object liveness: `isdeleted` may miss C++-side
-deletion of C++-created objects. No wrapper instance methods (including
-`parent()`) are called and the census does not construct Qt wrappers. The one
-permitted Qt call is the static `QCoreApplication.instance()` lookup for
-`qapp_alive`; the returned application is neither dereferenced nor retained.
+deletion of C++-created objects. No Qt method is called (including
+`parent()` and `QCoreApplication.instance()`, which could build a wrapper and
+run sub-class conversion on the C++ object), and the census does not construct
+Qt wrappers. `qapp_alive` means an existing application wrapper is in the
+census and is not flagged deleted.
 The SIP query signatures are documented in the installed `PyQt6/sip.pyi` API
 stub; their ownership/origin meanings are described in the
 [SIP ABI 13 API](https://python-sip.readthedocs.io/en/stable/abi_13.html).
