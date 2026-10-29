@@ -7,6 +7,7 @@ can shadow the canonical ``metroliza`` package during hidden-import analysis.
 
 from __future__ import annotations
 
+import atexit
 import os
 import sys
 from pathlib import Path
@@ -24,7 +25,10 @@ from metroliza.shared.compute_worker import use_native_windows_version  # noqa: 
 # before bootstrap or lazy NumPy/platform users can invoke cmd /c ver.
 use_native_windows_version()
 
-from metroliza.shared.diagnostic_startup_probe import mark, mark_error  # noqa: E402
+from metroliza.shared.diagnostic_startup_probe import enabled, mark, mark_error  # noqa: E402
+
+if enabled():
+    atexit.register(mark, "child_atexit_reached")
 
 QUALIFICATION_GATE_ENV = "METROLIZA_STARTUP_SMOKE"
 

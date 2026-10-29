@@ -258,6 +258,12 @@ def _close_descriptors(descriptors: set[int]) -> None:
     descriptors.clear()
 
 
+def _mark_child_exit(exit_code: int) -> None:
+    mark("child_wait_zero" if exit_code == 0 else "child_wait_nonzero")
+    if exit_code in {-1, 4294967295}:
+        mark("child_wait_all_ones")
+
+
 def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
                       cwd: str | Path | None = None,
                       session_id: str | None = None,
@@ -302,7 +308,7 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         write_frame(parent_write, control_bytes("challenge", session_id=session, token=token))
         _await_handshake(receiver, on_authenticated)
         exit_code = child.wait()
-        mark("child_wait_zero" if exit_code == 0 else "child_wait_nonzero")
+        _mark_child_exit(exit_code)
         receiver.thread.join(DRAIN_SECONDS)
         termination = "posix_signal" if os.name != "nt" and exit_code < 0 else "observed_exit"
     except (OSError, RuntimeError) as error:
@@ -312,7 +318,7 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         if child is not None:
             # Pipe failure cannot orphan/restart/kill the real product operation.
             exit_code = child.wait()
-            mark("child_wait_zero" if exit_code == 0 else "child_wait_nonzero")
+            _mark_child_exit(exit_code)
             termination = "posix_signal" if os.name != "nt" and exit_code < 0 else "observed_exit"
             receiver.stop.set()
             if receiver.thread.ident is not None:
@@ -333,10 +339,9 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
         # A validated terminal/error already finishes the protocol even if native
         # thread/descriptor cleanup is still returning.
         drain_incomplete = receiver.thread.is_alive() and receiver.channel == "incomplete"
-        mark("receiver_drain_incomplete" if drain_incomplete else "receiver_drain_not_flagged")
         receiver.stop.set()
         history = receiver.ring.snapshot(now=time.monotonic())
-        return SupervisedResult(
+        result = SupervisedResult(
             session, "started" if child is not None else "failed", receiver.handshake,
             "incomplete" if drain_incomplete else receiver.channel, exit_code, termination,
             False if drain_incomplete else receiver.clean_terminal,
@@ -345,3 +350,5 @@ def launch_supervised(argv: list[str], *, env: dict[str, str] | None = None,
             min(86_400_000, round((time.monotonic() - started) * 1000)),
             drain_incomplete,
         )
+    mark("receiver_drain_incomplete" if drain_incomplete else "receiver_drain_not_flagged")
+    return result

@@ -26,20 +26,23 @@ PHASES = (
     "child_application_returned", "child_qualification_returned",
     "child_exit_zero", "child_exit_nonzero", "child_main_failed",
     "child_recorder_close_entered", "child_recorder_close_returned", "child_recorder_close_failed",
-    "child_wait_zero", "child_wait_nonzero",
+    "child_wait_zero", "child_wait_nonzero", "child_wait_all_ones", "child_atexit_reached",
     "receiver_drain_incomplete", "receiver_drain_not_flagged",
     "publisher_close_entered", "publisher_close_returned",
-    "launcher_exit_zero", "launcher_exit_nonzero",
+    "launcher_exit_zero", "launcher_exit_nonzero", "launcher_exit_all_ones", "launcher_atexit_reached",
 )
 PROBE_DIRECTORY = "startup-phases"
 
 
+def enabled() -> bool:
+    return (os.getenv("METROLIZA_STARTUP_SMOKE") == "1"
+            and (os.getenv("METROLIZA_DIAGNOSTIC_QUALIFICATION") in {"normal", "concurrent"}
+                 or os.getenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION") == "1")
+            and os.getenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") == "1")
+
+
 def mark(phase: str) -> None:
-    if (type(phase) is not str or phase not in PHASES
-            or os.getenv("METROLIZA_STARTUP_SMOKE") != "1"
-            or (os.getenv("METROLIZA_DIAGNOSTIC_QUALIFICATION") not in {"normal", "concurrent"}
-                and os.getenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION") != "1")
-            or os.getenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE") != "1"):
+    if type(phase) is not str or phase not in PHASES or not enabled():
         return
     try:
         root = Path(os.environ["METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT"])

@@ -1161,6 +1161,7 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
             "startup_marker": "not_observed", "receipt_state": "not_checked",
             "stage_marker_state": "not_checked", "producer_stage": "unavailable",
             "allowlisted_failure": "unavailable",
+            "startup_phases": [],
         })
     stage["name"] = "fresh_reopen"
     try:
@@ -1367,7 +1368,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
                 failure_observation=failure_observation,
             )
         finally:
-            if failure_observation is not None and failure_observation.get("observed_process") != "fresh_reopen_launcher_handle":
+            if failure_observation is not None and failure_observation.get("observed_process") == "requested_launcher_handle":
                 failure_observation["startup_phases"] = _process_phases(probe_root)
 
 

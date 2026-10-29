@@ -106,8 +106,12 @@ leaving the scenario's initially empty root intact. The host retains only fixed
 phase names from empty, regular, single-link, non-reparse marker files. Phases
 cover the child's application/scenario return, requested exit and recorder close,
 the supervisor's observed child exit and receiver drain, and publisher/storage
-completion. `child_wait_zero`/`child_wait_nonzero` describe the supervisor's child
-handle; the numeric `observed_exit_code` belongs to the named
+completion. `child_atexit_reached` and `launcher_atexit_reached` are registered
+only under the probe gate and record entry into Python's atexit callbacks; they
+do not prove completion of interpreter or native teardown.
+`child_wait_zero`/`child_wait_nonzero` describe the supervisor's child handle;
+`child_wait_all_ones` and `launcher_exit_all_ones` additionally distinguish -1 or
+4294967295 at their respective boundaries. The numeric `observed_exit_code` belongs to the named
 `requested_launcher_handle` (or `fresh_reopen_launcher_handle`). They must not be
 treated as the same process. Failure receipts retain an allowlisted
 `startup_phases` array within a 4096-byte envelope. Successful core runs retain

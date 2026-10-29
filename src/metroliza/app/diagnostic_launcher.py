@@ -394,4 +394,6 @@ def main() -> int:
         mark("notice_not_required")
     code = delivery.observation.exit_code
     mark("launcher_exit_zero" if code == 0 else "launcher_exit_nonzero")
+    if code in {-1, 4294967295}:
+        mark("launcher_exit_all_ones")
     return code if code is not None else 1

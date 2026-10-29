@@ -59,14 +59,18 @@ def test_successful_heavy_child_with_held_receiver_persists_without_changing_exi
     from metroliza.app import diagnostic_launcher as launcher
     from metroliza.app import diagnostic_supervisor as supervisor
 
+    _completion_scheduler(monkeypatch)
     entered, release = threading.Event(), threading.Event()
+    receiver_failures = []
     receivers = []
     receive = supervisor._Receiver._receive
 
     def held_receive(self, payload):
         receivers.append(self)
         entered.set()
-        assert release.wait(15)
+        if not release.wait(15):
+            receiver_failures.append("receiver release watchdog")
+            return
         return receive(self, payload)
 
     monkeypatch.setattr(supervisor._Receiver, "_receive", held_receive)
@@ -94,6 +98,7 @@ def test_successful_heavy_child_with_held_receiver_persists_without_changing_exi
         for receiver in receivers:
             receiver.thread.join(5)
             assert not receiver.thread.is_alive()
+        assert receiver_failures == []
 
 
 @pytest.mark.parametrize("exit_code", [0, -1, 4294967295])
@@ -113,6 +118,85 @@ def test_drain_incident_accepts_exit_range_and_main_propagates_child_result(tmp_
     monkeypatch.setattr(launcher, "IncidentStore", lambda: store)
     monkeypatch.setattr(launcher, "run_with_store", lambda *a, **kw: launcher.LaunchDelivery(observed, StoreStatus.SAVED))
     assert launcher.main() == exit_code
+
+
+@pytest.mark.parametrize("exit_code", [0, 7, -1, 4294967295])
+@pytest.mark.parametrize("wait_raises", [False, True])
+@pytest.mark.parametrize("drain_incomplete", [False, True])
+def test_child_exit_buckets_and_drain_marker_outside_receiver_lock(
+    monkeypatch, exit_code, wait_raises, drain_incomplete,
+):
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    receiver_lock = threading.Lock()
+    marks = []
+    drain_locks = []
+    descriptors = []
+
+    class Child:
+        calls = 0
+
+        def wait(self):
+            self.calls += 1
+            if wait_raises and self.calls == 1:
+                raise OSError("synthetic wait failure")
+            return exit_code
+
+    class Receiver:
+        def __init__(self, read_fd, write_fd, *_args):
+            descriptors.extend((read_fd, write_fd))
+            self.lock = receiver_lock
+            self.stop = threading.Event()
+            self.ring = DiagnosticRing()
+            self.handshake = "accepted"
+            self.channel = "incomplete" if drain_incomplete else "complete"
+            self.clean_terminal, self.source_loss_known = True, True
+            self.source_dropped = 0
+            self.thread = SimpleNamespace(start=lambda: None, join=lambda _timeout: None,
+                                          is_alive=lambda: drain_incomplete, ident=1)
+
+    def mark(phase):
+        marks.append(phase)
+        if phase.startswith("receiver_drain_"):
+            drain_locks.append(receiver_lock.locked())
+
+    monkeypatch.setattr(supervisor, "_Receiver", Receiver)
+    monkeypatch.setattr(supervisor, "_spawn_child", lambda *_args: Child())
+    monkeypatch.setattr(supervisor, "_await_handshake", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "mark", mark)
+    try:
+        result = supervisor.launch_supervised([sys.executable])
+    finally:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    assert result.exit_code == exit_code
+    assert ("child_wait_zero" in marks) is (exit_code == 0)
+    assert ("child_wait_nonzero" in marks) is (exit_code != 0)
+    assert ("child_wait_all_ones" in marks) is (exit_code in {-1, 4294967295})
+    assert result.receiver_drain_incomplete is drain_incomplete
+    assert ("receiver_drain_incomplete" in marks) is drain_incomplete
+    assert ("receiver_drain_not_flagged" in marks) is (not drain_incomplete)
+    assert drain_locks == [False], "marker filesystem IO holds receiver lock"
+
+
+@pytest.mark.parametrize("exit_code", [0, 7, -1, 4294967295, None])
+def test_launcher_exit_all_ones_bucket_preserves_other_exit_buckets(monkeypatch, exit_code):
+    from metroliza.app import diagnostic_launcher as launcher
+
+    marks = []
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setattr(launcher, "IncidentStore", lambda: None)
+    monkeypatch.setattr(launcher, "run_with_store", lambda *_a, **_kw: launcher.LaunchDelivery(
+        SimpleNamespace(exit_code=exit_code), StoreStatus.SAVED,
+    ))
+    monkeypatch.setattr(launcher, "mark", marks.append)
+    assert launcher.main() == (exit_code if exit_code is not None else 1)
+    assert ("launcher_exit_zero" in marks) is (exit_code == 0)
+    assert ("launcher_exit_nonzero" in marks) is (exit_code != 0)
+    assert ("launcher_exit_all_ones" in marks) is (exit_code in {-1, 4294967295})
 
 
 def _completion_scheduler(monkeypatch):

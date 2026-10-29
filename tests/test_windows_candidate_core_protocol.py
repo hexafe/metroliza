@@ -465,6 +465,76 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
     assert "SYNTHETIC_PRIVATE_PATH" not in (diagnostic / driver.FAILED_DIAGNOSTIC_FILE).read_text()
 
 
+@pytest.mark.parametrize("cleanup_failed", [False, True])
+def test_fresh_reopen_launch_failure_does_not_acquire_core_phases(tmp_path, monkeypatch, cleanup_failed):
+    primary = OSError("PRIVATE_LAUNCH_FAILURE")
+    prior = {"relative_artifact_dir": "core-synthetic", "artifacts": {"database": {"sha256": ""}}}
+
+    class Process:
+        def close(self, *, terminate):
+            pass
+
+    class Api:
+        def launch(self, _executable, environment, _cwd, *, owned, expected_images):
+            probe = Path(environment["METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT"])
+            if environment.get("METROLIZA_WINDOWS_CANDIDATE_PHASE") == "reopen":
+                (probe / "startup-phases" / "launcher_entry").touch()
+                if cleanup_failed:
+                    class PartialProcess:
+                        def close(self, *, terminate):
+                            def fail():
+                                raise OSError("PRIVATE_CLEANUP_FAILURE")
+                            diagnostics._attempt_cleanup(fail)
+                    owned.append(PartialProcess())
+                raise primary
+            work = Path(environment[producer.ROOT_ENV])
+            child = work / prior["relative_artifact_dir"]
+            child.mkdir()
+            database = child / "reports.sqlite"
+            database.write_bytes(b"synthetic database")
+            prior["artifacts"]["database"]["sha256"] = driver._hash(database)
+            (probe / "startup-phases" / "child_wait_zero").touch()
+            owned.append(Process())
+            return owned[-1]
+
+    monkeypatch.setattr(driver, "_stage_known_fixtures", lambda *_: tmp_path)
+    monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda *_: tmp_path)
+    monkeypatch.setattr(driver, "_wait_for_launcher_exit", lambda *_a, **_kw: (0, True))
+    monkeypatch.setattr(driver, "_validated_core_payload", lambda *_: prior)
+    monkeypatch.setattr(driver, "_validate_ui_observation", lambda *_a, **_kw: None)
+    monkeypatch.setattr(driver, "_validate_closeout_observation", lambda *_a, **_kw: None)
+    monkeypatch.setattr(driver, "_verified_core_topology", lambda *_: {})
+    monkeypatch.setattr(driver, "_assert_database_sidecars_absent", lambda *_: None)
+    monkeypatch.setattr(driver, "_validate_reopen_sources", lambda *_: None)
+    monkeypatch.setattr(driver, "_independent_verifier", lambda: SimpleNamespace(
+        _load_oracle=lambda *_: {}, assert_database=lambda *_: None,
+    ))
+    diag = SimpleNamespace(
+        QualificationFailure=diagnostics.QualificationFailure,
+        _close_owned_processes=diagnostics._close_owned_processes,
+        _relocate_package=lambda _artifact, private, _deadline: private,
+        _sanitized_environment=lambda *_: {}, _WindowsApi=Api,
+        _wait_for_job_exit=lambda *_: True,
+    )
+    observation, stage = {"owned_cleanup": "not_attempted"}, {"name": "package_relocation"}
+    args = SimpleNamespace(expected_source_sha=SHA, dpi_scale="1.0", native_mode="default",
+                           source_checkout=tmp_path, oracle=ORACLE)
+    with pytest.raises(diagnostics.QualificationFailure if cleanup_failed else OSError) as caught:
+        driver._run_private_core(
+            tmp_path, args=args, diag=diag, artifact=tmp_path, fixtures=tmp_path,
+            output=tmp_path, deadline=time.monotonic() + 30, before="synthetic",
+            stage=stage, failure_observation=observation,
+        )
+    if not cleanup_failed:
+        assert caught.value is primary
+    assert observation["observed_process"] == "unavailable"
+    assert observation["observed_exit_code"] is None
+    assert observation["startup_phases"] == ["launcher_entry"]
+    bounded = driver._failed_diagnostic_payload(observation, stage, caught.value, SHA)
+    assert bounded["startup_phases"] == ["launcher_entry"]
+    assert "PRIVATE_LAUNCH_FAILURE" not in json.dumps(bounded)
+
+
 def test_failed_diagnostic_drops_untrusted_values(tmp_path) -> None:
     raw = "SYNTHETIC_PRIVATE_PATH"
     observation = {
