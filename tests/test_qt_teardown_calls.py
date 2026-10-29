@@ -1,8 +1,54 @@
 """Scenario-level finally blocks preserve qualification return values."""
 from types import SimpleNamespace
+import os
+from pathlib import Path
+import subprocess
 import sys
 
 import pytest
+
+
+def test_session_guard_and_default_spy_in_isolated_fake_qt_process(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    conftest = Path(os.environ.get("METROLIZA_QT_TEARDOWN_CONFTEST", root / "tests/conftest.py"))
+    (tmp_path / "conftest.py").write_text(conftest.read_text(), encoding="utf-8")
+    (tmp_path / "test_unlisted.py").write_text('''
+import sys
+from types import SimpleNamespace
+from metroliza.app.qt_teardown import shutdown_qt as real_shutdown
+
+def test_unlisted_uses_spy(qt_shutdown_spy):
+    from metroliza.app import qt_teardown
+    assert qt_teardown.shutdown_qt() is True
+    qt_shutdown_spy.assert_called_once_with()
+
+def test_real_saved_alias_is_protected(monkeypatch):
+    app = SimpleNamespace(_metroliza_test_session_application=True, thread=lambda: 'gui')
+    monkeypatch.setitem(sys.modules, 'PyQt6', SimpleNamespace(sip=SimpleNamespace(isdeleted=lambda _: False)))
+    monkeypatch.setitem(sys.modules, 'PyQt6.QtWidgets', SimpleNamespace(
+        QApplication=SimpleNamespace(instance=lambda: app), QWidget=object))
+    monkeypatch.setitem(sys.modules, 'PyQt6.QtCore', SimpleNamespace(
+        QThread=SimpleNamespace(currentThread=lambda: 'gui'), QObject=object,
+        QCoreApplication=object, QEvent=object))
+    assert real_shutdown(app) is False
+''', encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
+        cwd=tmp_path, env=dict(os.environ, PYTHONPATH=str(root / "src")),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "2 passed, 1 error" in result.stdout, result.stdout
+    assert "Real Qt teardown called on the retained session QApplication (#1119)" in result.stdout
+
+
+def test_normal_application_return_does_not_enter_exception_logger(monkeypatch):
+    from metroliza.app import bootstrap, qt_teardown
+
+    monkeypatch.setattr(qt_teardown, "APPLICATION_RELEASED", True)
+    monkeypatch.setattr(bootstrap, "bootstrap_application", lambda: 0)
+    monkeypatch.setattr(bootstrap, "log_and_exit", lambda *_: pytest.fail("exception logger after normal return"))
+    assert bootstrap.run_application() == 0
 
 
 @pytest.mark.parametrize("failed", [False, True])

@@ -11,7 +11,7 @@ from collections import OrderedDict
 from concurrent.futures import Future
 from dataclasses import dataclass
 from queue import Full, Queue
-from threading import Thread
+from threading import Condition, Thread
 import time
 from typing import Any, Callable
 from weakref import WeakSet
@@ -393,6 +393,7 @@ class BoundedWorkerPool:
         self._queue: Queue[tuple[Future, Callable[..., Any], tuple[Any, ...], dict[str, Any]] | None] = Queue(maxsize=max(1, int(max_queue_size)))
         self._threads: list[Thread] = []
         self._closed = False
+        self._admission = Condition()
         _POOLS.add(self)
         for idx in range(self._max_workers):
             worker = Thread(target=self._worker_loop, name=f'chart-worker-{idx}', daemon=True)
@@ -414,14 +415,21 @@ class BoundedWorkerPool:
             RuntimeError: If called after shutdown has begun.
 
         Notes:
-            Submission uses a blocking queue ``put`` to enforce backpressure when
-            the queue is full.
+            Submission waits for queue space under the admission condition.
+            Shutdown wakes waiting submitters so they fail instead of waiting
+            behind a sentinel after the workers have exited.
         """
 
-        if self._closed:
-            raise RuntimeError('Worker pool is closed.')
         future: Future = Future()
-        self._queue.put((future, fn, args, kwargs), block=True)
+        with self._admission:
+            while True:
+                if self._closed:
+                    raise RuntimeError('Worker pool is closed.')
+                try:
+                    self._queue.put_nowait((future, fn, args, kwargs))
+                    break
+                except Full:
+                    self._admission.wait()
         return future
 
     def _worker_loop(self):
@@ -429,6 +437,8 @@ class BoundedWorkerPool:
 
         while True:
             item = self._queue.get()
+            with self._admission:
+                self._admission.notify_all()
             if item is None:
                 self._queue.task_done()
                 self._wake_shutdown()
@@ -469,9 +479,11 @@ class BoundedWorkerPool:
             full queue. Accepted work drains before the sentinel reaches workers.
         """
 
-        if not self._closed:
-            self._closed = True
-            self._wake_shutdown()
+        with self._admission:
+            if not self._closed:
+                self._closed = True
+                self._wake_shutdown()
+            self._admission.notify_all()
         if wait:
             for worker in self._threads:
                 worker.join()

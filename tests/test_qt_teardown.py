@@ -146,7 +146,12 @@ try:
 finally:
     release.set()
     pool.shutdown(wait=True)
-    assert shutdown_qt(app)
+    cleanup_released = shutdown_qt(app)
+    if not cleanup_released:
+        policy = vars(app).get('_metroliza_gc_policy')
+        if policy is not None:
+            policy.uninstall()
+        sip.delete(app)
 assert gc.isenabled() == previous and gc.get_threshold() == thresholds
 print(json.dumps(observed), flush=True)
 '''
@@ -163,8 +168,18 @@ print(json.dumps(observed), flush=True)
 
 @pytest.fixture
 def fake_qt(monkeypatch):
-    class Widget:
+    class Object:
+        deleted = False
+        def thread(self):
+            return "gui"
+
+    class Widget(Object):
         pass
+
+    class Thread(Object):
+        currentThread = staticmethod(lambda: "gui")
+        def isRunning(self):
+            return False
 
     class App:
         deleted = False
@@ -183,27 +198,35 @@ def fake_qt(monkeypatch):
     core = SimpleNamespace(
         QCoreApplication=SimpleNamespace(sendPostedEvents=lambda *_: calls.append("deferred")),
         QEvent=SimpleNamespace(Type=SimpleNamespace(DeferredDelete=1)),
-        QThread=SimpleNamespace(currentThread=lambda: "gui"),
+        QThread=Thread, QObject=Object,
     )
     widgets = SimpleNamespace(QApplication=SimpleNamespace(instance=lambda: app), QWidget=Widget)
     monkeypatch.setitem(sys.modules, "PyQt6", SimpleNamespace(sip=sip))
     monkeypatch.setitem(sys.modules, "PyQt6.QtCore", core)
     monkeypatch.setitem(sys.modules, "PyQt6.QtWidgets", widgets)
     monkeypatch.setattr(teardown, "_stop_workers", lambda deadline, **kwargs: calls.append("workers") or True)
-    monkeypatch.setattr(teardown, "_live_widgets", lambda *_: 0)
+    objects, gc_state = [], {"enabled": False}
+    monkeypatch.setattr(teardown, "APPLICATION_RELEASED", False, raising=False)
+    monkeypatch.setattr(teardown.gc, "get_objects", lambda: objects)
+    monkeypatch.setattr(teardown.gc, "isenabled", lambda: gc_state["enabled"])
+    monkeypatch.setattr(teardown.gc, "disable", lambda: gc_state.update(enabled=False))
+    monkeypatch.setattr(teardown.gc, "enable", lambda: gc_state.update(enabled=True))
     monkeypatch.setattr(teardown.gc, "collect", lambda: calls.append("gc") or 0)
     monkeypatch.setattr(teardown, "record_event", lambda name, **counts: calls.append((name, counts)))
-    return SimpleNamespace(app=app, calls=calls, core=core, sip=sip)
+    return SimpleNamespace(app=app, calls=calls, core=core, sip=sip, objects=objects,
+                           gc_state=gc_state, widget_type=Widget)
 
 
 def test_idempotent_order_and_closed_events(fake_qt):
-    fake_qt.app._metroliza_gc_policy = SimpleNamespace(uninstall=lambda: fake_qt.calls.append("uninstall"))
+    fake_qt.app._metroliza_gc_policy = SimpleNamespace(
+        stop=lambda: fake_qt.calls.append("stop"),
+        uninstall=lambda **kwargs: fake_qt.calls.append("uninstall"))
     assert teardown.shutdown_qt(fake_qt.app)
     count = len(fake_qt.calls)
     assert teardown.shutdown_qt(fake_qt.app)
     assert len(fake_qt.calls) == count
     actions = [call for call in fake_qt.calls if isinstance(call, str)]
-    assert actions == ["workers", "deferred", "events", "uninstall", "gc", "deferred", "events", "delete_app"]
+    assert actions == ["stop", "workers", "deferred", "events", "gc", "deferred", "events", "delete_app", "uninstall"]
     assert all(type(value) is int for call in fake_qt.calls if isinstance(call, tuple) for value in call[1].values())
 
 
@@ -217,19 +240,30 @@ def test_exception_containment_retains_application(fake_qt, monkeypatch, failure
     assert "PRIVATE_TEXT" not in repr(fake_qt.calls)
 
 
-def test_refused_close_loop_is_bounded_and_never_deletes_app(fake_qt):
-    closes = []
-    window = SimpleNamespace(deleted=False, close=lambda: closes.append(1) or False,
-                             deleteLater=lambda: pytest.fail("refused close deleted"))
+def test_visible_window_is_untouched_and_retains_application(fake_qt):
+    window = SimpleNamespace(deleted=False, isVisible=lambda: True,
+                             close=lambda: pytest.fail("close event delivered"),
+                             deleteLater=lambda: pytest.fail("visible window deleted"))
     fake_qt.app.topLevelWidgets = lambda: [window]
     assert teardown.shutdown_qt(fake_qt.app, deadline_s=5) is False
-    assert len(closes) == 1
-    assert fake_qt.calls.count("events") == teardown.MAX_DELETE_PASSES
+    assert fake_qt.calls.count("events") == 0
     assert "gc" not in fake_qt.calls and not fake_qt.app.deleted
+    assert ("qt_teardown_retained", {"widgets": 1}) in fake_qt.calls
+
+
+def test_hidden_widget_delete_loop_is_bounded_without_close(fake_qt):
+    deletes = []
+    window = SimpleNamespace(deleted=False, isVisible=lambda: False,
+                             close=lambda: pytest.fail("close event delivered"),
+                             deleteLater=lambda: deletes.append(1))
+    fake_qt.app.topLevelWidgets = lambda: [window]
+    assert teardown.shutdown_qt(fake_qt.app) is False
+    assert deletes == [1]
+    assert fake_qt.calls.count("events") == teardown.MAX_DELETE_PASSES
 
 
 def test_expired_deadline_makes_only_one_delete_pass(fake_qt):
-    window = SimpleNamespace(deleted=False, close=lambda: False)
+    window = SimpleNamespace(deleted=False, isVisible=lambda: False, deleteLater=lambda: None)
     fake_qt.app.topLevelWidgets = lambda: [window]
     assert teardown.shutdown_qt(fake_qt.app, deadline_s=0) is False
     assert fake_qt.calls.count("events") == 1
@@ -249,7 +283,7 @@ def test_incomplete_workers_prevent_widget_or_gc_cleanup(fake_qt, monkeypatch):
 
 
 def test_widget_created_during_gc_prevents_application_release(fake_qt, monkeypatch):
-    monkeypatch.setattr(teardown, "_live_widgets", lambda *_: 1)
+    fake_qt.objects.append(fake_qt.widget_type())
     assert teardown.shutdown_qt(fake_qt.app) is False
     assert not fake_qt.app.deleted
 
@@ -332,7 +366,7 @@ def test_step_errors_never_escape(fake_qt, monkeypatch, stage):
     if stage == "widgets":
         fake_qt.app.topLevelWidgets = fail
     elif stage == "policy":
-        fake_qt.app._metroliza_gc_policy = SimpleNamespace(uninstall=fail)
+        fake_qt.app._metroliza_gc_policy = SimpleNamespace(stop=fail)
     elif stage == "gc":
         monkeypatch.setattr(teardown.gc, "collect", fail)
     elif stage == "flush":
@@ -342,3 +376,166 @@ def test_step_errors_never_escape(fake_qt, monkeypatch, stage):
     assert teardown.shutdown_qt(fake_qt.app) is False
     assert not fake_qt.app.deleted
     assert "PRIVATE_TEXT" not in repr(fake_qt.calls)
+
+
+@pytest.mark.parametrize("kind", ["running_thread", "foreign_object"])
+def test_live_qobject_scan_retains_unsafe_wrappers(fake_qt, kind):
+    obj = fake_qt.core.QThread() if kind == "running_thread" else fake_qt.core.QObject()
+    if kind == "running_thread":
+        obj.isRunning = lambda: True
+    else:
+        obj.thread = lambda: "worker"
+    fake_qt.objects.append(obj)
+    assert teardown.shutdown_qt(fake_qt.app) is False
+    assert not fake_qt.app.deleted
+    field = "running_threads" if kind == "running_thread" else "foreign_objects"
+    assert any(isinstance(call, tuple) and call[0] == "qt_teardown_retained"
+               and call[1].get(field) == 1 for call in fake_qt.calls)
+
+
+def test_gc_scan_uses_actual_type_without_class_property_dispatch(fake_qt):
+    class Pretender:
+        @property
+        def __class__(self):
+            pytest.fail("gc census dispatched __class__")
+    fake_qt.objects.append(Pretender())
+    assert teardown.shutdown_qt(fake_qt.app)
+
+
+@pytest.mark.parametrize("retain", [False, True])
+def test_gc_stays_disabled_through_release_decision(fake_qt, monkeypatch, retain):
+    fake_qt.gc_state["enabled"] = False
+    def uninstall(**kwargs):
+        fake_qt.gc_state["enabled"] = True
+        fake_qt.calls.append("uninstall")
+    fake_qt.app._metroliza_gc_policy = SimpleNamespace(
+        stop=lambda: fake_qt.calls.append("stop"), uninstall=uninstall)
+    if retain:
+        fake_qt.objects.append(fake_qt.widget_type())
+    during_collection = []
+    monkeypatch.setattr(teardown.gc, "collect",
+                        lambda: during_collection.append(teardown.gc.isenabled()) or 0)
+    assert teardown.shutdown_qt(fake_qt.app) is (not retain)
+    assert during_collection == [False]
+    assert fake_qt.gc_state["enabled"] is (not retain)
+    assert ("uninstall" in fake_qt.calls) is (not retain)
+
+
+def test_factory_refuses_after_release_without_constructing_qt(fake_qt, monkeypatch):
+    from metroliza.app import bootstrap
+    from unittest.mock import Mock
+
+    assert teardown.shutdown_qt(fake_qt.app)
+    # Safe also on the RED source: no second native application can be created.
+    factory = Mock(return_value=fake_qt.app)
+    factory.instance.return_value = None
+    monkeypatch.setattr(sys.modules["PyQt6.QtWidgets"], "QApplication", factory)
+    with pytest.raises(RuntimeError, match="second application"):
+        bootstrap.get_or_create_qapplication(gui_gc=False)
+    factory.assert_not_called()
+
+
+def _run_teardown_child(source_code):
+    source = os.environ.get("METROLIZA_QT_TEARDOWN_SOURCE", str(ROOT / "src"))
+    result = subprocess.run(
+        [sys.executable, "-u", "-c", source_code], cwd=Path(source).parent,
+        env=dict(os.environ, PYTHONPATH=source, QT_QPA_PLATFORM="offscreen"),
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    print(result.stdout)
+    assert Path(result.stdout.splitlines()[0]) == Path(source) / "metroliza/app/qt_teardown.py"
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+@pytest.mark.parametrize("visible", [False, True])
+def test_shutdown_child_after_exec_never_delivers_close_event(visible):
+    observed = _run_teardown_child('''
+import gc, json
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent, QTimer
+from PyQt6.QtWidgets import QWidget
+from metroliza.app import bootstrap, qt_teardown
+print(qt_teardown.__file__, flush=True)
+app = bootstrap.get_or_create_qapplication()
+app.setQuitOnLastWindowClosed(False)
+closes = []
+class Window(QWidget):
+    def closeEvent(self, event):
+        closes.append(1)
+        super().closeEvent(event)
+window = Window()
+window.show()
+def finish():
+    if not VISIBLE:
+        assert window.close()
+        QTimer.singleShot(0, app.quit)
+    else:
+        # QApplication.quit itself closes windows on Qt 6.6.1. exit leaves
+        # this top-level visible so the post-exec retention case is real.
+        QTimer.singleShot(0, lambda: app.exit(0))
+QTimer.singleShot(0, finish)
+app.exec()
+assert window.isVisible() is VISIBLE
+assert len(closes) == (0 if VISIBLE else 1)
+events = []
+qt_teardown.record_event = lambda name, **counts: events.append(name)
+released = qt_teardown.shutdown_qt(app)
+observed = dict(released=released, closes=len(closes),
+                alive=not sip.isdeleted(app), gc_disabled=not gc.isenabled(),
+                retained_event='qt_teardown_retained' in events)
+# Always perform ordinary safe cleanup before the parent's assertions, also RED.
+if not sip.isdeleted(app):
+    if not sip.isdeleted(window):
+        window.hide()
+        window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    if not qt_teardown.shutdown_qt(app):
+        policy = vars(app).get('_metroliza_gc_policy')
+        if policy is not None:
+            policy.uninstall()
+        sip.delete(app)
+print(json.dumps(observed), flush=True)
+'''.replace("VISIBLE", repr(visible)))
+    assert observed["closes"] == (0 if visible else 1), observed
+    assert observed["released"] is (not visible), observed
+    assert observed["alive"] is visible, observed
+    assert observed["gc_disabled"] is visible, observed
+    assert observed["retained_event"] is visible, observed
+
+
+def test_shutdown_child_retained_policy_timer_stops_and_gc_stays_disabled():
+    observed = _run_teardown_child('''
+import gc, json
+from PyQt6 import sip
+from PyQt6.QtCore import QObject
+from metroliza.app import bootstrap, qt_teardown
+print(qt_teardown.__file__, flush=True)
+app = bootstrap.get_or_create_qapplication()
+policy = app._metroliza_gc_policy
+timer = policy.timer
+# A hidden child created during collection prevents release without any close.
+from PyQt6.QtWidgets import QWidget
+original = gc.collect
+windows, during = [], []
+def collect():
+    during.append(gc.isenabled())
+    windows.append(QWidget())
+    return original()
+gc.collect = collect
+try:
+    released = qt_teardown.shutdown_qt(app)
+finally:
+    gc.collect = original
+observed = dict(released=released, during=during, disabled=not gc.isenabled(),
+                policy_retained=vars(app).get('_metroliza_gc_policy') is policy,
+                timer_stopped=sip.isdeleted(timer) or not timer.isActive())
+if not qt_teardown.shutdown_qt(app):
+    policy = vars(app).get('_metroliza_gc_policy')
+    if policy is not None:
+        policy.uninstall()
+    sip.delete(app)
+print(json.dumps(observed), flush=True)
+''')
+    assert observed == dict(released=False, during=[False], disabled=True,
+                            policy_retained=True, timer_stopped=True)

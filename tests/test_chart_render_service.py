@@ -4,6 +4,7 @@ import time
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from modules.chart_render_service import (
     BoundedWorkerPool,
@@ -18,6 +19,7 @@ def test_nonwaiting_shutdown_never_uses_blocking_queue_api():
     calls = []
     pool = BoundedWorkerPool.__new__(BoundedWorkerPool)
     pool._closed, pool._threads = False, [object()]
+    pool._admission = threading.Condition()
     pool._queue = SimpleNamespace(
         put=lambda *args, **kwargs: calls.append("blocking"),
         put_nowait=lambda *args: calls.append("nonblocking"),
@@ -83,6 +85,39 @@ def test_module_shutdown_reports_live_worker_after_expired_deadline(monkeypatch)
     monkeypatch.setattr(service.time, "monotonic", lambda: 20.0)
     assert service.shutdown(deadline=12.0) is False
     assert timeouts == [0.0]
+
+
+def test_submit_racing_close_cannot_block_on_leftover_sentinel(monkeypatch):
+    from concurrent.futures import Future
+    from metroliza.charts import chart_render_service as service
+
+    pool = BoundedWorkerPool(max_workers=1, max_queue_size=1)
+    errors = []
+    def close_during_admission():
+        pool.shutdown(wait=True)
+        assert pool._queue.full()  # final worker passes on the sentinel
+        return Future()
+    monkeypatch.setattr(service, "Future", close_during_admission)
+    def submit():
+        try:
+            pool.submit(lambda: 7)
+        except RuntimeError as error:
+            errors.append(str(error))
+    submitter = threading.Thread(target=submit)
+    submitter.start()
+    submitter.join(1)
+    stuck = submitter.is_alive()
+    if stuck:
+        # Release the RED submitter normally; never leave a blocked real thread.
+        pool._queue.get_nowait()
+        pool._queue.task_done()
+    submitter.join(2)
+    pool.shutdown(wait=True)
+    assert not submitter.is_alive()
+    assert not stuck, "submit blocked after shutdown on a leftover sentinel"
+    assert errors == ["Worker pool is closed."]
+    with pytest.raises(RuntimeError, match="closed"):
+        pool.submit(lambda: 9)
 
 
 class TestChartRenderService(unittest.TestCase):

@@ -1,6 +1,6 @@
 """Order Qt destruction on GUI before CPython's module finalization.
 
-No exit policy is changed. Incomplete workers, refused closes or failed cleanup
+No exit policy is changed. Incomplete workers, visible windows or failed cleanup
 leave the application alive rather than deleting an unsafe QObject hierarchy.
 """
 
@@ -15,6 +15,7 @@ from metroliza.app.startup_profile import record_event
 MAX_DELETE_PASSES = 8
 DEFAULT_DEADLINE_S = 5.0  # detached_threads' existing total exit-wait ceiling
 _ACTIVE_ATTRIBUTE = "_metroliza_qt_teardown_active"
+APPLICATION_RELEASED = False
 
 
 def _event(name: str, **counts: int) -> None:
@@ -47,20 +48,19 @@ def _flush(app, core, event) -> None:
     app.processEvents()
 
 
-def _close_widgets(app, sip, core, event, deadline: float) -> bool:
+def _delete_hidden_widgets(app, sip, core, event, deadline: float) -> bool:
     attempted = {}
     for _ in range(MAX_DELETE_PASSES):
         widgets = app.topLevelWidgets()
+        if any(not sip.isdeleted(widget) and widget.isVisible() for widget in widgets):
+            return False
         for widget in widgets:
             if sip.isdeleted(widget) or id(widget) in attempted:
                 continue
-            # A close handler may already spend its own bounded worker wait.
-            # Never repeat that wait on later drain turns. Retain the wrapper
-            # locally so a new widget cannot reuse an attempted identity.
+            # Keep identities alive across drain turns. Never send a close event:
+            # product close handlers have already run, or must remain untouched.
             attempted[id(widget)] = widget
-            # A refused close can mean a worker still owns the window.
-            if widget.close() and not sip.isdeleted(widget):
-                widget.deleteLater()
+            widget.deleteLater()
         _flush(app, core, event)
         if not app.topLevelWidgets():
             return True
@@ -69,16 +69,29 @@ def _close_widgets(app, sip, core, event, deadline: float) -> bool:
     return False
 
 
-def _live_widgets(widget_type, sip) -> int:
-    return sum(isinstance(obj, widget_type) and not sip.isdeleted(obj) for obj in gc.get_objects())
+def _live_qobjects(widget_type, object_type, thread_type, sip, app_thread) -> dict[str, int]:
+    counts = dict(widgets=0, running_threads=0, foreign_objects=0)
+    # The GUI thread's own QThread always reports isRunning(); only other
+    # running threads make release unsafe. SIP keeps one wrapper per native
+    # object and app_thread is held for the scan, so identity is exact.
+    for obj in gc.get_objects():
+        kind = type(obj)
+        if not issubclass(kind, object_type) or sip.isdeleted(obj):
+            continue
+        counts["widgets"] += int(issubclass(kind, widget_type))
+        counts["running_threads"] += int(issubclass(kind, thread_type)
+                                         and obj is not app_thread and obj.isRunning())
+        counts["foreign_objects"] += int(obj.thread() != app_thread)
+    return counts
 
 
 def shutdown_qt(app=None, *, deadline_s: float = DEFAULT_DEADLINE_S) -> bool:
     """Best-effort GUI-only teardown; return whether the application was released.
 
     The deadline bounds existing worker waits and the number of event-drain turns,
-    not arbitrary user close handlers or Python finalizers. Chart joins share
-    this deadline. Off-thread calls are quiet no-ops, including GC.
+    not arbitrary Python finalizers. No close handlers are called. Chart joins
+    share this deadline after aboutToQuit's existing wait. Off-thread calls are
+    quiet no-ops, including GC.
     Repeated/reentrant calls never touch an already deleted native application.
     """
     try:
@@ -86,7 +99,7 @@ def shutdown_qt(app=None, *, deadline_s: float = DEFAULT_DEADLINE_S) -> bool:
         if widgets is None:
             return True
         from PyQt6 import sip
-        from PyQt6.QtCore import QCoreApplication, QEvent, QThread
+        from PyQt6.QtCore import QCoreApplication, QEvent, QObject, QThread
 
         if app is None:
             app = widgets.QApplication.instance()
@@ -99,7 +112,7 @@ def shutdown_qt(app=None, *, deadline_s: float = DEFAULT_DEADLINE_S) -> bool:
             return False
         setattr(app, _ACTIVE_ATTRIBUTE, True)
         try:
-            return _shutdown_gui(app, widgets.QWidget, sip, QCoreApplication, QEvent, deadline_s)
+            return _shutdown_gui(app, widgets.QWidget, QObject, QThread, sip, QCoreApplication, QEvent, deadline_s)
         finally:
             setattr(app, _ACTIVE_ATTRIBUTE, False)
     except BaseException:
@@ -107,26 +120,30 @@ def shutdown_qt(app=None, *, deadline_s: float = DEFAULT_DEADLINE_S) -> bool:
         return False
 
 
-def _shutdown_gui(app, widget_type, sip, core, event, deadline_s: float) -> bool:
+def _shutdown_gui(app, widget_type, object_type, thread_type, sip, core, event, deadline_s: float) -> bool:
+    global APPLICATION_RELEASED
+    previous_enabled = gc.isenabled()
+    gc.disable()
+    policy = getattr(app, "_metroliza_gc_policy", None)
+    if policy is not None:
+        policy.stop()
     deadline = time.monotonic() + min(DEFAULT_DEADLINE_S, max(0.0, deadline_s))
     stopped = _stop_workers(deadline, detached_wait_spent=getattr(app, "_metroliza_detached_exit_wait_spent", False))
     _event("qt_teardown_workers", stopped=int(stopped))
     if not stopped:
         return False
-    closed = _close_widgets(app, sip, core, event, deadline)
+    closed = _delete_hidden_widgets(app, sip, core, event, deadline)
     _event("qt_teardown_widgets", complete=int(closed))
     if not closed:
+        _event("qt_teardown_retained", widgets=len(app.topLevelWidgets()))
         return False
-    policy = getattr(app, "_metroliza_gc_policy", None)
-    if policy is not None:
-        policy.uninstall()
     collected = gc.collect()
     _event("qt_teardown_gc", collected=collected)
     _flush(app, core, event)
     # Finalizers/events can create widgets: recheck immediately before release.
-    remaining = _live_widgets(widget_type, sip)
-    if remaining or app.topLevelWidgets():
-        _event("qt_teardown_retained", widgets=remaining)
+    remaining = _live_qobjects(widget_type, object_type, thread_type, sip, app.thread())
+    if any(remaining.values()) or app.topLevelWidgets():
+        _event("qt_teardown_retained", **remaining)
         return False
     # PyQt6 6.6.1's QApplication destructor runs qtwidgets_cleanup_qobjects;
     # QCoreApplication's destructor runs cleanup_qobjects. SIP invalidates the
@@ -134,5 +151,11 @@ def _shutdown_gui(app, widget_type, sip, core, event, deadline_s: float) -> bool
     # diagnostics, module state and callers may still hold the application.
     sip.delete(app)
     released = sip.isdeleted(app)
+    if released:
+        APPLICATION_RELEASED = True
+        if policy is not None:
+            policy.uninstall(application_released=True)
+        elif previous_enabled:
+            gc.enable()
     _event("qt_teardown_application", released=int(released))
     return released

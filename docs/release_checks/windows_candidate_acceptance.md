@@ -115,12 +115,21 @@ Product event-loop return and every returning package qualification flow now
 use GUI-thread teardown before interpreter finalization: request chart-pool
 shutdown for every pool, then join chart workers and use the existing bounded
 detached-thread shutdown within one shared monotonic 5-second deadline,
-close/delete remaining top-level widgets and drain deferred deletes, restore
-the previous GC policy and collect on GUI, then explicitly destroy QApplication
-only after workers and widgets are gone. Failed/incomplete cleanup retains the
+delete already-hidden top-level widgets without calling close or delivering a
+close event, then drain deferred deletes. Any visible top-level retains Qt
+untouched; teardown cannot prompt or repeat product close handlers. The GC timer
+stops while automatic GC remains disabled, followed by collection on GUI and a
+scan for live widgets, running QThreads and foreign-thread QObjects. Only after
+successful QApplication destruction is the previous GC state restored. Retention
+keeps automatic GC disabled for main-thread finalization. Failed/incomplete cleanup retains the
 application safely and never changes the scenario exit code.
 The chart joins use the remaining deadline even if the normal Quit hook has
 already spent its detached-thread wait; that detached wait is never granted again.
+Thus the chart join shares the teardown's 5-second budget after aboutToQuit's
+existing wait (up to 5 seconds). Close-handler waits add no teardown latency
+because teardown never calls close. Event callbacks and Python finalizers are
+not preempted by this deadline. A later application-factory call after release
+raises rather than creating an unsafe second QApplication (#1119).
 Closed startup profile events report completion/counts without object or exception text.
 Linux offscreen regression evidence proves the teardown contract only. The
 proposed root cause is confirmed only once Windows Combined passes with the

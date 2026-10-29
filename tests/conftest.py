@@ -10,20 +10,36 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def protect_retained_qapplication(monkeypatch):
+    """Catch even a saved alias of the real teardown before it mutates Qt."""
+    from metroliza.app import qt_teardown
+
+    original = qt_teardown._shutdown_gui
+    forbidden = []
+
+    def guarded(app, *args, **kwargs):
+        if any(app is kept for kept in _RETAINED_QT_APPLICATIONS) or getattr(
+            app, "_metroliza_test_session_application", False
+        ):
+            forbidden.append(True)
+            pytest.fail("Real Qt teardown called on the retained session QApplication (#1119)")
+        return original(app, *args, **kwargs)
+
+    monkeypatch.setattr(qt_teardown, "_shutdown_gui", guarded)
+    yield
+    # shutdown_qt contains BaseException: do not let it swallow this test guard.
+    if forbidden:
+        pytest.fail("Real Qt teardown called on the retained session QApplication (#1119)")
+
+
+@pytest.fixture(autouse=True)
 def qt_shutdown_spy(request, monkeypatch):
     """Entry-point unit tests must not destroy pytest's session QApplication.
 
     Actual process teardown is exercised in normal-exit subprocesses instead.
     Keep the orchestration seam observable while preserving the #1119 keeper.
     """
-    entry_tests = {
-        "test_bootstrap_startup", "test_step2_r4df_fixes",
-        "test_windows_candidate_core_protocol", "test_windows_candidate_import_sync",
-        "test_windows_candidate_launch_ownership", "test_windows_candidate_fresh_reopen",
-        "test_diagnostic_qualification", "test_compute_worker_qualification",
-        "test_qt_teardown_calls",
-    }
-    if request.module.__name__.rsplit(".", 1)[-1] not in entry_tests:
+    if request.module.__name__.rsplit(".", 1)[-1] == "test_qt_teardown":
         return None
     from unittest.mock import Mock
     from metroliza.app import qt_teardown
@@ -81,6 +97,7 @@ def retain_qapplication() -> None:
         from metroliza.app.gc_policy import install
 
         install(application)
+        application._metroliza_test_session_application = True
         if not any(application is kept for kept in _RETAINED_QT_APPLICATIONS):
             _RETAINED_QT_APPLICATIONS.append(application)
 
