@@ -1703,9 +1703,19 @@ def test_feature_warmup_close_cancels_queue_and_bounds_join(qapplication_session
     try:
         _wait_for_filter_shutdown(entered.is_set)
         thread = window._feature_import_warmup_thread
+        join_calls = []
+        original_join = thread.join
+
+        def join_spy(*args, **kwargs):
+            join_calls.append((args, kwargs))
+            return original_join(*args, **kwargs)
+
+        monkeypatch.setattr(thread, "join", join_spy)
         started = time.monotonic()
         window.close()
-        assert time.monotonic() - started < module.FEATURE_WARMUP_JOIN_TIMEOUT_S + 0.2
+        assert time.monotonic() - started < 5  # Hang guard, not a GUI timing budget.
+        assert join_calls == [((), {"timeout": module.FEATURE_WARMUP_JOIN_TIMEOUT_S})]
+        assert not release.is_set()
         assert thread.is_alive()
     finally:
         release.set()

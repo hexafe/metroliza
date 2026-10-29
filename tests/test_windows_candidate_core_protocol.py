@@ -352,13 +352,15 @@ def test_launcher_observer_rejects_expired_deadline_without_claiming_an_exit(tmp
 @pytest.mark.parametrize("cleanup_failed", [False, True])
 @pytest.mark.parametrize("receipt_present", [False, True, "success"])
 def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
-    tmp_path, monkeypatch, cleanup_failed, receipt_present,
+    tmp_path, monkeypatch, capsys, cleanup_failed, receipt_present,
 ) -> None:
-    from metroliza.shared.diagnostic_fatal_probe import FATAL_FILE
+    from metroliza.shared.diagnostic_fatal_probe import FATAL_FILE, INVENTORY_FILE
 
     closes = []
     private_sinks = []
     ready = []
+    inventory = {"qapp_alive": False, "qt_wrappers": 1, "qt_classes": [["QIcon", 1]],
+                 "qobject_parentless": 0, "threads_alive": 1, "daemon_threads": 0, "deleted_wrappers": 0}
     success_receipt = dict(payload(), schema="metroliza-windows-candidate-core-v1", scenario="core")
 
     class Process:
@@ -396,6 +398,7 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
                             'Current thread 0x123 (most recent call first):\n'
                             '  File "C:\\PRIVATE\\module.py", line 12 in shutdown\n')
             private_sinks.append(sink)
+            (self.probe / INVENTORY_FILE).write_text(json.dumps(inventory))
             def cleanup():
                 if cleanup_failed:
                     raise OSError("SYNTHETIC_PRIVATE_PATH")
@@ -464,8 +467,14 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
             "present": not cleanup_failed, "kind": "other" if cleanup_failed else "access_violation",
             "frames": [] if cleanup_failed else ["module:shutdown"], "truncated": False,
             "multiple_blocks": False,
+            "current_thread_marked": not cleanup_failed, "faulting_is_main": "unknown",
+            "python_threads": 0 if cleanup_failed else 1, "main_frames": [],
         },
+        "exit_inventory": None if cleanup_failed else inventory,
     }
+    line, = capsys.readouterr().out.splitlines()
+    assert line.startswith("core_exit_inventory=")
+    assert json.loads(line.split("=", 1)[1]) == (None if cleanup_failed else inventory)
     assert len(private_sinks) == 1 and not private_sinks[0].exists()
     diagnostic_payload = driver._failed_diagnostic_payload(observation, stage, failures[0], SHA)
     assert diagnostic_payload["stage_marker_state"] == "valid"

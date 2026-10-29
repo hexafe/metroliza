@@ -27,7 +27,7 @@ from pathlib import Path
 from scripts.verify_windows_candidate_closeout import ALL_FACETS as CLOSEOUT_CHECKS
 from scripts.windows_candidate_exit_evidence import (
     absent_fatal_observation, bound_fatal_frames, exit_class, retain_fatal_observation,
-    valid_exit_evidence, valid_fatal_observation,
+    retain_exit_inventory, valid_exit_evidence, valid_exit_inventory, valid_fatal_observation,
 )
 
 SCENARIO_FILE = "windows-candidate-result.json"
@@ -307,6 +307,15 @@ def _close_private_core_owned(diag, owned, *, terminate: bool, stage: dict[str, 
     else:
         if failure_observation is not None and failure_observation["owned_cleanup"] != "failed":
             failure_observation["owned_cleanup"] = "complete"
+
+
+def _close_with_exit_evidence(diag, owned, *, terminate, stage, observation, root, scenario):
+    try:
+        _close_private_core_owned(diag, owned, terminate=terminate, stage=stage, failure_observation=observation)
+    finally:
+        observation["startup_phases"] = _process_phases(root)
+        retain_fatal_observation(observation, root)
+        retain_exit_inventory(observation, root, scenario=scenario)
 
 
 def _run_private_directory_closed(diag, action, failure_observation: dict | None = None):
@@ -958,6 +967,8 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         "child_fatal_observation": (observation["child_fatal_observation"]
                                     if valid_fatal_observation(observation.get("child_fatal_observation"))
                                     else absent_fatal_observation()),
+        "exit_inventory": (observation.get("exit_inventory")
+                           if valid_exit_inventory(observation.get("exit_inventory")) else None),
         "host_stage": host_stage, "startup_marker": marker,
         "producer_stage": producer_stage, "stage_marker_state": stage_marker_state,
         "receipt_state": receipt_state,
@@ -1165,6 +1176,8 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
     next_environment.update(_probe_environment(probe_root))
     owned = []
     terminate = True
+    if failure_observation is None:
+        failure_observation = {"owned_cleanup": "not_attempted"}
     if failure_observation is not None:
         failure_observation.update({
             "observed_process": "unavailable", "observed_exit_code": None,
@@ -1220,15 +1233,8 @@ def _run_fresh_reopen(private, *, diag, relocated, environment, work, prior, arg
             "before_reopen_database": {"path": before_database.name, "sha256": expected_hash},
         }
     finally:
-        try:
-            _close_private_core_owned(
-                diag, owned, terminate=terminate, stage=stage,
-                failure_observation=failure_observation,
-            )
-        finally:
-            if failure_observation is not None:
-                failure_observation["startup_phases"] = _process_phases(probe_root)
-                retain_fatal_observation(failure_observation, probe_root)
+        _close_with_exit_evidence(diag, owned, terminate=terminate, stage=stage,
+                                  observation=failure_observation, root=probe_root, scenario="reopen")
 
 
 def _validated_core_payload(work: Path, args, failure_observation: dict | None):
@@ -1293,6 +1299,9 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     })
     owned = []
     terminate = True
+    exit_collected = False
+    if failure_observation is None:
+        failure_observation = {"owned_cleanup": "not_attempted"}
     try:
         stage["name"] = "owned_launch"
         process = diag._WindowsApi().launch(
@@ -1302,8 +1311,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
                 relocated / "metroliza_ocr_worker.exe",
             ),
         )
-        if failure_observation is not None:
-            failure_observation["observed_process"] = "requested_launcher_handle"
+        failure_observation["observed_process"] = "requested_launcher_handle"
         stage["name"] = "runtime_observation"
         code, startup_observed = _wait_for_launcher_exit(
             work, process, deadline, scenario="core", timeout_reason="owned_package_scenario_timeout",
@@ -1323,10 +1331,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
                     "allowlisted_failure": "unavailable",
                     "reason": "package_scenario_nonzero_exit_receipt_invalid",
                 }
-            if failure_observation is not None:
-                _retain_child_failure_observation(
-                    failure_observation, child_failure, stage_observation,
-                )
+            _retain_child_failure_observation(failure_observation, child_failure, stage_observation)
             raise CandidateFailure(child_failure["reason"])
         if not startup_observed:
             raise CandidateFailure("core_startup_receipt_missing")
@@ -1338,6 +1343,11 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
             raise CandidateFailure("owned_processes_remain")
         stage["name"] = "owned_topology"
         topology = _verified_core_topology(diag, process, relocated, failure_observation)
+        # The first Job is drained. Close its handles and collect its private
+        # evidence before the fresh Job reuses the failure observation.
+        exit_collected = True
+        _close_with_exit_evidence(diag, owned, terminate=False, stage=stage,
+                                  observation=failure_observation, root=probe_root, scenario="core")
         stage["name"] = "fresh_reopen"
         fresh_reopen = _run_fresh_reopen(
             private, diag=diag, relocated=relocated, environment=environment, work=work,
@@ -1373,15 +1383,9 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         terminate = False
         return artifacts
     finally:
-        try:
-            _close_private_core_owned(
-                diag, owned, terminate=terminate, stage=stage,
-                failure_observation=failure_observation,
-            )
-        finally:
-            if failure_observation is not None and failure_observation.get("observed_process") == "requested_launcher_handle":
-                failure_observation["startup_phases"] = _process_phases(probe_root)
-                retain_fatal_observation(failure_observation, probe_root)
+        if not exit_collected:
+            _close_with_exit_evidence(diag, owned, terminate=terminate, stage=stage,
+                                      observation=failure_observation, root=probe_root, scenario="core")
 
 
 def qualify(args) -> dict:
