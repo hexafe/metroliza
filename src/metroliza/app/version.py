@@ -13,7 +13,7 @@ release_notes = f"""
     - Filter searches keep selected headers, All and specific values cannot be mixed, and a From date after To is blocked<br>
     - Modify Database accepts an unambiguous decimal comma, blocks invalid numbers and saves all changes or none<br>
     - Mapping CSV import previews added and replaced names and imports only new ones by default<br>
-    - CSV Summary applies a search with Enter before assigning rows, keeps groups when nothing changed, and keeps manual limits of metrics you deselect<br>
+    - CSV Summary applies a search with Enter before assigning rows, keeps groups when nothing changed, and keeps manual limits of metrics you deselect and select again<br>
     - Much faster start on Windows: the app unpacks once per version, and later starts open the main window in about a second<br>
     - A smaller download: unused OCR acceleration and video components are no longer bundled<br>
     - Fast report import is about 2.5 times faster<br>
