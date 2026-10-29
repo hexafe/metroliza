@@ -116,15 +116,18 @@ The wire snapshot saturates at
 MAX_COUNTER (`4294967295`), meaning **at least** that many rejections. A drained recorder sends
 `ended(dropped=N)`. Callers must quiesce producers before close; a rejection racing the final counter
 snapshot may or may not be included in `ended`, and a later rejection cannot be included.
-Close joins the writer in 1-second progress windows and continues only if its completed-frame
-counter advanced. This window allows several small-frame reads to free one pipe buffer, including
+Before handshake completion nothing can be delivered, so close returns without a drain
+progress window; the daemon writer may stay blocked in the handshake read until process exit. After handshake completion, close joins the writer in 1-second progress windows
+and continues only if its completed-frame counter advanced. This window allows several small-frame
+reads to free one pipe buffer, including
 Windows' small default anonymous buffer; the 20-ms/frame slow-reader control can need more than
 0.25 seconds before a blocked write completes. The hard total cap is
 `(262144 + 4*256 + 4608 + 4 + 512 + 4) / 65536 = 4.0938720703125` seconds: maximum queued
 payload plus queue framing, one in-flight frame and the largest terminal control, at a stated minimum
 64 KiB/s. This is a shutdown allowance, not a guaranteed OS throughput or scheduling latency.
-A stalled writer costs one window; a progressing drain can use the total cap. Slower drains may
-expire and remain incomplete; neither expiry nor a successful join alone proves receiver completion.
+A stalled writer costs at most one window after its last completed frame (within the cap).
+Slower drains may expire and remain incomplete; neither expiry nor a successful join alone proves
+receiver completion.
 Stalled/broken writes can still leave terminal loss unknown; the outer process deadline still applies.
 Partial, wrong-session, malformed, flooded and broken channels cannot
 produce a complete-history claim. A receiver may outlive its bounded drain as a daemon when an

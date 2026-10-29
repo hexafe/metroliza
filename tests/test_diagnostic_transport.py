@@ -66,6 +66,61 @@ def test_control_round_trip():
     }
 
 
+@pytest.mark.parametrize("stage", ["challenge", "accepted"])
+@pytest.mark.parametrize("partial", [None, b"\x00", struct.pack("!I", 3) + b"{"])
+def test_close_without_handshake_is_prompt_and_stops_worker(monkeypatch, stage, partial):
+    import time
+
+    child_in, parent_write = os.pipe()
+    parent_read, child_out = os.pipe()
+    recorder = diagnostic_transport.ChildRecorder(child_in, child_out)
+    reading = threading.Event()
+    original = diagnostic_transport.read_frame
+    original_read = os.read
+    reads = 0
+
+    def observe_read(descriptor, **kwargs):
+        nonlocal reads
+        reads += 1
+        if partial is None and reads == (1 if stage == "challenge" else 2):
+            reading.set()
+        return original(descriptor, **kwargs)
+
+    def observe_partial_read(descriptor, size):
+        block = original_read(descriptor, size)
+        if descriptor == child_in and block in (b"\x00", b"{"):
+            reading.set()
+        return block
+
+    monkeypatch.setattr(diagnostic_transport, "read_frame", observe_read)
+    monkeypatch.setattr(os, "read", observe_partial_read)
+    if stage == "accepted":
+        write_frame(parent_write, control_bytes(
+            "challenge", session_id=uuid.uuid4().hex, token=secrets.token_hex(32),
+        ))
+    if partial is not None:
+        os.write(parent_write, partial)
+    try:
+        recorder._worker.start()
+        assert reading.wait(1)
+        if stage == "accepted":
+            assert parse_control(read_frame(parent_read), "hello", {"session_id", "token"})
+        started = time.monotonic()
+        recorder.close()
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.3
+        # The daemon writer may remain blocked in the handshake read; process exit releases it.
+        assert not recorder.connected
+        assert not recorder.qualified
+    finally:
+        # Also release an old blocking read when this regression intentionally fails.
+        os.close(parent_write)
+        recorder._worker.join(2)
+        recorder.close()
+        os.close(parent_read)
+    assert not recorder._worker.is_alive()
+
+
 def test_late_parent_accept_cannot_qualify_timed_out_child_recorder(monkeypatch):
     child_in, parent_write = os.pipe()
     parent_read, child_out = os.pipe()
@@ -471,6 +526,25 @@ def test_drop_counter_repeated_reads_preserve_value_and_reset(initial):
     assert recorder.dropped == 8
 
 
+@pytest.mark.parametrize("value, error", [
+    (-1, ValueError), (1.5, TypeError), ("1", TypeError),
+    (None, TypeError), (True, TypeError), (False, TypeError),
+])
+def test_drop_counter_reset_rejects_invalid_values_without_changing_count(value, error):
+    recorder = diagnostic_transport.ChildRecorder(-1, -1)
+    recorder.dropped = 7
+    with pytest.raises(error):
+        recorder.dropped = value
+    assert [recorder.dropped for _ in range(3)] == [7] * 3
+
+
+@pytest.mark.parametrize("value", [0, 7, diagnostic_transport.MAX_COUNTER])
+def test_drop_counter_reset_accepts_nonnegative_ints(value):
+    recorder = diagnostic_transport.ChildRecorder(-1, -1)
+    recorder.dropped = value
+    assert [recorder.dropped for _ in range(3)] == [value] * 3
+
+
 def test_contended_producer_counts_exact_loss_and_sends_clean_terminal(recorder_receiver_pair):
     recorder, receiver = recorder_receiver_pair
     locked, release = threading.Event(), threading.Event()
@@ -625,6 +699,7 @@ def test_close_stops_after_one_window_without_completed_frame():
     import time
 
     recorder = diagnostic_transport.ChildRecorder(-1, -1)
+    recorder.connected = True
     budgets = []
     recorder._worker = types.SimpleNamespace(ident=1, join=budgets.append, is_alive=lambda: True)
     recorder._queue.extend([(b"{}", True)] * diagnostic_transport.MAX_QUEUE_EVENTS)
@@ -640,6 +715,7 @@ def test_close_hard_cap_even_with_continuing_frame_progress(monkeypatch):
     clock = [0.0]
     budgets = []
     recorder = diagnostic_transport.ChildRecorder(-1, -1)
+    recorder.connected = True
     recorder._completed_frames = 0
 
     def join(window):
@@ -682,6 +758,7 @@ def test_stalled_full_pipe_close_returns_within_one_progress_window(recorder_rec
         started = time.monotonic()
         recorder.close()
         elapsed = time.monotonic() - started
+        assert elapsed >= 0.9  # Prove the default full progress window was waited.
         assert elapsed < 1.5  # One 1-s progress window plus 0.5-s scheduler tolerance.
         assert recorder._worker.is_alive()
         assert not receiver.clean_terminal

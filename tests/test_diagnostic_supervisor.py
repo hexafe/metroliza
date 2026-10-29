@@ -257,10 +257,48 @@ def test_contended_source_counter_is_exact_after_clean_terminal():
     assert result.source_dropped == 1
 
 
-def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
+def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch, tmp_path):
+    from metroliza.app import diagnostic_supervisor as supervisor
     from metroliza.app.diagnostic_supervisor import DRAIN_SECONDS, _Receiver
     from metroliza.shared.diagnostic_transport import CLOSE_MAX_SECONDS
 
+    # Instrument only the owned child fixture, using the same system monotonic
+    # clock in both processes (including supported Windows CPython 3.11).
+    close_times = tmp_path / "close-times.json"
+    program = '''
+import json, runpy, sys, time
+from pathlib import Path
+fixture, timing_path = sys.argv[1:]
+sys.path.insert(0, str(Path(fixture).resolve().parents[2] / "src"))
+from metroliza.shared.diagnostic_transport import ChildRecorder
+close = ChildRecorder.close
+def measured_close(self, *args, **kwargs):
+    started = time.monotonic()
+    try:
+        return close(self, *args, **kwargs)
+    finally:
+        finished = time.monotonic()
+        Path(timing_path).write_text(json.dumps([started, finished]), encoding="ascii")
+ChildRecorder.close = measured_close
+sys.argv = [fixture, "full_queue"]
+runpy.run_path(fixture, run_name="__main__")
+'''
+    child_exited = []
+    spawn = supervisor._spawn_child
+
+    def measured_spawn(*args, **kwargs):
+        child = spawn(*args, **kwargs)
+        wait = child.wait
+
+        def measured_wait():
+            result = wait()
+            child_exited.append(time.monotonic())
+            return result
+
+        monkeypatch.setattr(child, "wait", measured_wait)
+        return child
+
+    monkeypatch.setattr(supervisor, "_spawn_child", measured_spawn)
     receive = _Receiver._receive
     receivers = []
     def slow_receive(self, payload):
@@ -271,7 +309,7 @@ def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
     monkeypatch.setattr(_Receiver, "_receive", slow_receive)
     authenticated = []
     result = launch_supervised(
-        _command("full_queue"),
+        [sys.executable, "-c", program, str(CHILD), str(close_times)],
         on_authenticated=lambda _session: authenticated.append(time.monotonic()),
     )
     assert len(authenticated) == 1
@@ -279,12 +317,21 @@ def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch):
     for receiver in receivers:
         receiver.thread.join(3)
         assert not receiver.thread.is_alive()
-    # This deliberately sub-budget reader takes ~5 s for a full queue. Shutdown
-    # must respect the byte cap, then the unchanged receiver cap. One extra second
-    # covers the child's 0.05-s fixture preparation, enqueueing and scheduling.
-    # Start after authentication so Windows interpreter startup is not timed.
-    assert elapsed < CLOSE_MAX_SECONDS + DRAIN_SECONDS + 1
     assert result.exit_code == 0
+    close_started, close_finished = json.loads(close_times.read_text(encoding="ascii"))
+    assert len(child_exited) == 1
+    assert authenticated[0] <= close_started <= close_finished <= child_exited[0]
+    # This deliberately sub-budget reader takes ~5 s for a full queue. The total
+    # bound is the writer byte cap + receiver drain + a separate, enforced 1-s
+    # fixture/process budget: 0.05 s intentional preparation leaves at most 0.95 s
+    # for 1000 enqueues, scheduling, timing-file publication and interpreter exit.
+    # Measure both outside-close phases so the extra second cannot silently cover
+    # a fixture/child-shutdown regression. Windows interpreter startup precedes auth.
+    fixture_process_budget = 1.0
+    fixture_process_elapsed = ((close_started - authenticated[0])
+                               + (child_exited[0] - close_finished))
+    assert fixture_process_elapsed < fixture_process_budget
+    assert elapsed < CLOSE_MAX_SECONDS + DRAIN_SECONDS + fixture_process_budget
     assert result.receiver_drain_incomplete
     assert result.channel == "incomplete"
     assert not result.clean_terminal_received

@@ -263,7 +263,11 @@ class ChildRecorder:
     @dropped.setter
     def dropped(self, value: int) -> None:
         # Preserve explicit counter initialization used by synthetic callers;
-        # callers must quiesce producers before resetting a recorder's counter.
+        # callers must quiesce producers AND the writer before resetting the counter.
+        if type(value) is not int:
+            raise TypeError("invalid_drop_count")
+        if value < 0:
+            raise ValueError("invalid_drop_count")
         self._losses = count(value)
         self._loss_reads = count()
 
@@ -276,16 +280,22 @@ class ChildRecorder:
         more than 0.25 s). This is a shutdown policy, not a portable latency promise.
         The cap budgets MAX_QUEUE_BYTES + 4*MAX_QUEUE_EVENTS framing + MAX_FRAME_BYTES
         + 4 in flight + 512 + 4 terminal bytes at minimum 64 KiB/s: 268296/65536 s.
-        A stalled writer costs one window; a progressing writer never exceeds the
-        cap. Neither expiry proves ended was sent. Callers must quiesce producers:
+        A stalled writer costs at most one window after its last completed frame
+        (within the cap). Before handshake completion nothing can be delivered, so
+        close returns without a drain window. Neither expiry proves ended was sent. Callers must quiesce producers:
         rejections racing the final counter snapshot may or may not appear in ended;
         later rejections cannot appear. MAX_COUNTER reports at least that many drops.
         """
         with self._lock:
             self._closing = True
             self._wake.set()
+            connected = self.connected
         if self._worker.ident is None:
             self._close_channels()
+            return
+        if not connected:
+            # No qualified channel can deliver queued events. The daemon writer may
+            # stay blocked in the handshake read; process exit releases it.
             return
         deadline = time.monotonic() + CLOSE_MAX_SECONDS
         completed = self._completed_frames
