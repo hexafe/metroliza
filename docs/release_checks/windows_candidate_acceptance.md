@@ -153,7 +153,20 @@ earlier exceptions outside that tail. Stem and function lengths are at most 64;
 only `[A-Za-z0-9_.]` and `[A-Za-z0-9_<>]`, respectively, are accepted.
 Frames are shortened further, with `truncated: true`, if needed to preserve
 the existing failure and phase fields within the byte limit.
-Paths, line numbers, raw text and other threads are excluded from public
+The last block also supplies `current_thread_marked` (a Current thread header
+exists), `python_threads` (thread-header count, capped at 32), and
+`faulting_is_main` (`true`, `false`, or `"unknown"`). The child records the main
+Python thread ident at sink enable in an exclusively created fixed-format private
+sidecar. The host compares numeric ids, accepting zero padding differences, and
+never publishes them. A missing/invalid sidecar or an unmarked fault gives
+`"unknown"`. When the current thread is unmarked or differs from main,
+`main_frames` retains at most six frames from the matching main-thread stack,
+using the same stem/function restrictions. No main stack is inferred when its
+header is absent. A native fault without a Python thread state may leave every
+Python stack labelled Thread, with no Current thread; an empty `frames` array
+alone therefore cannot identify the faulting thread.
+
+Paths, line numbers, raw text and unrelated thread stacks are excluded from public
 evidence, which remains bounded to 4096 bytes. Faults after
 `_PyFaulthandler_Fini`, including late finalization or DLL unload, cannot be
 captured: `present: false` is valid and is recorded explicitly. Because a
@@ -162,6 +175,59 @@ handled first-chance exception is also logged, `present: true` with a matching
 fault: a late fault, or a fail-fast that bypasses the vectored handler
 (for example `0xC0000409`/`0xC0000374`), leaves only the earlier handled block.
 These observations discriminate exits without establishing their root cause.
+
+Under exactly the fatal-sink gate, the package entry registers an exit inventory
+callback before its other callbacks and before `child_atexit_reached`. Atexit's
+LIFO order makes the inventory run last among the entry's own callbacks. PyQt's
+QtCore atexit cleanup (`cleanup_on_exit` / `pyqt6_cleanup_qobjects`) runs before
+this census, as does Python's threading shutdown. Thus `qapp_alive` and the
+wrapper counts describe the state after PyQt cleanup, before subsequent
+interpreter GC/module teardown; they do not prove that teardown completed.
+The census never imports Qt, explicitly collects garbage, deletes objects,
+changes SIP exit policy, or retains wrappers after returning. Automatic GC is
+disabled for the census and its previous state is restored in `finally`,
+including on Python errors. Python callback exceptions, including
+`BaseException`, are caught and do not escape; native faults cannot be caught by
+this handler. The census adds work before finalization and perturbs timing, so
+occurrence rates are not directly comparable with earlier runs. It does not
+guarantee an unchanged process exit code.
+
+The private inventory JSON has only `qapp_alive`, `qt_wrappers`, `qt_classes`,
+`cpp_created_wrappers`, `py_owned_wrappers`, `threads_alive`, `daemon_threads`,
+and `deleted_wrappers`. Only already-loaded PyQt6 modules are consulted.
+GC-tracked SIP wrappers, including wrappers for deleted C++ objects, are counted
+up to 1000000 using type names and wrapper-only SIP flag queries:
+`sip.isdeleted`, `not sip.ispycreated` for `cpp_created_wrappers`, and
+`sip.ispyowned` for `py_owned_wrappers`. These are intended to read wrapper
+state; that they never touch the C++ object on every PyQt6-sip build is not
+independently verified. These independent counts can overlap.
+They do not establish native object liveness: `isdeleted` may miss C++-side
+deletion of C++-created objects. No Qt method is called (including
+`parent()` and `QCoreApplication.instance()`, which could build a wrapper and
+run sub-class conversion on the C++ object), and the census does not construct
+Qt wrappers. `qapp_alive` means an existing application wrapper is in the
+census and is not flagged deleted.
+The SIP query signatures are documented in the installed `PyQt6/sip.pyi` API
+stub; their ownership/origin meanings are described in the
+[SIP ABI 13 API](https://python-sip.readthedocs.io/en/stable/abi_13.html).
+The top 12 `[ClassName, count]` pairs sort by descending
+count then name. Names must match `^[A-Za-z_][A-Za-z0-9_]{0,48}$`; all others
+count as `other`. Thread counts come from `threading.enumerate()` and share the
+1000000 cap. This is a census of GC-tracked wrappers and enumerated Python
+threads, not every native object or thread.
+
+After owned cleanup, the host reads at most 4096 bytes with the same no-follow,
+regular-file, single-link, non-reparse and fstat identity checks as the fatal sink.
+Missing, unsafe or invalid inventory becomes `null`, never a zero-object claim.
+Both passing and failing core runs print `core_exit_inventory=<json>`; fresh
+reopen runs print `reopen_exit_inventory=<json>` from their separate private root.
+Failed diagnostics retain `exit_inventory` inside the existing 4096-byte bound,
+trimming `qt_classes` first, then stack frames while preserving failure, exit and
+phase fields. Counts, booleans, safe class names and sanitized frame names are
+the entire public contract: no object representations, addresses, thread ids,
+paths, raw text or exception messages. Private sidecars are removed with the
+owned root. Probes perturb timing; surviving Qt wrappers without an application
+are a diagnostic lead, not proof that SIP or Qt caused the access violation.
 
 Core runs enable the opt-in startup probe in a separate owned private directory,
 leaving the scenario's initially empty root intact. The host retains only fixed

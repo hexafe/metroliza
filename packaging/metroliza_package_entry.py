@@ -19,8 +19,13 @@ if not getattr(sys, "frozen", False):
         sys.path.remove(src_text)
     sys.path.insert(0, src_text)
 
-from metroliza.shared.diagnostic_fatal_probe import enable_private_fatal_probe  # noqa: E402
+from metroliza.shared.diagnostic_fatal_probe import (  # noqa: E402
+    enable_private_fatal_probe, register_private_exit_inventory,
+)
 
+# First entry callback, hence last under atexit's LIFO ordering. In particular
+# the child_atexit_reached marker below runs before the inventory.
+register_private_exit_inventory()
 enable_private_fatal_probe()
 
 from metroliza.shared.compute_worker import use_native_windows_version  # noqa: E402
