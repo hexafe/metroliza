@@ -213,6 +213,113 @@ def test_w07_failure_substage_round_trips_without_raw_workbook_data(tmp_path) ->
     assert sanitized["xlsx_failure_stage"] == "unavailable"
 
 
+def test_import_and_cleanup_failure_allowlists_match_producer():
+    from metroliza.app.windows_candidate_import_sync import IMPORT_FAILURES
+    from metroliza.app.windows_candidate_native_check import CLEANUP_FAILURES
+
+    assert driver.IMPORT_FAILURES == IMPORT_FAILURES
+    assert driver.CLEANUP_FAILURES == CLEANUP_FAILURES
+
+
+def test_core_execution_preserves_inference_substage_before_group_computation(tmp_path, monkeypatch, qapplication_session):
+    from metroliza.app import windows_candidate_inference, windows_candidate_reopen, windows_candidate_xlsx
+
+    digest = "2" * 64
+    receipt = {
+        "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+        "scenario": "core", "status": "failed", "source_sha": SHA,
+        "relative_artifact_dir": ".", "source_hashes": {}, "facets": {},
+        "artifacts": {"database": {"sha256": digest}},
+    }
+    # Only prerequisite slices are replaced; execute the real inference branch
+    # and the actual failed-receipt projection on both old and new sources.
+    monkeypatch.setattr(producer, "_run_core", lambda *args: None)
+    monkeypatch.setattr(producer, "_run_ocr_slice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(producer, "capture_tabular_w05", lambda *args: None)
+    monkeypatch.setattr(producer, "_sha256", lambda *args: digest)
+    monkeypatch.setattr(producer.shutil, "copyfile", lambda *args: None)
+    monkeypatch.setattr(windows_candidate_reopen, "run_reopen_checks", lambda *args: {
+        "status": "passed", "facets": {"reopen_preserves_completed_import": "passed"},
+        "database": {"before_sha256": digest, "sha256": digest},
+    })
+    facets = {
+        "literal_chart_titles_series_caches_references", "value_limit_order",
+        "local_chart_cells_and_negative_control", "pre_cancelled_export_preserves_workbook",
+        "oversized_label_rejection_preserves_workbook", "active_export_cancellation_preserves_workbook",
+    }
+    monkeypatch.setattr(windows_candidate_xlsx, "run_export_checks", lambda *args: {
+        "status": "passed", "facets": dict.fromkeys(facets, "passed"),
+        "relative_artifact_dir": ".", "artifacts": {"workbook": {"workbook": "literal.xlsx", "sha256": digest}},
+    })
+    monkeypatch.setattr(windows_candidate_inference, "run_inference_checks", lambda *args: {
+        "status": "failed", "failure": "import_worker_error", "failure_stage": "import",
+        "facets": {"successful_group_inference": "failed"},
+    })
+    with pytest.raises(producer.ScenarioFailure, match="^group_inference_checks_failed$"):
+        producer._execute_core_checks(tmp_path, tmp_path, tmp_path, receipt)
+    failed = producer._failed_core_receipt(receipt, "group_inference_checks_failed")
+    assert failed.get("inference_failure") == "import_worker_error"
+    assert failed.get("inference_failure_stage") == "import"
+
+
+@pytest.mark.parametrize("inference", [False, True])
+def test_primary_cleanup_and_inference_details_survive_both_receipts(tmp_path, inference):
+    receipt = {
+        "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+        "scenario": "core", "status": "failed", "stage": "inference" if inference else "selected_import",
+        "source_sha": SHA, "cleanup_failure": "candidate_report_owner_close_refused",
+    }
+    failure = "import_worker_not_started"
+    if inference:
+        with pytest.raises(producer.ScenarioFailure, match="^group_inference_checks_failed$"):
+            producer._require_inference_result(receipt, {
+                "status": "failed", "failure": "import_start_deadline", "failure_stage": "import",
+                "cleanup_failure": "candidate_report_owner_close_refused",
+            })
+        failure = "group_inference_checks_failed"
+    failed = producer._failed_core_receipt(receipt, failure)
+    path = tmp_path / driver.SCENARIO_FILE
+    path.write_text(json.dumps(failed))
+    observed = driver._child_failure_observation(tmp_path, SHA)
+    assert observed["receipt_state"] == "valid_allowlisted"
+    assert observed["allowlisted_failure"] == failure
+    assert observed["cleanup_failure"] == "candidate_report_owner_close_refused"
+    retained = {}
+    driver._retain_child_failure_observation(retained, observed, {"stage_marker_state": "valid"})
+    bounded = driver._failed_diagnostic_payload(
+        retained, {"name": "runtime_observation"}, driver.CandidateFailure(observed["reason"]), SHA,
+    )
+    assert bounded["cleanup_failure"] == "candidate_report_owner_close_refused"
+    if inference:
+        assert bounded["inference_failure"] == "import_start_deadline"
+        assert bounded["inference_failure_stage"] == "import"
+    driver._write_failed_diagnostic(tmp_path, bounded)
+    assert (tmp_path / driver.FAILED_DIAGNOSTIC_FILE).stat().st_size <= driver.MAX_FAILED_DIAGNOSTIC_BYTES
+
+
+@pytest.mark.parametrize("field", ["cleanup_failure", "inference_failure", "inference_failure_stage"])
+@pytest.mark.parametrize("private", ["SYNTHETIC_PRIVATE_PATH_AND_REPORT", ["private"], {"private": True}, None])
+def test_import_failure_details_reject_private_or_nonstring_values(tmp_path, field, private):
+    receipt = {
+        "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+        "scenario": "core", "status": "failed", "stage": "inference", "source_sha": SHA,
+        "inference_failure": "import_start_deadline", "inference_failure_stage": "import",
+        "cleanup_failure": "candidate_report_owner_close_refused",
+    }
+    failed = producer._failed_core_receipt(receipt, "group_inference_checks_failed")
+    failed[field] = private
+    (tmp_path / driver.SCENARIO_FILE).write_text(json.dumps(failed))
+    observed = driver._child_failure_observation(tmp_path, SHA)
+    assert observed["receipt_state"] == "invalid"
+    assert field not in observed
+    receipt[field] = private
+    sanitized = producer._failed_core_receipt(receipt, "group_inference_checks_failed")
+    assert private != sanitized[field]
+    observation = {field: private}
+    bounded = driver._failed_diagnostic_payload(observation, {"name": "runtime_observation"}, ValueError(), SHA)
+    assert "SYNTHETIC_PRIVATE" not in json.dumps(bounded)
+
+
 def test_producer_cannot_write_receipt_before_root_is_known(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(producer, "requested_scenario", lambda: "core")
     monkeypatch.setattr(producer, "_ordinary_user", lambda: True)

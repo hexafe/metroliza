@@ -114,6 +114,39 @@ _CLOSED_CHILD_FAILURES = frozenset({
 })
 
 
+IMPORT_FAILURES = frozenset({
+    "import_not_accepted", "import_start_deadline", "import_deadline",
+    "import_worker_error", "import_cancelled", "import_result_missing", "import_worker_join_deadline",
+})
+CLEANUP_FAILURES = frozenset({
+    "candidate_report_worker_join_deadline", "candidate_report_owner_close_refused", "candidate_report_cleanup_failed",
+})
+
+_CLOSED_CHILD_FAILURES |= IMPORT_FAILURES | CLEANUP_FAILURES
+
+
+def _child_failure_details(payload, base_fields, failure):
+    """Validate every optional field before accepting any producer detail."""
+    from metroliza.app.windows_candidate_inference import FAILURE_CODES, FAILURE_STAGES
+    from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES, _SAFE_FAILURE_STAGES
+
+    fields = {}
+    if "cleanup_failure" in payload:
+        fields["cleanup_failure"] = CLEANUP_FAILURES
+    if failure == "literal_workbook_checks_failed":
+        fields.update(xlsx_failure=_SAFE_FAILURE_CODES | {"operation_failed"},
+                      xlsx_failure_stage=_SAFE_FAILURE_STAGES | {"unavailable"})
+    if failure == "group_inference_checks_failed":
+        fields.update(inference_failure=FAILURE_CODES | IMPORT_FAILURES | CLEANUP_FAILURES,
+                      inference_failure_stage=FAILURE_STAGES)
+    if set(payload) != base_fields | fields.keys():
+        return None
+    if any(type(payload.get(key)) is not str or payload[key] not in allowed
+           for key, allowed in fields.items()):
+        return None
+    return {key: payload[key] for key in fields}
+
+
 def _closed_unexpected_stage(stage: str) -> CandidateFailure:
     return CandidateFailure(
         "unexpected_" + (stage if stage in _PRIVATE_CORE_STAGES else "private_core_unknown")
@@ -143,19 +176,10 @@ def _child_failure_observation(work: Path, expected_source_sha: str | None = Non
             failure = payload["failure"]
             observation["producer_stage"] = payload["stage"]
             base_fields = {"schema", "schema_version", "scenario", "status", "stage", "source_sha", "failure"}
-            if failure == "literal_workbook_checks_failed":
-                from metroliza.app.windows_candidate_xlsx import _SAFE_FAILURE_CODES, _SAFE_FAILURE_STAGES
-
-                code = payload.get("xlsx_failure")
-                substage = payload.get("xlsx_failure_stage")
-                if (set(payload) != base_fields | {"xlsx_failure", "xlsx_failure_stage"}
-                        or type(code) is not str or code not in _SAFE_FAILURE_CODES | {"operation_failed"}
-                        or type(substage) is not str or substage not in _SAFE_FAILURE_STAGES | {"unavailable"}):
-                    return observation
-                observation["xlsx_failure"] = code
-                observation["xlsx_failure_stage"] = substage
-            elif set(payload) != base_fields:
+            details = _child_failure_details(payload, base_fields, failure)
+            if details is None:
                 return observation
+            observation.update(details)
             if failure in _CLOSED_CHILD_FAILURES:
                 observation["receipt_state"] = "valid_allowlisted"
                 observation["allowlisted_failure"] = failure
@@ -170,7 +194,7 @@ def _retain_child_failure_observation(observation: dict, child: dict, marker: di
     observation.update({
         key: child[key] for key in ("receipt_state", "producer_stage", "allowlisted_failure")
     })
-    for key in ("xlsx_failure", "xlsx_failure_stage"):
+    for key in ("xlsx_failure", "xlsx_failure_stage", "inference_failure", "inference_failure_stage", "cleanup_failure"):
         if key in child:
             observation[key] = child[key]
     observation["stage_marker_state"] = marker["stage_marker_state"]
@@ -829,6 +853,12 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
                                  _SAFE_FAILURE_CODES | {"operation_failed"}, "unavailable")
     xlsx_stage = _closed_value(observation.get("xlsx_failure_stage"),
                                _SAFE_FAILURE_STAGES | {"unavailable"}, "unavailable")
+    from metroliza.app.windows_candidate_inference import FAILURE_CODES, FAILURE_STAGES
+
+    inference_failure = _closed_value(observation.get("inference_failure"),
+                                     FAILURE_CODES | IMPORT_FAILURES | CLEANUP_FAILURES, "unavailable")
+    inference_stage = _closed_value(observation.get("inference_failure_stage"), FAILURE_STAGES, "unavailable")
+    cleanup_failure = _closed_value(observation.get("cleanup_failure"), CLEANUP_FAILURES, "unavailable")
     from scripts.windows_owned_process_probe import UNAVAILABLE_SOURCES
 
     raw_sources = observation.get("probe_unavailable_sources")
@@ -863,6 +893,8 @@ def _failed_diagnostic_payload(observation: dict, stage: dict[str, str], error: 
         "receipt_state": receipt_state,
         "allowlisted_failure": failure_code, "failure_category": category,
         "xlsx_failure": xlsx_failure, "xlsx_failure_stage": xlsx_stage,
+        "inference_failure": inference_failure, "inference_failure_stage": inference_stage,
+        "cleanup_failure": cleanup_failure,
         "probe_unavailable_sources": probe_sources,
         "owned_cleanup": owned_cleanup, "private_cleanup": private_cleanup,
     }
