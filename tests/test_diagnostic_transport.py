@@ -581,10 +581,14 @@ def test_concurrent_contended_admissions_have_exact_saturating_count(recorder_re
     recorder.dropped = initial
     payload = _recorder_startup_payload(recorder)
     barrier = threading.Barrier(9)
+    # Each admission validates the event (~0.2 ms locally, several times slower on a
+    # loaded CI runner with coverage), so 8 x 100 keeps the contention well inside the
+    # join bound while still exceeding the saturation headroom of MAX_COUNTER - 2.
+    per_thread = 100
 
     def produce():
         barrier.wait()
-        for _ in range(1000):
+        for _ in range(per_thread):
             assert not recorder.enqueue_bytes(payload)
 
     workers = [threading.Thread(target=produce) for _ in range(8)]
@@ -597,7 +601,7 @@ def test_concurrent_contended_admissions_have_exact_saturating_count(recorder_re
             assert not worker.is_alive()
     recorder.close(timeout=2)
     receiver.thread.join(2)
-    assert receiver.source_dropped == min(diagnostic_transport.MAX_COUNTER, initial + 8000)
+    assert receiver.source_dropped == min(diagnostic_transport.MAX_COUNTER, initial + 8 * per_thread)
     assert receiver.clean_terminal
     assert receiver.source_loss_known
 
