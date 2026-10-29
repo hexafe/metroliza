@@ -710,6 +710,10 @@ def run_qualification() -> int:
         if root is not None:
             _atomic_json(root / "windows-candidate-result.json", _failed_core_receipt(receipt, failure))
         return 21
+    finally:
+        from metroliza.app.qt_teardown import shutdown_qt
+
+        shutdown_qt()
 
 
 def _bounded_exception_class(error):

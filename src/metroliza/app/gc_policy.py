@@ -90,7 +90,8 @@ class GuiGcPolicy:
         """Stop the timer and restore the caller's GC settings on the GUI thread.
 
         The caller must first stop its workers; enabling automatic GC reintroduces
-        collection on allocating threads. Normal GUI shutdown leaves it disabled.
+        collection on allocating threads. The deterministic GUI teardown calls
+        this only after its worker shutdown APIs report completion.
         """
         _require_gui_thread(self.app)
         if not self.active:

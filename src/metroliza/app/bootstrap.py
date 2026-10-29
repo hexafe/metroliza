@@ -1,4 +1,3 @@
-import gc
 import logging
 import os
 import sys
@@ -472,8 +471,9 @@ def launch_ui(
     record_event("event_loop_enter")
     _startup_event(StartupCallsite.EVENT_LOOP_EXEC_REQUEST, StartupOutcome.STARTUP_COMPLETED)
     exit_code = app.exec()
-    # All quit handlers have finished; collect remaining Qt cycles on the GUI thread.
-    gc.collect()
+    from metroliza.app.qt_teardown import shutdown_qt
+
+    shutdown_qt(app)
     record_event("event_loop_exit", exit_code=exit_code)
     return exit_code
 

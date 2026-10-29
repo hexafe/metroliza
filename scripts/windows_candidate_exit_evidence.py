@@ -74,16 +74,22 @@ def valid_exit_inventory(value: object) -> bool:
         return True
     wrapper_counts = {"deleted_wrappers", "cpp_created_wrappers", "py_owned_wrappers"}
     counters = {"qt_wrappers", "threads_alive", "daemon_threads"} | wrapper_counts
-    if type(value) is not dict or set(value) != counters | {"qapp_alive", "qt_classes"}:
+    if type(value) is not dict or set(value) != counters | {"qapp_alive", "qt_classes", "daemon_thread_names"}:
         return False
     if type(value["qapp_alive"]) is not bool or any(type(value[k]) is not int or not 0 <= value[k] <= 10**6 for k in counters):
         return False
     classes = value["qt_classes"]
     if type(classes) is not list or len(classes) > 12 or not all(_valid_class(pair) for pair in classes):
         return False
+    names = value["daemon_thread_names"]
+    if type(names) is not list or len(names) > 8 or not all(_valid_thread_name(pair) for pair in names):
+        return False
     return (len({pair[0] for pair in classes}) == len(classes)
             and classes == sorted(classes, key=lambda pair: (-pair[1], pair[0]))
             and sum(pair[1] for pair in classes) <= value["qt_wrappers"]
+            and len({pair[0] for pair in names}) == len(names)
+            and names == sorted(names, key=lambda pair: (-pair[1], pair[0]))
+            and sum(pair[1] for pair in names) <= value["daemon_threads"]
             and all(value[key] <= value["qt_wrappers"] for key in wrapper_counts)
             and value["daemon_threads"] <= value["threads_alive"])
 
@@ -91,6 +97,13 @@ def valid_exit_inventory(value: object) -> bool:
 def _valid_class(pair: object) -> bool:
     return (type(pair) is list and len(pair) == 2 and type(pair[0]) is str
             and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,48}", pair[0]) is not None
+            and type(pair[1]) is int and 1 <= pair[1] <= 10**6)
+
+
+def _valid_thread_name(pair: object) -> bool:
+    # The producer replaces every digit run with N; reject unnormalized names.
+    return (type(pair) is list and len(pair) == 2 and type(pair[0]) is str
+            and re.fullmatch(r"[A-Za-z][A-Za-z_.-]{0,40}", pair[0]) is not None
             and type(pair[1]) is int and 1 <= pair[1] <= 10**6)
 
 
@@ -129,19 +142,21 @@ def retain_exit_inventory(observation: dict, root: Path, *, scenario: str) -> No
 
 
 def bound_fatal_frames(payload: dict, limit: int) -> dict:
-    """Trim classes first, preserving existing failures and phases within 4096 B."""
+    """Trim thread names, classes, then stacks, preserving failures and phases."""
     fatal = dict(payload["child_fatal_observation"])
     fatal["frames"] = list(fatal["frames"])
     fatal["main_frames"] = list(fatal["main_frames"])
     payload["child_fatal_observation"] = fatal
     inventory = payload.get("exit_inventory")
     if inventory is not None:
-        inventory = dict(inventory, qt_classes=list(inventory["qt_classes"]))
+        inventory = dict(inventory, qt_classes=list(inventory["qt_classes"]),
+                         daemon_thread_names=list(inventory["daemon_thread_names"]))
         payload["exit_inventory"] = inventory
-    for frames in ([inventory["qt_classes"]] if inventory is not None else []) + [fatal["main_frames"], fatal["frames"]]:
+    census_lists = [inventory["daemon_thread_names"], inventory["qt_classes"]] if inventory is not None else []
+    for frames in census_lists + [fatal["main_frames"], fatal["frames"]]:
         while frames and len(json.dumps(payload, separators=(",", ":"), ensure_ascii=True)) + 1 > limit:
             frames.pop()
-            if inventory is None or frames is not inventory["qt_classes"]:
+            if frames is fatal["main_frames"] or frames is fatal["frames"]:
                 fatal["truncated"] = True
     return payload
 

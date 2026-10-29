@@ -9,6 +9,30 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def qt_shutdown_spy(request, monkeypatch):
+    """Entry-point unit tests must not destroy pytest's session QApplication.
+
+    Actual process teardown is exercised in normal-exit subprocesses instead.
+    Keep the orchestration seam observable while preserving the #1119 keeper.
+    """
+    entry_tests = {
+        "test_bootstrap_startup", "test_step2_r4df_fixes",
+        "test_windows_candidate_core_protocol", "test_windows_candidate_import_sync",
+        "test_windows_candidate_launch_ownership", "test_windows_candidate_fresh_reopen",
+        "test_diagnostic_qualification", "test_compute_worker_qualification",
+        "test_qt_teardown_calls",
+    }
+    if request.module.__name__.rsplit(".", 1)[-1] not in entry_tests:
+        return None
+    from unittest.mock import Mock
+    from metroliza.app import qt_teardown
+
+    spy = Mock(return_value=True)
+    monkeypatch.setattr(qt_teardown, "shutdown_qt", spy)
+    return spy
+
+
 expected_qt_platform = os.environ.get("METROLIZA_EXPECT_QT_PLATFORM", "").strip()
 if expected_qt_platform:
     if not os.environ.get("QT_QPA_PLATFORM"):

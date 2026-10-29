@@ -103,6 +103,29 @@ are no host retries or increased deadlines.
 
 ### Post-success process exits
 
+RC `6a604a1e`, Combined run `40937991935`, core DPR 1.0 reached a valid
+success receipt but exited with `0xC0000005`. Its last atexit census still found
+a live QApplication and 869 Qt wrappers (319 already deleted), with 10 Python
+threads including 9 daemons. The fatal observation identifies the main thread,
+one remaining Python thread state and no Python frame. These findings narrow
+the failure to native interpreter-finalization work; the census alone cannot
+identify the destructing object or the daemon thread names.
+
+Product event-loop return and every returning package qualification flow now
+use GUI-thread teardown before interpreter finalization: request chart-pool
+shutdown for every pool, then join chart workers and use the existing bounded
+detached-thread shutdown within one shared monotonic 5-second deadline,
+close/delete remaining top-level widgets and drain deferred deletes, restore
+the previous GC policy and collect on GUI, then explicitly destroy QApplication
+only after workers and widgets are gone. Failed/incomplete cleanup retains the
+application safely and never changes the scenario exit code.
+The chart joins use the remaining deadline even if the normal Quit hook has
+already spent its detached-thread wait; that detached wait is never granted again.
+Closed startup profile events report completion/counts without object or exception text.
+Linux offscreen regression evidence proves the teardown contract only. The
+proposed root cause is confirmed only once Windows Combined passes with the
+exit census showing a released application; nonzero exits still fail.
+
 The Python supervisor and portable envelope convert Windows child DWORDs in
 `0x80000000..0xffffffff` to signed int32 before `SystemExit`, preserving the
 bits through CPython's signed C exit argument, including Python 3.11. POSIX and
@@ -193,7 +216,7 @@ occurrence rates are not directly comparable with earlier runs. It does not
 guarantee an unchanged process exit code.
 
 The private inventory JSON has only `qapp_alive`, `qt_wrappers`, `qt_classes`,
-`cpp_created_wrappers`, `py_owned_wrappers`, `threads_alive`, `daemon_threads`,
+`cpp_created_wrappers`, `py_owned_wrappers`, `threads_alive`, `daemon_threads`, `daemon_thread_names`,
 and `deleted_wrappers`. Only already-loaded PyQt6 modules are consulted.
 GC-tracked SIP wrappers, including wrappers for deleted C++ objects, are counted
 up to 1000000 using type names and wrapper-only SIP flag queries:
@@ -215,6 +238,15 @@ count then name. Names must match `^[A-Za-z_][A-Za-z0-9_]{0,48}$`; all others
 count as `other`. Thread counts come from `threading.enumerate()` and share the
 1000000 cap. This is a census of GC-tracked wrappers and enumerated Python
 threads, not every native object or thread.
+`daemon_thread_names` contains up to 8 `[name, count]` pairs, sorted by descending
+count then name. Runs of digits are replaced with `N` before checking
+`^[A-Za-z][A-Za-z0-9_.-]{0,40}$`; rejected names count as `other`.
+Only daemon entries in the capped census contribute. This can include Python
+DummyThread entries for completed native threads; names do not prove that those
+native threads are still running. Historical inventories without names cannot
+identify the nine daemon entries retroactively.
+The host requires the new field; an older private inventory without it is invalid
+and reads as `null`, rather than implying there were no daemon names.
 
 After owned cleanup, the host reads at most 4096 bytes with the same no-follow,
 regular-file, single-link, non-reparse and fstat identity checks as the fatal sink.
@@ -222,8 +254,8 @@ Missing, unsafe or invalid inventory becomes `null`, never a zero-object claim.
 Both passing and failing core runs print `core_exit_inventory=<json>`; fresh
 reopen runs print `reopen_exit_inventory=<json>` from their separate private root.
 Failed diagnostics retain `exit_inventory` inside the existing 4096-byte bound,
-trimming `qt_classes` first, then stack frames while preserving failure, exit and
-phase fields. Counts, booleans, safe class names and sanitized frame names are
+trimming `daemon_thread_names` first, then `qt_classes`, then stack frames while preserving failure, exit and
+phase fields. Counts, booleans, normalized thread names, safe class names and sanitized frame names are
 the entire public contract: no object representations, addresses, thread ids,
 paths, raw text or exception messages. Private sidecars are removed with the
 owned root. Probes perturb timing; surviving Qt wrappers without an application

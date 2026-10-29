@@ -352,4 +352,11 @@ def _install_quit_hook() -> None:
     if app is None or any(app is hooked for hooked in _HOOKED_APPS):
         return
     _HOOKED_APPS.append(app)
-    app.aboutToQuit.connect(shutdown)
+    app.aboutToQuit.connect(functools.partial(_shutdown_on_quit, weakref.ref(app)))
+
+
+def _shutdown_on_quit(app_ref) -> None:
+    app = app_ref()
+    if app is not None:
+        app._metroliza_detached_exit_wait_spent = True
+    shutdown()
