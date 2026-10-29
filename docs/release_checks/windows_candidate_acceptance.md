@@ -156,8 +156,12 @@ the existing failure and phase fields within the byte limit.
 Paths, line numbers, raw text and other threads are excluded from public
 evidence, which remains bounded to 4096 bytes. Faults after
 `_PyFaulthandler_Fini`, including late finalization or DLL unload, cannot be
-captured: `present: false` is valid and is recorded explicitly. These
-observations discriminate exits without establishing their root cause.
+captured: `present: false` is valid and is recorded explicitly. Because a
+handled first-chance exception is also logged, `present: true` with a matching
+`observed_exit_class` does not prove that the retained block is the terminating
+fault: a late fault, or a fail-fast that bypasses the vectored handler
+(for example `0xC0000409`/`0xC0000374`), leaves only the earlier handled block.
+These observations discriminate exits without establishing their root cause.
 
 Core runs enable the opt-in startup probe in a separate owned private directory,
 leaving the scenario's initially empty root intact. The host retains only fixed

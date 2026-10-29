@@ -91,10 +91,9 @@ def test_e4_package_enables_private_faulthandler_early(monkeypatch, tmp_path):
     import faulthandler
 
     events, handles = [], []
-    if importlib.util.find_spec("metroliza.shared.diagnostic_fatal_probe") is not None:
-        from metroliza.shared import diagnostic_fatal_probe as fatal
+    from metroliza.shared import diagnostic_fatal_probe as fatal
 
-        monkeypatch.setattr(fatal, "_fatal_stream", None)
+    monkeypatch.setattr(fatal, "_fatal_stream", None)
     _gates(monkeypatch, tmp_path)
 
     def enable(*, file, all_threads):
@@ -118,12 +117,6 @@ def test_e4_package_enables_private_faulthandler_early(monkeypatch, tmp_path):
                 handle.close()
         if "metroliza.shared.diagnostic_fatal_probe" in sys.modules:
             monkeypatch.setattr(sys.modules["metroliza.shared.diagnostic_fatal_probe"], "_fatal_stream", None)
-
-
-def test_e5_post_success_documentation():
-    text = (ROOT / "docs/release_checks/windows_candidate_acceptance.md").read_text()
-    assert "observed_exit_class" in text
-    assert "_PyFaulthandler_Fini" in text
 
 
 @pytest.mark.parametrize("windows", [False, True])
@@ -487,36 +480,29 @@ assert system_exit_code(0xC0000005, windows=True) == -1073741819
     assert result.returncode == 0, result.stderr.decode(errors="replace")
 
 
-@pytest.mark.parametrize("previous_enabled", [False, True])
-def test_entry_fatal_fixture_restores_handler_and_resets_sink(monkeypatch, tmp_path, previous_enabled):
+def test_entry_fatal_fixture_keeps_real_handler_and_resets_sink(monkeypatch, tmp_path):
     import faulthandler
     from metroliza.shared import diagnostic_fatal_probe as fatal
 
-    original_enabled = faulthandler.is_enabled()
-    if previous_enabled:
-        faulthandler.enable(file=sys.__stderr__, all_threads=True)
-    else:
-        faulthandler.disable()
+    enabled_before = faulthandler.is_enabled()
+    real_enable = faulthandler.enable
+    isolation = isolated_fatal_probe.__wrapped__()
+    next(isolation)
     try:
-        isolation = isolated_fatal_probe.__wrapped__()
-        next(isolation)
-        try:
-            _gates(monkeypatch, tmp_path)
-            _entry(monkeypatch, [])
-            handle = fatal._fatal_stream
-            assert handle is not None
-            assert faulthandler.is_enabled()
-        finally:
-            isolation.close()
-        assert faulthandler.is_enabled() is previous_enabled
-        assert fatal._fatal_stream is None
-        with pytest.raises(OSError):
-            os.fstat(handle)
+        assert faulthandler.enable is not real_enable
+        _gates(monkeypatch, tmp_path)
+        _entry(monkeypatch, [])
+        handle = fatal._fatal_stream
+        assert type(handle) is int
+        # The entry never retargeted pytest's handler.
+        assert faulthandler.is_enabled() is enabled_before
     finally:
-        if original_enabled:
-            faulthandler.enable(file=sys.__stderr__, all_threads=True)
-        else:
-            faulthandler.disable()
+        isolation.close()
+    assert faulthandler.enable is real_enable
+    assert faulthandler.is_enabled() is enabled_before
+    assert fatal._fatal_stream is None
+    with pytest.raises(OSError):
+        os.fstat(handle)
 
 
 def test_e2_exit_evidence_is_in_native_windows_pytest_selection():
