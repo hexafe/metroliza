@@ -78,6 +78,21 @@ changing PDF bytes. The GUI selects samples 1 and 3 and verifies two imported an
 three excluded reports. Independent comparisons require exact persisted keys,
 measurements, grouping membership, exported cells and finite/precision filter IDs.
 
+Every Reports producer clicks the real Import control before waiting for metadata
+to become idle. It binds the newly accepted import operation, observes its queued
+start and terminal result within the existing 45-second import deadline, then
+confirms native worker completion. A cleared `parse_thread` alone is not evidence
+of success: fast completion, worker error and cancellation retain the outcome of
+that specific operation. Cancel and owner cleanup discard pending starts before
+canceling and joining existing workers; closing must never launch a queued import.
+
+Failed core receipts retain a bounded `cleanup_failure` alongside the primary
+`failure` when both occur. Cleanup failure always fails qualification. W06 failures
+also retain `inference_failure` and `inference_failure_stage` (fixtures, review,
+import, cleanup, database, groups, public_service or artifact), so an import failure cannot be
+mistaken for a statistical mismatch. Producer and host validate these closed
+identifiers; raw exception messages and private paths are excluded.
+
 The literal-label export additionally checks formula-looking text, non-ASCII
 labels, series caches, local references, values and limit order. A corrupted local
 cell with unchanged chart cache must fail comparison. Pre-cancel and oversized

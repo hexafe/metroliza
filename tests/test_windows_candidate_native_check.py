@@ -12,6 +12,33 @@ from scripts import qualify_windows_candidate_core as driver
 from tests.test_windows_candidate_core_protocol import native_observation, payload
 
 
+@pytest.mark.parametrize("joined", [True, False])
+def test_report_cleanup_joins_terminal_record_after_gui_clears_parse_thread(joined):
+    events = []
+    worker = SimpleNamespace(wait=lambda timeout: events.append(("join", timeout)) or joined)
+    window = SimpleNamespace(
+        _reports_workspace=SimpleNamespace(
+            preflight_thread=None, parse_thread=None, import_operation=SimpleNamespace(worker=worker),
+            _request_active_worker_cancellation=lambda: events.append("cancel"),
+        ),
+        close=lambda: events.append("close") or True, isVisible=lambda: False,
+    )
+    app = SimpleNamespace(processEvents=lambda: events.append("events"))
+    retained = len(control._UNJOINED_OWNERS)
+    try:
+        if joined:
+            control.close_report_owner(window, app)
+            assert ("join", 20000) in events
+            assert events.index(("join", 20000)) < events.index("close")
+        else:
+            with pytest.raises(control.ReportOwnerCleanupFailure) as caught:
+                control.close_report_owner(window, app)
+            assert caught.value.cleanup_failure == "candidate_report_worker_join_deadline"
+            assert "close" not in events
+    finally:
+        del control._UNJOINED_OWNERS[retained:]
+
+
 def _enable(monkeypatch, mode="unavailable"):
     monkeypatch.setenv("METROLIZA_STARTUP_SMOKE", "1")
     monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", "1")
