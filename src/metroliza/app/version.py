@@ -1,11 +1,19 @@
 RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "261020"
+VERSION_DATE = "261029"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import."
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261020)"
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261029)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Exporting to an existing workbook asks whether to save a copy (the default) or replace it; a workbook open in Excel is not overwritten<br>
+    - Metadata enrichment reports canceled, failed and skipped reports instead of a green 100%<br>
+    - Opening an existing .sqlite, .sqlite3 or .DB database uses exactly the file you chose<br>
+    - Copy to checked shows hidden and overwritten values and can be undone<br>
+    - Filter searches keep selected headers, All and specific values cannot be mixed, and a From date after To is blocked<br>
+    - Modify Database accepts an unambiguous decimal comma, blocks invalid numbers and saves all changes or none<br>
+    - Mapping CSV import previews added and replaced names and imports only new ones by default<br>
+    - CSV Summary applies a search with Enter before assigning rows, keeps groups when nothing changed, and keeps manual limits of metrics you switch off and on again<br>
     - Much faster start on Windows: the app unpacks once per version, and later starts open the main window in about a second<br>
     - A smaller download: unused OCR acceleration and video components are no longer bundled<br>
     - Fast report import is about 2.5 times faster<br>

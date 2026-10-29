@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261020)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261029)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,6 +50,14 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                '- Exporting to an existing workbook asks whether to save a copy (the default) or replace it; a workbook open in Excel is not overwritten<br>',
+                '- Metadata enrichment reports canceled, failed and skipped reports instead of a green 100%<br>',
+                '- Opening an existing .sqlite, .sqlite3 or .DB database uses exactly the file you chose<br>',
+                '- Copy to checked shows hidden and overwritten values and can be undone<br>',
+                '- Filter searches keep selected headers, All and specific values cannot be mixed, and a From date after To is blocked<br>',
+                '- Modify Database accepts an unambiguous decimal comma, blocks invalid numbers and saves all changes or none<br>',
+                '- Mapping CSV import previews added and replaced names and imports only new ones by default<br>',
+                '- CSV Summary applies a search with Enter before assigning rows, keeps groups when nothing changed, and keeps manual limits of metrics you switch off and on again<br>',
                 '- Much faster start on Windows: the app unpacks once per version, and later starts open the main window in about a second<br>',
                 '- A smaller download: unused OCR acceleration and video components are no longer bundled<br>',
                 '- Fast report import is about 2.5 times faster<br>',
