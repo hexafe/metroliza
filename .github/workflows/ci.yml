@@ -305,6 +305,10 @@ jobs:
       group: windows-candidate-acceptance-${{ github.repository }}
       cancel-in-progress: false
     steps:
+      - name: Record candidate job start UTC
+        shell: pwsh
+        run: '"CANDIDATE_JOB_START_UTC=$([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ"))" >> $env:GITHUB_ENV'
+
       - name: Checkout exact candidate source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -397,6 +401,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Candidate tree identity unavailable' }
           & .\.venv-build\Scripts\python.exe scripts/finalize_windows_candidate_receipts.py --receipt-root $env:CANDIDATE_RECEIPTS --expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree
           if ($LASTEXITCODE -ne 0) { throw 'Candidate combined receipt gate failed' }
+
+      - name: Collect bounded Windows fault module evidence
+        if: always()
+        shell: pwsh
+        run: |
+          try {
+            & .\.venv-build\Scripts\python.exe scripts/windows_fault_events.py --since $env:CANDIDATE_JOB_START_UTC --output (Join-Path $env:CANDIDATE_RECEIPTS 'fault-events/fault-events.json')
+          } catch { }
+          exit 0
 
       - name: Retain bounded synthetic candidate receipts
         if: always()
