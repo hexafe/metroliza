@@ -539,3 +539,33 @@ print(json.dumps(observed), flush=True)
 ''')
     assert observed == dict(released=False, during=[False], disabled=True,
                             policy_retained=True, timer_stopped=True)
+
+
+def test_shutdown_child_unregistered_running_qthread_retains_qt():
+    observed = _run_teardown_child('''
+import json, threading
+from PyQt6 import sip
+from PyQt6.QtCore import QThread
+from metroliza.app import bootstrap, qt_teardown
+print(qt_teardown.__file__, flush=True)
+app = bootstrap.get_or_create_qapplication()
+release = threading.Event()
+
+class Blocked(QThread):
+    def run(self):
+        release.wait(5)
+
+worker = Blocked()
+worker.start()
+try:
+    released = qt_teardown.shutdown_qt(app)
+    alive = not sip.isdeleted(app)
+finally:
+    release.set()
+    worker.wait(5000)
+# The GUI thread's own QThread alone must not block release.
+second = qt_teardown.shutdown_qt(app)
+print(json.dumps(dict(released=released, alive=alive, second=second,
+                      after=sip.isdeleted(app))), flush=True)
+''')
+    assert observed == dict(released=False, alive=True, second=True, after=True)

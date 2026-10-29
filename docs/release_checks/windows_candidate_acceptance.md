@@ -117,7 +117,9 @@ shutdown for every pool, then join chart workers and use the existing bounded
 detached-thread shutdown within one shared monotonic 5-second deadline,
 delete already-hidden top-level widgets without calling close or delivering a
 close event, then drain deferred deletes. Any visible top-level retains Qt
-untouched; teardown cannot prompt or repeat product close handlers. The GC timer
+untouched; teardown never sends a close event, so product close handlers do not
+run again. Draining deferred deletes calls `processEvents`, which can still deliver
+already-queued timers or signals after Quit. The GC timer
 stops while automatic GC remains disabled, followed by collection on GUI and a
 scan for live widgets, running QThreads and foreign-thread QObjects. Only after
 successful QApplication destruction is the previous GC state restored. Retention
