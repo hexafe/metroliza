@@ -141,8 +141,17 @@ def test_byte_encodings_fragments_and_xml_document(encoding):
         assert len(faults.reduce_events(xml.encode(encoding), START)["events"]) == expected
 
 
+def test_non_utf8_byte_in_foreign_event_keeps_allowlisted_evidence():
+    raw = event().encode("utf-8") + b'<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event"><System><EventID>1000</EventID></System><EventData><Data Name="AppName">caf\xe9.exe</Data></EventData></Event>'
+    reduced = faults.reduce_events(raw, START)
+    assert reduced["status"] == "available"
+    assert len(reduced["events"]) == 1
+    assert faults.reduce_events(b"\xff", START) == {
+        "schema_version": 1, "status": "available", "events": [], "truncated": False}
+
+
 @pytest.mark.parametrize("raw, reason", [
-    (b"broken <", "invalid_xml"), (b"\xff", "invalid_xml"),
+    (b"broken <", "invalid_xml"),
     (b'<!DOCTYPE x [<!ENTITY x "private">]><x>&x;</x>', "invalid_xml"),
     (b"x" * (faults.MAX_XML_BYTES + 1), "query_too_large"),
 ])

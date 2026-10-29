@@ -110,7 +110,9 @@ def reduce_events(raw: bytes, since: datetime) -> dict:
         encoding = "utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
         if not raw.startswith((b"\xff\xfe", b"\xfe\xff")) and b"\x00" in raw:
             encoding = "utf-16-le"
-        xml = raw.decode(encoding).strip()
+        # A foreign event in the console code page must not discard the whole
+        # receipt; only allowlisted, regex-checked fields survive anyway.
+        xml = raw.decode(encoding, errors="replace").strip()
         if "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
             return _unavailable("invalid_xml")
         xml = re.sub(r"^<\?xml[^?]*\?>", "", xml)

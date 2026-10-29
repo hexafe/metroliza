@@ -307,7 +307,7 @@ jobs:
     steps:
       - name: Record candidate job start UTC
         shell: pwsh
-        run: '"CANDIDATE_JOB_START_UTC=$([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ"))" >> $env:GITHUB_ENV'
+        run: '"CANDIDATE_JOB_START_UTC=$([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ", [Globalization.CultureInfo]::InvariantCulture))" >> $env:GITHUB_ENV'
 
       - name: Checkout exact candidate source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
