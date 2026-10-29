@@ -93,6 +93,35 @@ import, cleanup, database, groups, public_service or artifact), so an import fai
 mistaken for a statistical mismatch. Producer and host validate these closed
 identifiers; raw exception messages and private paths are excluded.
 
+A nonzero launcher exit always fails, including after a completed scenario. If
+the full packaged core receipt validates against the requested source, native mode
+and DPR, the host records `receipt_state=valid_success` and
+`failure_category=post_success_nonzero_exit`. A `complete` stage marker alone
+does not establish that the success receipt was written. Invalid, missing or
+source-mismatched receipts retain their existing failure classification. There
+are no host retries or increased deadlines.
+
+Core runs enable the opt-in startup probe in a separate owned private directory,
+leaving the scenario's initially empty root intact. The host retains only fixed
+phase names from empty, regular, single-link, non-reparse marker files. Phases
+cover the child's application/scenario return, requested exit and recorder close,
+the supervisor's observed child exit and receiver drain, and publisher/storage
+completion. `child_atexit_reached` and `launcher_atexit_reached` are registered
+only under the probe gate and record entry into Python's atexit callbacks; they
+do not prove completion of interpreter or native teardown.
+`child_wait_zero`/`child_wait_nonzero` describe the supervisor's child handle;
+`child_wait_all_ones` and `launcher_exit_all_ones` additionally distinguish -1 or
+4294967295 at their respective boundaries. The numeric `observed_exit_code` belongs to the named
+`requested_launcher_handle` (or `fresh_reopen_launcher_handle`). They must not be
+treated as the same process. Failure receipts retain an allowlisted
+`startup_phases` array within a 4096-byte envelope. Successful core runs retain
+separate `core` and `reopen` process-phase records inside the hash-bound
+`fresh-reopen-observation.json`, using separate probe roots. Marker presence proves only that the
+boundary was reached, absence is inconclusive, and array order is the allowlist
+order rather than an event timeline. Probes perturb timing and cannot establish
+the cause of an earlier uninstrumented exit. No raw text, paths or exception
+messages are retained in this phase evidence.
+
 The literal-label export additionally checks formula-looking text, non-ASCII
 labels, series caches, local references, values and limit order. A corrupted local
 cell with unchanged chart cache must fail comparison. Pre-cancel and oversized

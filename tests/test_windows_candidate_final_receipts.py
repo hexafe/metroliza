@@ -87,7 +87,12 @@ def _prepared(tmp_path):
         fresh = {"schema_version": 1, "status": "passed",
                  "process_boundary": "new_owned_job_after_initial_job_drained",
                  "observation": runtime_receipt(artifacts["database"]["sha256"], HEAD),
-                 "topology": receipt["topology"]["supervised"][0]}
+                 "topology": receipt["topology"]["supervised"][0],
+                 "process_phases": {
+                     "core": {"observed_process": "requested_launcher_handle", "observed_exit_code": 0,
+                              "startup_phases": ["child_wait_zero", "launcher_exit_zero"]},
+                     "reopen": {"observed_process": "fresh_reopen_launcher_handle", "observed_exit_code": 0,
+                                "startup_phases": []}}}
         fresh["observation"]["observation"]["database"].update(core._assert_reopen_databases_preserved(
             directory / artifacts["before_reopen_database"]["path"], directory / artifacts["database"]["path"],
             before_hash=artifacts["before_reopen_database"]["sha256"], after_hash=artifacts["database"]["sha256"]))
@@ -128,6 +133,29 @@ def test_same_package_protocol_fixture_binds_archive_and_all_four_runs(tmp_path)
     assert result["source_sha"] == HEAD
     assert result["scope"] == "same_package_diagnostics_and_core_four_runs"
     assert json.loads((root / "combined-candidate-receipt.json").read_bytes()) == result
+
+
+@pytest.mark.parametrize("field,value", [
+    ("startup_phases", ["PRIVATE_SENTINEL"]),
+    ("startup_phases", ["child_entry", "child_entry"]),
+    ("startup_phases", "child_entry"), ("startup_phases", [True]),
+    ("observed_process", "PRIVATE_SENTINEL"),
+    ("observed_exit_code", 4294967295), ("observed_exit_code", False),
+])
+def test_finalizer_rejects_unclosed_or_nonzero_process_phase_evidence(tmp_path, field, value):
+    root = _prepared(tmp_path)
+    directory = root / "core-dpr-1.0"
+    receipt_path = directory / "core-driver-receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    artifact = directory / receipt["artifacts"]["fresh_reopen_evidence"]["path"]
+    fresh = json.loads(artifact.read_bytes())
+    fresh["process_phases"]["core"][field] = value
+    _write(artifact, fresh)
+    receipt["artifacts"]["fresh_reopen_evidence"]["sha256"] = core._hash(artifact)
+    _write(receipt_path, receipt)
+    with pytest.raises(core.CandidateFailure, match="invalid_process_phase_evidence"):
+        final.finalize(root, HEAD, TREE)
+    assert not (root / "combined-candidate-receipt.json").exists()
 
 
 def test_finalizer_accepts_only_verified_ocr_worker_in_core_topology(tmp_path):

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import builtins
+import atexit
+import os
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -10,6 +13,13 @@ import pytest
 
 from metroliza.shared import diagnostic_startup_probe as probe
 from scripts import qualify_windows_diagnostics as qualifier
+
+
+@pytest.fixture(autouse=True)
+def atexit_callbacks(monkeypatch):
+    callbacks = []
+    monkeypatch.setattr(atexit, "register", lambda *args: callbacks.append(args))
+    return callbacks
 
 
 @pytest.fixture
@@ -31,6 +41,102 @@ def test_probe_requires_all_synthetic_opt_ins(probe_root, monkeypatch, name, val
     monkeypatch.setenv(name, value)
     probe.mark("launcher_entry")
     assert qualifier._startup_phases(probe_root) == ()
+
+
+def test_core_probe_uses_separate_private_root_without_diagnostic_scenario(probe_root, monkeypatch):
+    monkeypatch.delenv("METROLIZA_DIAGNOSTIC_QUALIFICATION")
+    monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", "1")
+    probe.mark("supervision_returned")
+    assert qualifier._startup_phases(probe_root) == ("supervision_returned",)
+    monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", "0")
+    probe.mark("persist_entered")
+    assert qualifier._startup_phases(probe_root) == ("supervision_returned",)
+
+
+@pytest.mark.parametrize("name", ["METROLIZA_STARTUP_SMOKE", "METROLIZA_DIAGNOSTIC_STARTUP_PROBE"])
+@pytest.mark.parametrize("value", [None, "0", "true"])
+def test_core_probe_requires_smoke_and_probe_gates(probe_root, monkeypatch, name, value):
+    monkeypatch.delenv("METROLIZA_DIAGNOSTIC_QUALIFICATION")
+    monkeypatch.setenv("METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION", "1")
+    if value is None:
+        monkeypatch.delenv(name)
+    else:
+        monkeypatch.setenv(name, value)
+    probe.mark("child_entry")
+    assert qualifier._startup_phases(probe_root) == ()
+
+
+@pytest.mark.parametrize("entry_name,phase", [
+    ("metroliza_package_entry.py", "child_atexit_reached"),
+    ("metroliza_supervisor_entry.py", "launcher_atexit_reached"),
+])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_entry_atexit_registration_is_gated_and_marker_is_deferred(
+    probe_root, monkeypatch, atexit_callbacks, entry_name, phase, enabled,
+):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("METROLIZA_DIAGNOSTIC_STARTUP_PROBE", "1" if enabled else "0")
+    monkeypatch.setitem(sys.modules, "metroliza.shared.diagnostic_transport", SimpleNamespace(
+        attach_child_recorder=lambda: None, supervised_mode_requested=lambda: False,
+    ))
+    monkeypatch.setitem(sys.modules, "metroliza.app.bootstrap", SimpleNamespace(run_application=lambda: 7))
+    monkeypatch.setitem(sys.modules, "metroliza.app.diagnostic_launcher", SimpleNamespace(main=lambda: 7))
+    entry = Path(probe.__file__).resolve().parents[3] / "packaging" / entry_name
+    with pytest.raises(SystemExit) as caught:
+        runpy.run_path(str(entry), run_name="__main__")
+    assert caught.value.code == 7
+    assert phase not in qualifier._startup_phases(probe_root)
+    callbacks = [args for args in atexit_callbacks if args == (probe.mark, phase)]
+    assert len(callbacks) == int(enabled)
+    for callback, name in callbacks:
+        callback(name)
+    assert (phase in qualifier._startup_phases(probe_root)) is enabled
+
+
+@pytest.mark.parametrize("phase", [
+    "child_atexit_reached", "launcher_atexit_reached", "child_wait_all_ones", "launcher_exit_all_ones",
+])
+def test_finalization_and_all_ones_phases_pass_shared_host_validation(probe_root, phase):
+    from scripts import qualify_windows_candidate_core as core
+
+    probe.mark(phase)
+    assert qualifier._startup_phases(probe_root) == (phase,)
+    assert core._closed_phases([phase]) == [phase]
+    core._validate_process_phases({
+        scenario: {"observed_process": role, "observed_exit_code": 0, "startup_phases": [phase]}
+        for scenario, role in (("core", "requested_launcher_handle"), ("reopen", "fresh_reopen_launcher_handle"))
+    })
+
+
+@pytest.mark.parametrize("entry_name,phase", [
+    ("metroliza_package_entry.py", "child_atexit_reached"),
+    ("metroliza_supervisor_entry.py", "launcher_atexit_reached"),
+])
+def test_actual_interpreter_finalization_creates_entry_marker(probe_root, entry_name, phase):
+    root = Path(probe.__file__).resolve().parents[3]
+    program = '''
+import runpy, sys
+from types import SimpleNamespace
+from metroliza.shared import diagnostic_startup_probe as probe
+from pathlib import Path
+sys.modules["metroliza.shared.diagnostic_transport"] = SimpleNamespace(
+    attach_child_recorder=lambda: None, supervised_mode_requested=lambda: False)
+sys.modules["metroliza.app.bootstrap"] = SimpleNamespace(run_application=lambda: 7)
+sys.modules["metroliza.app.diagnostic_launcher"] = SimpleNamespace(main=lambda: 7)
+try:
+    runpy.run_path(sys.argv[1], run_name="__main__")
+except SystemExit as error:
+    assert error.code == 7
+assert not (Path(sys.argv[2]) / probe.PROBE_DIRECTORY / sys.argv[3]).exists()
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", program, str(root / "packaging" / entry_name), str(probe_root), phase],
+        cwd=probe_root, env=dict(os.environ, PYTHONPATH=str(root / "src")),
+        capture_output=True, timeout=15, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    assert phase in qualifier._startup_phases(probe_root)
 
 
 def test_probe_records_only_fixed_empty_markers_without_overwriting(probe_root):

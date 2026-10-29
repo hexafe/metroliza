@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import runpy
+import atexit
 import sys
 import types
 from pathlib import Path
@@ -10,6 +11,11 @@ import pytest
 
 
 ENTRY = Path(__file__).resolve().parents[1] / "packaging" / "metroliza_package_entry.py"
+
+
+@pytest.fixture(autouse=True)
+def isolate_entry_atexit(monkeypatch):
+    monkeypatch.setattr(atexit, "register", lambda *_args: None)
 
 
 def _module(**members):
@@ -71,12 +77,86 @@ def test_candidate_qualification_runs_only_after_diagnostic_gate_declines(monkey
     assert events == ["bootstrap", "candidate_requested", "candidate_run", "recorder_close"]
 
 
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_successful_candidate_system_exit_preserves_zero_through_recorder_close(
+    monkeypatch, tmp_path, close_fails,
+):
+    from metroliza.shared import diagnostic_startup_probe as probe
+    from scripts.qualify_windows_diagnostics import _startup_phases
+
+    (tmp_path / probe.PROBE_DIRECTORY).mkdir()
+    for name, value in {
+        "METROLIZA_STARTUP_SMOKE": "1", "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION": "1",
+        "METROLIZA_DIAGNOSTIC_STARTUP_PROBE": "1", "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT": str(tmp_path),
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("METROLIZA_DIAGNOSTIC_QUALIFICATION", raising=False)
+
+    class Recorder:
+        def close(self):
+            if close_fails:
+                raise RuntimeError("PRIVATE_SENTINEL")
+
+    monkeypatch.setitem(sys.modules, "metroliza.shared.diagnostic_transport", _module(
+        attach_child_recorder=Recorder, supervised_mode_requested=lambda: False,
+    ))
+    monkeypatch.setitem(sys.modules, "metroliza.app.bootstrap", _module(run_application=lambda: 0))
+    monkeypatch.setitem(sys.modules, "metroliza.app.diagnostic_qualification", _module(
+        requested_scenario=lambda: None, run_qualification=lambda scenario: 0,
+    ))
+    monkeypatch.setitem(sys.modules, "metroliza.app.windows_candidate_qualification", _module(
+        requested_scenario=lambda: "core", run_qualification=lambda: 0,
+    ))
+    with pytest.raises(SystemExit) as exited:
+        runpy.run_path(str(ENTRY), run_name="__main__")
+    assert exited.value.code == 0
+    phases = _startup_phases(tmp_path)
+    assert "child_exit_zero" in phases
+    assert "child_qualification_returned" in phases
+    assert "child_recorder_close_entered" in phases
+    assert ("child_recorder_close_returned" in phases) is (not close_fails)
+    assert ("child_recorder_close_failed" in phases) is close_fails
+    assert all(p.stat().st_size == 0 for p in (tmp_path / probe.PROBE_DIRECTORY).iterdir())
+
+
 def test_recorder_closes_when_bootstrap_fails_before_all_qualification_gates(monkeypatch):
     code, events = _run_entry(
         monkeypatch, startup_code=7, diagnostic_scenario="diagnostic", candidate_scenario="core"
     )
     assert code == 7
     assert events == ["bootstrap", "recorder_close"]
+
+
+def test_entry_marks_and_reraises_same_application_exception_after_recorder_close(monkeypatch, tmp_path):
+    from metroliza.shared import diagnostic_startup_probe as probe
+    from scripts.qualify_windows_diagnostics import _startup_phases
+
+    (tmp_path / probe.PROBE_DIRECTORY).mkdir()
+    for name, value in {
+        "METROLIZA_STARTUP_SMOKE": "1", "METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION": "1",
+        "METROLIZA_DIAGNOSTIC_STARTUP_PROBE": "1", "METROLIZA_DIAGNOSTIC_QUALIFICATION_ROOT": str(tmp_path),
+    }.items():
+        monkeypatch.setenv(name, value)
+    events = []
+    primary = RuntimeError("PRIVATE_SENTINEL")
+
+    def fail():
+        raise primary
+
+    monkeypatch.setitem(sys.modules, "metroliza.shared.diagnostic_transport", _module(
+        attach_child_recorder=lambda: _module(close=lambda: events.append("closed")),
+        supervised_mode_requested=lambda: False,
+    ))
+    monkeypatch.setitem(sys.modules, "metroliza.app.bootstrap", _module(run_application=fail))
+    entry = Path(probe.__file__).resolve().parents[3] / "packaging" / "metroliza_package_entry.py"
+    with pytest.raises(RuntimeError) as caught:
+        runpy.run_path(str(entry), run_name="__main__")
+    assert caught.value is primary
+    assert events == ["closed"]
+    phases = _startup_phases(tmp_path)
+    assert "child_main_failed" in phases
+    assert "child_application_returned" not in phases
+    assert "child_recorder_close_returned" in phases
 
 
 def test_candidate_gate_requires_both_explicit_environment_values(monkeypatch):
