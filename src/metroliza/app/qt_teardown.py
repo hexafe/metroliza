@@ -79,6 +79,11 @@ def _live_qobjects(widget_type, object_type, thread_type, sip, app_thread) -> di
         if not issubclass(kind, object_type) or sip.isdeleted(obj):
             continue
         counts["widgets"] += int(issubclass(kind, widget_type))
+        # isdeleted() is reliable only for Python-created objects (the derived
+        # destructor notifies SIP). A C++-created child can already be freed
+        # with a stale wrapper, so never call one of its methods (#1158).
+        if not sip.ispycreated(obj):
+            continue
         counts["running_threads"] += int(issubclass(kind, thread_type)
                                          and obj is not app_thread and obj.isRunning())
         counts["foreign_objects"] += int(obj.thread() != app_thread)

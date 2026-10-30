@@ -194,6 +194,7 @@ def fake_qt(monkeypatch):
 
     app, calls = App(), []
     sip = SimpleNamespace(isdeleted=lambda obj: obj.deleted,
+                          ispycreated=lambda obj: getattr(obj, "pycreated", True),
                           delete=lambda obj: (calls.append("delete_app"), setattr(obj, "deleted", True)))
     core = SimpleNamespace(
         QCoreApplication=SimpleNamespace(sendPostedEvents=lambda *_: calls.append("deferred")),
@@ -601,3 +602,23 @@ print(json.dumps(dict(released=released, window_alive=window_alive,
                       worker_alive=worker_alive, second=second)), flush=True)
 ''')
     assert observed == dict(released=False, window_alive=True, worker_alive=True, second=True)
+
+
+def test_scan_never_calls_methods_of_cpp_created_wrappers():
+    from metroliza.app import qt_teardown as teardown
+
+    class QObject:
+        deleted = False
+
+    class Stale(QObject):
+        # A C++-created child whose native object may already be freed.
+        def thread(self):
+            raise AssertionError("dereferenced a C++-created wrapper")
+
+        def isRunning(self):
+            raise AssertionError("dereferenced a C++-created wrapper")
+
+    stale = Stale()
+    sip = SimpleNamespace(isdeleted=lambda obj: False, ispycreated=lambda obj: obj is not stale)
+    counts = teardown._live_qobjects(type("W", (), {}), QObject, Stale, sip, object())
+    assert counts == dict(widgets=0, running_threads=0, foreign_objects=0)
