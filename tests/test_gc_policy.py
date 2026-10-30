@@ -202,7 +202,7 @@ def test_bootstrap_installs_before_main_window_but_smoke_keeps_gc_state():
         with patch('metroliza.app.license_key_manager.LicenseKeyManager.generate_hardware_id'):
             bootstrap.run_startup_smoke_mode(logging.getLogger('test'))
         assert gc.isenabled() == enabled
-        assert not hasattr(app, '_metroliza_gc_policy')
+        assert '_metroliza_gc_policy' not in vars(app)
         class Window:
             def __init__(self, *args):
                 assert not gc.isenabled()
@@ -216,7 +216,10 @@ def test_bootstrap_installs_before_main_window_but_smoke_keeps_gc_state():
              patch.object(bootstrap, 'create_startup_splash', return_value=splash), \
              patch.object(bootstrap, '_schedule_splash_finish_then_warmup'):
             assert bootstrap.launch_ui(config, main_window_factory=Window) == 0
-        app._metroliza_gc_policy.uninstall()
+        from PyQt6 import sip
+        assert sip.isdeleted(app)
+        assert '_metroliza_gc_policy' not in vars(app)
+        assert gc.isenabled() == enabled
     ''')
 
 

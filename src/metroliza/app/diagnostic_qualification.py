@@ -526,3 +526,7 @@ def run_qualification(scenario: str) -> int:
         except Exception:
             pass
         return 21
+    finally:
+        from metroliza.app.qt_teardown import shutdown_qt
+
+        shutdown_qt()

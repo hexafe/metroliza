@@ -31,7 +31,7 @@ def _fatal(**fields):
 
 def _inventory(**fields):
     return {"qapp_alive": False, "qt_wrappers": 0, "qt_classes": [], "cpp_created_wrappers": 0, "py_owned_wrappers": 0,
-            "threads_alive": 1, "daemon_threads": 0, "deleted_wrappers": 0, **fields}
+            "threads_alive": 1, "daemon_threads": 0, "daemon_thread_names": [], "deleted_wrappers": 0, **fields}
 
 
 def test_g_native_thread_recovers_main_stack_without_publishing_ident(tmp_path):
@@ -72,7 +72,7 @@ def test_g_inventory_registered_before_marker_and_runs_last(monkeypatch, tmp_pat
         callback(*args)
     inventory = json.loads((tmp_path / "child-exit-inventory-private.json").read_bytes())
     assert set(inventory) == {"qapp_alive", "qt_wrappers", "qt_classes", "cpp_created_wrappers", "py_owned_wrappers",
-                              "threads_alive", "daemon_threads", "deleted_wrappers"}
+                              "threads_alive", "daemon_threads", "daemon_thread_names", "deleted_wrappers"}
 
 
 def test_g2_census_uses_only_wrapper_flags(monkeypatch, tmp_path):
@@ -292,9 +292,69 @@ def test_g_inventory_does_not_import_qt(monkeypatch, tmp_path):
 
     monkeypatch.setattr(builtins, "__import__", guarded)
     monkeypatch.setattr(gc, "get_objects", lambda: [])
-    monkeypatch.setattr(threading, "enumerate", lambda: [SimpleNamespace(daemon=False), SimpleNamespace(daemon=True)])
+    monkeypatch.setattr(threading, "enumerate", lambda: [SimpleNamespace(daemon=False), SimpleNamespace(daemon=True, name="chart-worker-12")])
     fatal._write_exit_inventory(tmp_path)
-    assert read_exit_inventory(tmp_path) == _inventory(threads_alive=2, daemon_threads=1)
+    assert read_exit_inventory(tmp_path) == _inventory(threads_alive=2, daemon_threads=1,
+                                                     daemon_thread_names=[["chart-worker-N", 1]])
+
+
+def test_h2_daemon_names_normalize_allowlist_and_top_eight(monkeypatch, tmp_path):
+    import gc
+    import threading
+    from metroliza.shared import diagnostic_fatal_probe as fatal
+    from scripts.windows_candidate_exit_evidence import read_exit_inventory
+
+    names = ["chart-worker-1", "chart-worker-25", "a12b345", "a9b0",
+             "Dummy-17", "diagnostic-channel", "safe_name.v2", "A" + "x" * 40,
+             "/PRIVATE/path", "bad name", "x" * 42, "_bad", "é", "9start", "",
+             "Zed", "Zulu", "extra"]
+    threads = [SimpleNamespace(daemon=True, name=name) for name in names]
+    threads.append(SimpleNamespace(daemon=False, name="excluded-123"))
+    monkeypatch.setattr(gc, "get_objects", lambda: [])
+    monkeypatch.setattr(threading, "enumerate", lambda: threads)
+    fatal._write_exit_inventory(tmp_path)
+    result = read_exit_inventory(tmp_path)
+    assert result == _inventory(threads_alive=19, daemon_threads=18, daemon_thread_names=[
+        ["other", 6], ["aNbN", 2], ["chart-worker-N", 2], ["A" + "x" * 40, 1],
+        ["Dummy-N", 1], ["Nstart", 1], ["Zed", 1], ["Zulu", 1]])
+    raw = (tmp_path / fatal.INVENTORY_FILE).read_text()
+    assert all(secret not in raw for secret in ("PRIVATE", "bad name", "excluded", "chart-worker-25"))
+
+
+@pytest.mark.parametrize("names", [None, {}, "worker", [["worker", True]], [["worker", 0]],
+    [["worker", 10**6 + 1]], [["worker-12", 1]], [["_worker", 1]], [["/PRIVATE", 1]],
+    [["x" * 42, 1]], [["é", 1]], [["worker", 1, 2]], [["worker", 1], ["worker", 1]],
+    [["Z", 1], ["A", 1]], [["A", 1], ["B", 2]], [[chr(65+i), 1] for i in range(9)]])
+def test_h2_validator_rejects_invalid_daemon_names(names):
+    from scripts.windows_candidate_exit_evidence import valid_exit_inventory
+
+    assert not valid_exit_inventory(_inventory(threads_alive=10, daemon_threads=10, daemon_thread_names=names))
+
+
+def test_h2_validator_rejects_name_count_over_total_and_missing_names():
+    from scripts.windows_candidate_exit_evidence import valid_exit_inventory
+
+    assert not valid_exit_inventory(_inventory(daemon_thread_names=[["worker", 1]]))
+    value = _inventory()
+    del value["daemon_thread_names"]
+    assert not valid_exit_inventory(value)
+
+
+def test_h2_byte_bound_trims_names_before_classes_and_stacks():
+    from scripts.windows_candidate_exit_evidence import bound_fatal_frames, valid_exit_evidence
+
+    inventory = _inventory(qt_wrappers=1, qt_classes=[["QObject", 1]], threads_alive=10, daemon_threads=9,
+                           daemon_thread_names=[["chart-worker-N", 8], ["diagnostic-channel", 1]])
+    fatal = _fatal(present=True, frames=["module:worker"], main_frames=["module:main"],
+                   faulting_is_main=False, current_thread_marked=True, python_threads=2)
+    payload = {"exit_inventory": inventory, "child_fatal_observation": fatal}
+    limit = len(json.dumps(payload, separators=(",", ":"))) + 1 - len(',["diagnostic-channel",1]')
+    result = bound_fatal_frames(payload, limit)
+    assert result["exit_inventory"]["daemon_thread_names"] == [["chart-worker-N", 8]]
+    assert result["exit_inventory"]["qt_classes"] == inventory["qt_classes"]
+    assert result["child_fatal_observation"] == fatal
+    assert len(inventory["daemon_thread_names"]) == 2
+    assert valid_exit_evidence(result)
 
 
 @pytest.mark.parametrize("error", [OSError, RuntimeError, KeyboardInterrupt, SystemExit])
@@ -483,13 +543,14 @@ def test_g_inventory_counter_caps_without_allocating_a_million_objects(monkeypat
             return 10**6 + 1
 
         def __iter__(self):
-            return itertools.repeat(SimpleNamespace(daemon=True), 10**6 + 1)
+            return itertools.repeat(SimpleNamespace(daemon=True, name="worker-123"), 10**6 + 1)
 
     monkeypatch.setattr(gc, "get_objects", lambda: [])
     monkeypatch.setattr(threading, "enumerate", Threads)
     fatal._write_exit_inventory(tmp_path)
     result = read_exit_inventory(tmp_path)
     assert result["threads_alive"] == result["daemon_threads"] == 10**6
+    assert result["daemon_thread_names"] == [["worker-N", 10**6]]
 
 
 @pytest.mark.parametrize("opened", [False, True])
@@ -812,7 +873,8 @@ def test_worst_closed_fields_bound_frames_without_losing_exit_or_phases(tmp_path
                    multiple_blocks=True, current_thread_marked=True, python_threads=32)
     inventory = _inventory(qt_wrappers=10**6, deleted_wrappers=10**6,
                            cpp_created_wrappers=10**6, py_owned_wrappers=10**6, threads_alive=10**6,
-                           daemon_threads=10**6, qt_classes=[[f"C{i:048}", 1000] for i in range(12)])
+                           daemon_threads=10**6, qt_classes=[[f"C{i:048}", 1000] for i in range(12)],
+                           daemon_thread_names=[["Thread" + chr(65+i) * 35, 1000] for i in range(8)])
     observation = {
         "startup_phases": list(probe.PHASES), "child_fatal_observation": fatal,
         "exit_inventory": inventory,
@@ -835,6 +897,8 @@ def test_worst_closed_fields_bound_frames_without_losing_exit_or_phases(tmp_path
     assert payload["child_fatal_observation"]["multiple_blocks"] is True
     assert payload["child_fatal_observation"]["faulting_is_main"] is False
     assert payload["exit_inventory"]["qt_classes"] == []  # Classes trimmed before either stack.
+    assert payload["exit_inventory"]["daemon_thread_names"] == []
+    assert len(inventory["daemon_thread_names"]) == 8
     assert len(inventory["qt_classes"]) == 12 and len(fatal["main_frames"]) == 6
     driver._write_failed_diagnostic(tmp_path, payload)
     assert (tmp_path / driver.FAILED_DIAGNOSTIC_FILE).stat().st_size <= 4096

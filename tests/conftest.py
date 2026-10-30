@@ -9,6 +9,46 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def protect_retained_qapplication(monkeypatch):
+    """Catch even a saved alias of the real teardown before it mutates Qt."""
+    from metroliza.app import qt_teardown
+
+    original = qt_teardown._shutdown_gui
+    forbidden = []
+
+    def guarded(app, *args, **kwargs):
+        if any(app is kept for kept in _RETAINED_QT_APPLICATIONS) or getattr(
+            app, "_metroliza_test_session_application", False
+        ):
+            forbidden.append(True)
+            pytest.fail("Real Qt teardown called on the retained session QApplication (#1119)")
+        return original(app, *args, **kwargs)
+
+    monkeypatch.setattr(qt_teardown, "_shutdown_gui", guarded)
+    yield
+    # shutdown_qt contains BaseException: do not let it swallow this test guard.
+    if forbidden:
+        pytest.fail("Real Qt teardown called on the retained session QApplication (#1119)")
+
+
+@pytest.fixture(autouse=True)
+def qt_shutdown_spy(request, monkeypatch):
+    """Entry-point unit tests must not destroy pytest's session QApplication.
+
+    Actual process teardown is exercised in normal-exit subprocesses instead.
+    Keep the orchestration seam observable while preserving the #1119 keeper.
+    """
+    if request.module.__name__.rsplit(".", 1)[-1] == "test_qt_teardown":
+        return None
+    from unittest.mock import Mock
+    from metroliza.app import qt_teardown
+
+    spy = Mock(return_value=True)
+    monkeypatch.setattr(qt_teardown, "shutdown_qt", spy)
+    return spy
+
+
 expected_qt_platform = os.environ.get("METROLIZA_EXPECT_QT_PLATFORM", "").strip()
 if expected_qt_platform:
     if not os.environ.get("QT_QPA_PLATFORM"):
@@ -57,6 +97,7 @@ def retain_qapplication() -> None:
         from metroliza.app.gc_policy import install
 
         install(application)
+        application._metroliza_test_session_application = True
         if not any(application is kept for kept in _RETAINED_QT_APPLICATIONS):
             _RETAINED_QT_APPLICATIONS.append(application)
 
@@ -68,6 +109,29 @@ def qapplication_session():
     application = widgets.QApplication.instance() or widgets.QApplication([])
     retain_qapplication()
     return application
+
+
+def pytest_unconfigure(config):
+    """Release the session QApplication on the GUI thread before finalization.
+
+    Without this, interpreter finalization destroys the application and its
+    remaining wrappers in arbitrary order (the #1158 exit mechanism; it matches
+    the industrial-dialog batch's post-summary SIGSEGV). Tests are over, so the
+    #1119 keeper no longer needs the application.
+    """
+    if not _RETAINED_QT_APPLICATIONS:
+        return
+    application = _RETAINED_QT_APPLICATIONS[0]
+    try:
+        from PyQt6 import sip
+        from metroliza.app import qt_teardown
+
+        if sip.isdeleted(application):
+            return
+        application._metroliza_test_session_application = False
+        qt_teardown.shutdown_qt(application)
+    except Exception:
+        pass  # A stubbed or partial Qt import keeps the previous behaviour.
 
 
 @pytest.hookimpl(hookwrapper=True)

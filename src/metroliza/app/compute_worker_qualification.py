@@ -132,9 +132,19 @@ def run_qualification() -> int:
     if os.environ.get('METROLIZA_STARTUP_SMOKE') != '1' or not os.environ.get(GATE):
         raise ValueError('compute_qualification_gate_required')
     from PyQt6.QtWidgets import QApplication
-    from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
 
     app = QApplication.instance() or QApplication([])
+    try:
+        return _run_with_application(app)
+    finally:
+        from metroliza.app.qt_teardown import shutdown_qt
+
+        shutdown_qt(app)
+
+
+def _run_with_application(app) -> int:
+    from metroliza.shared.diagnostic_runtime_audit import wait_for_host_ready
+
     root = Path(os.environ[GATE])
     if not root.is_absolute() or not root.is_dir() or root.is_symlink():
         raise ValueError('compute_qualification_root_invalid')

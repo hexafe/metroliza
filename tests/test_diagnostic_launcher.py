@@ -1245,6 +1245,9 @@ def test_real_child_final_preserves_recent_failure_after_saved_live_backlog(
         return original(incident)
 
     monkeypatch.setattr(store, "publish", hold_first_live_publish)
+    # Functional persistence, not the close budget: on a loaded Windows runner
+    # the real 0.75 s window reported PUBLISH_INCOMPLETE (#1158, job 123819195737).
+    _completion_scheduler(monkeypatch)
     child = Path(__file__).parent / "fixtures" / "diagnostic_protocol_child.py"
     delivery = run_with_store(
         [sys.executable, str(child), "failure_backlog", str(tmp_path)],
