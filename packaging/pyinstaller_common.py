@@ -729,7 +729,7 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     third_party_notice_datas = [
         (str(root_dir / "THIRD_PARTY_NOTICES.md"), "."),
         (
-            str(root_dir / "docs" / "release_checks" / "third_party_inventory_260711.json"),
+            str(root_dir / "docs" / "release_checks" / "third_party_inventory.json"),
             ".",
         ),
     ]

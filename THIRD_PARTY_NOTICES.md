@@ -5,11 +5,15 @@ Keep this file with every packaged release artifact and installed application
 bundle. PyInstaller and Nuitka release builds include this file as
 `THIRD_PARTY_NOTICES.md` next to the executable's bundled data.
 
-The metadata-derived inventory for build `260711` is
-[`docs/release_checks/third_party_inventory_260711.json`](docs/release_checks/third_party_inventory_260711.json).
-It records 77 installed Python distributions and 83 resolved Rust packages from
-the release environment. Packaging also emits this inventory and a SHA-256
-manifest in a visible `.licenses` sidecar beside each distributable artifact.
+The metadata-derived inventory is
+[`docs/release_checks/third_party_inventory.json`](docs/release_checks/third_party_inventory.json).
+It was regenerated on 2026-10-30 from the Windows build environment of 2026.09 RC1
+and records 79 Python distributions (the runtime requirement closure plus every
+distribution whose metadata the package bundles) and 126 Rust packages (the native
+modules and the native launcher). Each Windows candidate build compares this file
+with its own build environment and fails on any package or version difference.
+Packaging also emits this inventory and a SHA-256 manifest in a visible
+`.licenses` sidecar beside each distributable artifact.
 
 This notice is a release compliance aid, not legal advice. Before public or
 commercial distribution, verify the exact package versions in the build

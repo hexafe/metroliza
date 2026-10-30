@@ -116,7 +116,7 @@ WS_SYSMENU = 0x00080000
 WS_CHILD = 0x40000000
 WS_EX_TOOLWINDOW = 0x00000080
 NORMAL_WINDOW_REQUIRED_STYLE = WS_CAPTION | WS_SYSMENU
-NOTICE_FILES = ("THIRD_PARTY_NOTICES.md", "third_party_inventory_260711.json")
+NOTICE_FILES = ("THIRD_PARTY_NOTICES.md", "third_party_inventory.json")
 CHECK_IDS = (
     "package_identity",
     "no_console",
