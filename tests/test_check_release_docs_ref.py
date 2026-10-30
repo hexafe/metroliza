@@ -164,3 +164,34 @@ def test_repository_pin_is_immutable_and_covers_every_linked_manual() -> None:
         pytest.skip("pinned commit is not in this shallow checkout; the static-checks step verifies it")
     problems, _ = checker.check_release_docs_ref(REPO_ROOT)
     assert problems == []
+
+
+def test_discovery_fails_closed_for_computed_aliased_and_hard_coded_links(repo: Path) -> None:
+    _write(repo, "src/metroliza/exporting/other.py", '''
+from metroliza.shared.docs_links import github_blob_url as manual_link
+ALIASED = manual_link("docs/user_manual/aliased.md")
+COMPUTED = manual_link("docs/user_manual/" + "x.md")
+MOVING = "https://github.com/hexafe/metroliza/blob/develop/docs/user_manual/parsing.md"
+PINNED = "https://github.com/hexafe/metroliza/blob/''' + "a" * 40 + '''/docs/user_manual/parsing.md"
+''')
+    _write(repo, "docs/user_manual/aliased.md", "# Aliased\n")
+    complete = _commit(repo, "manuals")
+    _set_pin(repo, complete)
+
+    assert "docs/user_manual/aliased.md" in {item.path for item in checker.linked_paths(repo)}
+    problems, _ = checker.check_release_docs_ref(repo)
+
+    assert problems == [
+        "src/metroliza/exporting/other.py:4 calls manual_link with a computed path",
+        "src/metroliza/exporting/other.py:5 hard-codes the moving docs ref 'develop'",
+    ]
+
+
+def test_bom_only_manual_is_reported_not_crashing(repo: Path) -> None:
+    _write(repo, "docs/user_manual/parsing.md", "﻿")
+    broken = _commit(repo, "bom only")
+    _set_pin(repo, broken)
+
+    problems, _ = checker.check_release_docs_ref(repo)
+
+    assert problems == [f"docs/user_manual/parsing.md (help:parsing) is empty at {broken}"]

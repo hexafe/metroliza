@@ -3,10 +3,12 @@
 The pinned ref lives in ``src/metroliza/shared/docs_links.py``. The linked paths
 are derived from the code, not from a copied list: every value of
 ``MANUAL_RELATIVE_PATHS`` in ``src/metroliza/ui/help_menu.py`` plus every literal
-``github_blob_url("...")`` argument under ``src/``. The check fails when the ref
-is a branch, tag or short SHA, when the commit is not available locally (run it
-in a full-history checkout), or when a linked file is missing or not a plausible
-manual at that commit.
+``github_blob_url("...")`` argument under ``src/``. Discovery fails closed: a
+helper call with a computed argument, or a hard-coded ``github.com/.../blob/<ref>/``
+link whose ref is not a full SHA, is reported unless listed in
+``HARD_CODED_LINK_EXCEPTIONS``. The check fails when the ref is a branch, tag or
+short SHA, when the commit is not available locally (run it in a full-history
+checkout), or when a linked file is missing or not a plausible manual there.
 
 ``--online`` additionally fetches each rendered GitHub page and the raw file at
 the pinned commit and compares the raw bytes with the local git blob. It needs
@@ -32,6 +34,14 @@ HELP_MENU_PATH = Path("src/metroliza/ui/help_menu.py")
 SOURCE_ROOT = Path("src")
 FULL_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 REPOSITORY = "hexafe/metroliza"
+HELPER_NAME = "github_blob_url"
+# The helper's own definitions forward a variable path; they are not consumers.
+HELPER_MODULES = {DOCS_LINKS_PATH.as_posix(), HELP_MENU_PATH.as_posix()}
+HARD_CODED_BLOB = re.compile(r"github\.com/hexafe/metroliza/blob/([^/{}\s\"']+)/")
+# Developer-only links outside the release Help set, each with its follow-up Issue.
+HARD_CODED_LINK_EXCEPTIONS = {
+    "src/metroliza/parsing/llm_plugin_factory/scaffold.py": "https://github.com/hexafe/metroliza/issues/1187",
+}
 
 
 @dataclass(frozen=True)
@@ -56,6 +66,40 @@ def pinned_docs_ref(repo_root: Path) -> str:
     raise ValueError(f"DEFAULT_RELEASE_DOCS_REF not found in {DOCS_LINKS_PATH}")
 
 
+def _helper_aliases(tree: ast.Module) -> set[str]:
+    names = {HELPER_NAME}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.endswith("docs_links"):
+            names.update(alias.asname or alias.name for alias in node.names if alias.name == HELPER_NAME)
+    return names
+
+
+def discovery_problems(repo_root: Path) -> list[str]:
+    """Return link sources the path discovery cannot verify."""
+    problems = []
+    for source in sorted((repo_root / SOURCE_ROOT).rglob("*.py")):
+        relative = source.relative_to(repo_root).as_posix()
+        text = source.read_text(encoding="utf-8")
+        tree = ast.parse(text, filename=relative)
+        aliases = _helper_aliases(tree)
+        if relative not in HELPER_MODULES:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                if name in aliases and not (
+                    node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                ):
+                    problems.append(f"{relative}:{node.lineno} calls {name} with a computed path")
+        if relative in HARD_CODED_LINK_EXCEPTIONS:
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            for ref in HARD_CODED_BLOB.findall(line):
+                if not FULL_COMMIT_SHA.fullmatch(ref):
+                    problems.append(f"{relative}:{line_number} hard-codes the moving docs ref {ref!r}")
+    return problems
+
+
 def linked_paths(repo_root: Path) -> tuple[LinkedPath, ...]:
     """Return every repository path the release links to, with where it comes from."""
     found: dict[str, LinkedPath] = {}
@@ -72,11 +116,13 @@ def linked_paths(repo_root: Path) -> tuple[LinkedPath, ...]:
 
     for source in sorted((repo_root / SOURCE_ROOT).rglob("*.py")):
         relative = source.relative_to(repo_root)
-        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"), filename=str(relative))):
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(relative))
+        aliases = _helper_aliases(tree)
+        for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-            if name not in {"github_blob_url", "_github_blob_url"} or not node.args:
+            if name not in aliases or not node.args:
                 continue
             argument = node.args[0]
             if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
@@ -93,8 +139,10 @@ def _blob_problem(path: str, content: bytes) -> str | None:
     if not content.strip():
         return "is empty"
     if path.endswith(".md"):
-        first_line = content.decode("utf-8", errors="replace").lstrip("﻿").lstrip().splitlines()[0]
-        if not first_line.startswith("# "):
+        lines = content.decode("utf-8", errors="replace").lstrip("\ufeff").lstrip().splitlines()
+        if not lines:
+            return "is empty"
+        if not lines[0].startswith("# "):
             return "does not start with a Markdown title"
     elif path.endswith(".pdf") and not content.startswith(b"%PDF-"):
         return "is not a PDF"
@@ -110,7 +158,7 @@ def check_release_docs_ref(repo_root: Path, *, ref: str | None = None) -> tuple[
     if kind.returncode != 0 or kind.stdout.strip() != b"commit":
         return [f"docs ref {ref} is not a commit available in this checkout (use full history)"], {}
 
-    problems: list[str] = []
+    problems = discovery_problems(repo_root)
     blobs: dict[str, bytes] = {}
     for item in linked_paths(repo_root):
         shown = _git(repo_root, "show", f"{ref}:{item.path}")
