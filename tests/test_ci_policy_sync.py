@@ -269,6 +269,20 @@ def test_ci_workflow_keeps_packaging_manual_and_google_local_only() -> None:
     assert 'NOTICE_MANIFEST.json' in workflow
 
 
+def test_static_checks_verify_the_pinned_release_docs_ref() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['static-checks']
+    checkout = next(step for step in job['steps'] if step.get('name') == 'Checkout')
+    docs_ref = next(step for step in job['steps'] if step.get('name') == 'Release docs ref is immutable and complete')
+
+    # The pinned commit is only resolvable with full history; the step must not be docs-only gated.
+    assert checkout['with']['fetch-depth'] == '0'
+    assert docs_ref['run'] == 'python scripts/check_release_docs_ref.py'
+    assert 'if' not in docs_ref
+
+
 def test_ci_and_precommit_run_release_hygiene_scan() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
     precommit_config = Path('.pre-commit-config.yaml').read_text(encoding='utf-8')
@@ -1074,7 +1088,8 @@ def test_tier_zero_runs_focused_policy_release_and_secret_checks_only():
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
     steps = workflow['jobs']['static-checks']['steps']
     shared = {'Require a successful classification', 'Checkout', 'Setup Python',
-              'Release metadata consistency', 'Secret scan (diff + repository)', 'Release hygiene scan'}
+              'Release metadata consistency', 'Release docs ref is immutable and complete',
+              'Secret scan (diff + repository)', 'Release hygiene scan'}
     focused = {'Install focused documentation dependencies', 'Focused documentation and policy checks'}
     for step in steps:
         if step['name'] in shared:

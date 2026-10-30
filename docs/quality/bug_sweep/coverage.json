@@ -2424,6 +2424,7 @@
         "scripts/benchmark_trend_compare.py",
         "scripts/build_flavor.py",
         "scripts/build_provenance.py",
+        "scripts/check_release_docs_ref.py",
         "scripts/check_release_hygiene.py",
         "scripts/ci_change_classifier.py",
         "scripts/fetch_rapidocr_models.py",
