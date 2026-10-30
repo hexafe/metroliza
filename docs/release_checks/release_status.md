@@ -17,7 +17,7 @@ not distribute or publish a packaged candidate.
 | Integration order | #1109, #1142, one STEP2+STEP3 aggregate, #1063; merge commits | #1153, current-base checks and independent reviews per merge |
 | Current RC source line | `release/2026.09-rc1` | Cut from accepted final develop; exact SHA/tree in #1153 |
 | STEP3 delivery | Complete with disclosed limits | [Immutable report](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/engineering/performance-boost-step3.md) |
-| Final build identity | Assigned `261031` to the next candidate (pinned Help docs ref, one user ZIP); `261029` stays bound to the historical bytes below | Synchronized source metadata under #1158; changed binaries never reuse 261029 |
+| Final build identity | Assigned `261031` to the next candidate (pinned Help docs ref, one user ZIP); `261029` stays bound to the historical bytes below. 261031 is not yet built or qualified | Synchronized source metadata under #1158; changed binaries never reuse 261029 |
 | Accepted candidate source (historical, fixed) | `b2510e0aa651e8c96363e5a9c224c841318cc9d0`, tree `e165267b09b437b7fe5a1556b5809e87123f1c9a` | Head of `release/2026.09-rc1` when run [40991278786](https://github.com/hexafe/metroliza/actions/runs/40991278786) was dispatched. Later commits on `develop`, including this document, do not move or replace it |
 | Combined Windows candidate acceptance (CI onedir) | **PASS**: diagnostics, core at DPR 1.0/1.25/1.5, forced native-unavailable, fresh reopen; one package | Job 123854028888, `combined-candidate-receipt.json`. Accepted `qualified-windows-development-package.zip` SHA-256 `da8a25eb2d0a4e79c80823bc03f470bc81fde3fe0a83d7037437ac61e495b84c`, 538738623 B, package tree `cb9b18c1…`; Actions artifact 12949329678. Not clean-machine, desktop Excel, real-report or release acceptance |
 | Tester launcher EXE | Separate build from the same source; **not** the Combined bytes; unsigned | `metroliza_2026.09rc1_261029_launcher.exe` SHA-256 `16f3edb988bc9d0e5000c89796f40daf0bd2ebfef468c6e34827a3947512b408`, 334830360 B; Actions artifact 12949892358 (job 123854029137). Launcher smoke **PASS** on these bytes: cold, verified and warm cache, hard exit, preview |
@@ -32,9 +32,10 @@ not distribute or publish a packaged candidate.
 | Dependency upgrades #972/#973 | Deferred until after RC | Refresh separately, preserve STEP3 exact dependency pins |
 | Security exception review #906 | Open | Selected STEP3 baseline earliest expiry 2026-11-23; verify the actual baseline before every gate and renew before expiry. The issue's original 2026-10-31 deadline is historical, not a new waiver |
 
-The final RC1 candidate's source metadata is assigned `2026.09 RC1 (build 261029)` under
-#1158, replacing the inherited build 261020 label while keeping the same RC1 release line.
-The Combined PASS above accepts the CI onedir bytes only. The tester launcher EXE is a
+The next RC1 candidate's source metadata is assigned `2026.09 RC1 (build 261031)` under
+#1158, on the same RC1 release line; it has no qualification evidence yet. Build `261029`
+(which replaced the inherited 261020 label) remains the historical accepted candidate below.
+The Combined PASS above accepts the 261029 CI onedir bytes only. The tester launcher EXE is a
 separate build of the same source with its own smoke evidence; its manual acceptance and
 every release-owner criterion remain open in #1158. The copy of this file on
 `release/2026.09-rc1` is intentionally not synchronized, so the RC head stays at the
