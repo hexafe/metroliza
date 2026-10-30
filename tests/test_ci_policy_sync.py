@@ -102,7 +102,7 @@ def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zi
     assert sum("build_windows_exe.ps1" in step.get("run", "") or "-BuildOnedir" in step.get("run", "") for step in steps) == 1
     assert "--kind launcher" in steps[smoke]["run"]
     for flag in ("--expected-content-sha256 $env:CANDIDATE_CONTENT_SHA256", "--expected-source-sha $env:GITHUB_SHA",
-                 "--source-root $env:GITHUB_WORKSPACE"):
+                 "--expected-exe-sha256 $env:CANDIDATE_LAUNCHER_SHA256", "--source-root $env:GITHUB_WORKSPACE"):
         assert flag in steps[zip_gate]["run"]
     assert "if ($LASTEXITCODE -ne 0) { throw 'Release ZIP completeness gate failed' }" in steps[zip_gate]["run"]
     assert "--generated" in steps[inventory]["run"] and "throw" in steps[inventory]["run"]
@@ -123,7 +123,10 @@ def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zi
     assert download["with"]["name"] == "windows-release-zip"
     verify = next(step for step in check["steps"] if "release_zip.py verify" in step.get("run", ""))
     assert verify["env"]["CONTENT_SHA256"] == "${{ needs.windows-candidate-acceptance.outputs.content_sha256 }}"
-    for flag in ('--expected-content-sha256 "$CONTENT_SHA256"', '--expected-source-sha "$GITHUB_SHA"', "--source-root"):
+    assert job["outputs"]["launcher_sha256"] == "${{ steps.launcher-smoke.outputs.sha256 }}"
+    assert verify["env"]["LAUNCHER_SHA256"] == "${{ needs.windows-candidate-acceptance.outputs.launcher_sha256 }}"
+    for flag in ('--expected-content-sha256 "$CONTENT_SHA256"', '--expected-exe-sha256 "$LAUNCHER_SHA256"',
+                 '--expected-source-sha "$GITHUB_SHA"', "--source-root"):
         assert flag in verify["run"]
 
 

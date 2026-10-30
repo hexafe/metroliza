@@ -14,7 +14,11 @@ against their manifest (and, with ``--source-root``, against their exact source 
 payload embedded in the EXE. The
 payload's content hash uses the packer's definition (``Manifest::content_sha256`` in
 ``packaging/launcher/src/manifest.rs``), so ``onedir-hash`` on the qualified onedir and
-``--expected-content-sha256`` prove that the EXE carries exactly the qualified files.
+``--expected-content-sha256`` prove that the EXE's manifest declares exactly the qualified files.
+The compressed blobs are not decoded here (LZ4, not in the standard library); only their layout
+is checked. The blob bytes are proven by the launcher itself, which verifies every file's size and
+SHA-256 while unpacking (``archive.rs::decode_file``) during the cold-start smoke; pass that
+smoked EXE's hash as ``--expected-exe-sha256`` to bind the ZIP to those exact bytes.
 """
 
 from __future__ import annotations
@@ -144,7 +148,19 @@ def read_payload_manifest(exe: Path) -> dict[str, Any]:
     manifest = json.loads(manifest_bytes)
     if not isinstance(manifest.get("files"), list) or not isinstance(manifest.get("entry"), str):
         raise ReleaseZipError("launcher payload manifest has no file list or entry")
+    _check_blob_layout(manifest["files"], payload_len - manifest_len)
     return manifest
+
+
+def _check_blob_layout(files: list[dict[str, Any]], blob_region_len: int) -> None:
+    """Require the blobs to tile the blob region exactly, in order, as the packer writes them."""
+    position = 0
+    for item in files:
+        if int(item["offset"]) != position or int(item["compressed_size"]) < 0:
+            raise ReleaseZipError(f"launcher payload blob layout is inconsistent at {item.get('path')!r}")
+        position += int(item["compressed_size"])
+    if position != blob_region_len:
+        raise ReleaseZipError("launcher payload blobs do not fill the blob region")
 
 
 def payload_content_sha256(manifest: dict[str, Any]) -> str:
@@ -232,6 +248,7 @@ def verify(
     *,
     expected_content_sha256: str | None = None,
     expected_source_sha: str | None = None,
+    expected_exe_sha256: str | None = None,
     source_root: Path | None = None,
     work_dir: Path | None = None,
 ) -> dict[str, Any]:
@@ -259,14 +276,17 @@ def verify(
         with tempfile.TemporaryDirectory(dir=work_dir) as temporary:
             root = Path(temporary)
             archive.extractall(root, members)
-            return _verify_extracted(
+            receipt = _verify_extracted(
                 root / folder,
                 exe_name,
                 names,
                 expected_content_sha256=expected_content_sha256,
                 expected_source_sha=expected_source_sha,
                 source_root=source_root,
-            ) | {"zip": {"name": zip_path.name, "sha256": _sha256_file(zip_path), "size_bytes": zip_path.stat().st_size}}
+            )
+            if expected_exe_sha256 is not None and receipt["exe"]["sha256"] != expected_exe_sha256:
+                raise ReleaseZipError("EXE differs from the smoke-tested launcher")
+            return receipt | {"zip": {"name": zip_path.name, "sha256": _sha256_file(zip_path), "size_bytes": zip_path.stat().st_size}}
 
 
 def _listed_notices(folder: Path, licenses: str) -> dict[str, str]:
@@ -376,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     checked.add_argument("zip", type=Path)
     checked.add_argument("--expected-content-sha256")
     checked.add_argument("--expected-source-sha")
+    checked.add_argument("--expected-exe-sha256", help="SHA-256 of the EXE that passed the launcher smoke.")
     checked.add_argument("--source-root", type=Path)
     checked.add_argument("--receipt", type=Path)
     args = parser.parse_args(argv)
@@ -389,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.zip,
                 expected_content_sha256=args.expected_content_sha256,
                 expected_source_sha=args.expected_source_sha,
+                expected_exe_sha256=args.expected_exe_sha256,
                 source_root=args.source_root,
             )
             text = json.dumps(receipt, indent=2, sort_keys=True) + "\n"

@@ -30,19 +30,20 @@ def _write_onedir(root: Path) -> Path:
     return onedir
 
 
-def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SHA) -> None:
-    """Write a stub + payload + trailer laid out like packaging/launcher/src/pack.rs."""
-    records = [
-        {"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "compressed_size": len(data), "offset": 0}
-        for name, data in sorted(files.items())
-    ]
+def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SHA, gap: int = 0) -> None:
+    """Write a stub + payload + trailer laid out like packaging/launcher/src/pack.rs (raw blobs)."""
+    records, offset = [], 0
+    for name, data in sorted(files.items()):
+        records.append({"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                        "compressed_size": len(data), "offset": offset})
+        offset += len(data) + gap
     content = release_zip.content_sha256("metroliza.exe", [(r["path"], r["size"], r["sha256"]) for r in records])
     manifest = json.dumps(
         {"format": 1, "version": f"2026.09rc1_261031-{content[:12]}", "git_sha": git_sha,
          "entry": "metroliza.exe", "chunk_size": 4194304, "files": records}
     ).encode()
     stub = b"MZ" + b"\0" * 62
-    blobs = b"".join(files[name] for name in sorted(files))
+    blobs = b"".join(files[name] + b"\0" * gap for name in sorted(files))
     trailer = (
         release_zip.TRAILER_MAGIC
         + struct.pack("<QQQ", len(stub), len(blobs) + len(manifest), len(manifest))
@@ -284,3 +285,20 @@ def test_notice_manifest_must_list_exactly_the_required_notices(tmp_path: Path) 
 
     with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
         release_zip.verify(zip_path)
+
+
+def test_blob_layout_must_tile_the_blob_region(tmp_path: Path) -> None:
+    exe = tmp_path / EXE_NAME
+    _fake_launcher(exe, ONEDIR_FILES, gap=1)
+
+    with pytest.raises(release_zip.ReleaseZipError, match="blob layout is inconsistent"):
+        release_zip.read_payload_manifest(exe)
+
+
+def test_zip_must_carry_the_smoke_tested_exe(release: tuple[Path, str]) -> None:
+    zip_path, expected = release
+    receipt = release_zip.verify(zip_path)
+
+    assert release_zip.verify(zip_path, expected_exe_sha256=receipt["exe"]["sha256"])["status"] == "PASS"
+    with pytest.raises(release_zip.ReleaseZipError, match="smoke-tested launcher"):
+        release_zip.verify(zip_path, expected_exe_sha256="0" * 64)

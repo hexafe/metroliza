@@ -8,3 +8,8 @@ tests/fixtures/packaging/pyi_rth_setuptools_6_22_3.py text eol=lf
 
 # STEP3 audit PoC diffs are stored verbatim (blank context lines end in a space).
 docs/engineering/performance-boost-step3-poc/*.patch -whitespace
+
+# Release notices are copied byte-for-byte beside the EXE and compared with the source on
+# Windows and Linux; keep one line ending on every checkout.
+THIRD_PARTY_NOTICES.md text eol=lf
+docs/release_checks/third_party_inventory.json text eol=lf

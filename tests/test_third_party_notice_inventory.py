@@ -59,3 +59,10 @@ def test_notice_and_packagers_require_inventory_sidecars() -> None:
     assert "third_party_inventory.json" in pyinstaller_common
     assert "scripts/stage_release_notices.py" in windows_builder
     assert "scripts/stage_release_notices.py" in nuitka_builder
+
+
+def test_release_notice_files_keep_lf_on_every_checkout() -> None:
+    # The notices beside the EXE are compared byte-for-byte with Linux and Windows checkouts.
+    attributes = Path(".gitattributes").read_text(encoding="utf-8").splitlines()
+    assert "THIRD_PARTY_NOTICES.md text eol=lf" in attributes
+    assert "docs/release_checks/third_party_inventory.json text eol=lf" in attributes
