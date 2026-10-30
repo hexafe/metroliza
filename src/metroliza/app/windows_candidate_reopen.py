@@ -309,3 +309,7 @@ def run_fresh_qualification() -> int:
             receipt["failure_stage"] = failure_stage
             core._atomic_json(root / "fresh-reopen-result.json", receipt)
         return 21
+    finally:
+        from metroliza.app.qt_teardown import shutdown_qt
+
+        shutdown_qt()

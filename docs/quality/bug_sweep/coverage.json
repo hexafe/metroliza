@@ -1497,7 +1497,8 @@
     {
       "id": "application-lifecycle",
       "include": [
-        "src/metroliza/app/**"
+        "src/metroliza/app/**",
+        "src/metroliza/app/qt_teardown.py"
       ],
       "exclude": [
         "src/metroliza/app/build_provenance.py",
@@ -2680,7 +2681,9 @@
     {
       "id": "test-and-audit-code",
       "include": [
-        "tests/**"
+        "tests/**",
+        "tests/test_qt_teardown.py",
+        "tests/test_qt_teardown_calls.py"
       ],
       "exclude": [
         "tests/fixtures/**",

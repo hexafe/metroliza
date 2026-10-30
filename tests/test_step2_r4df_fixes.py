@@ -129,8 +129,9 @@ def test_gc_policy_rejects_mock_attribute_as_installed_policy():
     ''')
 
 
-def test_launch_ui_collects_after_exec_and_quit_handlers(qapplication_session, monkeypatch):
+def test_launch_ui_tears_down_after_exec_and_quit_handlers(qapplication_session, monkeypatch):
     from metroliza.app import bootstrap, gc_policy
+    from metroliza.app import qt_teardown
 
     events = []
     app = SimpleNamespace(exec=lambda: events.extend(["quit_handlers", "exec_return"]) or 7)
@@ -141,13 +142,13 @@ def test_launch_ui_collects_after_exec_and_quit_handlers(qapplication_session, m
         is_valid=True, days_until_expiration=7,
     ))
     monkeypatch.setattr(bootstrap, "_schedule_splash_finish_then_warmup", lambda *_: None)
-    monkeypatch.setattr(gc_policy.gc, "collect", lambda *a: events.append(("collect", a)))
+    monkeypatch.setattr(qt_teardown, "shutdown_qt", lambda app: events.append("teardown"))
     result = bootstrap.launch_ui(
         bootstrap.StartupConfig(False, False, None, None, False),
         main_window_factory=lambda *_: SimpleNamespace(show=lambda: None),
     )
     assert result == 7
-    assert events == ["quit_handlers", "exec_return", ("collect", ())]
+    assert events == ["quit_handlers", "exec_return", "teardown"]
 
 
 @pytest.mark.parametrize("rejected", [False, True])

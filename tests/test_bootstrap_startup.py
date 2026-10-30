@@ -103,7 +103,7 @@ class TestBootstrapStartup(unittest.TestCase):
                 # Simulate the first event-loop turn running queued singleShot(0) work.
                 while deferred_callbacks:
                     deferred_callbacks.pop(0)()
-                return 0
+                return 17
 
         class FakeMainWindow:
             def __init__(self, version_label, days_until_expiration):
@@ -174,10 +174,12 @@ class TestBootstrapStartup(unittest.TestCase):
         ), patch(
             "metroliza.app.bootstrap._schedule_after_first_event_loop_tick",
             side_effect=deferred_callbacks.append,
-        ):
+        ), patch("metroliza.app.qt_teardown.shutdown_qt") as teardown:
             result = bootstrap.launch_ui(config)
 
-        self.assertEqual(result, 0)
+        self.assertEqual(result, 17)
+        teardown.assert_called_once()
+        self.assertIsInstance(teardown.call_args.args[0], FakeApplication)
         self.assertEqual(
             call_order,
             [

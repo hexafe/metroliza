@@ -43,6 +43,7 @@ class GuiGcPolicy:
         self.total_ms = 0.0
         self.max_ms = 0.0
         self.active = True
+        self._stopped = False
         self._collecting = False
         self.timer = QTimer(app)
         self.timer.setInterval(INTERVAL_MS)
@@ -63,7 +64,7 @@ class GuiGcPolicy:
         of zero retains Python's disabled automatic-collection semantics.
         """
         _require_gui_thread(self.app)
-        if not self.active or self._collecting:
+        if not self.active or self._stopped or self._collecting:
             return
         self._collecting = True
         try:
@@ -86,18 +87,30 @@ class GuiGcPolicy:
         finally:
             self._collecting = False
 
-    def uninstall(self) -> None:
-        """Stop the timer and restore the caller's GC settings on the GUI thread.
-
-        The caller must first stop its workers; enabling automatic GC reintroduces
-        collection on allocating threads. Normal GUI shutdown leaves it disabled.
-        """
+    def stop(self) -> None:
+        """Stop GUI collections without allowing automatic GC during teardown."""
         _require_gui_thread(self.app)
-        if not self.active:
+        if self._stopped:
             return
         self.timer.stop()
         self.timer.timeout.disconnect(self.collect_due)
         self.timer.deleteLater()
+        self._stopped = True
+
+    def uninstall(self, *, application_released: bool = False) -> None:
+        """Stop the timer and restore the caller's GC settings on the GUI thread.
+
+        The caller must first stop its workers; enabling automatic GC reintroduces
+        collection on allocating threads. The deterministic GUI teardown stops
+        the timer first and calls this with application_released only after
+        successful native destruction, without further Qt method calls.
+        """
+        if not application_released:
+            _require_gui_thread(self.app)
+        if not self.active:
+            return
+        if not application_released:
+            self.stop()
         self.active = False
         delattr(self.app, _APP_ATTRIBUTE)
         gc.set_threshold(*self.previous_thresholds)

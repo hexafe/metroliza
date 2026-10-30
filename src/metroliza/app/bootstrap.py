@@ -1,4 +1,3 @@
-import gc
 import logging
 import os
 import sys
@@ -275,6 +274,10 @@ def get_or_create_qapplication(*, gui_gc: bool = True):
     workers) get the GUI-thread garbage-collection policy of ``metroliza.app.gc_policy``.
     Modes without a Qt event loop, such as the startup smoke, pass ``gui_gc=False``.
     """
+    from metroliza.app import qt_teardown
+
+    if qt_teardown.APPLICATION_RELEASED:
+        raise RuntimeError("QApplication has been released; a second application is unsafe (#1119).")
     record_event("qapplication_import_start")
     from PyQt6.QtWidgets import QApplication
 
@@ -472,8 +475,9 @@ def launch_ui(
     record_event("event_loop_enter")
     _startup_event(StartupCallsite.EVENT_LOOP_EXEC_REQUEST, StartupOutcome.STARTUP_COMPLETED)
     exit_code = app.exec()
-    # All quit handlers have finished; collect remaining Qt cycles on the GUI thread.
-    gc.collect()
+    from metroliza.app.qt_teardown import shutdown_qt
+
+    shutdown_qt(app)
     record_event("event_loop_exit", exit_code=exit_code)
     return exit_code
 

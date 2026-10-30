@@ -78,6 +78,23 @@ def _live_application_wrapper(objects, sip, app_type) -> bool:
     return False
 
 
+def _daemon_inventory(threads) -> dict:
+    import re
+
+    names, count = {}, 0
+    for thread in threads:
+        if not thread.daemon:
+            continue
+        name = re.sub(r"\d+", "N", thread.name)
+        name = name if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,40}", name) else "other"
+        names[name] = names.get(name, 0) + 1
+        count += 1
+        if count == 10**6:
+            break
+    return {"daemon_threads": count, "daemon_thread_names": [
+        [name, number] for name, number in sorted(names.items(), key=lambda pair: (-pair[1], pair[0]))[:8]]}
+
+
 def _write_exit_inventory(root: Path) -> None:
     """Read wrapper flags with automatic GC suspended; never call object methods."""
     try:
@@ -98,7 +115,7 @@ def _write_exit_inventory(root: Path) -> None:
             del objects
             threads = threading.enumerate()
             inventory.update(threads_alive=min(len(threads), 10**6),
-                             daemon_threads=min(sum(thread.daemon for thread in threads), 10**6))
+                             **_daemon_inventory(threads))
             _write_private(root, INVENTORY_FILE, json.dumps(inventory, separators=(",", ":")).encode("ascii"))
         finally:
             if was_enabled:

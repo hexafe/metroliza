@@ -1,6 +1,10 @@
 import unittest
+import threading
+import time
+from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from modules.chart_render_service import (
     BoundedWorkerPool,
@@ -9,6 +13,111 @@ from modules.chart_render_service import (
     resolve_chart_sampling_policy,
     sample_frame_for_chart,
 )
+
+
+def test_nonwaiting_shutdown_never_uses_blocking_queue_api():
+    calls = []
+    pool = BoundedWorkerPool.__new__(BoundedWorkerPool)
+    pool._closed, pool._threads = False, [object()]
+    pool._admission = threading.Condition()
+    pool._queue = SimpleNamespace(
+        put=lambda *args, **kwargs: calls.append("blocking"),
+        put_nowait=lambda *args: calls.append("nonblocking"),
+    )
+    pool.shutdown(wait=False)
+    assert calls == ["nonblocking"]
+
+
+def test_nonwaiting_shutdown_with_full_queue_drains_and_joins_normally():
+    entered, release = threading.Event(), threading.Event()
+    pool = BoundedWorkerPool(max_workers=3, max_queue_size=1)
+    def work():
+        entered.set()
+        release.wait(5)
+        return 7
+    futures = [pool.submit(work) for _ in range(3)]
+    assert entered.wait(2)
+    pending = pool.submit(lambda: 9)
+    try:
+        pool.shutdown(wait=False)
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+    assert all(future.result() == 7 for future in futures)
+    assert pending.result() == 9
+    assert not any(worker.is_alive() for worker in pool._threads)
+    pool.shutdown(wait=True)
+
+
+def test_module_shutdown_tracks_real_chart_workers_without_starting_pools():
+    from metroliza.charts import chart_render_service as service
+
+    pool = BoundedWorkerPool(max_workers=2, max_queue_size=1)
+    try:
+        assert all(thread.name.startswith("chart-worker-") and thread.daemon for thread in pool._threads)
+        assert service.shutdown(deadline=time.monotonic() + 2)
+        assert not any(worker.is_alive() for worker in pool._threads)
+    finally:
+        pool.shutdown(wait=True)
+    assert service.shutdown(deadline=time.monotonic()) is True
+
+
+def test_module_shutdown_requests_all_pools_before_joining_with_one_deadline(monkeypatch):
+    from metroliza.charts import chart_render_service as service
+
+    calls, clock = [], iter([10.0, 11.0, 15.0])
+    workers = [SimpleNamespace(join=lambda *, timeout, i=i: calls.append((i, timeout)),
+                               is_alive=lambda: False) for i in range(3)]
+    pools = [SimpleNamespace(shutdown=lambda *, wait, i=i: calls.append(("stop", i, wait)),
+                             _threads=group) for i, group in enumerate([workers[:2], workers[2:]])]
+    monkeypatch.setattr(service, "_POOLS", pools)
+    monkeypatch.setattr(service.time, "monotonic", lambda: next(clock))
+    assert service.shutdown(deadline=12.0)
+    assert calls == [("stop", 0, False), ("stop", 1, False), (0, 2.0), (1, 1.0), (2, 0.0)]
+
+
+def test_module_shutdown_reports_live_worker_after_expired_deadline(monkeypatch):
+    from metroliza.charts import chart_render_service as service
+
+    timeouts = []
+    worker = SimpleNamespace(join=lambda *, timeout: timeouts.append(timeout), is_alive=lambda: True)
+    monkeypatch.setattr(service, "_POOLS", [SimpleNamespace(shutdown=lambda *, wait: None, _threads=[worker])])
+    monkeypatch.setattr(service.time, "monotonic", lambda: 20.0)
+    assert service.shutdown(deadline=12.0) is False
+    assert timeouts == [0.0]
+
+
+def test_submit_racing_close_cannot_block_on_leftover_sentinel(monkeypatch):
+    from concurrent.futures import Future
+    from metroliza.charts import chart_render_service as service
+
+    pool = BoundedWorkerPool(max_workers=1, max_queue_size=1)
+    errors = []
+    def close_during_admission():
+        pool.shutdown(wait=True)
+        assert pool._queue.full()  # final worker passes on the sentinel
+        return Future()
+    monkeypatch.setattr(service, "Future", close_during_admission)
+    def submit():
+        try:
+            pool.submit(lambda: 7)
+        except RuntimeError as error:
+            errors.append(str(error))
+    submitter = threading.Thread(target=submit)
+    submitter.start()
+    submitter.join(1)
+    stuck = submitter.is_alive()
+    if stuck:
+        # Release the RED submitter normally; never leave a blocked real thread.
+        pool._queue.get_nowait()
+        pool._queue.task_done()
+    submitter.join(2)
+    pool.shutdown(wait=True)
+    assert not submitter.is_alive()
+    assert not stuck, "submit blocked after shutdown on a leftover sentinel"
+    assert errors == ["Worker pool is closed."]
+    with pytest.raises(RuntimeError, match="closed"):
+        pool.submit(lambda: 9)
 
 
 class TestChartRenderService(unittest.TestCase):
