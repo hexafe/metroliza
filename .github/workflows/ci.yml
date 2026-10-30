@@ -344,7 +344,7 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP 'metroliza-inventory-evidence'
           if (Test-Path -LiteralPath $out) { throw 'Inventory evidence root must be new' }
           & .\.venv-build\Scripts\python.exe scripts/verify_third_party_inventory.py `
-            --inventory docs/release_checks/third_party_inventory_260711.json --onedir $package[0].FullName `
+            --inventory docs/release_checks/third_party_inventory.json --onedir $package[0].FullName `
             --receipt (Join-Path $out 'third-party-inventory.json') --generated (Join-Path $out 'third-party-inventory-generated.json')
           $code = $LASTEXITCODE
           if (-not (Test-Path -LiteralPath (Join-Path $out 'third-party-inventory.json'))) { throw 'Inventory evidence was not written' }
@@ -1602,7 +1602,7 @@ jobs:
             --dist-dir dist \
             --artifact "${{ steps.packaged-artifact.outputs.path }}"
           test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/THIRD_PARTY_NOTICES.md"
-          test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/third_party_inventory_260711.json"
+          test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/third_party_inventory.json"
           test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/NOTICE_MANIFEST.json"
 
       - name: Smoke parse PDF fixture with packaged artifact

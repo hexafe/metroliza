@@ -1323,7 +1323,7 @@
       "include": [
         "docs/**/*.pdf",
         "docs/perf_baseline_snapshot.json",
-        "docs/release_checks/third_party_inventory_260711.json"
+        "docs/release_checks/third_party_inventory.json"
       ],
       "exclude": [
         "docs/archive/**"
@@ -1366,7 +1366,7 @@
         "docs/roadmaps/static_population_layer_dashboard_plan.md",
         "docs/**/*.pdf",
         "docs/perf_baseline_snapshot.json",
-        "docs/release_checks/third_party_inventory_260711.json"
+        "docs/release_checks/third_party_inventory.json"
       ],
       "class": "active documentation",
       "primary_owner": 975,

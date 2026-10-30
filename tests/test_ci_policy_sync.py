@@ -332,7 +332,7 @@ def test_ci_workflow_keeps_packaging_manual_and_google_local_only() -> None:
     assert 'name: packaging-smoke-artifacts' in workflow
     assert 'name: packaging-smoke-release-artifact' in workflow
     assert 'python scripts/stage_release_notices.py' in workflow
-    assert 'third_party_inventory_260711.json' in workflow
+    assert 'third_party_inventory.json' in workflow
     assert 'NOTICE_MANIFEST.json' in workflow
 
 

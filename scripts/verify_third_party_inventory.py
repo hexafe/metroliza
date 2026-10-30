@@ -20,6 +20,7 @@ dependency kinds, so the list over-approximates what is linked. It is not a lega
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 from pathlib import Path
 import sys
@@ -60,6 +61,29 @@ def bundled_distributions(onedir: Path) -> dict[str, str]:
         if name and version:
             bundled[canonicalize_name(name)] = version
     return bundled
+
+
+def bundled_only_records(onedir: Path, names: set[str]) -> list[dict[str, Any]]:
+    """Return inventory records read from bundled metadata of distributions not installed as such.
+
+    Packagers can ship a dist-info that is vendored inside another distribution (for example
+    setuptools' own copy of importlib_metadata); its bundled METADATA is then the only source.
+    """
+    records = []
+    for metadata_path in sorted(onedir.rglob("*.dist-info/METADATA")):
+        metadata = importlib.metadata.PathDistribution(metadata_path.parent).metadata
+        name = canonicalize_name(str(metadata.get("Name") or ""))
+        if name in names:
+            records.append({
+                "name": str(metadata["Name"]),
+                "canonical_name": name,
+                "version": str(metadata["Version"]),
+                "direct": False,
+                "license_metadata": generator._license_text(metadata),
+                "project_url": generator._project_url(metadata),
+            })
+            names = names - {name}
+    return records
 
 
 def _python_identities(inventory: dict[str, Any]) -> dict[str, str]:
@@ -123,6 +147,9 @@ def generate_build_inventory(
     direct = {canonicalize_name(name) for name in roots}
     for record in packages:
         record["direct"] = record["canonical_name"] in direct
+    vendored = bundled_only_records(onedir, set(missing) & set(bundled))
+    missing = sorted(set(missing) - {record["canonical_name"] for record in vendored})
+    packages = sorted([*packages, *vendored], key=lambda record: record["canonical_name"])
     payload["python"]["packages"] = packages
     payload["python"]["bundled_roots"] = extra
     payload["python"]["missing_requirement_roots"] = missing

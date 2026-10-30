@@ -115,3 +115,22 @@ def test_build_inventory_adds_bundled_only_distributions_as_non_direct_roots(tmp
     assert bundled == {"numpy": "2.4.6", "pluggy": "1.7.0"}
     assert payload["python"]["bundled_roots"] == ["pluggy"]
     assert {r["canonical_name"]: r["direct"] for r in payload["python"]["packages"]} == {"numpy": True, "pluggy": False}
+
+
+def test_vendored_bundled_metadata_is_recorded_from_the_onedir(tmp_path: Path, monkeypatch) -> None:
+    _dist_info(tmp_path, "importlib_metadata", "8.7.1")
+
+    def fake_generate(**_kwargs):
+        return {"python": {"requirement_roots": [], "packages": [], "missing_requirement_roots": []},
+                "rust": {"packages": [], "warnings": []}}
+
+    monkeypatch.setattr(verifier.generator, "generate_inventory", fake_generate)
+    monkeypatch.setattr(verifier.generator, "build_python_inventory", lambda roots: ([], sorted(roots)))
+
+    payload, bundled = verifier.generate_build_inventory(onedir=tmp_path, requirement_paths=[], cargo_manifests=[])
+
+    assert payload["python"]["missing_requirement_roots"] == []
+    assert [(r["canonical_name"], r["version"], r["direct"]) for r in payload["python"]["packages"]] == [
+        ("importlib-metadata", "8.7.1", False)
+    ]
+    assert verifier.compare_inventories(payload, payload, bundled)["status"] == "PASS"
