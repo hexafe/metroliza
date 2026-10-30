@@ -134,3 +134,15 @@ def test_vendored_bundled_metadata_is_recorded_from_the_onedir(tmp_path: Path, m
         ("importlib-metadata", "8.7.1", False)
     ]
     assert verifier.compare_inventories(payload, payload, bundled)["status"] == "PASS"
+
+
+def test_conflicting_bundled_versions_fail_loudly(tmp_path: Path) -> None:
+    _dist_info(tmp_path, "zipp", "3.20.0")
+    folder = tmp_path / "_internal" / "setuptools" / "_vendor" / "zipp-3.19.0.dist-info"
+    folder.mkdir(parents=True)
+    (folder / "METADATA").write_text("Name: zipp\nVersion: 3.19.0\n\n", encoding="utf-8")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="two versions"):
+        verifier.bundled_distributions(tmp_path)

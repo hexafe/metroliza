@@ -482,10 +482,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release ZIP completeness gate failed' }
 
       - name: Enforce the third-party inventory gate recorded before acceptance
-        if: always() && env.INVENTORY_EVIDENCE != ''
+        if: ${{ !cancelled() && env.INVENTORY_EVIDENCE != '' }}
         shell: pwsh
         run: |
-          $out = Join-Path $env:CANDIDATE_RECEIPTS 'release'
+          $root = if ($env:CANDIDATE_RECEIPTS) { $env:CANDIDATE_RECEIPTS } else { Join-Path $env:RUNNER_TEMP 'metroliza-candidate-acceptance' }
+          $out = Join-Path $root 'release'
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item -Path (Join-Path $env:INVENTORY_EVIDENCE '*.json') -Destination $out
           if ($env:INVENTORY_EXIT -ne '0') { throw 'Third-party inventory does not match this build' }

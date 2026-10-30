@@ -12,7 +12,8 @@ update can be committed; this script never edits the committed file.
 
 Limits: the comparison covers package identities and versions only. Python components shipped
 without ``*.dist-info`` metadata outside the requirement closure (for example the PyInstaller
-bootloader) are not detected. Rust packages come from ``cargo metadata`` for all targets and
+bootloader) are not detected, and the dependencies of vendored bundled-only metadata are not
+followed. Rust packages come from ``cargo metadata`` for all targets and
 dependency kinds, so the list over-approximates what is linked. It is not a legal review: the
 ``review_status`` block of the inventory is reported, never changed.
 """
@@ -59,7 +60,10 @@ def bundled_distributions(onedir: Path) -> dict[str, str]:
             elif key == "Version":
                 version = value.strip()
         if name and version:
-            bundled[canonicalize_name(name)] = version
+            key = canonicalize_name(name)
+            if bundled.get(key, version) != version:
+                raise ValueError(f"onedir bundles {key} in two versions: {bundled[key]} and {version}")
+            bundled[key] = version
     return bundled
 
 

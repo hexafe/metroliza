@@ -94,7 +94,7 @@ def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zi
     clean = index("dirty after packing")
     # Inventory evidence comes from the frozen build venv, before host packages are installed into it.
     assert build < inventory < host < before < diagnostics < final < unchanged < pack < smoke < zip_gate < enforce < clean
-    assert steps[enforce]["if"] == "always() && env.INVENTORY_EVIDENCE != ''"
+    assert steps[enforce]["if"] == "${{ !cancelled() && env.INVENTORY_EVIDENCE != '' }}"
     assert "exit 0" in steps[inventory]["run"] and "INVENTORY_EXIT=$code" in steps[inventory]["run"]
 
     # One application build: the launcher packs the qualified onedir and never rebuilds it.
