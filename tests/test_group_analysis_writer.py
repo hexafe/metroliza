@@ -1,4 +1,7 @@
+import os
 import unittest
+
+from metroliza.shared.docs_links import DEFAULT_RELEASE_DOCS_REF
 
 from modules.group_analysis_writer import (
     GROUP_ANALYSIS_MANUAL_GITHUB_URL,
@@ -674,6 +677,17 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         }
         self.assertEqual(note_rows['Violin'], 'Not enough samples in one or more groups.')
         self.assertEqual(note_rows['Histogram'], 'Not enough total samples to show this plot.')
+
+    def test_manual_links_use_the_pinned_release_docs_ref(self):
+        # Without METROLIZA_RELEASE_DOCS_REF the export links must carry the immutable pin.
+        if os.environ.get('METROLIZA_RELEASE_DOCS_REF', '').strip():
+            self.skipTest('developer docs ref override is set')
+        for url, path in (
+            (GROUP_ANALYSIS_MANUAL_GITHUB_URL, 'docs/user_manual/group_analysis/user_manual.md'),
+            (GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL, 'docs/user_manual/group_analysis/user_manual.pdf'),
+        ):
+            self.assertEqual(url, f'https://github.com/hexafe/metroliza/blob/{DEFAULT_RELEASE_DOCS_REF}/{path}')
+            self.assertRegex(DEFAULT_RELEASE_DOCS_REF, r'^[0-9a-f]{40}$')
 
 
 if __name__ == '__main__':
