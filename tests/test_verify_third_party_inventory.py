@@ -91,3 +91,27 @@ def test_default_rust_scope_includes_the_shipped_launcher() -> None:
 
     assert "packaging/launcher/Cargo.toml" in manifests
     assert any(path.startswith("src/metroliza/native/") for path in manifests)
+
+
+def test_build_inventory_adds_bundled_only_distributions_as_non_direct_roots(tmp_path: Path, monkeypatch) -> None:
+    _dist_info(tmp_path, "numpy", "2.4.6")
+    _dist_info(tmp_path, "pluggy", "1.7.0")
+    calls = []
+
+    def fake_generate(**_kwargs):
+        return {"python": {"requirement_roots": ["numpy"], "packages": [], "missing_requirement_roots": []},
+                "rust": {"packages": [], "warnings": []}}
+
+    def fake_closure(roots):
+        calls.append(list(roots))
+        return [{"canonical_name": name, "version": "1", "direct": True} for name in roots], []
+
+    monkeypatch.setattr(verifier.generator, "generate_inventory", fake_generate)
+    monkeypatch.setattr(verifier.generator, "build_python_inventory", fake_closure)
+
+    payload, bundled = verifier.generate_build_inventory(onedir=tmp_path, requirement_paths=[], cargo_manifests=[])
+
+    assert calls == [["numpy", "pluggy"]]
+    assert bundled == {"numpy": "2.4.6", "pluggy": "1.7.0"}
+    assert payload["python"]["bundled_roots"] == ["pluggy"]
+    assert {r["canonical_name"]: r["direct"] for r in payload["python"]["packages"]} == {"numpy": True, "pluggy": False}

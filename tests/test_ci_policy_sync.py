@@ -81,6 +81,8 @@ def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zi
         return matches[0]
 
     build = index("build_windows_exe.ps1 -Clean -WithNative -Mode onedir")
+    inventory = index("scripts/verify_third_party_inventory.py")
+    host = index("requirements-windows-candidate-host.txt")
     before = index('"CANDIDATE_CONTENT_SHA256=')
     diagnostics = index("scripts/qualify_windows_diagnostics.py")
     final = index("scripts/finalize_windows_candidate_receipts.py")
@@ -88,9 +90,12 @@ def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zi
     pack = index("build_windows_launcher_exe.ps1")
     smoke = index("scripts/qualify_windows_portable_onefile.py")
     zip_gate = index("scripts/release_zip.py verify")
-    inventory = index("scripts/verify_third_party_inventory.py")
+    enforce = index("Third-party inventory does not match this build")
     clean = index("dirty after packing")
-    assert build < before < diagnostics < final < unchanged < pack < smoke < zip_gate < inventory < clean
+    # Inventory evidence comes from the frozen build venv, before host packages are installed into it.
+    assert build < inventory < host < before < diagnostics < final < unchanged < pack < smoke < zip_gate < enforce < clean
+    assert steps[enforce]["if"] == "always() && env.INVENTORY_EVIDENCE != ''"
+    assert "exit 0" in steps[inventory]["run"] and "INVENTORY_EXIT=$code" in steps[inventory]["run"]
 
     # One application build: the launcher packs the qualified onedir and never rebuilds it.
     assert steps[pack]["run"] == ".\\build_windows_launcher_exe.ps1 -Supervised -OnedirPath $env:CANDIDATE_PACKAGE"
@@ -108,6 +113,18 @@ def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zi
     assert release["with"]["path"] == "${{ runner.temp }}/metroliza-release/metroliza_*_windows.zip"
     # Release receipts land below the receipt root, which is uploaded with if: always().
     assert "Join-Path $env:CANDIDATE_RECEIPTS 'release/release-zip.json'" in steps[zip_gate]["run"]
+
+    # The uploaded artifact is downloaded and verified again in a separate job.
+    job = workflow["jobs"]["windows-candidate-acceptance"]
+    assert job["outputs"]["content_sha256"] == "${{ steps.onedir-content.outputs.sha256 }}"
+    check = workflow["jobs"]["windows-release-zip-download-check"]
+    assert check["needs"] == "windows-candidate-acceptance" and check["if"] == "success()"
+    download = next(step for step in check["steps"] if "actions/download-artifact@" in step.get("uses", ""))
+    assert download["with"]["name"] == "windows-release-zip"
+    verify = next(step for step in check["steps"] if "release_zip.py verify" in step.get("run", ""))
+    assert verify["env"]["CONTENT_SHA256"] == "${{ needs.windows-candidate-acceptance.outputs.content_sha256 }}"
+    for flag in ('--expected-content-sha256 "$CONTENT_SHA256"', '--expected-source-sha "$GITHUB_SHA"', "--source-root"):
+        assert flag in verify["run"]
 
 
 def test_portable_tester_launcher_upload_keeps_its_notices():

@@ -1,6 +1,7 @@
 """Verify the committed third-party inventory against the dependencies of an actual build.
 
-Run it with the build environment's interpreter (``.venv-build``) after the onedir is built.
+Run it with the build environment's interpreter (``.venv-build``) right after the onedir is built,
+before anything else is installed into that environment.
 It regenerates the inventory from that environment: the installed closure of the runtime
 requirement roots, plus every distribution whose ``*.dist-info`` the onedir bundles (packagers
 pull in some that the requirements do not name), and the Rust packages of the native crates and
@@ -9,7 +10,10 @@ package name or version, or when the onedir bundles metadata of a distribution t
 environment does not explain. ``--generated`` writes the regenerated inventory so a reviewed
 update can be committed; this script never edits the committed file.
 
-The comparison is limited to package identities and versions. It is not a legal review: the
+Limits: the comparison covers package identities and versions only. Python components shipped
+without ``*.dist-info`` metadata outside the requirement closure (for example the PyInstaller
+bootloader) are not detected. Rust packages come from ``cargo metadata`` for all targets and
+dependency kinds, so the list over-approximates what is linked. It is not a legal review: the
 ``review_status`` block of the inventory is reported, never changed.
 """
 
@@ -102,6 +106,7 @@ def compare_inventories(
         "python": python_diff | {"build_count": len(actual_python), "inventory_count": len(committed_python)},
         "rust": rust_diff | {"build_count": len(actual_rust), "inventory_count": len(committed_rust)},
         "bundled_dist_info_count": len(bundled),
+        "scope_note": "Python: requirement closure plus bundled dist-info; Rust: cargo metadata, all targets and kinds",
         "review_status": committed.get("review_status"),
     }
 

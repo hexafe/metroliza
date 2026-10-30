@@ -183,7 +183,7 @@ def test_notices_must_match_the_source_checkout(release: tuple[Path, str], tmp_p
     (source / "docs/release_checks").mkdir(parents=True)
     (source / "THIRD_PARTY_NOTICES.md").write_text("different notice\n", encoding="utf-8")
 
-    with pytest.raises(release_zip.ReleaseZipError, match="does not match the source checkout"):
+    with pytest.raises(release_zip.ReleaseZipError, match="does not match THIRD_PARTY_NOTICES.md in the source checkout"):
         release_zip.verify(zip_path, source_root=source)
 
 
@@ -200,3 +200,87 @@ def test_tampered_payload_manifest_is_rejected(tmp_path: Path) -> None:
 
 # A byte inside the manifest JSON, just before the 64-byte trailer.
 TRAILER_MANIFEST_BYTE = release_zip.TRAILER_LEN + 3
+
+
+# Produced by the real packer (packaging/launcher, `metroliza-packer --input <these files>`) on
+# 2026-10-30; any ordering, separator or encoding difference from Rust changes it.
+RUST_PACKER_GOLDEN = "300545a11b5bbef38d4ad1b990a1f6a61d5ae0574e9574eee7dd26ea6303aaab"
+GOLDEN_FILES = {
+    "metroliza.exe": b"supervisor",
+    "a": b"A",
+    "b.txt": b"lower-b",
+    "a b.txt": b"",
+    "_internal/sub/z.pyd": b"x",
+    "B/c": b"upper",
+    "_internal/Ä.dat": b"\x00\x01",
+}
+
+
+def test_content_hash_equals_the_rust_packer_golden(tmp_path: Path) -> None:
+    for relative, content in GOLDEN_FILES.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    assert release_zip.content_sha256("metroliza.exe", release_zip.onedir_records(tmp_path)) == RUST_PACKER_GOLDEN
+
+
+def test_signed_pe_trailer_is_read_before_the_certificate_table(tmp_path: Path) -> None:
+    exe = tmp_path / EXE_NAME
+    _fake_launcher(exe, ONEDIR_FILES)
+    unsigned = exe.read_bytes()
+    pe = 0x80
+    header = bytearray(unsigned[:2] + b"\0" * (pe - 2))
+    struct.pack_into("<I", header, 0x3C, pe)
+    optional = bytearray(b"PE\0\0" + b"\0" * 20) + bytearray(240)
+    struct.pack_into("<H", optional, 24, 0x20B)
+    struct.pack_into("<I", optional, 24 + 108, 16)
+    certificate = b"\x30\x82fake-certificate"
+    signed_body = bytes(header + optional)
+    # Rebuild the payload after the larger PE header, then append a certificate table.
+    shift = len(signed_body) - 64
+    trailer = unsigned[-release_zip.TRAILER_LEN:]
+    offset, length, manifest_len = struct.unpack_from("<QQQ", trailer, 8)
+    payload = unsigned[64:-release_zip.TRAILER_LEN]
+    new_trailer = trailer[:8] + struct.pack("<QQQ", offset + shift, length, manifest_len) + trailer[32:]
+    body = signed_body + payload + new_trailer
+    struct.pack_into("<II", optional, 24 + 112 + 32, len(body), len(certificate))
+    exe.write_bytes(bytes(header + optional) + payload + new_trailer + certificate)
+
+    with exe.open("rb") as handle:
+        assert release_zip._trailer_end(handle, exe.stat().st_size) == exe.stat().st_size - len(certificate)
+    manifest = release_zip.read_payload_manifest(exe)
+
+    assert release_zip.payload_content_sha256(manifest) == release_zip.content_sha256(
+        "metroliza.exe", [(r["path"], r["size"], r["sha256"]) for r in manifest["files"]]
+    )
+    assert manifest["git_sha"] == GIT_SHA
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"replace": {"README.txt": b"Run anything.\r\n"}}, "README.txt is not the release instruction"),
+        ({"add": {f"metroliza_2026.09rc1_261031/{EXE_NAME.upper()}": b"x"}}, "duplicate member name"),
+    ],
+)
+def test_readme_and_duplicate_members_are_checked(release: tuple[Path, str], tmp_path: Path, mutation, message) -> None:
+    zip_path, _ = release
+    altered = _rewrite_zip(zip_path, tmp_path / "altered.zip", **mutation)
+
+    with pytest.raises(release_zip.ReleaseZipError, match=message):
+        release_zip.verify(altered)
+
+
+def test_notice_manifest_must_list_exactly_the_required_notices(tmp_path: Path) -> None:
+    exe = _stage_release(tmp_path)
+    licenses = exe.with_name(f"{exe.name}.licenses")
+    inventory = licenses / release_zip_inventory_name()
+    inventory.unlink()
+    manifest = json.loads((licenses / "NOTICE_MANIFEST.json").read_text(encoding="utf-8"))
+    manifest["files"] = [item for item in manifest["files"] if item["name"] != inventory.name]
+    (licenses / "NOTICE_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
+    zip_path = release_zip.assemble(exe, tmp_path / "out.zip")
+
+    with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
+        release_zip.verify(zip_path)

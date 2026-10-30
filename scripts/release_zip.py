@@ -4,12 +4,14 @@ The ZIP holds one folder with exactly:
 
 * the native launcher ``metroliza_<version>_<build>_launcher.exe``;
 * its original ``.provenance.json`` sidecar;
-* its visible ``.licenses`` notice directory (``NOTICE_MANIFEST.json`` plus the files it lists);
+* its visible ``.licenses`` notice directory: ``NOTICE_MANIFEST.json``, ``THIRD_PARTY_NOTICES.md`` and
+  the dependency inventory, nothing else;
 * ``README.txt``: extract everything, then start the EXE.
 
-``verify`` checks a downloaded ZIP without trusting its contents: safe member names, the exact
-file set, the EXE hash and size against provenance, the notices against their manifest (and,
-with ``--source-root``, against the source files), and the payload embedded in the EXE. The
+``verify`` checks a downloaded ZIP without trusting its contents: safe, unique member names, the
+exact file set and README text, the EXE hash and size against provenance, the required notices
+against their manifest (and, with ``--source-root``, against their exact source paths), and the
+payload embedded in the EXE. The
 payload's content hash uses the packer's definition (``Manifest::content_sha256`` in
 ``packaging/launcher/src/manifest.rs``), so ``onedir-hash`` on the qualified onedir and
 ``--expected-content-sha256`` prove that the EXE carries exactly the qualified files.
@@ -29,6 +31,12 @@ import tempfile
 from typing import Any
 import zipfile
 
+try:
+    from scripts.stage_release_notices import DEFAULT_INVENTORY, DEFAULT_NOTICE, REPO_ROOT
+except ImportError:  # pragma: no cover - direct ``python scripts/release_zip.py`` execution
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.stage_release_notices import DEFAULT_INVENTORY, DEFAULT_NOTICE, REPO_ROOT
+
 
 LAUNCHER_NAME = re.compile(r"metroliza_(?P<version>[0-9]{4}\.[0-9]{2}[a-z0-9]+)_(?P<build>[0-9]{6})_launcher\.exe")
 TRAILER_MAGIC = b"MTRLZPL1"
@@ -37,6 +45,11 @@ CONTENT_PREFIX = b"metroliza-onedir-content-v1\n"
 NOTICE_MANIFEST = "NOTICE_MANIFEST.json"
 README = "README.txt"
 CHUNK = 1024 * 1024
+# The notice files every release must carry, by name, and where each comes from in the source.
+REQUIRED_NOTICES = {
+    DEFAULT_NOTICE.name: DEFAULT_NOTICE.relative_to(REPO_ROOT),
+    DEFAULT_INVENTORY.name: DEFAULT_INVENTORY.relative_to(REPO_ROOT),
+}
 
 
 class ReleaseZipError(Exception):
@@ -199,7 +212,11 @@ def assemble(exe: Path, output: Path) -> Path:
 
 def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     members = []
+    seen: set[str] = set()
     for info in archive.infolist():
+        if info.filename.casefold() in seen:
+            raise ReleaseZipError(f"duplicate member name: {info.filename!r}")
+        seen.add(info.filename.casefold())
         name = PurePosixPath(info.filename)
         if info.filename.startswith(("/", "\\")) or "\\" in info.filename or ".." in name.parts or ":" in info.filename:
             raise ReleaseZipError(f"unsafe member name: {info.filename!r}")
@@ -236,6 +253,9 @@ def verify(
         for required in (README, f"{exe_name}.provenance.json"):
             if required not in names:
                 raise ReleaseZipError(f"{required} is missing")
+        provenance = json.loads(archive.read(f"{folder}/{exe_name}.provenance.json"))
+        if archive.read(f"{folder}/{README}").decode("utf-8") != readme_text(exe_name, provenance).replace("\n", "\r\n"):
+            raise ReleaseZipError(f"{README} is not the release instruction for {exe_name}")
         with tempfile.TemporaryDirectory(dir=work_dir) as temporary:
             root = Path(temporary)
             archive.extractall(root, members)
@@ -249,9 +269,8 @@ def verify(
             ) | {"zip": {"name": zip_path.name, "sha256": _sha256_file(zip_path), "size_bytes": zip_path.stat().st_size}}
 
 
-def _verify_notices(folder: Path, exe_name: str, names: set[str], source_root: Path | None) -> dict[str, str]:
-    """Check the notice directory against its manifest, the exact file set and the source."""
-    licenses = f"{exe_name}.licenses"
+def _listed_notices(folder: Path, licenses: str) -> dict[str, str]:
+    """Return ``name -> sha256`` of the notices, checked against ``NOTICE_MANIFEST.json``."""
     listed = _load_json(folder / licenses / NOTICE_MANIFEST).get("files")
     if not isinstance(listed, list) or not listed:
         raise ReleaseZipError(f"{NOTICE_MANIFEST} lists no files")
@@ -266,15 +285,24 @@ def _verify_notices(folder: Path, exe_name: str, names: set[str], source_root: P
         notices[name] = _sha256_file(path)
         if notices[name] != item.get("sha256"):
             raise ReleaseZipError(f"notice hash differs from {NOTICE_MANIFEST}: {name}")
+    return notices
+
+
+def _verify_notices(folder: Path, exe_name: str, names: set[str], source_root: Path | None) -> dict[str, str]:
+    """Check the notice directory against its manifest, the exact file set and the source."""
+    licenses = f"{exe_name}.licenses"
+    notices = _listed_notices(folder, licenses)
+    if set(notices) != set(REQUIRED_NOTICES):
+        raise ReleaseZipError(f"notices must be exactly {sorted(REQUIRED_NOTICES)}, found {sorted(notices)}")
     expected = {README, exe_name, f"{exe_name}.provenance.json", f"{licenses}/{NOTICE_MANIFEST}"}
     expected.update(f"{licenses}/{name}" for name in notices)
     if names != expected:
         raise ReleaseZipError(f"unexpected file set: extra {sorted(names - expected)}, missing {sorted(expected - names)}")
     if source_root is not None:
         for name, digest in notices.items():
-            candidates = [path for path in (source_root / name, source_root / "docs/release_checks" / name) if path.is_file()]
-            if not candidates or _sha256_file(candidates[0]) != digest:
-                raise ReleaseZipError(f"notice {name} does not match the source checkout")
+            source = source_root / REQUIRED_NOTICES[name]
+            if not source.is_file() or _sha256_file(source) != digest:
+                raise ReleaseZipError(f"notice {name} does not match {REQUIRED_NOTICES[name].as_posix()} in the source checkout")
     return notices
 
 
@@ -368,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.receipt.parent.mkdir(parents=True, exist_ok=True)
                 args.receipt.write_text(text, encoding="utf-8")
             print(text, end="")
-    except (ReleaseZipError, OSError, zipfile.BadZipFile) as exc:
+    except (ReleaseZipError, OSError, ValueError, zipfile.BadZipFile) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0
