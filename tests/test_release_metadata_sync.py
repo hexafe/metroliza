@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261029)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261031)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,6 +50,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                '- Help opens the manuals that match this version<br>',
+                '- The Windows download is one ZIP: extract it and start the EXE; build identity and third-party notices sit next to the EXE<br>',
                 '- Exporting to an existing workbook asks whether to save a copy (the default) or replace it; a workbook open in Excel is not overwritten<br>',
                 '- Metadata enrichment reports canceled, failed and skipped reports instead of a green 100%<br>',
                 '- Opening an existing .sqlite, .sqlite3 or .DB database uses exactly the file you chose<br>',

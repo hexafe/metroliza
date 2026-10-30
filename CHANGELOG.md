@@ -1,6 +1,10 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261029) — current version
+## 2026.09 RC1 (build 261031) — current version
+- Help menu entries open the manuals that match this version, without any setup.
+- The Windows download is one ZIP. Extract all of it and start the EXE; the build identity file and the third-party notices folder sit next to the EXE.
+
+## 2026.09 RC1 (build 261029)
 - Exporting to an existing workbook asks you to Save a copy (the default, such as `name (2).xlsx`), Replace, or Cancel; a workbook open in Excel is not overwritten.
 - Report metadata enrichment now reports canceled, failed, and skipped reports instead of showing a green 100% completion.
 - Opening an existing `.sqlite`, `.sqlite3`, or `.DB` database keeps the exact file you selected.
