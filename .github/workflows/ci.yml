@@ -944,6 +944,9 @@ jobs:
       - name: Release metadata consistency
         run: python scripts/sync_release_metadata.py --check
 
+      - name: Release docs ref is immutable and complete
+        run: python scripts/check_release_docs_ref.py
+
       - name: Secret scan (diff + repository)
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
