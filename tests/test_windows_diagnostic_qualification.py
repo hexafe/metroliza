@@ -3789,7 +3789,7 @@ def _package_receipt() -> dict[str, object]:
         "manifest_sha256": "d" * 64,
         "notice_hashes": {
             "THIRD_PARTY_NOTICES.md": "e" * 64,
-            "third_party_inventory_260711.json": "f" * 64,
+            "third_party_inventory.json": "f" * 64,
         },
         "tested_tree_sha256": "1" * 64,
         "package_manifest_sha256": "2" * 64,
