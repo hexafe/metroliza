@@ -11,7 +11,8 @@ Windows acceptance (E1–E14) was NOT_RUN when it was made. Actions retention of
 
 Tester download (the user ZIP itself, stored unchanged):
 [`metroliza_2026.09rc1_261031_windows.zip`](https://github.com/hexafe/metroliza/releases/download/untagged-e800cc5baa028c387acb/metroliza_2026.09rc1_261031_windows.zip).
-The link works only for accounts with access to the repository's draft releases.
+The link works only for accounts with write access to the repository, and only while the release stays a draft;
+otherwise use the Actions artifact named in the tester packet.
 
 | Layer | Archived asset | SHA-256 | Bytes |
 |---|---|---|---|
