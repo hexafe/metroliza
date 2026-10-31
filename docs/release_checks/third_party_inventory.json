@@ -1,6 +1,17 @@
 {
-  "generated_at": "2026-07-11T06:51:21.096390+00:00",
+  "generated_at": "2026-10-30T22:00:27.887430+00:00",
   "python": {
+    "bundled_roots": [
+      "google-auth",
+      "importlib-metadata",
+      "opentelemetry-api",
+      "pandas",
+      "pluggy",
+      "pydantic",
+      "setuptools",
+      "sqlalchemy",
+      "tqdm"
+    ],
     "missing_requirement_roots": [],
     "packages": [
       {
@@ -9,23 +20,15 @@
         "license_metadata": "MIT",
         "name": "annotated-doc",
         "project_url": "https://github.com/fastapi/annotated-doc",
-        "version": "0.0.4"
+        "version": "0.0.5"
       },
       {
         "canonical_name": "annotated-types",
         "direct": false,
-        "license_metadata": "OSI Approved :: MIT License",
+        "license_metadata": "MIT",
         "name": "annotated-types",
         "project_url": "https://github.com/annotated-types/annotated-types",
-        "version": "0.7.0"
-      },
-      {
-        "canonical_name": "antlr4-python3-runtime",
-        "direct": false,
-        "license_metadata": "BSD",
-        "name": "antlr4-python3-runtime",
-        "project_url": "http://www.antlr.org",
-        "version": "4.9.3"
+        "version": "0.8.0"
       },
       {
         "canonical_name": "anyio",
@@ -33,7 +36,7 @@
         "license_metadata": "MIT",
         "name": "anyio",
         "project_url": "https://anyio.readthedocs.io/en/latest/",
-        "version": "4.14.1"
+        "version": "4.15.1"
       },
       {
         "canonical_name": "certifi",
@@ -41,7 +44,7 @@
         "license_metadata": "MPL-2.0",
         "name": "certifi",
         "project_url": "https://github.com/certifi/python-certifi",
-        "version": "2026.6.17"
+        "version": "2026.10.23"
       },
       {
         "canonical_name": "cffi",
@@ -49,7 +52,7 @@
         "license_metadata": "MIT-0",
         "name": "cffi",
         "project_url": "https://cffi.readthedocs.io/",
-        "version": "2.1.0"
+        "version": "2.1.1"
       },
       {
         "canonical_name": "charset-normalizer",
@@ -57,7 +60,7 @@
         "license_metadata": "MIT",
         "name": "charset-normalizer",
         "project_url": "https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md",
-        "version": "3.4.9"
+        "version": "3.5.2"
       },
       {
         "canonical_name": "click",
@@ -65,7 +68,15 @@
         "license_metadata": "BSD-3-Clause",
         "name": "click",
         "project_url": "https://click.palletsprojects.com/page/changes/",
-        "version": "8.4.2"
+        "version": "8.5.0"
+      },
+      {
+        "canonical_name": "colorama",
+        "direct": false,
+        "license_metadata": "OSI Approved :: BSD License",
+        "name": "colorama",
+        "project_url": "https://github.com/tartley/colorama",
+        "version": "0.4.6"
       },
       {
         "canonical_name": "colorlog",
@@ -73,7 +84,7 @@
         "license_metadata": "MIT License",
         "name": "colorlog",
         "project_url": "https://github.com/borntyping/python-colorlog",
-        "version": "6.10.1"
+        "version": "6.12.0"
       },
       {
         "canonical_name": "contourpy",
@@ -89,7 +100,7 @@
         "license_metadata": "Apache-2.0 OR BSD-3-Clause",
         "name": "cryptography",
         "project_url": "https://cryptography.io/en/latest/changelog/",
-        "version": "49.0.0"
+        "version": "50.0.2"
       },
       {
         "canonical_name": "cycler",
@@ -113,7 +124,7 @@
         "license_metadata": "MIT",
         "name": "fastapi",
         "project_url": "https://github.com/fastapi/fastapi",
-        "version": "0.139.0"
+        "version": "0.162.0"
       },
       {
         "canonical_name": "flatbuffers",
@@ -129,7 +140,7 @@
         "license_metadata": "MIT",
         "name": "fonttools",
         "project_url": "http://github.com/fonttools/fonttools",
-        "version": "4.63.0"
+        "version": "4.68.0"
       },
       {
         "canonical_name": "google-auth",
@@ -137,7 +148,7 @@
         "license_metadata": "Apache 2.0",
         "name": "google-auth",
         "project_url": "https://github.com/googleapis/google-cloud-python/tree/main/packages/google-auth",
-        "version": "2.55.2"
+        "version": "2.62.0"
       },
       {
         "canonical_name": "google-auth-oauthlib",
@@ -145,15 +156,7 @@
         "license_metadata": "Apache 2.0",
         "name": "google-auth-oauthlib",
         "project_url": "https://github.com/googleapis/google-cloud-python/tree/main/packages/google-auth-oauthlib",
-        "version": "1.4.0"
-      },
-      {
-        "canonical_name": "greenlet",
-        "direct": false,
-        "license_metadata": "MIT AND PSF-2.0",
-        "name": "greenlet",
-        "project_url": "https://greenlet.readthedocs.io",
-        "version": "3.5.3"
+        "version": "1.5.0"
       },
       {
         "canonical_name": "h11",
@@ -185,7 +188,15 @@
         "license_metadata": "BSD-3-Clause",
         "name": "idna",
         "project_url": "https://github.com/kjd/idna/blob/master/HISTORY.md",
-        "version": "3.18"
+        "version": "3.20"
+      },
+      {
+        "canonical_name": "importlib-metadata",
+        "direct": false,
+        "license_metadata": "Apache-2.0",
+        "name": "importlib_metadata",
+        "project_url": "https://github.com/python/importlib_metadata",
+        "version": "8.7.1"
       },
       {
         "canonical_name": "kiwisolver",
@@ -193,7 +204,7 @@
         "license_metadata": "========================= The Kiwi licensing terms ========================= Kiwi is licensed under the terms of the Modified BSD License (also known as New or Revised BSD), as follows: Copyright (c) 2013-2026, Nucleic Development Team All rights reserved. Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met: Redistributions of source code must retain the above copyright notice, this list of conditions and t",
         "name": "kiwisolver",
         "project_url": "https://github.com/nucleic/kiwi",
-        "version": "1.5.0"
+        "version": "1.5.1"
       },
       {
         "canonical_name": "markdown-it-py",
@@ -209,7 +220,7 @@
         "license_metadata": "License agreement for matplotlib versions 1.3.0 and later ========================================================= 1. This LICENSE AGREEMENT is between the Matplotlib Development Team (\"MDT\"), and the Individual or Organization (\"Licensee\") accessing and otherwise using matplotlib software in source or binary form and its associated documentation. 2. Subject to the terms and conditions of this License Agreement, MDT hereby grants Licensee a nonexclusive, royalty-free, world-wide license to repr",
         "name": "matplotlib",
         "project_url": "https://matplotlib.org",
-        "version": "3.11.0"
+        "version": "3.11.2"
       },
       {
         "canonical_name": "mdurl",
@@ -225,7 +236,7 @@
         "license_metadata": "GNU GPLv2 (with FOSS License Exception)",
         "name": "mysql-connector-python",
         "project_url": "https://dev.mysql.com/doc/connector-python/en/",
-        "version": "9.7.0"
+        "version": "26.10.0"
       },
       {
         "canonical_name": "numpy",
@@ -240,16 +251,16 @@
         "direct": false,
         "license_metadata": "BSD-3-Clause",
         "name": "oauthlib",
-        "project_url": "https://github.com/oauthlib/oauthlib",
-        "version": "3.3.1"
+        "project_url": "https://github.com/oauthlib/oauthlib/blob/master/CHANGELOG.rst",
+        "version": "4.0.0"
       },
       {
         "canonical_name": "omegaconf",
         "direct": false,
         "license_metadata": "OSI Approved :: BSD License",
         "name": "omegaconf",
-        "project_url": "https://github.com/omry/omegaconf",
-        "version": "2.3.1"
+        "project_url": "https://github.com/hydra-ecosystem/omegaconf",
+        "version": "2.4.0"
       },
       {
         "canonical_name": "onnxruntime",
@@ -257,7 +268,7 @@
         "license_metadata": "MIT License",
         "name": "onnxruntime",
         "project_url": "https://onnxruntime.ai",
-        "version": "1.27.0"
+        "version": "1.30.0"
       },
       {
         "canonical_name": "opencv-python",
@@ -265,7 +276,7 @@
         "license_metadata": "Apache 2.0",
         "name": "opencv-python",
         "project_url": "https://github.com/opencv/opencv-python",
-        "version": "4.13.0.92"
+        "version": "4.14.0.94"
       },
       {
         "canonical_name": "openpyxl",
@@ -276,20 +287,12 @@
         "version": "3.1.5"
       },
       {
-        "canonical_name": "openvino",
-        "direct": true,
-        "license_metadata": "Apache-2.0",
-        "name": "openvino",
-        "project_url": "https://docs.openvino.ai/2023.0/index.html",
-        "version": "2026.2.1"
-      },
-      {
-        "canonical_name": "openvino-telemetry",
+        "canonical_name": "opentelemetry-api",
         "direct": false,
-        "license_metadata": "OSI Approved :: Apache Software License",
-        "name": "openvino-telemetry",
-        "project_url": "https://github.com/openvinotoolkit/telemetry",
-        "version": "2025.2.0"
+        "license_metadata": "Apache-2.0",
+        "name": "opentelemetry-api",
+        "project_url": "https://github.com/open-telemetry/opentelemetry-python/tree/main/opentelemetry-api",
+        "version": "1.45.2"
       },
       {
         "canonical_name": "oznak",
@@ -305,15 +308,15 @@
         "license_metadata": "Apache-2.0 OR BSD-2-Clause",
         "name": "packaging",
         "project_url": "https://packaging.pypa.io/",
-        "version": "26.2"
+        "version": "26.3"
       },
       {
         "canonical_name": "pandas",
         "direct": false,
-        "license_metadata": "BSD 3-Clause License Copyright (c) 2008-2011, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData Development Team All rights reserved. Copyright (c) 2011-2026, Open source contributors. Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met: * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer. * Redistributions in binary form m",
+        "license_metadata": "BSD-3-Clause",
         "name": "pandas",
         "project_url": "https://pandas.pydata.org",
-        "version": "3.0.3"
+        "version": "3.1.0"
       },
       {
         "canonical_name": "pillow",
@@ -321,7 +324,15 @@
         "license_metadata": "MIT-CMU",
         "name": "pillow",
         "project_url": "https://pillow.readthedocs.io/en/stable/releasenotes/index.html",
-        "version": "12.3.0"
+        "version": "13.0.0"
+      },
+      {
+        "canonical_name": "pluggy",
+        "direct": false,
+        "license_metadata": "MIT",
+        "name": "pluggy",
+        "project_url": "https://github.com/pytest-dev/pluggy",
+        "version": "1.7.0"
       },
       {
         "canonical_name": "protobuf",
@@ -329,7 +340,7 @@
         "license_metadata": "3-Clause BSD License",
         "name": "protobuf",
         "project_url": "https://developers.google.com/protocol-buffers/",
-        "version": "7.35.1"
+        "version": "7.36.2"
       },
       {
         "canonical_name": "pyasn1",
@@ -337,7 +348,7 @@
         "license_metadata": "BSD-2-Clause",
         "name": "pyasn1",
         "project_url": "https://github.com/pyasn1/pyasn1",
-        "version": "0.6.4"
+        "version": "0.6.5"
       },
       {
         "canonical_name": "pyasn1-modules",
@@ -361,7 +372,7 @@
         "license_metadata": "BSD-3-Clause",
         "name": "pycparser",
         "project_url": "https://github.com/eliben/pycparser",
-        "version": "3.0"
+        "version": "3.12"
       },
       {
         "canonical_name": "pydantic",
@@ -369,7 +380,7 @@
         "license_metadata": "MIT",
         "name": "pydantic",
         "project_url": "https://github.com/pydantic/pydantic",
-        "version": "2.13.4"
+        "version": "2.14.2"
       },
       {
         "canonical_name": "pydantic-core",
@@ -377,7 +388,7 @@
         "license_metadata": "MIT",
         "name": "pydantic_core",
         "project_url": "https://github.com/sponsors/samuelcolvin",
-        "version": "2.46.4"
+        "version": "2.50.2"
       },
       {
         "canonical_name": "pygments",
@@ -385,7 +396,7 @@
         "license_metadata": "BSD-2-Clause",
         "name": "Pygments",
         "project_url": "https://pygments.org",
-        "version": "2.20.0"
+        "version": "2.21.0"
       },
       {
         "canonical_name": "pymupdf",
@@ -393,7 +404,7 @@
         "license_metadata": "Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License",
         "name": "pymupdf",
         "project_url": "https://pymupdf.readthedocs.io/",
-        "version": "1.28.0"
+        "version": "1.28.2"
       },
       {
         "canonical_name": "pymysql",
@@ -401,7 +412,7 @@
         "license_metadata": "MIT",
         "name": "PyMySQL",
         "project_url": "https://github.com/PyMySQL/PyMySQL",
-        "version": "1.2.0"
+        "version": "1.2.3"
       },
       {
         "canonical_name": "pyodbc",
@@ -417,7 +428,7 @@
         "license_metadata": "MIT",
         "name": "pyparsing",
         "project_url": "https://pyparsing-docs.readthedocs.io/en/latest/",
-        "version": "3.3.2"
+        "version": "3.3.3"
       },
       {
         "canonical_name": "pyqt6",
@@ -441,7 +452,7 @@
         "license_metadata": "BSD-2-Clause",
         "name": "PyQt6_sip",
         "project_url": "https://github.com/Python-SIP/sip",
-        "version": "13.11.1"
+        "version": "13.13.0"
       },
       {
         "canonical_name": "python-dateutil",
@@ -449,7 +460,7 @@
         "license_metadata": "Dual License",
         "name": "python-dateutil",
         "project_url": "https://dateutil.readthedocs.io/en/stable/",
-        "version": "2.9.0.post0"
+        "version": "3.0.0"
       },
       {
         "canonical_name": "python-dotenv",
@@ -457,7 +468,7 @@
         "license_metadata": "BSD-3-Clause",
         "name": "python-dotenv",
         "project_url": "https://github.com/theskumar/python-dotenv",
-        "version": "1.2.2"
+        "version": "1.2.4"
       },
       {
         "canonical_name": "pyyaml",
@@ -516,12 +527,20 @@
         "version": "0.13.2"
       },
       {
+        "canonical_name": "setuptools",
+        "direct": false,
+        "license_metadata": "MIT",
+        "name": "setuptools",
+        "project_url": "https://github.com/pypa/setuptools",
+        "version": "84.2.1"
+      },
+      {
         "canonical_name": "shapely",
         "direct": false,
-        "license_metadata": "BSD 3-Clause",
+        "license_metadata": "BSD-3-Clause",
         "name": "shapely",
         "project_url": "https://shapely.readthedocs.io/",
-        "version": "2.1.2"
+        "version": "2.2.0"
       },
       {
         "canonical_name": "shellingham",
@@ -544,8 +563,8 @@
         "direct": false,
         "license_metadata": "MIT",
         "name": "SQLAlchemy",
-        "project_url": "https://docs.sqlalchemy.org",
-        "version": "2.0.51"
+        "project_url": "https://www.sqlalchemy.org",
+        "version": "2.1.6"
       },
       {
         "canonical_name": "starlette",
@@ -553,7 +572,7 @@
         "license_metadata": "BSD-3-Clause",
         "name": "starlette",
         "project_url": "https://github.com/Kludex/starlette",
-        "version": "1.3.1"
+        "version": "1.10.0"
       },
       {
         "canonical_name": "tqdm",
@@ -561,7 +580,7 @@
         "license_metadata": "MPL-2.0 AND MIT",
         "name": "tqdm",
         "project_url": "https://tqdm.github.io",
-        "version": "4.68.4"
+        "version": "4.70.1"
       },
       {
         "canonical_name": "typer",
@@ -569,7 +588,7 @@
         "license_metadata": "MIT",
         "name": "typer",
         "project_url": "https://github.com/fastapi/typer",
-        "version": "0.26.8"
+        "version": "0.27.3"
       },
       {
         "canonical_name": "typing-extensions",
@@ -585,7 +604,15 @@
         "license_metadata": "MIT",
         "name": "typing-inspection",
         "project_url": "https://github.com/pydantic/typing-inspection",
-        "version": "0.4.2"
+        "version": "0.4.4"
+      },
+      {
+        "canonical_name": "tzdata",
+        "direct": false,
+        "license_metadata": "Apache-2.0",
+        "name": "tzdata",
+        "project_url": "https://github.com/python/tzdata/issues",
+        "version": "2026.6"
       },
       {
         "canonical_name": "urllib3",
@@ -593,7 +620,7 @@
         "license_metadata": "MIT",
         "name": "urllib3",
         "project_url": "https://github.com/urllib3/urllib3/blob/main/CHANGES.rst",
-        "version": "2.7.0"
+        "version": "2.8.0"
       },
       {
         "canonical_name": "uvicorn",
@@ -601,7 +628,7 @@
         "license_metadata": "BSD-3-Clause",
         "name": "uvicorn",
         "project_url": "https://uvicorn.dev/release-notes",
-        "version": "0.51.0"
+        "version": "0.54.0"
       },
       {
         "canonical_name": "xlrd",
@@ -630,7 +657,6 @@
       "onnxruntime",
       "opencv-python",
       "openpyxl",
-      "openvino",
       "oznak",
       "pillow",
       "pymupdf",
@@ -683,6 +709,20 @@
         "version": "2.11.1"
       },
       {
+        "license": "MIT OR Apache-2.0",
+        "name": "bitflags",
+        "repository": "https://github.com/bitflags/bitflags",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "2.13.2"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "block-buffer",
+        "repository": "https://github.com/RustCrypto/utils",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.10.4"
+      },
+      {
         "license": "Zlib OR Apache-2.0 OR MIT",
         "name": "bytemuck",
         "repository": "https://github.com/Lokathor/bytemuck",
@@ -702,6 +742,20 @@
         "repository": "https://github.com/rust-lang/cfg-if",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "1.0.4"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "cfg-if",
+        "repository": "https://github.com/rust-lang/cfg-if",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.5"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "cpufeatures",
+        "repository": "https://github.com/RustCrypto/utils",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.2.17"
       },
       {
         "license": "MIT OR Apache-2.0",
@@ -726,10 +780,31 @@
       },
       {
         "license": "MIT OR Apache-2.0",
+        "name": "crypto-common",
+        "repository": "https://github.com/RustCrypto/traits",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.1.7"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "digest",
+        "repository": "https://github.com/RustCrypto/traits",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.10.7"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
         "name": "either",
         "repository": "https://github.com/rayon-rs/either",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "1.15.0"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "errno",
+        "repository": "https://github.com/lambda-fairy/rust-errno",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.3.14"
       },
       {
         "license": "MIT/Apache-2.0",
@@ -746,6 +821,13 @@
         "version": "0.1.9"
       },
       {
+        "license": "Apache-2.0 OR MIT",
+        "name": "fastrand",
+        "repository": "https://github.com/smol-rs/fastrand",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "2.5.0"
+      },
+      {
         "license": "MIT OR Apache-2.0",
         "name": "find-msvc-tools",
         "repository": "https://github.com/rust-lang/cc-rs",
@@ -753,11 +835,32 @@
         "version": "0.1.9"
       },
       {
+        "license": "MIT",
+        "name": "generic-array",
+        "repository": "https://github.com/fizyk20/generic-array.git",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.14.7"
+      },
+      {
         "license": "MIT OR Apache-2.0",
         "name": "getrandom",
         "repository": "https://github.com/rust-random/getrandom",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.2.17"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "getrandom",
+        "repository": "https://github.com/rust-random/getrandom",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.4.3"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "gif",
+        "repository": "https://github.com/image-rs/image-gif",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.13.3"
       },
       {
         "license": "MIT OR Apache-2.0",
@@ -789,6 +892,13 @@
       },
       {
         "license": "MIT OR Apache-2.0",
+        "name": "itoa",
+        "repository": "https://github.com/dtolnay/itoa",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.18"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
         "name": "lazy_static",
         "repository": "https://github.com/rust-lang-nursery/lazy-static.rs",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
@@ -800,6 +910,13 @@
         "repository": "https://github.com/rust-lang/libc",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.2.186"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "libc",
+        "repository": "https://github.com/rust-lang/libc",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.2.191"
       },
       {
         "license": "MIT",
@@ -816,11 +933,25 @@
         "version": "0.30.1"
       },
       {
+        "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+        "name": "linux-raw-sys",
+        "repository": "https://github.com/sunfishcode/linux-raw-sys",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.12.1"
+      },
+      {
         "license": "MIT OR Apache-2.0",
         "name": "lock_api",
         "repository": "https://github.com/Amanieu/parking_lot",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.4.14"
+      },
+      {
+        "license": "MIT",
+        "name": "lz4_flex",
+        "repository": "https://github.com/pseitz/lz4_flex",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.11.6"
       },
       {
         "license": "MIT/Apache-2.0",
@@ -830,11 +961,25 @@
         "version": "0.3.10"
       },
       {
+        "license": "Unlicense OR MIT",
+        "name": "memchr",
+        "repository": "https://github.com/BurntSushi/memchr",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "2.8.3"
+      },
+      {
         "license": "MIT",
         "name": "memoffset",
         "repository": "https://github.com/Gilnaa/memoffset",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.9.1"
+      },
+      {
+        "license": "UNDECLARED",
+        "name": "metroliza-launcher",
+        "repository": "",
+        "source": "workspace",
+        "version": "0.1.0"
       },
       {
         "license": "UNDECLARED",
@@ -985,6 +1130,13 @@
       },
       {
         "license": "MIT OR Apache-2.0",
+        "name": "proc-macro2",
+        "repository": "https://github.com/dtolnay/proc-macro2",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.107"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
         "name": "pyo3",
         "repository": "https://github.com/pyo3/pyo3",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
@@ -1024,6 +1176,20 @@
         "repository": "https://github.com/dtolnay/quote",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "1.0.45"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "quote",
+        "repository": "https://github.com/dtolnay/quote",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.47"
+      },
+      {
+        "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
+        "name": "r-efi",
+        "repository": "https://github.com/r-efi/r-efi",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "6.0.0"
       },
       {
         "license": "MIT OR Apache-2.0",
@@ -1096,6 +1262,13 @@
         "version": "1.1.0"
       },
       {
+        "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+        "name": "rustix",
+        "repository": "https://github.com/bytecodealliance/rustix",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.1.5"
+      },
+      {
         "license": "MIT OR Apache-2.0",
         "name": "rustversion",
         "repository": "https://github.com/dtolnay/rustversion",
@@ -1115,6 +1288,41 @@
         "repository": "https://github.com/bluss/scopeguard",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "1.2.0"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "serde",
+        "repository": "https://github.com/serde-rs/serde",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.229"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "serde_core",
+        "repository": "https://github.com/serde-rs/serde",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.229"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "serde_derive",
+        "repository": "https://github.com/serde-rs/serde",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.229"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "serde_json",
+        "repository": "https://github.com/serde-rs/json",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.154"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "sha2",
+        "repository": "https://github.com/RustCrypto/hashes",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.10.9"
       },
       {
         "license": "MIT OR Apache-2.0",
@@ -1159,11 +1367,25 @@
         "version": "2.0.117"
       },
       {
+        "license": "MIT OR Apache-2.0",
+        "name": "syn",
+        "repository": "https://github.com/dtolnay/syn",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "3.0.9"
+      },
+      {
         "license": "Apache-2.0 WITH LLVM-exception",
         "name": "target-lexicon",
         "repository": "https://github.com/bytecodealliance/target-lexicon",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.12.16"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "tempfile",
+        "repository": "https://github.com/Stebalien/tempfile",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "3.27.0"
       },
       {
         "license": "MIT OR Apache-2.0",
@@ -1173,11 +1395,25 @@
         "version": "1.20.0"
       },
       {
+        "license": "MIT OR Apache-2.0",
+        "name": "typenum",
+        "repository": "https://github.com/paholg/typenum",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.20.1"
+      },
+      {
         "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
         "name": "unicode-ident",
         "repository": "https://github.com/dtolnay/unicode-ident",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "1.0.24"
+      },
+      {
+        "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+        "name": "unicode-ident",
+        "repository": "https://github.com/dtolnay/unicode-ident",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.27"
       },
       {
         "license": "MIT OR Apache-2.0",
@@ -1208,6 +1444,13 @@
         "version": "0.11.1+wasi-snapshot-preview1"
       },
       {
+        "license": "MIT OR Apache-2.0",
+        "name": "weezl",
+        "repository": "https://github.com/image-rs/weezl",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.1.12"
+      },
+      {
         "license": "Zlib OR Apache-2.0 OR MIT",
         "name": "wide",
         "repository": "https://github.com/Lokathor/wide",
@@ -1222,6 +1465,83 @@
         "version": "0.2.1"
       },
       {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows-sys",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.59.0"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows-sys",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.61.2"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows-targets",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_aarch64_gnullvm",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_aarch64_msvc",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_i686_gnu",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_i686_gnullvm",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_i686_msvc",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_x86_64_gnu",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_x86_64_gnullvm",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
+        "license": "MIT OR Apache-2.0",
+        "name": "windows_x86_64_msvc",
+        "repository": "https://github.com/microsoft/windows-rs",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "0.52.6"
+      },
+      {
         "license": "BSD-2-Clause OR Apache-2.0 OR MIT",
         "name": "zerocopy",
         "repository": "https://github.com/google/zerocopy",
@@ -1234,6 +1554,13 @@
         "repository": "https://github.com/google/zerocopy",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.8.48"
+      },
+      {
+        "license": "MIT",
+        "name": "zmij",
+        "repository": "https://github.com/dtolnay/zmij",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "1.0.23"
       }
     ],
     "warnings": []

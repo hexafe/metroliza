@@ -5,7 +5,7 @@ from pathlib import Path
 import tomllib
 
 
-INVENTORY_PATH = Path("docs/release_checks/third_party_inventory_260711.json")
+INVENTORY_PATH = Path("docs/release_checks/third_party_inventory.json")
 
 
 def test_release_inventory_represents_all_resolved_dependencies() -> None:
@@ -32,7 +32,8 @@ def test_release_inventory_represents_all_resolved_dependencies() -> None:
     )
 
     locked_packages = set()
-    for lock_path in Path("src/metroliza/native").glob("*/Cargo.lock"):
+    lock_paths = [*Path("src/metroliza/native").glob("*/Cargo.lock"), Path("packaging/launcher/Cargo.lock")]
+    for lock_path in lock_paths:
         lock_payload = tomllib.loads(lock_path.read_text(encoding="utf-8"))
         locked_packages.update(
             (record["name"], record["version"])
@@ -53,8 +54,15 @@ def test_notice_and_packagers_require_inventory_sidecars() -> None:
     windows_builder = Path("build_windows_exe.ps1").read_text(encoding="utf-8")
     nuitka_builder = Path("packaging/build_nuitka.ps1").read_text(encoding="utf-8")
 
-    assert "third_party_inventory_260711.json" in notice
+    assert "third_party_inventory.json" in notice
     assert "PyQt6 and PyMuPDF are dual-license components" in notice
-    assert "third_party_inventory_260711.json" in pyinstaller_common
+    assert "third_party_inventory.json" in pyinstaller_common
     assert "scripts/stage_release_notices.py" in windows_builder
     assert "scripts/stage_release_notices.py" in nuitka_builder
+
+
+def test_release_notice_files_keep_lf_on_every_checkout() -> None:
+    # The notices beside the EXE are compared byte-for-byte with Linux and Windows checkouts.
+    attributes = Path(".gitattributes").read_text(encoding="utf-8").splitlines()
+    assert "THIRD_PARTY_NOTICES.md text eol=lf" in attributes
+    assert "docs/release_checks/third_party_inventory.json text eol=lf" in attributes

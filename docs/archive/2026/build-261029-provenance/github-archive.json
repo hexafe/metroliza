@@ -1,0 +1,211 @@
+{
+  "status": "DURABLE_UNPUBLISHED_GITHUB_ARCHIVE",
+  "owner": "hexafe repository maintainer",
+  "recovery_check": {
+    "date_utc": "2026-10-30",
+    "result": "PASS",
+    "method": "gh release download into a fresh empty directory; sha256sum -c ARCHIVE_SHA256SUMS (all 15 listed assets OK; 16 assets including the list); GitHub asset digests equal downloaded bytes; inner members re-extracted from the outer Actions archives; archive tag fetched into a fresh repository",
+    "inner": {
+      "qualified-windows-development-package.zip": {
+        "sha256": "da8a25eb2d0a4e79c80823bc03f470bc81fde3fe0a83d7037437ac61e495b84c",
+        "size": 538738623
+      },
+      "metroliza_2026.09rc1_261029_launcher.exe": {
+        "sha256": "16f3edb988bc9d0e5000c89796f40daf0bd2ebfef468c6e34827a3947512b408",
+        "size": 334830360
+      }
+    },
+    "tag": {
+      "name": "archive/2026.09-rc1/build-261029",
+      "commit": "b2510e0aa651e8c96363e5a9c224c841318cc9d0",
+      "tree": "e165267b09b437b7fe5a1556b5809e87123f1c9a",
+      "fsck": 0
+    }
+  },
+  "metadata": {
+    "assets": [
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060903",
+        "contentType": "application/zip",
+        "createdAt": "2026-10-30T05:34:38Z",
+        "digest": "sha256:4e7ce99fccf99ab97034cd5e8e3a69118cfd75b34c243c51d5bdb5b4905ce9ce",
+        "id": "RA_kwDOHIEk0M4pMMCn",
+        "name": "12949329678-windows-candidate-development-onedir.zip",
+        "size": 269888624,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/12949329678-windows-candidate-development-onedir.zip"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060879",
+        "contentType": "application/zip",
+        "createdAt": "2026-10-30T05:34:38Z",
+        "digest": "sha256:ad2a929203057c40a3e45556b3decf14af488f4301bdd3b2cc390289f75fdd32",
+        "id": "RA_kwDOHIEk0M4pMMCP",
+        "name": "12949499262-windows-compute-worker-receipt.zip",
+        "size": 2554,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/12949499262-windows-compute-worker-receipt.zip"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060890",
+        "contentType": "application/zip",
+        "createdAt": "2026-10-30T05:34:38Z",
+        "digest": "sha256:b6a9b0ae175a5e4422aa7af1966d7322164031e64f654833864c1529cbea3b90",
+        "id": "RA_kwDOHIEk0M4pMMCa",
+        "name": "12949566490-windows-launcher-qualification.zip",
+        "size": 9095217,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/12949566490-windows-launcher-qualification.zip"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060872",
+        "contentType": "application/zip",
+        "createdAt": "2026-10-30T05:34:38Z",
+        "digest": "sha256:02bfd968f21b5f142531b2937b6d81041ce7e6f8e390ca79d0a06aa0052fa967",
+        "id": "RA_kwDOHIEk0M4pMMCI",
+        "name": "12949856019-windows-package-identity-receipt.zip",
+        "size": 1393,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/12949856019-windows-package-identity-receipt.zip"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060974",
+        "contentType": "application/zip",
+        "createdAt": "2026-10-30T05:34:39Z",
+        "digest": "sha256:f16601e3bfc4ec4bbf23bc53fe531d0bd156a650c94a09150b4bae6f1b81d86c",
+        "id": "RA_kwDOHIEk0M4pMMDu",
+        "name": "12949892358-windows-supervised-launcher-exe.zip",
+        "size": 288770271,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/12949892358-windows-supervised-launcher-exe.zip"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060885",
+        "contentType": "application/zip",
+        "createdAt": "2026-10-30T05:34:38Z",
+        "digest": "sha256:3c431ae7efc3ca8779e8a2b09be10d977ecc5c9db2c568b2a0776423ff7ae11f",
+        "id": "RA_kwDOHIEk0M4pMMCV",
+        "name": "12950335316-windows-candidate-acceptance-receipts.zip",
+        "size": 548573,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/12950335316-windows-candidate-acceptance-receipts.zip"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060807",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:cd746cda75d3e01b2f762178ef7da6512dda86e525ed8eebe75525c122f8b059",
+        "id": "RA_kwDOHIEk0M4pMMBH",
+        "name": "ARCHIVE_SHA256SUMS",
+        "size": 1641,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/ARCHIVE_SHA256SUMS"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060813",
+        "contentType": "text/markdown; charset=utf-8",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:22a0f69ae74e634806a2f56eae10ed8b530acd5d6e124be49a9ec6d8013c8f44",
+        "id": "RA_kwDOHIEk0M4pMMBN",
+        "name": "README.md",
+        "size": 3722,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/README.md"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060808",
+        "contentType": "application/json",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:13071b107272111b4d70d2acef82d2632081197aff9366651fd525c0f7f2e5bc",
+        "id": "RA_kwDOHIEk0M4pMMBI",
+        "name": "combined-candidate-receipt.json",
+        "size": 1505,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/combined-candidate-receipt.json"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060810",
+        "contentType": "application/json",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:9030762ceefb38db83f9077e4cbc3f19bff0c9a806e142f950afd76b94d35989",
+        "id": "RA_kwDOHIEk0M4pMMBK",
+        "name": "embedded-build_provenance.json",
+        "size": 252,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/embedded-build_provenance.json"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060843",
+        "contentType": "text/x-log; charset=utf-8",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:9ec504d0789aa710ac1058cd00182d3535386ca70e9a10b687df90a1055d1169",
+        "id": "RA_kwDOHIEk0M4pMMBr",
+        "name": "job-123854028888-combined-candidate-acceptance.log",
+        "size": 279847,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/job-123854028888-combined-candidate-acceptance.log"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060849",
+        "contentType": "text/x-log; charset=utf-8",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:c8093bdfd83b2de1a2cb0904ef828b53248e47e9b8794f9e3a9612c2c83a8833",
+        "id": "RA_kwDOHIEk0M4pMMBx",
+        "name": "job-123854029037-native-launcher-qualification.log",
+        "size": 61585,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/job-123854029037-native-launcher-qualification.log"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060853",
+        "contentType": "text/x-log; charset=utf-8",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:f476c4d0ec1dfb85044029ff257cd9c5b7bf5ab3d14628906bd51d9740fe4766",
+        "id": "RA_kwDOHIEk0M4pMMB1",
+        "name": "job-123854029137-supervised-portable-onefile.log",
+        "size": 325727,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/job-123854029137-supervised-portable-onefile.log"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060806",
+        "contentType": "application/json",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:99576585d7cc8a6386f74322ab37538ffab73e446ec5cf96c75e850d8a9ed4e5",
+        "id": "RA_kwDOHIEk0M4pMMBG",
+        "name": "launcher-payload-manifest.json",
+        "size": 409163,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/launcher-payload-manifest.json"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060973",
+        "contentType": "application/octet-stream",
+        "createdAt": "2026-10-30T05:34:39Z",
+        "digest": "sha256:16f3edb988bc9d0e5000c89796f40daf0bd2ebfef468c6e34827a3947512b408",
+        "id": "RA_kwDOHIEk0M4pMMDt",
+        "name": "metroliza_2026.09rc1_261029_launcher.exe",
+        "size": 334830360,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/metroliza_2026.09rc1_261029_launcher.exe"
+      },
+      {
+        "apiUrl": "https://api.github.com/repos/hexafe/metroliza/releases/assets/691060844",
+        "contentType": "application/json",
+        "createdAt": "2026-10-30T05:34:37Z",
+        "digest": "sha256:71d8e69f6042faafb0bde874e58a9750d3b942ef5273bc581726b90fb98c253e",
+        "id": "RA_kwDOHIEk0M4pMMBs",
+        "name": "metroliza_2026.09rc1_261029_launcher.exe.provenance.json",
+        "size": 444,
+        "state": "uploaded",
+        "url": "https://github.com/hexafe/metroliza/releases/download/untagged-e620a8de8830f171bdba/metroliza_2026.09rc1_261029_launcher.exe.provenance.json"
+      }
+    ],
+    "id": "RE_kwDOHIEk0M4ZjT2B",
+    "isDraft": true,
+    "isPrerelease": false,
+    "publishedAt": null,
+    "tagName": "archive/2026.09-rc1/build-261029",
+    "url": "https://github.com/hexafe/metroliza/releases/tag/untagged-e620a8de8830f171bdba"
+  }
+}

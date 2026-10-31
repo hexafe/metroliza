@@ -294,10 +294,14 @@ jobs:
           path: |
             dist/metroliza_[0-9]*_launcher.exe
             dist/metroliza_[0-9]*_launcher.exe.provenance.json
+            dist/metroliza_[0-9]*_launcher.exe.licenses/**
           if-no-files-found: error
 
   windows-candidate-acceptance:
     name: Combined Windows candidate acceptance (manual/opt-in)
+    outputs:
+      content_sha256: ${{ steps.onedir-content.outputs.sha256 }}
+      launcher_sha256: ${{ steps.launcher-smoke.outputs.sha256 }}
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && github.actor == github.repository_owner && github.event.repository.private == false
     runs-on: windows-latest
     timeout-minutes: 60
@@ -325,6 +329,30 @@ jobs:
           METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
         run: .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
 
+      - name: Setup Rust toolchain for the native launcher
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Record third-party inventory evidence from the frozen build environment
+        shell: pwsh
+        env:
+          PYTHONPATH: .
+        run: |
+          # Before acceptance host packages change .venv-build; the gate is enforced after packing.
+          $package = @(Get-ChildItem -LiteralPath dist -Directory -Filter '*_onedir')
+          if ($package.Count -ne 1) { throw 'Expected exactly one candidate package' }
+          $out = Join-Path $env:RUNNER_TEMP 'metroliza-inventory-evidence'
+          if (Test-Path -LiteralPath $out) { throw 'Inventory evidence root must be new' }
+          & .\.venv-build\Scripts\python.exe scripts/verify_third_party_inventory.py `
+            --inventory docs/release_checks/third_party_inventory.json --onedir $package[0].FullName `
+            --receipt (Join-Path $out 'third-party-inventory.json') --generated (Join-Path $out 'third-party-inventory-generated.json')
+          $code = $LASTEXITCODE
+          if (-not (Test-Path -LiteralPath (Join-Path $out 'third-party-inventory.json'))) { throw 'Inventory evidence was not written' }
+          "INVENTORY_EVIDENCE=$out" >> $env:GITHUB_ENV
+          "INVENTORY_EXIT=$code" >> $env:GITHUB_ENV
+          exit 0
+
       - name: Prepare acceptance host after freezing
         shell: pwsh
         run: |
@@ -341,6 +369,16 @@ jobs:
           "CANDIDATE_BROWSER=$browser" >> $env:GITHUB_ENV
           "CANDIDATE_PACKAGE=$($package[0].FullName)" >> $env:GITHUB_ENV
           "CANDIDATE_RECEIPTS=$receipts" >> $env:GITHUB_ENV
+
+      - name: Record the candidate onedir content before acceptance
+        id: onedir-content
+        shell: pwsh
+        run: |
+          $hash = [string](& .\.venv-build\Scripts\python.exe scripts/release_zip.py onedir-hash $env:CANDIDATE_PACKAGE)
+          if ($LASTEXITCODE -ne 0 -or $hash.Trim() -notmatch '^[0-9a-f]{64}$') { throw 'Candidate onedir content hash failed' }
+          "CANDIDATE_CONTENT_SHA256=$($hash.Trim())" >> $env:GITHUB_ENV
+          "sha256=$($hash.Trim())" >> $env:GITHUB_OUTPUT
+          Write-Host "Candidate onedir content SHA-256 (launcher packer definition): $($hash.Trim())"
 
       - name: Qualify supervisor and incident menu on the same candidate
         shell: pwsh
@@ -402,6 +440,64 @@ jobs:
           & .\.venv-build\Scripts\python.exe scripts/finalize_windows_candidate_receipts.py --receipt-root $env:CANDIDATE_RECEIPTS --expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree
           if ($LASTEXITCODE -ne 0) { throw 'Candidate combined receipt gate failed' }
 
+      - name: Verify acceptance left the qualified onedir unchanged
+        shell: pwsh
+        run: |
+          $hash = [string](& .\.venv-build\Scripts\python.exe scripts/release_zip.py onedir-hash $env:CANDIDATE_PACKAGE)
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate onedir content hash failed' }
+          if ($hash.Trim() -ne $env:CANDIDATE_CONTENT_SHA256) { throw 'The qualified onedir changed during acceptance' }
+
+      - name: Pack the same qualified onedir into the native launcher EXE (no rebuild)
+        shell: pwsh
+        run: .\build_windows_launcher_exe.ps1 -Supervised -OnedirPath $env:CANDIDATE_PACKAGE
+
+      - name: Smoke the actual launcher EXE (cold first launch, warm reopen, incident, cache layout)
+        id: launcher-smoke
+        shell: pwsh
+        run: |
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe' |
+            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}_launcher\.exe$' })
+          if ($launcher.Count -ne 1) { throw 'Expected exactly one versioned launcher EXE' }
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py --artifact $launcher[0].FullName --kind launcher
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher EXE smoke failed' }
+          # The cold start unpacked and verified every payload file; bind the ZIP to these bytes.
+          $sha = (Get-FileHash -LiteralPath $launcher[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "CANDIDATE_LAUNCHER=$($launcher[0].FullName)" >> $env:GITHUB_ENV
+          "CANDIDATE_LAUNCHER_SHA256=$sha" >> $env:GITHUB_ENV
+          "sha256=$sha" >> $env:GITHUB_OUTPUT
+          Write-Host "Smoke-tested launcher EXE: $($launcher[0].Name) SHA-256 $sha"
+
+      - name: Assemble and verify the complete user ZIP
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:RUNNER_TEMP 'metroliza-release'
+          if (Test-Path -LiteralPath $release) { throw 'Release output root must be new' }
+          $stem = [IO.Path]::GetFileNameWithoutExtension($env:CANDIDATE_LAUNCHER) -replace '_launcher$', ''
+          $zip = Join-Path $release "${stem}_windows.zip"
+          & .\.venv-build\Scripts\python.exe scripts/release_zip.py assemble --exe $env:CANDIDATE_LAUNCHER --output $zip
+          if ($LASTEXITCODE -ne 0) { throw 'Release ZIP assembly failed' }
+          & .\.venv-build\Scripts\python.exe scripts/release_zip.py verify $zip `
+            --expected-content-sha256 $env:CANDIDATE_CONTENT_SHA256 --expected-source-sha $env:GITHUB_SHA `
+            --expected-exe-sha256 $env:CANDIDATE_LAUNCHER_SHA256 --source-root $env:GITHUB_WORKSPACE --receipt (Join-Path $env:CANDIDATE_RECEIPTS 'release/release-zip.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Release ZIP completeness gate failed' }
+
+      - name: Enforce the third-party inventory gate recorded before acceptance
+        if: ${{ !cancelled() && env.INVENTORY_EVIDENCE != '' }}
+        shell: pwsh
+        run: |
+          $root = if ($env:CANDIDATE_RECEIPTS) { $env:CANDIDATE_RECEIPTS } else { Join-Path $env:RUNNER_TEMP 'metroliza-candidate-acceptance' }
+          $out = Join-Path $root 'release'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Path (Join-Path $env:INVENTORY_EVIDENCE '*.json') -Destination $out
+          if ($env:INVENTORY_EXIT -ne '0') { throw 'Third-party inventory does not match this build' }
+
+      - name: Verify exact source checkout remains clean after packing
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Candidate source head changed' }
+          $dirty = @(git status --porcelain)
+          if ($dirty.Count -ne 0) { $dirty | Write-Host; throw 'Candidate source checkout is dirty after packing' }
+
       - name: Collect bounded Windows fault module evidence
         if: always()
         shell: pwsh
@@ -430,6 +526,58 @@ jobs:
           name: windows-candidate-development-onedir
           path: ${{ runner.temp }}/metroliza-candidate-acceptance/diagnostics/qualified-windows-development-package.zip
           if-no-files-found: error
+
+      - name: Retain the verified user ZIP (one launcher EXE, provenance, notices, instructions)
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-release-zip
+          path: ${{ runner.temp }}/metroliza-release/metroliza_*_windows.zip
+          if-no-files-found: error
+
+  windows-release-zip-download-check:
+    name: Verify the downloaded user ZIP (manual/opt-in)
+    needs: windows-candidate-acceptance
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+
+      - name: Download the uploaded user ZIP
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: windows-release-zip
+          path: ${{ runner.temp }}/downloaded-release
+
+      - name: Verify the downloaded ZIP against the qualified onedir and source
+        env:
+          CONTENT_SHA256: ${{ needs.windows-candidate-acceptance.outputs.content_sha256 }}
+          LAUNCHER_SHA256: ${{ needs.windows-candidate-acceptance.outputs.launcher_sha256 }}
+        run: |
+          mapfile -t zips < <(find "$RUNNER_TEMP/downloaded-release" -type f -name 'metroliza_*_windows.zip')
+          test "${#zips[@]}" -eq 1
+          [[ "$CONTENT_SHA256" =~ ^[0-9a-f]{64}$ && "$LAUNCHER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          python scripts/release_zip.py verify "${zips[0]}" --expected-content-sha256 "$CONTENT_SHA256" \
+            --expected-exe-sha256 "$LAUNCHER_SHA256" \
+            --expected-source-sha "$GITHUB_SHA" --source-root "$GITHUB_WORKSPACE" \
+            --receipt "$RUNNER_TEMP/release-zip-download/release-zip-download.json"
+
+      - name: Retain the downloaded-ZIP verification receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-release-zip-download-receipt
+          path: ${{ runner.temp }}/release-zip-download/release-zip-download.json
+          if-no-files-found: warn
 
   windows-diagnostic-qualification:
     name: Windows incident feature qualification (manual/opt-in)
@@ -805,6 +953,9 @@ jobs:
 
       - name: Release metadata consistency
         run: python scripts/sync_release_metadata.py --check
+
+      - name: Release docs ref is immutable and complete
+        run: python scripts/check_release_docs_ref.py
 
       - name: Secret scan (diff + repository)
         env:
@@ -1461,7 +1612,7 @@ jobs:
             --dist-dir dist \
             --artifact "${{ steps.packaged-artifact.outputs.path }}"
           test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/THIRD_PARTY_NOTICES.md"
-          test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/third_party_inventory_260711.json"
+          test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/third_party_inventory.json"
           test -f "${{ steps.packaged-artifact.outputs.path }}.licenses/NOTICE_MANIFEST.json"
 
       - name: Smoke parse PDF fixture with packaged artifact

@@ -69,6 +69,76 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate()
     assert "continue-on-error" not in job and all("continue-on-error" not in step for step in steps)
 
 
+def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zip():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["windows-candidate-acceptance"]["steps"]
+
+    def index(fragment: str) -> int:
+        matches = [i for i, step in enumerate(steps) if fragment in step.get("run", "") or fragment in step.get("uses", "")]
+        assert len(matches) == 1, fragment
+        return matches[0]
+
+    build = index("build_windows_exe.ps1 -Clean -WithNative -Mode onedir")
+    inventory = index("scripts/verify_third_party_inventory.py")
+    host = index("requirements-windows-candidate-host.txt")
+    before = index('"CANDIDATE_CONTENT_SHA256=')
+    diagnostics = index("scripts/qualify_windows_diagnostics.py")
+    final = index("scripts/finalize_windows_candidate_receipts.py")
+    unchanged = index("The qualified onedir changed during acceptance")
+    pack = index("build_windows_launcher_exe.ps1")
+    smoke = index("scripts/qualify_windows_portable_onefile.py")
+    zip_gate = index("scripts/release_zip.py verify")
+    enforce = index("Third-party inventory does not match this build")
+    clean = index("dirty after packing")
+    # Inventory evidence comes from the frozen build venv, before host packages are installed into it.
+    assert build < inventory < host < before < diagnostics < final < unchanged < pack < smoke < zip_gate < enforce < clean
+    assert steps[enforce]["if"] == "${{ !cancelled() && env.INVENTORY_EVIDENCE != '' }}"
+    assert "exit 0" in steps[inventory]["run"] and "INVENTORY_EXIT=$code" in steps[inventory]["run"]
+
+    # One application build: the launcher packs the qualified onedir and never rebuilds it.
+    assert steps[pack]["run"] == ".\\build_windows_launcher_exe.ps1 -Supervised -OnedirPath $env:CANDIDATE_PACKAGE"
+    assert sum("build_windows_exe.ps1" in step.get("run", "") or "-BuildOnedir" in step.get("run", "") for step in steps) == 1
+    assert "--kind launcher" in steps[smoke]["run"]
+    for flag in ("--expected-content-sha256 $env:CANDIDATE_CONTENT_SHA256", "--expected-source-sha $env:GITHUB_SHA",
+                 "--expected-exe-sha256 $env:CANDIDATE_LAUNCHER_SHA256", "--source-root $env:GITHUB_WORKSPACE"):
+        assert flag in steps[zip_gate]["run"]
+    assert "if ($LASTEXITCODE -ne 0) { throw 'Release ZIP completeness gate failed' }" in steps[zip_gate]["run"]
+    assert "--generated" in steps[inventory]["run"] and "throw" in steps[inventory]["run"]
+
+    uploads = {step["with"]["name"]: step for step in steps if "actions/upload-artifact@" in step.get("uses", "")}
+    release = uploads["windows-release-zip"]
+    assert release["if"] == "success()" and release["with"]["if-no-files-found"] == "error"
+    assert release["with"]["path"] == "${{ runner.temp }}/metroliza-release/metroliza_*_windows.zip"
+    # Release receipts land below the receipt root, which is uploaded with if: always().
+    assert "Join-Path $env:CANDIDATE_RECEIPTS 'release/release-zip.json'" in steps[zip_gate]["run"]
+
+    # The uploaded artifact is downloaded and verified again in a separate job.
+    job = workflow["jobs"]["windows-candidate-acceptance"]
+    assert job["outputs"]["content_sha256"] == "${{ steps.onedir-content.outputs.sha256 }}"
+    check = workflow["jobs"]["windows-release-zip-download-check"]
+    assert check["needs"] == "windows-candidate-acceptance" and check["if"] == "success()"
+    download = next(step for step in check["steps"] if "actions/download-artifact@" in step.get("uses", ""))
+    assert download["with"]["name"] == "windows-release-zip"
+    verify = next(step for step in check["steps"] if "release_zip.py verify" in step.get("run", ""))
+    assert verify["env"]["CONTENT_SHA256"] == "${{ needs.windows-candidate-acceptance.outputs.content_sha256 }}"
+    assert job["outputs"]["launcher_sha256"] == "${{ steps.launcher-smoke.outputs.sha256 }}"
+    assert verify["env"]["LAUNCHER_SHA256"] == "${{ needs.windows-candidate-acceptance.outputs.launcher_sha256 }}"
+    for flag in ('--expected-content-sha256 "$CONTENT_SHA256"', '--expected-exe-sha256 "$LAUNCHER_SHA256"',
+                 '--expected-source-sha "$GITHUB_SHA"', "--source-root"):
+        assert flag in verify["run"]
+
+
+def test_portable_tester_launcher_upload_keeps_its_notices():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["windows-portable-onefile"]["steps"]
+    upload = next(step for step in steps if step.get("with", {}).get("name") == "windows-supervised-launcher-exe")
+    assert "dist/metroliza_[0-9]*_launcher.exe.licenses/**" in upload["with"]["path"].splitlines()
+
+
 def test_candidate_required_native_contracts_include_actual_closeout_owners():
     import yaml
 
@@ -265,8 +335,22 @@ def test_ci_workflow_keeps_packaging_manual_and_google_local_only() -> None:
     assert 'name: packaging-smoke-artifacts' in workflow
     assert 'name: packaging-smoke-release-artifact' in workflow
     assert 'python scripts/stage_release_notices.py' in workflow
-    assert 'third_party_inventory_260711.json' in workflow
+    assert 'third_party_inventory.json' in workflow
     assert 'NOTICE_MANIFEST.json' in workflow
+
+
+def test_static_checks_verify_the_pinned_release_docs_ref() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['static-checks']
+    checkout = next(step for step in job['steps'] if step.get('name') == 'Checkout')
+    docs_ref = next(step for step in job['steps'] if step.get('name') == 'Release docs ref is immutable and complete')
+
+    # The pinned commit is only resolvable with full history; the step must not be docs-only gated.
+    assert checkout['with']['fetch-depth'] == '0'
+    assert docs_ref['run'] == 'python scripts/check_release_docs_ref.py'
+    assert 'if' not in docs_ref
 
 
 def test_ci_and_precommit_run_release_hygiene_scan() -> None:
@@ -1074,7 +1158,8 @@ def test_tier_zero_runs_focused_policy_release_and_secret_checks_only():
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
     steps = workflow['jobs']['static-checks']['steps']
     shared = {'Require a successful classification', 'Checkout', 'Setup Python',
-              'Release metadata consistency', 'Secret scan (diff + repository)', 'Release hygiene scan'}
+              'Release metadata consistency', 'Release docs ref is immutable and complete',
+              'Secret scan (diff + repository)', 'Release hygiene scan'}
     focused = {'Install focused documentation dependencies', 'Focused documentation and policy checks'}
     for step in steps:
         if step['name'] in shared:

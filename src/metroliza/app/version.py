@@ -1,11 +1,13 @@
 RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "261029"
+VERSION_DATE = "261031"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = "A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import."
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261029)"
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261031)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Help opens the manuals that match this version<br>
+    - The Windows download is one ZIP: extract it and start the EXE; build identity and third-party notices sit next to the EXE<br>
     - Exporting to an existing workbook asks whether to save a copy (the default) or replace it; a workbook open in Excel is not overwritten<br>
     - Metadata enrichment reports canceled, failed and skipped reports instead of a green 100%<br>
     - Opening an existing .sqlite, .sqlite3 or .DB database uses exactly the file you chose<br>
