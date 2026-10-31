@@ -180,5 +180,5 @@ Retired planning/temporary docs are under `archive/`.
 - [External recovery receipts](engineering/repo-cleanup-external-recovery.json)
 - [Historical test build261021 provenance](archive/2026/build-261021-provenance/README.md)
 - [Accepted candidate build 261029 archive](archive/2026/build-261029-provenance/README.md) and [tester EXE acceptance packet](release_checks/rc1_261029_exe_acceptance_2026-10-30.md)
-- [Current candidate build 261031 tester ZIP acceptance packet](release_checks/rc1_261031_zip_acceptance_2026-10-31.md)
+- [Current candidate build 261031 archive](archive/2026/build-261031-provenance/README.md) and [tester ZIP acceptance packet](release_checks/rc1_261031_zip_acceptance_2026-10-31.md)
 - [Live execution ledger #1153](https://github.com/hexafe/metroliza/issues/1153)
