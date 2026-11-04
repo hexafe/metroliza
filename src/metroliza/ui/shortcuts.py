@@ -93,9 +93,20 @@ def apply_dialog_mnemonics(window, kind):
 
 
 def _append_shortcut_tooltip(widget, sequence):
-    suffix = f" ({sequence})"
-    if not widget.toolTip().endswith(suffix):
-        widget.setToolTip((widget.toolTip() or plain_text(widget.text())) + suffix)
+    """Show the key in the tooltip; the base text is kept so dynamic captions stay current."""
+    if not sequence:
+        return
+    base = widget.property("metrolizaShortcutTooltipBase")
+    if base is None:
+        base = widget.toolTip()
+        widget.setProperty("metrolizaShortcutTooltipBase", base)
+    if not base:
+        # Never use a line edit's typed text; buttons use their current caption.
+        if hasattr(widget, "placeholderText"):
+            base = widget.placeholderText() or widget.accessibleName()
+        else:
+            base = plain_text(widget.text())
+    widget.setToolTip(f"{base} ({sequence})" if base else sequence)
 
 
 def bind_search_shortcut(window, pairs):

@@ -1,7 +1,5 @@
 """Keyboard contracts for the Export, filtering and grouping windows (#1159)."""
 
-import sys
-
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
@@ -24,12 +22,21 @@ BUTTONS = {
                  "cancel_button"),
 }
 
+def _wait_until(condition, timeout_ms=2000):
+    """Poll the event loop; animateClick-delivered clicks can lag on loaded CI hosts."""
+    waited = 0
+    while not condition() and waited < timeout_ms:
+        QTest.qWait(20)
+        waited += 20
+    return condition()
+
+
 
 def _patch_dialog_open_manual(monkeypatch, dialog, opened):
     """Patch open_manual where this dialog's help menu resolves it (full-suite module copies may differ)."""
-    module = sys.modules[type(dialog).__module__]
+    attach = type(dialog).__init__.__globals__["attach_help_menu_to_layout"]
     monkeypatch.setitem(
-        module.attach_help_menu_to_layout.__globals__, "open_manual",
+        attach.__globals__["build_help_menu"].__globals__, "open_manual",
         lambda owner, key: opened.append((owner, key)),
     )
 
@@ -191,8 +198,7 @@ def test_mnemonics_trigger_enabled_buttons_only(window):
         assert not sequence.isEmpty(), name
         key = sequence[0].key()
         _press(dialog, key, Qt.KeyboardModifier.AltModifier)
-        QTest.qWait(150)
-        assert hits == [True], (name, button.isVisible(), button.isEnabled(), dialog.isActiveWindow())
+        assert _wait_until(lambda: hits == [True]), (name, button.isVisible(), button.isEnabled(), dialog.isActiveWindow())
         button.setEnabled(False)
         _press(dialog, key, Qt.KeyboardModifier.AltModifier)
         QTest.qWait(150)

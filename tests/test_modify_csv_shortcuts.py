@@ -20,6 +20,15 @@ BUTTONS = {
                     "workbook_button", "close_button", "start_button", "advanced_toggle_button"),
 }
 
+def _wait_until(condition, timeout_ms=2000):
+    """Poll the event loop; animateClick-delivered clicks can lag on loaded CI hosts."""
+    waited = 0
+    while not condition() and waited < timeout_ms:
+        QTest.qWait(20)
+        waited += 20
+    return condition()
+
+
 
 @pytest.fixture(params=BUTTONS)
 def window(request, monkeypatch):
@@ -156,8 +165,7 @@ def test_mnemonics_dispatch_enabled_only(window):
         sequence = button.shortcut()
         assert not sequence.isEmpty(), name
         _press(dialog, sequence[0].key(), Qt.KeyboardModifier.AltModifier)
-        QTest.qWait(150)
-        assert hits == [True], name
+        assert _wait_until(lambda: hits == [True]), name
         button.setEnabled(False)
         _press(dialog, sequence[0].key(), Qt.KeyboardModifier.AltModifier)
         QTest.qWait(150)
@@ -409,8 +417,7 @@ def test_p5d_editor_mnemonics_dispatch_enabled_only_and_survive_refresh(search_w
         sequence = button.shortcut()
         assert not sequence.isEmpty(), name
         _press(dialog, sequence[0].key(), Qt.KeyboardModifier.AltModifier)
-        QTest.qWait(150)
-        assert hits == [True], name
+        assert _wait_until(lambda: hits == [True]), name
         button.setEnabled(False)
         _press(dialog, sequence[0].key(), Qt.KeyboardModifier.AltModifier)
         QTest.qWait(150)
