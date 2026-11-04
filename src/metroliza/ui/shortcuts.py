@@ -10,6 +10,16 @@ MAIN_SHORTCUTS = {
 PAGE_SHORTCUTS = tuple(f"Ctrl+{index}" for index in range(1, 10))
 DIALOG_SHORTCUTS = {"focus_search": ("Ctrl+F", "Focus and select the current search field")}
 DIALOG_MNEMONICS = {
+    "csv_filter": {
+        "add_column_button": "d", "remove_column_button": "m", "clear_columns_button": "l",
+        "clear_selection_button": "v", "clear_filter_button": "r", "cancel_button": "c",
+        "apply_button": "a",
+    },
+    "csv_grouping": {
+        "assign_filtered_rows_button": "f", "create_group_button": "a", "rename_group_button": "r",
+        "delete_group_button": "d", "clear_selection_button": "l", "use_grouping_button": "u",
+        "dont_use_grouping_button": "s", "cancel_button": "c",
+    },
     "modify": {
         "select_db_button": "b", "apply_button": "a", "cancel_button": "c",
     },

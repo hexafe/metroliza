@@ -1430,7 +1430,7 @@ def test_main_shortcut_and_mnemonic_inventory(window):
                  for shortcut in action.shortcuts() if not shortcut.isEmpty()]
     sequences.extend(shortcut.key().toString() for shortcut in window.findChildren(QShortcut))
     assert len(sequences) == len(set(sequences))
-    expected = {"Ctrl+O", "Ctrl+R", "Ctrl+I", "Ctrl+E", "F1"}
+    expected = {"Ctrl+O", "Ctrl+R", "Ctrl+I", "Ctrl+E", "Ctrl+F", "F1"}
     expected.update(f"Ctrl+{index + 1}" for index in range(min(9, window.navigation_list.count())))
     assert set(sequences) == expected
     reserved = {f"Ctrl+{letter}" for letter in "CVXZY A".replace(" ", "")}

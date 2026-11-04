@@ -37,6 +37,7 @@ from metroliza.shared.grouping_filter_core import (
     parse_filter_expression,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
 from metroliza.shared.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
 from metroliza.exporting.export_grouping_utils import set_default_group_label
 from metroliza.tabular.tabular_column_selection import (
@@ -662,6 +663,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._refresh_all()
         self._capture_committed_grouping_state()
         self._initializing_scope = False
+        apply_dialog_mnemonics(self, "csv_grouping")
+        bind_search_shortcut(self, (
+            (self.column_search, self.available_columns_list),
+            (self.selected_column_search, self.selected_columns_list),
+            (self.selector_search, self.selector_list),
+        ))
 
     def _is_sqlite_backed(self) -> bool:
         return vars(self).get("sqlite_store") is not None
