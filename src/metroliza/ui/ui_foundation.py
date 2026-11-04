@@ -841,7 +841,9 @@ class _PathField(QLineEdit):
         )
 
     def copy(self):
-        QApplication.clipboard().setText(self.text())
+        # The empty state shows placeholder text ("None selected"); there is no path to copy.
+        if self.toolTip():
+            QApplication.clipboard().setText(self.text())
 
     def keyPressEvent(self, event):
         from PyQt6.QtGui import QKeySequence
@@ -856,8 +858,9 @@ class _PathField(QLineEdit):
         from PyQt6.QtWidgets import QMenu
 
         menu = QMenu(self)
-        menu.addAction("Copy", self.copy)
-        menu.addAction("Copy path", self.copy)
+        has_path = bool(self.toolTip())
+        menu.addAction("Copy", self.copy).setEnabled(has_path)
+        menu.addAction("Copy path", self.copy).setEnabled(has_path)
         menu.addSeparator()
         menu.addAction("Select All", self.selectAll)
         return menu

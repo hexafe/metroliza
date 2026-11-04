@@ -156,6 +156,27 @@ def test_path_field_copies_full_path_even_with_partial_selection(method):
         field.close()
 
 
+def test_path_field_empty_state_copies_nothing():
+    from metroliza.ui.ui_foundation import path_field
+
+    field = path_field("", empty_text="None selected")
+    field.show()
+    try:
+        _app().clipboard().setText("previous clipboard")
+        field.setFocus()
+        QTest.keyClick(field, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        field.copy()
+        assert _app().clipboard().text() == "previous clipboard"
+        menu = field.createStandardContextMenu()
+        try:
+            copies = [a for a in menu.actions() if a.text().replace("&", "") in ("Copy", "Copy path")]
+            assert len(copies) == 2 and not any(a.isEnabled() for a in copies)
+        finally:
+            menu.deleteLater()
+    finally:
+        field.close()
+
+
 @pytest.mark.parametrize("scale", ["1", "1.5", "2"])
 def test_path_field_at_scaled_dpi(scale):
     probe = subprocess.run(
