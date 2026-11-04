@@ -41,7 +41,7 @@ STEP2+STEP3 aggregate and refreshed #1063 into develop using merge commits, then
 `release/2026.09-rc1` from the accepted final develop. Exact commits, trees and gates are in that
 execution ledger. Current candidate source is distinct from final packaged qualification.
 
-Keep seven refs after the finite cleanup: master, develop, release/2026.09-rc1, historical rc2,
+(Superseded: the current retained refs are listed in section 0.) Keep seven refs after the finite cleanup: master, develop, release/2026.09-rc1, historical rc2,
 historical release/2026.06-rc2, and the dependency branches for #972/#973. The two historical refs
 and two dependency branches are named exceptions to the ordinary small branch set. They remain
 until their own lifecycle/update criteria are met. No master promotion or published release.
@@ -80,7 +80,7 @@ third-party notice/artifact, and legal/release-owner evidence remains open in #9
 - `master` promotion/stable tag: **No-Go pending #901**.
 
 Because GitHub still presents `master` as the default branch, every new pull request must select
-its base explicitly: normally `develop`, or `release/2026.06-rc2` for approved release work.
+its base explicitly: normally `develop`, or `release/2026.06-rc2` for approved release work (historical; that branch was retired on 2026-11-04).
 
 Dependabot is an explicit platform exception. The checked-in `.github/dependabot.yml` policy sets
 normal version-update pull requests to target `develop`. GitHub reads that file from the configured
