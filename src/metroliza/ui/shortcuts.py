@@ -18,8 +18,14 @@ def plain_text(text):
 def set_mnemonic(button, letter):
     """Keep the visible caption and accessible name when adding an Alt key."""
     text = plain_text(button.text())
-    index = text.lower().index(letter.lower())
-    button.setText(text[:index] + "&" + text[index:])
+    index = text.lower().find(letter.lower())
+    escaped = text.replace("&", "&&")
+    if index < 0:
+        # Caption without that letter (e.g. a changed state): no mnemonic, never raise in a slot.
+        button.setText(escaped)
+    else:
+        prefix = text[:index].replace("&", "&&")
+        button.setText(prefix + "&" + escaped[len(prefix):])
     if not button.accessibleName():
         button.setAccessibleName(text)
 
