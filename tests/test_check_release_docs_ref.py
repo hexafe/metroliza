@@ -187,6 +187,20 @@ PINNED = "https://github.com/hexafe/metroliza/blob/''' + "a" * 40 + '''/docs/use
     ]
 
 
+def test_scaffold_rc2_link_is_rejected_after_exception_removal(repo: Path) -> None:
+    _write(
+        repo,
+        "src/metroliza/parsing/llm_plugin_factory/scaffold.py",
+        'REFERENCE = "https://github.com/hexafe/metroliza/blob/rc2/docs/parser_plugins/parser_plugin_specification.md"\n',
+    )
+
+    problems = checker.discovery_problems(repo)
+
+    assert problems == [
+        "src/metroliza/parsing/llm_plugin_factory/scaffold.py:1 hard-codes the moving docs ref 'rc2'"
+    ]
+
+
 def test_bom_only_manual_is_reported_not_crashing(repo: Path) -> None:
     _write(repo, "docs/user_manual/parsing.md", "﻿")
     broken = _commit(repo, "bom only")

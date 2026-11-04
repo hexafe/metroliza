@@ -38,10 +38,6 @@ HELPER_NAME = "github_blob_url"
 # The helper's own definitions forward a variable path; they are not consumers.
 HELPER_MODULES = {DOCS_LINKS_PATH.as_posix(), HELP_MENU_PATH.as_posix()}
 HARD_CODED_BLOB = re.compile(r"github\.com/hexafe/metroliza/blob/([^/{}\s\"']+)/")
-# Developer-only links outside the release Help set, each with its follow-up Issue.
-HARD_CODED_LINK_EXCEPTIONS = {
-    "src/metroliza/parsing/llm_plugin_factory/scaffold.py": "https://github.com/hexafe/metroliza/issues/1187",
-}
 
 
 @dataclass(frozen=True)
@@ -91,8 +87,6 @@ def discovery_problems(repo_root: Path) -> list[str]:
                     node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
                 ):
                     problems.append(f"{relative}:{node.lineno} calls {name} with a computed path")
-        if relative in HARD_CODED_LINK_EXCEPTIONS:
-            continue
         for line_number, line in enumerate(text.splitlines(), start=1):
             for ref in HARD_CODED_BLOB.findall(line):
                 if not FULL_COMMIT_SHA.fullmatch(ref):
