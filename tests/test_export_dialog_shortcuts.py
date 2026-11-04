@@ -1,5 +1,7 @@
 """Keyboard contracts for the Export, filtering and grouping windows (#1159)."""
 
+import sys
+
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
@@ -21,6 +23,15 @@ BUTTONS = {
                  "delete_group_button", "use_grouping_button", "dont_use_grouping_button",
                  "cancel_button"),
 }
+
+
+def _patch_dialog_open_manual(monkeypatch, dialog, opened):
+    """Patch open_manual where this dialog's help menu resolves it (full-suite module copies may differ)."""
+    module = sys.modules[type(dialog).__module__]
+    monkeypatch.setitem(
+        module.attach_help_menu_to_layout.__globals__, "open_manual",
+        lambda owner, key: opened.append((owner, key)),
+    )
 
 
 @pytest.fixture(params=BUTTONS)
@@ -205,6 +216,7 @@ def test_f1_uses_dialog_manual(window, monkeypatch):
     kind, dialog, _ = window
     opened = []
     monkeypatch.setattr(help_menu, "open_manual", lambda owner, key: opened.append((owner, key)))
+    _patch_dialog_open_manual(monkeypatch, dialog, opened)
     _press(dialog, Qt.Key.Key_F1)
     expected = {"export": "export_overview", "filter": "export_filtering", "grouping": "export_grouping"}
     assert opened == [(dialog, expected[kind])]
@@ -221,6 +233,7 @@ def test_modal_child_owns_f1_and_blocks_parent_mnemonic(window, monkeypatch):
     button.clicked.connect(lambda: hits.append(True))
     opened = []
     monkeypatch.setattr(help_menu, "open_manual", lambda owner, key: opened.append((owner, key)))
+    _patch_dialog_open_manual(monkeypatch, dialog, opened)
     child = QDialog(dialog)
     help_menu.build_help_menu(child, [("Child manual", "export_overview")])
     child.setModal(True)

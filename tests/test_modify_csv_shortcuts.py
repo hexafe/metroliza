@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import sys
+
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
@@ -19,6 +21,15 @@ BUTTONS = {
                     "edit_groups_button", "clear_groups_button", "dashboard_button",
                     "workbook_button", "close_button", "start_button", "advanced_toggle_button"),
 }
+
+
+def _patch_dialog_open_manual(monkeypatch, dialog, opened):
+    """Patch open_manual where this dialog's help menu resolves it (full-suite module copies may differ)."""
+    module = sys.modules[type(dialog).__module__]
+    monkeypatch.setitem(
+        module.attach_help_menu_to_layout.__globals__, "open_manual",
+        lambda owner, key: opened.append((owner, key)),
+    )
 
 
 @pytest.fixture(params=BUTTONS)
@@ -170,6 +181,7 @@ def test_f1_manual_and_modal_child_blocks_parent_mnemonic(window, monkeypatch):
     kind, dialog, app = window
     opened = []
     monkeypatch.setattr(help_menu, "open_manual", lambda owner, key: opened.append((owner, key)))
+    _patch_dialog_open_manual(monkeypatch, dialog, opened)
     _press(dialog, Qt.Key.Key_F1)
     assert opened == [(dialog, "modify_database" if kind == "modify" else "csv_summary")]
     button = getattr(dialog, BUTTONS[kind][0])
