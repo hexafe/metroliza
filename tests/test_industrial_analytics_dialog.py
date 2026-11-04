@@ -2234,3 +2234,26 @@ def test_w1_csv_last_run_survives_completion(monkeypatch, tmp_path, outcome):
             assert not row.findChildren(export_ui.QPushButton)
     finally:
         _dispose_dialog(dialog)
+
+
+def test_csv_summary_f1_opens_its_own_manual(monkeypatch) -> None:
+    """F1 must not open the Export manual that is listed first in the Help menu."""
+    from PyQt6.QtGui import QKeySequence
+    from metroliza.ui import help_menu
+
+    _app()
+    opened = []
+    monkeypatch.setattr(help_menu, "open_manual", lambda _owner, key: opened.append(key) or True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        f1_actions = [
+            action for action in dialog.actions()
+            if action.shortcut() == QKeySequence("F1")
+        ]
+        assert len(f1_actions) == 1
+        f1_actions[0].trigger()
+        assert opened == ["csv_summary"]
+        menu_keys = [action.text() for action in dialog.help_menu.actions()]
+        assert menu_keys[0] == "Export manual"  # menu order unchanged
+    finally:
+        _dispose_dialog(dialog)

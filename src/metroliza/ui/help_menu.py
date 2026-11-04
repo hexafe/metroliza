@@ -143,7 +143,7 @@ def open_manual(parent, manual_key: str) -> bool:
 
 
 
-def build_help_menu(parent, entries, *, menu_bar=None):
+def build_help_menu(parent, entries, *, menu_bar=None, f1_manual=None):
     """Create a Help menu with one action per manual entry.
 
     Args:
@@ -151,15 +151,20 @@ def build_help_menu(parent, entries, *, menu_bar=None):
         entries: Iterable of ``(label, manual_key)`` tuples.
         menu_bar: Existing menu bar to attach to. When omitted, a new ``QMenuBar``
             is created for layout-based dialogs.
+        f1_manual: Manual key that F1 opens; defaults to the first entry. Set it when
+            the window's own manual is not listed first.
     """
     resolved_menu_bar = menu_bar or QMenuBar(parent)
     help_menu = resolved_menu_bar.addMenu('Help')
-    for index, (label, manual_key) in enumerate(entries):
+    entries = list(entries)
+    f1_key = f1_manual if f1_manual is not None else (entries[0][1] if entries else None)
+    for label, manual_key in entries:
         action = QAction(label, parent)
         action.triggered.connect(lambda _checked=False, key=manual_key, owner=parent: open_manual(owner, key))
         help_menu.addAction(action)
         # Embedded Reports shares the shell's F1. A dialog owns its own manual.
-        if index == 0 and hasattr(action, 'setShortcut') and parent.isWindow():
+        if manual_key == f1_key and hasattr(action, 'setShortcut') and parent.isWindow():
+            f1_key = None  # bind once
             bind_shortcut(action, MAIN_SHORTCUTS['manual'][0])
             parent.addAction(action)
     return resolved_menu_bar, help_menu
@@ -167,9 +172,9 @@ def build_help_menu(parent, entries, *, menu_bar=None):
 
 
 
-def attach_help_menu_to_layout(layout, parent, entries):
+def attach_help_menu_to_layout(layout, parent, entries, *, f1_manual=None):
     """Attach a Help menu to a dialog layout when the layout supports menu bars."""
-    dialog_menu_bar, help_menu = build_help_menu(parent, entries)
+    dialog_menu_bar, help_menu = build_help_menu(parent, entries, f1_manual=f1_manual)
     if hasattr(layout, 'setMenuBar'):
         layout.setMenuBar(dialog_menu_bar)
     return dialog_menu_bar, help_menu

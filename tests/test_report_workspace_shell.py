@@ -1454,7 +1454,7 @@ def test_main_shortcut_and_mnemonic_inventory(window):
 def test_definitions_match_manual_and_actions(window):
     from metroliza.ui.shortcuts import MAIN_SHORTCUTS, PAGE_SHORTCUTS
 
-    manual = Path("docs/user_manual/main_window.md").read_text()
+    manual = Path("docs/user_manual/main_window.md").read_text(encoding="utf-8")
     for sequence, description in MAIN_SHORTCUTS.values():
         assert f"| {sequence} | {description} |" in manual
         action_for(window, sequence)
@@ -1483,3 +1483,16 @@ def test_home_shared_context_menu(window, tmp_path, name):
         assert field.toolTip() == value
     finally:
         menu.deleteLater()
+
+
+def test_set_mnemonic_tolerates_missing_letter_and_literal_ampersand(app):
+    from PyQt6.QtWidgets import QPushButton
+    from metroliza.ui.shortcuts import plain_text, set_mnemonic
+
+    button = QPushButton("Review reports")
+    set_mnemonic(button, "z")  # letter absent: no mnemonic, no exception
+    assert button.text() == "Review reports"
+    button.setText("R&&D export")
+    set_mnemonic(button, "e")
+    assert button.text() == "R&&D &export"
+    assert plain_text(button.text()) == "R&D export"

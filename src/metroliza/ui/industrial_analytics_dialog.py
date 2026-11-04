@@ -948,7 +948,11 @@ class IndustrialAnalyticsDialog(QDialog):
             help_entries.append(("CSV Summary manual", "csv_summary"))
         if self.is_industrial_cache_presentation:
             help_entries.append(("Industrial Data manual", "industrial_data"))
-        self.dialog_menu_bar, self.help_menu = attach_help_menu_to_layout(layout, self, help_entries)
+        # F1 opens this window's own manual, not the Export manual listed first.
+        f1_manual = help_entries[-1][1]
+        self.dialog_menu_bar, self.help_menu = attach_help_menu_to_layout(
+            layout, self, help_entries, f1_manual=f1_manual
+        )
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
