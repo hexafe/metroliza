@@ -3,7 +3,6 @@ import importlib
 import importlib.util
 import os
 import sqlite3
-from contextlib import closing
 from pathlib import Path
 import tempfile
 import threading
@@ -11,6 +10,7 @@ from time import perf_counter
 from typing import Callable
 
 from metroliza.app.startup_profile import record_event
+from metroliza.reports.db import sqlite_query_only_connection_scope
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
@@ -590,8 +590,7 @@ class MainWindow(QMainWindow):
         try:
             # Plain path, not a file: URI: SQLite rejects URI authorities, so UNC shares
             # (and mapped drives that resolve() turns into UNC) would be refused.
-            with closing(sqlite3.connect(str(db_file), timeout=0.1)) as db:
-                db.execute("PRAGMA query_only = ON")
+            with sqlite_query_only_connection_scope(str(db_file), plain_path=True, timeout_s=0.1) as db:
                 for table, query in (("parsed_reports", "SELECT 1 FROM parsed_reports LIMIT 1"),
                                      ("reports", "SELECT 1 FROM REPORTS LIMIT 1")):
                     exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND lower(name)=? LIMIT 1",
@@ -1796,15 +1795,8 @@ class MainWindow(QMainWindow):
             readiness = self._inspect_database(db_file)
             if readiness is None:
                 return False
-            if self.industrial_data_dialog and self.industrial_data_dialog.isVisible():
-                updated = self.industrial_data_dialog.update_db_file(db_file)
-                if updated is False:
-                    self.workspace_notice_label.setText(
-                        "Database change cancelled because temporary industrial data was not resolved."
-                    )
-                    set_status_variant(self.workspace_notice_label, "warning")
-                    self.workspace_notice_label.setVisible(True)
-                    return False
+            if not self._industrial_database_change_allowed(db_file):
+                return False
             self.workspace_notice_label.setVisible(False)
             recovery_result = self._recover_abandoned_realtime_staging(db_file)
             self._export_ready = readiness
@@ -1849,6 +1841,17 @@ class MainWindow(QMainWindow):
             return True
         except Exception as e:
             self.log_and_exit(e)
+
+    def _industrial_database_change_allowed(self, db_file):
+        dialog = self.industrial_data_dialog
+        if dialog and dialog.isVisible() and dialog.update_db_file(db_file) is False:
+            self.workspace_notice_label.setText(
+                "Database change cancelled because temporary industrial data was not resolved."
+            )
+            set_status_variant(self.workspace_notice_label, "warning")
+            self.workspace_notice_label.setVisible(True)
+            return False
+        return True
 
     def _workflows_using_previous_database(self, database_file) -> tuple[str, ...]:
         labels = []

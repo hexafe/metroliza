@@ -669,16 +669,28 @@ def iter_query_scope_batches(
 
 
 @contextmanager
-def sqlite_query_only_connection_scope(db_path: str) -> Iterator[sqlite3.Connection]:
+def sqlite_query_only_connection_scope(
+    db_path: str, *, plain_path: bool = False, timeout_s: float = 5.0
+) -> Iterator[sqlite3.Connection]:
     """Block SQL writes while allowing SQLite's normal WAL housekeeping on close.
 
     Open only an existing database, without initializing its journal mode.
     SQLite recovery/checkpoint and sidecar cleanup may still change files.
+    ``plain_path`` supports UNC shares that SQLite URI authorities reject. In
+    that mode check existence before opening, as a plain SQLite path can create
+    a file. The default URI mode additionally enforces existence at open time.
     """
 
-    resolved_path = Path(db_path).resolve(strict=False)
-    database_uri = f"file:{quote(str(resolved_path))}?mode=rw"
-    with closing(sqlite3.connect(database_uri, uri=True, **persist_sqlite_options())) as connection:
+    if plain_path:
+        if not Path(db_path).is_file():
+            raise sqlite3.OperationalError("database does not exist")
+        target = str(db_path)
+    else:
+        resolved_path = Path(db_path).resolve(strict=False)
+        target = f"file:{quote(str(resolved_path))}?mode=rw"
+    with closing(sqlite3.connect(
+        target, uri=not plain_path, timeout=timeout_s, **persist_sqlite_options()
+    )) as connection:
         with closing(connection.cursor()) as cursor:
             cursor.execute("PRAGMA query_only=ON")
         yield connection

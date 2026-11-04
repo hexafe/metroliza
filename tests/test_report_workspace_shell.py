@@ -1240,28 +1240,30 @@ def test_database_inspection_uses_plain_path_and_keeps_busy_database(window, tmp
         connection.commit()
     warnings, calls = [], []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
-    real_connect = sqlite3.connect
+    from metroliza.reports.db import sqlite_query_only_connection_scope
 
-    def recording_connect(*args, **kwargs):
+    real_scope = sqlite_query_only_connection_scope
+
+    def recording_scope(*args, **kwargs):
         calls.append((args, kwargs))
-        return real_connect(*args, **kwargs)
+        return real_scope(*args, **kwargs)
 
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", recording_connect)
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", recording_scope)
     assert window.set_db_file(str(database))
     # No file: URI (SQLite rejects URI authorities such as UNC hosts).
-    assert calls and calls[0][0][0] == str(database) and not calls[0][1].get("uri")
+    assert calls and calls[0] == ((str(database),), {"plain_path": True, "timeout_s": 0.1})
     assert window.home_next_action.text() == "Export Workbook"
 
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", real_connect)
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", real_scope)
     other = tmp_path / "busy.db"
     other.write_bytes(database.read_bytes())
     # Busy/locked (another process writing): not export-ready, but not rejected.
-    def busy_connect(*_args, **_kwargs):
+    def busy_scope(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", busy_connect)
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", busy_scope)
     assert window._inspect_database(str(other)) is False
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", real_connect)
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", real_scope)
     assert warnings == []
     assert window._inspect_database(str(other)) is True
 
