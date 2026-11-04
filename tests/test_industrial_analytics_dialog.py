@@ -2239,11 +2239,14 @@ def test_w1_csv_last_run_survives_completion(monkeypatch, tmp_path, outcome):
 def test_csv_summary_f1_opens_its_own_manual(monkeypatch) -> None:
     """F1 must not open the Export manual that is listed first in the Help menu."""
     from PyQt6.QtGui import QKeySequence
-    from metroliza.ui import help_menu
 
     _app()
     opened = []
-    monkeypatch.setattr(help_menu, "open_manual", lambda _owner, key: opened.append(key) or True)
+    # Patch the help_menu copy this dialog module actually uses: earlier stub-heavy suites can
+    # leave a different module object under metroliza.ui.help_menu (a real call would block).
+    dialog_module = sys.modules[IndustrialAnalyticsDialog.__module__]
+    help_globals = dialog_module.attach_help_menu_to_layout.__globals__
+    monkeypatch.setitem(help_globals, "open_manual", lambda _owner, key: opened.append(key) or True)
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         f1_actions = [

@@ -1378,7 +1378,10 @@ def test_export_shortcut_follows_readiness(app, window, monkeypatch, tmp_path):
 
 def test_f1_main_including_embedded_reports(app, window, monkeypatch):
     opened = []
-    monkeypatch.setattr(help_menu, "open_manual", lambda owner, name: opened.append((owner, name)))
+    # Patch the help_menu module object MainWindow actually uses (stub-heavy suites can leave a
+    # different copy importable under the same name; a real open_manual would block on a dialog).
+    window_help_globals = sys.modules[type(window).__module__].build_help_menu.__globals__
+    monkeypatch.setitem(window_help_globals, "open_manual", lambda owner, name: opened.append((owner, name)))
     host = window.reports_workspace
     for control in (window.home_next_action, host.scan_button):
         window._show_workspace_page("reports" if control is host.scan_button else "home")
