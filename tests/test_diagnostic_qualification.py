@@ -15,6 +15,11 @@ from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
 from metroliza.shared.diagnostic_wire import encode_event
 
 
+# Several qualification cases create QApplication only inside their test body.
+# The post-call keeper runs too late if that local owner was already released.
+pytestmark = pytest.mark.usefixtures("qapplication_session")
+
+
 @pytest.mark.parametrize("count,error,window,expected", [
     (0, 6, 0, True), (0, 0, 0, False), (0, 87, 0, False),
     (1, 0, 0, False), (2, 0, 41, False), (0, 6, 41, False),

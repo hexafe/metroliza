@@ -151,3 +151,53 @@ def test_qapplication_survives_module_scoped_fixtures_so_wrappers_stay_valid(tmp
     assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-2000:]
     expected_count = 2 if first_module == FIRST_MODULE else 3
     assert f"{expected_count} passed" in completed.stdout
+
+
+def test_diagnostic_qualification_owns_application_before_local_factory_returns(tmp_path):
+    """Exercise the real first Qt cases without allowing unsafe app recreation."""
+    plugin = tmp_path / "qualification_application_guard.py"
+    plugin.write_text(textwrap.dedent('''
+        import weakref
+
+        import pytest
+
+        previous = None
+
+        @pytest.fixture(autouse=True)
+        def guard_qualification_application(monkeypatch):
+            from metroliza.app import bootstrap
+            from tests.conftest import retain_qapplication
+
+            original = bootstrap.get_or_create_qapplication
+
+            def checked_factory(*args, **kwargs):
+                global previous
+                if previous is not None:
+                    assert previous() is not None, "qualification destroyed its QApplication"
+                app = original(*args, **kwargs)
+                owned = getattr(app, "_metroliza_test_session_application", False)
+                # Retain even a failing control before unwinding its local owner:
+                # the regression must fail by assertion, never recreate Qt.
+                retain_qapplication()
+                previous = weakref.ref(app)
+                assert owned, "qualification QApplication had no session owner during the test"
+                return app
+
+            monkeypatch.setattr(bootstrap, "get_or_create_qapplication", checked_factory)
+    '''))
+    environment = dict(os.environ)
+    environment.pop("QT_QPA_PLATFORMTHEME", None)
+    environment["QT_QPA_PLATFORM"] = "offscreen"
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(tmp_path), str(REPO_ROOT / "src"), str(REPO_ROOT)]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-m", "pytest", "-q",
+         "-p", "no:cacheprovider", "-o", "addopts=",
+         "-p", "qualification_application_guard",
+         "tests/test_diagnostic_qualification.py", "-k",
+         "finish_barrier_accepts_file or finish_barrier_accepts_only_file_observed_before_deadline"],
+        cwd=REPO_ROOT, env=environment, capture_output=True, text=True, timeout=120,
+    )
+    assert completed.returncode == 0, completed.stdout[-4000:] + completed.stderr[-2000:]
+    assert "5 passed" in completed.stdout

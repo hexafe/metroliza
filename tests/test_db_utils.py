@@ -170,6 +170,49 @@ class TestDbUtils(unittest.TestCase):
                     self.fail("Missing database unexpectedly opened")
             self.assertFalse(source.exists())
 
+    def test_sqlite_query_only_plain_path_has_short_timeout_and_blocks_writes(self):
+        from metroliza.reports import db
+
+        real_connect = sqlite3.connect
+        connections = []
+
+        def record_connection(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        with mock.patch.object(db.sqlite3, "connect", side_effect=record_connection) as connect:
+            with sqlite_query_only_connection_scope(
+                self.db_path, plain_path=True, timeout_s=0.1
+            ) as connection:
+                self.assertEqual(connect.call_args.args, (self.db_path,))
+                self.assertFalse(connect.call_args.kwargs.get("uri", False))
+                self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone(), (100,))
+                self.assertEqual(connection.execute("PRAGMA query_only").fetchone(), (1,))
+                with self.assertRaises(sqlite3.OperationalError):
+                    connection.execute("DELETE FROM sample")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connections[0].execute("SELECT 1")
+
+    def test_sqlite_query_only_plain_path_does_not_create_missing_database(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "missing.sqlite"
+            with self.assertRaises(sqlite3.OperationalError):
+                with sqlite_query_only_connection_scope(str(source), plain_path=True):
+                    self.fail("Missing database unexpectedly opened")
+            self.assertFalse(source.exists())
+
+    def test_sqlite_query_only_plain_path_closes_when_pragma_fails(self):
+        from metroliza.reports import db
+
+        connection = mock.MagicMock()
+        connection.cursor.return_value.execute.side_effect = sqlite3.DatabaseError("invalid database")
+        with mock.patch.object(db.sqlite3, "connect", return_value=connection):
+            with self.assertRaises(sqlite3.DatabaseError):
+                with sqlite_query_only_connection_scope(self.db_path, plain_path=True):
+                    self.fail("Invalid database unexpectedly opened")
+        connection.close.assert_called_once_with()
+
     def test_execute_with_retry_raises_for_non_transient_error(self):
         with self.assertRaises(sqlite3.OperationalError):
             execute_with_retry(self.db_path, 'SELECT * FROM missing_table')

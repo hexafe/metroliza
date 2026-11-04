@@ -369,6 +369,8 @@ class _ReportOperations:
     """One implementation of report state, controls and worker ownership."""
 
     def _initialize_report_operations(self, directory=None, db_file=None, *, external_context=False):
+        self.import_succeeded = False
+        self._export_primary = False
         self._external_context = external_context
         self.operation_start_allowed = None
         self._operation_progress = 0
@@ -638,14 +640,24 @@ class _ReportOperations:
             f"Import exactly {count} selected reports, including selected rows hidden by filters."
             if approved and not busy and not ocr_running and not stopping else message
         )
-        set_status_variant(self.readiness_label, "success" if approved else "warning")
+        set_status_variant(self.readiness_label, "success" if approved or (self.import_succeeded and not busy) else "warning")
+        self._review_primary = self.parse_button if approved else self.scan_button
         configure_dialog_button_roles(
-            primary=self.parse_button if approved else self.scan_button,
+            primary=self._review_primary,
             secondary=(self.scan_button if approved else self.parse_button,
                        self.directory_button, self.archive_button, self.database_button),
             quiet=(self.review_scan_button,),
         )
+        self.set_export_primary(self._export_primary and not busy)
         self.state_changed.emit()
+
+    def set_export_primary(self, enabled):
+        self._export_primary = enabled
+        configure_dialog_button_roles(
+            primary=None if enabled else self._review_primary,
+            secondary=tuple(button for button in (self.scan_button, self.parse_button)
+                            if enabled or button is not self._review_primary),
+        )
 
     def _readiness_message(self, *, busy, current, count, inputs_ready, ocr_running, stopping):
         if busy:
@@ -682,6 +694,7 @@ class _ReportOperations:
             raise RuntimeError("Report operation must finish before context changes")
         self._invalidate_preflight()
         self.report_planner.clear_outcome()
+        self.import_succeeded = False
         self.directory, self.db_file = paths
         update_path_field(self.directory_text_label, self.directory)
         update_path_field(self.database_text_label, self.db_file)
@@ -890,6 +903,8 @@ class _ReportOperations:
             return
         if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return
+        # A new run supersedes the previous import result (its failure must not show green).
+        self.import_succeeded = False
         if self._defer_until_metadata_idle(
             partial(self.scan_reports, action_started_at=action_started_at), user_started=True
         ):
@@ -1286,6 +1301,7 @@ class _ReportOperations:
         self._sync_readiness_state(refresh_registry=True)
         if not self.parse_button.isEnabled():
             return
+        self.import_succeeded = False
         # A still-running fast read is stopped by show_loading_screen (cooperative
         # cancel, never awaited): the import does not depend on it.
         metadata, enrich, _modeless = self._build_parse_request_fields()
@@ -1493,6 +1509,10 @@ class _ReportOperations:
                 and self._pending_modeless_metadata_enrichment
                 and not enrichment_requested
             )
+            self.import_succeeded = bool(
+                result is not None and getattr(result, "imported_files", 0) > 0
+                and feedback[0] == "info" and not self.parse_error_message and not self.parsing_canceled
+            )
             self._dismiss_progress("loading")
 
             outcome_title, outcome_message = feedback[1:]
@@ -1521,7 +1541,10 @@ class _ReportOperations:
 
             # The destination changed, so require a fresh duplicate/content scan
             # before another import while keeping this dialog open for review.
-            self._invalidate_preflight("Import finished. Refresh review before another import.")
+            self._invalidate_preflight(
+                "Import successful. Export Workbook or refresh review before another import."
+                if self.import_succeeded else "Import finished. Refresh review before another import."
+            )
             self._sync_readiness_state()
 
             if should_request_modeless_enrichment:
