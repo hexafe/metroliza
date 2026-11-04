@@ -277,6 +277,16 @@ class FilterDialog(QDialog):
             if hasattr(self.has_nok_button, "setChecked"):
                 self.has_nok_button.setChecked(False)
 
+            self.date_range_label = QLabel("Date &range:")
+            self.date_range_selector = QtWidgets.QComboBox()
+            self.date_range_selector.addItems((
+                "All dates", "Today", "Yesterday", "Last 7 days", "This month", "Custom",
+            ))
+            self.date_range_label.setBuddy(self.date_range_selector)
+            self.date_range_selector.setAccessibleName("Date range")
+            self.date_range_selector.setToolTip(
+                "Inclusive local calendar dates. Choose Custom to edit From and To."
+            )
             self.date_from_label = QLabel("Measurement date from:")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
             self.date_from_calendar.setCalendarPopup(True)
@@ -288,6 +298,11 @@ class FilterDialog(QDialog):
             self.date_to_calendar.setCalendarPopup(True)
             self.date_to_calendar.setDate(QDate.currentDate())
             self.date_to_calendar.setMinimumWidth(100)
+            self.date_from_calendar.setAccessibleName("Measurement date from")
+            self.date_to_calendar.setAccessibleName("Measurement date to")
+            self.date_from_label.setBuddy(self.date_from_calendar)
+            self.date_to_label.setBuddy(self.date_to_calendar)
+            self._update_date_field_state()
             self.date_error_label = QLabel("")
             ui_foundation.set_status_variant(self.date_error_label, "danger")
             self.header_availability_label = QLabel("")
@@ -450,15 +465,19 @@ class FilterDialog(QDialog):
 
         footer_layout.addWidget(self.expression_label, 0, 0)
         footer_layout.addWidget(self.expression_input, 0, 1, 1, 3)
-        footer_layout.addWidget(self.date_from_label, 1, 0)
-        footer_layout.addWidget(self.date_from_calendar, 1, 1)
-        footer_layout.addWidget(self.select_beginning_button, 1, 2)
-        footer_layout.addWidget(self.has_nok_button, 1, 3)
-        footer_layout.addWidget(self.date_to_label, 2, 0)
-        footer_layout.addWidget(self.date_to_calendar, 2, 1)
-        footer_layout.addWidget(self.select_today_button, 2, 2)
-        footer_layout.addWidget(self.date_error_label, 3, 0, 1, 3)
-        footer_layout.addWidget(self.filter_summary_label, 4, 0, 1, 3)
+        footer_layout.addWidget(self.date_range_label, 1, 0)
+        footer_layout.addWidget(self.date_range_selector, 1, 1)
+        footer_layout.addWidget(self.date_from_label, 2, 0)
+        footer_layout.addWidget(self.date_from_calendar, 2, 1)
+        footer_layout.addWidget(self.select_beginning_button, 2, 2)
+        footer_layout.addWidget(self.has_nok_button, 2, 3)
+        footer_layout.addWidget(self.date_to_label, 3, 0)
+        footer_layout.addWidget(self.date_to_calendar, 3, 1)
+        footer_layout.addWidget(self.select_today_button, 3, 2)
+        footer_layout.addWidget(self.date_error_label, 4, 0, 1, 3)
+        footer_layout.addWidget(self.filter_summary_label, 5, 0, 1, 3)
+        self.setTabOrder(self.date_range_selector, self.date_from_calendar)
+        self.setTabOrder(self.date_from_calendar, self.date_to_calendar)
 
         action_layout = QtWidgets.QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
@@ -466,7 +485,7 @@ class FilterDialog(QDialog):
         action_layout.addWidget(self.reset_button)
         action_layout.addWidget(self.cancel_button)
         action_layout.addWidget(self.apply_button)
-        footer_layout.addLayout(action_layout, 2, 3, 2, 1)
+        footer_layout.addLayout(action_layout, 3, 3, 2, 1)
         footer_layout.setColumnStretch(1, 1)
         footer_layout.setColumnStretch(3, 1)
         parent_layout.addWidget(footer_widget)
@@ -568,9 +587,10 @@ class FilterDialog(QDialog):
             ):
                 list_widget.itemSelectionChanged.connect(self._refresh_filter_summary)
             if hasattr(self.date_from_calendar, "dateChanged"):
-                self.date_from_calendar.dateChanged.connect(self._refresh_filter_summary)
+                self.date_from_calendar.dateChanged.connect(self._date_fields_edited)
             if hasattr(self.date_to_calendar, "dateChanged"):
-                self.date_to_calendar.dateChanged.connect(self._refresh_filter_summary)
+                self.date_to_calendar.dateChanged.connect(self._date_fields_edited)
+            self.date_range_selector.currentTextChanged.connect(self._apply_date_preset)
             if hasattr(self.has_nok_button, "toggled"):
                 self.has_nok_button.toggled.connect(self._refresh_filter_summary)
             if hasattr(self.expression_input, "textChanged"):
@@ -670,14 +690,21 @@ class FilterDialog(QDialog):
             else QDate.currentDate().toString("yyyy-MM-dd")
         )
         has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
-        return tuple(selections), date_from, date_to, has_nok_only, self._filter_expression_text()
+        selector = getattr(self, "date_range_selector", None)
+        preset = selector.currentText() if selector is not None else (
+            "Custom" if self._has_custom_date_range() else "All dates"
+        )
+        return (
+            tuple(selections), date_from, date_to, has_nok_only,
+            self._filter_expression_text(), preset,
+        )
 
     def _is_dirty(self):
         committed = getattr(self, "_committed_draft_snapshot", self._draft_snapshot())
         return self._draft_snapshot() != committed
 
     def _has_active_draft(self):
-        selections, date_from, date_to, has_nok_only, expression = self._draft_snapshot()
+        selections, _date_from, _date_to, has_nok_only, expression, _preset = self._draft_snapshot()
         has_selected_values = any(
             any(value != "SELECT ALL" for value in selected_values)
             for _attr_name, selected_values in selections
@@ -686,8 +713,7 @@ class FilterDialog(QDialog):
             has_selected_values
             or has_nok_only
             or expression
-            or date_from != "1970-01-01"
-            or date_to != QDate.currentDate().toString("yyyy-MM-dd")
+            or self._has_custom_date_range()
         )
 
     def _confirm_discard(self, *, title, message):
@@ -728,7 +754,7 @@ class FilterDialog(QDialog):
         self._dimension_selections[widget] = values
 
     def _restore_draft_snapshot(self, snapshot):
-        selections, date_from, date_to, has_nok_only, expression = snapshot
+        selections, date_from, date_to, has_nok_only, expression, preset = snapshot
         for attr_name, selected_values in selections:
             if attr_name == "header_list":
                 self._retain_saved_header_choices(selected_values)
@@ -737,10 +763,12 @@ class FilterDialog(QDialog):
             self.date_from_calendar.setDate(QDate.fromString(date_from, "yyyy-MM-dd"))
         if hasattr(self, "date_to_calendar"):
             self.date_to_calendar.setDate(QDate.fromString(date_to, "yyyy-MM-dd"))
+        self._set_date_preset_label(preset)
         if hasattr(self.has_nok_button, "setChecked"):
             self.has_nok_button.setChecked(has_nok_only)
         if hasattr(self.expression_input, "setText"):
             self.expression_input.setText(expression)
+        self._reconcile_date_preset()
         self.update_selected_headers()
         self._refresh_filter_summary()
         self.on_reference_selection_changed()
@@ -759,8 +787,8 @@ class FilterDialog(QDialog):
     def _reset_draft(self):
         for attr_name in self._FILTER_LIST_ATTRS:
             self._set_selected_values(getattr(self, attr_name, None), ())
-        self.date_from_calendar.setDate(QDate(1970, 1, 1))
-        self.date_to_calendar.setDate(QDate.currentDate())
+        self._set_date_preset_label("All dates")
+        self._apply_date_preset("All dates")
         if hasattr(self.has_nok_button, "setChecked"):
             self.has_nok_button.setChecked(False)
         self.expression_input.clear()
@@ -816,6 +844,7 @@ class FilterDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._reconcile_date_preset()
         if self._values_closed or not self._values_loading:
             self._values_closed = False
             self.populate_list_widgets()
@@ -841,14 +870,79 @@ class FilterDialog(QDialog):
             for label, attribute in field_widgets
         }
 
+    @staticmethod
+    def _preset_dates(preset):
+        today = QDate.currentDate()
+        return {
+            "All dates": (QDate(1970, 1, 1), today),
+            "Today": (today, today),
+            "Yesterday": (today.addDays(-1), today.addDays(-1)),
+            "Last 7 days": (today.addDays(-6), today),
+            "This month": (QDate(today.year(), today.month(), 1), today),
+        }.get(preset)
+
+    def _update_date_field_state(self):
+        enabled = self.date_range_selector.currentText() != "All dates"
+        self.date_from_calendar.setEnabled(enabled)
+        self.date_to_calendar.setEnabled(enabled)
+
+    def _set_date_preset_label(self, preset):
+        blocked = self.date_range_selector.blockSignals(True)
+        self.date_range_selector.setCurrentText(preset)
+        self.date_range_selector.blockSignals(blocked)
+        self._update_date_field_state()
+
+    def _apply_date_preset(self, preset):
+        dates = self._preset_dates(preset)
+        if dates is not None:
+            for widget, date in zip((self.date_from_calendar, self.date_to_calendar), dates):
+                blocked = widget.blockSignals(True)
+                widget.setDate(date)
+                widget.blockSignals(blocked)
+        self._update_date_field_state()
+        self._refresh_filter_summary()
+
+    def _date_fields_edited(self):
+        self._set_date_preset_label("Custom")
+        self._refresh_filter_summary()
+
+    def _reconcile_date_preset(self):
+        """Keep concrete saved dates when a relative preset becomes stale."""
+        preset = self.date_range_selector.currentText()
+        dates = self._preset_dates(preset)
+        if preset == "All dates" or dates is None:
+            return
+        actual = (self.date_from_calendar.date(), self.date_to_calendar.date())
+        if actual != dates:
+            previous = self._draft_snapshot()
+            self._set_date_preset_label("Custom")
+            if previous == getattr(self, "_committed_draft_snapshot", None):
+                self._committed_draft_snapshot = self._draft_snapshot()
+            self._refresh_filter_summary()
+
     def _has_custom_date_range(self) -> bool:
+        selector = getattr(self, "date_range_selector", None)
+        if selector is not None:
+            return selector.currentText() != "All dates"
+        # Query-only legacy callers can supply calendars without creating UI.
         if not hasattr(self, "date_from_calendar") or not hasattr(self, "date_to_calendar"):
             return False
-        date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
-        date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
-        return date_from != "1970-01-01" or date_to != QDate.currentDate().toString(
-            "yyyy-MM-dd"
+        return (
+            self.date_from_calendar.date().toString("yyyy-MM-dd") != "1970-01-01"
+            or self.date_to_calendar.date().toString("yyyy-MM-dd")
+            != QDate.currentDate().toString("yyyy-MM-dd")
         )
+
+    def _date_range_summary(self):
+        selector = getattr(self, "date_range_selector", None)
+        if selector is None:
+            return ""
+        preset = selector.currentText()
+        if preset == "All dates":
+            return "All dates"
+        start = self.date_from_calendar.date().toString("yyyy-MM-dd")
+        end = self.date_to_calendar.date().toString("yyyy-MM-dd")
+        return f"{preset}: {start} to {end}"
 
     def _validate_filter_expression(self, expression_text: str) -> str:
         if not expression_text:
@@ -906,11 +1000,14 @@ class FilterDialog(QDialog):
             return
         self._set_filter_apply_enabled(True)
         if active_fields == 0:
-            summary_label.setText("No active filters")
+            summary_label.setText("No active filters | All dates")
             ui_foundation.set_status_variant(summary_label, "neutral")
             return
 
         summary_text = f"Active filters: {active_fields} | Selected values: {selected_values}"
+        date_summary = self._date_range_summary()
+        if date_summary:
+            summary_text += f" | {date_summary}"
         if has_nok_only:
             summary_text += " | NOK only"
         if expression_text:
