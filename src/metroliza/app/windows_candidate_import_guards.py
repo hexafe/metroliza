@@ -130,6 +130,7 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
 
     MainWindow = load_main_window_factory()
     UiPreferences = import_module("metroliza.ui.ui_preferences").UiPreferences
+    plain_text = import_module("metroliza.ui.shortcuts").plain_text
 
     child = scratch / f"import-guards-{uuid.uuid4().hex}"
     child.mkdir()
@@ -161,7 +162,7 @@ def _run(scratch: Path, fixtures: Path, app, result: dict[str, Any]) -> None:
         workspace.report_planner.search.setText("_0.pdf")
         _require(workspace.report_planner.proxy.rowCount() == 1, "filter_row_count")
         _require(model.selected_ids == selected and workspace.parse_button.isEnabled()
-                 and workspace.parse_button.text() == "Import 2 selected reports",
+                 and plain_text(workspace.parse_button.text()) == "Import 2 selected reports",
                  "hidden_selection_lost")
         for page in ("home", "tools", "reports"):
             window._show_workspace_page(page)

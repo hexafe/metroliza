@@ -14,6 +14,7 @@ from metroliza.reports.db import sqlite_query_only_connection_scope
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
+from metroliza.ui.shortcuts import MAIN_SHORTCUTS, PAGE_SHORTCUTS, bind_shortcut, set_mnemonic, shortcut_tooltip
 from PyQt6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPixmap
 from PyQt6.QtWidgets import (
@@ -226,12 +227,7 @@ class MainWindow(QMainWindow):
         for field, name in ((self.source_path_field, "Report source path"),
                             (self.database_path_field, "Database path")):
             field.setAccessibleName(name)
-            copy = QAction("Copy path", field)
-            copy.setEnabled(False)
-            field.addAction(copy)
-            field.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
             field.setAccessibleDescription("Full path; right-click for Copy path.")
-            copy.triggered.connect(lambda checked=False, control=field: QApplication.clipboard().setText(control.toolTip()))
         self.workflow_hint_label = secondary_label("Review and import reports in Reports, then prepare or export the database.")
         self.workflow_next_step_label = status_chip(
             "Next step: choose reports and create or select a database.",
@@ -266,6 +262,7 @@ class MainWindow(QMainWindow):
 
         # Add buttons to the layout and connect signals
         self.setup_buttons_layout()
+        self._setup_shortcuts()
         self._sync_context_rows()
         self._restore_ui_preferences()
         apply_metroliza_theme(self)
@@ -533,6 +530,52 @@ class MainWindow(QMainWindow):
         self.help_menu.aboutToShow.connect(self._refresh_incident_action)
         self._refresh_incident_action()
         self.help_menu.addAction(self.about_button)
+
+    def _setup_shortcuts(self):
+        bind_shortcut(self.open_database_action, MAIN_SHORTCUTS["open_database"][0])
+        self.command_actions = {}
+        self.tools_menu.addSeparator()
+        for command, callback in (
+            ("review_reports", lambda: self._trigger_report_command("scan_button")),
+            ("import_reports", lambda: self._trigger_report_command("parse_button")),
+            ("export_workbook", self.export_button.click),
+        ):
+            sequence, label = MAIN_SHORTCUTS[command]
+            action = self.tools_menu.addAction(label, callback)
+            bind_shortcut(action, sequence)
+            self.addAction(action)
+            self.command_actions[command] = action
+        pages = self.view_menu.addMenu("Workspaces")
+        for index, sequence in enumerate(PAGE_SHORTCUTS[:self.navigation_list.count()]):
+            action = pages.addAction(self.navigation_combo.itemText(index))
+            action.triggered.connect(lambda checked=False, row=index: self.navigation_list.setCurrentRow(row))
+            bind_shortcut(action, sequence)
+            self.addAction(action)
+        for button, letter in ((self.home_review_action, "p"), (self.home_cancel_report, "l"),
+                               (self.modifydb_button, "d"), (self.map_characteristics_button, "m"),
+                               (self.export_button, "e")):
+            set_mnemonic(button, letter)
+        shortcut_tooltip(self.export_button, "export_workbook")
+
+    def _trigger_report_command(self, button_name):
+        host = self._ensure_reports_workspace()
+        button = getattr(host, button_name)
+        if button.isEnabled():
+            self._show_workspace_page("reports")
+            button.click()
+
+    def _sync_shortcuts(self):
+        host = self._reports_workspace
+        for command, name, letter in (("review_reports", "scan_button", "r"),
+                                      ("import_reports", "parse_button", "i")):
+            enabled = bool(self.directory and self.db_file) if command == "review_reports" else False
+            if host is not None:
+                button = getattr(host, name)
+                enabled = button.isEnabled()
+                set_mnemonic(button, letter)
+                shortcut_tooltip(button, command)
+            self.command_actions[command].setEnabled(enabled)
+        self.command_actions["export_workbook"].setEnabled(self.export_button.isEnabled())
 
     def _launch_home_next_action(self):
         reports = self._reports_workspace
@@ -872,9 +915,6 @@ class MainWindow(QMainWindow):
         self.database_status_label.setText(f"Database: {'selected' if self.db_file else database_text}")
         update_path_field(self.source_path_field, self.directory)
         update_path_field(self.database_path_field, self.db_file)
-        for field, value in ((self.source_path_field, self.directory), (self.database_path_field, self.db_file)):
-            for action in field.actions():
-                action.setEnabled(bool(value))
         set_status_variant(self.source_status_label, "success" if self.directory else "neutral")
         set_status_variant(self.database_status_label, "success" if self.db_file else "neutral")
         self._sync_workflow_next_step()
@@ -898,6 +938,9 @@ class MainWindow(QMainWindow):
         self.home_review_action.setVisible(self._export_ready)
         self.home_next_action.setText(caption)
         self.home_next_action.setAccessibleName(caption)
+        set_mnemonic(self.home_next_action, "w" if caption == "Export Workbook" else "a" if busy else "o")
+        if caption == "Export Workbook":
+            shortcut_tooltip(self.home_next_action, "export_workbook")
         if reports is not None:
             guidance = reports.readiness_label.text()
             variant = reports.readiness_label.property("statusVariant")
@@ -923,6 +966,7 @@ class MainWindow(QMainWindow):
         for button in self._database_workflow_buttons:
             button.setEnabled(not busy)
         self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
+        self._sync_shortcuts()
 
     def _home_next_caption(self, reports, busy):
         if busy:
