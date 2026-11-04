@@ -393,6 +393,41 @@ Reports without a reference can still be exported. Group Analysis omits those me
 from comparisons that require a reference and reports the omission. Add a reference to the
 report metadata if those measurements should take part in a reference comparison.
 
+## Keyboard shortcuts
+
+**F1** opens the manual for the active window. In the Export filtering and Export
+grouping windows, **Ctrl+F** focuses and selects the search text for the focused
+list. From other controls it selects the first available search on the visible
+tab. In grouping, Ctrl+F also selects the scope expression when that field has
+focus; it does not apply the expression. Disabled controls do not run commands,
+and a modal window owns its shortcuts until closed.
+
+Use **Alt+letter** for the underlined letter on a button. Tooltips show these
+shortcuts. The Export window uses:
+
+| Shortcut | Button |
+| --- | --- |
+| Alt+B | Browse (database) |
+| Alt+R | Browse (output) |
+| Alt+E | Edit... (filters) |
+| Alt+F | Clear filters |
+| Alt+D | Edit... (grouping) |
+| Alt+G | Clear grouping |
+| Alt+N | Change... (dashboard visuals) |
+| Alt+A | Show / Hide advanced options |
+| Alt+X | Export |
+| Alt+C | Close |
+
+In Export filtering: **Alt+A** applies filters, **Alt+S** resets the draft,
+**Alt+C** cancels, **Alt+N** toggles Has NOK only, **Alt+T** selects today, and
+**Alt+B** selects the beginning of time. **Alt+R** keeps its existing Date range
+command.
+
+In Export grouping: **Alt+A** creates or adds, **Alt+R** renames a group,
+**Alt+M** removes from a group, **Alt+D** deletes a group, **Alt+U** uses grouping,
+**Alt+S** resets changes, and **Alt+C** cancels. Existing Enter, Space and Delete
+behaviour in the lists is unchanged.
+
 ## Which manual to read next
 
 Use these follow-up pages based on what you need:

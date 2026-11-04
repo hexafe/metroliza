@@ -91,6 +91,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         if callable(close):
             close()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, set_mnemonic
 from metroliza.reports.report_query_service import build_measurement_export_query
 from metroliza.shared.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
 from metroliza.ui.ui_foundation import (
@@ -804,6 +805,7 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.hide_ok_results_checkbox, self.close_button)
             self.setTabOrder(self.close_button, self.export_button)
             self._configure_accessibility()
+            apply_dialog_mnemonics(self, "export")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -875,6 +877,7 @@ class ExportDialog(QDialog):
     def _toggle_advanced_options(self, expanded):
         self.advanced_options_container.setVisible(bool(expanded))
         self.advanced_toggle_button.setText("Hide advanced options" if expanded else "Show advanced options")
+        set_mnemonic(self.advanced_toggle_button, "a")
         self._apply_window_size_constraints()
 
     def _available_geometry(self):

@@ -47,6 +47,7 @@ class TestExportDialogLayout(unittest.TestCase):
             """
             import json
             from PyQt6.QtWidgets import QApplication
+            from metroliza.ui.shortcuts import plain_text
             import modules.export_dialog as export_dialog_module
             from modules.export_dialog import ExportDialog
 
@@ -74,10 +75,10 @@ class TestExportDialogLayout(unittest.TestCase):
                 "advanced_visible": dialog.advanced_options_container.isVisible(),
                 "has_group_analysis_level": hasattr(dialog, "group_analysis_level_combobox"),
                 "has_group_analysis_scope": hasattr(dialog, "group_analysis_scope_combobox"),
-                "toggle_text": dialog.advanced_toggle_button.text(),
+                "toggle_text": plain_text(dialog.advanced_toggle_button.text()),
                 "google_label": dialog.include_google_sheets_checkbox.text(),
                 "html_label": dialog.generate_html_dashboard_checkbox.text(),
-                "dashboard_visuals_text": dialog.dashboard_visuals_button.text(),
+                "dashboard_visuals_text": plain_text(dialog.dashboard_visuals_button.text()),
                 "dashboard_visuals_visible": dialog.dashboard_visuals_button.isVisible(),
                 "dashboard_visuals_enabled": dialog.dashboard_visuals_button.isEnabled(),
                 "dashboard_visuals_summary": dialog.dashboard_visuals_summary_label.text(),
@@ -87,7 +88,7 @@ class TestExportDialogLayout(unittest.TestCase):
                     dialog.preset_combobox.itemText(index)
                     for index in range(dialog.preset_combobox.count())
                 ],
-                "close_label": dialog.close_button.text(),
+                "close_label": plain_text(dialog.close_button.text()),
                 "db_text": dialog.database_text_label.text(),
                 "excel_text": dialog.excel_file_text_label.text(),
                 "pre_finished_values": pre_finished_values,

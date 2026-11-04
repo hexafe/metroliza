@@ -179,6 +179,7 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
             import tempfile
             from PyQt6.QtCore import QPoint
             from PyQt6.QtWidgets import QApplication, QAbstractButton
+            from metroliza.ui.shortcuts import plain_text
 
             with tempfile.TemporaryDirectory() as home_dir:
                 os.environ["HOME"] = home_dir
@@ -195,7 +196,7 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
                         continue
                     top_left = button.mapTo(dialog, QPoint(0, 0))
                     visible_button_bounds.append({
-                        "text": button.text(),
+                        "text": plain_text(button.text()),
                         "left": top_left.x(),
                         "right": top_left.x() + button.width(),
                         "width": button.width(),
