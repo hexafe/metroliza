@@ -9,6 +9,24 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(scope="session", autouse=True)
+def isolate_user_qsettings(tmp_path_factory):
+    """Tests must never read or write the developer's real Metroliza settings.
+
+    MainWindow falls back to QSettings("Hexafe", "Metroliza") when no preferences are
+    injected; that file now also holds recent database and report-folder paths.
+    """
+    try:
+        from PyQt6.QtCore import QSettings
+    except Exception:  # PyQt6 unavailable: Qt tests are skipped anyway.
+        yield
+        return
+    root = str(tmp_path_factory.mktemp("user-qsettings"))
+    for settings_format in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        QSettings.setPath(settings_format, QSettings.Scope.UserScope, root)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def protect_retained_qapplication(monkeypatch):
     """Catch even a saved alias of the real teardown before it mutates Qt."""

@@ -25,6 +25,9 @@ class RecentLocations:
         return f"{self.ROOT}/v1/{kind}"
 
     def _validated(self, values):
+        if isinstance(values, str):
+            # INI-backed QSettings reads a one-item string list back as a plain string.
+            values = [values]
         if not isinstance(values, list):
             return []
         result, seen = [], set()

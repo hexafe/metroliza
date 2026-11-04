@@ -903,6 +903,8 @@ class _ReportOperations:
             return
         if self.operation_start_allowed is not None and not self.operation_start_allowed():
             return
+        # A new run supersedes the previous import result (its failure must not show green).
+        self.import_succeeded = False
         if self._defer_until_metadata_idle(
             partial(self.scan_reports, action_started_at=action_started_at), user_started=True
         ):
@@ -1299,6 +1301,7 @@ class _ReportOperations:
         self._sync_readiness_state(refresh_registry=True)
         if not self.parse_button.isEnabled():
             return
+        self.import_succeeded = False
         # A still-running fast read is stopped by show_loading_screen (cooperative
         # cancel, never awaited): the import does not depend on it.
         metadata, enrich, _modeless = self._build_parse_request_fields()

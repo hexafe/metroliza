@@ -301,7 +301,8 @@ def test_accepted_and_rejected_context_changes_keep_one_authority(app, window, r
     assert host.report_planner.model.selected_count == 5
     window.industrial_data_dialog = None
     assert window.set_db_file(str(rejected))
-    assert window.recent_locations.paths("databases")[0] == str(rejected)
+    # Not created yet: recorded only once the file exists (after a successful import).
+    assert str(rejected) not in window.recent_locations.paths("databases")
     assert window.db_file == host.db_file == str(rejected)
     assert host.directory == str(source)
     assert not host.report_planner.model.valid
@@ -1132,12 +1133,15 @@ def test_home_paths_and_export_readiness(window, tmp_path, monkeypatch, table):
 
     assert isinstance(window.source_path_field, QLineEdit)
     assert window.source_path_field.isReadOnly() and window.database_path_field.isReadOnly()
+    assert not window.source_path_field.actions()[0].isEnabled()
     assert window.set_directory(str(tmp_path))
+    assert window.source_path_field.actions()[0].isEnabled()
     assert window.source_path_field.toolTip() == str(tmp_path)
     window.source_path_field.actions()[0].trigger()
     assert QApplication.clipboard().text() == str(tmp_path)
     assert window.set_db_file(str(tmp_path / "not-created.db"))
     assert window.home_next_action.text() != "Export Workbook"
+    assert str(tmp_path / "not-created.db") not in window.recent_locations.paths("databases")
     database = tmp_path / "reports.db"
     with closing(sqlite3.connect(database)) as connection:
         connection.execute(f"CREATE TABLE {table} (id INTEGER)")
@@ -1171,6 +1175,7 @@ def test_import_success_promotes_export_and_green_status(app, window, reports):
     wait_until(app, workspace_idle(host))
     assert "Import successful" in host.report_planner.outcome.toPlainText()
     assert window.home_next_action.text() == "Export Workbook"
+    assert window.recent_locations.paths("databases")[0] == window.db_file
     assert window.export_button.property("buttonRole") == "primary"
     assert host.scan_button.property("buttonRole") == "secondary"
     assert host.readiness_label.property("statusVariant") == "success"
@@ -1209,3 +1214,58 @@ def test_import_completion_variant_requires_verified_success(window, monkeypatch
     host._sync_readiness_state()
     assert host.import_succeeded is (not warning)
     assert host.readiness_label.property("statusVariant") == ("warning" if warning else "success")
+    # A later review run supersedes the success: its failure or cancel must not show green.
+    monkeypatch.setattr(host, "_defer_until_metadata_idle", lambda *_args, **_kwargs: True)
+    host.scan_reports()
+    host._sync_readiness_state()
+    assert host.import_succeeded is False
+    assert host.readiness_label.property("statusVariant") == "warning"
+
+
+def test_recent_single_entry_survives_reload_from_ini(tmp_path):
+    from metroliza.ui.recent_locations import RecentLocations
+
+    path = str(tmp_path / "recent.ini")
+    RecentLocations(QSettings(path, QSettings.Format.IniFormat), windows=False).record("databases", "/data/a.db")
+    # A fresh QSettings reads a one-item list back from INI as a plain string.
+    reloaded = RecentLocations(QSettings(path, QSettings.Format.IniFormat), windows=False)
+    assert reloaded.paths("databases") == ["/data/a.db"]
+
+
+def test_database_inspection_uses_plain_path_and_keeps_busy_database(window, tmp_path, monkeypatch):
+    database = tmp_path / "reports.db"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE parsed_reports (id INTEGER)")
+        connection.execute("INSERT INTO parsed_reports VALUES (1)")
+        connection.commit()
+    warnings, calls = [], []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+    real_connect = sqlite3.connect
+
+    def recording_connect(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", recording_connect)
+    assert window.set_db_file(str(database))
+    # No file: URI (SQLite rejects URI authorities such as UNC hosts).
+    assert calls and calls[0][0][0] == str(database) and not calls[0][1].get("uri")
+    assert window.home_next_action.text() == "Export Workbook"
+
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", real_connect)
+    other = tmp_path / "busy.db"
+    other.write_bytes(database.read_bytes())
+    # Busy/locked (another process writing): not export-ready, but not rejected.
+    def busy_connect(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", busy_connect)
+    assert window._inspect_database(str(other)) is False
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite3.connect", real_connect)
+    assert warnings == []
+    assert window._inspect_database(str(other)) is True
+
+    broken = tmp_path / "not-sqlite.db"
+    broken.write_bytes(b"not a database" * 100)
+    assert window.set_db_file(str(broken)) is False
+    assert window.db_file == str(database) and len(warnings) == 1

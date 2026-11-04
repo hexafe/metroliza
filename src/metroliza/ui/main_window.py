@@ -227,6 +227,7 @@ class MainWindow(QMainWindow):
                             (self.database_path_field, "Database path")):
             field.setAccessibleName(name)
             copy = QAction("Copy path", field)
+            copy.setEnabled(False)
             field.addAction(copy)
             field.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
             field.setAccessibleDescription("Full path; right-click for Copy path.")
@@ -534,7 +535,9 @@ class MainWindow(QMainWindow):
         self.help_menu.addAction(self.about_button)
 
     def _launch_home_next_action(self):
-        if self._export_ready and self._report_database_action_allowed():
+        reports = self._reports_workspace
+        busy = reports is not None and not reports.can_change_workspace()
+        if self._export_ready and not busy:
             self.launch_export_dialog()
         else:
             self.launch_parsing_dialog()
@@ -582,10 +585,13 @@ class MainWindow(QMainWindow):
 
     def _inspect_database(self, db_file):
         """Validate existing SQLite without creating it; only real rows imply readiness."""
-        if not db_file or not Path(db_file).exists():
+        if not db_file or not Path(db_file).is_file():
             return False
         try:
-            with closing(sqlite3.connect(Path(db_file).resolve().as_uri() + "?mode=ro", uri=True, timeout=0.1)) as db:
+            # Plain path, not a file: URI: SQLite rejects URI authorities, so UNC shares
+            # (and mapped drives that resolve() turns into UNC) would be refused.
+            with closing(sqlite3.connect(str(db_file), timeout=0.1)) as db:
+                db.execute("PRAGMA query_only = ON")
                 for table, query in (("parsed_reports", "SELECT 1 FROM parsed_reports LIMIT 1"),
                                      ("reports", "SELECT 1 FROM REPORTS LIMIT 1")):
                     exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND lower(name)=? LIMIT 1",
@@ -593,7 +599,10 @@ class MainWindow(QMainWindow):
                     if exists is not None and db.execute(query).fetchone() is not None:
                         return True
                 return False
-        except (sqlite3.Error, OSError, ValueError):
+        except sqlite3.OperationalError:
+            # Busy/locked or temporarily unreadable: keep the selection, just not export-ready.
+            return False
+        except (sqlite3.DatabaseError, OSError, ValueError):
             QMessageBox.warning(self, "Cannot open database", "Select a readable SQLite database. The current database was kept.")
             return None
 
@@ -864,6 +873,9 @@ class MainWindow(QMainWindow):
         self.database_status_label.setText(f"Database: {'selected' if self.db_file else database_text}")
         update_path_field(self.source_path_field, self.directory)
         update_path_field(self.database_path_field, self.db_file)
+        for field, value in ((self.source_path_field, self.directory), (self.database_path_field, self.db_file)):
+            for action in field.actions():
+                action.setEnabled(bool(value))
         set_status_variant(self.source_status_label, "success" if self.directory else "neutral")
         set_status_variant(self.database_status_label, "success" if self.db_file else "neutral")
         self._sync_workflow_next_step()
@@ -874,6 +886,10 @@ class MainWindow(QMainWindow):
         reports = self._reports_workspace
         busy = reports is not None and not reports.can_change_workspace()
         if reports is not None:
+            if reports.import_succeeded and not self._export_ready and self.db_file and Path(self.db_file).is_file():
+                # A database created by this import becomes a recent location once it exists.
+                self.recent_locations.record("databases", self.db_file)
+                self._refresh_recent_menus()
             self._export_ready = self._export_ready or reports.import_succeeded
             reports.set_export_primary(not busy and self._export_ready)
         caption = self._home_next_caption(reports, busy)
@@ -1793,8 +1809,9 @@ class MainWindow(QMainWindow):
             recovery_result = self._recover_abandoned_realtime_staging(db_file)
             self._export_ready = readiness
             self.workspace_context.set_database_file(db_file)
-            self.recent_locations.record("databases", db_file)
-            self._refresh_recent_menus()
+            if db_file and Path(db_file).is_file():
+                self.recent_locations.record("databases", db_file)
+                self._refresh_recent_menus()
             self._sync_workflow_next_step()
             realtime = self.realtime_monitoring_dialog
             if (
