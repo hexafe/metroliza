@@ -36,7 +36,7 @@ not distribute or publish a packaged candidate.
 | 261029 durable archive | Original Actions archives, EXE, receipts, job logs | Tag `archive/2026.09-rc1/build-261029`, unpublished draft release; see [archive record](../archive/2026/build-261029-provenance/README.md). Actions retention ends 2027-01-28 |
 | Core-flow Qt retain at exit | Open follow-up, not a gate for the Combined PASS | [#1184](https://github.com/hexafe/metroliza/issues/1184) |
 | Promotion to master / published release | **Not authorized by #1153** | Full RC checklist and release-owner Go required |
-| Historical RC lines | Retained, cycle closure pending | `rc2` and `release/2026.06-rc2`, separate #901/#924 decisions |
+| Historical RC lines | 2026.06 RC2 closed without a release (#901); `release/2026.06-rc2` retired, recovery tag `archive/2026.06-rc2/final` | `rc2` kept until #1187 links are gone (#924) |
 | Dependency upgrades #972/#973 | Deferred until after RC | Refresh separately, preserve STEP3 exact dependency pins |
 | Security exception review #906 | Open | Selected STEP3 baseline earliest expiry 2026-11-23; verify the actual baseline before every gate and renew before expiry. The issue's original 2026-10-31 deadline is historical, not a new waiver |
 
