@@ -323,7 +323,14 @@ When processing starts, Metroliza shows a worker/progress dialog with:
 - a progress bar,
 - a **Cancel** button.
 
-If processing completes normally, the app shows where the dashboard and workbook were saved.
-The completion dialog links the generated dashboard and workbook files.
+If processing completes normally, the completion dialog shows the generated file names
+as links and offers **Open workbook**, **Open dashboard**, and **Show in folder** for
+produced files. Hover over a file link or button to see its full location.
+
+After acknowledgement, the **Last run** row keeps the outcome, local time, file names,
+row/metric/chart counts, and those actions until the next run starts in this window.
+Cancelled and failed runs keep their outcome without actions for unproduced files.
+Nothing is saved between sessions. Actions warn you if a file was moved or deleted;
+locate it or run the analysis again.
 Dashboard diagnostics, groupstats sections, detailed statistical-test tables, and chart
 statistics are collapsed by default; open only the sections you need to inspect.

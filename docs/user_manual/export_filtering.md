@@ -189,14 +189,26 @@ which choices are visible; it does not clear conditions.
 
 ## Date filtering
 
-The dialog includes two date controls:
+Use **Date range** to choose an inclusive range based on your local calendar date:
 
-- **MEASUREMENT DATE FROM**
-- **MEASUREMENT DATE TO**
+- **All dates** (default): no active date filter; the From/To fields are disabled.
+  It keeps the existing export bounds, 1 January 1970 through today when the draft
+  is created or All dates is selected.
+- **Today**: today only.
+- **Yesterday**: yesterday only.
+- **Last 7 days**: today and the six preceding days.
+- **This month**: the first day of this month through today.
+- **Custom**: edit **Measurement date from** and **Measurement date to**.
 
-These let you limit the export to a date range.
-FROM must be on or before TO; equal dates are valid. A reversed range blocks Apply and
+Choosing a preset fills both fields. Editing either field switches to **Custom**.
+From must be on or before To; equal dates are valid. A reversed range blocks Apply and
 shows a message beside the dates while preserving both entries.
+
+Use the arrow keys to choose a preset. Tab then reaches From and To.
+**Cancel** restores the previously applied dates and preset. Reopening keeps those
+concrete dates; if a relative preset no longer matches the current day, it is shown as
+**Custom**. Choose the preset again to update its dates. **Reset draft** selects
+**All dates** with today's upper bound. Presets are not remembered across app sessions.
 
 ### Select today
 
@@ -246,8 +258,8 @@ Use this when `VAL1` exists in multiple references but only the `REF1` measureme
 
 ### Example 4: Export only recent measurements
 
-1. Set **MEASUREMENT DATE FROM** to your starting date.
-2. Use **Select today** for the end date if needed.
+1. Choose **Last 7 days** in **Date range**, or choose **Custom** and enter your dates.
+2. Check the range shown in the filter summary.
 3. Click **Apply filters**.
 
 ### Example 5: Review NOK rows from one operator and source file

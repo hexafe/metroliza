@@ -4,7 +4,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from modules.contracts import validate_export_options
@@ -183,6 +183,9 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
 
             def scheme(self):
                 return self._value.split('://', 1)[0] if self.isValid() else ''
+
+            def isLocalFile(self):
+                return self.scheme() == "file"
 
             def toLocalFile(self):
                 if self._value.startswith('file://'):
@@ -524,7 +527,7 @@ class TestExportCompletionMessaging(_ExportPresetFlowStubCase):
 
         formatted = format_message_with_clickable_links('Export file: file:///tmp/out.xlsx')
 
-        self.assertIn('<a href="file:///tmp/out.xlsx">file:///tmp/out.xlsx</a>', formatted)
+        self.assertIn('<a href="file:///tmp/out.xlsx" title="file:///tmp/out.xlsx">out.xlsx</a>', formatted)
 
     def test_build_export_directory_link_line_points_to_file(self):
         from modules.export_dialog import build_export_directory_link_line
@@ -714,18 +717,18 @@ class TestRevealFileInExplorer(_ExportPresetFlowStubCase):
 
 
 class TestShowExportResultMessage(_ExportPresetFlowStubCase):
-    def test_handle_export_result_link_reveals_file_for_export_link(self):
+    def test_handle_export_result_link_opens_named_file_for_export_link(self):
         from modules.export_dialog import handle_export_result_link
 
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = Path(tmpdir) / 'out.xlsx'
             file_path.write_text('content', encoding='utf-8')
 
-            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.QDesktopServices.openUrl') as open_url_mock:
+            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.open_local_link') as open_file_mock:
                 handle_export_result_link(parent=None, url=file_path.resolve().as_uri(), excel_file=str(file_path))
 
-        reveal_mock.assert_called_once_with(str(file_path))
-        open_url_mock.assert_not_called()
+        reveal_mock.assert_not_called()
+        open_file_mock.assert_called_once_with(None, str(file_path))
 
     def test_handle_export_result_link_opens_non_matching_urls_normally(self):
         from modules.export_dialog import handle_export_result_link
@@ -742,11 +745,11 @@ class TestShowExportResultMessage(_ExportPresetFlowStubCase):
             file_path = Path(tmpdir) / 'dashboard.html'
             file_path.write_text('<html></html>', encoding='utf-8')
 
-            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.QDesktopServices.openUrl') as open_url_mock:
+            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.open_local_link') as open_file_mock:
                 handle_export_result_link(parent=None, url=file_path.resolve().as_uri(), excel_file='')
 
         reveal_mock.assert_not_called()
-        open_url_mock.assert_called_once()
+        open_file_mock.assert_called_once_with(None, str(file_path))
 
     def test_open_export_result_link_surfaces_failure_warning(self):
         from modules.export_dialog import _open_export_result_link
@@ -803,6 +806,7 @@ class TestExportDialogCompletionFlow(_ExportPresetFlowStubCase):
 
         dialog = ExportDialog.__new__(ExportDialog)
         dialog.export_error_message = None
+        dialog.last_result_row = Mock()
         dialog.excel_file = 'out.xlsx'
         dialog.export_thread = _Thread()
         dialog.loading_dialog = _LoadingDialog()
@@ -810,12 +814,13 @@ class TestExportDialogCompletionFlow(_ExportPresetFlowStubCase):
         dialog.accept_called = False
         dialog.accept = lambda: setattr(dialog, 'accept_called', True)
 
-        with patch('modules.export_dialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
+        with patch('modules.export_dialog.sip.isdeleted', return_value=False), \
+             patch('modules.export_dialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
              patch('modules.export_dialog.show_export_result_message') as show_mock:
             dialog.on_export_finished()
 
         build_mock.assert_called_once()
-        show_mock.assert_called_once_with(dialog, 'info', 'Export successful', 'ok', excel_file='out.xlsx')
+        show_mock.assert_called_once_with(dialog, 'info', 'Export successful', 'ok', excel_file='out.xlsx', artifacts=())
         self.assertEqual(dialog.loading_dialog.accept_calls, 1)
         self.assertFalse(dialog.accept_called)
         self.assertEqual(dialog.export_button.enabled_states, [True])
@@ -844,6 +849,7 @@ class TestExportDialogCompletionFlow(_ExportPresetFlowStubCase):
 
         dialog = ExportDialog.__new__(ExportDialog)
         dialog.export_error_message = None
+        dialog.last_result_row = Mock()
         dialog.excel_file = 'out.xlsx'
         dialog.export_thread = _Thread()
         dialog.loading_dialog = _LoadingDialog()
@@ -858,7 +864,8 @@ class TestExportDialogCompletionFlow(_ExportPresetFlowStubCase):
             def information(parent, title, text):
                 _InfoMessageBox.information_calls.append((parent, title, text))
 
-        with patch('modules.export_dialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
+        with patch('modules.export_dialog.sip.isdeleted', return_value=False), \
+             patch('modules.export_dialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
              patch('modules.export_dialog.show_export_result_message', side_effect=RuntimeError('boom')) as show_mock, \
              patch('modules.export_dialog.QMessageBox', _InfoMessageBox):
             dialog.on_export_finished()
@@ -1089,6 +1096,7 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.db_file = 'input.db'
         dialog.excel_file = Path('out.xlsx')
         dialog.config = {}
+        dialog.last_result_row = Mock()
         dialog.config_path = Path('/tmp/nonexistent-export-config.json')
         dialog.stop_exporting = lambda: None
         dialog.on_export_error = lambda *_: None
@@ -1169,6 +1177,7 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.db_file = 'input.db'
         dialog.excel_file = Path('out.xls')
         dialog.config = {}
+        dialog.last_result_row = Mock()
         dialog.config_path = Path('/tmp/nonexistent-export-config.json')
 
         with patch('modules.export_dialog.QMessageBox', _FakeMessageBox), \
@@ -1271,6 +1280,7 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.db_file = 'input.db'
         dialog.excel_file = Path('out.xlsx')
         dialog.config = {}
+        dialog.last_result_row = Mock()
         dialog.config_path = Path('/tmp/nonexistent-export-config.json')
         dialog.stop_exporting = lambda: None
         dialog.on_export_error = lambda *_: None

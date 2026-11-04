@@ -16,7 +16,10 @@ from metroliza.exporting.export_dialog_service import (
     build_export_options_payload as build_export_options_payload,
     build_validated_export_request,
 )
-from metroliza.exporting.export_outcomes import sanitize_export_diagnostics
+from metroliza.exporting.export_outcomes import sanitize_export_diagnostics, derive_export_run_result
+from metroliza.ui.result_actions import (
+    LastResultRow, add_result_actions, export_result_files, open_local_link,
+)
 from metroliza.exporting.output_publication import (
     OutputConsent, conflicting_outputs, free_copy_path, output_paths,
 )
@@ -35,6 +38,7 @@ from metroliza.charts.dashboard_visual_options import (
     dashboard_visual_swatch_palette,
     load_dashboard_visual_settings,
 )
+from PyQt6 import sip
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import(
@@ -122,25 +126,24 @@ def _reject_progress_dialog_as_terminal(dialog) -> None:
 def format_message_with_clickable_links(message):
     """Convert plain-text message into rich text with clickable URLs."""
     safe_message = html.escape(str(message or ""))
-    linked_message = _URL_PATTERN.sub(r'<a href="\1">\1</a>', safe_message)
-    return linked_message.replace("\n", "<br>")
+
+    def link(match):
+        url = match.group(0)
+        parsed = QUrl(html.unescape(url))
+        label = html.escape(Path(parsed.toLocalFile()).name) if parsed.isLocalFile() else url
+        tooltip = f' title="{url}"' if parsed.isLocalFile() else ""
+        return f'<a href="{url}"{tooltip}>{label}</a>'
+
+    return _URL_PATTERN.sub(link, safe_message).replace("\n", "<br>")
 
 
 def handle_export_result_link(parent, url, excel_file=None):
-    """Handle message-box link activation, revealing exported file when selected."""
+    """Open the named local file; preserve remote/Google link handling."""
     parsed = QUrl(str(url or ""))
-
-    if parsed.isValid() and parsed.scheme() == 'file' and excel_file:
-        try:
-            clicked_path = Path(parsed.toLocalFile()).resolve(strict=False)
-            exported_path = Path(str(excel_file)).resolve(strict=False)
-            if clicked_path == exported_path:
-                reveal_file_in_explorer(excel_file)
-                return
-        except (OSError, ValueError) as exc:
-            _log_exception(exc, context="resolve export result link path", reraise=False)
-
-    QDesktopServices.openUrl(parsed if parsed.isValid() else QUrl(str(url or "")))
+    if parsed.isLocalFile():
+        open_local_link(parent, parsed.toLocalFile())
+    else:
+        QDesktopServices.openUrl(parsed)
 
 
 def _configure_export_result_dialog(dialog, *, level, title, message, diagnostics):
@@ -161,21 +164,18 @@ def _configure_export_result_dialog(dialog, *, level, title, message, diagnostic
         dialog.setDetailedText(str(diagnostics))
 
 
-def _add_export_result_actions(dialog, *, excel_file, diagnostics):
+def _add_export_result_actions(dialog, *, excel_file, diagnostics, artifacts=None):
     button_role = getattr(QMessageBox, "ButtonRole", None)
     if button_role is None or not hasattr(dialog, "addButton"):
         return None, None
-    open_button = (
-        dialog.addButton("Open output folder", button_role.ActionRole)
-        if excel_file
-        else None
-    )
+    paths = (excel_file,) if artifacts is None else artifacts
+    add_result_actions(dialog.parent(), paths, lambda text: dialog.addButton(text, button_role.ActionRole))
     copy_button = (
         dialog.addButton("Copy diagnostics", button_role.ActionRole)
         if diagnostics
         else None
     )
-    return open_button, copy_button
+    return None, copy_button
 
 
 def _connect_export_result_links(dialog, *, parent, excel_file):
@@ -203,13 +203,6 @@ def _handle_export_result_action(
     copy_diagnostics_button,
 ):
     clicked_button = dialog.clickedButton() if hasattr(dialog, "clickedButton") else None
-    if clicked_button is open_output_button and excel_file:
-        _open_export_result_link(
-            parent,
-            Path(str(excel_file)).resolve(strict=False).as_uri(),
-            excel_file,
-        )
-        return
     if clicked_button is copy_diagnostics_button and diagnostics:
         clipboard = QApplication.clipboard()
         if clipboard is not None:
@@ -223,6 +216,7 @@ def show_export_result_message(
     message,
     excel_file=None,
     diagnostics="",
+    artifacts=None,
 ):
     """Display an export outcome with copyable diagnostics and output actions."""
     diagnostics = sanitize_export_diagnostics(diagnostics)
@@ -238,9 +232,12 @@ def show_export_result_message(
         dialog,
         excel_file=excel_file,
         diagnostics=diagnostics,
+        artifacts=artifacts,
     )
     _connect_export_result_links(dialog, parent=parent, excel_file=excel_file)
     dialog.exec()
+    if isinstance(dialog, QDialog) and sip.isdeleted(dialog):
+        return
     _handle_export_result_action(
         dialog,
         parent=parent,
@@ -757,6 +754,8 @@ class ExportDialog(QDialog):
             self.content_scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.layout.addWidget(self.content_scroll_area, 1)
             self.layout.addWidget(self.metadata_enrichment_notice_label)
+            self.last_result_row = LastResultRow(self, "Last export")
+            self.layout.addWidget(self.last_result_row)
 
             footer_layout = QHBoxLayout()
             footer_layout.setContentsMargins(0, 0, 0, 0)
@@ -1380,6 +1379,7 @@ class ExportDialog(QDialog):
             self.config['selected_preset'] = selected_preset
             save_export_dialog_config(self.config_path, self.config)
 
+            self.last_result_row.clear()
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
                 self,
                 window_title="Exporting data...",
@@ -1522,15 +1522,28 @@ class ExportDialog(QDialog):
                     outcome_kwargs["run_result"] = run_result
                 level, title, message = build_export_completion_message(**outcome_kwargs)
                 diagnostics = build_export_completion_diagnostics(**outcome_kwargs)
-                show_kwargs = {"excel_file": result_path}
+                paths = self._retain_export_result(outcome_kwargs)
+                show_kwargs = {"excel_file": result_path, "artifacts": paths}
                 if diagnostics:
                     show_kwargs["diagnostics"] = diagnostics
                 show_export_result_message(self, level, title, message, **show_kwargs)
-            self.export_button.setEnabled(True)
-            self._cancel_requested = False
-            self._set_loading_cancel_enabled(True)
+            if not sip.isdeleted(self):
+                self.export_button.setEnabled(True)
+                self._cancel_requested = False
+                self._set_loading_cancel_enabled(True)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _retain_export_result(self, outcome_kwargs):
+        result = outcome_kwargs.get("run_result") or derive_export_run_result(
+            **{key: value for key, value in outcome_kwargs.items() if key != "run_result"}
+        )
+        outcome = {"complete": "completed", "complete_with_omissions": "completed with warnings"}.get(
+            result.status.value, result.status.value
+        )
+        paths = export_result_files(result)
+        self.last_result_row.set_result(outcome, paths)
+        return paths
 
     def on_export_finished(self):
         """Finalize export flow with success/error messaging and UI reset."""
@@ -1559,8 +1572,9 @@ class ExportDialog(QDialog):
             level, title, message = build_export_completion_message(**outcome_kwargs)
             diagnostics = build_export_completion_diagnostics(**outcome_kwargs)
 
+            paths = self._retain_export_result(outcome_kwargs)
             try:
-                show_kwargs = {"excel_file": result_path}
+                show_kwargs = {"excel_file": result_path, "artifacts": paths}
                 if diagnostics:
                     show_kwargs["diagnostics"] = diagnostics
                 show_export_result_message(self, level, title, message, **show_kwargs)
@@ -1571,14 +1585,16 @@ class ExportDialog(QDialog):
                 else:
                     QMessageBox.information(self, title, message)
 
-            self._cancel_requested = False
-            self._set_loading_cancel_enabled(True)
+            if not sip.isdeleted(self):
+                self._cancel_requested = False
+                self._set_loading_cancel_enabled(True)
         except Exception as e:
             self.log_and_exit(e)
         finally:
             # Re-enable actions after completion flow and clear transient error state.
-            self.export_button.setEnabled(True)
-            self.export_error_message = None
+            if not sip.isdeleted(self):
+                self.export_button.setEnabled(True)
+                self.export_error_message = None
 
     def on_export_thread_stopped(self):
         """Restore export UI when the worker stops without a success/cancel signal."""
