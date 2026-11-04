@@ -68,6 +68,11 @@ head must receive a completely fresh Gate 5.
 
 ## Final intended four-branch model
 
+> **Superseded 2026-11-04.** The retention policy is now lifecycle-based; the current retained refs,
+> owners and retirement triggers are in
+> [branching_strategy.md §0](../release_checks/branching_strategy.md). `release/2026.06-rc2` was retired
+> under the exact-ref gate (#960); the table below is the August 2026 record.
+
 After the closeout PR merges and the source branch later passes its separate Gate 5, the intended
 ordinary branch inventory is exactly:
 

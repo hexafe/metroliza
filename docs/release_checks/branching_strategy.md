@@ -5,7 +5,36 @@ work. Current RC roles and qualification are recorded in [release status](releas
 The historical branch transition and automatic evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md).
 
-## 0) Active repository state — decision 2026-10-27
+## 0) Active repository state — decision 2026-11-04
+
+The Product Owner adopted **lifecycle-based branch retention** (escalation review: Codex
+`gpt-6-astra`; execution record in [#960](https://github.com/hexafe/metroliza/issues/960)):
+
+> Retain `master`, `develop`, active PR heads, and release branches with a named active release,
+> support, or evidence obligation. Record an owner and retirement trigger for each exception.
+> Preserve historical release points through verified immutable recovery refs; retire branches
+> through the exact-ref cleanup gate.
+
+There is no fixed number of retained release branches. A growing set of release refs triggers a
+lifecycle review; it does not delete or keep refs by count.
+
+The 2026.06 RC2 cycle was closed without a release (#901, not planned). `release/2026.06-rc2` was
+deleted under the gate; its head `1eeeab27` is preserved by the annotated tag
+`archive/2026.06-rc2/final` (a recovery point, not an accepted release). The stray
+`release/1158-build-261029` was deleted the same way (recovery: `refs/pull/1169/head`).
+
+Retained refs after this cleanup, each with its obligation:
+
+| Ref | Obligation | Owner | Retirement trigger |
+|---|---|---|---|
+| `master` | default branch, production/history anchor | repository owner | none (long-lived) |
+| `develop` | canonical integration branch | repository owner | none (long-lived) |
+| `release/2026.09-rc1` | active RC, frozen for manual acceptance of build 261031 (#1158) | release owner | release decision for 2026.09 RC1 (then tag and retire) |
+| `rc2` | live consumer: generated parser-plugin scaffolds link to `blob/rc2/...` (#1187), also in the frozen RC | repository owner | #1187 fixed on develop and the current RC no longer ships those links |
+
+Dependabot and other PR heads retire with their PRs.
+
+## 0.1) Repository state — decision 2026-10-27 (superseded 2026-11-04)
 
 Under [#1153](https://github.com/hexafe/metroliza/issues/1153), integrate #1109, #1142, the accepted
 STEP2+STEP3 aggregate and refreshed #1063 into develop using merge commits, then cut
@@ -26,7 +55,7 @@ Newly admitted release work must select its base explicitly: normally `develop`,
 `release/2026.09-rc1` after its source cut. The June base selection in the historical decision below
 applies only to explicitly admitted historical cycle work; it is not the current RC default.
 
-## 0.1) Historical repository state — decision 2026-08-22
+## 0.2) Historical repository state — decision 2026-08-22
 
 - `develop` is the canonical branch for new Issue-driven development.
 - `release/2026.06-rc2` is the frozen release-candidate/evidence branch for
@@ -92,10 +121,11 @@ release fixes, qualification evidence and reviewed candidate metadata belong her
 Reconcile accepted fixes into develop. Final build/EXE qualification and release-owner Go remain
 separate from the source cut and repository cleanup.
 
-### `release/2026.06-rc2`
+### `release/2026.06-rc2` (retired 2026-11-04)
 
-Historical frozen stabilization/evidence branch; retain it unchanged for separate #901/#924
-cycle closure. The following original restrictions continue for explicitly admitted historical fixes. Allowed changes are limited to:
+Retired: the 2026.06 RC2 cycle closed without a release (#901). Recovery point:
+`archive/2026.06-rc2/final` → `1eeeab27`. The restrictions below are kept as the historical record of
+that line. Allowed changes were limited to:
 
 - release-blocking defects;
 - packaging/clean-machine fixes;
@@ -108,10 +138,9 @@ late-scope exception process.
 
 ### `rc2`
 
-Historical transition/reference branch. It preserves the long-running ad-hoc RC development line
-and external references during the transition. Do not branch new work from it or target routine
-pull requests at it after #900. Retire it only through a separate explicit cleanup after release
-reconciliation.
+Historical transition/reference branch (same commit as `archive/2026.06-rc2/final`). Do not branch new
+work from it or target pull requests at it. It is kept only because generated parser-plugin scaffolds
+link to `blob/rc2/...` (#1187); retire it through the exact-ref gate once that consumer is gone.
 
 ### `hotfix/*`
 
@@ -393,8 +422,10 @@ long-lived refs plus genuinely active PR heads.
 
 ### Long-lived and historical release refs
 
-Keep `develop` and `master` in their current roles. Keep an active `release/*` branch only while
-its release/evidence cycle is open. Prefer immutable tags for historical release points rather than
-keeping old release branches indefinitely. Retire the historical `rc2` only through its recorded
+Keep `develop` and `master` in their current roles. Keep a `release/*` branch only while it has a
+named active release, support or evidence obligation, recorded with an owner and a retirement
+trigger (section 0). Preserve historical release points as verified immutable recovery refs
+(annotated `archive/...` tags or retained PR refs) rather than keeping old release branches. There is
+no fixed count of retained release branches. Retire the historical `rc2` only through its recorded
 release-transition decision; default-branch renaming and release promotion remain separate actions.
 
