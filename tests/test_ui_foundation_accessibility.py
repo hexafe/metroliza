@@ -61,6 +61,147 @@ def _ensure_qapplication():
     _app()
 
 
+@pytest.mark.parametrize("value", [
+    r"C:\Users\operator\Documents\measurements\archived\production\site-a\2026-10\line-a.db",
+    "/home/operator/Documents/measurements/archived/production/site-a/2026-10/line-a.db",
+    "/home/operator/Documents/measurements/archived/production/site-a/2026-10/line-a/",
+])
+def test_path_field_elides_directories_and_recomputes_for_width_font_theme(value):
+    from metroliza.ui.ui_foundation import path_field
+
+    field = path_field(value)
+    field.show()
+    try:
+        for dark in (False, True):
+            apply_metroliza_theme(field, dark_mode=dark)
+            for point_size in (9, 14):
+                font = QFont(field.font())
+                font.setPointSize(point_size)
+                field.setFont(font)
+                for width in (240, 320, 420):
+                    field.resize(width, 48)
+                    _app().processEvents()
+                    displayed = field.displayText()
+                    name = "line-a/" if value.endswith("/") else "line-a.db"
+                    assert displayed.endswith(name)
+                    assert "\u2026" in displayed
+                    assert field.fontMetrics().horizontalAdvance(displayed) < width
+                    assert field.text() == value
+                    # The display method must actually drive the painted glyphs.
+                    original = field.grab().toImage()
+                    field.displayText = lambda: "PAINT CONTROL"
+                    assert field.grab().toImage() != original
+                    del field.displayText
+        field.resize(1600, 48)
+        _app().processEvents()
+        assert field.displayText() == value
+    finally:
+        field.close()
+
+
+def test_path_field_full_metadata_and_empty_state():
+    from metroliza.ui.ui_foundation import (
+        configure_accessibility, path_field, update_path_field,
+    )
+
+    value = r"C:\Users\operator\Documents\measurements\2026-10\line-a.db"
+    field = path_field(value)
+    configure_accessibility(field, name="Source database")
+    field.resize(240, 40)
+    field.show()
+    try:
+        assert field.text() == field.toolTip() == field.accessibleDescription() == value
+        assert field.accessibleName() == "Source database"
+        field.setText("/new/location/updated.db")
+        assert field.toolTip() == field.accessibleDescription() == field.text()
+        update_path_field(field, "", empty_text="No database chosen")
+        assert field.text() == field.displayText() == "No database chosen"
+        assert field.toolTip() == field.accessibleDescription() == ""
+        update_path_field(field, value)
+        assert field.text() == field.toolTip() == field.accessibleDescription() == value
+    finally:
+        field.close()
+
+
+@pytest.mark.parametrize("method", ["keyboard", "copy", "Copy", "Copy path"])
+def test_path_field_copies_full_path_even_with_partial_selection(method):
+    from metroliza.ui.ui_foundation import path_field
+
+    value = r"C:\Users\operator\Documents\measurements\2026-10\line-a.db"
+    field = path_field(value)
+    field.resize(240, 40)
+    field.show()
+    try:
+        field.setFocus()
+        field.setSelection(0, 3)
+        _app().clipboard().clear()
+        if method == "keyboard":
+            QTest.keyClick(field, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        elif method == "copy":
+            field.deselect()
+            field.copy()
+        else:
+            menu = field.createStandardContextMenu()
+            try:
+                action = next(
+                    a for a in menu.actions()
+                    if a.text().split("\t", 1)[0].replace("&", "") == method
+                )
+                action.trigger()
+            finally:
+                menu.deleteLater()
+        assert _app().clipboard().text() == value
+        assert field.text() == value
+    finally:
+        field.close()
+
+
+def test_path_field_empty_state_copies_nothing():
+    from metroliza.ui.ui_foundation import path_field
+
+    field = path_field("", empty_text="None selected")
+    field.show()
+    try:
+        _app().clipboard().setText("previous clipboard")
+        field.setFocus()
+        QTest.keyClick(field, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        field.copy()
+        assert _app().clipboard().text() == "previous clipboard"
+        menu = field.createStandardContextMenu()
+        try:
+            copies = [a for a in menu.actions() if a.text().replace("&", "") in ("Copy", "Copy path")]
+            assert len(copies) == 2 and not any(a.isEnabled() for a in copies)
+        finally:
+            menu.deleteLater()
+    finally:
+        field.close()
+
+
+@pytest.mark.parametrize("scale", ["1", "1.5", "2"])
+def test_path_field_at_scaled_dpi(scale):
+    probe = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(r'''
+            from PyQt6.QtWidgets import QApplication
+            from metroliza.ui.ui_foundation import path_field
+            app = QApplication([])
+            value = r"C:\Users\operator\Documents\measurements\archive\site-a\2026-10\line-a.db"
+            field = path_field(value)
+            field.resize(240, 40)
+            field.show()
+            app.processEvents()
+            assert field.displayText().endswith("line-a.db")
+            assert "\u2026" in field.displayText()
+            assert field.text() == field.toolTip() == value
+            assert field.fontMetrics().horizontalAdvance(field.displayText()) < field.width()
+            assert field.grab().devicePixelRatio() == float(__import__("os").environ["QT_SCALE_FACTOR"])
+            field.close()
+        ''')],
+        env={**os.environ, "QT_SCALE_FACTOR": scale},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+
+
 def test_effective_light_theme_text_and_focus_pairs_meet_wcag_contrast():
     palette = ui_theme_tokens.theme_tokens(dark_mode=False)
     status_colors = palette["STATUS_COLORS"]

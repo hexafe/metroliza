@@ -1189,6 +1189,8 @@ class IndustrialAnalyticsDialog(QDialog):
         configure_accessibility(self.tabular_source_status_label, name="Detected CSV Summary source")
         configure_accessibility(self.database_field, name="Analytics report database")
         configure_accessibility(self.input_file_field, name="CSV or Excel input file")
+        configure_accessibility(self.dashboard_path_field, name="CSV Summary dashboard output path")
+        configure_accessibility(self.workbook_path_field, name="CSV Summary workbook output path")
         configure_accessibility(self.browse_input_button, name="Browse CSV or Excel input")
         configure_accessibility(self.sheet_name_combo, name="Excel sheet")
         configure_accessibility(self.timestamp_column_combo, name="Analytics time column")

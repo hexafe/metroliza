@@ -72,7 +72,13 @@ The **Export** button stays disabled until the required output file for the sele
 
 Even if you also use Google Sheets export, the local **.xlsx file** is still required and is always kept.
 
-The selected output path is shown in the dialog in a compact field with the full path available on hover.
+The suggested output name is `<database stem>_YYYY-MM-DD.xlsx`, using today's local date,
+or `<database stem>_YYYY-MM-DD_dashboard.html` for HTML dashboard only. Without a database,
+the suggestion is `export_YYYY-MM-DD.xlsx` or `export_YYYY-MM-DD_dashboard.html` in your
+home folder. Existing suggestions get a numbered suffix; a name you have selected is kept.
+
+Path fields keep the filename visible by shortening the directory in the middle. Hover
+to see the full path, or use Ctrl+C, Copy or Copy path in the context menu to copy it.
 
 ## Data
 
