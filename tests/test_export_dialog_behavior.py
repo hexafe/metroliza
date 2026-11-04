@@ -61,6 +61,63 @@ def _set_combo_to_existing_label(combo, needle):
     raise AssertionError(f"Missing combo label containing {needle!r}: {_combo_labels(combo)}")
 
 
+@pytest.mark.parametrize("html_only", [False, True])
+@pytest.mark.parametrize("has_database", [False, True])
+def test_dated_export_default_and_collision_counter(monkeypatch, tmp_path, html_only, has_database):
+    from datetime import date
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 4)
+
+    monkeypatch.setattr(export_dialog, "date", FrozenDate, raising=False)
+    monkeypatch.setattr(export_dialog.Path, "home", lambda: tmp_path)
+    database = str(tmp_path / "line-a.db") if has_database else ""
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=database)
+    monkeypatch.setattr(dialog, "_is_html_dashboard_only", lambda: html_only)
+    captured = []
+    monkeypatch.setattr(export_dialog.QFileDialog, "getSaveFileName",
+                        lambda _p, _t, proposed, _f: (captured.append(proposed) or "", ""))
+    stem = "line-a" if has_database else "export"
+    suffix = "_dashboard.html" if html_only else ".xlsx"
+    expected = tmp_path / f"{stem}_2026-11-04{suffix}"
+    try:
+        dialog.select_excel_file()
+        assert captured[-1] == str(expected)
+        assert dialog.excel_file == ""  # Cancelling does not select the proposal.
+        expected.touch()
+        expected.with_stem(expected.stem + "_1").touch()
+        dialog.select_excel_file()
+        assert captured[-1] == str(expected.with_stem(expected.stem + "_2"))
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("html_only", [False, True])
+def test_export_keeps_user_chosen_name_when_browsing_again(monkeypatch, tmp_path, html_only):
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "line-a.db"))
+    monkeypatch.setattr(dialog, "_is_html_dashboard_only", lambda: html_only)
+    chosen = tmp_path / ("chosen.html" if html_only else "chosen.xlsx")
+    chosen.touch()
+    captured = []
+
+    def select(_parent, _title, proposed, _filter):
+        captured.append(proposed)
+        return str(chosen), ""
+
+    monkeypatch.setattr(export_dialog.QFileDialog, "getSaveFileName", select)
+    try:
+        dialog.select_excel_file()
+        assert dialog.excel_file == chosen
+        dialog.select_excel_file()
+        assert captured[-1] == str(chosen)
+        dialog._coerce_output_path_for_mode()
+        assert dialog.excel_file == chosen
+    finally:
+        dialog.close()
+
+
 def test_result_dialog_sanitizes_details_before_display_or_copy(monkeypatch):
     captured = {}
 
@@ -106,6 +163,8 @@ def test_result_dialog_sanitizes_details_before_display_or_copy(monkeypatch):
 def test_path_filter_group_controls_and_button_state(monkeypatch, tmp_path):
     dialog = _build_dialog(monkeypatch, tmp_path)
     try:
+        assert dialog.database_text_label.accessibleName() == "Export source database"
+        assert dialog.excel_file_text_label.accessibleName() == "Export output path"
         assert not dialog.export_button.isEnabled()
         assert "Select both" in dialog.path_readiness_label.text()
 
