@@ -446,7 +446,7 @@ def test_export_dialog_helper_methods(monkeypatch, tmp_path):
     reveals = []
     opened = []
     monkeypatch.setattr(export_dialog, "reveal_file_in_explorer", lambda path: reveals.append(path))
-    monkeypatch.setattr(export_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url))
+    monkeypatch.setattr(export_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
 
     export_dialog.handle_export_result_link(
         None,
@@ -455,9 +455,10 @@ def test_export_dialog_helper_methods(monkeypatch, tmp_path):
     )
     export_dialog.handle_export_result_link(None, "https://example.invalid/result", excel_file=exported_file)
 
-    assert reveals == [exported_file]
-    assert len(opened) == 1
-    assert opened[0].scheme() == "https"
+    assert reveals == []
+    assert len(opened) == 2
+    assert opened[0].toLocalFile() == str(exported_file)
+    assert opened[1].scheme() == "https"
 
 
 def test_reveal_file_in_explorer_failure_branch(tmp_path):
@@ -555,7 +556,11 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         )
         monkeypatch.setattr(export_dialog, "create_export_data_thread", lambda request: fake_thread)
 
+        dialog.last_result_row.set_result("completed")
+        dialog._update_export_button_enabled_state()
+        assert not dialog.last_result_row.isHidden()
         dialog.show_loading_screen()
+        assert dialog.last_result_row.isHidden()
 
         assert validation_calls["db_file"] == str(tmp_path / "source.db")
         assert dialog.excel_file == tmp_path / "validated.xlsx"
@@ -593,6 +598,8 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         dialog.on_export_canceled()
 
         assert cancel_results[-1][0][2] == "Export cancelled"
+        assert "cancelled" in dialog.last_result_row.summary.text()
+        assert not dialog.last_result_row.findChildren(export_dialog.QPushButton)
         assert progress_dialog.rejected_as_terminal
         assert events[-2:] == ["progress_rejected", "rich_message"]
         assert dialog.export_button.isEnabled()
@@ -655,3 +662,117 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         assert notices[-1][1] == "Export canceled"
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize("produced", [("book.xlsx",), ("dash.html",), ("book.xlsx", "dash.html"), ()])
+def test_w1_completion_actions_only_for_produced_files(monkeypatch, tmp_path, produced):
+    _app()
+    paths = tuple(tmp_path / name for name in produced)
+    for path in paths:
+        path.touch()
+    (tmp_path / "stale.xlsx").touch()
+    opened, revealed = [], []
+    monkeypatch.setattr(export_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(export_dialog, "reveal_file_in_explorer", lambda path: revealed.append(Path(path)))
+
+    def acknowledge(box):
+        buttons = {button.text(): button for button in box.buttons()}
+        expected = {"OK"}
+        if produced:
+            expected.add("Show in folder")
+        if "book.xlsx" in produced:
+            expected.add("Open workbook")
+        if "dash.html" in produced:
+            expected.add("Open dashboard")
+        assert set(buttons) == expected
+        for text, button in buttons.items():
+            if text != "OK":
+                button.click()
+        return 0
+
+    monkeypatch.setattr(export_dialog.QMessageBox, "exec", acknowledge)
+    export_dialog.show_export_result_message(None, "info", "Done", "Done", artifacts=(*paths, tmp_path / "missing.html"))
+    assert {url.toLocalFile() for url in opened} == {str(path) for path in paths}
+    assert revealed == list(paths[:1])
+
+
+@pytest.mark.parametrize("reveal", [False, True])
+def test_w1_actions_check_missing_files_and_open_failure(monkeypatch, tmp_path, reveal):
+    _app()
+    path = tmp_path / "gone.xlsx"
+    warnings, opened = [], []
+    monkeypatch.setattr(export_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    monkeypatch.setattr(export_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url) or False)
+    monkeypatch.setattr(export_dialog, "reveal_file_in_explorer", lambda p: opened.append(p))
+    if reveal:
+        from metroliza.ui.result_actions import activate_result_file
+        activate_result_file(None, path, reveal=lambda p: opened.append(p))
+    else:
+        export_dialog.handle_export_result_link(None, path.resolve().as_uri(), excel_file=path)
+    assert not opened
+    assert str(path) in warnings[-1] and "was moved or deleted" in warnings[-1]
+    path.touch()
+    export_dialog.handle_export_result_link(None, path.resolve().as_uri(), excel_file=path)
+    assert len(opened) == 1
+    assert path.name in warnings[-1]
+
+
+@pytest.mark.parametrize("status", ["complete", "complete_with_omissions", "cancelled", "failed"])
+def test_w1_export_retains_typed_outcome_after_acknowledge(monkeypatch, tmp_path, status):
+    from metroliza.exporting.export_outcomes import (
+        ExportArtifactResult, ExportArtifactStatus, ExportRunResult, ExportRunStatus,
+    )
+    dialog = _build_dialog(monkeypatch, tmp_path)
+    path = tmp_path / "result.xlsx"
+    path.touch()
+    completed = status in {"complete", "complete_with_omissions"}
+    result = ExportRunResult(ExportRunStatus(status), (ExportArtifactResult(
+        "workbook", "Workbook", ExportArtifactStatus.COMPLETE if completed else ExportArtifactStatus.FAILED,
+        True, str(path),
+    ),), ())
+    opened, revealed = [], []
+    monkeypatch.setattr(export_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(export_dialog, "reveal_file_in_explorer", lambda path: revealed.append(Path(path)))
+    dialog.export_thread = types.SimpleNamespace(export_run_result=result, completion_metadata={})
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *args, **kw: None)
+    try:
+        dialog.on_export_finished()
+        row = dialog.last_result_row
+        assert not row.isHidden()
+        assert "Last export" in row.summary.text()
+        assert {"complete": "completed", "complete_with_omissions": "completed with warnings"}.get(status, status) in row.summary.text()
+        import re
+        assert re.search(r"\b\d{2}:\d{2}\b", row.summary.text())
+        assert bool(row.findChildren(export_dialog.QPushButton)) == completed
+        assert (path.name in row.summary.text()) == completed
+        for button in row.findChildren(export_dialog.QPushButton):
+            button.click()
+        assert [url.toLocalFile() for url in opened] == ([str(path)] if completed else [])
+        assert revealed == ([path] if completed else [])
+        if completed:
+            warnings = []
+            monkeypatch.setattr(export_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+            path.unlink()
+            for button in row.findChildren(export_dialog.QPushButton):
+                button.click()
+            assert len(opened) == len(revealed) == 1
+            assert all("was moved or deleted" in warning and str(path) in warning for warning in warnings)
+            assert len(warnings) == 2
+    finally:
+        dialog.export_thread = None
+        dialog.close()
+
+
+def test_w1_local_link_opens_named_file_and_uses_basename(monkeypatch, tmp_path):
+    _app()
+    path = tmp_path / "work book.xlsx"
+    path.touch()
+    opened = []
+    monkeypatch.setattr(export_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(export_dialog, "reveal_file_in_explorer", lambda path: pytest.fail("link must open"))
+    uri = path.resolve().as_uri()
+    export_dialog.handle_export_result_link(None, uri, excel_file=path)
+    assert opened[0].toLocalFile() == str(path)
+    linked = export_dialog.format_message_with_clickable_links(uri)
+    assert f'>{path.name}</a>' in linked
+    assert f'href="{uri}"' in linked
