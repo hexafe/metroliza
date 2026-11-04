@@ -2,6 +2,7 @@
 
 from time import monotonic
 from dataclasses import replace
+from datetime import date
 
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
@@ -810,6 +811,8 @@ class ExportDialog(QDialog):
         configure_accessibility(self.preset_combobox, name="Export preset")
         configure_accessibility(self.select_db_button, name="Select export database")
         configure_accessibility(self.select_excel_button, name="Select output workbook")
+        configure_accessibility(self.database_text_label, name="Export source database")
+        configure_accessibility(self.excel_file_text_label, name="Export output path")
         configure_accessibility(self.filter_button, name="Edit export filters")
         configure_accessibility(self.clear_filter_button, name="Clear export filters")
         configure_accessibility(self.group_button, name="Edit export grouping")
@@ -1293,23 +1296,19 @@ class ExportDialog(QDialog):
         """Prompt for an output path and avoid immediate name collisions."""
         try:
             html_only = self._is_html_dashboard_only()
-            if str(self.db_file or "").strip():
-                default_name = str(Path(str(self.db_file)).with_suffix(""))
-                if html_only:
-                    default_name = f"{default_name}_dashboard.html"
-                elif not default_name.endswith(".xlsx"):
-                    default_name += ".xlsx"
-                file_path = Path(default_name)
+            if str(self.excel_file or "").strip():
+                file_path = Path(str(self.excel_file))
             else:
-                file_path = Path.home() / ("export_dashboard.html" if html_only else "export.xlsx")
-            base_name = file_path.stem
-            suffix = file_path.suffix
-            directory = file_path.parent
-
-            counter = 1
-            while file_path.exists():
-                file_path = directory / f"{base_name}_{counter}{suffix}"
-                counter += 1
+                database = Path(str(self.db_file)) if str(self.db_file or "").strip() else None
+                directory = database.parent if database else Path.home()
+                stem = database.stem if database else "export"
+                suffix = "_dashboard.html" if html_only else ".xlsx"
+                file_path = directory / f"{stem}_{date.today().isoformat()}{suffix}"
+                base_name, extension = file_path.stem, file_path.suffix
+                counter = 1
+                while file_path.exists():
+                    file_path = directory / f"{base_name}_{counter}{extension}"
+                    counter += 1
 
             dialog_title = "Select an HTML dashboard file" if html_only else "Select an Excel file"
             file_filter = "HTML dashboard (*.html);;All files (*)" if html_only else "Excel workbook (*.xlsx);;All files (*)"

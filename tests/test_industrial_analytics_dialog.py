@@ -416,6 +416,9 @@ def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_def
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
+        assert dialog.input_file_field.accessibleName() == "CSV or Excel input file"
+        assert dialog.dashboard_path_field.accessibleName() == "CSV Summary dashboard output path"
+        assert dialog.workbook_path_field.accessibleName() == "CSV Summary workbook output path"
         assert dialog.advanced_toggle_button.text() == "Show advanced options"
         assert dialog.advanced_options_container.isHidden()
         assert dialog.time_series_checkbox.parent() == dialog.advanced_options_container

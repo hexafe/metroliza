@@ -783,8 +783,98 @@ def separator():
     return frame
 
 
+class _PathField(QLineEdit):
+    """Keep the full path in Qt's value/accessibility model; elide only paint."""
+
+    def __init__(self):
+        super().__init__()
+        self.setAccessibleName("File or folder path")
+        self.textChanged.connect(self._sync_path_metadata)
+
+    def _sync_path_metadata(self, text):
+        self.setToolTip(text)
+        self.setAccessibleDescription(text)
+
+    def _text_rect(self):
+        from PyQt6.QtWidgets import QStyle, QStyleOptionFrame
+
+        option = QStyleOptionFrame()
+        self.initStyleOption(option)
+        rect = self.style().subElementRect(QStyle.SubElement.SE_LineEditContents, option, self)
+        margins = self.textMargins()
+        return rect.adjusted(margins.left() + 2, margins.top(), -margins.right() - 2, -margins.bottom())
+
+    def displayText(self):
+        from PyQt6.QtCore import Qt
+
+        text = self.text()
+        metrics = self.fontMetrics()
+        width = self._text_rect().width()
+        if not self.toolTip() or metrics.horizontalAdvance(text) <= width:
+            return text
+        end = text.rstrip("/\\")
+        split = max(end.rfind("/"), end.rfind("\\")) + 1
+        directory, name = text[:split], text[split:]
+        remaining = width - metrics.horizontalAdvance(name)
+        if remaining < metrics.horizontalAdvance("\u2026"):
+            # A segment wider than the entire field cannot be shown in full.
+            return metrics.elidedText(name, Qt.TextElideMode.ElideLeft, width)
+        return metrics.elidedText(directory, Qt.TextElideMode.ElideMiddle, remaining) + name
+
+    def paintEvent(self, event):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QStyle, QStyleOptionFrame, QStylePainter
+
+        painter = QStylePainter(self)
+        option = QStyleOptionFrame()
+        self.initStyleOption(option)
+        painter.drawPrimitive(QStyle.PrimitiveElement.PE_PanelLineEdit, option)
+        rect = self._text_rect()
+        painter.setClipRect(rect)
+        role = QPalette.ColorRole.Text
+        if self.hasSelectedText():
+            painter.fillRect(rect, self.palette().highlight())
+            role = QPalette.ColorRole.HighlightedText
+        painter.drawItemText(
+            rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self.palette(), self.isEnabled(), self.displayText(), role,
+        )
+
+    def copy(self):
+        QApplication.clipboard().setText(self.text())
+
+    def keyPressEvent(self, event):
+        from PyQt6.QtGui import QKeySequence
+
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def createStandardContextMenu(self, *args):
+        from PyQt6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.addAction("Copy", self.copy)
+        menu.addAction("Copy path", self.copy)
+        menu.addSeparator()
+        menu.addAction("Select All", self.selectAll)
+        return menu
+
+    def contextMenuEvent(self, event):
+        from PyQt6 import sip
+
+        menu = self.createStandardContextMenu()
+        try:
+            menu.exec(event.globalPos())
+        finally:
+            if not sip.isdeleted(menu):
+                menu.deleteLater()
+
+
 def path_field(value="", *, empty_text="None selected"):
-    field = QLineEdit()
+    field = _PathField()
     field.setReadOnly(True)
     field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     field.setMinimumWidth(120)
@@ -796,6 +886,8 @@ def update_path_field(field, value, *, empty_text="None selected"):
     text = str(value or "").strip()
     field.setText(text if text else empty_text)
     field.setToolTip(text if text else "")
+    if hasattr(field, "setAccessibleDescription"):
+        field.setAccessibleDescription(text)
     if text and hasattr(field, "setCursorPosition"):
         field.setCursorPosition(0)
 
