@@ -53,6 +53,7 @@ from metroliza.charts.dashboard_visual_options import (
     load_dashboard_visual_settings,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, set_mnemonic
 from metroliza.industrial.industrial_analytics_service import discover_production_metric_candidates
 from metroliza.ui.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
 from metroliza.industrial.industrial_analytics_state import (
@@ -1283,6 +1284,8 @@ class IndustrialAnalyticsDialog(QDialog):
             self.filters_button.setText("Filter cached rows...")
         else:
             self.filters_button.setText("Filter rows...")
+        if not self.is_production_source:
+            set_mnemonic(self.filters_button, "f")
         self.clear_filter_button.setVisible(show_tabular)
         self.dashboard_interactivity_row_label.setVisible(show_tabular)
         self.dashboard_interactivity_summary_label.setVisible(show_tabular)
@@ -1328,6 +1331,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.advanced_toggle_button.setText(
             "Hide advanced options" if show_advanced and expanded else "Show advanced options"
         )
+        if show_advanced:
+            set_mnemonic(self.advanced_toggle_button, "a")
 
     def _sync_tabular_source_status(self) -> None:
         if not hasattr(self, "tabular_source_status_label"):
@@ -2494,6 +2499,8 @@ class IndustrialAnalyticsDialog(QDialog):
                 if needs_reload
                 else "Load CSV/Excel data and detect metrics"
             )
+        if not self.is_production_source:
+            apply_dialog_mnemonics(self, "csv_summary")
         self._sync_filter_visibility()
         groupstats_unavailable_reason = self._tabular_groupstats_unavailable_reason()
         groupstats_available = groupstats_unavailable_reason is None

@@ -2686,6 +2686,7 @@
       "include": [
         "tests/**",
         "tests/test_export_dialog_shortcuts.py",
+        "tests/test_modify_csv_shortcuts.py",
         "tests/test_qt_teardown.py",
         "tests/test_qt_teardown_calls.py"
       ],

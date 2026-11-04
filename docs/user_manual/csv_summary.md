@@ -1,5 +1,26 @@
 # CSV Summary
 
+## Keyboard shortcuts
+
+**F1** opens this window's manual. In the CSV Summary launcher:
+
+| Shortcut | Action |
+|---|---|
+| Alt+B | Browse for input files |
+| Alt+M | Load or refresh data and metrics |
+| Alt+F / Alt+T | Filter rows / Clear filter |
+| Alt+O / Alt+L | Choose metrics / Edit limits |
+| Alt+E / Alt+G | Edit groups / Clear groups |
+| Alt+R / Alt+W | Browse for dashboard / workbook output |
+| Alt+A | Show or hide advanced options |
+| Alt+Y | Create analytics |
+| Alt+C | Close |
+
+Button tooltips also show these shortcuts. Disabled or hidden controls do nothing;
+an open modal dialog owns its own keyboard commands. The launcher has no search
+field, so it does not bind Ctrl+F. The Industrial cache presentation uses the same
+visible button shortcuts and its own Industrial Data manual on F1.
+
 ## When To Use CSV Summary
 
 Use **CSV Summary** when you want to analyze a CSV or Excel file without first creating a

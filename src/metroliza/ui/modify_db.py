@@ -30,6 +30,7 @@ from metroliza.reports.report_edit_service import (
     ReportEditService,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
 from metroliza.ui.modify_db_records import (
     FILTER_DEBOUNCE_MS,
     RecordBusyBanner,
@@ -189,6 +190,14 @@ class ModifyDB(QDialog):
             self.create_widgets()
             self.arrange_layout()
             self.connect_signals()
+            apply_dialog_mnemonics(self, "modify")
+            self.search_action = bind_search_shortcut(self, [
+                (self.reference_filter_edit, self.reference_table),
+                (self.part_number_filter_edit, self.part_number_table),
+                (self.header_filter_edit, self.header_table),
+                (self.report_filter_edit, self.report_records_table),
+                (self.measurement_filter_edit, self.measurement_records_table),
+            ])
             apply_metroliza_theme(self)
             if self.db_file:
                 ModifyDB._refresh_tables_for_view(self)
