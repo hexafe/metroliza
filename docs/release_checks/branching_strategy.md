@@ -95,8 +95,8 @@ must be reconciled into `develop` and any active release line where applicable.
 ### `master`
 
 `master`: current production-ready branch and historical/default production anchor. It represents
-the last accepted production state; the historical `2026.06 RC2` candidate is not approved for
-promotion while #901 remains open. Only reviewed, release-owner-approved candidate merges and
+the last accepted production state; the historical `2026.06 RC2` cycle was closed without a release
+(#901, 2026-11-04) and is not a promotion candidate. Only reviewed, release-owner-approved candidate merges and
 minimal production hotfixes belong here.
 
 `master` is not a development base. Its default-branch status does not authorize feature/refactor
@@ -179,7 +179,7 @@ branches instead of one product-wide change set.
 
 - Release candidate branches: `release/YYYY.MM-rcN`
   - Current: `release/2026.09-rc1`
-  - Historical retained example: `release/2026.06-rc2`
+  - Historical example (retired 2026-11-04, tag `archive/2026.06-rc2/final`): `release/2026.06-rc2`
 - Hotfix branches: `hotfix/<version>-<description>`
   - Example: `hotfix/2026.09.1-startup-fix`
 
@@ -315,8 +315,8 @@ Not allowed:
 - After production promotion, tag the approved merge commit on `master` as `vYYYY.MM`.
 - Do not move or recreate a published tag. Create a new `-rcN` or patch version.
 - Hotfix versions must progress monotonically according to the selected release scheme.
-- Do not tag `release/2026.06-rc2` as stable until #901 and the final release-owner decision are
-  complete.
+- The 2026.06 RC2 line is never tagged as stable: its cycle closed without a release (#901); its
+  head is preserved only as the recovery tag `archive/2026.06-rc2/final`.
 
 ## 8) Branch lifecycle and housekeeping
 
@@ -426,6 +426,6 @@ Keep `develop` and `master` in their current roles. Keep a `release/*` branch on
 named active release, support or evidence obligation, recorded with an owner and a retirement
 trigger (section 0). Preserve historical release points as verified immutable recovery refs
 (annotated `archive/...` tags or retained PR refs) rather than keeping old release branches. There is
-no fixed count of retained release branches. Retire the historical `rc2` only through its recorded
-release-transition decision; default-branch renaming and release promotion remain separate actions.
+no fixed count of retained release branches. Retire the historical `rc2` when its retirement trigger in
+section 0 is met (#1187 links), through the exact-ref gate; default-branch renaming and release promotion remain separate actions.
 
