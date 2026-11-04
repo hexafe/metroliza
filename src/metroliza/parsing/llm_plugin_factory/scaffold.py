@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from metroliza.parsing.parser_plugin_paths import default_external_plugin_dir_display
+from metroliza.shared.docs_links import github_blob_url
 
 
 @dataclass(frozen=True)
@@ -99,10 +100,6 @@ def _workspace_replacements(
         "SAMPLE_FILE_NAME": sample_file_name,
         "INSTALL_PATH": f"{default_external_plugin_dir_display()}/{normalized_plugin_id}.py",
     }
-
-
-def _github_source_url(path: str) -> str:
-    return f"https://github.com/hexafe/metroliza/blob/rc2/{path}"
 
 
 def _prompt_order_from_known_files(
@@ -423,12 +420,12 @@ Use this checklist before sharing a parser handoff package with any external LLM
 These links are supplemental. The contract files in this folder contain the minimum API details needed
 when the LLM has no repository access.
 
-- Parser contracts: {_github_source_url("src/metroliza/parsing/parser_plugin_contracts.py")}
-- Base parser bridge: {_github_source_url("src/metroliza/parsing/base_report_parser.py")}
-- Parser factory selection: {_github_source_url("src/metroliza/parsing/report_parser_factory.py")}
-- Validation helper: {_github_source_url("src/metroliza/parsing/parser_plugin_validation.py")}
-- Declarative profiles: {_github_source_url("src/metroliza/parsing/declarative_parser_profiles.py")}
-- Parser plugin docs: {_github_source_url("docs/parser_plugins/parser_plugin_specification.md")}
+- Parser contracts: {github_blob_url("src/metroliza/parsing/parser_plugin_contracts.py")}
+- Base parser bridge: {github_blob_url("src/metroliza/parsing/base_report_parser.py")}
+- Parser factory selection: {github_blob_url("src/metroliza/parsing/report_parser_factory.py")}
+- Validation helper: {github_blob_url("src/metroliza/parsing/parser_plugin_validation.py")}
+- Declarative profiles: {github_blob_url("src/metroliza/parsing/declarative_parser_profiles.py")}
+- Parser plugin docs: {github_blob_url("docs/parser_plugins/parser_plugin_specification.md")}
 """
 
     contract_files = {
