@@ -5,14 +5,43 @@ work. Current RC roles and qualification are recorded in [release status](releas
 The historical branch transition and automatic evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md).
 
-## 0) Active repository state — decision 2026-10-27
+## 0) Active repository state — decision 2026-11-04
+
+The Product Owner adopted **lifecycle-based branch retention** (escalation review: Codex
+`gpt-6-astra`; execution record in [#960](https://github.com/hexafe/metroliza/issues/960)):
+
+> Retain `master`, `develop`, active PR heads, and release branches with a named active release,
+> support, or evidence obligation. Record an owner and retirement trigger for each exception.
+> Preserve historical release points through verified immutable recovery refs; retire branches
+> through the exact-ref cleanup gate.
+
+There is no fixed number of retained release branches. A growing set of release refs triggers a
+lifecycle review; it does not delete or keep refs by count.
+
+The 2026.06 RC2 cycle was closed without a release (#901, not planned). `release/2026.06-rc2` was
+deleted under the gate; its head `1eeeab27` is preserved by the annotated tag
+`archive/2026.06-rc2/final` (a recovery point, not an accepted release). The stray
+`release/1158-build-261029` was deleted the same way (recovery: `refs/pull/1169/head`).
+
+Retained refs after this cleanup, each with its obligation:
+
+| Ref | Obligation | Owner | Retirement trigger |
+|---|---|---|---|
+| `master` | default branch, production/history anchor | repository owner | none (long-lived) |
+| `develop` | canonical integration branch | repository owner | none (long-lived) |
+| `release/2026.09-rc1` | active RC, frozen for manual acceptance of build 261031 (#1158) | release owner | release decision for 2026.09 RC1 (then tag and retire) |
+| `rc2` | live consumer: generated parser-plugin scaffolds link to `blob/rc2/...` (#1187), also in the frozen RC | repository owner | #1187 fixed on develop and the current RC no longer ships those links |
+
+Dependabot and other PR heads retire with their PRs.
+
+## 0.1) Repository state — decision 2026-10-27 (superseded 2026-11-04)
 
 Under [#1153](https://github.com/hexafe/metroliza/issues/1153), integrate #1109, #1142, the accepted
 STEP2+STEP3 aggregate and refreshed #1063 into develop using merge commits, then cut
 `release/2026.09-rc1` from the accepted final develop. Exact commits, trees and gates are in that
 execution ledger. Current candidate source is distinct from final packaged qualification.
 
-Keep seven refs after the finite cleanup: master, develop, release/2026.09-rc1, historical rc2,
+(Superseded: the current retained refs are listed in section 0.) Keep seven refs after the finite cleanup: master, develop, release/2026.09-rc1, historical rc2,
 historical release/2026.06-rc2, and the dependency branches for #972/#973. The two historical refs
 and two dependency branches are named exceptions to the ordinary small branch set. They remain
 until their own lifecycle/update criteria are met. No master promotion or published release.
@@ -26,7 +55,7 @@ Newly admitted release work must select its base explicitly: normally `develop`,
 `release/2026.09-rc1` after its source cut. The June base selection in the historical decision below
 applies only to explicitly admitted historical cycle work; it is not the current RC default.
 
-## 0.1) Historical repository state — decision 2026-08-22
+## 0.2) Historical repository state — decision 2026-08-22
 
 - `develop` is the canonical branch for new Issue-driven development.
 - `release/2026.06-rc2` is the frozen release-candidate/evidence branch for
@@ -51,7 +80,7 @@ third-party notice/artifact, and legal/release-owner evidence remains open in #9
 - `master` promotion/stable tag: **No-Go pending #901**.
 
 Because GitHub still presents `master` as the default branch, every new pull request must select
-its base explicitly: normally `develop`, or `release/2026.06-rc2` for approved release work.
+its base explicitly: normally `develop`, or `release/2026.06-rc2` for approved release work (historical; that branch was retired on 2026-11-04).
 
 Dependabot is an explicit platform exception. The checked-in `.github/dependabot.yml` policy sets
 normal version-update pull requests to target `develop`. GitHub reads that file from the configured
@@ -66,8 +95,8 @@ must be reconciled into `develop` and any active release line where applicable.
 ### `master`
 
 `master`: current production-ready branch and historical/default production anchor. It represents
-the last accepted production state; the historical `2026.06 RC2` candidate is not approved for
-promotion while #901 remains open. Only reviewed, release-owner-approved candidate merges and
+the last accepted production state; the historical `2026.06 RC2` cycle was closed without a release
+(#901, 2026-11-04) and is not a promotion candidate. Only reviewed, release-owner-approved candidate merges and
 minimal production hotfixes belong here.
 
 `master` is not a development base. Its default-branch status does not authorize feature/refactor
@@ -92,10 +121,11 @@ release fixes, qualification evidence and reviewed candidate metadata belong her
 Reconcile accepted fixes into develop. Final build/EXE qualification and release-owner Go remain
 separate from the source cut and repository cleanup.
 
-### `release/2026.06-rc2`
+### `release/2026.06-rc2` (retired 2026-11-04)
 
-Historical frozen stabilization/evidence branch; retain it unchanged for separate #901/#924
-cycle closure. The following original restrictions continue for explicitly admitted historical fixes. Allowed changes are limited to:
+Retired: the 2026.06 RC2 cycle closed without a release (#901). Recovery point:
+`archive/2026.06-rc2/final` → `1eeeab27`. The restrictions below are kept as the historical record of
+that line. Allowed changes were limited to:
 
 - release-blocking defects;
 - packaging/clean-machine fixes;
@@ -108,10 +138,9 @@ late-scope exception process.
 
 ### `rc2`
 
-Historical transition/reference branch. It preserves the long-running ad-hoc RC development line
-and external references during the transition. Do not branch new work from it or target routine
-pull requests at it after #900. Retire it only through a separate explicit cleanup after release
-reconciliation.
+Historical transition/reference branch (same commit as `archive/2026.06-rc2/final`). Do not branch new
+work from it or target pull requests at it. It is kept only because generated parser-plugin scaffolds
+link to `blob/rc2/...` (#1187); retire it through the exact-ref gate once that consumer is gone.
 
 ### `hotfix/*`
 
@@ -150,7 +179,7 @@ branches instead of one product-wide change set.
 
 - Release candidate branches: `release/YYYY.MM-rcN`
   - Current: `release/2026.09-rc1`
-  - Historical retained example: `release/2026.06-rc2`
+  - Historical example (retired 2026-11-04, tag `archive/2026.06-rc2/final`): `release/2026.06-rc2`
 - Hotfix branches: `hotfix/<version>-<description>`
   - Example: `hotfix/2026.09.1-startup-fix`
 
@@ -286,8 +315,8 @@ Not allowed:
 - After production promotion, tag the approved merge commit on `master` as `vYYYY.MM`.
 - Do not move or recreate a published tag. Create a new `-rcN` or patch version.
 - Hotfix versions must progress monotonically according to the selected release scheme.
-- Do not tag `release/2026.06-rc2` as stable until #901 and the final release-owner decision are
-  complete.
+- The 2026.06 RC2 line is never tagged as stable: its cycle closed without a release (#901); its
+  head is preserved only as the recovery tag `archive/2026.06-rc2/final`.
 
 ## 8) Branch lifecycle and housekeeping
 
@@ -393,8 +422,10 @@ long-lived refs plus genuinely active PR heads.
 
 ### Long-lived and historical release refs
 
-Keep `develop` and `master` in their current roles. Keep an active `release/*` branch only while
-its release/evidence cycle is open. Prefer immutable tags for historical release points rather than
-keeping old release branches indefinitely. Retire the historical `rc2` only through its recorded
-release-transition decision; default-branch renaming and release promotion remain separate actions.
+Keep `develop` and `master` in their current roles. Keep a `release/*` branch only while it has a
+named active release, support or evidence obligation, recorded with an owner and a retirement
+trigger (section 0). Preserve historical release points as verified immutable recovery refs
+(annotated `archive/...` tags or retained PR refs) rather than keeping old release branches. There is
+no fixed count of retained release branches. Retire the historical `rc2` when its retirement trigger in
+section 0 is met (#1187 links), through the exact-ref gate; default-branch renaming and release promotion remain separate actions.
 

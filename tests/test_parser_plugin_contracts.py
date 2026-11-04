@@ -1,6 +1,8 @@
 import importlib
 import json
 
+from metroliza.shared.docs_links import GITHUB_REPOSITORY_BASE_URL, current_release_docs_ref
+
 CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
 llm_plugin_factory = importlib.import_module("modules.llm_plugin_factory")
 build_plugin_scaffold = llm_plugin_factory.build_plugin_scaffold
@@ -171,6 +173,27 @@ def test_llm_plugin_workspace_bundle_contains_install_and_validation_guidance():
     assert "Metroliza owns database writes" in bundle["contracts/00_read_this_first.md"]
     assert "Strict matching requires confidence >= 80" in bundle["contracts/02_runtime_selection_contract.md"]
     assert "every parsed measurement row" in bundle["contracts/04_expected_results_contract.md"]
+
+
+def test_llm_plugin_scaffold_source_links_use_the_pinned_docs_ref():
+    bundle = build_plugin_workspace_bundle(plugin_id="supplier_alpha", source_format="pdf")
+    references = bundle["contracts/06_github_references.md"]
+    linked_paths = (
+        "src/metroliza/parsing/parser_plugin_contracts.py",
+        "src/metroliza/parsing/base_report_parser.py",
+        "src/metroliza/parsing/report_parser_factory.py",
+        "src/metroliza/parsing/parser_plugin_validation.py",
+        "src/metroliza/parsing/declarative_parser_profiles.py",
+        "docs/parser_plugins/parser_plugin_specification.md",
+    )
+
+    expected_links = [
+        f"{GITHUB_REPOSITORY_BASE_URL}/blob/{current_release_docs_ref()}/{path}"
+        for path in linked_paths
+    ]
+    for link in expected_links:
+        assert link in references
+    assert "github.com/hexafe/metroliza/blob/rc2/" not in references
 
 
 def test_llm_plugin_workspace_bundle_is_not_only_source_path_references():
