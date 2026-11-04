@@ -302,7 +302,6 @@ class FilterDialog(QDialog):
             self.date_to_calendar.setAccessibleName("Measurement date to")
             self.date_from_label.setBuddy(self.date_from_calendar)
             self.date_to_label.setBuddy(self.date_to_calendar)
-            self._update_date_field_state()
             self.date_error_label = QLabel("")
             ui_foundation.set_status_variant(self.date_error_label, "danger")
             self.header_availability_label = QLabel("")
@@ -377,6 +376,7 @@ class FilterDialog(QDialog):
 
             # Create a button to select the beginning of time
             self.select_beginning_button = QPushButton("Select beginning of time")
+            self._update_date_field_state()
             self.reset_button = QPushButton("Reset draft")
             self.cancel_button = QPushButton("Cancel")
             self.filter_summary_label = ui_foundation.status_chip("No active filters", variant="neutral")
@@ -885,6 +885,8 @@ class FilterDialog(QDialog):
         enabled = self.date_range_selector.currentText() != "All dates"
         self.date_from_calendar.setEnabled(enabled)
         self.date_to_calendar.setEnabled(enabled)
+        self.select_beginning_button.setEnabled(enabled)
+        self.select_today_button.setEnabled(enabled)
 
     def _set_date_preset_label(self, preset):
         blocked = self.date_range_selector.blockSignals(True)
@@ -907,15 +909,21 @@ class FilterDialog(QDialog):
         self._refresh_filter_summary()
 
     def _reconcile_date_preset(self):
-        """Keep concrete saved dates when a relative preset becomes stale."""
-        preset = self.date_range_selector.currentText()
+        """Refresh All dates; keep concrete dates for stale relative presets."""
+        selector = getattr(self, "date_range_selector", None)
+        if selector is None:
+            return
+        preset = selector.currentText()
         dates = self._preset_dates(preset)
-        if preset == "All dates" or dates is None:
+        if dates is None:
             return
         actual = (self.date_from_calendar.date(), self.date_to_calendar.date())
         if actual != dates:
             previous = self._draft_snapshot()
-            self._set_date_preset_label("Custom")
+            if preset == "All dates":
+                self._apply_date_preset(preset)
+            else:
+                self._set_date_preset_label("Custom")
             if previous == getattr(self, "_committed_draft_snapshot", None):
                 self._committed_draft_snapshot = self._draft_snapshot()
             self._refresh_filter_summary()
@@ -1233,6 +1241,7 @@ class FilterDialog(QDialog):
             self.log_and_exit(e)
 
     def apply_filters(self):
+        self._reconcile_date_preset()
         if not self._validate_date_range():
             self._set_filter_apply_enabled(False)
             return

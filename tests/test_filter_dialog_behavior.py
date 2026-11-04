@@ -667,6 +667,8 @@ def test_date_presets_fill_inclusive_ranges_and_summary(date_preset_dialog, pres
     assert dialog._is_dirty() == active
     assert dialog.date_from_calendar.isEnabled() == active
     assert dialog.date_to_calendar.isEnabled() == active
+    assert dialog.select_beginning_button.isEnabled() == active
+    assert dialog.select_today_button.isEnabled() == active
     assert preset in dialog.filter_summary_label.text()
     assert dialog.apply_button.isEnabled()
     if active:
@@ -835,14 +837,65 @@ def test_cancel_after_midnight_restores_other_conditions_and_concrete_dates(date
     assert not dialog._is_dirty()
 
 
-def test_all_dates_stays_inactive_after_midnight_without_moving_bounds(date_preset_dialog):
+@pytest.mark.parametrize("reopen", [False, True])
+@pytest.mark.parametrize("action", ["apply_filters", "accept"])
+def test_all_dates_refresh_after_midnight(date_preset_dialog, reopen, action):
     dialog, clock = date_preset_dialog
-    dialog.apply_filters()
-    dates = _date_pair(dialog)
-    clock.today = QDate(2026, 3, 2)
+    assert dialog.apply_filters() is True
     dialog.show()
+    _app().processEvents()
+    changes = []
+    dialog.date_from_calendar.dateChanged.connect(lambda date: changes.append(date))
+    dialog.date_to_calendar.dateChanged.connect(lambda date: changes.append(date))
+    if reopen:
+        dialog.reject()
+    clock.today = QDate(2026, 3, 2)
+    if reopen:
+        dialog.show()
+        _app().processEvents()
+        assert _date_pair(dialog) == ("1970-01-01", "2026-03-02")
+        assert not dialog._is_dirty()
+    getattr(dialog, action)()
+    assert _date_pair(dialog) == ("1970-01-01", "2026-03-02")
+    assert dialog.filter_query == filter_dialog.build_measurement_filter_query(
+        date_from="1970-01-01", date_to="2026-03-02",
+    )
+    assert changes == []
     assert dialog.date_range_selector.currentText() == "All dates"
-    assert _date_pair(dialog) == dates
+    assert dialog.filter_summary_label.text() == "No active filters | All dates"
     assert not dialog._has_active_draft()
     assert not dialog._has_custom_date_range()
+    assert not dialog._is_dirty()
+
+
+def test_all_dates_midnight_refresh_preserves_other_dirty_conditions(date_preset_dialog):
+    dialog, clock = date_preset_dialog
+    assert dialog.apply_filters() is True
+    dialog.expression_input.setText("Reference=REF1")
+    clock.today = QDate(2026, 3, 2)
+    dialog.show()
+    assert _date_pair(dialog) == ("1970-01-01", "2026-03-02")
+    assert dialog.expression_input.text() == "Reference=REF1"
+    assert dialog._is_dirty()
+    dialog.reject()
+    assert dialog.date_range_selector.currentText() == "All dates"
+    assert _date_pair(dialog) == ("1970-01-01", "2026-03-02")
+    assert dialog.expression_input.text() == ""
+    assert not dialog._is_dirty()
+
+
+@pytest.mark.parametrize("preset", ["Today", "Yesterday", "Last 7 days", "This month"])
+def test_relative_presets_become_custom_on_apply_after_midnight(date_preset_dialog, preset):
+    dialog, clock = date_preset_dialog
+    dialog.date_range_selector.setCurrentText(preset)
+    assert dialog.apply_filters() is True
+    dates, query = _date_pair(dialog), dialog.filter_query
+    dialog.show()
+    _app().processEvents()
+    clock.today = QDate(2026, 3, 2)
+    assert dialog.apply_filters() is True
+    assert dialog.date_range_selector.currentText() == "Custom"
+    assert _date_pair(dialog) == dates
+    assert dialog.filter_query == query
+    assert "Custom" in dialog.filter_summary_label.text()
     assert not dialog._is_dirty()
