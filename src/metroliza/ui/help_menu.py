@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import types
 
+from metroliza.ui.shortcuts import MAIN_SHORTCUTS, bind_shortcut
+
 from metroliza.shared.docs_links import (
     DEFAULT_RELEASE_DOCS_REF,
     GITHUB_REPOSITORY_BASE_URL,
@@ -152,10 +154,14 @@ def build_help_menu(parent, entries, *, menu_bar=None):
     """
     resolved_menu_bar = menu_bar or QMenuBar(parent)
     help_menu = resolved_menu_bar.addMenu('Help')
-    for label, manual_key in entries:
+    for index, (label, manual_key) in enumerate(entries):
         action = QAction(label, parent)
         action.triggered.connect(lambda _checked=False, key=manual_key, owner=parent: open_manual(owner, key))
         help_menu.addAction(action)
+        # Embedded Reports shares the shell's F1. A dialog owns its own manual.
+        if index == 0 and hasattr(action, 'setShortcut') and parent.isWindow():
+            bind_shortcut(action, MAIN_SHORTCUTS['manual'][0])
+            parent.addAction(action)
     return resolved_menu_bar, help_menu
 
 

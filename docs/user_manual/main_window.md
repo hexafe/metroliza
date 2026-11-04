@@ -36,6 +36,32 @@ their own primary pages. Their **Tools** menu shortcuts open the named workflow 
 raising an existing coordinated window when available; page actions open the same workflows. **Tools** also offers metadata enrichment
 for the current database. **Help** provides manuals, release notes and support actions.
 
+## Keyboard shortcuts
+
+Commands apply to the active window. Disabled commands do nothing. Main-window
+commands pause while a modal dialog is open; F1 opens that dialog's own manual
+when it has a Help menu. Alt underlines identify the main action buttons and menus.
+
+| Shortcut | Action |
+|---|---|
+| Ctrl+1 | Home |
+| Ctrl+2 | Reports |
+| Ctrl+3 | CSV Summary |
+| Ctrl+4 | Industrial Data |
+| Ctrl+5 | Realtime Monitor |
+| Ctrl+6 | Parser Profiles |
+| Ctrl+7 | Tools |
+| Ctrl+O | Open database… |
+| Ctrl+R | Review reports |
+| Ctrl+I | Import selected reports |
+| Ctrl+E | Export Workbook |
+| F1 | Manual of the active window |
+
+Review and Import use the current Reports selection and readiness, even from
+another page. Review starts the existing review/preflight action; Import requires
+an approved selection. Export opens the workbook workflow for the selected database.
+Standard editing and navigation keys keep their usual behavior.
+
 ## Report preparation and output
 
 The actions below the Reports planner open the existing database workflows.

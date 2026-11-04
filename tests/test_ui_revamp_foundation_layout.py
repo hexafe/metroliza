@@ -49,6 +49,7 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
             from PyQt6.QtWidgets import QApplication, QPushButton
             from modules.main_window import MainWindow
             from modules.parsing_dialog import ParsingDialog
+            from metroliza.ui.shortcuts import plain_text
 
             app = QApplication.instance() or QApplication([])
             main = MainWindow(version_label="test", days_until_expiration=None)
@@ -58,13 +59,13 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
             app.processEvents()
 
             available = app.primaryScreen().availableGeometry()
-            button_texts = [button.text() for button in main.findChildren(QPushButton)]
+            button_texts = [plain_text(button.text()) for button in main.findChildren(QPushButton)]
             print(json.dumps({
                 "main_size": [main.width(), main.height()],
                 "parsing_size": [parsing.width(), parsing.height()],
                 "available": [available.width(), available.height()],
                 "main_buttons": button_texts,
-                "home_actions": [button.text() for button in main.home_page.findChildren(QPushButton) if not button.isHidden()],
+                "home_actions": [plain_text(button.text()) for button in main.home_page.findChildren(QPushButton) if not button.isHidden()],
                 "reports_owns_export": main.reports_page.isAncestorOf(main.export_button),
                 "source_status": main.source_status_label.text(),
                 "database_status": main.database_status_label.text(),

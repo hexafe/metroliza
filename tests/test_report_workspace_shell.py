@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from dataclasses import replace
+from pathlib import Path
 import os
 import sqlite3
 import subprocess
@@ -12,13 +13,14 @@ from types import SimpleNamespace
 import pytest
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, Qt
-from PyQt6.QtGui import QPalette
+from PyQt6.QtGui import QAction, QKeySequence, QPalette, QShortcut
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton, QVBoxLayout
 
 from metroliza.ui.main_window import MainWindow
+from metroliza.ui.shortcuts import plain_text
 from metroliza.ui.ui_preferences import UiPreferences
-from metroliza.ui import ui_theme_tokens
+from metroliza.ui import help_menu, ui_theme_tokens
 from metroliza.ui.ui_foundation import apply_metroliza_application_theme
 from tests.test_report_planner_integration import reports as reports, wait_until
 
@@ -1133,25 +1135,29 @@ def test_home_paths_and_export_readiness(window, tmp_path, monkeypatch, table):
 
     assert isinstance(window.source_path_field, QLineEdit)
     assert window.source_path_field.isReadOnly() and window.database_path_field.isReadOnly()
-    assert not window.source_path_field.actions()[0].isEnabled()
+    menu = window.source_path_field.createStandardContextMenu()
+    assert not menu.actions()[1].isEnabled()
+    menu.deleteLater()
     assert window.set_directory(str(tmp_path))
-    assert window.source_path_field.actions()[0].isEnabled()
+    menu = window.source_path_field.createStandardContextMenu()
+    assert menu.actions()[1].isEnabled()
     assert window.source_path_field.toolTip() == str(tmp_path)
-    window.source_path_field.actions()[0].trigger()
+    menu.actions()[1].trigger()
+    menu.deleteLater()
     assert QApplication.clipboard().text() == str(tmp_path)
     assert window.set_db_file(str(tmp_path / "not-created.db"))
-    assert window.home_next_action.text() != "Export Workbook"
+    assert plain_text(window.home_next_action.text()) != "Export Workbook"
     assert str(tmp_path / "not-created.db") not in window.recent_locations.paths("databases")
     database = tmp_path / "reports.db"
     with closing(sqlite3.connect(database)) as connection:
         connection.execute(f"CREATE TABLE {table} (id INTEGER)")
         connection.commit()
         assert window.set_db_file(str(database))
-        assert window.home_next_action.text() != "Export Workbook"
+        assert plain_text(window.home_next_action.text()) != "Export Workbook"
         connection.execute(f"INSERT INTO {table} VALUES (1)")
         connection.commit()
     assert window.set_db_file(str(database))
-    assert window.home_next_action.text() == "Export Workbook"
+    assert plain_text(window.home_next_action.text()) == "Export Workbook"
     assert window.home_next_action.property("buttonRole") == "primary"
     assert window.home_review_action.property("buttonRole") == "secondary"
     assert not window.home_review_action.isHidden()
@@ -1163,18 +1169,18 @@ def test_home_paths_and_export_readiness(window, tmp_path, monkeypatch, table):
     assert window.export_button.property("buttonRole") == "primary"
     assert host.scan_button.property("buttonRole") == "secondary"
     assert window.set_db_file(str(tmp_path / "another-empty.db"))
-    assert window.home_next_action.text() != "Export Workbook"
+    assert plain_text(window.home_next_action.text()) != "Export Workbook"
     assert window.export_button.property("buttonRole") == "secondary"
     assert host.scan_button.property("buttonRole") == "primary"
 
 
 def test_import_success_promotes_export_and_green_status(app, window, reports):
     host, _, _ = prepare_review(app, window, reports)
-    assert window.home_next_action.text() != "Export Workbook"
+    assert plain_text(window.home_next_action.text()) != "Export Workbook"
     host.parse_button.click()
     wait_until(app, workspace_idle(host))
     assert "Import successful" in host.report_planner.outcome.toPlainText()
-    assert window.home_next_action.text() == "Export Workbook"
+    assert plain_text(window.home_next_action.text()) == "Export Workbook"
     assert window.recent_locations.paths("databases")[0] == window.db_file
     assert window.export_button.property("buttonRole") == "primary"
     assert host.scan_button.property("buttonRole") == "secondary"
@@ -1252,7 +1258,7 @@ def test_database_inspection_uses_plain_path_and_keeps_busy_database(window, tmp
     assert window.set_db_file(str(database))
     # No file: URI (SQLite rejects URI authorities such as UNC hosts).
     assert calls and calls[0] == ((str(database),), {"plain_path": True, "timeout_s": 0.1})
-    assert window.home_next_action.text() == "Export Workbook"
+    assert plain_text(window.home_next_action.text()) == "Export Workbook"
 
     monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", real_scope)
     other = tmp_path / "busy.db"
@@ -1271,3 +1277,209 @@ def test_database_inspection_uses_plain_path_and_keeps_busy_database(window, tmp
     broken.write_bytes(b"not a database" * 100)
     assert window.set_db_file(str(broken)) is False
     assert window.db_file == str(database) and len(warnings) == 1
+
+
+# Wave 1 P5a keyboard and shared path-menu regressions.
+def key(app, widget, sequence):
+    widget.window().activateWindow()
+    widget.setFocus()
+    app.processEvents()
+    combination = QKeySequence(sequence)[0]
+    QTest.keyClick(widget, combination.key(), combination.keyboardModifiers())
+    app.processEvents()
+
+
+def action_for(window, sequence):
+    matches = [action for action in window.findChildren(QAction)
+               if action.shortcut().toString() == sequence]
+    assert len(matches) == 1, (sequence, matches)
+    return matches[0]
+
+
+def test_global_navigation_and_menu_shortcuts(app, window, monkeypatch):
+    assert window._reports_workspace is None
+    for index in range(window.navigation_list.count()):
+        key(app, window.navigation_list, f"Ctrl+{index + 1}")
+        assert window.navigation_list.currentRow() == index
+    for width in (640, 1200):
+        window.resize(width, 800)
+        key(app, window.navigation_combo, "Ctrl+1")
+        assert window.navigation_combo.currentIndex() == 0
+    page_action = action_for(window, "Ctrl+2")
+    page_action.setEnabled(False)
+    key(app, window.navigation_list, "Ctrl+2")
+    page_action.trigger()
+    assert window.navigation_list.currentRow() == 0
+    page_action.setEnabled(True)
+    calls = []
+    monkeypatch.setattr("metroliza.ui.main_window.QFileDialog.getOpenFileName",
+                        lambda *_: (calls.append("open") or "", ""))
+    key(app, window.navigation_list, "Ctrl+O")
+    assert calls == ["open"]
+    assert window.open_database_action.shortcut().toString() == "Ctrl+O"
+    window.open_database_action.setEnabled(False)
+    key(app, window.navigation_list, "Ctrl+O")
+    window.open_database_action.trigger()
+    assert calls == ["open"]
+
+
+@pytest.mark.parametrize("sequence,button", [("Ctrl+R", "scan_button"), ("Ctrl+I", "parse_button")])
+def test_reports_shortcut_uses_enabled_button(app, window, monkeypatch, sequence, button):
+    host = window.reports_workspace
+    control = getattr(host, button)
+    control.clicked.disconnect()
+    calls = []
+    control.clicked.connect(lambda: calls.append(button))
+    for enabled in (False, True, False):
+        control.setEnabled(enabled)
+        window._sync_workflow_next_step()
+        action = action_for(window, sequence)
+        assert action.isEnabled() == enabled
+        window._show_workspace_page("home")
+        before = len(calls)
+        key(app, window.home_next_action, sequence)
+        action.trigger()
+        assert len(calls) == before + (2 if enabled else 0)
+        if enabled:
+            assert window.navigation_combo.currentData() == "reports"
+        assert sequence in control.toolTip()
+
+
+def test_review_shortcut_creates_lazy_workspace(app, window, monkeypatch, tmp_path):
+    from metroliza.ui.parsing_dialog import ReportsWorkspace
+
+    calls = []
+    monkeypatch.setattr(ReportsWorkspace, "scan_reports", lambda self: calls.append(self))
+    window.set_directory(str(tmp_path))
+    window.set_db_file(str(tmp_path / "new.db"))
+    assert window._reports_workspace is None
+    key(app, window.home_next_action, "Ctrl+R")
+    assert calls == [window._reports_workspace]
+    assert window.navigation_combo.currentData() == "reports"
+
+
+def test_export_shortcut_follows_readiness(app, window, monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(window, "launch_export_dialog", lambda: calls.append("export"))
+    # Use the existing button connection, with its heavy workflow replaced.
+    window.export_button.clicked.disconnect()
+    window.export_button.clicked.connect(window.launch_export_dialog)
+    for enabled in (False, True, False):
+        window.db_file = str(tmp_path / "test.db") if enabled else None
+        window._sync_workflow_next_step()
+        action = action_for(window, "Ctrl+E")
+        assert action.isEnabled() == enabled
+        before = len(calls)
+        key(app, window.home_next_action, "Ctrl+E")
+        action.trigger()
+        assert len(calls) == before + (2 if enabled else 0)
+    assert "Ctrl+E" in window.export_button.toolTip()
+
+
+def test_f1_main_including_embedded_reports(app, window, monkeypatch):
+    opened = []
+    monkeypatch.setattr(help_menu, "open_manual", lambda owner, name: opened.append((owner, name)))
+    host = window.reports_workspace
+    for control in (window.home_next_action, host.scan_button):
+        window._show_workspace_page("reports" if control is host.scan_button else "home")
+        key(app, control, "F1")
+    assert opened == [(window, "main_window")] * 2
+    action = action_for(window, "F1")
+    assert action in window.help_menu.actions()
+    action.setEnabled(False)
+    key(app, host.scan_button, "F1")
+    action.trigger()
+    assert opened == [(window, "main_window")] * 2
+
+
+@pytest.mark.parametrize("manual", help_menu.MANUAL_RELATIVE_PATHS)
+@pytest.mark.parametrize("modal", [False, True])
+def test_dialog_f1_and_main_shortcut_isolation(app, window, monkeypatch, manual, modal):
+    opened, calls = [], []
+    monkeypatch.setattr(help_menu, "open_manual", lambda owner, name: opened.append((owner, name)))
+    monkeypatch.setattr("metroliza.ui.main_window.QFileDialog.getOpenFileName",
+                        lambda *_: (calls.append("open") or "", ""))
+    dialog = QDialog(window)
+    layout = QVBoxLayout(dialog)
+    _, menu = help_menu.attach_help_menu_to_layout(layout, dialog, [("Window manual", manual),
+                                                                 ("Other manual", "main_window")])
+    button = QPushButton("Focus", dialog)
+    layout.addWidget(button)
+    dialog.setModal(modal)
+    dialog.show()
+    try:
+        for sequence in ("Ctrl+2", "Ctrl+O", "Ctrl+R", "Ctrl+I", "Ctrl+E"):
+            key(app, button, sequence)
+        assert window.navigation_list.currentRow() == 0 and calls == []
+        key(app, button, "F1")
+        assert opened == [(dialog, manual)]
+        assert menu.actions()[0].shortcut().toString() == "F1"
+        assert menu.actions()[1].shortcut().isEmpty()
+        menu.actions()[0].setEnabled(False)
+        key(app, button, "F1")
+        menu.actions()[0].trigger()
+        assert opened == [(dialog, manual)]
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_main_shortcut_and_mnemonic_inventory(window):
+    window.reports_workspace
+    sequences = [shortcut.toString() for action in window.findChildren(QAction)
+                 for shortcut in action.shortcuts() if not shortcut.isEmpty()]
+    sequences.extend(shortcut.key().toString() for shortcut in window.findChildren(QShortcut))
+    assert len(sequences) == len(set(sequences))
+    expected = {"Ctrl+O", "Ctrl+R", "Ctrl+I", "Ctrl+E", "F1"}
+    expected.update(f"Ctrl+{index + 1}" for index in range(min(9, window.navigation_list.count())))
+    assert set(sequences) == expected
+    reserved = {f"Ctrl+{letter}" for letter in "CVXZY A".replace(" ", "")}
+    reserved.update(("Tab", "Return", "Enter", "Space", "Delete", "Backspace", "Left", "Right",
+                     "Up", "Down", "Home", "End", "PgUp", "PgDown"))
+    assert not set(sequences) & reserved
+    assert all(action.shortcutContext() == Qt.ShortcutContext.WindowShortcut
+               for action in window.findChildren(QAction) if not action.shortcut().isEmpty())
+    controls = [window.home_next_action, window.home_review_action, window.home_cancel_report,
+                window.modifydb_button, window.map_characteristics_button, window.export_button,
+                window.reports_workspace.scan_button, window.reports_workspace.parse_button]
+    labels = [action.text() for action in window.menuBar().actions()] + [button.text() for button in controls]
+    mnemonics = [text[text.index("&") + 1].lower() for text in labels if "&" in text]
+    assert len(mnemonics) == len(labels) == len(set(mnemonics))
+    button_keys = [button.shortcut().toString() for button in window.findChildren(QPushButton)
+                   if not button.shortcut().isEmpty()]
+    assert len(button_keys) == len(set(button_keys))
+    assert all("&" not in button.accessibleName() for button in controls)
+
+
+def test_definitions_match_manual_and_actions(window):
+    from metroliza.ui.shortcuts import MAIN_SHORTCUTS, PAGE_SHORTCUTS
+
+    manual = Path("docs/user_manual/main_window.md").read_text()
+    for sequence, description in MAIN_SHORTCUTS.values():
+        assert f"| {sequence} | {description} |" in manual
+        action_for(window, sequence)
+    for sequence in PAGE_SHORTCUTS[:window.navigation_list.count()]:
+        assert sequence in manual
+        action_for(window, sequence)
+
+
+@pytest.mark.parametrize("name", ["source_path_field", "database_path_field"])
+def test_home_shared_context_menu(window, tmp_path, name):
+    field = getattr(window, name)
+    assert field.contextMenuPolicy() == Qt.ContextMenuPolicy.DefaultContextMenu
+    assert field.actions() == []
+    menu = field.createStandardContextMenu()
+    try:
+        assert not menu.actions()[1].isEnabled()
+    finally:
+        menu.deleteLater()
+    value = str(tmp_path) if name == "source_path_field" else str(tmp_path / "new.db")
+    (window.set_directory if name == "source_path_field" else window.set_db_file)(value)
+    menu = field.createStandardContextMenu()
+    try:
+        menu.actions()[1].trigger()
+        assert QApplication.clipboard().text() == value
+        assert field.text() == value
+        assert field.toolTip() == value
+    finally:
+        menu.deleteLater()

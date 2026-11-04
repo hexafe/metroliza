@@ -8,6 +8,8 @@ import unittest
 import pytest
 from unittest.mock import patch
 
+from metroliza.ui.shortcuts import plain_text
+
 try:
     from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, pyqtSignal
     from PyQt6.QtGui import QCloseEvent
@@ -534,23 +536,23 @@ class TestMainWindowMetadataUi(unittest.TestCase):
     def test_workflow_next_step_tracks_source_and_database_context(self):
         window = self._main_window()
         try:
-            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports")
             self.assertIn("Select a source and database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_directory("/tmp/metroliza-reports")
-            self.assertEqual(window.home_next_action.text(), "Choose database in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Choose database in Reports")
             self.assertIn("Select or create a database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_db_file("/tmp/metroliza.db")
-            self.assertEqual(window.home_next_action.text(), "Review reports in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Review reports in Reports")
             self.assertIn("Ready to review", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
             self.assertFalse(window.reports_workspace.parse_button.isEnabled())
 
             window.set_directory("")
-            self.assertEqual(window.home_next_action.text(), "Choose reports in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports")
             self.assertTrue(window.export_button.isEnabled())
         finally:
             window.close()
