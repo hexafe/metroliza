@@ -717,6 +717,34 @@ def test_w1_actions_check_missing_files_and_open_failure(monkeypatch, tmp_path, 
     assert path.name in warnings[-1]
 
 
+def test_w1_failed_shell_reveal_warns_instead_of_raising(monkeypatch, tmp_path):
+    # Raised inside a Qt slot this would abort the app (no sys.excepthook).
+    import subprocess
+    from metroliza.ui.result_actions import activate_result_file
+
+    _app()
+    path = tmp_path / "out.xlsx"
+    path.touch()
+    warnings = []
+    monkeypatch.setattr(export_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+
+    def failing_reveal(_path):
+        raise subprocess.CalledProcessError(3, ["xdg-open", str(tmp_path)])
+
+    activate_result_file(None, path, reveal=failing_reveal)
+    assert str(path) in warnings[-1] and "CalledProcessError" in warnings[-1]
+
+
+def test_w1_local_folder_link_opens_folder(monkeypatch, tmp_path):
+    _app()
+    opened, warnings = [], []
+    monkeypatch.setattr(export_dialog.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    monkeypatch.setattr(export_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    export_dialog.handle_export_result_link(None, tmp_path.resolve().as_uri())
+    assert [url.toLocalFile() for url in opened] == [str(tmp_path.resolve())]
+    assert warnings == []
+
+
 @pytest.mark.parametrize("status", ["complete", "complete_with_omissions", "cancelled", "failed"])
 def test_w1_export_retains_typed_outcome_after_acknowledge(monkeypatch, tmp_path, status):
     from metroliza.exporting.export_outcomes import (

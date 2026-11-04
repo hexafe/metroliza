@@ -724,7 +724,7 @@ class TestShowExportResultMessage(_ExportPresetFlowStubCase):
             file_path = Path(tmpdir) / 'out.xlsx'
             file_path.write_text('content', encoding='utf-8')
 
-            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.activate_result_file') as open_file_mock:
+            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.open_local_link') as open_file_mock:
                 handle_export_result_link(parent=None, url=file_path.resolve().as_uri(), excel_file=str(file_path))
 
         reveal_mock.assert_not_called()
@@ -745,7 +745,7 @@ class TestShowExportResultMessage(_ExportPresetFlowStubCase):
             file_path = Path(tmpdir) / 'dashboard.html'
             file_path.write_text('<html></html>', encoding='utf-8')
 
-            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.activate_result_file') as open_file_mock:
+            with patch('modules.export_dialog.reveal_file_in_explorer') as reveal_mock, patch('modules.export_dialog.open_local_link') as open_file_mock:
                 handle_export_result_link(parent=None, url=file_path.resolve().as_uri(), excel_file='')
 
         reveal_mock.assert_not_called()

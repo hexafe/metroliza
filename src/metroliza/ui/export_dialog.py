@@ -18,7 +18,7 @@ from metroliza.exporting.export_dialog_service import (
 )
 from metroliza.exporting.export_outcomes import sanitize_export_diagnostics, derive_export_run_result
 from metroliza.ui.result_actions import (
-    LastResultRow, activate_result_file, add_result_actions, export_result_files,
+    LastResultRow, add_result_actions, export_result_files, open_local_link,
 )
 from metroliza.exporting.output_publication import (
     OutputConsent, conflicting_outputs, free_copy_path, output_paths,
@@ -141,7 +141,7 @@ def handle_export_result_link(parent, url, excel_file=None):
     """Open the named local file; preserve remote/Google link handling."""
     parsed = QUrl(str(url or ""))
     if parsed.isLocalFile():
-        activate_result_file(parent, parsed.toLocalFile())
+        open_local_link(parent, parsed.toLocalFile())
     else:
         QDesktopServices.openUrl(parsed)
 

@@ -1,5 +1,6 @@
 """In-session result access shared by Export and CSV Summary."""
 
+import logging
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -8,6 +9,9 @@ from PyQt6 import sip
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QLabel, QMessageBox, QPushButton, QHBoxLayout, QVBoxLayout, QWidget
+
+
+logger = logging.getLogger(__name__)
 
 
 def existing_result_files(paths):
@@ -37,10 +41,23 @@ def activate_result_file(parent, path, _checked=False, *, reveal=None):
             reveal(path)
         elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))):
             QMessageBox.warning(parent, "Unable to open output", f"Could not open {path}. Check its associated application and try again.")
-    except (OSError, ValueError, RuntimeError) as exc:
+    except Exception as exc:
+        # Called from Qt slots: an escaping exception (e.g. a failed shell reveal,
+        # subprocess.CalledProcessError) would abort the process.
+        logger.warning("Opening result %s failed: %s", path, type(exc).__name__)
         # A nested native dialog may have destroyed the owner.
         if parent is None or not sip.isdeleted(parent):
             QMessageBox.warning(parent, "Unable to open output", f"Could not open {path}. Check that it exists and try again.\n{type(exc).__name__}")
+
+
+def open_local_link(parent, path):
+    """Open a local link target: folders as folders, files with the click-time checks."""
+    path = Path(path)
+    if path.is_dir():
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))):
+            QMessageBox.warning(parent, "Unable to open folder", f"Could not open {path}.")
+        return
+    activate_result_file(parent, path)
 
 
 def _reveal(path):
