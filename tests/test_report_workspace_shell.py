@@ -33,6 +33,7 @@ def window(app, tmp_path, monkeypatch):
     preferences = UiPreferences(QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat))
     monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
     monkeypatch.setattr(QMessageBox, "warning", lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
     window = MainWindow("synthetic", None, ui_preferences=preferences)
     window.show()
     app.processEvents()
@@ -294,17 +295,19 @@ def test_accepted_and_rejected_context_changes_keep_one_authority(app, window, r
     window.industrial_data_dialog = SimpleNamespace(isVisible=lambda: True, update_db_file=lambda _path: False)
     monkeypatch.setattr("metroliza.ui.parsing_dialog.QFileDialog.getSaveFileName", lambda *_args: (str(rejected), ""))
     host.select_database()
+    assert str(rejected) not in window.recent_locations.paths("databases")
     assert window.workspace_context.snapshot is previous
     assert window.db_file == host.db_file == str(database)
     assert host.report_planner.model.selected_count == 5
     window.industrial_data_dialog = None
     assert window.set_db_file(str(rejected))
+    assert window.recent_locations.paths("databases")[0] == str(rejected)
     assert window.db_file == host.db_file == str(rejected)
     assert host.directory == str(source)
     assert not host.report_planner.model.valid
     assert host.report_planner.model.selected_count == 0
     assert host.report_planner.outcome.toPlainText() == ""
-    assert str(rejected) in window.database_status_label.text()
+    assert str(rejected) == window.database_path_field.text()
 
 
 @pytest.mark.parametrize("stage", ["review", "import"])
@@ -366,7 +369,7 @@ def test_busy_owner_rejects_duplicate_context_and_defers_main_close(app, window,
         assert window.set_directory(str(source / "other")) is False
         assert window.set_db_file(str(database.with_name("other.db"))) is False
         assert window.workspace_context.snapshot is snapshot
-        assert window.close() is False
+        window.file_menu.actions()[-1].trigger()
         assert window.isVisible()
         assert host.is_close_deferred()
         release.set()
@@ -952,16 +955,37 @@ def test_shell_review_waits_for_enrichment_pdf_work(app, window, reports, monkey
     assert not probe.overlaps
 
 
-def test_tools_shortcuts_use_existing_primary_navigation(window):
-    for action, page in (
-        (window.csv_summary_action, "csv_analytics"),
-        (window.industrial_data_action, "industrial_data"),
-        (window.realtime_monitoring_action, "realtime_monitor"),
-        (window.parser_profiles_action, "parser_profiles"),
-    ):
+def test_tools_shortcuts_open_named_workflows(window, monkeypatch):
+    from metroliza.ui import industrial_analytics_dialog, industrial_data_dialog, parser_plugin_wizard
+
+    calls = []
+    class Tool(QDialog):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(window)
+            calls.append(self)
+        def exec(self):
+            calls.append("csv")
+            return 0
+    for module, name in ((industrial_analytics_dialog, "IndustrialAnalyticsDialog"),
+                         (industrial_data_dialog, "IndustrialDataDialog"),
+                         (parser_plugin_wizard, "ParserPluginWizardDialog")):
+        monkeypatch.setattr(module, name, Tool)
+    window.csv_summary_action.trigger()
+    assert "csv" in calls
+    for action, key in ((window.industrial_data_action, "industrial_data"),
+                        (window.parser_profiles_action, "parser_profiles")):
         action.trigger()
-        assert window.navigation_combo.currentData() == page
-    assert window.window_coordinator.open_window_ids == ()
+        opened = window.window_coordinator.get(key)
+        assert opened is not None and opened.isVisible()
+        action.trigger()
+        assert window.window_coordinator.get(key) is opened
+        opened.close()
+    calls.clear()
+    monkeypatch.setattr(window, "launch_realtime_industrial_monitoring_dialog", lambda: calls.append("realtime"))
+    window.realtime_monitoring_action.trigger()
+    assert calls == ["realtime"]
+    assert window.navigation_combo.findText("CSV Summary") >= 0
+    assert window.navigation_combo.findText("CSV Analytics") == -1
 
 
 def test_optional_incident_action_is_normal_lazy_menu_binding(window, monkeypatch):
@@ -1004,3 +1028,184 @@ def test_installed_broken_incident_feature_is_reported_not_absent(window, monkey
     window.diagnostic_incidents_action.trigger()
     assert window.diagnostic_incidents_action.isEnabled()
     assert messages == ["The installed diagnostic feature could not be loaded."]
+
+
+def test_file_menu_recent_acceptance_guards_and_clear(window, tmp_path, monkeypatch):
+    menus = [action.text() for action in window.menuBar().actions()]
+    assert menus == ["&File", "&Tools", "&View", "&Help"]
+    assert [action.text() for action in window.file_menu.actions()] == [
+        "Open database…", "Choose report folder…", "Recent databases", "Recent report folders",
+        "Clear recent lists", "", "Exit",
+    ]
+    database = tmp_path / "accepted.sqlite"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE parsed_reports (id INTEGER)")
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr("metroliza.ui.main_window.QFileDialog.getOpenFileName", lambda *_: (str(database), ""))
+    window.open_database_action.trigger()
+    assert window.db_file == str(database)
+    assert window.recent_locations.paths("databases") == [str(database)]
+    assert window.recent_database_menu.actions()[0].toolTip() == str(database)
+    assert window.recent_database_menu.actions()[0].statusTip() == str(database)
+    assert window.recent_database_menu.actions()[0].text() == database.name
+    host = window.reports_workspace
+    monkeypatch.setattr(host, "can_change_workspace", lambda: False)
+    window.choose_report_folder_action.trigger()
+    assert window.directory is None
+    assert window.recent_locations.paths("folders") == []
+    monkeypatch.setattr(host, "can_change_workspace", lambda: True)
+    monkeypatch.setattr("metroliza.ui.main_window.QFileDialog.getExistingDirectory", lambda *_: str(tmp_path))
+    window.choose_report_folder_action.trigger()
+    assert window.recent_locations.paths("folders") == [str(tmp_path)]
+    database.unlink()
+    messages = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args[2]))
+    window.recent_database_menu.actions()[0].trigger()
+    assert "Open database" in messages[-1]
+    assert window.recent_locations.paths("databases") == []
+    assert not database.exists()
+    window.clear_recent_action.trigger()
+    assert window.recent_locations.paths("folders") == []
+
+
+def test_rejected_database_is_not_recorded(window, tmp_path):
+    invalid = tmp_path / "invalid.sqlite"
+    invalid.write_text("not SQLite")
+    assert window.set_db_file(str(invalid)) is False
+    assert window.db_file is None
+    assert window.recent_locations.paths("databases") == []
+    window.industrial_data_dialog = SimpleNamespace(isVisible=lambda: True, update_db_file=lambda _: False)
+    assert window.set_db_file(str(tmp_path / "new.db")) is False
+    assert window.recent_locations.paths("databases") == []
+
+
+def test_recent_store_bounded_validated_and_windows_dedup(tmp_path):
+    from metroliza.ui.recent_locations import RecentLocations
+
+    settings = QSettings(str(tmp_path / "recent.ini"), QSettings.Format.IniFormat)
+    store = RecentLocations(settings, windows=True)
+    for index in range(10):
+        store.record("databases", f"C:/Reports/{index}.db")
+    store.record("databases", "c:/reports/9.DB")
+    assert len(store.paths("databases")) == 8
+    assert store.paths("databases")[0] == "c:/reports/9.DB"
+    assert store.paths("databases")[-1] == "C:/Reports/2.db"
+    assert RecentLocations(settings, windows=True).paths("databases") == store.paths("databases")
+    for bad in (None, 12, {"path": "/private"}, "relative.db", "https://host/file.db"):
+        settings.setValue("metroliza_recent/v1/databases", bad)
+        assert store.paths("databases") == []
+    settings.setValue("metroliza_recent/v1/databases", ["relative", "C:/valid.db", 42])
+    assert store.paths("databases") == ["C:/valid.db"]
+    settings.setValue("metroliza_recent/_schema_version", 99)
+    assert store.paths("databases") == []
+
+
+def test_recent_paths_absent_from_incident_export(window, tmp_path):
+    import zipfile
+    from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus
+    from tests.test_diagnostic_store import _incident
+
+    private = tmp_path / "PRIVATE-RECENT-LOCATION"
+    private.mkdir()
+    assert window.set_directory(str(private))
+    assert window.recent_locations.paths("folders") == [str(private)]
+    database = private / "private.sqlite"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE parsed_reports (id INTEGER)")
+    assert window.set_db_file(str(database))
+    assert window.recent_locations.paths("databases") == [str(database)]
+    store = IncidentStore(tmp_path / "diagnostics")
+    incident = _incident()
+    assert store.publish(incident).status is StoreStatus.SAVED
+    bundle = tmp_path / "support.zip"
+    assert store.export(incident.report_id, bundle).status is StoreStatus.EXPORTED
+    with zipfile.ZipFile(bundle) as archive:
+        assert set(archive.namelist()) == {"incident.json", "manifest.json", "summary.json"}
+        for member in archive.namelist():
+            assert str(private).encode() not in archive.read(member)
+            assert b"PRIVATE-RECENT-LOCATION" not in archive.read(member)
+
+
+@pytest.mark.parametrize("table", ["parsed_reports", "REPORTS"])
+def test_home_paths_and_export_readiness(window, tmp_path, monkeypatch, table):
+    from PyQt6.QtWidgets import QLineEdit
+
+    assert isinstance(window.source_path_field, QLineEdit)
+    assert window.source_path_field.isReadOnly() and window.database_path_field.isReadOnly()
+    assert window.set_directory(str(tmp_path))
+    assert window.source_path_field.toolTip() == str(tmp_path)
+    window.source_path_field.actions()[0].trigger()
+    assert QApplication.clipboard().text() == str(tmp_path)
+    assert window.set_db_file(str(tmp_path / "not-created.db"))
+    assert window.home_next_action.text() != "Export Workbook"
+    database = tmp_path / "reports.db"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(f"CREATE TABLE {table} (id INTEGER)")
+        connection.commit()
+        assert window.set_db_file(str(database))
+        assert window.home_next_action.text() != "Export Workbook"
+        connection.execute(f"INSERT INTO {table} VALUES (1)")
+        connection.commit()
+    assert window.set_db_file(str(database))
+    assert window.home_next_action.text() == "Export Workbook"
+    assert window.home_next_action.property("buttonRole") == "primary"
+    assert window.home_review_action.property("buttonRole") == "secondary"
+    assert not window.home_review_action.isHidden()
+    calls = []
+    monkeypatch.setattr(window, "launch_export_dialog", lambda: calls.append("export"))
+    window.home_next_action.click()
+    assert calls == ["export"]
+    host = window.reports_workspace
+    assert window.export_button.property("buttonRole") == "primary"
+    assert host.scan_button.property("buttonRole") == "secondary"
+    assert window.set_db_file(str(tmp_path / "another-empty.db"))
+    assert window.home_next_action.text() != "Export Workbook"
+    assert window.export_button.property("buttonRole") == "secondary"
+    assert host.scan_button.property("buttonRole") == "primary"
+
+
+def test_import_success_promotes_export_and_green_status(app, window, reports):
+    host, _, _ = prepare_review(app, window, reports)
+    assert window.home_next_action.text() != "Export Workbook"
+    host.parse_button.click()
+    wait_until(app, workspace_idle(host))
+    assert "Import successful" in host.report_planner.outcome.toPlainText()
+    assert window.home_next_action.text() == "Export Workbook"
+    assert window.export_button.property("buttonRole") == "primary"
+    assert host.scan_button.property("buttonRole") == "secondary"
+    assert host.readiness_label.property("statusVariant") == "success"
+
+
+@pytest.mark.parametrize("kind", ["databases", "folders"])
+def test_recent_change_respects_report_draft(app, window, reports, monkeypatch, tmp_path, kind):
+    host, _, database = prepare_review(app, window, reports)
+    row = next(iter(host.report_planner.model.metadata_rows.values()))
+    row.cells["reference"].user_set = True
+    row.cells["reference"].user_value = "unsaved correction"
+    target = tmp_path if kind == "folders" else database.with_name("other.db")
+    if kind == "databases":
+        with closing(sqlite3.connect(target)) as connection:
+            connection.execute("CREATE TABLE parsed_reports (id INTEGER)")
+    snapshot = window.workspace_context.snapshot
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.No)
+    window._open_recent_location(kind, str(target))
+    assert window.workspace_context.snapshot is snapshot
+    assert str(target) not in window.recent_locations.paths(kind)
+    assert row.cells["reference"].user_value == "unsaved correction"
+
+
+@pytest.mark.parametrize("warning", [True, False])
+def test_import_completion_variant_requires_verified_success(window, monkeypatch, warning):
+    host = window.reports_workspace
+    monkeypatch.setattr("metroliza.ui.parsing_dialog._build_parse_completion_summary",
+                        lambda *_args, **_kwargs: ("warning" if warning else "info", "Outcome", "Details"))
+    host.parse_thread = SimpleNamespace(last_parse_result=SimpleNamespace(imported_files=1),
+                                        last_enrichment_result=None)
+    host.parse_error_message = None
+    host.parsing_canceled = False
+    host._pending_modeless_metadata_enrichment = False
+    host.on_parse_finished()
+    host.parse_thread = None
+    host._sync_readiness_state()
+    assert host.import_succeeded is (not warning)
+    assert host.readiness_label.property("statusVariant") == ("warning" if warning else "success")

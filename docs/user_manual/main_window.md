@@ -6,8 +6,11 @@ The main window groups work into **Home**, **Reports**, the domain workspaces an
 **Tools**. Use the sidebar in a large window or the workspace selector in a compact window.
 
 **Home** shows the current source and database, the active report task or last result,
-and one recommended next action. That action opens the same Reports workspace and focuses
-the next available control. It does not start an import without a reviewed selection.
+and one recommended next action. Paths are read-only, selectable, and offer **Copy path** in their context menu
+with the full path on hover. After a successful import or opening a database containing
+reports, **Export Workbook** becomes the primary action; **Review / import reports** stays
+available. Otherwise the next action opens Reports and focuses its next available control.
+It does not start an import without a reviewed selection.
 
 **Reports** contains the [report planner](parsing.md): choose the source and database,
 review the files, select ready reports and import exactly that selection. Changing pages
@@ -22,9 +25,15 @@ opened from Reports allows navigation back to the main window. Finish or close a
 or industrial window before starting another report operation; its work is preserved.
 Closing the main window requests cancellation and waits for the worker.
 
-**CSV Analytics**, **Industrial Data**, **Realtime Monitor** and **Parser Profiles** keep
-their own primary pages. Their **Tools** menu shortcuts navigate to those same pages;
-the page action opens the corresponding workflow. **Tools** also offers metadata enrichment
+**File** opens an existing database or chooses a report folder. Recent databases and
+report folders are stored locally (up to eight each, most recent first); hover for the full
+path. Missing entries are removed with guidance to select their new location. **Clear recent
+lists** clears both lists. **Exit** uses the normal close guards. Recent paths are excluded
+from diagnostic support exports.
+
+**CSV Summary**, **Industrial Data**, **Realtime Monitor** and **Parser Profiles** keep
+their own primary pages. Their **Tools** menu shortcuts open the named workflow directly,
+raising an existing coordinated window when available; page actions open the same workflows. **Tools** also offers metadata enrichment
 for the current database. **Help** provides manuals, release notes and support actions.
 
 ## Report preparation and output
@@ -51,7 +60,7 @@ Use this when you already have a database file and want to create an **Excel fil
 
 ### Tools > CSV Summary...
 
-Selects **CSV Analytics**; choose **Open CSV Summary** to open the [CSV Summary](csv_summary.md) workflow.
+Opens the [CSV Summary](csv_summary.md) workflow directly.
 
 This works directly from a CSV or Excel file and does **not** require the normal
 parse-to-database workflow. It can create dashboards, grouped statistics, and optional
@@ -59,7 +68,7 @@ Excel workbooks with separate sheets for selected parameters.
 
 ### Tools > Industrial data...
 
-Selects **Industrial Data**; choose **Open Industrial Data** to open the compact [Industrial Data](industrial_data.md) launcher. It keeps cache storage
+Opens or raises the compact [Industrial Data](industrial_data.md) launcher directly. It keeps cache storage
 and production database access separate:
 
 - **Active local cache**: a temporary SQLite cache, an opened Metroliza report database,
@@ -134,8 +143,8 @@ Use **Edit filters...** in the fetch dialog to paste reference/ID values quickly
 
 ### Tools > Real-time Industrial Monitoring...
 
-Selects **Realtime Monitor**; **Open Realtime Monitor** opens the read-only
-[Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dashboard from the local realtime sample/event store. Selecting a Metroliza report
+Opens or raises the
+[Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dialog using the local realtime sample/event store. Selecting a Metroliza report
 database first is optional. If no database is selected, Metroliza creates a temporary
 session SQLite store so the dashboard and future monitoring setup can open without
 changing a report database. Select or create a persistent database only when you want
@@ -149,7 +158,7 @@ Use **CSV Summary...** when you need production-line grouping fields such as sta
 
 ### Tools > Real-time Industrial Monitoring...
 
-Selects **Realtime Monitor**; choose **Open Realtime Monitor** to open the
+Opens or raises the
 [Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dialog.
 
 Use this when production sources are already configured and you want Metroliza to poll
@@ -159,7 +168,7 @@ the monitor so saved source configs and events remain available after the sessio
 
 ### Tools > Parser profiles...
 
-Selects **Parser Profiles**; choose **Manage Parser Profiles** to open the
+Opens or raises the
 [Parser Profiles](parser_profiles.md) handoff dialog.
 
 Use this when a new supplier report template needs parser support. The dialog shows the local profile store status and can create a local handoff folder with:

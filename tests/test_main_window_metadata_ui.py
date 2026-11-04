@@ -88,7 +88,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertNotIn("Enrich Metadata", button_texts)
             self.assertFalse(hasattr(window, "enrich_metadata_button"))
 
-            self.assertEqual(window.tools_menu.title(), "Tools")
+            self.assertEqual(window.tools_menu.title(), "&Tools")
             action_texts = [action.text() for action in window.tools_menu.actions()]
             self.assertIn("Enrich existing database metadata...", action_texts)
         finally:
@@ -526,7 +526,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             window.set_directory("/tmp/metroliza-reports")
 
             self.assertEqual(window.directory, "/tmp/metroliza-reports")
-            self.assertEqual(window.source_status_label.text(), "Source: /tmp/metroliza-reports")
+            self.assertEqual(window.source_status_label.text(), "Source: selected")
             self.assertEqual(window.database_status_label.text(), "Database: not selected")
         finally:
             window.close()
@@ -652,7 +652,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 [
                     "Home",
                     "Reports",
-                    "CSV Analytics",
+                    "CSV Summary",
                     "Industrial Data",
                     "Realtime Monitor",
                     "Parser Profiles",
@@ -752,8 +752,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         window = self._main_window()
         try:
             top_level_action_texts = [action.text() for action in window.menuBar().actions()]
-            self.assertIn("Tools", top_level_action_texts)
-            self.assertIn("Help", top_level_action_texts)
+            self.assertIn("&Tools", top_level_action_texts)
+            self.assertIn("&Help", top_level_action_texts)
             self.assertNotIn("About", top_level_action_texts)
             self.assertNotIn("Release notes", top_level_action_texts)
 
