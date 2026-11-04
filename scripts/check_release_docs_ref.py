@@ -5,8 +5,8 @@ are derived from the code, not from a copied list: every value of
 ``MANUAL_RELATIVE_PATHS`` in ``src/metroliza/ui/help_menu.py`` plus every literal
 ``github_blob_url("...")`` argument under ``src/``. Discovery fails closed: a
 helper call with a computed argument, or a hard-coded ``github.com/.../blob/<ref>/``
-link whose ref is not a full SHA, is reported unless listed in
-``HARD_CODED_LINK_EXCEPTIONS``. The check fails when the ref is a branch, tag or
+link whose ref is not a full SHA, is reported (there are no exceptions). The
+check fails when the ref is a branch, tag or
 short SHA, when the commit is not available locally (run it in a full-history
 checkout), or when a linked file is missing or not a plausible manual there.
 

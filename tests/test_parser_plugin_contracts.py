@@ -1,7 +1,7 @@
 import importlib
 import json
 
-from metroliza.shared.docs_links import DEFAULT_RELEASE_DOCS_REF, GITHUB_REPOSITORY_BASE_URL
+from metroliza.shared.docs_links import GITHUB_REPOSITORY_BASE_URL, current_release_docs_ref
 
 CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
 llm_plugin_factory = importlib.import_module("modules.llm_plugin_factory")
@@ -188,7 +188,7 @@ def test_llm_plugin_scaffold_source_links_use_the_pinned_docs_ref():
     )
 
     expected_links = [
-        f"{GITHUB_REPOSITORY_BASE_URL}/blob/{DEFAULT_RELEASE_DOCS_REF}/{path}"
+        f"{GITHUB_REPOSITORY_BASE_URL}/blob/{current_release_docs_ref()}/{path}"
         for path in linked_paths
     ]
     for link in expected_links:
