@@ -805,14 +805,15 @@ def test_reset_restores_all_dates_and_helpers_keep_endpoints(date_preset_dialog)
 
 
 @pytest.mark.parametrize("today, preset, expected", [
-    (QDate(2026, 1, 1), "Yesterday", ("2025-12-31", "2025-12-31")),
-    (QDate(2026, 1, 1), "Last 7 days", ("2025-12-26", "2026-01-01")),
-    (QDate(2024, 3, 1), "Yesterday", ("2024-02-29", "2024-02-29")),
-    (QDate(2024, 2, 29), "This month", ("2024-02-01", "2024-02-29")),
+    ((2026, 1, 1), "Yesterday", ("2025-12-31", "2025-12-31")),
+    ((2026, 1, 1), "Last 7 days", ("2025-12-26", "2026-01-01")),
+    ((2024, 3, 1), "Yesterday", ("2024-02-29", "2024-02-29")),
+    ((2024, 2, 29), "This month", ("2024-02-01", "2024-02-29")),
 ])
 def test_date_presets_calendar_boundaries(date_preset_dialog, today, preset, expected):
+    # Plain tuples: QDate is None at collection time when PyQt6 is unavailable.
     dialog, clock = date_preset_dialog
-    clock.today = today
+    clock.today = QDate(*today)
     dialog.date_range_selector.setCurrentText(preset)
     assert _date_pair(dialog) == expected
     assert dialog.apply_button.isEnabled()
