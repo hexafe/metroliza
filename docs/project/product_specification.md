@@ -20,7 +20,7 @@ The accepted branch policy separates development from release evidence:
 
 - `develop` is the canonical branch for normal Issue-driven development and integration;
 - `release/2026.09-rc1` is the current RC source/evidence line under #1153; final packaged qualification is pending;
-- `release/2026.06-rc2` is retained historical frozen evidence, pending separate #901/#924 cycle closure;
+- the 2026.06 RC2 cycle closed without a release (#901); `release/2026.06-rc2` was retired (recovery tag `archive/2026.06-rc2/final`);
 - `rc2` is a temporary historical transition/reference alias, not a routine development base;
 - `master` remains the current production/history anchor and is unchanged pending the separate
   [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).

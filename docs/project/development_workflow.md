@@ -43,14 +43,14 @@ and expected-old-value guards.
 - Create feature, fix, refactor, test, security, documentation, and chore branches from `develop`
   unless the Issue is explicitly release-specific.
 - Normal pull requests target `develop`.
-- Broad new work must not target `release/2026.09-rc1`, `rc2`, `release/2026.06-rc2`, or the current production `master`.
+- Broad new work must not target `release/2026.09-rc1`, `rc2`, or the current production `master`.
 
 ### Current release candidate
 
 - `release/2026.09-rc1` is the current source candidate/evidence line under
   [#1153](https://github.com/hexafe/metroliza/issues/1153), cut from accepted develop after the ordered integrations.
 - Final candidate build identity and packaged Windows acceptance are pending; qualify the exact artifact before RC distribution.
-- `rc2` and `release/2026.06-rc2` are retained historical evidence, with separate #901/#924 cycle closure.
+- The 2026.06 RC2 cycle closed without a release (#901); `release/2026.06-rc2` was retired (recovery tag `archive/2026.06-rc2/final`). `rc2` is kept only until its #1187 retirement trigger (branching strategy §0).
 - Only release-blocking fixes, packaging/evidence work, release metadata/notes, and narrowly
   approved security/legal changes target `release/2026.09-rc1`.
 - Every accepted release-line change is reconciled into `develop` through a reviewed PR or an
@@ -392,7 +392,7 @@ A commit should be understandable without reading the entire diff. Avoid message
 
 ## 8. Release workflow
 
-Historical June RC2 flow (preserved for separate cycle closure):
+Historical June RC2 flow (cycle closed without a release on 2026-11-04, #901; kept as a record):
 
 1. normal development proceeds on Issue branches from `develop`;
 2. `release/2026.06-rc2` is frozen for release fixes/evidence only;
