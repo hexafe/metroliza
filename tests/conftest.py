@@ -24,7 +24,16 @@ def isolate_user_qsettings(tmp_path_factory):
     root = str(tmp_path_factory.mktemp("user-qsettings"))
     for settings_format in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
         QSettings.setPath(settings_format, QSettings.Scope.UserScope, root)
-    yield
+    # Child processes (UI probes) resolve their own paths; on Linux this redirects them too.
+    previous = os.environ.get("XDG_CONFIG_HOME")
+    os.environ["XDG_CONFIG_HOME"] = root
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = previous
 
 
 @pytest.fixture(autouse=True)
