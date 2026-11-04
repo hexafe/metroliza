@@ -1586,13 +1586,17 @@ def test_analytics_completion_message_uses_export_style_file_links(tmp_path, mon
     assert title == "Analytics successful"
     assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in message
     assert f"Workbook: {workbook_file.resolve().as_uri()}" in message
+    from metroliza.ui.export_dialog import format_message_with_clickable_links
+    linked = format_message_with_clickable_links(message)
+    assert ">analytics.html</a>" in linked
+    assert ">analytics.xlsx</a>" in linked
     assert "Charts: 7" in message
     assert "Rows analyzed: 42" in message
     assert reveal_path == str(workbook_file)
 
     calls = []
     fake_export_dialog = types.SimpleNamespace(
-        show_export_result_message=lambda parent, level, title, message, excel_file=None: calls.append(
+        show_export_result_message=lambda parent, level, title, message, excel_file=None, **kwargs: calls.append(
             (parent, level, title, message, excel_file)
         )
     )
@@ -1636,7 +1640,7 @@ def test_analytics_completion_message_opens_dashboard_normally_when_workbook_dis
 
     calls = []
     fake_export_dialog = types.SimpleNamespace(
-        show_export_result_message=lambda parent, level, title, message, excel_file=None: calls.append(
+        show_export_result_message=lambda parent, level, title, message, excel_file=None, **kwargs: calls.append(
             (parent, level, title, message, excel_file)
         )
     )
@@ -1680,8 +1684,12 @@ def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path)
     )
     try:
         dialog.create_analytics_thread = lambda: thread
+        dialog.last_result_row.set_result("completed")
+        dialog._sync_ui_state()
+        assert not dialog.last_result_row.isHidden()
 
         dialog.show_loading_screen()
+        assert dialog.last_result_row.isHidden()
 
         assert dialog.analytics_thread is thread
         assert thread.started
@@ -2178,5 +2186,48 @@ def test_t23a_f1_native_group_cache_reuses_qualified_payload():
         first = dialog._tabular_group_values()
         assert first == ('A',)
         assert dialog._tabular_group_values() is first
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize("outcome", ["completed", "completed with warnings", "cancelled", "failed"])
+def test_w1_csv_last_run_survives_completion(monkeypatch, tmp_path, outcome):
+    _app()
+    import metroliza.ui.export_dialog as export_ui
+    path = tmp_path / "summary.html"
+    path.touch()
+    completion_calls, opened, revealed = [], [], []
+    monkeypatch.setattr(export_ui, "show_export_result_message", lambda *a, **kw: completion_calls.append(kw))
+    monkeypatch.setattr(export_ui.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(export_ui, "reveal_file_in_explorer", lambda file: revealed.append(file))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: None)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        result = types.SimpleNamespace(html_dashboard_path=str(path), workbook_path="",
+                                       html_dashboard_chart_count=3, row_count=42, metric_count=2)
+        if outcome.startswith("completed"):
+            result.diagnostics = (types.SimpleNamespace(severity="warning"),) if "warnings" in outcome else ()
+            dialog.on_analytics_finished(result)
+        elif outcome == "cancelled":
+            dialog.on_analytics_cancelled("Cancelled")
+        else:
+            dialog.on_analytics_error("Failed")
+        row = dialog.last_result_row
+        assert not row.isHidden()
+        assert f"Last run · {outcome}" in row.summary.text()
+        if outcome.startswith("completed"):
+            assert "Rows analyzed: 42" in row.summary.text()
+            assert "Metrics: 2" in row.summary.text()
+            assert path.name in row.summary.text()
+            assert completion_calls[-1]["artifacts"] == (path,)
+            buttons = {button.text(): button for button in row.findChildren(export_ui.QPushButton)}
+            assert set(buttons) == {"Open dashboard", "Show in folder"}
+            for button in buttons.values():
+                button.click()
+            assert [url.toLocalFile() for url in opened] == [str(path)]
+            assert revealed == [path]
+        else:
+            assert not row.findChildren(export_ui.QPushButton)
     finally:
         _dispose_dialog(dialog)

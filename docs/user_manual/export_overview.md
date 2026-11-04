@@ -159,8 +159,8 @@ This means:
 - it also tries to create a Google Sheets version.
 
 This option is optional. The local Excel workbook remains the base editable output.
-When conversion succeeds, the final success message includes both the local file link
-and the Google Sheet link.
+When conversion succeeds, the final success message includes the Google Sheet link.
+Use **Open workbook** to open the local Excel file.
 
 ### Choosing the right output
 
@@ -374,9 +374,14 @@ If you enabled Google Sheets export, Metroliza also attempts that extra output, 
 ### Completion message
 
 When export finishes, Metroliza shows a completion message. Depending on the result, this
-message can include clickable links for the exported workbook, generated dashboard, and
-output location. Use those links before moving files so you can confirm the workbook,
-dashboard HTML, and dashboard assets were all created.
+message offers **Open workbook**, **Open dashboard**, and **Show in folder** for the files
+this run produced. File links open the file they name; Google Sheet links work as before.
+Diagnostics and omission details remain available in the message.
+
+After you acknowledge the message, the **Last export** row keeps the outcome, local time,
+artifact names, and the same actions until the next export starts in this window. Nothing
+is saved between sessions. If a file was moved or deleted, an action warns you with its
+path; locate the file or export again. Keep dashboard HTML and its assets together.
 
 Reports without a reference can still be exported. Group Analysis omits those measurements
 from comparisons that require a reference and reports the omission. Add a reference to the

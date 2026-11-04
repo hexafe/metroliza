@@ -8,6 +8,7 @@ from time import monotonic
 from dataclasses import replace
 import inspect
 
+from metroliza.ui.result_actions import LastResultRow, existing_result_files
 from PyQt6.QtCore import QThread, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -349,13 +350,19 @@ class DashboardPopulationLayerOptionsDialog(QDialog):
         )
 
 
+def _analytics_has_warnings(result):
+    return any(diagnostic.severity in {"warning", "error"}
+               for diagnostic in getattr(result, "diagnostics", ()))
+
+
 def build_analytics_completion_message(result) -> tuple[str, str, str, str]:
     """Build an export-style completion payload for generated analytics files."""
 
     dashboard_line = build_export_artifact_link_line("HTML dashboard", result.html_dashboard_path)
     workbook_line = build_export_artifact_link_line("Workbook", result.workbook_path)
 
-    message_lines = ["Analytics created successfully!"]
+    has_warnings = _analytics_has_warnings(result)
+    message_lines = ["Analytics created with warnings." if has_warnings else "Analytics created successfully!"]
     for artifact_line in (dashboard_line, workbook_line):
         if artifact_line:
             message_lines.extend(["", artifact_line])
@@ -364,10 +371,12 @@ def build_analytics_completion_message(result) -> tuple[str, str, str, str]:
             "",
             f"Charts: {result.html_dashboard_chart_count}",
             f"Rows analyzed: {result.row_count}",
+            f"Metrics: {getattr(result, 'metric_count', 0)}",
         ]
     )
     reveal_path = str(result.workbook_path or "")
-    return "info", "Analytics successful", "\n".join(message_lines), reveal_path
+    level, title = ("warning", "Analytics completed with warnings") if has_warnings else ("info", "Analytics successful")
+    return level, title, "\n".join(message_lines), reveal_path
 
 
 class MetricSelectionDialog(QDialog):
@@ -1069,6 +1078,8 @@ class IndustrialAnalyticsDialog(QDialog):
         content_layout.addLayout(grid)
         scroll_area.setWidget(content)
         layout.addWidget(scroll_area, 1)
+        self.last_result_row = LastResultRow(self, "Last run")
+        layout.addWidget(self.last_result_row)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -2771,6 +2782,7 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         finally:
             self._pending_grouping_snapshot = None
+        self.last_result_row.clear()
         self._worker_progress[self.analytics_thread] = (
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
         )
@@ -2797,19 +2809,26 @@ class IndustrialAnalyticsDialog(QDialog):
     def on_analytics_finished(self, result) -> None:
         self._close_worker_progress()
         level, title, message, reveal_path = build_analytics_completion_message(result)
+        paths = existing_result_files((result.workbook_path, result.html_dashboard_path))
+        self.last_result_row.set_result(
+            "completed with warnings" if _analytics_has_warnings(result) else "completed", paths,
+            counts=f"Rows analyzed: {result.row_count} · Metrics: {getattr(result, 'metric_count', 0)} · Charts: {result.html_dashboard_chart_count}",
+        )
         try:
             from metroliza.ui.export_dialog import show_export_result_message
 
-            show_export_result_message(self, level, title, message, excel_file=reveal_path)
+            show_export_result_message(self, level, title, message, excel_file=reveal_path, artifacts=paths)
         except Exception:
             QMessageBox.information(self, title, message)
 
     def on_analytics_error(self, message: str) -> None:
         self._close_worker_progress()
+        self.last_result_row.set_result("failed")
         QMessageBox.warning(self, self.windowTitle(), f"Could not create analytics: {message}")
 
     def on_analytics_cancelled(self, message: str) -> None:
         self._close_worker_progress()
+        self.last_result_row.set_result("cancelled")
         QMessageBox.information(self, self.windowTitle(), message or "Analytics generation was canceled.")
 
     def on_analytics_thread_stopped(self) -> None:
