@@ -1,5 +1,42 @@
 # CSV Summary
 
+## Keyboard shortcuts
+
+**F1** opens this window's manual. In the CSV Summary launcher:
+
+| Shortcut | Action |
+|---|---|
+| Alt+B | Browse for input files |
+| Alt+M | Load or refresh data and metrics |
+| Alt+F / Alt+T | Filter rows / Clear filter |
+| Alt+O / Alt+L | Choose metrics / Edit limits |
+| Alt+E / Alt+G | Edit groups / Clear groups |
+| Alt+R / Alt+W | Browse for dashboard / workbook output |
+| Alt+A | Show or hide advanced options |
+| Alt+Y | Create analytics |
+| Alt+C | Close |
+
+Button tooltips also show these shortcuts. Disabled or hidden controls do nothing;
+an open modal dialog owns its own keyboard commands. The launcher has no search
+field, so it does not bind Ctrl+F. The Industrial cache presentation uses the same
+visible button shortcuts and its own Industrial Data manual on F1.
+
+In the **Filter rows** and **Edit groups** dialogs, **Ctrl+F** focuses and selects
+the search for the list that has focus: available columns, selected columns, or
+matching values/rows. From elsewhere it selects the available-columns search.
+Searching keeps the existing rules: press Enter where the field requires it.
+F1 opens this CSV Summary manual from either dialog.
+
+| Dialog | Shortcut | Action |
+|---|---|---|
+| Filter rows | Alt+D / Alt+M / Alt+L | Add column / Remove selected column / Clear columns |
+| Filter rows | Alt+V / Alt+R | Clear values / Reset filter |
+| Filter rows | Alt+A / Alt+C | Apply filter / Cancel |
+| Edit groups | Alt+F / Alt+A | Assign all filtered rows / Assign selected row values |
+| Edit groups | Alt+R / Alt+D | Rename group / Delete group |
+| Edit groups | Alt+L / Alt+S | Clear selection / Reset changes |
+| Edit groups | Alt+U / Alt+C | Use grouping / Cancel |
+
 ## When To Use CSV Summary
 
 Use **CSV Summary** when you want to analyze a CSV or Excel file without first creating a

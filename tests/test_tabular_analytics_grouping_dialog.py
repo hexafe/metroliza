@@ -10,6 +10,8 @@ from threading import Event
 import pandas as pd
 import pytest
 
+from metroliza.ui.shortcuts import plain_text
+
 try:
     from PyQt6 import sip
     from PyQt6.QtCore import QCoreApplication, QEvent, QTimer, Qt
@@ -546,7 +548,7 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
         )
     )
     try:
-        button_texts = {button.text() for button in dialog.findChildren(QPushButton)}
+        button_texts = {plain_text(button.text()) for button in dialog.findChildren(QPushButton)}
         assert not hasattr(dialog, "add_column_button")
         assert not hasattr(dialog, "remove_column_button")
         assert not hasattr(dialog, "clear_columns_button")
@@ -598,7 +600,7 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
             False,
             True,
         ]
-        assert dialog.dont_use_grouping_button.text() == "Reset changes"
+        assert plain_text(dialog.dont_use_grouping_button.text()) == "Reset changes"
         assert dialog.previous_page_button.accessibleName() == "Previous matching rows page"
         assert dialog.selector_page_label.accessibleName() == "Matching rows page"
 
@@ -1666,7 +1668,7 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
     )
     dialog = TabularAnalyticsGroupingDialog(dataframe=frame)
     try:
-        button_texts = {button.text() for button in dialog.findChildren(QPushButton)}
+        button_texts = {plain_text(button.text()) for button in dialog.findChildren(QPushButton)}
         assert not hasattr(dialog, "select_visible_button")
         assert not hasattr(dialog, "select_all_matching_button")
         assert not hasattr(dialog, "clear_matching_button")

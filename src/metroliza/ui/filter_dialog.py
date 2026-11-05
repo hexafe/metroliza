@@ -51,6 +51,7 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
 
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
 from metroliza.shared.filter_state import FilterState
 from metroliza.reports.report_query_service import (
     build_distinct_value_query as _build_distinct_value_query,
@@ -202,6 +203,12 @@ class FilterDialog(QDialog):
         try:
             self.create_widgets()
             self.arrange_layout()
+            apply_dialog_mnemonics(self, "filter")
+            self.search_action = bind_search_shortcut(self, [
+                (getattr(self, search), getattr(self, listing))
+                for _, fields in self.FILTER_SECTIONS
+                for _, search, listing in fields if search
+            ] + [(self.header_search_input, self.selected_headers_list)])
             self._apply_list_theme_styles()
             self.connect_signals()
             self._refresh_filter_summary()

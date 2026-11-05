@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from metroliza.parsing.preflight import ParsePreflightStatus
 from metroliza.reports.report_metadata_review import CORE_FIELDS, FIELD_LABELS, REVIEW_FIELDS
 from metroliza.ui.report_planner_model import ReportPlannerFilterModel, ReportPlannerModel
+from metroliza.ui.shortcuts import bind_search_shortcut
 from metroliza.ui import ui_theme_tokens as tokens
 from metroliza.ui.ui_foundation import _is_dark_widget_palette, configure_accessibility
 
@@ -257,6 +258,7 @@ class ReportPlanner(QWidget):
         self.refresh_theme()
         self._update_counts()
         self._update_metadata_actions()
+        bind_search_shortcut(self, ((self.search, self.table),))
 
     # -- review lifecycle ---------------------------------------------------
 

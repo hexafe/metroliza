@@ -1,5 +1,13 @@
 # Modify Database
 
+## Keyboard shortcuts
+
+**Ctrl+F** focuses and selects the search field on the current tab, including
+each Normalize values subtab, Report records, and Measurement rows.
+**F1** opens this manual. **Alt+B** selects a database, **Alt+A** applies changes,
+and **Alt+C** cancels. Disabled buttons do nothing. Button tooltips show their
+Alt shortcuts; an open modal dialog owns its own keyboard commands.
+
 ## What this tool changes
 
 Use **Modify database** when you want to edit stored metadata values that are already inside a Metroliza **database file**.

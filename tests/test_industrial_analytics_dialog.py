@@ -9,6 +9,7 @@ import types
 import pandas as pd
 
 from metroliza.analytics.row_table import RowTable
+from metroliza.ui.shortcuts import plain_text
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 from modules.contracts import DashboardInteractivityOptions
 
@@ -419,7 +420,7 @@ def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_def
         assert dialog.input_file_field.accessibleName() == "CSV or Excel input file"
         assert dialog.dashboard_path_field.accessibleName() == "CSV Summary dashboard output path"
         assert dialog.workbook_path_field.accessibleName() == "CSV Summary workbook output path"
-        assert dialog.advanced_toggle_button.text() == "Show advanced options"
+        assert plain_text(dialog.advanced_toggle_button.text()) == "Show advanced options"
         assert dialog.advanced_options_container.isHidden()
         assert dialog.time_series_checkbox.parent() == dialog.advanced_options_container
         assert dialog.groupstats_checkbox.parent() == dialog.advanced_options_container
@@ -438,7 +439,7 @@ def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_def
 
         dialog.advanced_toggle_button.setChecked(True)
 
-        assert dialog.advanced_toggle_button.text() == "Hide advanced options"
+        assert plain_text(dialog.advanced_toggle_button.text()) == "Hide advanced options"
         assert not dialog.advanced_options_container.isHidden()
     finally:
         _dispose_dialog(dialog)
@@ -575,11 +576,11 @@ def test_preloaded_industrial_cache_uses_csv_summary_without_file_controls() -> 
         assert dialog.sheet_name_row_label.isHidden()
         assert dialog.timestamp_column_row_label.isHidden()
         assert dialog.reference_column_row_label.isHidden()
-        assert dialog.filters_button.text() == "Filter cached rows..."
+        assert plain_text(dialog.filters_button.text()) == "Filter cached rows..."
         assert not dialog.dashboard_interactivity_button.isHidden()
         assert not dialog.filters_button.isHidden()
         assert not dialog.edit_groups_button.isHidden()
-        assert dialog.load_metrics_button.text() == "Refresh cached CSV Summary metrics"
+        assert plain_text(dialog.load_metrics_button.text()) == "Refresh cached CSV Summary metrics"
         assert not dialog.tabular_source_status_label.isHidden()
         assert "Detected source: 1 row from industrial.db" in dialog.tabular_source_status_label.text()
         assert "part / ID column reference" in dialog.tabular_source_status_label.text()
@@ -831,7 +832,7 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         assert dialog.metrics_list.count() == 2
         assert dialog.metrics_summary_label.text() == "2 of 2 metrics selected"
         assert dialog.choose_metrics_button.isEnabled()
-        assert dialog.load_metrics_button.text() == "Reload CSV/Excel data and refresh metrics"
+        assert plain_text(dialog.load_metrics_button.text()) == "Reload CSV/Excel data and refresh metrics"
         assert not dialog.filter_row_label.isHidden()
         assert not dialog.filter_summary_label.isHidden()
         assert not dialog.filters_button.isHidden()
@@ -841,7 +842,7 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
 
         assert dialog.metric_candidates == ()
         assert dialog.metrics_list.count() == 0
-        assert dialog.load_metrics_button.text() == "Reload CSV/Excel data and refresh metrics"
+        assert plain_text(dialog.load_metrics_button.text()) == "Reload CSV/Excel data and refresh metrics"
         assert dialog.filter_row_label.isHidden()
         assert dialog.filter_summary_label.isHidden()
         assert dialog.filters_button.isHidden()
@@ -1231,7 +1232,7 @@ def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
-        assert dialog.load_metrics_button.text() == "Load CSV/Excel data and detect metrics"
+        assert plain_text(dialog.load_metrics_button.text()) == "Load CSV/Excel data and detect metrics"
         assert dialog.tabular_source_status_label.isHidden()
         assert dialog.filter_row_label.isHidden()
         assert dialog.filter_summary_label.isHidden()

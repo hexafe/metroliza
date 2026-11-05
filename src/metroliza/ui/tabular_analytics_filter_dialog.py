@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 
 from metroliza.analytics.row_table import RowTable
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
 from metroliza.shared.list_selection_utils import ListSelectionUtils
 from metroliza.tabular.tabular_column_selection import (
     column_sequence_text,
@@ -347,6 +348,12 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._list_selection_utils.connect_shift_range_behavior(self.matching_list)
         self._refresh_all()
         self._capture_committed_filter_state()
+        apply_dialog_mnemonics(self, "csv_filter")
+        bind_search_shortcut(self, (
+            (self.column_search, self.column_list),
+            (self.selected_column_search, self.selected_columns_list),
+            (self.matching_search, self.matching_list),
+        ))
 
     def _source_columns(self) -> list[str]:
         if self.sqlite_store is not None:

@@ -58,6 +58,7 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
 
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
 from PyQt6.QtCore import Qt
 try:
     from PyQt6.QtCore import QEvent
@@ -455,6 +456,14 @@ class DataGrouping(QDialog):
         try:
             self.create_widgets()
             self.arrange_layout()
+            apply_dialog_mnemonics(self, "grouping")
+            self.search_action = bind_search_shortcut(self, [
+                (self.reference_search_input, self.reference_list),
+                (self.part_search_input, self.part_list),
+                (self.group_search_input, self.groups_list),
+                (self.part_group_search_input, self.part_group_list),
+                (self.scope_filter_input, self.scope_filter_input),
+            ])
             self.connect_signals()
             self._refresh_selection_summary()
         except Exception as e:

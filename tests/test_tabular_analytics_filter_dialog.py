@@ -5,6 +5,8 @@ import time
 import pandas as pd
 import pytest
 
+from metroliza.ui.shortcuts import plain_text
+
 try:
     from PyQt6.QtCore import QDate, Qt
     from PyQt6.QtTest import QTest
@@ -269,8 +271,8 @@ def test_filter_dialog_uses_distinct_footer_actions(tmp_path) -> None:
         column_mapping=loaded.column_mapping,
     )
     try:
-        assert dialog.clear_selection_button.text() == "Clear values"
-        assert dialog.clear_filter_button.text() == "Reset filter"
+        assert plain_text(dialog.clear_selection_button.text()) == "Clear values"
+        assert plain_text(dialog.clear_filter_button.text()) == "Reset filter"
         assert dialog.clear_selection_button.accessibleName() == "Clear selected CSV filter values"
         assert dialog.clear_filter_button.accessibleName() == "Reset CSV row filter"
         assert dialog.apply_button.accessibleName() == "Apply CSV row filter"

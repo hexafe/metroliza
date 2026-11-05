@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 
 import pytest
+from metroliza.ui.shortcuts import plain_text
 
 try:
     from PyQt6.QtCore import QDate, Qt
@@ -70,10 +71,10 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
     try:
         assert dialog.isModal()
         assert dialog.filter_tabs.count() == 3
-        assert dialog.apply_button.text() == "Apply Filters"
+        assert plain_text(dialog.apply_button.text()) == "Apply Filters"
         assert dialog.apply_button.isDefault()
-        assert dialog.reset_button.text() == "Reset draft"
-        assert dialog.cancel_button.text() == "Cancel"
+        assert plain_text(dialog.reset_button.text()) == "Reset draft"
+        assert plain_text(dialog.cancel_button.text()) == "Cancel"
         assert dialog.has_nok_button.isCheckable()
         assert not dialog.has_nok_button.isChecked()
         assert dialog.filter_summary_label.text() == "No active filters | All dates"
