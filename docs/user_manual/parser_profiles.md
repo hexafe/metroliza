@@ -110,16 +110,18 @@ the generated handoff files before continuing.
 
 Click **Validate** after `profile.yaml` and `expected_results.csv` are filled.
 
-Validation checks that:
+Validate checks the data-only YAML policy and structural parser contract. When
+`expected_results.csv` references sample reports, it also checks those samples:
+profile selection/probing, the parser contract, and parsed row counts and values
+against their checked expected results. Unreferenced files in `samples/` are not
+covered by that sample validation.
 
-- the YAML profile follows the Metroliza profile contract,
-- at least one sample report is covered,
-- `expected_results.csv` has checked data rows,
-- every parsed measurement row matches the expected results,
-- no extra parsed rows are left unchecked,
-- the profile stays data-only and within the safe parser rules.
+If there are no referenced samples, Validate performs structural contract checks
+only. A header-only expected-results CSV with no samples can therefore **PASS**.
+That result does not prove sample coverage or the presence of checked data rows.
 
-Do not install a profile that fails validation.
+Do not install a profile that fails validation. Before installing, supply the
+current samples and checked expected-result rows required by Install below.
 
 ## Diagnose
 
@@ -149,9 +151,15 @@ were wrong, then run **Validate** again.
 Click **Install** only after **Check Package**, **Validate**, and any needed
 **Diagnose** review pass.
 
-Install copies the approved profile into the local approved profile store and
-writes approval evidence. Metroliza will only load approved profiles whose
-approval checksum matches the installed `profile.yaml`.
+Install requires an existing expected-results CSV and at least one existing
+sample report referenced by that table under `samples/`. It freshly validates the
+current profile and those samples. The expected-results checks require checked
+data rows and compare the parsed rows and their count with the sample's expected
+rows. An earlier structural PASS cannot bypass these requirements.
+
+Only successful installation copies the profile into the local approved profile
+store and writes approval evidence. Metroliza will only load approved profiles
+whose approval checksum matches the installed `profile.yaml`.
 
 ## Restart
 
