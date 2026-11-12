@@ -323,10 +323,10 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`2026.09 RC1 (build 261114)`): Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
+Current release highlight (`2026.09 RC1 (build 261115)`): Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
 
-Build `261114` is the UI workflow source candidate on the unchanged RC1 line.
-The earlier `261113` build attempt is superseded; its failed Windows test receipt is retained.
+Build `261115` is the UI workflow source candidate on the unchanged RC1 line.
+The earlier `261114` and `261113` build attempts are superseded; their failed Windows test receipts are retained.
 Final source review/CI and package qualification are pending; it does not replace
 the frozen `261031` package evidence. See [release status](docs/release_checks/release_status.md)
 for the separate source, package and manual acceptance gates. The current
@@ -336,7 +336,7 @@ for the separate source, package and manual acceptance gates. The current
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.09 RC1 (build 261114)`)
+### Changelog highlights (release `2026.09 RC1 (build 261115)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

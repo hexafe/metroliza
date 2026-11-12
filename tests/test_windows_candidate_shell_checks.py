@@ -75,6 +75,7 @@ def test_shell_checks_run_real_ui_flow_with_actual_platform_claim(tmp_path, monk
 
 def test_shell_completed_result_guard_rejects_corrupted_real_import_ui(tmp_path, monkeypatch):
     from PyQt6.QtCore import Qt
+    from metroliza.app.bootstrap import get_or_create_qapplication
     from metroliza.ui.report_planner_model import ExecutionStatus
 
     cases = (
@@ -128,7 +129,8 @@ def test_shell_completed_result_guard_rejects_corrupted_real_import_ui(tmp_path,
             original(window, workspace, occurrences)  # Every fault is restored and reverified.
 
     monkeypatch.setattr(checks, "_verify_import_results", corrupt)
-    observation = run_shell_checks(tmp_path, FIXTURES)
+    app = get_or_create_qapplication()
+    observation = run_shell_checks(tmp_path, FIXTURES, expected_dpr=float(app.primaryScreen().devicePixelRatio()))
     assert observation["error_codes"] == []
     assert observation["facets"]["real_review_import"] == "passed"
     assert rejected == [code for _fault, code in cases]
