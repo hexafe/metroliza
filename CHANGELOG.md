@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261031) — current version
+## 2026.09 RC1 (build 261112) — current version
 - Help menu entries open the manuals that match this version, without any setup.
 - The Windows download is one ZIP. Extract all of it and start the EXE; the build identity file and the third-party notices folder sit next to the EXE.
 
