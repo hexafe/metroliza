@@ -116,6 +116,16 @@ class _SqliteValuePreviewThread(QThread):
             self.error_occurred.emit(self.request_id, self.column, str(exc))
 
 
+class _FilterBody(QWidget):
+    """Keep nested controls in sync with the scroll area's current content size."""
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        layout = self.layout()
+        if layout is not None:
+            layout.activate()
+
+
 class TabularAnalyticsFilterDialog(QDialog):
     """Select CSV/Excel rows through user-selected source-column combinations."""
 
@@ -186,7 +196,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.filter_body_scroll = QScrollArea()
         self.filter_body_scroll.setWidgetResizable(True)
         self.filter_body_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        body = QWidget()
+        body = _FilterBody()
         layout = QVBoxLayout(body)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(8)
