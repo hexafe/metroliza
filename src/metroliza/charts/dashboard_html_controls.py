@@ -684,7 +684,7 @@ def render_dashboard_visual_dialog(
     )
     point_mark_controls = (
         '<label class="visual-field"><span>Find point</span>'
-        '<input type="search" id="dashboard-visual-point-search" '
+        '<input type="search" id="dashboard-visual-point-search" title="Enter: next match" '
         'placeholder="TraceCode or point value"></label>'
         '<label class="visual-field"><span>Search in</span>'
         '<select id="dashboard-visual-point-search-scope">'
@@ -699,10 +699,11 @@ def render_dashboard_visual_dialog(
         '<output id="dashboard-visual-point-search-count">0 matches</output></label>'
         '<div class="visual-actions visual-actions-inline visual-point-search-actions">'
         '<button type="button" id="dashboard-visual-point-search-prev">Previous</button>'
-        '<button type="button" id="dashboard-visual-point-search-next">Next</button>'
+        '<button type="button" id="dashboard-visual-point-search-next">Next (Enter in search)</button>'
         '</div>'
         '<ol id="dashboard-visual-point-search-results" class="visual-point-search-results" '
-        'aria-label="Point search results"></ol>'
+        'aria-label="Point search results" tabindex="0" data-dashboard-key-component></ol>'
+        '<p class="component-key-hint">Focus results: E next match. Enter in search: next match.</p>'
         '<label class="visual-field" data-visual-point-field="summary"><span>Selected point</span>'
         '<output id="dashboard-visual-point-summary">None selected</output></label>'
         '<label class="visual-field"><span>Point mark color</span>'
@@ -714,11 +715,11 @@ def render_dashboard_visual_dialog(
         '</div>'
     )
     return (
-        '<dialog id="dashboard-visual-dialog" class="visual-dialog" aria-label="Plot visual settings">'
+        '<dialog id="dashboard-visual-dialog" class="visual-dialog" aria-label="Plot visual settings" data-dashboard-key-component tabindex="-1">'
         '<form method="dialog" class="visual-panel">'
         '<div class="visual-panel-header">'
         '<div><h2>Plot Visuals</h2></div>'
-        '<button type="button" class="visual-dialog-close" id="dashboard-visuals-close">Close</button>'
+        '<button type="button" class="visual-dialog-close" id="dashboard-visuals-close">Close (Esc; Q in viewer)</button>'
         '</div>'
         '<section class="visual-section">'
         '<label class="visual-field"><span>Visual preset</span>'
@@ -1260,6 +1261,29 @@ def dashboard_visual_runtime_config_json(
     ).replace("</", "<\\/")
 
 
+def render_dashboard_component_keys_js() -> str:
+    """Bind optional bare commands only to their focused, non-editable component."""
+    return """
+      const bindDashboardComponentKeys = (component, { next = null, close = null } = {}) => {
+        if (!component || component.__metrolizaComponentKeysBound) return;
+        component.__metrolizaComponentKeysBound = true;
+        component.addEventListener('keydown', (event) => {
+          if (event.defaultPrevented || event.repeat || event.isComposing
+              || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey
+              || (event.getModifierState && event.getModifierState('AltGraph'))) return;
+          if (!component.contains(document.activeElement)) return;
+          const target = event.target;
+          if (!target || typeof target.closest !== 'function'
+              || target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
+          const button = event.key === 'e' ? next : event.key === 'q' ? close : null;
+          if (!button || button.disabled) return;
+          event.preventDefault();
+          button.click();
+        });
+      };
+    """
+
+
 def render_dashboard_visual_runtime_js(
     config_var: str = "dashboardVisualConfig",
     *,
@@ -1268,7 +1292,7 @@ def render_dashboard_visual_runtime_js(
 ) -> str:
     """Return browser functions for applying dashboard visual settings to Plotly specs."""
 
-    return f"""
+    return render_dashboard_component_keys_js() + f"""
       const {config_var} = {dashboard_visual_runtime_config_json(initial_settings, preview_labels=preview_labels)};
       const visualStorageBaseKey = {config_var}.storageKey;
       const visualThemeStorageKey = {config_var}.themeStorageKey;
@@ -3325,7 +3349,7 @@ def render_dashboard_visual_runtime_js(
         controls.setAttribute('aria-label', 'Point marking controls');
         controls.innerHTML = ''
           + '<label class="plotly-point-search-field"><span>Find point</span>'
-          + '<input type="search" data-dashboard-point-search-input placeholder="TraceCode or value"></label>'
+          + '<input type="search" data-dashboard-point-search-input title="Enter: next match" placeholder="TraceCode or value"></label>'
           + '<label class="plotly-point-scope-field"><span>Scope</span>'
           + '<select data-dashboard-point-search-scope>'
           + '<option value="record">Record</option>'
@@ -3335,10 +3359,11 @@ def render_dashboard_visual_runtime_js(
           + '<option value="y">Y</option>'
           + '<option value="metadata">Metadata</option>'
           + '</select></label>'
-          + '<div class="plotly-point-nav" role="group" aria-label="Point search matches">'
+          + '<div class="plotly-point-nav" role="group" aria-label="Point search matches" tabindex="0" data-dashboard-key-component>'
           + '<button type="button" data-dashboard-point-search-prev>Prev</button>'
           + '<output data-dashboard-point-search-count>0 matches</output>'
           + '<button type="button" data-dashboard-point-search-next>Next</button>'
+          + '<span class="component-key-hint">Enter in search; E in matches: next</span>'
           + '</div>'
           + '<label class="plotly-point-color-field"><span>Color</span>'
           + '<input type="color" data-dashboard-point-color value="#d66e2f"></label>'
@@ -3358,6 +3383,7 @@ def render_dashboard_visual_runtime_js(
         const searchScope = controls.querySelector('[data-dashboard-point-search-scope]');
         const previous = controls.querySelector('[data-dashboard-point-search-prev]');
         const next = controls.querySelector('[data-dashboard-point-search-next]');
+        bindDashboardComponentKeys(controls.querySelector('.plotly-point-nav'), {{ next }});
         const color = controls.querySelector('[data-dashboard-point-color]');
         const markButton = controls.querySelector('[data-dashboard-point-mark]');
         const clearButton = controls.querySelector('[data-dashboard-point-clear]');
@@ -3832,6 +3858,8 @@ def render_dashboard_visual_runtime_js(
         const pointSearchScope = document.getElementById('dashboard-visual-point-search-scope');
         const pointSearchPrevious = document.getElementById('dashboard-visual-point-search-prev');
         const pointSearchNext = document.getElementById('dashboard-visual-point-search-next');
+        bindDashboardComponentKeys(document.getElementById('dashboard-visual-point-search-results'), {{ next: pointSearchNext }});
+        bindDashboardComponentKeys(dialog, {{ close: closeButton }});
         const customizeButton = document.getElementById('dashboard-visual-customize-open');
         const customizePanel = document.getElementById('dashboard-visual-customize');
         if (openButton && dialog) {{

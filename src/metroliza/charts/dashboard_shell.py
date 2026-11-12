@@ -233,6 +233,40 @@ def render_dashboard_overview_cards(rows: Iterable[tuple[Any, Any]]) -> str:
     return f'<section class="overview-grid">{"".join(cards)}</section>' if cards else ""
 
 
+def render_dashboard_context(rows: Iterable[tuple[Any, Any]]) -> str:
+    """Keep scope facts readable without giving each setting a KPI card."""
+    items = "".join(
+        f'<div><dt>{html.escape(str(label))}</dt><dd>{html.escape(str(value))}</dd></div>'
+        for label, value in rows
+    )
+    return f'<dl class="dashboard-context" aria-label="Analysis scope">{items}</dl>' if items else ""
+
+
+def render_dashboard_compact_hero_css() -> str:
+    """Shared presentation only; chart sizes and numerical content are untouched."""
+    return """
+    .hero { padding: 18px 22px; }
+    .hero-top { gap: 12px; }
+    .hero-copy { min-width: min(100%, 420px); flex: 1 1 420px; }
+    .hero .eyebrow { margin-bottom: 6px; }
+    .hero h1 { font-size: clamp(26px, 3vw, 38px); line-height: 1.1; overflow-wrap: anywhere; }
+    .hero .lede { margin-top: 8px; }
+    .hero .overview-grid {
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 14px;
+    }
+    .hero .metric-card { padding: 10px 12px; }
+    .hero .metric-label { margin-bottom: 5px; font-size: 11px; }
+    .hero .metric-value { font-size: 22px; }
+    .dashboard-context { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 0; }
+    .dashboard-context > div { display: flex; gap: 6px; min-width: 0; max-width: 100%; }
+    .dashboard-context dt { color: var(--muted); font-weight: 650; }
+    .dashboard-context dd { margin: 0; overflow-wrap: anywhere; }
+    .dashboard-context, .component-key-hint { font-size: 12px; line-height: 1.4; }
+    .component-key-hint { color: var(--muted); }
+    [data-dashboard-key-component]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    """
+
+
 def render_dashboard_hero(
     *,
     eyebrow: str,
@@ -240,6 +274,7 @@ def render_dashboard_hero(
     lede_markup: str = "",
     controls_markup: str = "",
     notice_markup: str = "",
+    context_markup: str = "",
     overview_markup: str = "",
     nav_markup: str = "",
 ) -> str:
@@ -256,6 +291,7 @@ def render_dashboard_hero(
         f"{controls_markup}"
         '</div>'
         f"{notice_markup}"
+        f"{context_markup}"
         f"{overview_markup}"
         f"{nav_markup}"
         "</header>"

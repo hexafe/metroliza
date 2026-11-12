@@ -15,6 +15,31 @@ Open it from Export when **HTML dashboard** is enabled:
 The exported dashboard also includes its own **Plot Visuals** dialog when interactive
 Plotly charts are available. Use it for review-time changes inside the HTML file.
 
+## Read a saved dashboard
+
+The compact header shows the source and useful counts first. CSV Summary keeps
+filters, grouping and aggregation in an always-visible scope row. **Run notes**
+contains the technical interactivity/size-limit and unapplied layer choices.
+Rendered/source row counts, applied static-layer facts, chart sampling notes,
+missing specification limits and warnings remain available beside the evidence.
+A missing value is shown as unavailable, rather than converted to zero. Use
+**Key takeaways**, **Group comparison**, and the named chart links to reach the
+results and detail tables. Saved snapshot and data-through facts retain their
+reported meaning; an offline export does not become a live feed.
+
+In **Find point**, press **Enter** for the next match or use **Next**. After
+focusing the match-results list in Plot Visuals, or the inline match-navigation
+strip beside a chart, **E** invokes that component's Next button. It acts only
+inside that focused component and does nothing when there are no matches.
+
+An enlarged chart or Plot Visuals can be closed with its **Close** button or
+**Esc**. **Q** is an alternative while focus is inside that viewer, outside
+editable controls. Closing preserves the existing return to the opening control.
+The local E/Q alternatives do not act while typing in an input, textarea,
+select or editable content. Modified keys (including Shift and Ctrl+Alt/AltGr),
+composition and key repeat are ignored, so browser commands and text editing
+remain available. These alternatives do not apply to the whole page.
+
 ## Start with a recipe
 
 Recipes are complete visual setups. They are the safest choice for routine users because

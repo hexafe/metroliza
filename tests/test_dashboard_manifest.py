@@ -20,8 +20,8 @@ from metroliza.industrial.dashboard_manifest import (
 from metroliza.industrial.industrial_analytics_dashboard import write_production_dashboard
 
 
-_PRE_EXTRACTION_EMPTY_DASHBOARD_SHA256 = (
-    "167acf15dbe7029e6b25d3dfd81cb2c8eb485a16c86436fd6972b42a9292b870"
+_COMPACT_PRESENTATION_EMPTY_DASHBOARD_SHA256 = (
+    "e92579f04fae5a3ebf2efb4151eb7856bbcdfc1fb8fab27b276d4b751c80c44f"
 )
 
 
@@ -137,14 +137,23 @@ def test_invalid_manifest_fails_before_any_filesystem_write(
     assert not output_root.exists()
 
 
-def test_empty_dashboard_html_is_byte_identical_to_pre_extraction_output(tmp_path) -> None:
+def test_empty_dashboard_html_matches_reviewed_compact_presentation(tmp_path) -> None:
     output_path = tmp_path / "dashboard.html"
 
-    result = write_production_dashboard(_empty_manifest(), output_path)
+    manifest = _empty_manifest()
+    serialized_before = json.dumps(manifest, sort_keys=True)
+    result = write_production_dashboard(manifest, output_path)
     output_bytes = output_path.read_bytes()
 
-    assert result["html_dashboard_html_bytes"] == len(output_bytes)
-    assert sha256(output_bytes).hexdigest() == _PRE_EXTRACTION_EMPTY_DASHBOARD_SHA256
+    assert json.dumps(manifest, sort_keys=True) == serialized_before
+    assert manifest["summary"] == {"source_rows": 0, "metric_count": 0, "chart_count": 0}
+    assert manifest["schema"] == DASHBOARD_SCHEMA
+    assert result["html_dashboard_chart_count"] == 0
+    assert result["html_dashboard_plotly_spec_count"] == 0
+    assert result["html_dashboard_embedded_plotly_spec_count"] == 0
+
+    assert result["html_dashboard_html_bytes"] == len(output_bytes) == 27_859
+    assert sha256(output_bytes).hexdigest() == _COMPACT_PRESENTATION_EMPTY_DASHBOARD_SHA256
 
 
 def test_write_result_contract_preserves_exact_dictionary_shape_and_copy_semantics() -> None:
