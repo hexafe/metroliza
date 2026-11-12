@@ -117,13 +117,13 @@ class _SqliteValuePreviewThread(QThread):
 
 
 class _FilterBody(QWidget):
-    """Keep nested controls in sync with the scroll area's current content size."""
+    """Lay out the current scroll body rectangle before queued layout requests."""
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         layout = self.layout()
         if layout is not None:
-            layout.activate()
+            layout.setGeometry(self.rect())
 
 
 class TabularAnalyticsFilterDialog(QDialog):
