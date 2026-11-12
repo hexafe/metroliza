@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,10 +28,19 @@ def test_shell_checks_reports_packaged_runtime_context(tmp_path, monkeypatch):
     assert observation["runtime_context"] == "packaged"
 
 
-def test_shell_checks_run_real_ui_flow_with_actual_platform_claim(tmp_path):
+def test_shell_checks_run_real_ui_flow_with_actual_platform_claim(tmp_path, monkeypatch):
     from metroliza.app.bootstrap import get_or_create_qapplication
 
     app = get_or_create_qapplication()
+    verified = []
+    original = checks._verify_import_results
+
+    def verify(window, workspace, occurrences):
+        original(window, workspace, occurrences)
+        verified.append({row.display_name: row.status.value
+                         for row in workspace.report_planner.model.execution_rows})
+
+    monkeypatch.setattr(checks, "_verify_import_results", verify)
     native = checks.os.name == "nt" and app.platformName().casefold() == "windows"
     observation = run_shell_checks(tmp_path, FIXTURES, expected_dpr=float(app.primaryScreen().devicePixelRatio()))
 
@@ -59,6 +69,69 @@ def test_shell_checks_run_real_ui_flow_with_actual_platform_claim(tmp_path):
         "REF001_2024-01-01_3.pdf",
     ]
     assert observation["evidence"]["import_oracle"]["measurement_values"] == [10.02, 10.02]
+    assert verified == [{f"REF001_2024-01-01_{number}.pdf": "saved" if number in (1, 3) else "skipped"
+                         for number in range(5)}]
+
+
+def test_shell_completed_result_guard_rejects_corrupted_real_import_ui(tmp_path, monkeypatch):
+    from PyQt6.QtCore import Qt
+    from metroliza.ui.report_planner_model import ExecutionStatus
+
+    cases = (
+        ("duplicate_occurrence", "import_results_occurrences"),
+        ("wrong_saved_row", "import_results_statuses"),
+        ("retained_selection", "import_results_stale_approval"),
+        ("editable_row", "import_results_editable"),
+        ("false_counts", "import_results_counts"),
+        ("export_disabled", "import_results_export_unavailable"),
+    )
+    original = checks._verify_import_results
+    rejected = []
+
+    def corrupt(window, workspace, occurrences):
+        original(window, workspace, occurrences)  # One real import supplies the shared clean UI.
+        planner = workspace.report_planner
+        model = planner.model
+        rows = model.execution_rows
+        selected = set(model._selected_occurrence_ids)
+        counts_text = planner.counts.text()
+        export_enabled = window.export_button.isEnabled()
+        for fault, code in cases:
+            with monkeypatch.context() as changed:
+                try:
+                    if fault == "duplicate_occurrence":
+                        model.execution_rows = (replace(rows[0], stable_occurrence_id=rows[1].stable_occurrence_id), *rows[1:])
+                    elif fault == "wrong_saved_row":
+                        target = next(row for row in rows if row.status is ExecutionStatus.SKIPPED)
+                        model.execution_rows = tuple(replace(row, status=ExecutionStatus.SAVED) if row is target else row
+                                                     for row in rows)
+                    elif fault == "retained_selection":
+                        model._selected_occurrence_ids.add(rows[0].stable_occurrence_id)
+                    elif fault == "editable_row":
+                        flags = model.flags
+                        changed.setattr(model, "flags", lambda index: flags(index) | Qt.ItemFlag.ItemIsEditable)
+                    elif fault == "false_counts":
+                        planner.counts.setText("Last import: no saved results")
+                    elif fault == "export_disabled":
+                        window.export_button.setEnabled(False)
+                    with pytest.raises(checks.ShellChecksFailure) as caught:
+                        original(window, workspace, occurrences)
+                    assert str(caught.value) == code
+                    rejected.append(code)
+                    print(f"W13 completed-result rejection: {code}")
+                finally:
+                    model.execution_rows = rows
+                    model._selected_occurrence_ids.clear()
+                    model._selected_occurrence_ids.update(selected)
+                    planner.counts.setText(counts_text)
+                    window.export_button.setEnabled(export_enabled)
+            original(window, workspace, occurrences)  # Every fault is restored and reverified.
+
+    monkeypatch.setattr(checks, "_verify_import_results", corrupt)
+    observation = run_shell_checks(tmp_path, FIXTURES)
+    assert observation["error_codes"] == []
+    assert observation["facets"]["real_review_import"] == "passed"
+    assert rejected == [code for _fault, code in cases]
 
 
 def test_windows_os_with_offscreen_qpa_cannot_claim_native_pass(tmp_path, monkeypatch):
