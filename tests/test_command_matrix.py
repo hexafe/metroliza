@@ -371,3 +371,111 @@ def test_new_command_hints_fit_short_frame_and_native_source_controls(factory, q
     assert all(control.isVisibleTo(dialog) for control in controls)
     assert all(dialog.rect().contains(rect) for rect in rectangles)
     assert all(not first.intersects(second) for index, first in enumerate(rectangles) for second in rectangles[index + 1:])
+
+
+@pytest.mark.parametrize('context', ['industrial_sources', 'industrial_sql', 'industrial_filter', 'industrial_grouping'])
+@pytest.mark.parametrize('sequence', ['Ctrl+S', 'Ctrl+W'])
+def test_actual_industrial_parent_child_shared_keys_keep_real_handler_ownership(
+    factory, qapplication_session, tmp_path, monkeypatch, context, sequence,
+):
+    from metroliza.industrial.industrial_source_config import (
+        build_source_profile, import_source_profiles_to_repository,
+        load_source_profiles_from_config, upsert_source_profile_in_config,
+    )
+    from metroliza.ui import industrial_sync_dialog as sync
+    from metroliza.ui import industrial_export_dialog as industrial_export
+    from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
+    from metroliza.ui.industrial_filter_dialog import IndustrialFilterDialog
+    from metroliza.ui.industrial_grouping_dialog import IndustrialGroupingDialog
+
+    backend_attempts = []
+
+    def forbidden_backend(*_args, **_kwargs):
+        backend_attempts.append(True)
+        raise RuntimeError('Synthetic command control forbids network/workbook execution')
+
+    # Only the worker-construction boundary is replaced, never keys, buttons, guards or handlers.
+    monkeypatch.setattr(sync, 'IndustrialOznakSyncThread', forbidden_backend)
+    monkeypatch.setattr(industrial_export, 'IndustrialExportThread', forbidden_backend)
+    config = tmp_path / 'command-parent-sources.yaml'
+    upsert_source_profile_in_config(config, build_source_profile(
+        profile_key='uiux_commands', profile_name='Synthetic source', source_db_alias='uiux_commands',
+        database_type='mssql', host='synthetic.invalid', port=1433, database_name='synthetic',
+        source_object_name='events', allowed_columns=('id', 'value'),
+    ))
+    if context in ('industrial_sources', 'industrial_sql'):
+        from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+        cache = str(tmp_path / 'parent-cache.db')
+        # The real Data host imports configured profiles before opening cache-mode Sync.
+        import_source_profiles_to_repository(config, IndustrialDataRepository(cache))
+        parent = sync.IndustrialSyncDialog(db_file=cache, report_db_file=None, config_path=config)
+        assert parent.current_profile() is not None and len(parent.checked_profiles()) == 1
+        parent.username_edit.setText('synthetic-user')
+        parent.password_edit.setText('synthetic-session-only')
+        parent_primary = parent.sync_now_button
+        if context == 'industrial_sources':
+            child = IndustrialSourceProfilesDialog(parent, db_file=parent.db_file, config_path=config)
+            child.profile_combo.setCurrentIndex(1)  # index0 is the real empty New source form
+            assert child.current_profile_key() == 'uiux_commands'
+            child.source_name_edit.setText('Synthetic changed source')
+            assert child.profile_from_form().profile_name == 'Synthetic changed source'
+            warnings = []
+            monkeypatch.setattr(QMessageBox, 'warning',
+                                lambda *_args: warnings.append(_args[2]) or QMessageBox.StandardButton.Ok)
+            child_primary = child.save_source_button
+        else:
+            child = sync.IndustrialSqlQueryDialog(parent)
+            child.query_edit.setPlainText('SELECT id, value FROM events')
+            child_primary = child.save_button
+            recipe = tmp_path / 'saved-command.sql'
+            monkeypatch.setattr(sync.QFileDialog, 'getSaveFileName', lambda *_args: (str(recipe), ''))
+    else:
+        parent = factory('industrial_export')
+        parent.output_file = str(tmp_path / 'synthetic-output.xlsx')
+        parent._sync_ui_state()
+        parent_primary = parent.start_button
+        if context == 'industrial_filter':
+            child = IndustrialFilterDialog(parent, db_file=None, state=parent.filter_state)
+            child.references_edit.setPlainText('SYNTHETIC-REF')
+        else:
+            child = IndustrialGroupingDialog(parent, state=parent.grouping_state)
+            child.field_list.item(0).setSelected(True)
+        child_primary = child.apply_button
+    parent.show()
+    parent.activateWindow()
+    wait_until(qapplication_session, parent.isActiveWindow)
+    assert parent_primary.isEnabled() and parent.close_button.isEnabled()
+    parent_primary_hits, parent_close_hits, child_hits = [], [], []
+    parent_primary.clicked.connect(lambda: parent_primary_hits.append(True))
+    parent.close_button.clicked.connect(lambda: parent_close_hits.append(True))
+    child_primary.clicked.connect(lambda: child_hits.append('primary'))
+    child_close = child.close_button if context in ('industrial_sources', 'industrial_sql') else child.cancel_button
+    child_close.clicked.connect(lambda: child_hits.append('close'))
+    # SQL is the real nonmodal editor; the other three are modal children in their launchers.
+    child.setModal(context != 'industrial_sql')
+    child.show()
+    try:
+        press(qapplication_session, child, sequence)
+        assert child_hits == ['primary' if sequence == 'Ctrl+S' else 'close']
+        assert not parent_primary_hits and not parent_close_hits and not backend_attempts
+        assert parent.isVisible()
+        if context == 'industrial_sources':
+            assert not warnings, warnings
+            expected = 'Synthetic changed source' if sequence == 'Ctrl+S' else 'Synthetic source'
+            assert load_source_profiles_from_config(config)[0].profile_name == expected
+            assert child.isVisible() == (sequence == 'Ctrl+S')  # immediate Save keeps editor open
+        elif context == 'industrial_sql':
+            assert recipe.exists() == (sequence == 'Ctrl+S')
+            if recipe.exists():
+                assert recipe.read_text(encoding='utf-8') == 'SELECT id, value FROM events'
+            assert child.isVisible() == (sequence == 'Ctrl+S')
+        elif context == 'industrial_filter':
+            assert parent.filter_state.references == (('SYNTHETIC-REF',) if sequence == 'Ctrl+S' else ())
+            assert not child.isVisible()
+        else:
+            expected = (str(child.field_list.item(0).data(32)),) if sequence == 'Ctrl+S' else ()
+            assert parent.grouping_state.fields == expected
+            assert not child.isVisible()
+    finally:
+        assert child.close()
+        assert parent.close()
