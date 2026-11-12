@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261113)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261114)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -62,6 +62,8 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 '- Help opens manuals pinned to this build, including the shared keyboard reference<br>',
             ],
         )
+        self.assertIn("Version 2026.09rc1 (build 261113)", VersionDate.release_notes)
+        self.assertNotIn("261113", current_section)
         self.assertIn("Version 2026.09rc1 (build 261112)", VersionDate.release_notes)
         self.assertNotIn("261112", current_section)
         self.assertIn("Version 2026.06rc2 (build 260711)", VersionDate.release_notes)

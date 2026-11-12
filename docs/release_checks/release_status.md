@@ -10,10 +10,10 @@ the ordered #1109, #1142, STEP2+STEP3 and #1063 integrations. The live execution
 the actual merge commits, final branch cut and cleanup receipts. This source-line decision does
 not distribute or publish a packaged candidate.
 
-## UI workflow source candidate — build 261113
+## UI workflow source candidate — build 261114
 
 The UI delivery under [#1159](https://github.com/hexafe/metroliza/issues/1159) uses
-`2026.09 RC1 (build 261113)` on the unchanged `2026.09rc1` line. It brings visible
+`2026.09 RC1 (build 261114)` on the unchanged `2026.09rc1` line. It brings visible
 commands and workspace navigation, completed report results, clearer filter/group
 controls and output choices, guided Profiles/Industrial/Realtime setup, and a
 compact offline dashboard overview. Broader product epics retain their original
@@ -21,14 +21,15 @@ criteria; these UI additions do not establish their completion.
 
 | Item | State | Evidence / next gate |
 |---|---|---|
-| 261113 identity | Assigned to the new UI source; package not yet built | Coordinator check at 20:35 UTC on 2026-11-12 found no use in reachable version history, current refs/tags, three releases or the latest 100 of 2,894 artifacts. Artifact scope was limited; final build provenance will record the actual source/tree and UTC build time |
+| 261114 identity | Assigned by the coordinator after the 261113 build attempt started | Separate identity for the Windows test portability correction; final build provenance must record its actual source/tree and UTC build time |
+| Superseded candidate 261113 | Build attempt started; no accepted package claimed | PR #1215 Windows core job 131492860207 failed an assertion comparing native Windows and POSIX path spellings after the real read-only SQLite connection succeeded. Original FAIL retained; the build attempt does not qualify 261114. The original 261113 assignment check at 20:35 UTC on 2026-11-12 covered reachable version history, current refs/tags, three releases and latest 100 of 2,894 artifacts |
 | Manual set | Committed and pinned | [Immutable manuals](https://github.com/hexafe/metroliza/tree/964241e1d872bec158f2def4bad4fdbd3c0e6bc9/docs/user_manual), including the central keyboard reference; the same full SHA is the default Help/export docs ref. Published-link verification remains part of final preparation |
 | Source review | Leaf reviews are source-only; finalization and aggregate acceptance pending | Preserve each leaf's exact source/review binding and the final independent/GitHub review gates |
 | Local Stage A checks | PASS on `b5e1f629`: 70 focused tests, one declared DPR 1.5 geometry case and full security audit | Earlier preliminary security FAIL remains retained. The six unchanged SQL finding rebindings and one public fixture placeholder passed the strict local gate; this evidence does not replace final-source CI |
-| Final source CI | Pending for the final 261113 source/tree | Full coverage, security, native Windows source cohorts and required current-base checks/GitHub review must finish on the admitted head |
-| 261113 package and downloaded ZIP | **NOT_RUN** | One Combined build must preserve the same qualified onedir through launcher/ZIP, followed by exact downloaded artifact, provenance, notices and dependency-inventory verification |
-| 261113 manual / release acceptance | **NOT_RUN** | Physical Windows/Polish-keyboard/hand/screen-reader observations, clean-machine/desktop Excel and applicable live-service/data evidence remain separate. No stable promotion or published release is assigned by this metadata change |
-| Historical source build 261112 | Retained at source `7b0de056` and its accepted integration history | The new UI source uses 261113; historical 261112 source/CI evidence stays bound to its original bytes |
+| Final source CI | Pending for the final 261114 source/tree | Full coverage, security, native Windows source cohorts and required current-base checks/GitHub review must finish on the admitted head |
+| 261114 package and downloaded ZIP | **NOT_RUN** | One Combined build must preserve the same qualified onedir through launcher/ZIP, followed by exact downloaded artifact, provenance, notices and dependency-inventory verification |
+| 261114 manual / release acceptance | **NOT_RUN** | Physical Windows/Polish-keyboard/hand/screen-reader observations, clean-machine/desktop Excel and applicable live-service/data evidence remain separate. No stable promotion or published release is assigned by this metadata change |
+| Historical source build 261112 | Retained at source `7b0de056` and its accepted integration history | The new UI source uses 261114; historical 261112 source/CI evidence stays bound to its original bytes |
 
 The frozen qualified `261031` package and its still-open manual acceptance remain
 as recorded below. This new source candidate does not move the archived source,

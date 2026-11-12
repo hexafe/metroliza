@@ -157,7 +157,7 @@ class TestDbUtils(unittest.TestCase):
                 with mock.patch.object(db.sqlite3, "connect", side_effect=connect) as observed:
                     with sqlite_readonly_connection_scope(str(source), timeout_s=0.1) as connection:
                         uri = urlsplit(observed.call_args.args[0])
-                        self.assertEqual(unquote(uri.path), source.resolve().as_posix())
+                        self.assertEqual(Path(unquote(uri.path)), source.resolve())
                         self.assertEqual(parse_qs(uri.query), {"mode": ["ro"]})
                         self.assertEqual(observed.call_args.kwargs,
                                          {"uri": True, "timeout": 0.1, "cached_statements": 0})

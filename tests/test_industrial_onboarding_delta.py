@@ -1,5 +1,6 @@
 """FULL1 regressions: active config ownership and truthful cache outcome guidance."""
 from contextlib import closing
+from pathlib import Path
 import sqlite3
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -167,7 +168,7 @@ def test_outcome_read_is_bounded_readonly_closed_and_missing_stays_unknown(ui, t
     assert dialog._cache_has_rows() is False
     assert len(connections) == 1 and statements == ['SELECT 1 FROM industrial_records LIMIT 1']
     uri = urlsplit(parameters[0][0])
-    assert unquote(uri.path) == path.resolve().as_posix()
+    assert Path(unquote(uri.path)) == path.resolve()
     assert parse_qs(uri.query) == {'mode': ['ro']}  # A live cache must not use immutable=1.
     assert parameters[0][1] == {'uri': True, 'timeout': 0.1}
     assert closed == ['cursor', 'connection'] and path.read_bytes() == before
