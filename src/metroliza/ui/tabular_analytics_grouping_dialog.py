@@ -12,6 +12,7 @@ from PyQt6.QtGui import QBrush, QColor, QIntValidator, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
+    QLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QVBoxLayout,
@@ -389,10 +391,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.df = self._empty_grouping_dataframe()
         self._apply_group_assignments(self._initial_group_assignments)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(14, 14, 14, 14)
+        outer_layout.setSpacing(10)
+        attach_help_menu_to_layout(outer_layout, self, [("CSV Summary manual", "csv_summary")])
+        self.grouping_body_scroll = QScrollArea()
+        self.grouping_body_scroll.setWidgetResizable(True)
+        self.grouping_body_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        grouping_body = QWidget()
+        layout = QVBoxLayout(grouping_body)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        attach_help_menu_to_layout(layout, self, [("CSV Summary manual", "csv_summary")])
+        # Respect list/control minima and scroll the body on short screens instead of overlapping.
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.grouping_body_scroll.setWidget(grouping_body)
+        outer_layout.addWidget(self.grouping_body_scroll, 1)
 
         self.selector_status_label = status_chip("No grouping columns selected", "neutral")
         layout.addWidget(self.selector_status_label)
@@ -460,6 +473,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         columns_grid.addWidget(self.remove_column_button, 3, 1)
         columns_grid.addWidget(QLabel("List focus: E adds the current column"), 4, 0)
         columns_grid.addWidget(QLabel("List focus: R removes the current column"), 4, 1)
+        columns_grid.setRowStretch(2, 1)
         columns_grid.setColumnStretch(0, 1)
         columns_grid.setColumnStretch(1, 1)
         layout.addWidget(column_area, 1)
@@ -570,8 +584,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
         layout.addWidget(list_splitter, 3)
 
-        footer = QHBoxLayout()
-        footer.setSpacing(8)
+        footer = QGridLayout()
+        footer.setHorizontalSpacing(8)
+        footer.setVerticalSpacing(6)
         self.assign_filtered_rows_button = QPushButton("Assign all filtered rows...")
         self.create_group_button = QPushButton("Assign selected row values...")
         self.rename_group_button = QPushButton("Rename group")
@@ -608,16 +623,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.dont_use_grouping_button, name="Reset CSV grouping draft")
         configure_accessibility(self.cancel_button, name="Cancel CSV analytics grouping")
         configure_accessibility(self.use_grouping_button, name="Use CSV analytics grouping")
-        footer.addWidget(self.assign_filtered_rows_button)
-        footer.addWidget(self.create_group_button)
-        footer.addWidget(self.rename_group_button)
-        footer.addWidget(self.delete_group_button)
-        footer.addWidget(self.clear_selection_button)
-        footer.addStretch(1)
-        footer.addWidget(self.dont_use_grouping_button)
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.use_grouping_button)
-        layout.addLayout(footer)
+        footer.addWidget(self.assign_filtered_rows_button, 0, 0, 1, 2)
+        footer.addWidget(self.create_group_button, 0, 2, 1, 2)
+        footer.addWidget(self.rename_group_button, 0, 4)
+        footer.addWidget(self.delete_group_button, 1, 0)
+        footer.addWidget(self.clear_selection_button, 1, 1)
+        footer.addWidget(self.dont_use_grouping_button, 1, 2)
+        footer.addWidget(self.cancel_button, 1, 3)
+        footer.addWidget(self.use_grouping_button, 1, 4)
+        outer_layout.addLayout(footer)
 
         self.column_search.returnPressed.connect(self._apply_column_search)
         self.selected_column_search.returnPressed.connect(self._apply_selected_column_search)

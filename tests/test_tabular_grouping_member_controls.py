@@ -294,3 +294,82 @@ def test_bare_commands_only_run_in_their_directly_focused_lists(dialog, qapplica
     dialog.selected_columns_list.setFocus()
     QTest.keyClick(dialog.selected_columns_list, Qt.Key.Key_R)
     assert dialog.selector_columns == []
+
+
+@pytest.mark.parametrize("size", [(997, 680), (760, 560)])
+def test_grouping_small_screen_keeps_lists_separate_and_footer_reachable(
+    qapplication_session, monkeypatch, size,
+):
+    import json
+    import os
+    from pathlib import Path
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtGui import QFont
+
+    screen = qapplication_session.primaryScreen().availableGeometry()
+    artifact_dir = os.environ.get("METROLIZA_GROUPING_GEOMETRY_DIR")
+    if artifact_dir:
+        # The explicit DPI evidence run must prove the real configured screen before rendering.
+        assert (screen.width(), screen.height()) == (1280, 720)
+        assert qapplication_session.primaryScreen().devicePixelRatio() == 1.5
+    else:
+        # Ordinary CI verifies the same local layout on a deterministic virtual available area.
+        from metroliza.ui import ui_foundation
+        monkeypatch.setattr(ui_foundation, "_available_window_size", lambda *_a: (1240, 680))
+    previous_font = qapplication_session.font()
+    qapplication_session.setFont(QFont("Liberation Sans", 9))
+    window = TabularAnalyticsGroupingDialog(
+        dataframe=pd.DataFrame({"part": [f"P-{i}" for i in range(3000)], "line": [i % 12 for i in range(3000)]}),
+        identity_column="part",
+    )
+    try:
+        for group in range(12):
+            window._assign_rows_to_group(list(range(group + 1, 3001, 12)), f"G-{group:03d}")
+        window._refresh_all(preferred_group="G-000")
+        window.show()
+        qapplication_session.processEvents()
+        window.resize(*size)
+        qapplication_session.processEvents()
+        assert (window.width(), window.height()) == size, (screen, window.devicePixelRatioF())
+        for listing, button in (
+            (window.available_columns_list, window.add_column_button),
+            (window.selected_columns_list, window.remove_column_button),
+            (window.group_members_list, window.remove_from_group_button),
+        ):
+            assert listing.parentWidget() is button.parentWidget()
+            assert listing.geometry().bottom() < button.geometry().top()
+            assert listing.geometry().height() >= listing.minimumHeight()
+        footer = (
+            window.assign_filtered_rows_button, window.create_group_button, window.rename_group_button,
+            window.delete_group_button, window.clear_selection_button, window.dont_use_grouping_button,
+            window.cancel_button, window.use_grouping_button,
+        )
+        footer_rects = [button.rect().translated(button.mapTo(window, QPoint())) for button in footer]
+        assert all(window.rect().contains(rect) for rect in footer_rects)
+        assert all(not first.intersects(second)
+                   for index, first in enumerate(footer_rects) for second in footer_rects[index + 1:])
+        assert all(not window.grouping_body_scroll.isAncestorOf(button) for button in footer)
+        # Body commands remain reachable without pushing the pinned footer off screen.
+        window.grouping_body_scroll.ensureWidgetVisible(window.remove_from_group_button)
+        qapplication_session.processEvents()
+        scroll = window.grouping_body_scroll
+        member_rect = window.remove_from_group_button.rect().translated(
+            window.remove_from_group_button.mapTo(scroll.viewport(), QPoint()))
+        assert scroll.viewport().rect().contains(member_rect)
+        if artifact_dir:
+            target = Path(artifact_dir)
+            target.mkdir(parents=True, exist_ok=True)
+            stem = f"grouping-{size[0]}x{size[1]}"
+            assert window.grab().save(str(target / f"{stem}.png"))
+            (target / f"{stem}.json").write_text(json.dumps({
+                "window": list(size), "dpr": window.devicePixelRatioF(),
+                "available_screen": [qapplication_session.primaryScreen().availableGeometry().width(),
+                                     qapplication_session.primaryScreen().availableGeometry().height()],
+                "body_scroll_maximum": scroll.verticalScrollBar().maximum(),
+                "footer_rects": [[r.x(), r.y(), r.width(), r.height()] for r in footer_rects],
+                "member_button_in_viewport": [member_rect.x(), member_rect.y(), member_rect.width(), member_rect.height()],
+            }, indent=2))
+    finally:
+        window._reset_grouping_draft(refresh=False)
+        window.close()
+        qapplication_session.setFont(previous_font)
