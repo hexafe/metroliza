@@ -109,15 +109,20 @@ def test_export_cancel_and_error_after_terminal_dismissal(qapplication_session, 
         def stop_exporting(self):
             cancel_calls.append("cancel")  # Cleanup still owns the running thread.
 
-    request = SimpleNamespace(
-        paths=SimpleNamespace(excel_file=str(tmp_path / "output.xlsx"), html_dashboard_file=None),
-        options=SimpleNamespace(
-            violin_plot_min_samplesize=6, summary_plot_scale=0,
-            export_target="excel_xlsx", generate_html_dashboard=False,
-        ),
+    request = module.build_validated_export_request(
+        db_file=str(tmp_path / "source.db"), excel_file=tmp_path / "output.xlsx",
+        selected_preset="fast_diagnostics", export_type="Line", export_target="excel_xlsx",
+        sorting_parameter="Date", violin_input="6", summary_scale_input="0",
+        hide_ok_results=False, generate_html_dashboard=False,
+        filter_query=module.DEFAULT_FILTER_QUERY, grouping_df=None,
     )
+    received_requests = []
+
+    def create_thread(export_request):
+        received_requests.append(export_request)
+        return CleaningExportThread(export_request=export_request)
     monkeypatch.setattr(module, "build_validated_export_request", lambda **kwargs: request)
-    monkeypatch.setattr(module, "create_export_data_thread", CleaningExportThread)
+    monkeypatch.setattr(module, "create_export_data_thread", create_thread)
     monkeypatch.setattr(module, "create_worker_progress_dialog", _progress_dialog)
     monkeypatch.setattr(module.ExportDialog, "_load_dialog_config", lambda self: {"selected_preset": "fast_diagnostics"})
     monkeypatch.setattr(module, "load_dashboard_visual_settings", lambda: {})
@@ -129,9 +134,12 @@ def test_export_cancel_and_error_after_terminal_dismissal(qapplication_session, 
     monkeypatch.setattr(dialog, "_refresh_metadata_enrichment_notice", lambda: None)
     monkeypatch.setattr(dialog, "log_and_exit", errors.append)
     dialog._close_requested = True
+    dialog.sort_measurements_combobox.setCurrentText("Date")
     dialog.show_loading_screen()
     thread = dialog.export_thread
     try:
+        assert errors == []
+        assert received_requests == [request] and received_requests[0] is request
         assert _wait_until(qapplication_session, thread.isRunning)
         dialog.stop_exporting()
         thread.canceled.emit()
