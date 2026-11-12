@@ -8,7 +8,7 @@ import math
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QDeadlineTimer, QEventLoop, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QBrush, QColor, QIntValidator
+from PyQt6.QtGui import QBrush, QColor, QIntValidator, QKeySequence
 from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
@@ -535,6 +535,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.group_members_list, name="Rows in selected CSV group")
         members_column.addWidget(self.group_members_list, 1)
+        self.remove_from_group_button = QPushButton("Remove from group (Alt+X)")
+        self.remove_from_group_button.setShortcut(QKeySequence("Alt+X"))
+        self.remove_from_group_button.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.remove_from_group_button.setAutoDefault(False)
+        configure_accessibility(
+            self.remove_from_group_button,
+            name="Remove selected members from group",
+            description="Return selected members to the default group; source rows are kept. Alt+X.",
+        )
+        members_column.addWidget(self.remove_from_group_button)
         list_splitter.addWidget(members_widget)
         list_splitter.setStretchFactor(0, 2)
         list_splitter.setStretchFactor(1, 1)
@@ -611,6 +621,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list.itemSelectionChanged.connect(self._store_current_selection)
         self.selector_list.itemDoubleClicked.connect(self._assign_matching_rows_from_item)
         self.groups_list.itemSelectionChanged.connect(self._populate_group_members)
+        self.group_members_list.itemSelectionChanged.connect(self._sync_member_action)
+        self.remove_from_group_button.clicked.connect(self.remove_selected_group_members)
         self.groups_list.itemDoubleClicked.connect(lambda _item: self.rename_group())
         self.create_group_button.clicked.connect(lambda: self.create_group())
         self.assign_filtered_rows_button.clicked.connect(self.assign_filtered_rows)
@@ -636,7 +648,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self.last_page_button,
                 self.jump_page_button,
             ),
-            danger=(self.delete_group_button,),
+            danger=(self.delete_group_button, self.remove_from_group_button),
         )
         apply_metroliza_theme(self)
         self._configure_stretch_panes()
@@ -2272,6 +2284,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._ensure_group_color_integrity()
         self._refresh_all(preferred_group=self.default_group)
 
+    def _sync_member_action(self) -> None:
+        selected_group = self._selected_group_name()
+        self.remove_from_group_button.setEnabled(bool(
+            selected_group and selected_group != self.default_group
+            and any(item.data(Qt.ItemDataRole.UserRole) is not None
+                    for item in self.group_members_list.selectedItems())
+        ))
+
     def remove_selected_group_members(self) -> None:
         selected_group = self._selected_group_name()
         if not selected_group or selected_group == self.default_group:
@@ -2334,6 +2354,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.rename_group_button.setEnabled(bool(selected_group))
         self.delete_group_button.setEnabled(bool(selected_group and selected_group != self.default_group))
         self.clear_selection_button.setEnabled(bool(self.selected_selector_keys))
+        self._sync_member_action()
         self.use_grouping_button.setEnabled(filter_state.mode != "invalid")
 
     def _refresh_selectors(self) -> None:
