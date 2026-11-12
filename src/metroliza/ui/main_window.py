@@ -18,7 +18,7 @@ from metroliza.ui.shortcuts import (
     LEGACY_MAIN_SHORTCUTS, MAIN_SHORTCUTS, WORKSPACE_SHORTCUTS,
     bind_shortcut, set_mnemonic, shortcut_tooltip, visible_shortcut,
 )
-from PyQt6.QtCore import QByteArray, QSettings, Qt, QTimer
+from PyQt6.QtCore import QByteArray, QEvent, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -135,6 +135,53 @@ def _warm_feature_module(label, module_name, *, importer):
     return module_name, None
 
 
+class WorkspaceNavigationCombo(QComboBox):
+    """Arrow/type-ahead/wheel selection previews; explicit confirmation opens work."""
+
+    confirmed = pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+        self._confirming_popup = False
+        self.view().installEventFilter(self)
+        self.view().viewport().installEventFilter(self)
+        self.activated.connect(self._popup_activated)
+
+    def _popup_activated(self, index):
+        if self._confirming_popup:
+            self._confirming_popup = False
+            self.confirmed.emit(index)
+
+    def _clear_popup_confirmation(self):
+        self._confirming_popup = False
+
+    def eventFilter(self, watched, event):
+        key_confirmation = (event.type() == QEvent.Type.KeyPress
+                            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                            and event.modifiers() == Qt.KeyboardModifier.NoModifier)
+        mouse_confirmation = (event.type() == QEvent.Type.MouseButtonRelease
+                              and event.button() == Qt.MouseButton.LeftButton)
+        if key_confirmation:
+            index = self.view().currentIndex().row()
+            if index >= 0:
+                self.setCurrentIndex(index)
+                self.hidePopup()
+                self.confirmed.emit(index)
+            return True
+        if mouse_confirmation:
+            self._confirming_popup = True
+            QTimer.singleShot(0, self._clear_popup_confirmation)
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event):
+        if (not self.view().isVisible() and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+            self.confirmed.emit(self.currentIndex())
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class MainWindow(QMainWindow):
     """A main window class that provides the user interface for the Metroliza application."""
 
@@ -168,6 +215,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self.decode_icon(encoded_icon))
 
         # Initialize the dialogs and attributes
+        self._skip_navigation_release = False
         self._module_launch_buttons = {}
         self._module_context_labels = {}
         self.parsing_dialog = None
@@ -543,19 +591,19 @@ class MainWindow(QMainWindow):
 
     def _setup_shortcuts(self):
         bind_shortcut(self.open_database_action, MAIN_SHORTCUTS["open_database"][0])
-        bind_shortcut(self.choose_report_folder_action, MAIN_SHORTCUTS["choose_source"][0])
         self.command_actions = {}
         self.legacy_command_actions = {}
         for command, sequence in LEGACY_MAIN_SHORTCUTS.items():
-            callback = (self.open_database_action.trigger if command == "open_database"
-                        else lambda: self.command_actions["import_reports"].trigger())
             action = QAction(MAIN_SHORTCUTS[command][1], self)
             bind_shortcut(action, sequence)
-            action.triggered.connect(callback)
+            action.triggered.connect(lambda: self.command_actions["import_reports"].trigger())
             self.addAction(action)
             self.legacy_command_actions[command] = action
         self.tools_menu.addSeparator()
         for command, callback in (
+            ("report_database", self._choose_context_database),
+            ("choose_source", lambda: self._trigger_report_command("directory_button")),
+            ("cancel_reports", self.home_cancel_report.click),
             ("review_reports", lambda: self._trigger_report_command("scan_button")),
             ("import_reports", lambda: self._trigger_report_command("parse_button")),
             ("export_workbook", self.export_button.click),
@@ -567,15 +615,18 @@ class MainWindow(QMainWindow):
             self.command_actions[command] = action
         pages = self.view_menu.addMenu("Workspaces")
         self.workspace_actions = {}
-        for action, page_id in ((self.csv_summary_action, "csv_summary"),
-                                (self.industrial_data_action, "industrial_data"),
-                                (self.realtime_monitoring_action, "realtime_monitor"),
-                                (self.parser_profiles_action, "parser_profiles")):
-            action.setText(f"{action.text()} [{WORKSPACE_SHORTCUTS[page_id]}]")
+        module_actions = {
+            "csv_summary": self.csv_summary_action, "industrial_data": self.industrial_data_action,
+            "realtime_monitor": self.realtime_monitoring_action, "parser_profiles": self.parser_profiles_action,
+        }
         for page_id, sequence in WORKSPACE_SHORTCUTS.items():
-            index = self.navigation_combo.findData(page_id)
-            action = pages.addAction(self.navigation_combo.itemText(index).split(" [")[0])
-            action.triggered.connect(lambda checked=False, selected=page_id: self._activate_workspace(selected))
+            action = module_actions.get(page_id)
+            if action is None:
+                index = self.navigation_combo.findData(page_id)
+                action = pages.addAction(self.navigation_combo.itemText(index).split(" [")[0])
+                action.triggered.connect(lambda checked=False, selected=page_id: self._activate_workspace(selected))
+            else:
+                pages.addAction(action)
             bind_shortcut(action, sequence)
             self.addAction(action)
             self.workspace_actions[page_id] = action
@@ -583,7 +634,7 @@ class MainWindow(QMainWindow):
                                (self.modifydb_button, "d"), (self.map_characteristics_button, "m"),
                                (self.export_button, "e")):
             set_mnemonic(button, letter)
-        visible_shortcut(self.export_button, MAIN_SHORTCUTS["export_workbook"][0])
+        shortcut_tooltip(self.export_button, "export_workbook")
 
     def _trigger_report_command(self, button_name):
         host = self._ensure_reports_workspace()
@@ -602,14 +653,24 @@ class MainWindow(QMainWindow):
                 enabled = button.isEnabled()
                 set_mnemonic(button, letter)
                 shortcut_tooltip(button, command)
-                visible_shortcut(button, MAIN_SHORTCUTS[command][0])
+
             self.command_actions[command].setEnabled(enabled)
         if host is not None:
-            visible_shortcut(host.directory_button, MAIN_SHORTCUTS["choose_source"][0])
-            visible_shortcut(host.database_button, MAIN_SHORTCUTS["open_database"][0])
+            shortcut_tooltip(host.directory_button, "choose_source")
+            shortcut_tooltip(host.database_button, "report_database")
         self.command_actions["export_workbook"].setEnabled(self.export_button.isEnabled())
         self.legacy_command_actions["import_reports"].setEnabled(self.command_actions["import_reports"].isEnabled())
-        self.legacy_command_actions["open_database"].setEnabled(self.open_database_action.isEnabled())
+        busy = host is not None and not host.can_change_workspace()
+        in_reports = self.navigation_combo.currentData() == "reports"
+        database_enabled = host.database_button.isEnabled() if in_reports and host is not None else (
+            bool(self.directory) if in_reports else not busy
+        )
+        self.command_actions["report_database"].setEnabled(database_enabled)
+        self.command_actions["report_database"].setText(
+            "Select or create Reports database…" if in_reports else "Open database…"
+        )
+        self.command_actions["choose_source"].setEnabled(host.directory_button.isEnabled() if host is not None else True)
+        self.command_actions["cancel_reports"].setEnabled(busy)
 
     def _launch_home_next_action(self):
         reports = self._reports_workspace
@@ -618,6 +679,12 @@ class MainWindow(QMainWindow):
             self.launch_export_dialog()
         else:
             self.launch_parsing_dialog()
+
+    def _choose_context_database(self):
+        if self.navigation_combo.currentData() == "reports":
+            self._trigger_report_command("database_button")
+        else:
+            self._choose_database()
 
     def _choose_database(self):
         from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER
@@ -717,7 +784,7 @@ class MainWindow(QMainWindow):
     def setup_buttons_layout(self):
         """Compose primary workspaces around one persistent report owner."""
         self.layout.addWidget(self.workspace_notice_label)
-        self.navigation_combo = QComboBox()
+        self.navigation_combo = WorkspaceNavigationCombo()
         self.navigation_combo.setAccessibleName("Metroliza workspace navigation")
         self.layout.addWidget(self.navigation_combo)
         shell_row = QHBoxLayout()
@@ -758,7 +825,10 @@ class MainWindow(QMainWindow):
             button = QPushButton()
             button.clicked.connect(lambda checked=False, selected=page_id: self._activate_workspace(selected))
             self._module_launch_buttons.setdefault(page_id, []).append((button, title))
+            if page_id in ("industrial_data", "realtime_monitor"):
+                self._database_workflow_buttons.append(button)
             module_grid.addWidget(button, index // 2, index % 2)
+        home_layout.addWidget(secondary_label("Open database [Ctrl+D] · Reports source [Ctrl+Shift+D]"))
         home_layout.addLayout(module_grid)
         home_layout.addStretch(1)
         self._add_workspace_page("Home", self.home_page)
@@ -772,6 +842,7 @@ class MainWindow(QMainWindow):
         downstream_row.setSpacing(4)
         for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
             downstream_row.addWidget(button)
+        downstream_row.addWidget(secondary_label("Ctrl+E"))
         reports_layout.addLayout(downstream_row)
         self._add_workspace_page("Reports", self.reports_page)
         for title, description, action, callback in (
@@ -789,15 +860,14 @@ class MainWindow(QMainWindow):
             self._add_workspace_page(title, self._build_workspace_landing_page(
                 title, description, ((action, callback),),
             ))
-        self.navigation_list.itemActivated.connect(
-            lambda item: self._activate_workspace(item.data(Qt.ItemDataRole.UserRole))
-        )
+        self.navigation_list.installEventFilter(self)
+        self.navigation_list.viewport().installEventFilter(self)
         self.navigation_list.itemClicked.connect(
             lambda item: self._activate_workspace(item.data(Qt.ItemDataRole.UserRole))
         )
         self.navigation_list.currentRowChanged.connect(self._on_navigation_changed)
         self.navigation_combo.currentIndexChanged.connect(self.navigation_list.setCurrentRow)
-        self.navigation_combo.activated.connect(
+        self.navigation_combo.confirmed.connect(
             lambda index: self._activate_workspace(self.navigation_combo.itemData(index))
         )
         self.navigation_list.setCurrentRow(0)
@@ -863,6 +933,25 @@ class MainWindow(QMainWindow):
         self.navigation_combo.blockSignals(True)
         self.navigation_combo.setCurrentIndex(index)
         self.navigation_combo.blockSignals(False)
+        if hasattr(self, "command_actions"):
+            self._sync_shortcuts()
+
+    def eventFilter(self, watched, event):
+        navigation = getattr(self, "navigation_list", None)
+        if navigation is not None and watched is navigation.viewport():
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                self._skip_navigation_release = True
+                return True
+            if event.type() == QEvent.Type.MouseButtonRelease and self._skip_navigation_release:
+                self._skip_navigation_release = False
+                return True
+        if (watched is navigation
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+            self._activate_workspace(self.navigation_combo.currentData())
+            return True
+        return super().eventFilter(watched, event)
 
     def _update_navigation_layout(self):
         compact = self.width() < 1000
@@ -901,6 +990,9 @@ class MainWindow(QMainWindow):
             host.state_changed.connect(self._sync_workflow_next_step)
             host.shutdown_ready.connect(self._on_reports_shutdown_ready)
             self._reports_layout.insertWidget(0, host, 1)
+            host.directory_label.setText("Reports directory or archive: [Ctrl+Shift+D]")
+            host.database_label.setText("Database file: [Ctrl+D]")
+            host.layout.addWidget(secondary_label("Review [Ctrl+R] · Import [Ctrl+S]"), 5, 0, 1, 2)
             for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
                 button.setStyleSheet(PLANNER_ACTION_STYLE)
             host.apply_workspace_snapshot(self.workspace_context.snapshot)
@@ -963,6 +1055,11 @@ class MainWindow(QMainWindow):
 
     def _sync_module_launchers(self):
         for page_id, label in self._module_context_labels.items():
+            if page_id == "csv_summary":
+                csv = self.window_coordinator.get("csv_summary")
+                field = getattr(csv, "input_file_field", None)
+                path = field.text() if field is not None else "No CSV/Excel file selected"
+                label.setText(f"CSV session input: {path}. Independent of the Reports database.")
             if page_id in ("industrial_data", "realtime_monitor"):
                 label.setText(f"Reports database: {self.db_file or 'not selected; choose a database in this module'}. "
                               "Open again to resume its current window.")
@@ -1054,7 +1151,7 @@ class MainWindow(QMainWindow):
         self.home_next_action.setAccessibleName(caption)
         visible_shortcut(self.home_next_action, "Ctrl+E" if caption == "Export Workbook" else "Ctrl+2")
         visible_shortcut(self.home_review_action, "Ctrl+2")
-        visible_shortcut(self.home_cancel_report, "Alt+L")
+        visible_shortcut(self.home_cancel_report, MAIN_SHORTCUTS["cancel_reports"][0])
         set_mnemonic(self.home_next_action, "w" if caption == "Export Workbook" else "a" if busy else "o")
         if caption == "Export Workbook":
             shortcut_tooltip(self.home_next_action, "export_workbook")
@@ -1082,6 +1179,8 @@ class MainWindow(QMainWindow):
             button.setEnabled(bool(self.db_file) and not busy)
         for button in self._database_workflow_buttons:
             button.setEnabled(not busy)
+        self.industrial_data_action.setEnabled(not busy)
+        self.realtime_monitoring_action.setEnabled(not busy)
         self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
         self._sync_shortcuts()
         self._sync_module_launchers()
@@ -1571,6 +1670,9 @@ class MainWindow(QMainWindow):
                 dialog = IndustrialAnalyticsDialog(self, source_kind=SOURCE_TABULAR_FILE)
                 dialog.setModal(False)
                 dialog.setWindowModality(Qt.WindowModality.NonModal)
+                field = getattr(dialog, "input_file_field", None)
+                if field is not None:
+                    field.textChanged.connect(self._sync_module_launchers)
                 return dialog
 
             return self._open_coordinated_window(

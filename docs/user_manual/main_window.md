@@ -51,8 +51,10 @@ when it has a Help menu. Existing Alt mnemonics remain optional alternatives for
 | Ctrl+5 | Realtime Monitor |
 | Ctrl+Shift+F | Parser Profiles |
 | Ctrl+Shift+T | Tools |
-| Ctrl+D | Open database… |
-| Ctrl+Shift+D | Choose report folder… |
+| Ctrl+O | Open database… |
+| Ctrl+D | Select/create database in Reports; open database elsewhere |
+| Ctrl+Shift+D | Choose Reports source… |
+| Ctrl+Shift+S | Cancel report operation |
 | Ctrl+R | Review reports |
 | Ctrl+S | Import selected reports |
 | Ctrl+E | Export Workbook |
@@ -61,7 +63,12 @@ when it has a Help menu. Existing Alt mnemonics remain optional alternatives for
 Review and Import use the current Reports selection and readiness, even from
 another page. Review starts the existing review/preflight action; Import requires
 an approved selection. Export opens the workbook workflow for the selected database.
-Ctrl+O and Ctrl+I remain legacy alternatives for database selection and Import.
+Ctrl+D uses the Reports database button while Reports is active (select/create, disabled
+until a source is selected). On Home and other pages it opens an existing database,
+including database-only Export workflows. Ctrl+O always opens an existing database.
+Ctrl+Shift+D invokes the same Reports source chooser, including its archive fallback.
+Ctrl+Shift+S cancels the active Reports operation from the main window; Alt+L is secondary.
+Ctrl+I remains a legacy alternative for Import.
 Ctrl+1…5 are the only numbered commands. The keys are displayed beside navigation
 and primary commands; Ctrl+A/C/X/V/Z and Polish AltGr typing keep their usual behavior.
 All shell commands belong to the main window and do not run inside another dialog.

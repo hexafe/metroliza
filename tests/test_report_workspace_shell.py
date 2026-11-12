@@ -255,7 +255,7 @@ def test_home_has_one_recommended_action_and_reports_has_one_owner(window):
         assert window.reports_workspace is host
     assert window.launch_parsing_dialog() is host
     assert window.window_coordinator.get("parsing") is None
-    assert window.home_next_action.toolTip().startswith("Open Reports and focus the next available report action.")
+    assert window.home_next_action.toolTip() == "Open Reports and focus the next available report action. (Ctrl+2)"
 
 
 def test_real_selected_import_survives_navigation_and_preserves_outcome(app, window, reports):
@@ -1323,7 +1323,7 @@ def test_global_navigation_and_menu_shortcuts(app, window, monkeypatch):
                         lambda *_: (calls.append("open") or "", ""))
     key(app, window.navigation_list, "Ctrl+O")
     assert calls == ["open"]
-    assert window.open_database_action.shortcut().toString() == "Ctrl+D"
+    assert window.open_database_action.shortcut().toString() == "Ctrl+O"
     window.open_database_action.setEnabled(False)
     key(app, window.navigation_list, "Ctrl+O")
     window.open_database_action.trigger()
@@ -1440,7 +1440,7 @@ def test_main_shortcut_and_mnemonic_inventory(window):
                  for shortcut in action.shortcuts() if not shortcut.isEmpty()]
     sequences.extend(shortcut.key().toString() for shortcut in window.findChildren(QShortcut))
     assert len(sequences) == len(set(sequences))
-    expected = {"Ctrl+O", "Ctrl+D", "Ctrl+Shift+D", "Ctrl+R", "Ctrl+S", "Ctrl+I", "Ctrl+E", "Ctrl+F", "Ctrl+Shift+F", "Ctrl+Shift+T", "F1"}
+    expected = {"Ctrl+O", "Ctrl+D", "Ctrl+Shift+D", "Ctrl+R", "Ctrl+S", "Ctrl+I", "Ctrl+E", "Ctrl+F", "Ctrl+Shift+F", "Ctrl+Shift+T", "Ctrl+Shift+S", "F1"}
     expected.update(f"Ctrl+{index + 1}" for index in range(min(5, window.navigation_list.count())))
     assert set(sequences) == expected
     reserved = {f"Ctrl+{letter}" for letter in "CVXZY A".replace(" ", "")}
@@ -1508,7 +1508,7 @@ def test_set_mnemonic_tolerates_missing_letter_and_literal_ampersand(app):
     assert plain_text(button.text()) == "R&D export"
 
 
-def test_csv_session_is_nonmodal_reused_and_independent(app, window, tmp_path):
+def test_csv_session_is_nonmodal_reused_and_independent(app, window, tmp_path, monkeypatch):
     """The real CSV owner survives all shell entry points and report-context changes."""
     from metroliza.ui.industrial_analytics_dialog import SOURCE_TABULAR_FILE
 
@@ -1517,9 +1517,49 @@ def test_csv_session_is_nonmodal_reused_and_independent(app, window, tmp_path):
     assert csv.source_kind == SOURCE_TABULAR_FILE
     assert csv.windowModality() == Qt.WindowModality.NonModal
     assert not csv.isModal()
+    from metroliza.analytics.row_table import RowTable
+    from metroliza.tabular.tabular_analytics_service import TabularColumnFilter
+
+    source = tmp_path / "synthetic.csv"
+    source.write_text("Part,Line,Length mm,Width mm\nA,L1,10.1,5.1\nB,L2,10.2,5.2\nC,L1,10.3,5.3\nD,L2,10.4,5.4\n")
+    monkeypatch.setattr("metroliza.ui.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+                        lambda *_args: ([str(source)], ""))
+    thread_type = csv.show_tabular_load_screen.__globals__["TabularAnalyticsLoadThread"]
+    run = thread_type.run
+    entered, release = Event(), Event()
+
+    def held_load(worker):
+        entered.set()
+        assert release.wait(10)
+        run(worker)
+
+    monkeypatch.setattr(thread_type, "run", held_load)
+    csv.browse_input_button.click()
+    worker = csv.tabular_load_thread
+    try:
+        wait_until(app, entered.is_set)
+        assert csv.close() is False
+        window._show_workspace_page("reports")
+        assert window.set_db_file(str(tmp_path / "while-loading.db"))
+        window.csv_summary_action.trigger()
+        assert window.csv_summary_dialog is csv and csv.tabular_load_thread is worker
+    finally:
+        release.set()
+        assert worker.wait(20000)
+        app.processEvents()
+    wait_until(app, lambda: csv.tabular_load_thread is None)
+    assert csv.tabular_load_result is not None and csv.metrics_list.count() == 2
+    loaded = csv.tabular_load_result
     csv.output_dashboard_file = str(tmp_path / "retained.html")
     csv.output_workbook_file = str(tmp_path / "retained.xlsx")
-    csv.metric_limits = {"synthetic": (1, 2)}
+    csv.metric_spec_limits = {"length_mm": (9.5, None)}
+    csv.tabular_column_filters = (TabularColumnFilter("line", selected_values=("L1",)),)
+    csv.set_df_for_grouping(RowTable(((1, "First"), (3, "Second")), ("REPORT_ID", "GROUP")))
+    csv.set_grouping_applied(True)
+    csv.metrics_list.item(1).setCheckState(Qt.CheckState.Unchecked)
+    csv._sync_ui_state()
+    groups = csv.df_for_grouping
+    assert str(source) in window._module_context_labels["csv_summary"].text()
     window._show_workspace_page("home")
     window.csv_summary_action.trigger()
     assert window.csv_summary_dialog is csv
@@ -1528,7 +1568,13 @@ def test_csv_session_is_nonmodal_reused_and_independent(app, window, tmp_path):
     assert window.set_db_file(str(tmp_path / "report.db"))
     assert host.db_file == str(tmp_path / "report.db")
     assert csv.db_file == ""
-    assert csv.metric_limits == {"synthetic": (1, 2)}
+    assert csv.metric_spec_limits == {"length_mm": (9.5, None)}
+    assert csv.tabular_load_result is loaded and csv.df_for_grouping is groups
+    assert csv.grouping_applied and csv.metrics_list.item(1).checkState() == Qt.CheckState.Unchecked
+    assert csv.tabular_column_filters == (TabularColumnFilter("line", selected_values=("L1",)),)
+    request = csv.create_analytics_thread()
+    assert request.metric_selection[0].lsl == 9.5 and request.metric_selection[0].usl is None
+    assert request.tabular_column_filters == csv.tabular_column_filters
     assert csv.output_dashboard_file == str(tmp_path / "retained.html")
     window._show_workspace_page("home")
     key(app, window.home_next_action, "Ctrl+3")
@@ -1592,8 +1638,14 @@ def test_reports_composed_tab_order_real_keys(app, window, reports, stage):
         wait_until(app, window.isActiveWindow)
         navigation.setFocus()
         assert navigation.hasFocus()
+        planner = host.report_planner
         expected = (host.directory_text_label, host.directory_button, host.archive_button,
-                    host.database_text_label, host.database_button, host.metadata_mode_combo)
+                    host.database_text_label, host.database_button, host.metadata_mode_combo,
+                    host.scan_button, planner.search, planner.status_filter, planner.parser_filter,
+                    planner.attention_filter, planner.select_ready, planner.clear, planner.table,
+                    planner.details_button, planner.details, planner.ocr_button, planner.metadata_button,
+                    host.parse_button, planner.outcome_button, planner.outcome,
+                    window.modifydb_button, window.map_characteristics_button, window.export_button)
         expected = tuple(control for control in expected if control.isEnabled() and control.isVisibleTo(window))
         for control in expected:
             QTest.keyClick(app.focusWidget(), Qt.Key.Key_Tab)
@@ -1645,3 +1697,144 @@ def test_home_module_choices_scroll_in_compact_window(app, window):
         assert button.isVisibleTo(window)
         assert "[Ctrl+" in button.text()
         assert window.size() == QSize(720, 480)
+
+
+def test_compact_navigation_previews_until_explicit_confirmation(app, window, monkeypatch):
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+
+    calls = []
+    for name in ("csv_summary", "industrial_data", "realtime_industrial_monitoring"):
+        monkeypatch.setattr(window, f"launch_{name}_dialog", lambda name=name: calls.append(name))
+    window.resize(800, 800)
+    window._show_workspace_page("home")
+    combo = window.navigation_combo
+    window.activateWindow()
+    wait_until(app, window.isActiveWindow)
+    combo.setFocus()
+    for pressed in (Qt.Key.Key_Down, Qt.Key.Key_Down, Qt.Key.Key_I):
+        QTest.keyClick(combo, pressed)
+        app.processEvents()
+        assert combo.hasFocus() and calls == []
+    wheel = QWheelEvent(QPointF(8, 8), QPointF(combo.mapToGlobal(QPoint(8, 8))), QPoint(), QPoint(0, -120),
+                        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.ScrollUpdate, False)
+    QApplication.sendEvent(combo, wheel)
+    app.processEvents()
+    assert combo.hasFocus() and calls == []
+    combo.setCurrentIndex(2)
+    QTest.keyClick(combo, Qt.Key.Key_Return)
+    assert calls == ["csv_summary"]
+    calls.clear()
+    combo.showPopup()
+    app.processEvents()
+    index = combo.model().index(3, 0)
+    QTest.mouseClick(combo.view().viewport(), Qt.MouseButton.LeftButton,
+                     pos=combo.view().visualRect(index).center())
+    app.processEvents()
+    assert calls == ["industrial_data"]
+    calls.clear()
+    combo.showPopup()
+    app.processEvents()
+    QTest.keyClick(combo.view(), Qt.Key.Key_Down)
+    assert calls == []
+    QTest.keyClick(combo.view(), Qt.Key.Key_Return)
+    app.processEvents()
+    assert calls == ["realtime_industrial_monitoring"]
+
+
+def test_sidebar_double_click_does_not_duplicate_activation(app, window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(window, "launch_csv_summary_dialog", lambda: calls.append("csv"))
+    window.resize(1200, 800)
+    app.processEvents()
+    viewport = window.navigation_list.viewport()
+    target = window.navigation_list.visualItemRect(window.navigation_list.item(2)).center()
+    QTest.mouseClick(viewport, Qt.MouseButton.LeftButton, pos=target)
+    QTest.mouseDClick(viewport, Qt.MouseButton.LeftButton, pos=target)
+    QTest.mouseRelease(viewport, Qt.MouseButton.LeftButton, pos=target)
+    app.processEvents()
+    assert calls == ["csv"]
+
+
+def test_context_database_and_source_shortcuts_invoke_actual_choosers(app, window, monkeypatch, tmp_path):
+    opened, saved, folders, archives = [], [], [], []
+
+    def choose_existing(_owner, title, *_args):
+        (archives if title == "Select archive" else opened).append(True)
+        return "", ""
+
+    monkeypatch.setattr("metroliza.ui.main_window.QFileDialog.getOpenFileName", choose_existing)
+    monkeypatch.setattr("metroliza.ui.parsing_dialog.QFileDialog.getSaveFileName",
+                        lambda *_args: (saved.append(True) or "", ""))
+    monkeypatch.setattr("metroliza.ui.parsing_dialog.QFileDialog.getExistingDirectory",
+                        lambda *_args, **_kwargs: folders.append(True) or "")
+    window._show_workspace_page("home")
+    key(app, window.home_next_action, "Ctrl+D")
+    assert opened == [True] and saved == []
+    window._show_workspace_page("reports")
+    host = window.reports_workspace
+    assert not host.database_button.isEnabled() and not action_for(window, "Ctrl+D").isEnabled()
+    key(app, host.directory_button, "Ctrl+D")
+    assert saved == []
+    window.set_directory(str(tmp_path))
+    key(app, host.directory_button, "Ctrl+D")
+    host.database_button.click()
+    assert saved == [True, True] and opened == [True]
+    key(app, host.database_button, "Ctrl+Shift+D")
+    host.directory_button.click()
+    assert folders == [True, True] and archives == [True, True]
+
+
+def test_dynamic_tooltips_preserve_current_reason_and_single_key(app, window, reports):
+    host, _source, _database = prepare_review(app, window, reports)
+    planner = host.report_planner
+    assert plain_text(host.parse_button.text()) == "Import 5 selected reports"
+    assert "Import exactly 5" in host.parse_button.toolTip()
+    assert host.parse_button.toolTip().count("(Ctrl+S)") == 1
+    planner.model.clear_selection()
+    disabled = host.parse_button.toolTip()
+    assert "Select ready reports" in disabled and disabled.count("(Ctrl+S)") == 1
+    planner.model.setData(planner.model.index(0, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+    assert "Import exactly 1" in host.parse_button.toolTip()
+    assert host.parse_button.toolTip().count("(Ctrl+S)") == 1
+    assert host.scan_button.toolTip().count("(Ctrl+R)") == 1
+    window._export_ready = True
+    window._sync_workflow_next_step()
+    assert window.home_next_action.toolTip() == "Open Export Workbook. (Ctrl+E)"
+    window._export_ready = False
+    window._sync_workflow_next_step()
+    assert window.home_next_action.toolTip() == "Open Reports and focus the next available report action. (Ctrl+2)"
+    for button, _title in window._module_launch_buttons["csv_summary"]:
+        assert "[Ctrl+3]" not in button.toolTip() and button.toolTip().count("(Ctrl+3)") == 1
+
+
+def test_busy_reports_tab_and_home_cancel_use_actual_enabled_context(app, window):
+    host = window.reports_workspace
+    cancelled = []
+    host.preflight_thread = SimpleNamespace(isRunning=lambda: True, stop_scan=lambda: cancelled.append(True))
+    try:
+        host._sync_readiness_state()
+        for page in ("industrial_data", "realtime_monitor"):
+            assert not window._module_launch_buttons[page][0][0].isEnabled()
+            assert not window.workspace_actions[page].isEnabled()
+        assert not action_for(window, "Ctrl+Shift+D").isEnabled()
+        window._show_workspace_page("reports")
+        assert not action_for(window, "Ctrl+D").isEnabled()
+        for page in ("home", "reports", "tools", "reports"):
+            window._show_workspace_page(page)
+        planner = host.report_planner
+        navigation = window.navigation_list if window.navigation_list.isVisible() else window.navigation_combo
+        window.activateWindow()
+        wait_until(app, window.isActiveWindow)
+        navigation.setFocus()
+        for control in (host.directory_text_label, host.database_text_label, planner.search,
+                        planner.status_filter, planner.parser_filter, planner.attention_filter,
+                        planner.details_button):
+            QTest.keyClick(app.focusWidget(), Qt.Key.Key_Tab)
+            assert app.focusWidget() is control and control.isEnabled() and control.isVisibleTo(window)
+        window._show_workspace_page("home")
+        key(app, window.home_cancel_report, "Ctrl+Shift+S")
+        assert cancelled == [True]
+    finally:
+        host.preflight_thread = None
+        host._sync_readiness_state()
