@@ -31,6 +31,7 @@ from metroliza.industrial.industrial_workflow_state import (
 )
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui import detached_threads
+from metroliza.ui.shortcuts import install_button_commands
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.worker_progress_dialog import (
     create_delayed_worker_progress_dialog,
@@ -206,6 +207,7 @@ class IndustrialFilterDialog(QDialog):
         actions.addWidget(self.apply_button)
         layout.addLayout(actions)
 
+        install_button_commands(self, "industrial_filter")
         apply_metroliza_theme(self)
         self._sync_filter_builder_value_state()
         self._connect_draft_signals()

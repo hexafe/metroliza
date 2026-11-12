@@ -47,6 +47,7 @@ from metroliza.industrial.industrial_credentials import (
     save_industrial_credentials,
 )
 from metroliza.ui.curation_presentation import bind_button
+from metroliza.ui.shortcuts import install_button_commands
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.industrial_filter_dialog import IndustrialFilterDialog
 from metroliza.industrial.industrial_source_config import (
@@ -146,6 +147,7 @@ class IndustrialSqlQueryDialog(QDialog):
         self.save_button.clicked.connect(parent.save_sql_recipe)
         self.preview_button.clicked.connect(self._preview_sql)
         self.close_button.clicked.connect(self.close)
+        install_button_commands(self, "industrial_sql")
 
         self.sync_from_parent()
         apply_metroliza_theme(self)
