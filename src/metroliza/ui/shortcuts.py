@@ -1,8 +1,10 @@
 """Window command inventory; shared by menus, tooltips and manual checks."""
 
 MAIN_SHORTCUTS = {
-    "open_database": ("Ctrl+D", "Open database…"),
-    "choose_source": ("Ctrl+Shift+D", "Choose report folder…"),
+    "open_database": ("Ctrl+O", "Open database…"),
+    "report_database": ("Ctrl+D", "Select/create database in Reports; open database elsewhere"),
+    "choose_source": ("Ctrl+Shift+D", "Choose Reports source…"),
+    "cancel_reports": ("Ctrl+Shift+S", "Cancel report operation"),
     "review_reports": ("Ctrl+R", "Review reports"),
     "import_reports": ("Ctrl+S", "Import selected reports"),
     "export_workbook": ("Ctrl+E", "Export Workbook"),
@@ -12,7 +14,7 @@ PAGE_SHORTCUTS = tuple(f"Ctrl+{index}" for index in range(1, 6))
 WORKSPACE_SHORTCUTS = dict(zip(
     ("home", "reports", "csv_summary", "industrial_data", "realtime_monitor"), PAGE_SHORTCUTS,
 )) | {"parser_profiles": "Ctrl+Shift+F", "tools": "Ctrl+Shift+T"}
-LEGACY_MAIN_SHORTCUTS = {"open_database": "Ctrl+O", "import_reports": "Ctrl+I"}
+LEGACY_MAIN_SHORTCUTS = {"import_reports": "Ctrl+I"}
 DIALOG_SHORTCUTS = {"focus_search": ("Ctrl+F", "Focus and select the current search field")}
 DIALOG_MNEMONICS = {
     "csv_filter": {
@@ -74,10 +76,7 @@ def set_mnemonic(button, letter):
 
 
 def shortcut_tooltip(button, command):
-    sequence = MAIN_SHORTCUTS[command][0]
-    suffix = f" ({sequence})"
-    if not button.toolTip().endswith(suffix):
-        button.setToolTip(button.toolTip() + suffix)
+    _append_shortcut_tooltip(button, MAIN_SHORTCUTS[command][0])
 
 
 def bind_shortcut(action, sequence):
@@ -101,17 +100,25 @@ def _append_shortcut_tooltip(widget, sequence):
     """Show the key in the tooltip; the base text is kept so dynamic captions stay current."""
     if not sequence:
         return
-    base = widget.property("metrolizaShortcutTooltipBase")
-    if base is None:
-        base = widget.toolTip()
-        widget.setProperty("metrolizaShortcutTooltipBase", base)
+    current = widget.toolTip()
+    previous = widget.property("metrolizaShortcutTooltipRendered")
+    automatic = bool(widget.property("metrolizaShortcutTooltipAutomatic")) if current == previous else not current
+    base = widget.property("metrolizaShortcutTooltipBase") if current == previous else current
+    if automatic:
+        base = ""
     if not base:
-        # Never use a line edit's typed text; buttons use their current caption.
         if hasattr(widget, "placeholderText"):
             base = widget.placeholderText() or widget.accessibleName()
         else:
             base = plain_text(widget.text())
-    widget.setToolTip(f"{base} ({sequence})" if base else sequence)
+            hint = widget.property("metrolizaVisibleShortcut")
+            if hint and base.endswith(f" [{hint}]"):
+                base = base[:-(len(hint) + 3)]
+    rendered = f"{base} ({sequence})" if base else sequence
+    widget.setProperty("metrolizaShortcutTooltipAutomatic", automatic)
+    widget.setProperty("metrolizaShortcutTooltipBase", base)
+    widget.setProperty("metrolizaShortcutTooltipRendered", rendered)
+    widget.setToolTip(rendered)
 
 
 def bind_search_shortcut(window, pairs):
