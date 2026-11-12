@@ -92,7 +92,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         if callable(close):
             close()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
-from metroliza.ui.shortcuts import apply_dialog_mnemonics, set_mnemonic, visible_shortcut
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, install_button_commands, set_mnemonic, visible_shortcut
 from metroliza.ui.output_request_summary import (
     assignment_summary, install_output_commands, output_summary, set_output_summary,
     verify_grouping_after_consent,
@@ -818,6 +818,7 @@ class ExportDialog(QDialog):
             install_output_commands(self, self.export_button, self._stop_active_export, self.reject, self.filter_button.click)
             visible_shortcut(self.close_button, "Ctrl+W / Esc")
             visible_shortcut(self.filter_button, "Ctrl+F")
+            install_button_commands(self, "export")
         except Exception as e:
             self.log_and_exit(e)
 

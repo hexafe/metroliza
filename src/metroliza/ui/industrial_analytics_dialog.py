@@ -53,7 +53,8 @@ from metroliza.charts.dashboard_visual_options import (
     load_dashboard_visual_settings,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
-from metroliza.ui.shortcuts import apply_dialog_mnemonics, set_mnemonic, visible_shortcut
+from metroliza.ui.shortcuts import (apply_dialog_mnemonics, bind_search_shortcut, install_button_commands,
+                                    refresh_button_command_hints, set_mnemonic, visible_shortcut)
 from metroliza.ui.output_request_summary import (
     analytics_summary, install_output_commands, output_summary, set_output_summary, tabular_scope,
 )
@@ -435,6 +436,9 @@ class MetricSelectionDialog(QDialog):
         actions.addWidget(self.apply_button)
         layout.addLayout(actions)
 
+        install_button_commands(self, "metrics")
+        self.search_action = bind_search_shortcut(self, [(self.search_field, self.metrics_list)])
+        self.search_field.setPlaceholderText("Search metrics [Ctrl+F]")
         self._populate_metrics(selected_fields)
         self._committed_metric_fields = self._selected_metric_fields()
         configure_dialog_button_roles(
@@ -570,6 +574,7 @@ class MetricLimitsDialog(QDialog):
         footer.addWidget(self.cancel_button)
         footer.addWidget(self.apply_button)
         layout.addLayout(footer)
+        install_button_commands(self, "limits")
         self._committed_limits_signature = self._limits_signature()
         self._initial_limits, _error = self._parsed_limits()
         self.table.itemChanged.connect(lambda _item: self._sync_validation())
@@ -882,6 +887,7 @@ class IndustrialAnalyticsDialog(QDialog):
         install_output_commands(self, self.start_button, self._stop_active_analytics, self.reject, self.choose_metrics_button.click)
         visible_shortcut(self.close_button, "Ctrl+W / Esc")
         visible_shortcut(self.choose_metrics_button, "Ctrl+F")
+        install_button_commands(self, "csv_summary")
         self._configure_accessibility()
         configure_dialog_button_roles(
             primary=self.start_button,
@@ -1296,6 +1302,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self.filters_button.setText("Filter rows...")
         if not self.is_production_source:
             set_mnemonic(self.filters_button, "f")
+        refresh_button_command_hints(self, "csv_summary")
         self.clear_filter_button.setVisible(show_tabular)
         self.dashboard_interactivity_row_label.setVisible(show_tabular)
         self.dashboard_interactivity_summary_label.setVisible(show_tabular)
@@ -2518,6 +2525,7 @@ class IndustrialAnalyticsDialog(QDialog):
             )
         if not self.is_production_source:
             apply_dialog_mnemonics(self, "csv_summary")
+        refresh_button_command_hints(self, "csv_summary")
         self._sync_filter_visibility()
         groupstats_unavailable_reason = self._tabular_groupstats_unavailable_reason()
         groupstats_available = groupstats_unavailable_reason is None
