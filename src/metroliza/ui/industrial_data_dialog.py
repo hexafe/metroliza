@@ -1081,6 +1081,10 @@ class IndustrialDataDialog(QDialog):
         self.config_path = self.source_window.config_path
         self.refresh_status()
 
+    def on_industrial_source_config_changed(self, config_path) -> None:
+        """Adopt the modal editor's chosen file before any in-modal refresh or handoff."""
+        self.config_path = config_path
+
     def open_sync_dialog(self) -> None:
         self.sync_window = IndustrialSyncDialog(
             self,

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass, replace
+import sqlite3
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any
 
@@ -551,6 +554,9 @@ class IndustrialSyncDialog(QDialog):
                                                  config_path=self.config_path)
         dialog.exec()
         self.config_path = dialog.config_path
+        adopt_config = getattr(self.parent(), "on_industrial_source_config_changed", None)
+        if callable(adopt_config):
+            adopt_config(self.config_path)
         self.reload_profiles()
 
     def _present_stage(self, text, primary, *, variant="neutral"):
@@ -566,21 +572,48 @@ class IndustrialSyncDialog(QDialog):
         else:
             self._present_stage("Source selected. Next: Check access [Ctrl+R]; the one-row check saves nothing.", self.test_connection_button)
 
+    def _cache_has_rows(self):
+        """Bounded outcome-only observation; never initialize or change the live cache."""
+        if not self.db_file:
+            return None
+        try:
+            filename = quote(str(Path(self.db_file).resolve(strict=False)), safe="")
+            with closing(sqlite3.connect(f"file:{filename}?mode=ro", uri=True, timeout=0.1)) as connection:
+                with closing(connection.execute("SELECT 1 FROM industrial_records LIMIT 1")) as cursor:
+                    return cursor.fetchone() is not None
+        except (sqlite3.Error, OSError, ValueError):
+            return None
+
+    def _present_fetch_outcome(self, text, *, variant):
+        cached = self._cache_has_rows()
+        if cached is True:
+            self._present_stage(text + " Cached rows are available. Next: Close [Ctrl+W], then Analyze or Export in Industrial Data.",
+                                self.close_button, variant=variant)
+        elif cached is False:
+            target = self.test_connection_button if self.current_profile() else self.configure_sources_button
+            action = "review source/scope and Check access [Ctrl+R] before fetching again" if self.current_profile() else "Configure sources [Ctrl+D]"
+            self._present_stage(text + f" The local cache is empty. Next: {action}.", target, variant="warning")
+        else:
+            self._present_stage(text + " Cache readiness could not be confirmed. Next: Close [Ctrl+W] and check the local cache.",
+                                self.close_button, variant="warning")
+
     def _present_result_stage(self, result):
         if self._active_batch_total > 1:
             return  # the existing aggregate completion owns the final batch presentation
         status = result.get("status", "unknown")
-        if status not in {"succeeded", "completed_with_warnings"}:
-            text = ("Operation stopped. Existing complete cache remains separate." if status == "cancelled"
-                    else "Access/fetch failed. Check credentials and source settings.")
+        if not result.get("test_only"):
+            outcome = {"succeeded": "Fetch finished.", "completed_with_warnings": "Fetch finished with warnings.",
+                       "cancelled": "Fetch stopped.", "failed": "Fetch failed."}.get(status, "Fetch outcome needs attention.")
+            self._present_fetch_outcome(outcome, variant="success" if status == "succeeded" else "warning")
+        elif status not in {"succeeded", "completed_with_warnings"}:
+            text = "Access check stopped." if status == "cancelled" else "Access check failed. Check credentials and source settings."
             self._present_stage(text + " Next: Check access [Ctrl+R].", self.test_connection_button, variant="warning")
-        elif result.get("test_only"):
-            if self.access_only:
-                self._present_stage("Access check completed; nothing saved. Next: Close [Ctrl+W] to choose a local cache.", self.close_button)
-            else:
-                self._present_stage(f"Check completed: {int(result.get('row_count', 0) or 0):,} row(s) visible; nothing saved. Next: Fetch [Ctrl+S] for the selected scope.", self.sync_now_button)
         else:
-            self._present_stage("Fetch completed. Next: Close [Ctrl+W], then Analyze or Export the cache in Industrial Data.", self.close_button, variant="success")
+            variant = "warning" if status == "completed_with_warnings" else "neutral"
+            if self.access_only:
+                self._present_stage("Access check completed; nothing saved. Next: Close [Ctrl+W] to choose a local cache.", self.close_button, variant=variant)
+            else:
+                self._present_stage(f"Check completed: {int(result.get('row_count', 0) or 0):,} row(s) visible; nothing saved. Next: Fetch [Ctrl+S] for the selected scope.", self.sync_now_button, variant=variant)
 
     def _preserve_source_picker_height(self) -> None:
         """Apply the themed action-row height to the adjacent source list."""
@@ -1550,10 +1583,9 @@ class IndustrialSyncDialog(QDialog):
         )
 
     def _finish_batch_fetch_ui_actions(self) -> None:
-        if any(result.get("status") not in {"succeeded", "completed_with_warnings"} for result in self._batch_results):
-            self._present_stage("Batch finished with failures. Completed sources remain cached. Select the source to check, then Check access [Ctrl+R].", self.test_connection_button, variant="warning")
-        else:
-            self._present_stage("Batch finished. Next: Close [Ctrl+W], then Analyze or Export cached rows.", self.close_button, variant="success")
+        clean = bool(self._batch_results) and all(result.get("status") == "succeeded" for result in self._batch_results)
+        self._present_fetch_outcome("Batch finished." if clean else "Batch finished with warnings, failures or stopped sources.",
+                                    variant="success" if clean else "warning")
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
@@ -1568,7 +1600,7 @@ class IndustrialSyncDialog(QDialog):
             self.sql_editor_window.set_preview_records(records)
 
     def on_oznak_error(self, message: str) -> None:
-        self._present_stage("Remote operation failed. Check credentials/source settings, then Check access [Ctrl+R]. Cached rows remain separate.", self.test_connection_button, variant="warning")
+        self._present_fetch_outcome("Operation failed. Review the error and source settings.", variant="warning")
         self.status_label.setText(f"Operation failed: {redact_sensitive_text(message)}")
         set_status_variant(self.status_label, "danger")
         self._pending_credential_save = None
