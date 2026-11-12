@@ -339,7 +339,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 control = self.save_button if self.save_button.isEnabled() else self.edit_sources_button
                 message = "Save valid current edits, then choose Monitor and Start." if self.save_button.isEnabled() else "Configure or enable a source using Production Sources, then save monitor setup."
         elif self.start_button.isEnabled():
-            control, message = self.start_button, "Checked sources have saved setup. Start checks source access; Event Review uses persisted events."
+            control, message = self.start_button, self._start_action_message()
         else:
             control = self.configure_source_button
             message = self._unready_guidance()
@@ -352,6 +352,16 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             poll_owned=self.poll_thread is not None, stopping=self._stop_requested,
         ))
         self._sync_default_action_for_tab(tab)
+
+    def _start_action_message(self) -> str:
+        current = self.current_profile()
+        if current is None or all(profile.id != current.id for profile in self.selected_profiles()):
+            return "Start uses checked sources. Current unchecked source edits are not applied."
+        try:
+            self._config_from_form(current)
+        except ValueError:
+            return "Current checked source edits are invalid. Configure source to correct them; Start will report the error without polling."
+        return "Start validates and saves the current checked source setup, then polls checked sources. Polling checks source access."
 
     def _unready_guidance(self) -> str:
         if not self.profiles:
@@ -1622,6 +1632,17 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             event.ignore()
             return
         super().closeEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            # QDialog's inherited Escape->reject/done path bypasses closeEvent.
+            # Keep all Escape variants out of that path; only a deliberate plain
+            # press invokes the same guarded close as the visible Close command.
+            event.accept()
+            if not event.isAutoRepeat() and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                self.close()
+            return
+        super().keyPressEvent(event)
 
 
 def _profile_label(profile: IndustrialSourceProfile) -> str:
