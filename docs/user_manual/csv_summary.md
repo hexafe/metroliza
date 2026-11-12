@@ -398,3 +398,6 @@ column is hidden, its value/date editor clears while its condition remains in th
 draft. Clearing search reveals the choices without activating one; select a column
 to edit its saved draft values and dates. Search does not scan another column for
 date bounds.
+
+See the [keyboard command matrix](keyboard_shortcuts.md) for primary keys, active-window
+behavior and secondary shortcuts.

@@ -20,6 +20,7 @@ from metroliza.industrial.industrial_workflow_state import (
     INDUSTRIAL_GROUPING_FIELDS,
     IndustrialGroupingState,
 )
+from metroliza.ui.shortcuts import install_button_commands, bind_search_shortcut
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -93,6 +94,9 @@ class IndustrialGroupingDialog(QDialog):
         actions.addWidget(self.apply_button)
         layout.addLayout(actions)
 
+        install_button_commands(self, "industrial_grouping")
+        self.search_action = bind_search_shortcut(self, [(self.search_input, self.field_list)])
+        self.search_input.setPlaceholderText("Search fields [Ctrl+F]")
         self.populate_fields()
         self._sync_draft_state()
         apply_metroliza_theme(self)

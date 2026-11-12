@@ -98,7 +98,7 @@ def test_grouping_dialog_exposes_selection_count_and_semantic_actions():
     assert dialog.apply_button.isDefault()
     assert dialog.cancel_button.property("buttonRole") == "secondary"
     assert dialog.clear_button.property("buttonRole") == "quiet"
-    assert dialog.clear_button.text() == "Reset grouping"
+    assert dialog.clear_button.text() == "Reset grouping [Ctrl+Shift+R]"
     dialog.close()
 
 
