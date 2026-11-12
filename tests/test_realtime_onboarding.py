@@ -1,8 +1,10 @@
 """Operator presentation keeps the existing monitor and event ownership paths."""
+from dataclasses import replace
+
 import pytest
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QDialog, QLineEdit
+from PyQt6.QtWidgets import QDialog, QLineEdit, QPushButton
 
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
@@ -34,6 +36,12 @@ def _show(dialog, qapp):
     qapp.processEvents()
 
 
+def _assert_one_primary(dialog):
+    assert [button for button in dialog.findChildren(QPushButton)
+            if button.property("buttonRole") == "primary"] == [dialog.next_button]
+    assert dialog.next_button.isDefault() == dialog._next_control.isVisibleTo(dialog)
+
+
 @pytest.mark.parametrize("source", ["none", "disabled", "incomplete"])
 def test_unready_sources_route_to_setup_without_start(dashboard_dialog, source, qapp):
     dialog = dashboard_dialog
@@ -42,12 +50,14 @@ def test_unready_sources_route_to_setup_without_start(dashboard_dialog, source, 
                  is_enabled=source != "disabled")
         dialog.reload_from_database()
     assert not dialog.start_button.isEnabled()
+    _assert_one_primary(dialog)
     assert dialog._next_control is dialog.configure_source_button
     dialog.next_button.click()
     assert dialog.workflow_tabs.currentIndex() == 1
     assert dialog.poll_thread is None and not dialog.poll_timer.isActive()
     expected = dialog.save_button if source == "incomplete" else dialog.edit_sources_button
     assert dialog._next_control is expected
+    _assert_one_primary(dialog)
     _show(dialog, qapp)
     QTest.keyClick(dialog, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
     QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
@@ -83,6 +93,7 @@ def test_ready_start_stop_retains_owned_poll_and_observed_snapshot(dashboard_dia
     monkeypatch.setattr(dialog, "_schedule_dashboard_write", lambda **kwargs: None)
     profile = _ready(dialog)
     assert dialog._next_control is dialog.start_button
+    _assert_one_primary(dialog)
     assert "source access" in dialog.next_action_label.text()
     _show(dialog, qapp)
     QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
@@ -90,8 +101,13 @@ def test_ready_start_stop_retains_owned_poll_and_observed_snapshot(dashboard_dia
     try:
         assert worker is not None and worker.configs[0].source_profile_id == profile.id
         assert dialog.poll_timer.isActive()
+        _assert_one_primary(dialog)
         dialog.workflow_tabs.setCurrentIndex(2)
         assert dialog._next_control is dialog.stop_button  # Stop remains discoverable in review.
+        _assert_one_primary(dialog)
+        dialog.event_operator_edit.setFocus()
+        QTest.keyClick(dialog.event_operator_edit, Qt.Key.Key_Return)
+        assert worker.cancelled_count == 0 and dialog.poll_timer.isActive()
         worker.result_ready.emit((_poll_result(lag_seconds=12.5,
                                   event_time_watermark="2026-06-13T10:02:00Z"),))
         assert "max lag 12.5s" in dialog.freshness_label.text()
@@ -104,6 +120,7 @@ def test_ready_start_stop_retains_owned_poll_and_observed_snapshot(dashboard_dia
         assert worker.cancelled_count == 1
         assert dialog.poll_thread is worker and not dialog.poll_timer.isActive()
         assert not dialog.next_button.isEnabled()
+        _assert_one_primary(dialog)
         assert "stopping" in dialog.freshness_label.text()
     finally:
         dialog.stop_monitoring()
@@ -112,6 +129,85 @@ def test_ready_start_stop_retains_owned_poll_and_observed_snapshot(dashboard_dia
     assert "monitoring stopped" in dialog.freshness_label.text()
     assert "Snapshot, not live age" in dialog.freshness_label.text()
     assert dialog.request_shutdown()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("cursor_column_edit", "record_id"),
+    ("signal_columns_edit", "cycle_time=cycle_time_s\nsecond=cycle_time_s"),
+    ("interval_spin", 61),
+    ("display_mode_combo", "aggregated"),
+    ("aggregation_methods_edit", "mean, median"),
+    ("dashboard_path_field", "synthetic-changed-dashboard.html"),
+])
+def test_saved_setup_advances_to_monitor_and_current_edits_return_to_save(
+    dashboard_dialog, qapp, field, value,
+):
+    dialog = dashboard_dialog
+    _ready(dialog)
+    _show(dialog, qapp)
+    QTest.keyClick(dialog, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    assert dialog.workflow_tabs.currentIndex() == 1
+    assert dialog._next_control is dialog.monitor_view_button
+    assert "Current setup saved" in dialog.next_action_label.text()
+    _assert_one_primary(dialog)
+    saved = dict(dialog.configs_by_profile_id)
+    control = getattr(dialog, field)
+    if field == "signal_columns_edit":
+        control.setPlainText(value)
+    elif field == "interval_spin":
+        control.setValue(value)
+    elif field == "display_mode_combo":
+        control.setCurrentText(value)
+    else:
+        control.setText(value)
+    assert dialog._next_control is dialog.save_button  # Live signal, no tab switch/cache.
+    assert dialog.configs_by_profile_id == saved
+    _assert_one_primary(dialog)
+    QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    assert dialog.workflow_tabs.currentIndex() == 1  # Ctrl+S retains Save semantics.
+    assert dialog._next_control is dialog.monitor_view_button
+    assert dialog.configs_by_profile_id != saved
+    QTest.keyClick(dialog, Qt.Key.Key_Return)  # Saved Setup default navigates only, never starts.
+    assert dialog.workflow_tabs.currentIndex() == 0
+    assert dialog.poll_thread is None and not dialog.poll_timer.isActive()
+    assert dialog._next_control is dialog.start_button
+    QTest.keyClick(dialog, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    dialog.cursor_column_edit.setText("event_id" if field == "cursor_column_edit" else "event_id ")
+    if field != "cursor_column_edit":
+        assert dialog._next_control is dialog.monitor_view_button  # Normalized whitespace is not dirty.
+    QTest.keyClick(dialog, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
+    assert dialog.workflow_tabs.currentIndex() == 0
+
+
+def test_saved_setup_navigation_does_not_enable_unchecked_or_missing_source(dashboard_dialog, qapp):
+    dialog = dashboard_dialog
+    profile = _ready(dialog)
+    saved = dialog.configs_by_profile_id[profile.id]
+    persisted = dialog.repository.upsert_config(replace(
+        saved, allowed_lateness_seconds=5.0, source_timezone="Europe/Warsaw",
+    ))
+    dialog.reload_from_database()
+    assert dialog.configs_by_profile_id[profile.id] == persisted
+    dialog.source_list.item(0).setCheckState(Qt.CheckState.Unchecked)
+    dialog.workflow_tabs.setCurrentIndex(1)
+    assert dialog._next_control is dialog.monitor_view_button
+    assert dialog.configs_by_profile_id[profile.id] == persisted  # Hidden runtime values are untouched.
+    assert not dialog.start_button.isEnabled()
+    assert "requires checked enabled sources" in dialog.next_action_label.text()
+    dialog.next_button.click()
+    _show(dialog, qapp)
+    QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    assert dialog.poll_thread is None and not dialog.poll_timer.isActive()
+    _profile(IndustrialDataRepository(dialog.db_file), "missing", "Missing setup")
+    dialog.reload_from_database()
+    for index in range(dialog.source_list.count()):
+        dialog.source_list.item(index).setCheckState(Qt.CheckState.Checked)
+    dialog.workflow_tabs.setCurrentIndex(1)
+    assert dialog._next_control is dialog.monitor_view_button
+    assert not dialog.start_button.isEnabled()
+    dialog.next_button.click()
+    QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    assert dialog.poll_thread is None and not dialog.poll_timer.isActive()
 
 
 @pytest.mark.parametrize("key,status", [(Qt.Key.Key_A, "acknowledged"),
