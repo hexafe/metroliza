@@ -54,7 +54,7 @@ from metroliza.reports.import_persist_profile import close_persist_connection
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui import detached_threads
 from metroliza.ui.curation_presentation import bind_button
-from metroliza.ui.shortcuts import bind_search_shortcut
+from metroliza.ui.shortcuts import bind_search_shortcut, install_button_commands
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -707,6 +707,7 @@ class CharacteristicMappingDialog(QDialog):
         self.close_action = bind_button(self, self.close_button, 'Ctrl+W')
         self.search_action = bind_search_shortcut(self, [(self.metric_search_input, self.metric_table)])
         self.metric_search_input.setPlaceholderText('Search names or references [Ctrl+F]')
+        install_button_commands(self, "mapping")
 
         configure_table(self.metric_table, stretch_column=0, resize_to_contents=(1, 2, 3), min_height=280)
         metric_header = self.metric_table.horizontalHeader()

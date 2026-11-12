@@ -158,7 +158,7 @@ class WorkspaceNavigationCombo(QComboBox):
     def eventFilter(self, watched, event):
         key_confirmation = (event.type() == QEvent.Type.KeyPress
                             and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-                            and event.modifiers() == Qt.KeyboardModifier.NoModifier)
+                            and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier))
         mouse_confirmation = (event.type() == QEvent.Type.MouseButtonRelease
                               and event.button() == Qt.MouseButton.LeftButton)
         if key_confirmation:
@@ -175,7 +175,7 @@ class WorkspaceNavigationCombo(QComboBox):
 
     def keyPressEvent(self, event):
         if (not self.view().isVisible() and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+                and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)):
             self.confirmed.emit(self.currentIndex())
             event.accept()
             return
@@ -941,6 +941,8 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event):
         navigation = getattr(self, "navigation_list", None)
         if navigation is not None and watched is navigation.viewport():
+            if event.type() == QEvent.Type.MouseButtonPress:
+                self._skip_navigation_release = False
             if event.type() == QEvent.Type.MouseButtonDblClick:
                 self._skip_navigation_release = True
                 return True
@@ -950,7 +952,7 @@ class MainWindow(QMainWindow):
         if (watched is navigation
                 and event.type() == QEvent.Type.KeyPress
                 and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+                and event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)):
             self._activate_workspace(self.navigation_combo.currentData())
             return True
         return super().eventFilter(watched, event)

@@ -623,13 +623,13 @@ class _ReportOperations:
                                  "Review again" if self.report_planner.model.execution_rows else "Review reports")
         self.scan_button.setAccessibleName(self.scan_button.text())
         self.scan_button.setEnabled(inputs_ready and not busy and not stopping)
-        self.report_planner.set_busy(busy)
+        self.report_planner.set_busy(busy or stopping)
         self.report_planner.set_metadata_worker(
             self._metadata_mode(), ocr_reason=self._ocr_unavailable_reason()
         )
         for control in (self.directory_button, self.archive_button, self.metadata_mode_combo):
-            control.setEnabled(not busy)
-        self.database_button.setEnabled(bool(self.directory) and not busy)
+            control.setEnabled(not busy and not stopping)
+        self.database_button.setEnabled(bool(self.directory) and not busy and not stopping)
         self.review_scan_button.setEnabled(bool(self._preflight_result))
         message = self._readiness_message(
             busy=busy, current=current, count=count, inputs_ready=inputs_ready,
