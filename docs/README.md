@@ -28,13 +28,16 @@ Start here for current product scope, architecture, planning, and development pr
 ## Active docs
 
 - `user_manual/README.md` — canonical hub for active end-user manuals.
+- [`user_manual/keyboard_shortcuts.md`](user_manual/keyboard_shortcuts.md) — current keyboard commands, focus scopes, and availability rules.
 - `user_manual/main_window.md` — end-user guide to the main launcher window and workflow order.
 - `user_manual/parsing.md` — end-user guide to importing reports into a database file.
 - `user_manual/modify_database.md` — end-user guide to editing stored REFERENCE / SAMPLE NUMBER / HEADER values.
 - `user_manual/export_overview.md` — main end-user guide to the Export dialog.
+- [`user_manual/output_choices.md`](user_manual/output_choices.md) — HTML/workbook choices, output paths, and the generation summary.
 - `user_manual/export_filtering.md` — focused end-user guide to Export filtering.
 - `user_manual/export_grouping.md` — focused end-user guide to Export grouping.
 - `user_manual/csv_summary.md` — end-user guide to the CSV Summary workflow.
+- [`user_manual/csv_grouping_controls.md`](user_manual/csv_grouping_controls.md) — CSV grouping columns, selected members, and bounded previews.
 - `user_manual/industrial_data.md` — end-user guide to the Industrial Data/Oznak cache-first workflow.
 - `user_manual/realtime_industrial_monitoring.md` — operator guide to realtime industrial monitoring concepts, setup, event review, and false-positive handling.
 - `user_manual/dashboard_visuals.md` — end-user guide to dashboard visual recipes and customization.
