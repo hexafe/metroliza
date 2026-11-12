@@ -88,6 +88,14 @@ class ParseBatchResult:
     cancelled_files: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class ReportImportReceipt:
+    """Per-occurrence evidence published only after the import checkpoint."""
+
+    occurrence_id: str
+    state: str
+
+
 @dataclass(frozen=True)
 class _SelectedReportWorkItem:
     report_path: str | Path
@@ -1356,6 +1364,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self._parse_request = validated_request
         self.import_plan = import_plan
         self.last_parse_result = ParseBatchResult(parsed_files=0, total_files=0)
+        self.last_report_outcomes: tuple[ReportImportReceipt, ...] = ()
         self.last_enrichment_result: MetadataEnrichmentBatchResult | None = None
         self._last_emitted_progress = -1
         self._progress_stage_ranges = dict(self.PROGRESS_STAGE_RANGES)
@@ -1932,6 +1941,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
     def run(self):
         diagnostic = start_workflow_trace(WorkflowOperation.SELECTED_IMPORT)
         reports_to_parse = ()
+        receipts: list[ReportImportReceipt] = []
+        self.last_report_outcomes = ()
         try:
             plan = self._validated_import_plan()
             preflight = plan.preflight_result
@@ -2101,6 +2112,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     telemetry_batch_stage_timing_totals = {}
 
                 def _record_file_failure(report, exception, processed_files, total_files):
+                    receipts.append(ReportImportReceipt(self._occurrence_id_for_report(Path(report)), "failed"))
                     _log_parse_file_failure(
                         report,
                         getattr(exception, "_metroliza_parse_failure_stage", "unknown"),
@@ -2182,6 +2194,12 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
                 def _record_accepted_report(work_item, _parser, _outcome):
                     accepted_reports.setdefault(work_item.selected_identity, work_item.report_path)
+                    if work_item.selected_identity is not None:
+                        state = {
+                            ReportImportDisposition.IMPORTED: "saved",
+                            ReportImportDisposition.ALREADY_PRESENT: "already_present",
+                        }.get(_outcome, "unknown")
+                        receipts.append(ReportImportReceipt(work_item.selected_identity.occurrence_id, state))
 
                 diagnostic.stage(WorkflowStage.PROCESSING)
                 result = parse_new_reports(
@@ -2251,6 +2269,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.last_parse_result = result
                 # Enrichment can run for minutes without committing; sync the import first.
                 checkpoint_pending_import_commits(connection)
+                self.last_report_outcomes = tuple(receipts)
                 diagnostic.stage(WorkflowStage.PERSISTENCE_COMPLETE)
 
                 self._complete_requested_enrichment(list(accepted_reports.values()), connection)
