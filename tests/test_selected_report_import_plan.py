@@ -13,7 +13,7 @@ import pytest
 
 from metroliza.parsing import report_parser_factory
 from metroliza.parsing.cmm_report_parser import CMMReportParser
-from metroliza.parsing.parse_reports_thread import ParseReportsThread, parse_new_reports
+from metroliza.parsing.parse_reports_thread import ParseReportsThread, ReportImportReceipt, parse_new_reports
 from metroliza.parsing.source_inspection import SourceInspectionContext
 from metroliza.parsing.preflight import (
     ImportPlan,
@@ -1463,6 +1463,9 @@ def test_destination_becoming_duplicate_before_import_remains_safe(tmp_path):
     duplicate_recheck.run()
 
     assert _stored_source_hashes(database) == source_hashes_after_first_import
+    identity = plan.selected_reports[0].occurrence_id
+    assert first_import.last_report_outcomes == (ReportImportReceipt(identity, "saved"),)
+    assert duplicate_recheck.last_report_outcomes == (ReportImportReceipt(identity, "already_present"),)
     _assert_selected_result_counts(
         duplicate_recheck.last_parse_result,
         parsed=1,
