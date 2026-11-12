@@ -226,6 +226,9 @@ def test_queued_import_result_uses_submitted_selection(app, dialog, monkeypatch,
         owner.parse_button.click()
         operation = owner.import_operation
         assert owner._start_pending and operation.worker is None and owner.parse_thread is None
+        assert not owner.report_planner.table.isEnabled()
+        assert not owner.report_planner.clear.isEnabled() and not owner.report_planner.select_ready.isEnabled()
+        assert not owner.directory_button.isEnabled() and not owner.database_button.isEnabled()
         if change == "clear_all":
             owner.report_planner.clear.click()
         else:
@@ -235,6 +238,14 @@ def test_queued_import_result_uses_submitted_selection(app, dialog, monkeypatch,
             table.setFocus()
             from PyQt6.QtTest import QTest
             QTest.keyClick(table, Qt.Key.Key_Space)
+        assert frozenset(model.selected_ids) == submitted  # queued operation disables UI selection edits
+        # Preserve the independent actual-plan regression even against a programmatic model mutation.
+        if change == "clear_all":
+            model.clear_selection()
+        else:
+            model.setData(model.index(row, 0),
+                          Qt.CheckState.Checked if change == "check_extra" else Qt.CheckState.Unchecked,
+                          Qt.ItemDataRole.CheckStateRole)
         assert frozenset(model.selected_ids) != submitted
     finally:
         release.set()

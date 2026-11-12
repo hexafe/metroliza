@@ -28,3 +28,6 @@ With focus directly in **Selected columns**, **R** removes the current column.
 With focus directly in the member list, **R** removes selected members. These
 explicit command lists replace E/R type-ahead only in those contexts; search and
 text fields keep normal typing. Repeated key events do not repeat these commands.
+
+See the [keyboard command matrix](keyboard_shortcuts.md) for primary keys, active-window
+behavior and secondary shortcuts.

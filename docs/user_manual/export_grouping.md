@@ -260,3 +260,6 @@ Removing from a group sends it back to **POPULATION**. It does not delete the pa
 ### I created grouping but do not see it in Export
 
 Make sure you clicked **Use grouping**. If you close the dialog or click **Clear grouping**, Export will not use the grouping setup.
+
+See the [keyboard command matrix](keyboard_shortcuts.md) for primary keys, active-window
+behavior and secondary shortcuts.
