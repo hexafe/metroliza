@@ -331,3 +331,181 @@ def test_output_summary_and_disabled_reason_stay_with_primary_actions(
             assert window.rect().contains(rect)
     finally:
         window.close()
+
+
+@pytest.mark.parametrize("html_only", [False, True])
+def test_real_save_copy_handler_passes_selected_paths_to_worker(qapplication_session, monkeypatch, tmp_path, html_only):
+    window = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "source.db"))
+    captured = []
+    thread = _ExportThread()
+    monkeypatch.setattr(export_module, "create_export_data_thread", lambda request: captured.append(request) or thread)
+    monkeypatch.setattr(export_module, "save_export_dialog_config", lambda *_a: None)
+    monkeypatch.setattr(window, "_choose_output_collision", lambda *_a: "copy")
+    try:
+        window.excel_file = tmp_path / ("original.html" if html_only else "original.xlsx")
+        if html_only:
+            window.preset_combobox.setCurrentText("HTML dashboard only")
+        else:
+            window.generate_html_dashboard_checkbox.setChecked(True)
+        Path(window.excel_file).write_text("last complete output")
+        window.show_loading_screen()  # actual _confirm_output_publication, not a replaced path-only stub
+        assert len(captured) == 1
+        request = captured[0]
+        final = request.paths.html_dashboard_file if html_only else request.paths.excel_file
+        assert final == str(window.excel_file)
+        assert "(2)" in final
+        assert request.copy_output_from
+        assert window.request_summary_label.text() == window._export_request_summary(request)[0]
+        assert Path(request.copy_output_from).read_text() == "last complete output"
+    finally:
+        thread.finished.emit()
+        window.close()
+
+
+def test_declined_grouping_snapshot_summary_matches_actual_worker(qapplication_session, monkeypatch):
+    source = pd.DataFrame({"REPORT_ID": [1], "GROUP": ["A"]})
+    conversions = []
+
+    class Reference:
+        def __str__(self):
+            conversions.append("reference")
+            source.loc[0, "GROUP"] = "B"
+            return "reference"
+
+    source["REFERENCE"] = [Reference()]
+    window = IndustrialAnalyticsDialog(source_kind="tabular_file", input_file="table.csv")
+    monkeypatch.setattr(IndustrialAnalyticsThread, "start", lambda self: None)
+    try:
+        window.set_df_for_grouping(source)
+        window.set_grouping_applied(True)
+        window.show_loading_screen()
+        request = window.analytics_thread.request
+        assert request._grouping_snapshot is None
+        assert [(row.report_id, row.group) for row in request.grouping_df] == [(1, "B")]
+        assert window.request_summary_label.text() == analytics_summary(request)[0]
+        assert "assigned rows (B)" in window.request_summary_label.text()
+        assert conversions == ["reference"] * 2
+    finally:
+        if window.analytics_thread is not None:
+            window.analytics_thread.finished.emit()
+        window.close()
+
+
+@pytest.mark.parametrize("mutation", ["marker", "group"])
+def test_actual_replace_consent_rejects_in_place_semantic_changes(qapplication_session, monkeypatch, tmp_path, mutation):
+    window = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "source.db"))
+    window.excel_file = tmp_path / "existing.xlsx"
+    Path(window.excel_file).write_text("last complete output")
+    window.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [1], "GROUP": ["A"]}))
+    window.set_grouping_applied(True)
+    captured = []
+    messages = []
+    monkeypatch.setattr(export_module, "create_export_data_thread", lambda request: captured.append(request))
+    monkeypatch.setattr(QMessageBox, "information", lambda *_a: messages.append(_a[-1]))
+
+    def mutate_during_choice(*_args):
+        if mutation == "marker":
+            window.dashboard_visual_settings["marker_size"] = 17.0
+        else:
+            window.df_for_grouping.loc[0, "GROUP"] = "B"
+        return "replace"
+
+    monkeypatch.setattr(window, "_choose_output_collision", mutate_during_choice)
+    try:
+        window.show_loading_screen()
+        assert not captured
+        assert messages and "Settings changed" in messages[0]
+        assert Path(window.excel_file).read_text() == "last complete output"
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("abort", ["cancel", "parent_close", "changed_database"])
+def test_grouping_consent_admission_aborts_and_next_attempt_is_fresh(
+    qapplication_session, monkeypatch, tmp_path, abort,
+):
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QPushButton
+    import metroliza.ui.output_request_summary as summary_module
+
+    window = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "first.db"))
+    window.excel_file = tmp_path / "existing.xlsx"
+    Path(window.excel_file).write_text("last complete output")
+    window.set_df_for_grouping(pd.DataFrame({"REPORT_ID": range(1, 2049), "GROUP": ["A"] * 2048}))
+    window.set_grouping_applied(True)
+    captured = []
+    notices = []
+    thread = _ExportThread()
+    monkeypatch.setattr(export_module, "create_export_data_thread", lambda request: captured.append(request) or thread)
+    monkeypatch.setattr(export_module, "save_export_dialog_config", lambda *_a: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_a: notices.append(_a[-1]))
+    validate = summary_module.verify_grouping_after_consent
+
+    def observe_admission(parent, source, expected):
+        def act():
+            progress = parent._publication_admission_dialog
+            assert progress is not None
+            if abort == "cancel":
+                next(button for button in progress.findChildren(QPushButton) if button.text() == "Cancel").click()
+            elif abort == "parent_close":
+                parent.close()
+            else:
+                parent._update_database_context(str(tmp_path / "second.db"))
+        QTimer.singleShot(0, act)
+        return validate(parent, source, expected)
+
+    monkeypatch.setattr(export_module, "verify_grouping_after_consent", observe_admission)
+    monkeypatch.setattr(window, "_choose_output_collision", lambda *_a: "replace")
+    try:
+        window.show_loading_screen()
+        assert not captured and window.export_thread is None
+        assert window._publication_admission_dialog is None
+        monkeypatch.setattr(export_module, "verify_grouping_after_consent", validate)
+        window.set_df_for_grouping(None)
+        window.set_grouping_applied(False)
+        window.excel_file = tmp_path / "new-attempt.xlsx"  # no collision, no modal checker
+        window.show_loading_screen()
+        assert len(captured) == 1
+        assert captured[0].grouping_df is None
+        expected_db = "second.db" if abort == "changed_database" else "first.db"
+        assert captured[0].paths.db_file.endswith(expected_db)
+        assert captured[0].paths.excel_file.endswith("new-attempt.xlsx")
+    finally:
+        thread.finished.emit()
+        window.close()
+
+
+def test_large_grouping_consent_yields_between_bounded_canonical_checks(qapplication_session, monkeypatch, tmp_path):
+    from time import monotonic
+    from PyQt6.QtCore import QTimer
+    from metroliza.tabular import contracts
+    from metroliza.ui.output_request_summary import verify_grouping_after_consent
+
+    window = _build_dialog(monkeypatch, tmp_path)
+    source = pd.DataFrame({"REPORT_ID": range(1, 20001), "GROUP": ["A"] * 20000})
+    expected = contracts.validate_grouping_df(source)
+    calls = []
+    original = contracts.validate_grouping_df
+    ticks = []
+    heartbeat = QTimer(window)
+    heartbeat.setInterval(0)
+    heartbeat.timeout.connect(lambda: ticks.append(monotonic()))
+
+    def bounded_validate(chunk):
+        calls.append(len(chunk))
+        assert len(chunk) <= 128
+        return original(chunk)
+
+    monkeypatch.setattr(contracts, "validate_grouping_df", bounded_validate)
+    try:
+        heartbeat.start()
+        started = monotonic()
+        assert verify_grouping_after_consent(window, source, expected)
+        elapsed = monotonic() - started
+        assert len(calls) >= 157
+        assert len(ticks) >= 3
+        assert window._publication_admission_dialog is None
+        print(f"consent_guard rows=20000 chunks={len(calls)} heartbeat_ticks={len(ticks)} elapsed_seconds={elapsed:.6f}")
+    finally:
+        heartbeat.stop()
+        window.close()

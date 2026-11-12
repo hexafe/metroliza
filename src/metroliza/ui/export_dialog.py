@@ -37,6 +37,7 @@ from metroliza.charts.dashboard_visual_options import (
     dashboard_visual_group_names_from_grouping_frame,
     dashboard_visual_settings_summary,
     dashboard_visual_swatch_palette,
+    normalize_dashboard_visual_settings,
     load_dashboard_visual_settings,
 )
 from PyQt6 import sip
@@ -92,7 +93,10 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
             close()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.shortcuts import apply_dialog_mnemonics, set_mnemonic, visible_shortcut
-from metroliza.ui.output_request_summary import assignment_summary, install_output_commands, output_summary, set_output_summary
+from metroliza.ui.output_request_summary import (
+    assignment_summary, install_output_commands, output_summary, set_output_summary,
+    verify_grouping_after_consent,
+)
 from metroliza.reports.report_query_service import build_measurement_export_query
 from metroliza.shared.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
 from metroliza.ui.ui_foundation import (
@@ -1134,14 +1138,14 @@ class ExportDialog(QDialog):
             self.stop_exporting()
 
     def _export_draft_signature(self):
-        return (str(self.db_file), str(self.excel_file), self.filter_query, id(self.df_for_grouping),
+        return (str(self.db_file), self.filter_query, id(self.df_for_grouping),
                 self.preset_combobox.currentText(), self.export_type_combobox.currentText(),
                 self.sort_measurements_combobox.currentText(), self.violin_plot_min_samplesize.text(),
                 self.summary_plot_scale.text(), self.hide_ok_results_checkbox.isChecked(),
                 self.generate_html_dashboard_checkbox.isChecked(), self.include_google_sheets_checkbox.isChecked(),
                 self.include_industrial_context_checkbox.isChecked(), self._grouping_is_applied(),
                 self._selected_group_analysis_level(), self._selected_group_analysis_scope(),
-                id(self.dashboard_visual_settings))
+                normalize_dashboard_visual_settings(self.dashboard_visual_settings))
 
     def _show_database_required_warning(self, action_name):
         QMessageBox.information(
@@ -1436,10 +1440,13 @@ class ExportDialog(QDialog):
             if hasattr(self, "excel_file_text_label"):
                 self._set_path_field_value(self.excel_file_text_label, self.excel_file)
             draft_signature = self._export_draft_signature()
+            original_output = str(self.excel_file)
             export_request = self._confirm_output_publication(export_request)
             if export_request is None:
                 return
-            if self._export_draft_signature() != draft_signature:
+            returned_output = export_request.paths.excel_file or export_request.paths.html_dashboard_file
+            expected_output = str(returned_output) if export_request.copy_output_from else original_output
+            if self._export_draft_signature() != draft_signature or str(self.excel_file) != expected_output:
                 QMessageBox.information(self, "Export settings changed",
                                         "Settings changed while choosing outputs. Review the scope and generate again.")
                 self._refresh_draft_request_summary()
@@ -1493,6 +1500,8 @@ class ExportDialog(QDialog):
         choice = self._choose_output_collision(request.paths.db_file, paths, conflicts, copy_path)
         if choice == "cancel":
             return None
+        if not self._verify_publication_scope(request):
+            return None
         if choice == "replace":
             return replace(request, replace_outputs=consents, copy_output_from=None)
         copy_paths = output_paths(copy_path, html_only=html_only, dashboard=request.options.generate_html_dashboard)
@@ -1504,6 +1513,24 @@ class ExportDialog(QDialog):
         self.excel_file = copy_path
         self._set_path_field_value(self.excel_file_text_label, copy_path)
         return replace(request, paths=paths_contract, replace_outputs=(), copy_output_from=str(primary))
+
+    def _verify_publication_scope(self, request):
+        if normalize_dashboard_visual_settings(self.dashboard_visual_settings) != request.options.dashboard_visual_settings:
+            unchanged = False
+        else:
+            try:
+                unchanged = verify_grouping_after_consent(self, self.df_for_grouping, request.grouping_df)
+            except ValueError as exc:
+                self.log_and_exit(exc)
+                QMessageBox.warning(self, "Export scope verification failed", str(exc))
+                return False
+        if unchanged is None:
+            return False
+        if not unchanged:
+            QMessageBox.information(self, "Export settings changed",
+                                    "Settings changed while choosing outputs. Review the scope and generate again.")
+            self._refresh_draft_request_summary()
+        return bool(unchanged)
 
     def _choose_output_collision(self, database, paths, conflicts, copy_path):
         prompt = QMessageBox(self)
@@ -1730,6 +1757,10 @@ class ExportDialog(QDialog):
         QDialog.reject(self)
 
     def reject(self):
+        admission = getattr(self, "_publication_admission_dialog", None)
+        if admission is not None:
+            admission.reject()
+            return
         if self._defer_close_for_active_export():
             return
         if not self._discard_child_drafts():
@@ -1737,6 +1768,11 @@ class ExportDialog(QDialog):
         QDialog.reject(self)
 
     def closeEvent(self, event):
+        admission = getattr(self, "_publication_admission_dialog", None)
+        if admission is not None:
+            admission.reject()
+            event.ignore()
+            return
         if self._defer_close_for_active_export():
             event.ignore()
             return
