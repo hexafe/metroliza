@@ -1771,7 +1771,7 @@ jobs:
           METROLIZA_FILTER_SCOPE_DPR: '1'
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -vv -s tests/test_industrial_native_geometry.py tests/test_output_request_presentation.py tests/test_filter_presentation.py tests/test_curation_presentation.py tests/test_parser_profile_onboarding.py tests/test_industrial_onboarding_presentation.py tests/test_industrial_onboarding_delta.py
+          python -m pytest -vv -s tests/test_industrial_native_geometry.py tests/test_output_request_presentation.py tests/test_filter_presentation.py tests/test_curation_presentation.py tests/test_parser_profile_onboarding.py tests/test_industrial_onboarding_presentation.py tests/test_industrial_onboarding_delta.py tests/test_pyqt_ui_geometry_audit.py::test_tabular_filter_dialog_geometry_handles_multi_column_filters
 
       - name: Run native Windows realtime dashboard scheduling tests
         env:

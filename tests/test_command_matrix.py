@@ -294,7 +294,8 @@ def test_mapping_parent_export_and_modal_child_save_share_ctrl_s_without_double_
 
     _activate(qapplication_session, dialog)
     QTimer.singleShot(0, save_child)
-    press(qapplication_session, dialog, 'Ctrl+E')
+    # Open the modal before pumping events again, so the queued callback sees its child.
+    QTest.keyClick(dialog, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier)
     assert not failures, failures
     assert exports == [True]
     assert len(fetch_all_characteristic_aliases(dialog.db_file)) == 1
