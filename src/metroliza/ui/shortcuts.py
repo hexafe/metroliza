@@ -1,13 +1,18 @@
 """Window command inventory; shared by menus, tooltips and manual checks."""
 
 MAIN_SHORTCUTS = {
-    "open_database": ("Ctrl+O", "Open database…"),
+    "open_database": ("Ctrl+D", "Open database…"),
+    "choose_source": ("Ctrl+Shift+D", "Choose report folder…"),
     "review_reports": ("Ctrl+R", "Review reports"),
-    "import_reports": ("Ctrl+I", "Import selected reports"),
+    "import_reports": ("Ctrl+S", "Import selected reports"),
     "export_workbook": ("Ctrl+E", "Export Workbook"),
     "manual": ("F1", "Manual of the active window"),
 }
-PAGE_SHORTCUTS = tuple(f"Ctrl+{index}" for index in range(1, 10))
+PAGE_SHORTCUTS = tuple(f"Ctrl+{index}" for index in range(1, 6))
+WORKSPACE_SHORTCUTS = dict(zip(
+    ("home", "reports", "csv_summary", "industrial_data", "realtime_monitor"), PAGE_SHORTCUTS,
+)) | {"parser_profiles": "Ctrl+Shift+F", "tools": "Ctrl+Shift+T"}
+LEGACY_MAIN_SHORTCUTS = {"open_database": "Ctrl+O", "import_reports": "Ctrl+I"}
 DIALOG_SHORTCUTS = {"focus_search": ("Ctrl+F", "Focus and select the current search field")}
 DIALOG_MNEMONICS = {
     "csv_filter": {
@@ -140,3 +145,14 @@ def bind_search_shortcut(window, pairs):
     for edit, _view in pairs:
         _append_shortcut_tooltip(edit, sequence)
     return action
+
+
+def visible_shortcut(button, sequence):
+    """Append a persistent key hint while keeping dynamic captions and names clean."""
+    previous = button.property("metrolizaVisibleShortcut")
+    text = button.text()
+    if previous and text.endswith(f" [{previous}]"):
+        text = text[:-(len(previous) + 3)]
+    button.setText(f"{text} [{sequence}]")
+    button.setProperty("metrolizaVisibleShortcut", sequence)
+    _append_shortcut_tooltip(button, sequence)
