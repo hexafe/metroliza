@@ -566,7 +566,6 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.group_members_list.setMinimumHeight(120)
         self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.group_members_list, name="Rows in selected CSV group")
-        members_column.addWidget(self.group_members_list, 1)
         self.remove_from_group_button = QPushButton("Remove from group (Ctrl+D)")
         self._bind_control_shortcut(self.remove_from_group_button, "Ctrl+D")
         self.remove_from_group_button.setAutoDefault(False)
@@ -576,7 +575,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
             description="Return selected members to the default group; source rows are kept. Ctrl+D; R when the member list has focus.",
         )
         members_column.addWidget(self.remove_from_group_button)
-        members_column.addWidget(QLabel("List focus: R removes selected members"))
+        self.group_member_command_legend = QLabel("List focus: R removes selected members")
+        members_column.addWidget(self.group_member_command_legend)
+        members_column.addWidget(self.group_members_list, 1)
         list_splitter.addWidget(members_widget)
         list_splitter.setStretchFactor(0, 2)
         list_splitter.setStretchFactor(1, 1)
