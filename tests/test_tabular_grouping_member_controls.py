@@ -31,7 +31,7 @@ def dialog(qapplication_session, monkeypatch):
 
 
 def test_remove_member_button_only_returns_selected_record_to_default(dialog):
-    assert "Alt+X" in dialog.remove_from_group_button.text()
+    assert "Ctrl+D" in dialog.remove_from_group_button.text()
     assert not dialog.remove_from_group_button.isEnabled()
     member = dialog.group_members_list.item(1)
     assert member.data(Qt.ItemDataRole.UserRole) == 27
@@ -53,7 +53,7 @@ def test_remove_member_shortcut_and_reset_keep_draft_boundary(dialog, qapplicati
     dialog.group_members_list.setFocus()
     dialog.group_members_list.setCurrentRow(0)
     qapplication_session.processEvents()
-    QTest.keyClick(dialog.group_members_list, Qt.Key.Key_X, Qt.KeyboardModifier.AltModifier)
+    QTest.keyClick(dialog.group_members_list, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
     assert set(dialog._temp_assignments()) == {27}
     assert dialog._is_grouping_dirty()
     dialog._request_reset_grouping()
@@ -62,8 +62,8 @@ def test_remove_member_shortcut_and_reset_keep_draft_boundary(dialog, qapplicati
 
 
 def test_column_controls_respect_visible_search_and_preserve_groups(dialog):
-    assert "Alt+W" in dialog.add_column_button.text()
-    assert "Alt+E" in dialog.remove_column_button.text()
+    assert "Ctrl+E" in dialog.add_column_button.text()
+    assert "Ctrl+Shift+E" in dialog.remove_column_button.text()
     dialog.add_column_button.click()
     assert dialog.selector_columns == ["part"]
     assert set(dialog._temp_assignments()) == {11, 27}
@@ -88,10 +88,209 @@ def test_column_shortcuts_work_from_search_without_stealing_text_editing(dialog,
     dialog.activateWindow()
     dialog.column_search.setFocus()
     qapplication_session.processEvents()
-    QTest.keyClick(dialog.column_search, Qt.Key.Key_W, Qt.KeyboardModifier.AltModifier)
+    QTest.keyClick(dialog.column_search, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier)
     assert dialog.selector_columns == ["part"]
     QTest.keyClicks(dialog.column_search, "part")
     QTest.keyClick(dialog.column_search, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
     assert dialog.column_search.selectedText() == "part"
-    QTest.keyClick(dialog.column_search, Qt.Key.Key_E, Qt.KeyboardModifier.AltModifier)
+    QTest.keyClick(dialog.column_search, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+    assert dialog.selector_columns == []
+
+
+@pytest.mark.parametrize("timestamp", ["when_measured", None])
+def test_member_identity_uses_actual_fields_and_keeps_duplicate_ids_distinct(qapplication_session, timestamp):
+    frame = pd.DataFrame({
+        "source_row_number": [11, 27, 42], "custom_part": ["Same", "Same", pd.NA],
+        "when_measured": ["2026-01-01", None, "2026-01-03"], "selector": ["X"] * 3,
+    }, index=[7, 9, 14])
+    window = TabularAnalyticsGroupingDialog(
+        dataframe=frame, identity_column="custom_part", datetime_column=timestamp,
+        column_mapping={"Part code": "custom_part", "Measured": "when_measured"},
+    )
+    try:
+        window._assign_rows_to_group([11, 27, 42], "Chosen")
+        window.selector_columns = ["selector"]
+        window._refresh_all(preferred_group="Chosen")
+        labels = [window.group_members_list.item(i).text() for i in range(3)]
+        assert labels[0].startswith("Part code: Same")
+        assert labels[0].endswith("[Row 11]")
+        assert labels[1].endswith("[Row 27]")
+        assert "Missing identifier" in labels[2]
+        if timestamp:
+            assert "Measured: 2026-01-01" in labels[0]
+            assert "Missing date" in labels[1]
+        else:
+            assert "Measured:" not in labels[0]
+        window.group_members_list.setCurrentRow(1)
+        window.remove_from_group_button.click()
+        assert set(window._temp_assignments()) == {11, 42}
+        assert len(window.source_dataframe) == 3
+    finally:
+        window._reset_grouping_draft(refresh=False)
+        window.close()
+
+
+def test_sqlite_member_identity_read_is_bounded_and_survives_search_and_reopen(
+    qapplication_session, tmp_path, monkeypatch,
+):
+    from metroliza.tabular.tabular_analytics_service import (
+        cleanup_tabular_load_result, load_tabular_analytics_file,
+    )
+    from metroliza.ui import tabular_analytics_grouping_dialog as module
+
+    source = tmp_path / "synthetic.csv"
+    pd.DataFrame({
+        "PART": ["Same" if i % 24 == 0 else None for i in range(3000)],
+        "DATE": ["2026-01-01" if i % 24 == 0 else None for i in range(3000)],
+        "LINE": [str(i % 12) for i in range(3000)], "VALUE": range(3000),
+        "source_row_number": ["duplicate source label"] * 3000,
+    }).to_csv(source, index=False)
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    store = loaded.sqlite_store
+    assert store is not None
+    assert loaded.column_mapping["source_row_number"] != "source_row_number"
+    monkeypatch.setattr(module, "_GROUP_MEMBER_PREVIEW_LIMIT", 3)
+    reads = []
+    real_read = type(store).read_row_table
+
+    def read_spy(self, **kwargs):
+        reads.append(kwargs)
+        assert kwargs["limit"] == 3
+        assert len(kwargs["selected_filter_keys"]) <= 3
+        return real_read(self, **kwargs)
+
+    monkeypatch.setattr(type(store), "read_row_table", read_spy)
+    window = TabularAnalyticsGroupingDialog(
+        dataframe=loaded.dataframe, sqlite_store=store, column_mapping=loaded.column_mapping,
+        identity_column=loaded.column_mapping["PART"], datetime_column=loaded.column_mapping["DATE"],
+    )
+    try:
+        for group in range(12):
+            window._assign_rows_to_group(list(range(group + 1, 3001, 12)), f"Line {group}")
+        window._capture_committed_grouping_state()
+        window._refresh_all(preferred_group="Line 0")
+        assert window.group_members_list.count() == 4
+        ids = [window.group_members_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(3)]
+        assert ids == [1, 13, 25]
+        assert "PART: Same" in window.group_members_list.item(0).text()
+        assert "DATE: 2026-01-01" in window.group_members_list.item(0).text()
+        assert "Missing identifier" in window.group_members_list.item(1).text()
+        assert "Missing date" in window.group_members_list.item(1).text()
+        assert reads[-1]["columns"] == ("source_row_number", "part", "date")
+        assert not window.group_members_list.item(3).flags() & Qt.ItemFlag.ItemIsSelectable
+        window.selector_search.setText("absent")
+        window._apply_selector_filter()
+        _choose_group(window, "Line 1")
+        _choose_group(window, "Line 0")
+        assert window.group_members_list.item(1).data(Qt.ItemDataRole.UserRole) == 13
+        window.group_members_list.setCurrentRow(1)
+        window.remove_from_group_button.click()
+        assert window._group_counts()["Line 0"] == 249
+        assert [window.group_members_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(3)] == [1, 25, 37]
+        window._reset_grouping_draft()
+        assert window._group_counts()["Line 0"] == 250
+        saved = window._materialize_grouping_dataframe()
+        window.close()
+        reopened = TabularAnalyticsGroupingDialog(
+            dataframe=loaded.dataframe, sqlite_store=store, grouping_dataframe=saved,
+            identity_column="part", datetime_column="date",
+        )
+        try:
+            _choose_group(reopened, "Line 0")
+            assert reopened.group_members_list.item(1).data(Qt.ItemDataRole.UserRole) == 13
+            assert "Missing identifier" in reopened.group_members_list.item(1).text()
+        finally:
+            reopened.close()
+    finally:
+        window.close()
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("sqlite", [False, True])
+def test_grouping_caller_forwards_actual_user_identity_and_date(
+    qapplication_session, tmp_path, monkeypatch, sqlite,
+):
+    from types import SimpleNamespace
+    from metroliza.tabular.tabular_analytics_service import (
+        cleanup_tabular_load_result, load_tabular_analytics_file,
+    )
+    from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog
+
+    source = tmp_path / "synthetic.csv"
+    pd.DataFrame({"Key A": ["A"], "Time A": ["2026-01-01"], "Value": [1]}).to_csv(source, index=False)
+    loaded = load_tabular_analytics_file(source, force_sqlite=sqlite)
+    parent = IndustrialAnalyticsDialog(source_kind="tabular_file", tabular_load_result=loaded)
+    calls = []
+    try:
+        parent._populate_tabular_column_options(
+            loaded.column_mapping, reference_column="key_a", timestamp_column="time_a",
+        )
+        monkeypatch.setattr(parent, "_create_tabular_grouping_dialog", lambda *_a, **kwargs: (
+            calls.append(kwargs) or SimpleNamespace(exec=lambda: None)
+        ))
+        parent.open_grouping_dialog()
+        assert calls[0]["identity_column"] == "key_a"
+        assert calls[0]["datetime_column"] == "time_a"
+    finally:
+        parent.close()
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("identity,timestamp", [(None, None), ("unknown_id", "unknown_date")])
+def test_empty_or_unknown_identity_fields_never_use_another_column(qapplication_session, identity, timestamp):
+    window = TabularAnalyticsGroupingDialog(
+        dataframe=pd.DataFrame({"reference": ["WRONG ID"], "process_datetime": ["WRONG DATE"]}),
+        identity_column=identity, datetime_column=timestamp,
+    )
+    try:
+        window._assign_rows_to_group([1], "Chosen")
+        window._refresh_all(preferred_group="Chosen")
+        label = window.group_members_list.item(0).text()
+        assert "Missing identifier" in label and "[Row 1]" in label
+        assert "WRONG" not in label
+        assert ("Missing date" in label) is bool(timestamp)
+    finally:
+        window._reset_grouping_draft(refresh=False)
+        window.close()
+
+
+def test_bare_commands_only_run_in_their_directly_focused_lists(dialog, qapplication_session):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+    from PyQt6.QtWidgets import QApplication
+
+    dialog.show()
+    dialog.activateWindow()
+    dialog.column_search.setFocus()
+    qapplication_session.processEvents()
+    QTest.keyClicks(dialog.column_search, "er")
+    assert dialog.column_search.text() == "er"
+    assert dialog.selector_columns == []
+    assert set(dialog._temp_assignments()) == {11, 27}
+    dialog.available_columns_list.setFocus()
+    QTest.keyClick(dialog.available_columns_list, Qt.Key.Key_E, Qt.KeyboardModifier.ShiftModifier)
+    assert dialog.selector_columns == []
+    QTest.keyClick(dialog.available_columns_list, Qt.Key.Key_E)
+    assert dialog.selector_columns == ["part"]
+    dialog.selected_columns_list.setFocus()
+    repeat = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_R, Qt.KeyboardModifier.NoModifier, "r", True)
+    QApplication.sendEvent(dialog.selected_columns_list, repeat)
+    assert dialog.selector_columns == ["part"]
+    QTest.keyClick(dialog.selected_columns_list, Qt.Key.Key_R)
+    assert dialog.selector_columns == []
+    # R cannot remove a member without selection, nor can AltGr-like modifiers.
+    _choose_group(dialog, "Chosen")
+    dialog.group_members_list.setFocus()
+    dialog.group_members_list.clearSelection()
+    QTest.keyClick(dialog.group_members_list, Qt.Key.Key_R)
+    assert set(dialog._temp_assignments()) == {11, 27}
+    dialog.group_members_list.setCurrentRow(0)
+    QTest.keyClick(dialog.group_members_list, Qt.Key.Key_R,
+                   Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
+    assert set(dialog._temp_assignments()) == {11, 27}
+    QTest.keyClick(dialog.group_members_list, Qt.Key.Key_R)
+    assert set(dialog._temp_assignments()) == {27}
+    # The same key in an empty selected-columns list remains harmless.
+    dialog.selected_columns_list.setFocus()
+    QTest.keyClick(dialog.selected_columns_list, Qt.Key.Key_R)
     assert dialog.selector_columns == []

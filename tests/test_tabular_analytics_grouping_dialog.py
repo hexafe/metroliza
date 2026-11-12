@@ -536,7 +536,7 @@ def test_grouping_dialog_column_panes_are_tall_enough_for_multiple_columns() -> 
         dialog.close()
 
 
-def test_grouping_dialog_uses_double_click_column_selection_without_action_buttons() -> None:
+def test_grouping_dialog_exposes_column_actions_and_preserves_double_click_selection() -> None:
     _app()
     dialog = TabularAnalyticsGroupingDialog(
         dataframe=pd.DataFrame(
@@ -549,10 +549,12 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
     )
     try:
         button_texts = {plain_text(button.text()) for button in dialog.findChildren(QPushButton)}
-        assert not hasattr(dialog, "add_column_button")
-        assert not hasattr(dialog, "remove_column_button")
+        assert "Add column (Ctrl+E)" in button_texts
+        assert "Remove column (Ctrl+Shift+E)" in button_texts
+        assert dialog.add_column_button.isEnabled()
+        assert not dialog.remove_column_button.isEnabled()
         assert not hasattr(dialog, "clear_columns_button")
-        assert {"Add column", "Remove selected column", "Clear columns"}.isdisjoint(button_texts)
+        assert "Clear columns" not in button_texts
         assert "Create or add" not in button_texts
         assert "Assign all filtered rows..." in button_texts
         assert "Assign selected row values..." in button_texts

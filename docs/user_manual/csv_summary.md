@@ -171,9 +171,11 @@ Click **Edit groups** when you want export-style groups for the CSV/Excel rows. 
 single input file, the grouping dialog starts empty and leaves every row in
 **POPULATION** until you create a custom group. For multiple CSV files, accepting the
 auto-create prompt starts the dialog with one group per file name and no **POPULATION**
-rows. Search for a source column and double-click it to choose the first column used to
-select parts, such as `TraceCode`. Double-click another available column when you want to
-refine the visible combinations, or double-click a selected column to remove it. The
+rows. Search for a source column, select it, and use **Add column (Ctrl+E)** to
+choose a column such as `TraceCode`. **Remove column (Ctrl+Shift+E)** removes the
+current visible selected column. Double-clicking remains available for both operations.
+See [grouping controls](csv_grouping_controls.md) for focused E/R commands, member removal,
+source identity/date labels and draft behavior. The
 matching list shows each selected column chain as values like `TraceCode | Cavity`, so you
 can select the rows for a named group and leave the remaining rows in **POPULATION** for
 selected-vs-rest comparisons when you choose to create that population manually.
