@@ -14,7 +14,10 @@ from metroliza.reports.db import sqlite_query_only_connection_scope
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
-from metroliza.ui.shortcuts import MAIN_SHORTCUTS, PAGE_SHORTCUTS, bind_shortcut, set_mnemonic, shortcut_tooltip
+from metroliza.ui.shortcuts import (
+    LEGACY_MAIN_SHORTCUTS, MAIN_SHORTCUTS, WORKSPACE_SHORTCUTS,
+    bind_shortcut, set_mnemonic, shortcut_tooltip, visible_shortcut,
+)
 from PyQt6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QPixmap
 from PyQt6.QtWidgets import (
@@ -22,11 +25,13 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QHBoxLayout,
+    QGridLayout,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QScrollArea,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -163,7 +168,10 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(self.decode_icon(encoded_icon))
 
         # Initialize the dialogs and attributes
+        self._module_launch_buttons = {}
+        self._module_context_labels = {}
         self.parsing_dialog = None
+        self.csv_summary_dialog = None
         self.modifydb_dialog = None
         self.export_dialog = None
         self.metadata_enrichment_thread = None
@@ -194,6 +202,7 @@ class MainWindow(QMainWindow):
             self._on_coordinated_close_deferral_cancelled
         )
         self._coordinated_window_attributes = {
+            "csv_summary": "csv_summary_dialog",
             "modify_database": "modifydb_dialog",
             "export": "export_dialog",
             "industrial_data": "industrial_data_dialog",
@@ -470,22 +479,23 @@ class MainWindow(QMainWindow):
         self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
         self.csv_summary_action = QAction("CSV Summary...", self)
         self.csv_summary_action.setToolTip("Analyze CSV or Excel data with dashboards and workbook output.")
-        self.csv_summary_action.triggered.connect(lambda: self.launch_csv_summary_dialog())
+        self.csv_summary_action.triggered.connect(lambda: self._activate_workspace("csv_summary"))
         self.enrich_metadata_action = QAction("Enrich existing database metadata...", self)
         self.enrich_metadata_action.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
         self.enrich_metadata_action.triggered.connect(self.launch_metadata_enrichment)
         self.industrial_data_action = QAction("Industrial data...", self)
         self.industrial_data_action.setToolTip("Configure, sync, link, and export cached Oznak industrial data")
-        self.industrial_data_action.triggered.connect(lambda: self.launch_industrial_data_dialog())
+        self.industrial_data_action.triggered.connect(lambda: self._activate_workspace("industrial_data"))
         self.realtime_monitoring_action = QAction("Real-time Industrial Monitoring...", self)
         self.realtime_monitoring_action.setToolTip(
             "Configure and run realtime polling for industrial source databases."
         )
-        self.realtime_monitoring_action.triggered.connect(lambda: self.launch_realtime_industrial_monitoring_dialog())
+        self.realtime_monitoring_action.triggered.connect(lambda: self._activate_workspace("realtime_monitor"))
         self.parser_profiles_action = QAction("Parser profiles...", self)
         self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
-        self.parser_profiles_action.triggered.connect(lambda: self.launch_parser_plugin_wizard())
+        self.parser_profiles_action.triggered.connect(lambda: self._activate_workspace("parser_profiles"))
         self.tools_menu = self.menuBar().addMenu("&Tools")
+        self.tools_menu.setToolTip("Open work modules and database maintenance utilities.")
         self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
         self.tools_menu.addAction(self.industrial_data_action)
@@ -533,7 +543,17 @@ class MainWindow(QMainWindow):
 
     def _setup_shortcuts(self):
         bind_shortcut(self.open_database_action, MAIN_SHORTCUTS["open_database"][0])
+        bind_shortcut(self.choose_report_folder_action, MAIN_SHORTCUTS["choose_source"][0])
         self.command_actions = {}
+        self.legacy_command_actions = {}
+        for command, sequence in LEGACY_MAIN_SHORTCUTS.items():
+            callback = (self.open_database_action.trigger if command == "open_database"
+                        else lambda: self.command_actions["import_reports"].trigger())
+            action = QAction(MAIN_SHORTCUTS[command][1], self)
+            bind_shortcut(action, sequence)
+            action.triggered.connect(callback)
+            self.addAction(action)
+            self.legacy_command_actions[command] = action
         self.tools_menu.addSeparator()
         for command, callback in (
             ("review_reports", lambda: self._trigger_report_command("scan_button")),
@@ -546,16 +566,24 @@ class MainWindow(QMainWindow):
             self.addAction(action)
             self.command_actions[command] = action
         pages = self.view_menu.addMenu("Workspaces")
-        for index, sequence in enumerate(PAGE_SHORTCUTS[:self.navigation_list.count()]):
-            action = pages.addAction(self.navigation_combo.itemText(index))
-            action.triggered.connect(lambda checked=False, row=index: self.navigation_list.setCurrentRow(row))
+        self.workspace_actions = {}
+        for action, page_id in ((self.csv_summary_action, "csv_summary"),
+                                (self.industrial_data_action, "industrial_data"),
+                                (self.realtime_monitoring_action, "realtime_monitor"),
+                                (self.parser_profiles_action, "parser_profiles")):
+            action.setText(f"{action.text()} [{WORKSPACE_SHORTCUTS[page_id]}]")
+        for page_id, sequence in WORKSPACE_SHORTCUTS.items():
+            index = self.navigation_combo.findData(page_id)
+            action = pages.addAction(self.navigation_combo.itemText(index).split(" [")[0])
+            action.triggered.connect(lambda checked=False, selected=page_id: self._activate_workspace(selected))
             bind_shortcut(action, sequence)
             self.addAction(action)
+            self.workspace_actions[page_id] = action
         for button, letter in ((self.home_review_action, "p"), (self.home_cancel_report, "l"),
                                (self.modifydb_button, "d"), (self.map_characteristics_button, "m"),
                                (self.export_button, "e")):
             set_mnemonic(button, letter)
-        shortcut_tooltip(self.export_button, "export_workbook")
+        visible_shortcut(self.export_button, MAIN_SHORTCUTS["export_workbook"][0])
 
     def _trigger_report_command(self, button_name):
         host = self._ensure_reports_workspace()
@@ -574,8 +602,14 @@ class MainWindow(QMainWindow):
                 enabled = button.isEnabled()
                 set_mnemonic(button, letter)
                 shortcut_tooltip(button, command)
+                visible_shortcut(button, MAIN_SHORTCUTS[command][0])
             self.command_actions[command].setEnabled(enabled)
+        if host is not None:
+            visible_shortcut(host.directory_button, MAIN_SHORTCUTS["choose_source"][0])
+            visible_shortcut(host.database_button, MAIN_SHORTCUTS["open_database"][0])
         self.command_actions["export_workbook"].setEnabled(self.export_button.isEnabled())
+        self.legacy_command_actions["import_reports"].setEnabled(self.command_actions["import_reports"].isEnabled())
+        self.legacy_command_actions["open_database"].setEnabled(self.open_database_action.isEnabled())
 
     def _launch_home_next_action(self):
         reports = self._reports_workspace
@@ -700,8 +734,12 @@ class MainWindow(QMainWindow):
         shell_row.addWidget(self.workspace_stack, 1)
         self.layout.addLayout(shell_row, 1)
 
-        self.home_page = QWidget()
-        home_layout = QVBoxLayout(self.home_page)
+        self.home_page = QScrollArea()
+        self.home_page.setWidgetResizable(True)
+        self.home_page.setFrameShape(QScrollArea.Shape.NoFrame)
+        home_content = QWidget()
+        self.home_page.setWidget(home_content)
+        home_layout = QVBoxLayout(home_content)
         home_layout.setContentsMargins(4, 4, 4, 4)
         home_layout.setSpacing(8)
         for widget in (
@@ -711,6 +749,17 @@ class MainWindow(QMainWindow):
             self.home_report_result, self.home_next_action, self.home_review_action, self.home_cancel_report,
         ):
             home_layout.addWidget(widget)
+        module_grid = QGridLayout()
+        for index, (page_id, title) in enumerate((
+            ("reports", "Reports"), ("csv_summary", "CSV Summary"),
+            ("industrial_data", "Industrial Data"), ("realtime_monitor", "Realtime Monitor"),
+            ("parser_profiles", "Parser Profiles"), ("tools", "Tools"),
+        )):
+            button = QPushButton()
+            button.clicked.connect(lambda checked=False, selected=page_id: self._activate_workspace(selected))
+            self._module_launch_buttons.setdefault(page_id, []).append((button, title))
+            module_grid.addWidget(button, index // 2, index % 2)
+        home_layout.addLayout(module_grid)
         home_layout.addStretch(1)
         self._add_workspace_page("Home", self.home_page)
 
@@ -733,15 +782,24 @@ class MainWindow(QMainWindow):
             ("Realtime Monitor", "Monitor reviewed source configurations and inspect source lag and events.",
              "Open Realtime Monitor", self.launch_realtime_industrial_monitoring_dialog),
             ("Parser Profiles", "Inspect unsupported formats and prepare a local parser-profile handoff.",
-             "Manage Parser Profiles", self.launch_parser_plugin_wizard),
+             "Open Parser Profiles", self.launch_parser_plugin_wizard),
             ("Tools", "Maintenance utilities for the current database. Domain shortcuts in the Tools menu open their named windows.",
              "Enrich existing database metadata", self.launch_metadata_enrichment),
         ):
             self._add_workspace_page(title, self._build_workspace_landing_page(
                 title, description, ((action, callback),),
             ))
+        self.navigation_list.itemActivated.connect(
+            lambda item: self._activate_workspace(item.data(Qt.ItemDataRole.UserRole))
+        )
+        self.navigation_list.itemClicked.connect(
+            lambda item: self._activate_workspace(item.data(Qt.ItemDataRole.UserRole))
+        )
         self.navigation_list.currentRowChanged.connect(self._on_navigation_changed)
         self.navigation_combo.currentIndexChanged.connect(self.navigation_list.setCurrentRow)
+        self.navigation_combo.activated.connect(
+            lambda index: self._activate_workspace(self.navigation_combo.itemData(index))
+        )
         self.navigation_list.setCurrentRow(0)
         self.navigation_list.currentRowChanged.connect(self._persist_navigation_index)
 
@@ -768,20 +826,35 @@ class MainWindow(QMainWindow):
         configure_accessibility(self.cancel_metadata_enrichment_button, name="Cancel metadata enrichment")
         configure_accessibility(self.navigation_list, name="Metroliza workspace navigation",
                                 description="Choose a workflow without closing other work.")
+        self._sync_module_launchers()
         self._update_navigation_layout()
 
     def _add_workspace_page(self, label: str, page: QWidget) -> None:
         page_id = label.lower().replace(" ", "_")
-        item = QListWidgetItem(label)
+        sequence = WORKSPACE_SHORTCUTS.get(page_id, "")
+        item = QListWidgetItem(f"{label}  [{sequence}]" if sequence else label)
         item.setData(Qt.ItemDataRole.UserRole, page_id)
         self.navigation_list.addItem(item)
-        self.navigation_combo.addItem(label, page_id)
+        self.navigation_combo.addItem(f"{label} [{sequence}]" if sequence else label, page_id)
         self.workspace_stack.addWidget(page)
 
     def _show_workspace_page(self, page_id):
         index = self.navigation_combo.findData(page_id)
         if index >= 0:
             self.navigation_list.setCurrentRow(index)
+
+    def _activate_workspace(self, page_id):
+        """One activation path for menu, keyboard, navigation and launcher."""
+        self._show_workspace_page(page_id)
+        if page_id == "reports":
+            return self.launch_parsing_dialog()
+        callback = {
+            "csv_summary": self.launch_csv_summary_dialog,
+            "industrial_data": self.launch_industrial_data_dialog,
+            "realtime_monitor": self.launch_realtime_industrial_monitoring_dialog,
+            "parser_profiles": self.launch_parser_plugin_wizard,
+        }.get(page_id)
+        return callback() if callback else None
 
     def _on_navigation_changed(self, index):
         if self._reports_first_paint and self.navigation_combo.itemData(index) == "reports":
@@ -832,7 +905,24 @@ class MainWindow(QMainWindow):
                 button.setStyleSheet(PLANNER_ACTION_STYLE)
             host.apply_workspace_snapshot(self.workspace_context.snapshot)
             self._sync_workflow_next_step()
+            self._compose_reports_tab_order(host)
         return self._reports_workspace
+
+    def _compose_reports_tab_order(self, host):
+        """Rebind the final shell chain after lazy insertion of the Reports owner."""
+        planner = host.report_planner
+        order = (
+            self.navigation_list, self.navigation_combo,
+            host.directory_text_label, host.directory_button, host.archive_button,
+            host.database_text_label, host.database_button, host.metadata_mode_combo,
+            host.scan_button, planner.search, planner.status_filter, planner.parser_filter,
+            planner.attention_filter, planner.select_ready, planner.clear, planner.table,
+            planner.details_button, planner.details, planner.ocr_button, planner.metadata_button,
+            host.parse_button, planner.outcome_button, planner.outcome,
+            self.modifydb_button, self.map_characteristics_button, self.export_button,
+        )
+        for first, second in zip(order, order[1:]):
+            self.setTabOrder(first, second)
 
     def _cancel_report_operation(self):
         if self._reports_workspace is not None:
@@ -853,13 +943,37 @@ class MainWindow(QMainWindow):
         layout.addWidget(description_label)
         for index, (label, callback) in enumerate(actions):
             button = QPushButton(label)
+            page_id = title.lower().replace(" ", "_")
+            if title != "Tools":
+                self._module_launch_buttons.setdefault(page_id, []).append((button, title))
+                def callback(selected=page_id):
+                    return self._activate_workspace(selected)
             set_button_role(button, "primary" if index == 0 else "secondary")
-            button.clicked.connect(callback)
+            button.clicked.connect(lambda checked=False, activate=callback: activate())
             if title in ("Industrial Data", "Realtime Monitor", "Tools"):
                 self._database_workflow_buttons.append(button)
             layout.addWidget(button)
+        if title != "Tools":
+            context = secondary_label("CSV/Excel input is independent of the Reports database." if title == "CSV Summary"
+                                      else "Uses its own window; opening again resumes the current session.")
+            self._module_context_labels[page_id] = context
+            layout.addWidget(context)
         layout.addStretch(1)
         return page
+
+    def _sync_module_launchers(self):
+        for page_id, label in self._module_context_labels.items():
+            if page_id in ("industrial_data", "realtime_monitor"):
+                label.setText(f"Reports database: {self.db_file or 'not selected; choose a database in this module'}. "
+                              "Open again to resume its current window.")
+        for page_id, controls in self._module_launch_buttons.items():
+            active = (self._reports_workspace is not None if page_id == "reports"
+                      else self.window_coordinator.get(page_id) is not None)
+            for button, title in controls:
+                caption = f"{'Resume' if active else 'Open'} {title}" if page_id != "tools" else "Database maintenance tools"
+                button.setText(caption)
+                button.setAccessibleName(caption)
+                visible_shortcut(button, WORKSPACE_SHORTCUTS[page_id])
 
     def _on_workspace_snapshot_changed(self, current, _previous) -> None:
         self.directory = current.source_directory
@@ -938,6 +1052,9 @@ class MainWindow(QMainWindow):
         self.home_review_action.setVisible(self._export_ready)
         self.home_next_action.setText(caption)
         self.home_next_action.setAccessibleName(caption)
+        visible_shortcut(self.home_next_action, "Ctrl+E" if caption == "Export Workbook" else "Ctrl+2")
+        visible_shortcut(self.home_review_action, "Ctrl+2")
+        visible_shortcut(self.home_cancel_report, "Alt+L")
         set_mnemonic(self.home_next_action, "w" if caption == "Export Workbook" else "a" if busy else "o")
         if caption == "Export Workbook":
             shortcut_tooltip(self.home_next_action, "export_workbook")
@@ -967,6 +1084,7 @@ class MainWindow(QMainWindow):
             button.setEnabled(not busy)
         self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
         self._sync_shortcuts()
+        self._sync_module_launchers()
 
     def _home_next_caption(self, reports, busy):
         if busy:
@@ -1316,9 +1434,11 @@ class MainWindow(QMainWindow):
         attribute = self._coordinated_window_attributes.get(window_id)
         if attribute:
             setattr(self, attribute, widget)
+        self._sync_module_launchers()
         return widget
 
     def _on_coordinated_window_closed(self, window_id: str) -> None:
+        self._sync_module_launchers()
         if window_id == "realtime_monitor":
             self._pending_realtime_database = None
         attribute = self._coordinated_window_attributes.get(window_id)
@@ -1447,11 +1567,16 @@ class MainWindow(QMainWindow):
         try:
             from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
 
-            csv_summary_window = IndustrialAnalyticsDialog(
-                self,
-                source_kind=SOURCE_TABULAR_FILE,
+            def create_csv(_snapshot):
+                dialog = IndustrialAnalyticsDialog(self, source_kind=SOURCE_TABULAR_FILE)
+                dialog.setModal(False)
+                dialog.setWindowModality(Qt.WindowModality.NonModal)
+                return dialog
+
+            return self._open_coordinated_window(
+                "csv_summary", create_csv, context_policy=WindowContextPolicy.KEEP,
+                context_fields=frozenset(),
             )
-            csv_summary_window.exec()
         except Exception as e:
             self.log_and_exit(e)
 
