@@ -448,10 +448,9 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
     html_text = dashboard_file.read_text(encoding="utf-8")
     hero = html_text.split('<header class="hero"', 1)[1].split('</header>', 1)[0]
     run_notes = html_text.split('<details id="run-notes"', 1)[1].split('</details>', 1)[0]
-    attention = html_text.split('<details id="attention-needed"', 1)[1].split('</details>', 1)[0]
 
     assert result.row_count == row_count
-    assert f'<li>{sampling_note}</li>' in attention
+    assert f'<li>{sampling_note}</li>' in run_notes
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"
         and diagnostic.message == sampling_note
