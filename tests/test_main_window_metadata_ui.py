@@ -536,23 +536,23 @@ class TestMainWindowMetadataUi(unittest.TestCase):
     def test_workflow_next_step_tracks_source_and_database_context(self):
         window = self._main_window()
         try:
-            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports [Ctrl+2]")
             self.assertIn("Select a source and database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_directory("/tmp/metroliza-reports")
-            self.assertEqual(plain_text(window.home_next_action.text()), "Choose database in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Choose database in Reports [Ctrl+2]")
             self.assertIn("Select or create a database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
             window.set_db_file("/tmp/metroliza.db")
-            self.assertEqual(plain_text(window.home_next_action.text()), "Review reports in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Review reports in Reports [Ctrl+2]")
             self.assertIn("Ready to review", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
             self.assertFalse(window.reports_workspace.parse_button.isEnabled())
 
             window.set_directory("")
-            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports [Ctrl+2]")
             self.assertTrue(window.export_button.isEnabled())
         finally:
             window.close()
@@ -645,7 +645,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         window = self._main_window()
         try:
             navigation = [
-                window.navigation_list.item(index).text()
+                window.navigation_combo.itemText(index).split(" [")[0]
                 for index in range(window.navigation_list.count())
             ]
 
