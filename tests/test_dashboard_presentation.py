@@ -144,24 +144,42 @@ def test_component_key_dispatch_protects_focus_editors_modifiers_and_rebinding()
         const listeners = [];
         let nextCount = 0, closeCount = 0;
         const component = {
-          contains: (target) => target === component || target === editor,
+          contains: (target) => [component, editor, result].includes(target),
+          isConnected: true,
+          focus: () => { document.activeElement = component; },
           closest: () => null,
           addEventListener: (type, callback) => listeners.push(callback),
         };
         const editor = { closest: () => ({}) };
-        const next = { disabled: false, click: () => nextCount++ };
-        const close = { disabled: false, click: () => closeCount++ };
+        const result = { isConnected: true, closest: () => null };
+        const chart = {}, outside = {};
+        const next = { disabled: false, click: () => {
+          nextCount++;
+          if (document.activeElement === result) result.isConnected = false;
+          document.activeElement = chart;
+        } };
+        const close = { disabled: false, click: () => { closeCount++; document.activeElement = outside; } };
         bindDashboardComponentKeys(component, { next, close });
         bindDashboardComponentKeys(component, { next, close });
         const send = (key, flags = {}, target = component, focused = target) => {
           document.activeElement = focused;
+          if (!component.contains(target)) return false;
           let prevented = false;
           listeners.forEach((callback) => callback({ key, target,
             preventDefault: () => { prevented = true; }, ...flags }));
           return prevented;
         };
-        const accepted = [send('e'), send('q')];
-        const protectedKeys = ['a', 'c', 'x', 'v', 'z', 'Enter', 'Escape', 'E'];
+        const accepted = [send('e')];
+        const focus = [document.activeElement === component];
+        accepted.push(send('e', {}, document.activeElement));
+        focus.push(document.activeElement === component);
+        accepted.push(send('e', {}, result));  // A rebuilt result button becomes detached.
+        focus.push(document.activeElement === component && !result.isConnected);
+        accepted.push(send('q'));
+        focus.push(document.activeElement === outside);  // Never restore a closed viewer.
+
+        accepted.push(send('E'), send('Q'));  // Caps Lock letters without Shift.
+        const protectedKeys = ['a', 'c', 'x', 'v', 'z', 'Enter', 'Escape'];
         const ignored = protectedKeys.map((key) => send(key));
         for (const flag of ['ctrlKey', 'altKey', 'metaKey', 'shiftKey', 'repeat', 'isComposing', 'defaultPrevented']) {
           ignored.push(send('e', { [flag]: true }), send('q', { [flag]: true }));
@@ -172,14 +190,17 @@ def test_component_key_dispatch_protects_focus_editors_modifiers_and_rebinding()
         ignored.push(send('e', {}, component, {}), send('q', {}, component, {}));
         next.disabled = true; close.disabled = true;
         ignored.push(send('e'), send('q'));
-        return { accepted, ignored, nextCount, closeCount, registrations: listeners.length };
+        return { accepted, ignored, focus, nextCount, closeCount, registrations: listeners.length };
       `);
       process.stdout.write(JSON.stringify(run()));
     """
     observed = _node(driver, render_dashboard_component_keys_js())
-    assert observed["accepted"] == [True, True]
+    assert observed["accepted"] == [True, True, True, True, True, True]
+    assert observed["focus"] == [True, True, True, True]
     assert not any(observed["ignored"])
-    assert observed["nextCount"] == observed["closeCount"] == observed["registrations"] == 1
+    assert observed["nextCount"] == 4
+    assert observed["closeCount"] == 2
+    assert observed["registrations"] == 1
 
 
 def test_generated_csv_and_export_javascript_parse_including_snapshot_only():

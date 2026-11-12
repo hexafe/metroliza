@@ -1275,10 +1275,16 @@ def render_dashboard_component_keys_js() -> str:
           const target = event.target;
           if (!target || typeof target.closest !== 'function'
               || target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
-          const button = event.key === 'e' ? next : event.key === 'q' ? close : null;
+          const key = String(event.key || '').toLowerCase();
+          const button = key === 'e' ? next : key === 'q' ? close : null;
           if (!button || button.disabled) return;
           event.preventDefault();
+          const focused = document.activeElement;
           button.click();
+          if (key === 'e' && component.isConnected) {
+            const restore = focused && focused.isConnected && component.contains(focused) ? focused : component;
+            restore.focus({ preventScroll: true });
+          }
         });
       };
     """
