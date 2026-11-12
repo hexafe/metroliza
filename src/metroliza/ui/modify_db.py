@@ -31,7 +31,7 @@ from metroliza.reports.report_edit_service import (
 )
 from metroliza.ui.curation_presentation import bind_button, short_value
 from metroliza.ui.help_menu import attach_help_menu_to_layout
-from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
+from metroliza.ui.shortcuts import install_button_commands, apply_dialog_mnemonics, bind_search_shortcut
 from metroliza.ui.modify_db_records import (
     FILTER_DEBOUNCE_MS,
     RecordBusyBanner,
@@ -194,6 +194,7 @@ class ModifyDB(QDialog):
             self.connect_signals()
             self._refresh_pending_status()
             apply_dialog_mnemonics(self, "modify")
+            install_button_commands(self, "modify")
             self.apply_action = bind_button(self, self.apply_button, "Ctrl+S")
             self.close_action = bind_button(self, self.cancel_button, "Ctrl+W")
             self.search_action = bind_search_shortcut(self, [

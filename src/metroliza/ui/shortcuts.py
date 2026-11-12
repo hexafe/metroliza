@@ -168,6 +168,7 @@ def visible_shortcut(button, sequence):
 # Supplemental commands only: accepted primary bindings stay at their existing owners.
 # Each entry targets the actual guarded button, not a parallel command/readiness state.
 PRIMARY_BUTTON_COMMANDS = {
+    "modify": (("select_db_button", "Ctrl+D"),),
     "csv_summary": (
         ("browse_input_button", "Ctrl+D"), ("load_metrics_button", "Ctrl+R"),
         ("dashboard_button", "Ctrl+Shift+D"), ("workbook_button", "Ctrl+Shift+E"),
@@ -271,3 +272,20 @@ def install_button_commands(window, context):
         installed[key] = action
     refresh_button_command_hints(window, context)
     return tuple(installed[(context, attribute)] for attribute, _sequence in PRIMARY_BUTTON_COMMANDS[context])
+
+
+def install_callback_command(window, sequence, callback):
+    """Window-local route to an existing guarded handler (for an active operation)."""
+    from PyQt6.QtGui import QAction
+
+    installed = getattr(window, "_catalog_callback_actions", None)
+    if installed is None:
+        installed = window._catalog_callback_actions = {}
+    if sequence not in installed:
+        action = QAction(window)
+        bind_shortcut(action, sequence)
+        action.setAutoRepeat(False)
+        action.triggered.connect(lambda: callback() if _active_command_window(window) else None)
+        window.addAction(action)
+        installed[sequence] = action
+    return installed[sequence]
