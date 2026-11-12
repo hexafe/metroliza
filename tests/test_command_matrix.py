@@ -1,13 +1,14 @@
 """Actual keys for the integrated window/component command matrix (#1204/#946)."""
+import json
 import os
 from threading import Event
 
 import pandas as pd
 import pytest
-from PyQt6.QtCore import QEvent, QPoint, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QKeyEvent, QKeySequence, QShortcut
+from PyQt6.QtCore import QEvent, QObject, QPoint, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QGuiApplication, QKeyEvent, QKeySequence, QShortcut
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox
+from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox, QWidget
 
 from metroliza.industrial.industrial_analytics_state import ProductionMetricSelection
 from metroliza.ui import detached_threads
@@ -22,14 +23,99 @@ from tests.test_wave0_modifydb_mapping import _database
 CONTEXTS = tuple(PRIMARY_BUTTON_COMMANDS)
 
 
-def press(app, target, sequence):
+def _key_state(app, target):
+    """Describe routing identities without captions, editor contents or other user data."""
+    def describe(obj):
+        if obj is None:
+            return None
+        state = {'class': type(obj).__name__, 'id': hex(id(obj))}
+        if isinstance(obj, QWidget):
+            state.update(flags=int(obj.windowFlags()), visible=obj.isVisible(), enabled=obj.isEnabled(),
+                         active=obj.isActiveWindow(), modal=obj.isModal(), is_window=obj.isWindow())
+        return state
+
+    try:
+        return {name: describe(obj) for name, obj in (
+            ('target', target), ('top', target.window()), ('active', app.activeWindow()),
+            ('modal', app.activeModalWidget()), ('popup', app.activePopupWidget()),
+            ('focus', app.focusWidget()), ('native_focus', QGuiApplication.focusWindow()),
+        )}
+    except Exception as exc:
+        return {'state_error': type(exc).__name__, 'target_class': type(target).__name__}
+
+
+def _activate(app, target):
+    """Wait for the Qt shortcut owner's actual activation, modality and input focus."""
     window = target.window()
+    expected_modal = window
+    while expected_modal is not None:
+        if expected_modal.isWindow() and expected_modal.isVisible() and expected_modal.isModal():
+            break
+        expected_modal = expected_modal.parentWidget()
     window.activateWindow()
-    wait_until(app, window.isActiveWindow)
-    target.setFocus()
+    if target is not window:
+        target.setFocus()  # Qt resolves the real focus proxy and remembers it during activation.
+
+    def ready():
+        if (app.activeWindow() is not window or not window.isActiveWindow()
+                or app.activeModalWidget() is not expected_modal):
+            return False
+        focused = app.focusWidget()
+        if target is window:
+            # A dialog keeps its natural editor focus; an empty dialog may have only native focus.
+            return ((focused is not None and focused.window() is window)
+                    or (focused is None and window.windowHandle() is not None
+                        and QGuiApplication.focusWindow() is window.windowHandle()))
+        return target.hasFocus() and focused is not None and focused.window() is window
+
+    try:
+        wait_until(app, ready)  # Existing finite 20-second deadline; no fixed settling delay.
+    except AssertionError as exc:
+        raise AssertionError('Keyboard activation/focus precondition failed: '
+                             + json.dumps(_key_state(app, target), sort_keys=True)) from exc
+
+
+class _ShortcutObserver(QObject):
+    """Observe Qt arbitration without consuming events or intercepting production handlers."""
+
+    def __init__(self, app, target):
+        super().__init__()
+        self.app, self.target = app, target
+        self.events, self.errors = [], []
+
+    def eventFilter(self, receiver, event):
+        try:
+            if event.type() == QEvent.Type.Shortcut and len(self.events) < 32:
+                owner = receiver.parent()
+                self.events.append({
+                    'key': event.key().toString(), 'ambiguous': event.isAmbiguous(),
+                    'receiver_class': type(receiver).__name__, 'receiver_id': hex(id(receiver)),
+                    'owner_class': type(owner).__name__, 'owner_id': hex(id(owner)),
+                    'state': _key_state(self.app, self.target),
+                })
+        except BaseException as exc:
+            # A diagnostic failure must never escape through a Qt virtual callback.
+            if len(self.errors) < 8:
+                self.errors.append(type(exc).__name__)
+        return False
+
+
+def press(app, target, sequence):
+    _activate(app, target)
+    before = _key_state(app, target)
+    observer = _ShortcutObserver(app, target)
+    app.installEventFilter(observer)
     combination = QKeySequence(sequence)[0]
-    QTest.keyClick(target, combination.key(), combination.keyboardModifiers())
-    app.processEvents()
+    try:
+        QTest.keyClick(target, combination.key(), combination.keyboardModifiers())
+        app.processEvents()
+    finally:
+        app.removeEventFilter(observer)
+        print('COMMAND_KEY_TRACE ' + json.dumps({
+            'sequence': sequence, 'before': before, 'after': _key_state(app, target),
+            'shortcuts': observer.events, 'observer_errors': observer.errors,
+        }, sort_keys=True))
+    assert not observer.errors, observer.errors
 
 
 @pytest.fixture
@@ -199,20 +285,16 @@ def test_mapping_parent_export_and_modal_child_save_share_ctrl_s_without_double_
             assert isinstance(child, mapping.CharacteristicAliasEditorDialog)
             child.alias_input.setCurrentText('Synthetic metric')
             child.common_name_input.setCurrentText('Shared metric')
-            child.activateWindow()
-            wait_until(qapplication_session, child.isActiveWindow)
-            child.common_name_input.setFocus()
-            QTest.keyClick(child.common_name_input, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+            press(qapplication_session, child.common_name_input, 'Ctrl+S')
             assert not child.isVisible()
         except Exception as exc:
             failures.append(exc)
             if isinstance(child, QDialog):
                 child.reject()
 
-    dialog.activateWindow()
-    wait_until(qapplication_session, dialog.isActiveWindow)
+    _activate(qapplication_session, dialog)
     QTimer.singleShot(0, save_child)
-    QTest.keyClick(dialog, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier)
+    press(qapplication_session, dialog, 'Ctrl+E')
     assert not failures, failures
     assert exports == [True]
     assert len(fetch_all_characteristic_aliases(dialog.db_file)) == 1
@@ -228,9 +310,7 @@ def test_keypad_enter_confirms_compact_navigation_once_and_modifiers_remain_prev
     combo.setCurrentIndex(2)
     press(app, combo, 'Ctrl+Return')
     assert calls == []
-    combo.activateWindow()
-    wait_until(app, window.isActiveWindow)
-    combo.setFocus()
+    _activate(app, combo)
     QTest.keyClick(combo, Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier)
     assert calls == ['csv']
     combo.showPopup()
@@ -442,8 +522,7 @@ def test_actual_industrial_parent_child_shared_keys_keep_real_handler_ownership(
             child.field_list.item(0).setSelected(True)
         child_primary = child.apply_button
     parent.show()
-    parent.activateWindow()
-    wait_until(qapplication_session, parent.isActiveWindow)
+    _activate(qapplication_session, parent)
     assert parent_primary.isEnabled() and parent.close_button.isEnabled()
     parent_primary_hits, parent_close_hits, child_hits = [], [], []
     parent_primary.clicked.connect(lambda: parent_primary_hits.append(True))
