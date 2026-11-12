@@ -14,6 +14,7 @@ from metroliza.tabular.tabular_analytics_service import TabularColumnFilter, app
 from metroliza.ui.filter_dialog import FilterDialog
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from tests.qt_key_input import press_key
+from tests.qt_geometry_diagnostics import geometry_snapshot
 from tests.test_report_planner_integration import wait_until
 from tests.test_wave0_filters_groups import scoped_header_dialog as scoped_header_dialog, wait_for_choices
 
@@ -222,7 +223,10 @@ def test_filter_short_screen_has_visible_primary_actions(app, monkeypatch, kind)
     editor.resize(720, 480)
     app.processEvents()
     try:
-        assert editor.size() == QSize(720, 480)
+        assert editor.size() == QSize(720, 480), (
+            geometry_snapshot(editor, requested=(720, 480), pinned=('apply_button', 'cancel_button'))
+            if kind == 'reports' else None
+        )
         assert editor.apply_button.isVisibleTo(editor) and editor.cancel_button.isVisibleTo(editor)
         for button in (editor.apply_button, editor.cancel_button):
             point = button.mapTo(editor, button.rect().center())
