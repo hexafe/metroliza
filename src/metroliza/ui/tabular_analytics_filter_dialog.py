@@ -486,7 +486,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         )
         self.add_column_button.setEnabled(self.column_list.count() > 0)
 
-    def _refresh_selected_columns(self) -> None:
+    def _refresh_selected_columns(self, *, select_fallback=True) -> None:
         current_column = self._current_filter_column()
         populate_column_list(
             self.selected_columns_list,
@@ -497,10 +497,16 @@ class TabularAnalyticsFilterDialog(QDialog):
             fallback="first",
             block_signals=True,
         )
+        if not select_fallback and self._current_filter_column() != current_column:
+            # Searching reveals choices; it does not activate another condition or scan its source.
+            blocked = self.selected_columns_list.blockSignals(True)
+            self.selected_columns_list.setCurrentRow(-1)
+            self.selected_columns_list.clearSelection()
+            self.selected_columns_list.blockSignals(blocked)
 
     def _search_selected_columns(self):
         previous = self._current_filter_column()
-        self._refresh_selected_columns()
+        self._refresh_selected_columns(select_fallback=False)
         current = self._current_filter_column()
         if current != previous:
             self._refresh_values()
@@ -770,7 +776,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.matching_list.blockSignals(True)
         self.matching_list.clear()
         if column is None:
-            self.matching_status_label.setText("Clear selected-column search to edit hidden conditions."
+            self.matching_status_label.setText("Select a column to edit its values and dates; search only hides conditions."
                                               if self.filter_columns else "Add a filter column to preview values.")
             set_status_variant(self.matching_status_label, "neutral")
             self.matching_list.blockSignals(False)

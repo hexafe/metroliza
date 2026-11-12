@@ -392,3 +392,9 @@ Nothing is saved between sessions. Actions warn you if a file was moved or delet
 locate it or run the analysis again.
 Dashboard diagnostics, groupstats sections, detailed statistical-test tables, and chart
 statistics are collapsed by default; open only the sections you need to inspect.
+
+Searching selected filter columns only changes the visible choices. If the current
+column is hidden, its value/date editor clears while its condition remains in the
+draft. Clearing search reveals the choices without activating one; select a column
+to edit its saved draft values and dates. Search does not scan another column for
+date bounds.
