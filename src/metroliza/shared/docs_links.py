@@ -10,11 +10,11 @@ import re
 GITHUB_REPOSITORY_BASE_URL = "https://github.com/hexafe/metroliza"
 RELEASE_DOCS_REF_ENV = "METROLIZA_RELEASE_DOCS_REF"
 
-# Approved manual set for the shipped release, pinned to a full commit SHA so a
+# Manual set for this release candidate, pinned to a full commit SHA so a
 # double-clicked EXE opens instructions that match its functionality. A branch
 # such as ``master`` moves and can lack manuals; scripts/check_release_docs_ref.py
 # rejects such refs and checks that this commit holds every linked manual.
-DEFAULT_RELEASE_DOCS_REF = "c07ea197e149a10d22c92f22cc9bed3fdd482236"
+DEFAULT_RELEASE_DOCS_REF = "964241e1d872bec158f2def4bad4fdbd3c0e6bc9"
 
 _FULL_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
