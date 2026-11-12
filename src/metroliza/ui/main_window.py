@@ -542,7 +542,7 @@ class MainWindow(QMainWindow):
         )
         self.realtime_monitoring_action.triggered.connect(lambda: self._activate_workspace("realtime_monitor"))
         self.parser_profiles_action = QAction("Parser profiles...", self)
-        self.parser_profiles_action.setToolTip("Create a local handoff folder for a new supplier parser profile")
+        self.parser_profiles_action.setToolTip("Manage installed profiles or add a new format: Prepare → Check / Validate → Install / Enable.")
         self.parser_profiles_action.triggered.connect(lambda: self._activate_workspace("parser_profiles"))
         self.tools_menu = self.menuBar().addMenu("&Tools")
         self.tools_menu.setToolTip("Open work modules and database maintenance utilities.")
@@ -854,7 +854,7 @@ class MainWindow(QMainWindow):
              "Open Industrial Data", self.launch_industrial_data_dialog),
             ("Realtime Monitor", "Monitor reviewed source configurations and inspect source lag and events.",
              "Open Realtime Monitor", self.launch_realtime_industrial_monitoring_dialog),
-            ("Parser Profiles", "Inspect unsupported formats and prepare a local parser-profile handoff.",
+            ("Parser Profiles", "Manage installed profiles or add a new format: Prepare → Check / Validate → Install / Enable.",
              "Open Parser Profiles", self.launch_parser_plugin_wizard),
             ("Tools", "Maintenance utilities for the current database. Domain shortcuts in the Tools menu open their named windows.",
              "Enrich existing database metadata", self.launch_metadata_enrichment),
