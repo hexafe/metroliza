@@ -2,7 +2,7 @@
 
 - Status: Active release status hub
 - Owner: Release maintainer
-- Last reviewed: 2026-10-31
+- Last reviewed: 2026-11-12
 
 The Product Owner selected `release/2026.09-rc1` as the current RC source line under
 [#1153](https://github.com/hexafe/metroliza/issues/1153). Cut it from accepted `develop` after
@@ -10,7 +10,31 @@ the ordered #1109, #1142, STEP2+STEP3 and #1063 integrations. The live execution
 the actual merge commits, final branch cut and cleanup receipts. This source-line decision does
 not distribute or publish a packaged candidate.
 
-## Current decisions
+## UI workflow source candidate — build 261113
+
+The UI delivery under [#1159](https://github.com/hexafe/metroliza/issues/1159) uses
+`2026.09 RC1 (build 261113)` on the unchanged `2026.09rc1` line. It brings visible
+commands and workspace navigation, completed report results, clearer filter/group
+controls and output choices, guided Profiles/Industrial/Realtime setup, and a
+compact offline dashboard overview. Broader product epics retain their original
+criteria; these UI additions do not establish their completion.
+
+| Item | State | Evidence / next gate |
+|---|---|---|
+| 261113 identity | Assigned to the new UI source; package not yet built | Coordinator check at 20:35 UTC on 2026-11-12 found no use in reachable version history, current refs/tags, three releases or the latest 100 of 2,894 artifacts. Artifact scope was limited; final build provenance will record the actual source/tree and UTC build time |
+| Manual set | Committed and pinned | [Immutable manuals](https://github.com/hexafe/metroliza/tree/964241e1d872bec158f2def4bad4fdbd3c0e6bc9/docs/user_manual), including the central keyboard reference; the same full SHA is the default Help/export docs ref. Published-link verification remains part of final preparation |
+| Source review | Leaf reviews are source-only; finalization and aggregate acceptance pending | Preserve each leaf's exact source/review binding and the final independent/GitHub review gates |
+| Local Stage A checks | PASS on `b5e1f629`: 70 focused tests, one declared DPR 1.5 geometry case and full security audit | Earlier preliminary security FAIL remains retained. The six unchanged SQL finding rebindings and one public fixture placeholder passed the strict local gate; this evidence does not replace final-source CI |
+| Final source CI | Pending for the final 261113 source/tree | Full coverage, security, native Windows source cohorts and required current-base checks/GitHub review must finish on the admitted head |
+| 261113 package and downloaded ZIP | **NOT_RUN** | One Combined build must preserve the same qualified onedir through launcher/ZIP, followed by exact downloaded artifact, provenance, notices and dependency-inventory verification |
+| 261113 manual / release acceptance | **NOT_RUN** | Physical Windows/Polish-keyboard/hand/screen-reader observations, clean-machine/desktop Excel and applicable live-service/data evidence remain separate. No stable promotion or published release is assigned by this metadata change |
+| Historical source build 261112 | Retained at source `7b0de056` and its accepted integration history | The new UI source uses 261113; historical 261112 source/CI evidence stays bound to its original bytes |
+
+The frozen qualified `261031` package and its still-open manual acceptance remain
+as recorded below. This new source candidate does not move the archived source,
+package hashes, review receipts or acceptance state of that build.
+
+## Frozen RC qualification and existing decisions
 
 | Item | State | Evidence / next gate |
 |---|---|---|
@@ -40,7 +64,7 @@ not distribute or publish a packaged candidate.
 | Dependency upgrades #972/#973 | Deferred until after RC | Refresh separately, preserve STEP3 exact dependency pins |
 | Security exception review #906 | Open | Selected STEP3 baseline earliest expiry 2026-11-23; verify the actual baseline before every gate and renew before expiry. The issue's original 2026-10-31 deadline is historical, not a new waiver |
 
-The current RC1 candidate is `2026.09 RC1 (build 261031)` on the same RC1 release line; its
+The frozen qualified RC1 package is `2026.09 RC1 (build 261031)` on the same RC1 release line; its
 CI evidence is listed above, its bytes are archived under `archive/2026.09-rc1/build-261031`, and its manual acceptance is open. For 261031 the launcher EXE
 carries the same onedir that passed Combined (content hash above); it is not a separate build.
 Build `261029` (which replaced the inherited 261020 label) remains the historical accepted
