@@ -184,6 +184,10 @@ def test_csv_command_keys_are_focus_scoped_exact_and_guarded(app):
         QTest.keyClicks(editor.selected_column_search, "safe")
         assert editor.selected_column_search.text() == "safe"
         editor.selected_column_search.clear()
+        assert editor._current_filter_column() is None
+        key(app, editor.selected_columns_list, "R")
+        assert editor.filter_columns == [column]  # search did not implicitly choose a removal target
+        current_column(editor, column)
         key(app, editor.selected_columns_list, "R")
         assert editor.filter_columns == []
         child = QDialog(editor)
@@ -310,7 +314,139 @@ def test_selected_column_search_reuses_unchanged_preview_and_date_bounds(app, mo
             editor.selected_column_search.setText(search)
         assert calls == [] and editor._draft_signature() == before
         editor.selected_column_search.setText("part")
-        assert calls == ["value preview", "date bounds"]
+        assert calls == ["value preview", "date bounds"]  # clears the editor; neither reads source
+        assert editor._current_filter_column() is None
+        editor.selected_column_search.clear()
+        assert editor._current_filter_column() is None and len(calls) == 2
         assert editor._draft_signature() == before
     finally:
         editor.close()
+
+
+def test_reports_reset_refreshes_hidden_choice_labels_without_applying(scoped_header_dialog):
+    editor = scoped_header_dialog
+    selected = editor.status_code_list.findItems('nok', Qt.MatchFlag.MatchExactly)[0]
+    selected.setSelected(True)
+    assert editor.apply_filters()
+    applied_query = editor.filter_query
+    applied_snapshot = editor._committed_draft_snapshot
+    applied_ids = source_ids(editor)
+    editor.show()
+    wait_for_choices(editor)
+    editor.status_code_search_input.setText('ok-but-not-nok')
+    label = editor._choice_status_labels[editor.status_code_list]
+    assert 'Selected (1)' in label.text() and '1 hidden selected' in label.text()
+    editor.reset_button.click()
+    assert editor.status_code_list.selectedItems() == []
+    assert 'Values: All' in label.text() and 'hidden selected' not in label.text()
+    assert editor.filter_query == applied_query and source_ids(editor) == applied_ids == {2, 3}
+    assert editor._committed_draft_snapshot == applied_snapshot
+    editor.reject()
+    assert editor._committed_draft_snapshot == applied_snapshot
+    assert 'Selected (1)' in label.text() and '1 hidden selected' in label.text()
+
+
+def test_reports_scope_labels_fit_initial_short_viewport(scoped_header_dialog, app):
+    from PyQt6.QtCore import QPoint, QRect, QSize
+    from PyQt6.QtWidgets import QScrollArea
+    import os
+
+    editor = scoped_header_dialog
+    editor.reference_list.findItems('REF-NOK', Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+    wait_for_choices(editor)
+    editor.reference_search_input.setText('REF-OK')
+    QTest.qWait(40)  # allow the existing deferred initial-size finalizer to complete
+    editor.resize(760, 560)
+    app.processEvents()
+    assert editor.size() == QSize(760, 560)
+    screen = app.primaryScreen()
+    print(f'filter-scope-screen={screen.geometry().width()}x{screen.geometry().height()} DPR={screen.devicePixelRatio()}')
+    assert screen.devicePixelRatio() == float(os.environ.get('METROLIZA_FILTER_SCOPE_DPR', '1'))
+    assert screen.geometry().size() == QSize(1280, 800)
+    for tab_index, (_title, fields) in enumerate(editor.FILTER_SECTIONS):
+        editor.filter_tabs.setCurrentIndex(tab_index)
+        scroll = editor.filter_tabs.currentWidget().findChild(QScrollArea)
+        scroll.verticalScrollBar().setValue(0)
+        app.processEvents()
+        # Headings in the first row are initially exposed; their complete scope labels must be too.
+        for _heading, _search, listing in fields[:3]:
+            widget = getattr(editor, listing)
+            label = editor._choice_status_labels.get(widget)
+            if label is None:
+                continue
+            visible = QRect(label.mapTo(scroll.viewport(), QPoint()), label.size())
+            assert scroll.viewport().rect().contains(visible), (listing, visible, scroll.viewport().rect())
+            assert label.isVisibleTo(editor)
+    reference_text = editor._choice_status_labels[editor.reference_list].text()
+    assert 'Selected (1)' in reference_text and '1 hidden selected' in reference_text
+
+
+@pytest.mark.parametrize('storage', ['pandas', 'sqlite'])
+def test_column_search_never_auto_selects_or_scans_date_source(app, tmp_path, monkeypatch, storage):
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_file
+
+    frame = pd.DataFrame({'source_key': [11, 22, 33, 44], 'part': ['A', 'B', 'A', 'C'],
+                          'time_stamp': ['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04']})
+    filters = (TabularColumnFilter('part', selected_values=('A',)),
+               TabularColumnFilter('time_stamp', date_mode='between', date_from='2024-01-01', date_to='2024-01-03'))
+    loaded = None
+    if storage == 'sqlite':
+        path = tmp_path / 'dates.csv'
+        frame.to_csv(path, index=False)
+        loaded = load_tabular_analytics_file(path, force_sqlite=True)
+        editor = TabularAnalyticsFilterDialog(sqlite_store=loaded.sqlite_store, column_filters=filters)
+    else:
+        editor = TabularAnalyticsFilterDialog(dataframe=frame, column_filters=filters)
+    editor._confirm_discard = lambda **_kwargs: True
+    editor.show()
+    try:
+        wait_until(app, lambda: not editor._preview_threads)
+        current_column(editor, 'part')
+        wait_until(app, lambda: not editor._preview_threads)
+        editor._flush_pending_status_update()
+        before = editor._draft_signature()
+        bounds_calls, preview_calls, parse_calls = [], [], []
+        original_bounds = editor._column_date_bounds
+        original_preview = editor._start_sqlite_value_preview if storage == 'sqlite' else editor._value_index
+        original_parse = pd.to_datetime
+
+        def bounds(column):
+            bounds_calls.append(column)
+            return original_bounds(column)
+
+        def preview(column):
+            preview_calls.append(column)
+            return original_preview(column)
+
+        def parse(value, *args, **kwargs):
+            parse_calls.append(value)
+            return original_parse(value, *args, **kwargs)
+
+        with monkeypatch.context() as checks:
+            checks.setattr(editor, '_column_date_bounds', bounds)
+            checks.setattr(editor, '_start_sqlite_value_preview' if storage == 'sqlite' else '_value_index', preview)
+            checks.setattr(pd, 'to_datetime', parse)
+            editor.selected_column_search.setText('time')
+            assert editor.selected_columns_list.count() == 1
+            assert editor._current_filter_column() is None
+            assert editor.matching_list.count() == 0
+            assert all(widget.isHidden() for widget in editor.date_filter_widgets)
+            assert 'Select a column' in editor.matching_status_label.text()
+            editor.selected_column_search.clear()
+            assert editor.selected_columns_list.count() == 2 and editor._current_filter_column() is None
+            assert bounds_calls == preview_calls == parse_calls == []
+            assert editor._draft_signature() == before
+            current_column(editor, 'time_stamp')  # explicit user choice retains the existing bounds contract
+            wait_until(app, lambda: not editor._preview_threads)
+            assert bounds_calls == ['time_stamp'] and preview_calls == ['time_stamp']
+            assert editor.date_mode_combo.currentData() == 'between'
+            assert editor.date_from_calendar.date() == QDate(2024, 1, 1)
+            assert editor.date_to_calendar.date() == QDate(2024, 1, 3)
+            assert all(not widget.isHidden() for widget in editor.date_filter_widgets)
+        assert editor._draft_signature() == before
+        assert editor.get_column_filters() == filters
+        assert set(apply_tabular_row_filter(frame, column_filters=editor.get_column_filters()).dataframe.source_key) == {11, 33}
+    finally:
+        editor.close()
+        if loaded is not None:
+            cleanup_tabular_load_result(loaded)

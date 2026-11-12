@@ -473,13 +473,13 @@ class FilterDialog(QDialog):
 
             list_widget = getattr(self, list_attr)
             self._set_widget_size_policy(list_widget, min_width=150, min_height=110, expands_vertically=True)
-            field_layout.addWidget(list_widget, 1)
             if list_attr in self._FILTER_LIST_ATTRS:
                 from metroliza.ui.filter_presentation import list_choice_text
                 label = QtWidgets.QLabel(list_choice_text(list_widget, all_marker="SELECT ALL"))
                 label.setWordWrap(True)
                 field_layout.addWidget(label)
                 self._choice_status_labels[list_widget] = label
+            field_layout.addWidget(list_widget, 1)
             if list_attr == "selected_headers_list":
                 field_layout.addWidget(self.header_availability_label)
             group_layout.addWidget(field_widget, row, column)
@@ -825,6 +825,7 @@ class FilterDialog(QDialog):
                 list_widget.blockSignals(previous_state)
         if hasattr(self, "_dimension_selections"):
             self._dimension_selections[list_widget] = selected_lookup
+        self._refresh_choice_presentation(list_widget)
 
     def _normalize_dimension_selection(self, widget):
         values = {item.text() for item in widget.selectedItems()}
