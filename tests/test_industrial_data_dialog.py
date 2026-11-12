@@ -718,12 +718,12 @@ def test_launcher_dialog_keeps_connection_fields_out_of_main_surface(tmp_path):
     assert dialog.use_temp_button.text() == "Temp"
     assert dialog.select_database_button.text() == "Open..."
     assert dialog.create_database_button.text() == "Create..."
-    assert dialog.sources_button.text() == "Production sources..."
-    assert dialog.sync_button.text() == "Fetch to cache..."
+    assert dialog.sources_button.text() == "Configure sources [Ctrl+D]"
+    assert dialog.sync_button.text() == "Fetch to cache [Ctrl+R]"
     assert "Fetch rows" in dialog.sync_button.toolTip()
     assert dialog.links_button.text() == "Production links..."
-    assert dialog.export_button.text() == "Export workbook..."
-    assert dialog.analyze_button.text() == "CSV Summary..."
+    assert dialog.export_button.text() == "Export workbook [Ctrl+E]"
+    assert dialog.analyze_button.text() == "Analyze cache [Ctrl+S]"
     assert dialog.diagnostics_button.text() == "Diagnostics..."
     assert dialog.initialize_button.isHidden()
     assert "Source -> Access -> Cache -> CSV Summary" in dialog.workflow_label.text()
@@ -818,9 +818,9 @@ def test_sync_dialog_labels_bounded_access_check_clearly(tmp_path):
 
     dialog = IndustrialSyncDialog(db_file=db_path)
 
-    assert dialog.test_connection_button.text() == "Check access"
+    assert dialog.test_connection_button.text() == "Check access [Ctrl+R]"
     assert "one production row" in dialog.test_connection_button.toolTip()
-    assert dialog.sync_now_button.text() == "Fetch to cache"
+    assert dialog.sync_now_button.text() == "Fetch to cache [Ctrl+S]"
     assert "saves them in the local industrial cache" in dialog.sync_now_button.toolTip()
     assert dialog.edit_filter_button.text() == "Edit filters..."
     dialog.close()
