@@ -509,3 +509,72 @@ def test_large_grouping_consent_yields_between_bounded_canonical_checks(qapplica
     finally:
         heartbeat.stop()
         window.close()
+
+
+@pytest.mark.parametrize("html_only", [False, True])
+def test_real_copy_choice_preserves_intervening_destination_and_next_attempt(
+    qapplication_session, monkeypatch, tmp_path, html_only,
+):
+    window = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "source.db"))
+    captured = []
+    messages = []
+    thread = _ExportThread()
+    original = tmp_path / ("existing.html" if html_only else "existing.xlsx")
+    different = tmp_path / ("different.html" if html_only else "different.xlsx")
+    monkeypatch.setattr(export_module, "create_export_data_thread", lambda request: captured.append(request) or thread)
+    monkeypatch.setattr(export_module, "save_export_dialog_config", lambda *_a: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_a: messages.append(_a[-1]))
+    monkeypatch.setattr(export_module.QFileDialog, "getSaveFileName", lambda *_a: (str(different), ""))
+
+    def change_destination_then_copy(*_args):
+        window.select_excel_file()  # actual chooser handler changes field + visible path
+        return "copy"
+
+    monkeypatch.setattr(window, "_choose_output_collision", change_destination_then_copy)
+    try:
+        if html_only:
+            window.preset_combobox.setCurrentText("HTML dashboard only")
+        window.excel_file = original
+        original.write_text("last complete output")
+        window.show_loading_screen()  # actual confirmation must not erase the new destination
+        assert not captured and window.export_thread is None
+        assert window.excel_file == different
+        assert messages and "Settings changed" in messages[0]
+        assert original.read_text() == "last complete output"
+        assert not original.with_stem(original.stem + " (2)").exists()
+        # No conflict at the user's new destination; the next request must use it.
+        window.show_loading_screen()
+        assert len(captured) == 1
+        request = captured[0]
+        assert (request.paths.html_dashboard_file if html_only else request.paths.excel_file) == str(different)
+        assert request.copy_output_from is None
+        assert "different" in window.request_summary_label.text()
+    finally:
+        thread.finished.emit()
+        window.close()
+
+
+@pytest.mark.parametrize("bucket,fields,methods,expected", [
+    ("none", (), ("mean", "max"), "Raw rows"),
+    ("none", ("reference",), ("mean", "median"), "Mean, median by reference"),
+    ("day", (), ("sum", "std"), "Sum, standard deviation by day"),
+    ("month", ("station", "line"), ("p05", "p95"), "5th percentile, 95th percentile by month, station, line"),
+])
+def test_launch_aggregation_wording_has_independent_semantic_oracle(bucket, fields, methods, expected):
+    from metroliza.industrial.contracts import IndustrialAnalyticsRequest
+    from metroliza.industrial.industrial_analytics_state import (
+        ProductionAggregationState, ProductionFilterState, ReferenceCohortState,
+    )
+
+    request = IndustrialAnalyticsRequest(
+        source_kind="production_cache", db_file="synthetic.db", output_dashboard_file="result.html",
+        filter_state=ProductionFilterState(), cohort_state=ReferenceCohortState(),
+        aggregation_state=ProductionAggregationState(time_bucket=bucket, group_fields=fields, aggregation_methods=methods),
+    )
+    text, details = analytics_summary(request)
+    # Literal wording is an independent expectation, not a second call to the formatter.
+    assert text.endswith(f"0 metrics; {expected}")
+    assert details.endswith(f"0 metrics; {expected}")
+    if fields or bucket != "none":
+        assert "Raw rows" not in text
+    assert "none; mean" not in text

@@ -86,12 +86,13 @@ def analytics_summary(request, *, phase="Launch request"):
     fields = request.aggregation_state.group_fields
     grouping = assignment_summary(request.grouping_df) if request.grouping_df is not None else ", ".join(fields)
     bucket = request.aggregation_state.time_bucket
-    if bucket == "none":
+    if not request.aggregation_state.is_aggregated:
         aggregation = "Raw rows"
     else:
         methods = {"std": "standard deviation", "p05": "5th percentile", "p95": "95th percentile"}
         selected = ", ".join(methods.get(method, method) for method in request.aggregation_state.aggregation_methods)
-        aggregation = f"{selected.capitalize()} by {bucket}"
+        dimensions = ([bucket] if bucket != "none" else []) + list(fields)
+        aggregation = f"{selected.capitalize()} by {', '.join(dimensions)}"
     extra = f"{len(request.metric_selection)} metrics; {aggregation}"
     if request.cohort_state.is_applied:
         extra += "; " + request.cohort_state.summary()
@@ -123,6 +124,8 @@ def verify_grouping_after_consent(parent, source, expected, *, chunk_size=128):
 
     True/False are complete comparisons; None is cancelled/incomplete. Source data
     is never materialized as a whole, and the validated request stays authoritative.
+    Committed grouping is Export-owned during this modal check. A future shared
+    asynchronous writer must provide an ownership/revision contract before reuse.
     """
     from collections.abc import Mapping
     from itertools import islice

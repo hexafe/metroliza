@@ -1502,6 +1502,12 @@ class ExportDialog(QDialog):
             return None
         if not self._verify_publication_scope(request):
             return None
+        # Check the user's destination before a legitimate copy updates this field.
+        if str(self.excel_file) != str(primary):
+            QMessageBox.information(self, "Export settings changed",
+                                    "Settings changed while choosing outputs. Review the scope and generate again.")
+            self._refresh_draft_request_summary()
+            return None
         if choice == "replace":
             return replace(request, replace_outputs=consents, copy_output_from=None)
         copy_paths = output_paths(copy_path, html_only=html_only, dashboard=request.options.generate_html_dashboard)
