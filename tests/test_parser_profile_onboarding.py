@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QDialog, QLineEdit
 from metroliza.parsing.declarative_parser_profiles import list_profiles
 from metroliza.ui.parser_plugin_wizard import ParserPluginWizardDialog
 from tests.test_parser_plugin_wizard import _wait_validation, _write_pdf_text
+from tests.qt_geometry_diagnostics import geometry_snapshot
 
 
 def _valid_materials(window):
@@ -171,7 +172,12 @@ def test_profiles_small_window_keeps_status_next_and_close_accessible(window, qa
     qapplication_session.processEvents()
     window.resize(620, 560)
     qapplication_session.processEvents()
-    assert (window.width(), window.height()) == (620, 560)
+    assert (window.width(), window.height()) == (620, 560), geometry_snapshot(
+        window, requested=(620, 560), pinned=(
+            ("close_button", "manage_status_label", "refresh_button") if tab == 0 else
+            ("close_button", "stage_label", "validation_status_label", "next_action_label", "result_label", "next_button")
+        ),
+    )
     screen = qapplication_session.primaryScreen().availableGeometry()
     print(f"profiles_geometry tab={tab} size=620x560 screen={screen.width()}x{screen.height()} dpr={window.devicePixelRatioF()}")
     assert window.devicePixelRatioF() > 0
