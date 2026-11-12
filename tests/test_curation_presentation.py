@@ -317,3 +317,96 @@ def test_mapping_actual_child_ctrl_s_saves_and_close_does_not_undo(tmp_path, qap
             reopened.close()
     finally:
         dialog.close()
+
+
+def _mapping_browse_databases(app, window, tmp_path):  # noqa: F811
+    from metroliza.reports.report_repository import ReportRepository
+    source, _repository, _report, _other, _ids = _database(tmp_path)
+    destination = str(tmp_path / 'other.db')
+    ReportRepository(destination).ensure_schema()
+    assert window.set_db_file(source)
+    window.launch_characteristic_mapping_dialog()
+    dialog = window.characteristic_mapping_dialog
+    wait_until(app, lambda: not dialog.is_loading_source_options())
+    return dialog, source, destination
+
+
+@pytest.mark.parametrize('owners', [(), ('export',), ('modify',), ('realtime',), ('export', 'realtime')])
+def test_successful_mapping_browse_reconciles_only_actual_context_owners(app, window, tmp_path, monkeypatch, owners):  # noqa: F811
+    dialog, source, destination = _mapping_browse_databases(app, window, tmp_path)
+    writers, rebinds = [], []
+    attributes = {'export': 'export_dialog', 'modify': 'modifydb_dialog', 'realtime': 'realtime_monitoring_dialog'}
+    try:
+        for owner in owners:
+            writer = QDialog(window)
+            writer.db_file = source
+            if owner == 'realtime':
+                writer.rebind_database = lambda path: rebinds.append(path) or False
+            setattr(window, attributes[owner], writer)
+            writer.show()
+            writers.append(writer)
+        monkeypatch.setattr(matching.QFileDialog, 'getOpenFileName', lambda *_args: (destination, ''))
+        dialog.select_db_file()
+        wait_until(app, lambda: not dialog.is_loading_source_options())
+        assert window.db_file == dialog.db_file == dialog.db_path_input.text() == destination
+        notice = window.workspace_notice_label
+        if not owners:
+            assert notice.isHidden() and not notice.text()
+        else:
+            assert not notice.isHidden() and 'Name matching' not in notice.text()
+            for owner, label in (('export', 'Export'), ('modify', 'Database editor'), ('realtime', 'Realtime Monitor')):
+                assert (label in notice.text()) == (owner in owners)
+            if 'realtime' in owners:
+                assert rebinds == [destination]
+                assert notice.property('statusVariant') == 'danger'
+                assert 'temporary session data' in notice.text()
+        # The accepted mapping session now blocks the new database, not its previous one.
+        assert 'Name matching' in window._same_database_workflow_labels()
+    finally:
+        dialog.close()
+        for writer in writers:
+            writer.close()
+        for attribute in attributes.values():
+            setattr(window, attribute, None)
+        app.processEvents()
+
+
+def test_rejected_mapping_browse_preserves_database_and_unrelated_notice(app, window, tmp_path, monkeypatch):  # noqa: F811
+    dialog, source, _destination = _mapping_browse_databases(app, window, tmp_path)
+    invalid = tmp_path / 'not-a-database.db'
+    invalid.write_text('invalid SQLite content', encoding='utf-8')
+    notice = window.workspace_notice_label
+    notice.setText('An unrelated operation needs attention.')
+    notice.show()
+    monkeypatch.setattr(matching.QFileDialog, 'getOpenFileName', lambda *_args: (str(invalid), ''))
+    try:
+        dialog.select_db_file()
+        assert window.db_file == dialog.db_file == dialog.db_path_input.text() == source
+        assert notice.text() == 'An unrelated operation needs attention.' and not notice.isHidden()
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
+def test_accepted_mapping_browse_preserves_a_new_unrelated_host_warning(app, window, tmp_path, monkeypatch):  # noqa: F811
+    dialog, _source, destination = _mapping_browse_databases(app, window, tmp_path)
+    original = window.set_db_file
+
+    def accept_and_warn(path):
+        accepted = original(path)
+        assert accepted
+        window.workspace_notice_label.setText('A different operation now owns this warning.')
+        window.workspace_notice_label.show()
+        return accepted
+
+    monkeypatch.setattr(window, 'set_db_file', accept_and_warn)
+    monkeypatch.setattr(matching.QFileDialog, 'getOpenFileName', lambda *_args: (destination, ''))
+    try:
+        dialog.select_db_file()
+        wait_until(app, lambda: not dialog.is_loading_source_options())
+        assert window.db_file == dialog.db_file == destination
+        assert window.workspace_notice_label.text() == 'A different operation now owns this warning.'
+        assert not window.workspace_notice_label.isHidden()
+    finally:
+        dialog.close()
+        app.processEvents()

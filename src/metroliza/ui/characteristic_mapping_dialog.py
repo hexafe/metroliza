@@ -814,6 +814,9 @@ class CharacteristicMappingDialog(QDialog):
                 return
         self.db_file = filename
         self.db_path_input.setText(filename)
+        refresh_notice = getattr(parent, 'refresh_characteristic_mapping_database_notice', None)
+        if callable(refresh_notice):
+            refresh_notice()
         self.load_aliases()
         self.load_source_options()
 
