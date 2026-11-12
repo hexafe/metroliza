@@ -334,11 +334,29 @@ def test_grouping_small_screen_keeps_lists_separate_and_footer_reachable(
         for listing, button in (
             (window.available_columns_list, window.add_column_button),
             (window.selected_columns_list, window.remove_column_button),
-            (window.group_members_list, window.remove_from_group_button),
         ):
             assert listing.parentWidget() is button.parentWidget()
             assert listing.geometry().bottom() < button.geometry().top()
             assert listing.geometry().height() >= listing.minimumHeight()
+        member_list = window.group_members_list
+        member_button = window.remove_from_group_button
+        member_legend = window.group_member_command_legend
+        assert member_list.parentWidget() is member_button.parentWidget()
+        assert member_button.geometry().bottom() < member_legend.geometry().top()
+        assert member_legend.geometry().bottom() < member_list.geometry().top()
+        assert member_list.height() >= member_list.minimumHeight()
+        scroll = window.grouping_body_scroll
+        initial_member_rect = member_button.rect().translated(member_button.mapTo(scroll.viewport(), QPoint()))
+        initial_legend_rect = member_legend.rect().translated(member_legend.mapTo(scroll.viewport(), QPoint()))
+        if artifact_dir:
+            target = Path(artifact_dir)
+            target.mkdir(parents=True, exist_ok=True)
+            assert window.grab().save(str(target / f"grouping-{size[0]}x{size[1]}-initial.png"))
+        if size[0] >= 997:
+            # At default-width / 680px-high (stricter than 700px), discover the action before scrolling.
+            assert scroll.verticalScrollBar().value() == 0
+            assert scroll.viewport().rect().contains(initial_member_rect)
+            assert scroll.viewport().rect().contains(initial_legend_rect)
         footer = (
             window.assign_filtered_rows_button, window.create_group_button, window.rename_group_button,
             window.delete_group_button, window.clear_selection_button, window.dont_use_grouping_button,
@@ -368,6 +386,8 @@ def test_grouping_small_screen_keeps_lists_separate_and_footer_reachable(
                 "body_scroll_maximum": scroll.verticalScrollBar().maximum(),
                 "footer_rects": [[r.x(), r.y(), r.width(), r.height()] for r in footer_rects],
                 "member_button_in_viewport": [member_rect.x(), member_rect.y(), member_rect.width(), member_rect.height()],
+                "initial_member_button_in_viewport": [initial_member_rect.x(), initial_member_rect.y(), initial_member_rect.width(), initial_member_rect.height()],
+                "initial_member_legend_in_viewport": [initial_legend_rect.x(), initial_legend_rect.y(), initial_legend_rect.width(), initial_legend_rect.height()],
             }, indent=2))
     finally:
         window._reset_grouping_draft(refresh=False)
