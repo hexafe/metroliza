@@ -86,15 +86,21 @@ to **Monitor (Ctrl+R)**. Editing that setup changes the footer back to Save;
 step after saving. An active Stop is an Enter default on Monitor only, so Enter
 in an Event Review text field does not stop polling. On Monitor, choose **Start Checked
 (Ctrl+S)**. Saved setup does not
-prove source access; the actual poll checks access. Disabled or unsaved checked
-sources cannot start through the next-action button.
+prove source access; the actual poll checks access. Disabled sources and checked
+sources with no saved setup cannot start through the next-action button. For a
+previously configured checked source, Start validates and saves its current form
+(including edits not saved separately) before polling. Invalid checked-source
+edits are reported without polling; edits to an unchecked source are not applied.
 
 The footer keeps the current next action visible. During scheduled monitoring
 or an owned poll it shows **Stop (Ctrl+Shift+S)**, including on Event Review.
 Stop requests cancellation; the dialog stays in its stopping state until the
 owned poll finishes. **Poll Once (Ctrl+Shift+R)** and **Open Dashboard
-(Ctrl+Shift+F)** are available on Monitor. **Close (Ctrl+W or Esc)** keeps the
-existing worker and temporary-storage safeguards.
+(Ctrl+Shift+F)** are available on Monitor. **Close (Ctrl+W or plain Esc)** uses
+the existing worker and temporary-storage safeguards. A modified or repeated Esc
+does not request closure. Esc inside a child modal dialog belongs to that child.
+A refused source-editor close or private-storage cleanup keeps the monitor open;
+an owned poll/dashboard worker must finish before the monitor can be destroyed.
 
 **Setup**, **Poll**, and **Dashboard** report separate states. **Data freshness**
 shows the maximum available lag and first reported data-through timestamp from

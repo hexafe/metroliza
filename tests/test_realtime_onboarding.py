@@ -1,16 +1,23 @@
 """Operator presentation keeps the existing monitor and event ownership paths."""
 from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QDialog, QLineEdit, QPushButton
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent, QPoint, Qt
+from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QDialog, QLineEdit, QMessageBox, QPushButton
 
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+from metroliza.ui.realtime_industrial_monitoring_dialog import RealtimeIndustrialMonitoringDialog
+from metroliza.ui.window_coordinator import WindowCoordinator
+from metroliza.ui.workspace_context import WorkspaceContext
 from tests.test_realtime_dashboard_service import _seed_dashboard_data
 from tests.test_realtime_monitoring_dialog import (
-    _Signal, _poll_result, _profile, dashboard_dialog as _dashboard_dialog, qapp as _qapp,
+    _Signal, _poll_result, _profile, _wait_for, dashboard_dialog as _dashboard_dialog, qapp as _qapp,
 )
 
 
@@ -40,6 +47,60 @@ def _assert_one_primary(dialog):
     assert [button for button in dialog.findChildren(QPushButton)
             if button.property("buttonRole") == "primary"] == [dialog.next_button]
     assert dialog.next_button.isDefault() == dialog._next_control.isVisibleTo(dialog)
+
+
+class _ControlledWorker:
+    """Own terminal delivery explicitly without a live source connection."""
+    def __init__(self, **kwargs):
+        self.configs = kwargs.get("configs", ())
+        for name in ("update_label", "result_ready", "error_occurred", "cancelled", "finished"):
+            setattr(self, name, _Signal())
+        self.running = False
+        self.cancel_count = 0
+
+    def start(self):
+        self.running = True
+
+    def isRunning(self):
+        return self.running
+
+    def cancel(self):
+        self.cancel_count += 1
+
+    def finish(self):
+        self.running = False
+        self.finished.emit()
+
+
+@pytest.fixture
+def controlled_poll(monkeypatch):
+    monkeypatch.setattr("metroliza.ui.realtime_industrial_monitoring_dialog.RealtimeMonitorPollThread",
+                        _ControlledWorker)
+
+
+@pytest.fixture
+def owned_monitor(qapp, tmp_path):
+    db_file = str(tmp_path / "owned.db")
+    IndustrialDataRepository(db_file).ensure_schema()
+    workspace = WorkspaceContext(database_file=db_file)
+    owner = WindowCoordinator(workspace)
+    owner.register_modeless("realtime", lambda context: RealtimeIndustrialMonitoringDialog(
+        None, context.database_file, config_path=tmp_path / "private-sources.yaml",
+    ))
+    dialog = owner.open_modeless("realtime")
+    qapp.processEvents()
+    assert dialog.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    try:
+        yield dialog, owner
+    finally:
+        if not sip.isdeleted(dialog):
+            dialog.request_shutdown()
+            for worker in (dialog.poll_thread, dialog.dashboard_thread):
+                if worker is not None:
+                    worker.finish()
+            dialog.close()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            assert sip.isdeleted(dialog)
 
 
 @pytest.mark.parametrize("source", ["none", "disabled", "incomplete"])
@@ -210,6 +271,178 @@ def test_saved_setup_navigation_does_not_enable_unchecked_or_missing_source(dash
     assert dialog.poll_thread is None and not dialog.poll_timer.isActive()
 
 
+@pytest.mark.parametrize("valid", [True, False])
+def test_monitor_start_advertises_and_uses_current_checked_edits(
+    dashboard_dialog, controlled_poll, monkeypatch, qapp, valid,
+):
+    dialog = dashboard_dialog
+    profile = _ready(dialog)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    _show(dialog, qapp)
+    QTest.keyClick(dialog, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    dialog.cursor_column_edit.setFocus()
+    QTest.keyClick(dialog.cursor_column_edit, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    if valid:
+        QTest.keyClicks(dialog.cursor_column_edit, "record_id")
+    else:
+        QTest.keyClick(dialog.cursor_column_edit, Qt.Key.Key_Backspace)
+    assert dialog._next_control is dialog.save_button
+    QTest.keyClick(dialog, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
+    message = dialog.next_action_label.text()
+    assert dialog._next_control is dialog.start_button  # Existing enabled/preflight contract.
+    if valid:
+        assert "validates and saves the current checked source setup" in message
+    else:
+        assert "invalid" in message and "without polling" in message
+        assert "saved" not in message and "ready" not in message
+    QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    worker = dialog.poll_thread
+    try:
+        saved = {config.source_profile_id: config for config in dialog.repository.list_configs()}
+        if valid:
+            assert worker is not None and dialog.poll_timer.isActive()
+            assert worker.configs[0].cursor_column == saved[profile.id].cursor_column == "record_id"
+            assert not warnings
+        else:
+            assert worker is None and not dialog.poll_timer.isActive()
+            assert saved[profile.id].cursor_column == "event_id" and len(warnings) == 1
+    finally:
+        if worker is not None:
+            dialog.stop_monitoring()
+            worker.finish()
+
+
+def test_monitor_start_advertises_unchecked_edits_are_not_applied(
+    dashboard_dialog, controlled_poll, qapp,
+):
+    dialog = dashboard_dialog
+    first = _ready(dialog)
+    second = _profile(IndustrialDataRepository(dialog.db_file), "line_b", "Line B")
+    dialog.repository.upsert_config(replace(
+        dialog.configs_by_profile_id[first.id], source_profile_id=second.id,
+        stream_key="line_b", id=None, created_at=None, updated_at=None,
+    ))
+    dialog.reload_from_database()
+    for index in range(dialog.source_list.count()):
+        item = dialog.source_list.item(index)
+        if item.data(Qt.ItemDataRole.UserRole) == first.id:
+            item.setCheckState(Qt.CheckState.Unchecked)
+            dialog.source_list.setCurrentItem(item)
+    _show(dialog, qapp)
+    QTest.keyClick(dialog, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    dialog.cursor_column_edit.setFocus()
+    QTest.keyClick(dialog.cursor_column_edit, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClicks(dialog.cursor_column_edit, "record_id")
+    QTest.keyClick(dialog, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
+    assert "Current unchecked source edits are not applied" in dialog.next_action_label.text()
+    QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    worker = dialog.poll_thread
+    try:
+        assert [config.source_profile_id for config in worker.configs] == [second.id]
+        assert worker.configs[0].cursor_column == "event_id"
+        assert all(config.cursor_column == "event_id" for config in dialog.repository.list_configs())
+    finally:
+        dialog.stop_monitoring()
+        worker.finish()
+
+
+def test_escape_owned_poll_defers_coordinator_destruction_until_terminal(
+    owned_monitor, controlled_poll, qapp,
+):
+    dialog, owner = owned_monitor
+    _ready(dialog)
+    _show(dialog, qapp)
+    QTest.keyClick(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    worker = dialog.poll_thread
+    assert worker is not None and worker.isRunning()
+    QTest.keyClick(dialog, Qt.Key.Key_Escape, Qt.KeyboardModifier.ControlModifier)
+    repeat = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier, "", True)
+    QCoreApplication.sendEvent(dialog, repeat)
+    assert worker.cancel_count == 0 and dialog.poll_timer.isActive()
+    closed = QSignalSpy(owner.window_closed)
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    assert worker.cancel_count == 1 and worker.isRunning()
+    assert dialog.poll_thread is worker and dialog.is_close_deferred()
+    assert dialog.isVisible() and not sip.isdeleted(dialog)
+    assert owner.open_window_ids == ("realtime",) and len(closed) == 0
+    worker.finish()
+    _wait_for(lambda: sip.isdeleted(dialog), "guarded Esc destruction after poll terminal")
+    assert owner.open_window_ids == () and len(closed) == 1
+
+
+def test_escape_owned_dashboard_retains_cleanup_refusal_then_retries(
+    owned_monitor, monkeypatch,
+):
+    dialog, owner = owned_monitor
+    monkeypatch.setattr("metroliza.ui.realtime_industrial_monitoring_dialog.RealtimeDashboardWriterThread",
+                        _ControlledWorker)
+    owned = dialog._dashboard_temp_dir
+    directory = Path(owned.name)
+    attempts = []
+
+    def cleanup():
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise OSError("synthetic cleanup refusal")
+        owned.cleanup()
+
+    retained = SimpleNamespace(name=owned.name, cleanup=cleanup)
+    monkeypatch.setattr(dialog, "_dashboard_temp_dir", retained)
+    dialog._on_poll_results((_poll_result(),))
+    _wait_for(lambda: dialog.dashboard_thread is not None, "controlled dashboard worker")
+    worker = dialog.dashboard_thread
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    assert not sip.isdeleted(dialog) and dialog.dashboard_thread is worker
+    assert dialog.is_close_deferred() and owner.open_window_ids == ("realtime",)
+    worker.finish()
+    assert attempts == [True] and directory.is_dir()
+    assert dialog.dashboard_cleanup_retry_required() and not dialog.is_close_deferred()
+    assert dialog.isVisible() and not sip.isdeleted(dialog)
+    QTest.keyPress(dialog, Qt.Key.Key_Escape)
+    assert attempts == [True, True] and not directory.exists()
+    assert not dialog.isVisible() and dialog.result() == QDialog.DialogCode.Rejected
+    assert dialog.dashboard_thread is None and dialog.poll_thread is None
+    assert dialog._dashboard_temp_dir is None and not dialog.is_close_deferred()
+    assert owner.open_window_ids == ("realtime",)
+    # This close posted DeferredDelete before a nested wait loop could start.
+    # Deliver the existing event only after all safe-close conditions hold.
+    QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+    assert sip.isdeleted(dialog)
+    assert owner.open_window_ids == ()
+
+
+def test_escape_owned_source_editor_refusal_then_safe_idle_close(owned_monitor, monkeypatch, qapp):
+    dialog, owner = owned_monitor
+    answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+    consent = []
+
+    def question(*args, **kwargs):
+        answer = next(answers)
+        consent.append(answer)
+        return answer
+
+    monkeypatch.setattr(QMessageBox, "question", question)
+    dialog.open_source_profiles_dialog()
+    qapp.processEvents()
+    source = dialog.source_window
+    source.source_name_edit.setText("Unsaved synthetic source")
+    dialog.activateWindow()
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    assert not sip.isdeleted(dialog) and dialog.isVisible() and source.isVisible()
+    assert not dialog._closing and dialog.source_window is source
+    assert owner.open_window_ids == ("realtime",)
+    QTest.keyPress(dialog, Qt.Key.Key_Escape)
+    assert consent == [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    assert not dialog.isVisible() and dialog.result() == QDialog.DialogCode.Rejected
+    assert dialog.source_window is None and not dialog._workers_own_context()
+    assert dialog._dashboard_temp_dir is None and not dialog.is_close_deferred()
+    assert owner.open_window_ids == ("realtime",)
+    QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+    assert sip.isdeleted(dialog)
+    assert owner.open_window_ids == ()
+
+
 @pytest.mark.parametrize("key,status", [(Qt.Key.Key_A, "acknowledged"),
                                         (Qt.Key.Key_E, "resolved"),
                                         (Qt.Key.Key_Q, "false_positive")])
@@ -256,7 +489,8 @@ def test_shortcuts_preserve_text_altgr_and_modal_boundary(dashboard_dialog, qapp
     qapp.processEvents()
     QTest.keyClick(child_editor, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
     assert dialog.workflow_tabs.currentIndex() == 1
-    child.close()
+    QTest.keyClick(child_editor, Qt.Key.Key_Escape)
+    assert not child.isVisible() and dialog.isVisible()
     assert "Ctrl+D" in dialog.configure_source_button.text()
 
 
