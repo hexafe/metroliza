@@ -3602,6 +3602,72 @@ def test_native_job_query_names_only_failing_api(
     assert "PRIVATE" not in str(caught.value)
 
 
+@pytest.mark.parametrize("broken_stream", [False, True])
+@pytest.mark.parametrize(
+    ("assigned", "listed", "values", "category"),
+    [
+        (17, 17, (), "listed_over_capacity"),
+        (3, 2, (616161, 727272), "count_mismatch"),
+        (1, 0, (), "count_mismatch"),
+        (1, 2, (616161, 727272), "count_mismatch"),
+        (2, 2, (616161, 0), "nonpositive_id"),
+        (2, 2, (616161, 616161), "duplicate_id"),
+    ],
+)
+def test_invalid_job_ids_emit_only_counts_and_category(
+    assigned, listed, values, category, broken_stream, capsys, monkeypatch
+) -> None:
+    class _ProcessIds(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", ctypes.c_uint32),
+            ("NumberOfProcessIdsInList", ctypes.c_uint32),
+            ("ProcessIdList", ctypes.c_size_t * 16),
+        ]
+
+    calls = []
+
+    class _Kernel:
+        def QueryInformationJobObject(self, _job, kind, value, size, _returned):
+            calls.append((kind, size))
+            info = ctypes.cast(value, ctypes.POINTER(_ProcessIds)).contents
+            info.NumberOfAssignedProcesses = assigned
+            info.NumberOfProcessIdsInList = listed
+            for index, process_id in enumerate(values):
+                info.ProcessIdList[index] = process_id
+            return True
+
+    api = object.__new__(qualification._WindowsApi)
+    api.wintypes = _TokenWinTypes
+    api.PROCESS_IDS = _ProcessIds
+    api.kernel = _Kernel()
+
+    class _BrokenStream:
+        def write(self, _value):
+            raise OSError("PRIVATE_DIAGNOSTIC_STREAM_DETAIL")
+
+    with monkeypatch.context() as patch:
+        if broken_stream:
+            patch.setattr(qualification.sys, "stderr", _BrokenStream())
+        with pytest.raises(qualification.QualificationFailure) as caught:
+            api._job_process_ids(object())
+
+    assert caught.value.failure_id == "scenario_failed"
+    assert caught.value.qualification_reason == "native_job_ids_invalid"
+    assert calls == [(3, ctypes.sizeof(_ProcessIds))]
+    output = capsys.readouterr()
+    assert output.out == ""
+    if broken_stream:
+        assert output.err == ""
+        return
+    prefix, payload = output.err.strip().split("=", 1)
+    assert prefix == "qualification_job_ids_observation"
+    assert json.loads(payload) == {
+        "assigned": assigned, "listed": listed, "capacity": 16,
+        "category": category,
+    }
+    assert "616161" not in output.err and "727272" not in output.err
+
+
 def test_normal_window_requires_exact_owned_application_and_revalidates_close(
     tmp_path,
 ) -> None:

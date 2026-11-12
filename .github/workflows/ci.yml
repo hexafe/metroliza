@@ -327,6 +327,7 @@ jobs:
         shell: pwsh
         env:
           METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
+          PIP_CONSTRAINT: ${{ github.workspace }}/packaging/windows-rc-constraints.txt
         run: .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
 
       - name: Setup Rust toolchain for the native launcher

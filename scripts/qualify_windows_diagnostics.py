@@ -987,6 +987,22 @@ class _WindowsProcess:
             _attempt_cleanup(cleanup)
 
 
+def _emit_job_ids_failure_observation(
+    assigned: int, listed: int, capacity: int, category: str,
+) -> None:
+    """Expose only native counters and a fixed category, never returned PIDs."""
+    try:
+        print("qualification_job_ids_observation=" + json.dumps({
+            "assigned": assigned,
+            "listed": listed,
+            "capacity": capacity,
+            "category": category,
+        }, sort_keys=True), file=sys.stderr, flush=True)
+    except Exception:
+        # A broken diagnostic stream must not replace the qualification failure.
+        pass
+
+
 class _WindowsApi:
     """Small ctypes boundary for a non-admin restricted token and kill-on-close job."""
 
@@ -2559,11 +2575,19 @@ class _WindowsApi:
         listed = int(process_ids.NumberOfProcessIdsInList)
         assigned = int(process_ids.NumberOfAssignedProcesses)
         if listed > len(process_ids.ProcessIdList) or assigned != listed:
+            _emit_job_ids_failure_observation(
+                assigned, listed, len(process_ids.ProcessIdList),
+                "listed_over_capacity" if listed > len(process_ids.ProcessIdList) else "count_mismatch",
+            )
             raise QualificationFailure(
                 "scenario_failed", qualification_reason="native_job_ids_invalid"
             )
         values = tuple(int(process_ids.ProcessIdList[index]) for index in range(listed))
         if any(value <= 0 for value in values) or len(set(values)) != len(values):
+            _emit_job_ids_failure_observation(
+                assigned, listed, len(process_ids.ProcessIdList),
+                "nonpositive_id" if any(value <= 0 for value in values) else "duplicate_id",
+            )
             raise QualificationFailure(
                 "scenario_failed", qualification_reason="native_job_ids_invalid"
             )

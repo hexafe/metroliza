@@ -14,7 +14,7 @@ RELEASE_DOCS_REF_ENV = "METROLIZA_RELEASE_DOCS_REF"
 # double-clicked EXE opens instructions that match its functionality. A branch
 # such as ``master`` moves and can lack manuals; scripts/check_release_docs_ref.py
 # rejects such refs and checks that this commit holds every linked manual.
-DEFAULT_RELEASE_DOCS_REF = "b2510e0aa651e8c96363e5a9c224c841318cc9d0"
+DEFAULT_RELEASE_DOCS_REF = "c07ea197e149a10d22c92f22cc9bed3fdd482236"
 
 _FULL_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
