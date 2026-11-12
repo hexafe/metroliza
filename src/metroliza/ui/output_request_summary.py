@@ -31,7 +31,7 @@ def output_summary(*, source, scope, grouping, dashboard, workbook, phase="Draft
         return (Path(text).name or text)[:100] if text else missing
 
     scope = str(scope or "all rows")
-    grouping = str(grouping or "not applied")
+    grouping = str(grouping or "not applied").removeprefix("Groups: ")
     text = (f"{phase} — Source: {brief(source)} | Filter: {scope[:100]} | Groups: {grouping[:80]}\n"
             f"Dashboard (HTML): {brief(dashboard, 'off')} | Output workbook (XLSX): {brief(workbook, 'off')}")
     if extra:
@@ -85,8 +85,14 @@ def analytics_summary(request, *, phase="Launch request"):
     source = request.db_file if request.source_kind == "production_cache" else request.input_file
     fields = request.aggregation_state.group_fields
     grouping = assignment_summary(request.grouping_df) if request.grouping_df is not None else ", ".join(fields)
-    extra = (f"{len(request.metric_selection)} metrics; {request.aggregation_state.time_bucket}; "
-             + ", ".join(request.aggregation_state.aggregation_methods))
+    bucket = request.aggregation_state.time_bucket
+    if bucket == "none":
+        aggregation = "Raw rows"
+    else:
+        methods = {"std": "standard deviation", "p05": "5th percentile", "p95": "95th percentile"}
+        selected = ", ".join(methods.get(method, method) for method in request.aggregation_state.aggregation_methods)
+        aggregation = f"{selected.capitalize()} by {bucket}"
+    extra = f"{len(request.metric_selection)} metrics; {aggregation}"
     if request.cohort_state.is_applied:
         extra += "; " + request.cohort_state.summary()
     if len(files) > 1:
@@ -100,3 +106,90 @@ def set_output_summary(label, summary):
     label.setTextFormat(Qt.TextFormat.PlainText)
     label.setText(summary[0])
     label.setToolTip(summary[1])
+
+
+def _grouping_consent_outcome(outcome, error, complete, equal):
+    from PyQt6.QtWidgets import QDialog
+
+    if error is not None:
+        raise ValueError("Could not verify grouping after the output choice.") from error
+    if outcome != QDialog.DialogCode.Accepted or not complete:
+        return None
+    return equal
+
+
+def verify_grouping_after_consent(parent, source, expected, *, chunk_size=128):
+    """Compare canonical assignments in GUI-sized steps, only at publication admission.
+
+    True/False are complete comparisons; None is cancelled/incomplete. Source data
+    is never materialized as a whole, and the validated request stays authoritative.
+    """
+    from collections.abc import Mapping
+    from itertools import islice
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QProgressDialog
+    from metroliza.tabular.contracts import GroupingAssignment, validate_grouping_df
+
+    if source is None:
+        return expected is None
+    if expected is None:
+        return False
+    total = len(expected)
+    sliced = hasattr(source, "iloc")
+    single = isinstance(source, (Mapping, GroupingAssignment))
+    iterator = None if sliced else iter((source,) if single else source)
+    progress = QProgressDialog("Checking grouping before publishing outputs...", "Cancel", 0, max(1, total), parent)
+    progress.setWindowTitle("Confirm export scope")
+    progress.setWindowModality(Qt.WindowModality.WindowModal)
+    progress.setAutoClose(False)
+    progress.setAutoReset(False)
+    progress.setMinimumDuration(0)
+    progress.canceled.connect(progress.reject)
+    timer = QTimer(progress)
+    timer.setInterval(0)
+    offset = 0
+    complete = False
+    equal = False
+    error = None
+
+    def finish(result):
+        nonlocal complete, equal
+        complete, equal = True, result
+        timer.stop()
+        progress.accept()
+
+    def step():
+        nonlocal offset, error
+        try:
+            if sliced:
+                if len(source) != total:
+                    finish(False)
+                    return
+                chunk = source.iloc[offset:offset + chunk_size]
+            else:
+                chunk = tuple(islice(iterator, chunk_size))
+            actual = validate_grouping_df(chunk) or ()
+            if actual != expected[offset:offset + len(actual)]:
+                finish(False)
+                return
+            offset += len(actual)
+            if not actual or (sliced and offset >= total):
+                finish(offset == total)
+                return
+            progress.setValue(min(offset, total))
+        except Exception as exc:
+            error = exc
+            timer.stop()
+            progress.reject()
+
+    timer.timeout.connect(step)
+    parent._publication_admission_dialog = progress
+    try:
+        timer.start()
+        outcome = progress.exec()
+        return _grouping_consent_outcome(outcome, error, complete, equal)
+    finally:
+        timer.stop()
+        timer.timeout.disconnect(step)
+        parent._publication_admission_dialog = None
+        progress.deleteLater()

@@ -2831,7 +2831,7 @@ class IndustrialAnalyticsDialog(QDialog):
         finally:
             self._pending_grouping_snapshot = None
             self._pending_analytics_request = None
-        set_output_summary(self.request_summary_label, analytics_summary(request))
+        set_output_summary(self.request_summary_label, analytics_summary(getattr(self.analytics_thread, "request", request)))
         self.last_result_row.clear()
         self._worker_progress[self.analytics_thread] = (
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
