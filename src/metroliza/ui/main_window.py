@@ -2103,12 +2103,7 @@ class MainWindow(QMainWindow):
                 self.workspace_notice_label.setVisible(True)
             stale_workflows = self._workflows_using_previous_database(db_file)
             if stale_workflows:
-                self.workspace_notice_label.setText(
-                    f"{', '.join(stale_workflows)} remain on their previously selected database. "
-                    "Finish or close them before starting work in the new context."
-                )
-                set_status_variant(self.workspace_notice_label, "warning")
-                self.workspace_notice_label.setVisible(True)
+                self._show_previous_database_workflows_notice(stale_workflows)
             if recovery_result and recovery_result.get("runs_failed", 0):
                 self.statusBar().showMessage(
                     "Recovered abandoned industrial sync staging: "
@@ -2119,6 +2114,38 @@ class MainWindow(QMainWindow):
             return True
         except Exception as e:
             self.log_and_exit(e)
+
+    def _show_previous_database_workflows_notice(self, labels):
+        notice = self.workspace_notice_label
+        text = (f"{', '.join(labels)} remain on their previously selected database. "
+                "Finish or close them before starting work in the new context.")
+        notice.setText(text)
+        # Presentation ownership only; actual owners are always read from the live windows.
+        notice.setProperty("metrolizaPreviousDatabaseOwnersText", text)
+        set_status_variant(notice, "warning")
+        notice.show()
+
+    def refresh_characteristic_mapping_database_notice(self):
+        """Reconcile the host notice after the accepted mapping picker retargets its owner."""
+        notice = self.workspace_notice_label
+        if notice.property("metrolizaPreviousDatabaseOwnersText") != notice.text():
+            return  # another operation owns the current warning
+        notice.setProperty("metrolizaPreviousDatabaseOwnersText", None)
+        labels = self._workflows_using_previous_database(self.db_file)
+        if labels:
+            self._show_previous_database_workflows_notice(labels)
+        else:
+            notice.clear()
+            notice.hide()
+        realtime = self.realtime_monitoring_dialog
+        if (realtime is not None and realtime.isVisible()
+                and getattr(realtime, "db_file", None) != self.db_file):
+            # A stale-workflow notice may have overlaid the existing realtime warning.
+            prefix = notice.text() + "\n" if labels else ""
+            notice.setText(prefix + "Realtime Monitor is still using its previous database. Stop it before "
+                           "switching monitor context, or resolve its temporary session data.")
+            set_status_variant(notice, "danger")
+            notice.show()
 
     def _industrial_database_change_allowed(self, db_file):
         dialog = self.industrial_data_dialog
