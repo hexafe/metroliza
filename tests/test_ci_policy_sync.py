@@ -17,6 +17,7 @@ RELEASE_BRANCHING_PLAYBOOK_PATH = Path('docs/release_checks/release_branching_pl
 BEGINNER_RELEASE_PLAYBOOK_PATH = Path('docs/release_checks/release_playbook_beginner.md')
 GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
 GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
+NATIVE_DIAGNOSTIC_CONDITION = "${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}"
 
 
 def test_combined_candidate_workflow_preserves_authority_and_same_package_gate():
@@ -221,7 +222,7 @@ def test_native_windows_grouping_preview_step_keeps_complete_file_and_order() ->
     assert 'tests/test_tabular_analytics_grouping_dialog.py' in step
     assert ' -k ' not in step
     assert 'continue-on-error' not in step
-    assert 'if:' not in step
+    assert f'if: {NATIVE_DIAGNOSTIC_CONDITION}' in step
     assert workflow.index(f'- name: {name}') < workflow.index(f'- name: {ocr_name}')
     assert name in policy
     assert 'complete `tests/test_tabular_analytics_grouping_dialog.py` file' in policy
@@ -599,6 +600,40 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
 
 
+def test_windows_core_collects_independent_ui_evidence_after_failure_but_stays_blocking() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-core-smoke']
+    steps = job['steps']
+    install = next(step for step in steps if step.get('name') == 'Install dependencies')
+    assert install['id'] == 'windows-core-dependencies'
+    assert sum(step.get('id') == install['id'] for step in steps) == 1
+    assert install['run'].splitlines() == [
+        'python -m pip install --upgrade pip',
+        'python -m pip install -r requirements-dev.txt',
+    ]
+    assert 'if' not in install
+    independent = {
+        'Run native Windows report workspace tests',
+        'Run native Windows specialist geometry tests',
+        'Run native Windows grouping-preview lifecycle tests',
+    }
+    assert {step['name'] for step in steps if 'if' in step} == independent
+    for step in steps:
+        assert 'continue-on-error' not in step
+        if step['name'] in independent:
+            # No implicit success() gate: earlier failures still yield evidence.
+            # Cancelled/failed/skipped installation cannot run these processes.
+            assert step['if'] == NATIVE_DIAGNOSTIC_CONDITION
+            assert steps.index(step) > steps.index(install)
+            assert 'python -m pytest' in step['run']
+    # Failures retain the existing required job; no job-level waiver or new job.
+    assert job['name'] == 'Windows core smoke'
+    assert 'continue-on-error' not in job
+    assert job['if'] == "${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}"
+
+
 def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None:
     import shlex
 
@@ -620,7 +655,8 @@ def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None
         'METROLIZA_FILTER_SCOPE_SCREEN': '1920x1080',
         'METROLIZA_FILTER_SCOPE_DPR': '1',
     }
-    assert 'if' not in specialist and 'continue-on-error' not in specialist
+    assert specialist['if'] == NATIVE_DIAGNOSTIC_CONDITION
+    assert 'continue-on-error' not in specialist
     assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in specialist['run']
     assert 'python -m pytest -vv -s tests/test_industrial_native_geometry.py' in specialist['run']
     assert shlex.split(specialist['run'].splitlines()[-1]) == [
