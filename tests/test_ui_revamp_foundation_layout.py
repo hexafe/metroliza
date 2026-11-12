@@ -228,7 +228,7 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         for button in payload["button_bounds"]:
             self.assertGreaterEqual(button["left"], 0, button)
             self.assertLessEqual(button["right"], payload["dialog_size"][0], button)
-        self.assertIn("Export", {button["text"] for button in payload["button_bounds"]})
+        self.assertIn("Export [Ctrl+S]", {button["text"] for button in payload["button_bounds"]})
 
 
 if __name__ == "__main__":

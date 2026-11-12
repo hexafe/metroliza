@@ -556,8 +556,8 @@ def test_grouping_dialog_exposes_column_actions_and_preserves_double_click_selec
         assert not hasattr(dialog, "clear_columns_button")
         assert "Clear columns" not in button_texts
         assert "Create or add" not in button_texts
-        assert "Assign all filtered rows..." in button_texts
-        assert "Assign selected row values..." in button_texts
+        assert "Assign all filtered rows... [Ctrl+R]" in button_texts
+        assert "Assign selected row values... [Ctrl+G]" in button_texts
         assert "Add filter row" not in button_texts
         assert "Clear scope filters" not in button_texts
         assert not hasattr(dialog, "add_scope_filter_button")
@@ -602,7 +602,7 @@ def test_grouping_dialog_exposes_column_actions_and_preserves_double_click_selec
             False,
             True,
         ]
-        assert plain_text(dialog.dont_use_grouping_button.text()) == "Reset changes"
+        assert plain_text(dialog.dont_use_grouping_button.text()) == "Reset changes [Ctrl+Shift+R]"
         assert dialog.previous_page_button.accessibleName() == "Previous matching rows page"
         assert dialog.selector_page_label.accessibleName() == "Matching rows page"
 
@@ -1680,8 +1680,8 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
         assert "Grouping-scope filters" not in label_texts
         assert "Match" not in label_texts
         assert button_texts.isdisjoint({"Assign filtered rows...", "Assign to group..."})
-        assert "Assign all filtered rows..." in button_texts
-        assert "Assign selected row values..." in button_texts
+        assert "Assign all filtered rows... [Ctrl+R]" in button_texts
+        assert "Assign selected row values... [Ctrl+G]" in button_texts
 
         footer_layout = dialog.layout().itemAt(dialog.layout().count() - 1).layout()
         assign_all_index = footer_layout.indexOf(dialog.assign_filtered_rows_button)
