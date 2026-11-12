@@ -61,6 +61,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
             close()
 from metroliza.ui.metadata_review_worker import MetadataReviewThread
 from metroliza.ui.report_planner import PLANNER_ACTION_STYLE, ReportPlanner
+from metroliza.ui.report_planner_model import ExecutionStatus, build_execution_rows
 from metroliza.ui.report_planner_metadata import summarize_rows
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
@@ -618,7 +619,8 @@ class _ReportOperations:
         self.parse_button.setText(caption)
         self.parse_button.setAccessibleName(caption)
         self.parse_button.setEnabled(bool(approved and not busy and not ocr_running and not stopping))
-        self.scan_button.setText("Refresh review" if self._preflight_result else "Review reports")
+        self.scan_button.setText("Refresh review" if self._preflight_result else
+                                 "Review again" if self.report_planner.model.execution_rows else "Review reports")
         self.scan_button.setAccessibleName(self.scan_button.text())
         self.scan_button.setEnabled(inputs_ready and not busy and not stopping)
         self.report_planner.set_busy(busy)
@@ -790,6 +792,7 @@ class _ReportOperations:
                 "Review invalidated. Review reports again before importing."
                 if self._preflight_result is not None else ""
             )
+        self.import_succeeded = False
         carried = (
             self.report_planner.model.metadata_rows
             if keep_metadata and self._preflight_result is not None else {}
@@ -1496,6 +1499,10 @@ class _ReportOperations:
             close_requested = getattr(self, "_close_requested", False)
             # Retain both stage outcomes before stopped-thread cleanup or flag resets.
             result = getattr(self.parse_thread, "last_parse_result", None)
+            execution_rows = build_execution_rows(
+                self._preflight_result, self.report_planner.model.selected_ids,
+                getattr(self.parse_thread, "last_report_outcomes", ()),
+            )
             self._record_import_outcome(result)
             enrichment_result = getattr(self.parse_thread, "last_enrichment_result", None)
             enrichment_requested = self._embedded_enrichment_requested()
@@ -1512,6 +1519,8 @@ class _ReportOperations:
             self.import_succeeded = bool(
                 result is not None and getattr(result, "imported_files", 0) > 0
                 and feedback[0] == "info" and not self.parse_error_message and not self.parsing_canceled
+                and any(row.status is ExecutionStatus.SAVED for row in execution_rows)
+                and not any(row.status is ExecutionStatus.UNKNOWN for row in execution_rows)
             )
             self._dismiss_progress("loading")
 
@@ -1539,12 +1548,15 @@ class _ReportOperations:
                 if parent is not None and hasattr(parent, "set_db_file"):
                     parent.set_db_file(self.db_file)
 
-            # The destination changed, so require a fresh duplicate/content scan
-            # before another import while keeping this dialog open for review.
+            # The destination changed, so require a fresh duplicate/content scan.
+            # Keep only the proven last-run success flag, never its import approval.
+            confirmed_success = self.import_succeeded
             self._invalidate_preflight(
                 "Import successful. Export Workbook or refresh review before another import."
                 if self.import_succeeded else "Import finished. Refresh review before another import."
             )
+            self.import_succeeded = confirmed_success
+            self.report_planner.show_execution_rows(execution_rows)
             self._sync_readiness_state()
 
             if should_request_modeless_enrichment:

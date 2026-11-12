@@ -61,6 +61,21 @@ already-present reports, intentionally excluded reports, changed reports, failur
 cancellation. The review snapshot and metadata-enrichment result remain separate groups.
 A successful import does not imply enrichment succeeded.
 
+After import the table switches to read-only **last import results**, one row per reviewed
+occurrence. **Saved** and **Already present** require that report's persistence receipt.
+**Skipped** means it was not submitted (the reason identifies an intentional exclusion or
+review finding). **Failed** identifies a report-processing failure. **Unknown** means
+per-report completion was not confirmed, including unfinished cancelled work or a failed
+persistence checkpoint; check the destination before retrying. Aggregate totals never assign
+success to a particular row. Reports with the same filename in different folders keep their
+separate source-relative identities.
+
+Counters describe results, and **Needs attention**, status, parser and search filters still
+work. Historical rows cannot be checked or edited and contain no approved plan or content
+fingerprints. **Review again** obtains fresh source/parser/database approval before another
+import; changing context clears the prior result table. The existing textual outcome and
+Export Workbook next step remain available.
+
 Changing the source, destination or metadata detail invalidates the complete review and
 selection. After import, review again before another import. Source content and parser
 approvals are checked again by the import worker; **Changed since review** items cannot be

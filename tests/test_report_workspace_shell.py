@@ -1210,7 +1210,7 @@ def test_recent_change_respects_report_draft(app, window, reports, monkeypatch, 
 
 
 @pytest.mark.parametrize("warning", [True, False])
-def test_import_completion_variant_requires_verified_success(window, monkeypatch, warning):
+def test_import_completion_variant_requires_per_report_evidence(window, monkeypatch, warning):
     host = window.reports_workspace
     monkeypatch.setattr("metroliza.ui.parsing_dialog._build_parse_completion_summary",
                         lambda *_args, **_kwargs: ("warning" if warning else "info", "Outcome", "Details"))
@@ -1222,9 +1222,10 @@ def test_import_completion_variant_requires_verified_success(window, monkeypatch
     host.on_parse_finished()
     host.parse_thread = None
     host._sync_readiness_state()
-    assert host.import_succeeded is (not warning)
-    assert host.readiness_label.property("statusVariant") == ("warning" if warning else "success")
-    # A later review run supersedes the success: its failure or cancel must not show green.
+    # Aggregate-only evidence, with no reviewed occurrence receipts, proves no row succeeded.
+    assert host.import_succeeded is False
+    assert host.readiness_label.property("statusVariant") == "warning"
+    # A later review run must also keep the old outcome from turning green.
     monkeypatch.setattr(host, "_defer_until_metadata_idle", lambda *_args, **_kwargs: True)
     host.scan_reports()
     host._sync_readiness_state()
