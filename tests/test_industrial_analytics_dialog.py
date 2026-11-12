@@ -413,7 +413,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
         _dispose_dialog(dialog)
 
 
-def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_default() -> None:
+def test_tabular_analytics_dialog_advanced_section_hides_tuning_but_keeps_outputs_visible() -> None:
     _app()
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
@@ -424,7 +424,7 @@ def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_def
         assert dialog.advanced_options_container.isHidden()
         assert dialog.time_series_checkbox.parent() == dialog.advanced_options_container
         assert dialog.groupstats_checkbox.parent() == dialog.advanced_options_container
-        assert dialog.workbook_path_field.parent() == dialog.advanced_options_container
+        assert not dialog.advanced_options_container.isAncestorOf(dialog.workbook_path_field)
         assert dialog.dashboard_visuals_row_label.parent() == dialog.advanced_options_container
 
         request = dialog._build_analytics_request()

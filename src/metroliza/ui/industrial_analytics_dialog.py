@@ -53,7 +53,10 @@ from metroliza.charts.dashboard_visual_options import (
     load_dashboard_visual_settings,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
-from metroliza.ui.shortcuts import apply_dialog_mnemonics, set_mnemonic
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, set_mnemonic, visible_shortcut
+from metroliza.ui.output_request_summary import (
+    analytics_summary, install_output_commands, output_summary, set_output_summary, tabular_scope,
+)
 from metroliza.industrial.industrial_analytics_service import discover_production_metric_candidates
 from metroliza.ui.industrial_analytics_filter_dialog import IndustrialAnalyticsFilterDialog
 from metroliza.industrial.industrial_analytics_state import (
@@ -701,6 +704,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.df_for_grouping = None
         self.grouping_applied = False
         self._grouping_snapshot_owner = _GroupingSnapshotOwner()
+        self._pending_analytics_request = None
         self._pending_grouping_snapshot: _ValidatedGroupingSnapshot | None = None
         self._auto_group_selected_files = False
         self._tabular_reload_notice = ""
@@ -751,6 +755,9 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
+        self.request_summary_label = status_chip("", "info")
+        self.request_summary_label.setWordWrap(True)
+        configure_accessibility(self.request_summary_label, name="Analytics request scope and outputs")
         self.filter_row_label = section_label("Filters")
         self.filter_summary_label = status_chip(self.filter_state.summary(), "neutral")
         self.metrics_summary_label = status_chip("No metrics loaded", "warning")
@@ -760,7 +767,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.advanced_toggle_button = QPushButton("Show advanced options")
         self.advanced_toggle_button.setCheckable(True)
         self.advanced_toggle_button.setToolTip(
-            "Show dashboard tuning, optional workbook output, and advanced chart settings."
+            "Show dashboard tuning and advanced chart settings."
         )
         self.advanced_toggle_button.toggled.connect(self._toggle_advanced_options)
         self.advanced_options_container = QWidget()
@@ -821,7 +828,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.groupstats_checkbox = QCheckBox("Groupstats")
         self.groupstats_reason_label = status_chip("", "warning")
         self.groupstats_reason_label.setVisible(False)
-        self.workbook_checkbox = QCheckBox("Create workbook")
+        self.workbook_checkbox = QCheckBox("Output workbook (XLSX)")
         self.parameter_sheets_checkbox = QCheckBox("Separate sheet per selected parameter")
         self.time_series_checkbox.setChecked(True)
         self.histogram_checkbox.setChecked(True)
@@ -872,6 +879,9 @@ class IndustrialAnalyticsDialog(QDialog):
             checkbox.stateChanged.connect(lambda _state: self._sync_ui_state())
 
         self._build_layout()
+        install_output_commands(self, self.start_button, self._stop_active_analytics, self.reject, self.choose_metrics_button.click)
+        visible_shortcut(self.close_button, "Ctrl+W / Esc")
+        visible_shortcut(self.choose_metrics_button, "Ctrl+F")
         self._configure_accessibility()
         configure_dialog_button_roles(
             primary=self.start_button,
@@ -1068,6 +1078,7 @@ class IndustrialAnalyticsDialog(QDialog):
             row = self._add_workbook_rows(grid, row)
         else:
             row = self._add_dashboard_output_row(grid, row)
+            row = self._add_workbook_rows(grid, row)
             self._build_advanced_options_layout()
             row += 1
             grid.addWidget(self.advanced_section_label, row, 0, 1, 3)
@@ -1078,11 +1089,11 @@ class IndustrialAnalyticsDialog(QDialog):
             row += 1
             grid.addWidget(self.advanced_options_container, row, 0, 1, 3)
 
-        row += 1
-        grid.addWidget(self.readiness_label, row, 0, 1, 3)
         content_layout.addLayout(grid)
         scroll_area.setWidget(content)
         layout.addWidget(scroll_area, 1)
+        layout.addWidget(self.request_summary_label)
+        layout.addWidget(self.readiness_label)
         self.last_result_row = LastResultRow(self, "Last run")
         layout.addWidget(self.last_result_row)
 
@@ -1102,8 +1113,7 @@ class IndustrialAnalyticsDialog(QDialog):
         advanced_layout.setColumnStretch(1, 1)
         row = -1
         row = self._add_chart_option_rows(advanced_layout, row)
-        row = self._add_dashboard_tuning_rows(advanced_layout, row)
-        self._add_workbook_rows(advanced_layout, row)
+        self._add_dashboard_tuning_rows(advanced_layout, row)
 
     def _add_chart_option_rows(self, grid: QGridLayout, row: int) -> int:
         row += 1
@@ -1136,7 +1146,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def _add_dashboard_output_row(self, grid: QGridLayout, row: int) -> int:
         row += 1
-        grid.addWidget(section_label("Dashboard"), row, 0)
+        grid.addWidget(section_label("Dashboard (HTML, always)"), row, 0)
         grid.addWidget(self.dashboard_path_field, row, 1)
         grid.addWidget(self.dashboard_button, row, 2)
         return row
@@ -1175,7 +1185,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def _add_workbook_rows(self, grid: QGridLayout, row: int) -> int:
         row += 1
-        grid.addWidget(section_label("Workbook"), row, 0)
+        grid.addWidget(section_label("Output workbook"), row, 0)
         grid.addWidget(self.workbook_path_field, row, 1)
         grid.addWidget(self.workbook_button, row, 2)
 
@@ -1911,7 +1921,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def select_dashboard_file(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Save analytics dashboard",
+            "Dashboard (HTML)",
             self.output_dashboard_file,
             "HTML dashboard (*.html);;All files (*)",
         )
@@ -1923,7 +1933,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def select_workbook_file(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Save analytics workbook",
+            "Output workbook (XLSX)",
             self.output_workbook_file,
             "Excel workbook (*.xlsx);;All files (*)",
         )
@@ -2162,9 +2172,11 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         if not self.grouping_applied or self.df_for_grouping is None or self.df_for_grouping.empty:
             self.grouping_summary_label.setText("Groups: not applied")
+            self._grouping_summary_names = ()
             set_status_variant(self.grouping_summary_label, "neutral")
             return
         group_values = IndustrialAnalyticsDialog._tabular_group_values(self)
+        self._grouping_summary_names = tuple(group_values[:3])
         has_population = self._tabular_grouping_has_population(set(group_values))
         custom_groups = [value for value in group_values if value != TABULAR_DEFAULT_GROUP]
         if custom_groups:
@@ -2458,6 +2470,7 @@ class IndustrialAnalyticsDialog(QDialog):
             empty_text="Workbook disabled",
         )
         self.workbook_button.setEnabled(self.workbook_checkbox.isChecked())
+        self.workbook_path_field.setEnabled(self.workbook_checkbox.isChecked())
         self.parameter_sheets_checkbox.setEnabled(self.workbook_checkbox.isChecked())
         self._sync_tabular_source_status()
 
@@ -2561,6 +2574,17 @@ class IndustrialAnalyticsDialog(QDialog):
         else:
             self.readiness_label.setText("Select output paths before creating analytics.")
             set_status_variant(self.readiness_label, "warning")
+        self.start_button.setToolTip(self.readiness_label.text() + " Ctrl+S generates; Ctrl+Shift+S stops.")
+        if self.analytics_thread is None:
+            set_output_summary(self.request_summary_label, output_summary(
+                source=self.db_file if self.is_production_source else self.input_file,
+                scope=(self.filter_state.summary() if self.is_production_source else tabular_scope(
+                    self.tabular_filter_expression, self.tabular_column_filters,
+                    self.tabular_filter_columns, self.tabular_filter_keys)),
+                grouping=self.grouping_summary_label.text() + " " + ", ".join(getattr(self, "_grouping_summary_names", ())),
+                dashboard=self.output_dashboard_file,
+                workbook=self.output_workbook_file if self.workbook_checkbox.isChecked() else "",
+            ))
 
     def handle_start_button(self) -> None:
         action_started_at = monotonic()
@@ -2692,6 +2716,12 @@ class IndustrialAnalyticsDialog(QDialog):
             self.df_for_grouping if self.grouping_applied else None
         ):
             raise ValueError("Grouping snapshot is stale or does not match its source.")
+        pending = self._pending_analytics_request
+        if pending is not None:
+            if (self.db_file != pending.db_file or self.input_file != pending.input_file
+                    or (not self.is_production_source and self.tabular_load_result is not pending.tabular_load_result)):
+                raise ValueError("Source changed while preparing analytics. Review the scope and generate again.")
+            return pending
         return validate_industrial_analytics_request(
             IndustrialAnalyticsRequest(
                 source_kind=self.source_kind,
@@ -2791,6 +2821,7 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.loading_bar.setRange(0, 0)
         self._pending_grouping_snapshot = request._grouping_snapshot
+        self._pending_analytics_request = request
         try:
             self.analytics_thread = self.create_analytics_thread()
         except ValueError as exc:
@@ -2799,6 +2830,8 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         finally:
             self._pending_grouping_snapshot = None
+            self._pending_analytics_request = None
+        set_output_summary(self.request_summary_label, analytics_summary(request))
         self.last_result_row.clear()
         self._worker_progress[self.analytics_thread] = (
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif
@@ -2808,8 +2841,14 @@ class IndustrialAnalyticsDialog(QDialog):
         self.analytics_thread.cancelled.connect(self.on_analytics_cancelled)
         self.analytics_thread.update_label.connect(self.loading_label.setText)
         self.analytics_thread.finished.connect(self.on_analytics_thread_stopped)
+        self.start_button.setEnabled(False)
+        self.readiness_label.setText("Generating analytics. Ctrl+Shift+S requests stop.")
         self.analytics_thread.start()
         self.loading_dialog.show()
+
+    def _stop_active_analytics(self) -> None:
+        if self.analytics_thread is not None:
+            self.cancel_analytics()
 
     def cancel_analytics(self) -> None:
         if self.analytics_thread is not None:
