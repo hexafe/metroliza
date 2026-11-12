@@ -6,7 +6,6 @@ from threading import Event
 
 import pytest
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QKeySequence
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox, QVBoxLayout
 
@@ -17,6 +16,7 @@ from metroliza.industrial.oznak_adapter import OznakAdapterFetchResult, OznakAda
 from metroliza.industrial import industrial_workers as workers
 from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result
 from metroliza.ui import detached_threads, industrial_data_dialog as data, industrial_sync_dialog as sync
+from tests.qt_key_input import activate_for_key, observe_key, press_key
 from tests.test_report_planner_integration import wait_until
 
 
@@ -48,13 +48,7 @@ def ui(qapplication_session, tmp_path, monkeypatch):
 
 
 def press(app, widget, sequence):
-    window = widget.window()
-    window.activateWindow()
-    wait_until(app, window.isActiveWindow)
-    widget.setFocus()
-    combination = QKeySequence(sequence)[0]
-    QTest.keyClick(widget, combination.key(), combination.keyboardModifiers())
-    app.processEvents()
+    press_key(app, widget, sequence)
 
 
 def cached_sources(tmp_path):
@@ -141,15 +135,21 @@ def test_access_denial_is_observed_and_does_not_hide_cached_actions(ui, tmp_path
     status = OznakAdapterStatus(available=True, fetch_available=True)
     monkeypatch.setattr(workers, 'get_oznak_adapter_status', lambda: status)
     monkeypatch.setattr(workers, 'create_oznak_cancellation_token', lambda: None)
-    monkeypatch.setattr(workers, 'fetch_oznak_records_for_source_profile', lambda *_a, **_k:
-        OznakAdapterFetchResult(status=status, records=(), row_count=0, implemented=True,
-                               error='Access denied password=synthetic-value'))
+    attempts = []
+
+    def denied_fetch(*_args, **_kwargs):
+        attempts.append(True)
+        return OznakAdapterFetchResult(status=status, records=(), row_count=0, implemented=True,
+                                      error='Access denied password=synthetic-value')
+
+    monkeypatch.setattr(workers, 'fetch_oznak_records_for_source_profile', denied_fetch)
     dialog = sync.IndustrialSyncDialog(parent, db_file=path, report_db_file=None, config_path=tmp_path / 'sources.yaml')
     dialog.show()
     dialog.username_edit.setText('synthetic_operator')
     dialog.password_edit.setText('synthetic_session_password')
     try:
         press(qapplication_session, dialog.test_connection_button, 'Ctrl+R')
+        wait_until(qapplication_session, lambda: bool(attempts))
         wait_until(qapplication_session, lambda: dialog.oznak_sync_thread is None)
         assert 'failed' in dialog.stage_label.text() and 'Check credentials' in dialog.stage_label.text()
         assert dialog.test_connection_button.property('buttonRole') == 'primary'
@@ -215,12 +215,14 @@ def test_missing_source_configure_key_uses_existing_saved_profile_controller(ui,
     dialog = ui('sync')
     assert 'Configure sources' in dialog.stage_label.text() and not dialog.sync_now_button.isEnabled()
     failures = []
+    seen_children = []
 
     def save_source():
         child = QApplication.activeModalWidget()
         if not isinstance(child, IndustrialSourceProfilesDialog):
             failures.append('Expected the actual source configuration dialog')
             return
+        seen_children.append(True)
         child.source_name_edit.setText('Synthetic configured source')
         child.alias_edit.setText('uiux_new')
         child.host_edit.setText('synthetic.invalid')
@@ -232,14 +234,14 @@ def test_missing_source_configure_key_uses_existing_saved_profile_controller(ui,
         child.save_source()
         child.reject()
 
-    dialog.activateWindow()
-    wait_until(qapplication_session, dialog.isActiveWindow)
-    dialog.configure_sources_button.setFocus()
+    activate_for_key(qapplication_session, dialog.configure_sources_button)
     assert dialog.configure_sources_button.hasFocus()
-    QTimer.singleShot(0, save_source)
-    # No activation/event pumping may run this timer before the real command opens its child.
-    QTest.keyClick(dialog.configure_sources_button, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    with observe_key(qapplication_session, dialog.configure_sources_button, 'Ctrl+D'):
+        QTimer.singleShot(0, save_source)
+        # No activation/event pumping may run this timer before the real command opens its child.
+        QTest.keyClick(dialog.configure_sources_button, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
     assert not failures
+    assert seen_children == [True]
     assert dialog.current_profile() is not None and dialog.current_profile().profile_key == 'uiux_new'
     assert 'Next: Check access' in dialog.stage_label.text() and dialog.test_connection_button.isEnabled()
 

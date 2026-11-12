@@ -6,13 +6,14 @@ import sqlite3
 import pandas as pd
 import pytest
 from PyQt6.QtCore import QDate, Qt
-from PyQt6.QtGui import QKeyEvent, QKeySequence
+from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QVBoxLayout
 
 from metroliza.tabular.tabular_analytics_service import TabularColumnFilter, apply_tabular_row_filter
 from metroliza.ui.filter_dialog import FilterDialog
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
+from tests.qt_key_input import press_key
 from tests.test_report_planner_integration import wait_until
 from tests.test_wave0_filters_groups import scoped_header_dialog as scoped_header_dialog, wait_for_choices
 
@@ -23,12 +24,7 @@ def app():
 
 
 def key(app, widget, sequence):
-    widget.window().activateWindow()
-    wait_until(app, widget.window().isActiveWindow)
-    widget.setFocus()
-    combination = QKeySequence(sequence)[0]
-    QTest.keyClick(widget, combination.key(), combination.keyboardModifiers())
-    app.processEvents()
+    press_key(app, widget, sequence)
 
 
 def source_ids(dialog):
@@ -134,6 +130,7 @@ def test_csv_hidden_values_dates_clear_and_cancel_keep_source_ids(app):
         assert "Draft edited" in editor.draft_status_label.text()
         assert "Applied:" in editor.draft_status_label.text() and "2024-01-03" in editor.draft_status_label.text()
         key(app, editor.expression_input, "Ctrl+W")
+        assert not editor.isVisible()
         assert editor.result() == QDialog.DialogCode.Rejected
         assert csv_ids(editor, frame) == {33}
     finally:

@@ -3,7 +3,6 @@ from contextlib import closing
 from threading import Event
 import sqlite3
 import os
-import time
 
 import pytest
 from PyQt6.QtCore import Qt, QTimer
@@ -13,16 +12,10 @@ from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox, QVBox
 from metroliza.ui import characteristic_mapping_dialog as matching
 from metroliza.ui.modify_db import ModifyDB
 from metroliza.ui.modify_db_records import RecordRows, RecordTableModel
+from tests.qt_key_input import activate_for_key, key_state, press_key
 from tests.test_modifydb_record_updates import _wait_edit
 from tests.test_report_workspace_shell import app, window, prepare_review, reports, wait_until  # noqa: F401, F811
 from tests.test_wave0_modifydb_mapping import _database
-
-
-def _native_ready(condition, timeout=2):
-    deadline = time.monotonic() + timeout
-    while not condition() and time.monotonic() < deadline:
-        QTest.qWait(5)
-    return condition()
 
 
 @pytest.fixture
@@ -254,17 +247,18 @@ def test_ctrl_s_commits_active_record_delegate_before_confirmation(editor, monke
                                RecordRows([(7, 'Old')], None))
     editor.tab_widget.setCurrentWidget(editor.report_records_tab)
     table = editor.report_records_table
-    editor.activateWindow()
-    table.setFocus()
+    application = QApplication.instance()
+    activate_for_key(application, table)
     table.edit(table.model().index(0, 1))
     delegate = table.findChild(QLineEdit)
     assert delegate is not None
+    activate_for_key(application, delegate)
     delegate.selectAll()
     QTest.keyClicks(delegate, 'Typed part')
-    assert _native_ready(lambda: editor.isActiveWindow() and delegate.hasFocus())
+    assert QApplication.activeWindow() is editor and editor.isActiveWindow() and delegate.hasFocus()
     confirmations = []
     monkeypatch.setattr(QMessageBox, 'exec', lambda box: confirmations.append(box.text()) or QMessageBox.StandardButton.Cancel)
-    QTest.keyClick(delegate, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+    press_key(application, delegate, 'Ctrl+S')
     assert len(confirmations) == 1 and 'Typed part' in confirmations[0]
     assert table.model().pending_cell_count == 1
     assert editor.collect_report_record_updates() == [(7, {'part_name': 'Typed part'})]
@@ -284,29 +278,26 @@ def test_mapping_actual_child_ctrl_s_saves_and_close_does_not_undo(tmp_path, qap
         if not isinstance(child, matching.CharacteristicAliasEditorDialog):
             failures.append('Expected the real mapping editor')
             return
-        child.alias_input.setCurrentText('Original metric')
-        child.common_name_input.setCurrentText('Common metric')
-        child.common_name_input.setFocus()
-        if not _native_ready(lambda: child.isActiveWindow() and
-                             QApplication.activeModalWidget() is child and
-                             (child.common_name_input.hasFocus() or child.common_name_input.lineEdit().hasFocus())):
-            failures.append('The real modal editor never became active')
+        try:
+            child.alias_input.setCurrentText('Original metric')
+            child.common_name_input.setCurrentText('Common metric')
+            press_key(qapplication_session, child.common_name_input, 'Ctrl+S')
+        except Exception as exc:
+            failures.append({'error': type(exc).__name__,
+                             'state': key_state(qapplication_session, child.common_name_input)})
             child.reject()
             return
-        QTest.keyClick(child.common_name_input, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
         if child.isVisible():
             failures.append('Ctrl+S did not accept the editor')
             child.reject()
 
     try:
+        activate_for_key(qapplication_session, dialog.add_button)
         QTimer.singleShot(0, save_editor)
         dialog.add_button.click()
         assert not failures
         assert len(fetch_all_characteristic_aliases(path)) == 1
-        dialog.activateWindow()
-        dialog.close_button.setFocus()
-        QTest.qWait(10)
-        QTest.keyClick(dialog.close_button, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
+        press_key(qapplication_session, dialog.close_button, 'Ctrl+W')
         assert not dialog.isVisible()
         reopened = matching.CharacteristicMappingDialog(db_file=path, modal=False)
         try:
