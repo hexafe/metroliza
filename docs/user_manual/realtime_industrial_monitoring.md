@@ -80,7 +80,12 @@ for the session; for normal monitoring, select a persistent database first.
 Use **Configure source (Ctrl+D)** to open the existing **Setup** tab. With no
 source, open **Production Sources... (Ctrl+Shift+D)** there. Check an enabled
 source, complete its monitor setup, and use **Save Current Source (Ctrl+S)**.
-Choose **Monitor (Ctrl+R)**, then **Start Checked (Ctrl+S)**. Saved setup does not
+After saving valid current setup, the single highlighted footer action advances
+to **Monitor (Ctrl+R)**. Editing that setup changes the footer back to Save;
+**Ctrl+S** on Setup still saves the form; Enter follows the highlighted Monitor
+step after saving. An active Stop is an Enter default on Monitor only, so Enter
+in an Event Review text field does not stop polling. On Monitor, choose **Start Checked
+(Ctrl+S)**. Saved setup does not
 prove source access; the actual poll checks access. Disabled or unsaved checked
 sources cannot start through the next-action button.
 

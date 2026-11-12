@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -240,12 +241,15 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             set_status_variant(self.storage_lifecycle_label, "success")
 
     def _sync_default_action_for_tab(self, index: int) -> None:
-        selected = getattr(self, "_next_control", None)
         for button in (self.start_button, self.save_button, self.refresh_events_button,
-                       self.stop_button, self.configure_source_button, self.edit_sources_button):
-            role = "primary" if button is selected else "danger" if button is self.stop_button else "secondary"
-            set_button_role(button, role, default=button is selected and button.isVisibleTo(self))
-        set_button_role(self.next_button, "primary", default=False)
+                       self.stop_button, self.configure_source_button, self.edit_sources_button,
+                       self.monitor_view_button, self.event_review_button):
+            set_button_role(button, "danger" if button is self.stop_button else "secondary")
+        selected = getattr(self, "_next_control", None)
+        # Mirror the original visible control's Enter eligibility. A hidden Stop
+        # must not become the default while typing in Setup or Event Review.
+        set_button_role(self.next_button, "primary",
+                        default=selected is not None and selected.isVisibleTo(self))
 
     def _show_setup(self) -> None:
         self.workflow_tabs.setCurrentIndex(1)
@@ -289,6 +293,31 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                               (self.event_operator_edit, self.event_comment_edit),
                               (self.event_comment_edit, self.acknowledge_event_button)):
             self.setTabOrder(first, second)
+        for edit in (self.stream_key_edit, self.cursor_column_edit, self.event_time_column_edit,
+                     self.record_key_column_edit, self.signal_columns_edit,
+                     self.aggregation_methods_edit, self.aggregation_groups_edit,
+                     self.context_fields_edit, self.segment_fields_edit, self.detectors_edit,
+                     self.dashboard_path_field):
+            edit.textChanged.connect(self._sync_workflow_presentation)
+        for spin in (self.interval_spin, self.timeout_spin, self.chunk_spin, self.max_catchup_spin):
+            spin.valueChanged.connect(self._sync_workflow_presentation)
+        for combo in (self.display_mode_combo, self.aggregation_bucket_combo):
+            combo.currentTextChanged.connect(self._sync_workflow_presentation)
+
+    def _current_setup_matches_saved(self) -> bool:
+        profile = self.current_profile()
+        saved = self.configs_by_profile_id.get(profile.id) if profile and profile.is_enabled else None
+        if saved is None:
+            return False
+        try:
+            current = self._config_from_form(profile)
+        except ValueError:
+            return False  # Invalid current text remains an unsaved form, not readiness.
+        # Compare normalized editable values, ignoring persistence metadata and
+        # the two runtime fields not represented by this existing form.
+        return replace(current, id=saved.id, created_at=saved.created_at, updated_at=saved.updated_at,
+                       allowed_lateness_seconds=saved.allowed_lateness_seconds,
+                       source_timezone=saved.source_timezone) == saved
 
     def _sync_workflow_presentation(self, _index=None) -> None:
         if not hasattr(self, "next_button"):
@@ -301,8 +330,14 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         elif tab == 2:
             control, message = self.refresh_events_button, "Review persisted events; actions require operator and comment."
         elif tab == 1:
-            control = self.save_button if self.save_button.isEnabled() else self.edit_sources_button
-            message = "Save valid setup, then choose Monitor and Start." if self.save_button.isEnabled() else "Configure or enable a source using Production Sources, then save monitor setup."
+            if self._current_setup_matches_saved():
+                control = self.monitor_view_button
+                message = ("Current setup saved. Open Monitor, then Start checks source access."
+                           if self.start_button.isEnabled() else
+                           "Current setup saved. Monitoring requires checked enabled sources with saved setup.")
+            else:
+                control = self.save_button if self.save_button.isEnabled() else self.edit_sources_button
+                message = "Save valid current edits, then choose Monitor and Start." if self.save_button.isEnabled() else "Configure or enable a source using Production Sources, then save monitor setup."
         elif self.start_button.isEnabled():
             control, message = self.start_button, "Checked sources have saved setup. Start checks source access; Event Review uses persisted events."
         else:
