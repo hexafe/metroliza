@@ -15,6 +15,9 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QLayout,
+    QScrollArea,
+    QWidget,
     QListWidget,
     QMessageBox,
     QPushButton,
@@ -130,7 +133,7 @@ class TabularAnalyticsFilterDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("CSV / Excel row filter")
-        configure_window_size(self, minimum=(860, 560), initial=(1060, 720))
+        configure_window_size(self, minimum=(620, 420), initial=(960, 720))
 
         self.sqlite_store = sqlite_store
         if sqlite_store is not None:
@@ -177,14 +180,28 @@ class TabularAnalyticsFilterDialog(QDialog):
         else:
             self._load_legacy_filter(filter_columns, selected_filter_keys)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-        attach_help_menu_to_layout(layout, self, [("CSV Summary manual", "csv_summary")])
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(10, 10, 10, 10)
+        attach_help_menu_to_layout(outer_layout, self, [("CSV Summary manual", "csv_summary")])
+        self.filter_body_scroll = QScrollArea()
+        self.filter_body_scroll.setWidgetResizable(True)
+        self.filter_body_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(8)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.filter_body_scroll.setWidget(body)
+        outer_layout.addWidget(self.filter_body_scroll, 1)
 
         self.status_label = status_chip("No row filter selected", "neutral")
         layout.addWidget(section_label("Column filters"))
         layout.addWidget(self.status_label)
+        self.draft_status_label = status_chip("Draft unchanged since opening", "neutral")
+        layout.addWidget(self.draft_status_label)
+        search_help = QLabel("Search hides choices only; hidden selections still filter data. [Ctrl+F]")
+        search_help.setWordWrap(True)
+        layout.addWidget(search_help)
 
         layout.addWidget(QLabel("Advanced expression (optional)"))
         self.expression_input = QLineEdit()
@@ -210,8 +227,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         columns_grid.setContentsMargins(0, 0, 0, 0)
         columns_grid.setHorizontalSpacing(10)
         columns_grid.setVerticalSpacing(6)
-        columns_grid.addWidget(QLabel("Available columns"), 0, 0)
-        columns_grid.addWidget(QLabel("Selected columns"), 0, 1)
+        columns_grid.addWidget(QLabel("Available columns — E adds the current column"), 0, 0)
+        columns_grid.addWidget(QLabel("Selected columns — R removes the current column"), 0, 1)
 
         self.column_search = QLineEdit()
         self.column_search.setPlaceholderText("Search columns")
@@ -239,7 +256,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         column_actions = QHBoxLayout()
         column_actions.setSpacing(8)
         self.add_column_button = QPushButton("Add column")
-        self.remove_column_button = QPushButton("Remove selected column")
+        self.remove_column_button = QPushButton("Remove column")
         self.clear_columns_button = QPushButton("Clear columns")
         configure_accessibility(self.add_column_button, name="Add CSV filter column")
         configure_accessibility(self.remove_column_button, name="Remove selected CSV filter column")
@@ -257,6 +274,8 @@ class TabularAnalyticsFilterDialog(QDialog):
         layout.addWidget(self.matching_search)
         self.matching_status_label = status_chip("", "neutral")
         layout.addWidget(self.matching_status_label)
+        self.value_scope_label = status_chip("Values: All", "neutral")
+        layout.addWidget(self.value_scope_label)
         self.matching_list = QListWidget()
         self.matching_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         apply_list_selection_style(self.matching_list)
@@ -294,27 +313,37 @@ class TabularAnalyticsFilterDialog(QDialog):
             self.date_to_calendar,
         )
         layout.addLayout(date_row)
+        self.date_error_label = status_chip("", "danger")
+        self.date_error_label.hide()
+        layout.addWidget(self.date_error_label)
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
-        self.clear_selection_button = QPushButton("Clear values")
-        self.clear_filter_button = QPushButton("Reset filter")
+        self.clear_selection_button = QPushButton("Clear condition (values + dates)")
+        self.clear_values_only_button = QPushButton("Clear selection (All values)")
+        self.clear_search_button = QPushButton("Clear searches")
+        self.clear_expression_button = QPushButton("Clear expression")
+        self.clear_filter_button = QPushButton("Reset draft")
         self.cancel_button = QPushButton("Cancel")
         self.apply_button = QPushButton("Apply filter")
         self.apply_button.setDefault(True)
-        configure_accessibility(self.clear_selection_button, name="Clear selected CSV filter values")
+        configure_accessibility(self.clear_selection_button, name="Clear current CSV column condition")
         configure_accessibility(self.clear_filter_button, name="Reset CSV row filter")
         configure_accessibility(self.cancel_button, name="Cancel CSV row filter")
         configure_accessibility(self.apply_button, name="Apply CSV row filter")
-        footer.addWidget(self.clear_selection_button)
+        utility = QGridLayout()
+        for index, button in enumerate((self.clear_search_button, self.clear_values_only_button,
+                                        self.clear_selection_button, self.clear_expression_button)):
+            utility.addWidget(button, index // 2, index % 2)
+        layout.addLayout(utility)
         footer.addWidget(self.clear_filter_button)
         footer.addStretch(1)
         footer.addWidget(self.cancel_button)
         footer.addWidget(self.apply_button)
-        layout.addLayout(footer)
+        outer_layout.addLayout(footer)
 
         self.column_search.textChanged.connect(self._refresh_available_columns)
-        self.selected_column_search.textChanged.connect(self._refresh_selected_columns)
+        self.selected_column_search.textChanged.connect(self._search_selected_columns)
         self.column_list.itemDoubleClicked.connect(lambda _item: self.add_filter_column())
         self.selected_columns_list.itemSelectionChanged.connect(self._handle_selected_column_changed)
         self.selected_columns_list.itemDoubleClicked.connect(lambda _item: self.remove_selected_filter_column())
@@ -322,6 +351,9 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.remove_column_button.clicked.connect(self.remove_selected_filter_column)
         self.clear_columns_button.clicked.connect(self.clear_filter_columns)
         self.clear_selection_button.clicked.connect(self.clear_selection)
+        self.clear_values_only_button.clicked.connect(self._clear_value_selection)
+        self.clear_search_button.clicked.connect(self._clear_searches)
+        self.clear_expression_button.clicked.connect(self.expression_input.clear)
         self.clear_filter_button.clicked.connect(self._request_reset_filter)
         self.cancel_button.clicked.connect(self._request_cancel)
         self.apply_button.clicked.connect(self._accept_filter)
@@ -354,6 +386,25 @@ class TabularAnalyticsFilterDialog(QDialog):
             (self.selected_column_search, self.selected_columns_list),
             (self.matching_search, self.matching_list),
         ))
+        self._setup_filter_commands()
+        self._sync_draft_presentation()
+
+    def _setup_filter_commands(self):
+        from metroliza.ui.filter_presentation import FilterCommandBindings
+
+        self.filter_commands = FilterCommandBindings(self, (
+            ("Ctrl+E", self.add_column_button), ("Ctrl+Shift+E", self.remove_column_button),
+            ("Ctrl+S", self.apply_button), ("Ctrl+Shift+R", self.clear_filter_button), ("Ctrl+W", self.cancel_button),
+        ), local=(
+            ((self.column_list, Qt.Key.Key_E), self.add_column_button),
+            ((self.selected_columns_list, Qt.Key.Key_R), self.remove_column_button),
+        ))
+        ordered = (self.expression_input, self.column_search, self.column_list, self.add_column_button,
+                   self.selected_column_search, self.selected_columns_list, self.remove_column_button,
+                   self.matching_search, self.matching_list, self.date_mode_combo, self.date_from_calendar,
+                   self.date_to_calendar, self.clear_filter_button, self.cancel_button, self.apply_button)
+        for first, second in zip(ordered, ordered[1:]):
+            self.setTabOrder(first, second)
 
     def _source_columns(self) -> list[str]:
         if self.sqlite_store is not None:
@@ -447,6 +498,17 @@ class TabularAnalyticsFilterDialog(QDialog):
             block_signals=True,
         )
 
+    def _search_selected_columns(self):
+        previous = self._current_filter_column()
+        self._refresh_selected_columns()
+        current = self._current_filter_column()
+        if current != previous:
+            self._refresh_values()
+            self._sync_date_controls()
+        self.remove_column_button.setEnabled(bool(current))
+        self.clear_selection_button.setEnabled(bool(current and self._filter_for_column(current).is_active))
+        self.clear_values_only_button.setEnabled(bool(current and self.value_filters.get(current)))
+
     def _selected_column_label(self, column: str) -> str:
         column_filter = self._filter_for_column(column)
         details: list[str] = []
@@ -478,8 +540,6 @@ class TabularAnalyticsFilterDialog(QDialog):
 
     def remove_selected_filter_column(self) -> None:
         column = self._current_filter_column()
-        if column is None and self.filter_columns:
-            column = self.filter_columns[-1]
         if column is None or column not in self.filter_columns:
             return
         self.filter_columns.remove(column)
@@ -536,6 +596,8 @@ class TabularAnalyticsFilterDialog(QDialog):
     def _capture_committed_filter_state(self) -> None:
         self._committed_filter_state = self._draft_signature()
         self._committed_filter_signature = self._committed_filter_state
+        self._applied_scope_text = self._scope_description()
+        self._sync_draft_presentation()
 
     def _restore_committed_filter_state(self) -> None:
         snapshot = getattr(self, "_committed_filter_state", self._draft_signature())
@@ -632,6 +694,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         existing = set(self.value_filters.get(column, set()))
         self.value_filters[column] = (existing - visible_values) | selected_visible_values
         self._refresh_selected_columns()
+        self._sync_value_presentation()
         self._schedule_status_sync()
 
     def _handle_selected_column_changed(self) -> None:
@@ -707,10 +770,12 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.matching_list.blockSignals(True)
         self.matching_list.clear()
         if column is None:
-            self.matching_status_label.setText("Add a filter column to preview values.")
+            self.matching_status_label.setText("Clear selected-column search to edit hidden conditions."
+                                              if self.filter_columns else "Add a filter column to preview values.")
             set_status_variant(self.matching_status_label, "neutral")
             self.matching_list.blockSignals(False)
             self._syncing_current_filter = False
+            self._sync_value_presentation()
             return
         if self.sqlite_store is not None:
             self._start_sqlite_value_preview(column)
@@ -742,6 +807,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         else:
             self.matching_status_label.setText(f"Showing {total_rows} value(s).")
             set_status_variant(self.matching_status_label, "info" if total_rows else "warning")
+        self._sync_value_presentation()
 
     def _start_sqlite_value_preview(self, column: str) -> None:
         self._preview_request_id += 1
@@ -1014,6 +1080,8 @@ class TabularAnalyticsFilterDialog(QDialog):
 
     def _accept_filter(self) -> None:
         self._commit_current_filter_controls()
+        if self._date_range_error():
+            return
         try:
             self._filtered_row_count(self._active_column_filters())
         except (KeyError, RuntimeError, ValueError) as exc:
@@ -1029,6 +1097,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._sync_status_now()
 
     def _schedule_status_sync(self) -> None:
+        self._sync_draft_presentation()
         self._sync_status_controls(self._active_column_filters())
         self._status_timer.start()
 
@@ -1038,6 +1107,12 @@ class TabularAnalyticsFilterDialog(QDialog):
         self._sync_status_now()
 
     def _sync_status_now(self) -> None:
+        self._sync_draft_presentation()
+        if self._date_range_error():
+            self.status_label.setText("Date range needs attention")
+            set_status_variant(self.status_label, "danger")
+            self._sync_status_controls(self._active_column_filters(), expression_valid=False)
+            return
         active_filters = self._active_column_filters()
         expression_text = self._filter_expression_text()
         try:
@@ -1078,7 +1153,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         *,
         expression_valid: bool = True,
     ) -> None:
-        self.remove_column_button.setEnabled(bool(self.filter_columns))
+        self.remove_column_button.setEnabled(bool(self._current_filter_column()))
         self.clear_columns_button.setEnabled(bool(self.filter_columns))
         current_column = self._current_filter_column()
         self.clear_selection_button.setEnabled(
@@ -1087,7 +1162,61 @@ class TabularAnalyticsFilterDialog(QDialog):
         self.clear_filter_button.setEnabled(
             bool(self.filter_columns or active_filters or self._filter_expression_text())
         )
-        self.apply_button.setEnabled(expression_valid)
+        self.clear_values_only_button.setEnabled(bool(current_column and self.value_filters.get(current_column)))
+        self.apply_button.setEnabled(expression_valid and not self._date_range_error())
+
+    def _clear_searches(self):
+        self.column_search.clear()
+        self.selected_column_search.clear()
+        self.matching_search.clear()
+        if self.sqlite_store is not None:
+            self._apply_matching_search()
+
+    def _clear_value_selection(self):
+        column = self._current_filter_column()
+        if column is None:
+            return
+        self.value_filters[column] = set()
+        blocked = self.matching_list.blockSignals(True)
+        self.matching_list.clearSelection()
+        self.matching_list.blockSignals(blocked)
+        self._refresh_selected_columns()
+        self._sync_value_presentation()
+        self._schedule_status_sync()
+
+    def _scope_description(self):
+        parts = [self._selected_column_label(column) for column in self.filter_columns[:4]]
+        if len(self.filter_columns) > 4:
+            parts.append(f"+{len(self.filter_columns) - 4} more columns")
+        if self._filter_expression_text():
+            parts.append("advanced expression")
+        return "; ".join(parts) or "All values · Any date"
+
+    def _sync_draft_presentation(self):
+        state = "Draft edited; applied scope is unchanged" if self._is_dirty() else "Draft unchanged since opening or Apply"
+        self.draft_status_label.setText(f"{state}\nApplied: {getattr(self, '_applied_scope_text', self._scope_description())}")
+        self.draft_status_label.setToolTip(self.draft_status_label.text())
+        error = self._date_range_error()
+        self.date_error_label.setText(error)
+        self.date_error_label.setVisible(bool(error))
+
+    def _date_range_error(self):
+        for column in self.filter_columns:
+            rule = self.date_filters.get(column, {})
+            if (rule.get("mode") == "between" and rule.get("from") and rule.get("to")
+                    and rule["from"] > rule["to"]):
+                return f"Invalid date range for {self._column_label(column)}: From must be on or before To."
+        return ""
+
+    def _sync_value_presentation(self):
+        from metroliza.ui.filter_presentation import choice_scope_text
+
+        column = self._current_filter_column()
+        selected = self.value_filters.get(column, set())
+        shown = {str(self.matching_list.item(row).data(Qt.ItemDataRole.UserRole))
+                 for row in range(self.matching_list.count())}
+        self.value_scope_label.setText(choice_scope_text(len(selected), "Search hides choices only",
+                                                        hidden_count=len(selected - shown)))
 
     def _filtered_row_count(self, active_filters: tuple[TabularColumnFilter, ...]) -> int:
         expression_text = self._filter_expression_text()

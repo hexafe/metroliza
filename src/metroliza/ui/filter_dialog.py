@@ -52,7 +52,7 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
-from metroliza.shared.filter_state import FilterState
+from metroliza.shared.filter_state import FilterState, summarize_filter_state
 from metroliza.reports.report_query_service import (
     build_distinct_value_query as _build_distinct_value_query,
     build_measurement_expression_clause as _build_measurement_expression_clause,
@@ -176,6 +176,10 @@ class FilterDialog(QDialog):
             self.filter_query = ""
         self._choice_scope_query = self.filter_query
 
+        self._choice_status_labels = {}
+        parent_state = getattr(parent, "filter_state", None)
+        self._applied_scope_text = (summarize_filter_state(parent_state)[0] if isinstance(parent_state, FilterState)
+                                    else "Existing database filter" if self.filter_query else "All values · All dates")
         self._list_selection_utils = ListSelectionUtils()
         self._discard_gate_active = False
         self._value_loader = None
@@ -214,6 +218,8 @@ class FilterDialog(QDialog):
             self._refresh_filter_summary()
             self._committed_draft_snapshot = self._draft_snapshot()
             self.populate_list_widgets()
+            self._setup_filter_commands()
+            self._refresh_draft_presentation()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -387,6 +393,10 @@ class FilterDialog(QDialog):
             self.reset_button = QPushButton("Reset draft")
             self.cancel_button = QPushButton("Cancel")
             self.filter_summary_label = ui_foundation.status_chip("No active filters", variant="neutral")
+            self.draft_status_label = ui_foundation.status_chip("Draft unchanged since opening", variant="neutral")
+            self.clear_search_button = QPushButton("Clear searches")
+            self.clear_values_button = QPushButton("Clear value selections (All)")
+            self.clear_expression_button = QPushButton("Clear expression")
             ui_foundation.configure_accessibility(
                 self.expression_input,
                 name="Advanced report filter expression",
@@ -410,6 +420,14 @@ class FilterDialog(QDialog):
             self.layout.setSpacing(8)
             ui_foundation.apply_metroliza_theme(self)
 
+            self.layout.addWidget(self.draft_status_label)
+            search_help = QtWidgets.QLabel("Search hides choices only; hidden selections still filter data. [Ctrl+F]")
+            search_help.setWordWrap(True)
+            self.layout.addWidget(search_help)
+            utility = QtWidgets.QHBoxLayout()
+            for button in (self.clear_search_button, self.clear_values_button, self.clear_expression_button):
+                utility.addWidget(button)
+            self.layout.addLayout(utility)
             self._add_filter_tabs(self.layout)
             self._add_filter_footer(self.layout)
             self._apply_window_size_constraints()
@@ -456,6 +474,12 @@ class FilterDialog(QDialog):
             list_widget = getattr(self, list_attr)
             self._set_widget_size_policy(list_widget, min_width=150, min_height=110, expands_vertically=True)
             field_layout.addWidget(list_widget, 1)
+            if list_attr in self._FILTER_LIST_ATTRS:
+                from metroliza.ui.filter_presentation import list_choice_text
+                label = QtWidgets.QLabel(list_choice_text(list_widget, all_marker="SELECT ALL"))
+                label.setWordWrap(True)
+                field_layout.addWidget(label)
+                self._choice_status_labels[list_widget] = label
             if list_attr == "selected_headers_list":
                 field_layout.addWidget(self.header_availability_label)
             group_layout.addWidget(field_widget, row, column)
@@ -492,7 +516,7 @@ class FilterDialog(QDialog):
         action_layout.addWidget(self.reset_button)
         action_layout.addWidget(self.cancel_button)
         action_layout.addWidget(self.apply_button)
-        footer_layout.addLayout(action_layout, 3, 3, 2, 1)
+        footer_layout.addLayout(action_layout, 6, 0, 1, 4)
         footer_layout.setColumnStretch(1, 1)
         footer_layout.setColumnStretch(3, 1)
         parent_layout.addWidget(footer_widget)
@@ -567,6 +591,9 @@ class FilterDialog(QDialog):
             self.apply_button.clicked.connect(self.apply_filters)
             self.reset_button.clicked.connect(self._request_reset_draft)
             self.cancel_button.clicked.connect(self._request_cancel)
+            self.clear_search_button.clicked.connect(self._clear_searches)
+            self.clear_values_button.clicked.connect(self._clear_value_selections)
+            self.clear_expression_button.clicked.connect(self.expression_input.clear)
             ui_foundation.configure_dialog_button_roles(
                 primary=self.apply_button,
                 secondary=(self.cancel_button,),
@@ -605,6 +632,53 @@ class FilterDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+
+    def _setup_filter_commands(self):
+        from metroliza.ui.filter_presentation import FilterCommandBindings
+
+        self.filter_commands = FilterCommandBindings(self, (
+            ("Ctrl+S", self.apply_button), ("Ctrl+Shift+R", self.reset_button), ("Ctrl+W", self.cancel_button),
+        ))
+        ordered = [self.clear_search_button, self.clear_values_button, self.clear_expression_button, self.filter_tabs]
+        for _title, fields in self.FILTER_SECTIONS:
+            for _label, search, listing in fields:
+                if search:
+                    ordered.append(getattr(self, search))
+                ordered.append(getattr(self, listing))
+        ordered.extend((self.expression_input, self.date_range_selector, self.date_from_calendar,
+                        self.date_to_calendar, self.select_beginning_button, self.select_today_button,
+                        self.has_nok_button, self.reset_button, self.cancel_button, self.apply_button))
+        for first, second in zip(ordered, ordered[1:]):
+            self.setTabOrder(first, second)
+
+    def _refresh_choice_presentation(self, widget):
+        label = getattr(self, "_choice_status_labels", {}).get(widget)
+        if label is not None:
+            from metroliza.ui.filter_presentation import list_choice_text
+
+            label.setText(list_choice_text(widget, all_marker="SELECT ALL"))
+
+    def _refresh_draft_presentation(self):
+        label = getattr(self, "draft_status_label", None)
+        if label is None:
+            return
+        state = "Draft edited; applied scope is unchanged" if self._is_dirty() else "Draft unchanged since opening or Apply"
+        label.setText(f"{state}\nApplied: {self._applied_scope_text}")
+        label.setToolTip(label.text())
+
+    def _clear_searches(self):
+        for _title, fields in self.FILTER_SECTIONS:
+            for _label, search, _listing in fields:
+                if search:
+                    getattr(self, search).clear()
+
+    def _clear_value_selections(self):
+        for name in self._FILTER_LIST_ATTRS:
+            widget = getattr(self, name)
+            self._set_selected_values(widget, ())
+            self._refresh_choice_presentation(widget)
+        self.update_selected_headers()
+        self._refresh_filter_summary()
 
     def _apply_list_theme_styles(self):
         highlight_name = ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
@@ -759,6 +833,7 @@ class FilterDialog(QDialog):
             values = {"SELECT ALL"} if "SELECT ALL" not in previous else values - {"SELECT ALL"}
             self._set_selected_values(widget, values)
         self._dimension_selections[widget] = values
+        self._refresh_choice_presentation(widget)
 
     def _restore_draft_snapshot(self, snapshot):
         selections, date_from, date_to, has_nok_only, expression, preset = snapshot
@@ -974,6 +1049,7 @@ class FilterDialog(QDialog):
             button.setEnabled(enabled)
 
     def _refresh_filter_summary(self):
+        self._refresh_draft_presentation()
         summary_label = getattr(self, "filter_summary_label", None)
         if summary_label is None or not hasattr(summary_label, "setText"):
             return
@@ -1157,6 +1233,7 @@ class FilterDialog(QDialog):
                 widget.addItem(item)
             self._set_selected_values(widget, selected)
             widget.blockSignals(blocked)
+            self._refresh_choice_presentation(widget)
         self.update_selected_headers()
         self._finish_value_load()
         # Full loads restore references with signals blocked. Reapply their
@@ -1180,6 +1257,7 @@ class FilterDialog(QDialog):
             self._list_selection_utils.preserve_selection_during_filter(
                 list_widget, search_text, visibility_only=True,
             )
+            self._refresh_choice_presentation(list_widget)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1345,6 +1423,8 @@ class FilterDialog(QDialog):
                 self._call_parent_filter_applied(parent, filter_state)
 
             self._committed_draft_snapshot = self._draft_snapshot()
+            self._applied_scope_text = summarize_filter_state(filter_state)[0]
+            self._refresh_draft_presentation()
 
             # Hide the filter window
             self.hide()

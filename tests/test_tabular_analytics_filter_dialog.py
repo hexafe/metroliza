@@ -271,9 +271,9 @@ def test_filter_dialog_uses_distinct_footer_actions(tmp_path) -> None:
         column_mapping=loaded.column_mapping,
     )
     try:
-        assert plain_text(dialog.clear_selection_button.text()) == "Clear values"
-        assert plain_text(dialog.clear_filter_button.text()) == "Reset filter"
-        assert dialog.clear_selection_button.accessibleName() == "Clear selected CSV filter values"
+        assert plain_text(dialog.clear_selection_button.text()) == "Clear condition (values + dates)"
+        assert plain_text(dialog.clear_filter_button.text()) == "Reset draft [Ctrl+Shift+R]"
+        assert dialog.clear_selection_button.accessibleName() == "Clear current CSV column condition"
         assert dialog.clear_filter_button.accessibleName() == "Reset CSV row filter"
         assert dialog.apply_button.accessibleName() == "Apply CSV row filter"
     finally:
@@ -726,6 +726,9 @@ def test_filter_dialog_column_actions_reset_state_and_handle_noops(tmp_path) -> 
         assert dialog.clear_selection_button.isEnabled() is False
 
         dialog.selected_columns_list.setCurrentItem(None)
+        dialog.remove_selected_filter_column()
+        assert dialog.filter_columns == ["line"]
+        _select_filter_column(dialog, "line")
         dialog.remove_selected_filter_column()
         assert dialog.filter_columns == []
 
