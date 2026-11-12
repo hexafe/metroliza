@@ -219,7 +219,8 @@ def _close_shell_owner(window, app) -> None:
 def _verify_import_results(window, workspace, reviewed_occurrences: dict[str, str]) -> None:
     """Read the completed five-file UI facts without creating another import plan."""
     from PyQt6.QtCore import Qt
-    from metroliza.ui.report_planner_model import ExecutionStatus, ReportExecutionRow
+    model_module = import_module("metroliza.ui.report_planner_model")
+    ExecutionStatus, ReportExecutionRow = model_module.ExecutionStatus, model_module.ReportExecutionRow
 
     planner = workspace.report_planner
     model = planner.model

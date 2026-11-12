@@ -193,19 +193,24 @@ def test_export_close_waits_for_active_worker(qapp, monkeypatch, tmp_path):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, cancel_calls=cancel_calls, **kwargs)
 
-    request = SimpleNamespace(
-        paths=SimpleNamespace(excel_file=str(tmp_path / "output.xlsx"), html_dashboard_file=None),
-        options=SimpleNamespace(
-            violin_plot_min_samplesize=6, summary_plot_scale=0,
-            export_target="excel_xlsx", generate_html_dashboard=False,
-        ),
+    request = export_dialog_module.build_validated_export_request(
+        db_file=str(tmp_path / "source.db"), excel_file=tmp_path / "output.xlsx",
+        selected_preset="fast_diagnostics", export_type="Line", export_target="excel_xlsx",
+        sorting_parameter="Sample #", violin_input="6", summary_scale_input="0",
+        hide_ok_results=False, generate_html_dashboard=False,
+        filter_query=export_dialog_module.DEFAULT_FILTER_QUERY, grouping_df=None,
     )
+    received_requests = []
+
+    def create_thread(export_request):
+        received_requests.append(export_request)
+        return ExportThread(export_request=export_request)
     monkeypatch.setattr(
         export_dialog_module,
         "build_validated_export_request",
         lambda **_kwargs: request,
     )
-    monkeypatch.setattr(export_dialog_module, "create_export_data_thread", ExportThread)
+    monkeypatch.setattr(export_dialog_module, "create_export_data_thread", create_thread)
     monkeypatch.setattr(
         export_dialog_module,
         "create_worker_progress_dialog",
@@ -213,9 +218,11 @@ def test_export_close_waits_for_active_worker(qapp, monkeypatch, tmp_path):
     )
     dialog = _build_export_dialog(monkeypatch, tmp_path)
     deleted = _track_deletion(dialog)
+    monkeypatch.setattr(dialog, "log_and_exit", lambda error: pytest.fail(f"Unexpected export error: {error}"))
     dialog.show_loading_screen()
     thread = dialog.export_thread
     try:
+        assert received_requests == [request] and received_requests[0] is request
         assert _wait_until(qapp, thread.isRunning)
 
         assert dialog.close() is False

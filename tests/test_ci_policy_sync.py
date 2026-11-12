@@ -600,6 +600,8 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
 
 
 def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None:
+    import shlex
+
     import yaml
 
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
@@ -614,9 +616,23 @@ def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None
         'QT_QPA_PLATFORM': 'windows',
         'METROLIZA_EXPECT_QT_PLATFORM': 'windows',
         'METROLIZA_EXPECT_INDUSTRIAL_SCREEN': '1920x1080',
+        'METROLIZA_FILTER_TEST_SCREEN': '1920x1080',
+        'METROLIZA_FILTER_SCOPE_SCREEN': '1920x1080',
+        'METROLIZA_FILTER_SCOPE_DPR': '1',
     }
+    assert 'if' not in specialist and 'continue-on-error' not in specialist
     assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in specialist['run']
     assert 'python -m pytest -vv -s tests/test_industrial_native_geometry.py' in specialist['run']
+    assert shlex.split(specialist['run'].splitlines()[-1]) == [
+        'python', '-m', 'pytest', '-vv', '-s',
+        'tests/test_industrial_native_geometry.py',
+        'tests/test_output_request_presentation.py',
+        'tests/test_filter_presentation.py',
+        'tests/test_curation_presentation.py',
+        'tests/test_parser_profile_onboarding.py',
+        'tests/test_industrial_onboarding_presentation.py',
+        'tests/test_industrial_onboarding_delta.py',
+    ]
 
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
     assert 'Run native Windows specialist geometry tests' in ci_policy
