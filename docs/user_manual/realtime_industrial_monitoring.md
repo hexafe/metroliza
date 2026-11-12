@@ -77,6 +77,34 @@ Open the monitor from **Tools > Real-time Industrial Monitoring...**. If no
 Metroliza database is selected, the app creates a temporary local SQLite store
 for the session; for normal monitoring, select a persistent database first.
 
+Use **Configure source (Ctrl+D)** to open the existing **Setup** tab. With no
+source, open **Production Sources... (Ctrl+Shift+D)** there. Check an enabled
+source, complete its monitor setup, and use **Save Current Source (Ctrl+S)**.
+Choose **Monitor (Ctrl+R)**, then **Start Checked (Ctrl+S)**. Saved setup does not
+prove source access; the actual poll checks access. Disabled or unsaved checked
+sources cannot start through the next-action button.
+
+The footer keeps the current next action visible. During scheduled monitoring
+or an owned poll it shows **Stop (Ctrl+Shift+S)**, including on Event Review.
+Stop requests cancellation; the dialog stays in its stopping state until the
+owned poll finishes. **Poll Once (Ctrl+Shift+R)** and **Open Dashboard
+(Ctrl+Shift+F)** are available on Monitor. **Close (Ctrl+W or Esc)** keeps the
+existing worker and temporary-storage safeguards.
+
+**Setup**, **Poll**, and **Dashboard** report separate states. **Data freshness**
+shows the maximum available lag and first reported data-through timestamp from
+the last completed poll snapshot. It is not a ticking age or proof that data is
+live. After Stop the snapshot remains visible as stopped; a later poll error
+appears separately without making the previous snapshot current. Dashboard
+generation can still be finishing after polling stops.
+
+Open **Event Review (Ctrl+E)** to load up to 100 persisted open events. **Ctrl+S**
+refreshes that list. Select an event and enter both operator and review comment
+before **Acknowledge (Ctrl+Shift+A)**, **Resolve (Ctrl+Shift+E)**, or **Mark false
+positive (Ctrl+Shift+Q)**. These retain the existing recorded decisions and
+conflict checks. Shortcuts act inside this dialog; normal text editing and
+Ctrl+Alt/AltGr combinations remain available to editors.
+
 The monitor uses the same production source YAML config and source editor as the manual
 Industrial Data fetch workflow. In **Sources**, confirm the **Production source config
 file**, use **Reload Config** after the file changes, or open **Production Sources...** to
