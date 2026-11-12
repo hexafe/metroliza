@@ -1496,13 +1496,24 @@ class _ReportOperations:
     def on_parse_finished(self):
         """Handle parse completion, including cancellation and error paths."""
         try:
+            worker = self.parse_thread
+            sender = self.sender()
+            operation = getattr(self, "import_operation", None)
+            if (sender is not None and sender is not worker) or (
+                operation is not None and operation.worker is not worker
+            ):
+                return  # A retired or unbound worker cannot replace the current operation's UI.
+            self._complete_parse_operation(worker)
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def _complete_parse_operation(self, worker):
+        """Present completion after the public slot verifies worker ownership."""
+        try:
             close_requested = getattr(self, "_close_requested", False)
             # Retain both stage outcomes before stopped-thread cleanup or flag resets.
-            result = getattr(self.parse_thread, "last_parse_result", None)
-            execution_rows = build_execution_rows(
-                self._preflight_result, self.report_planner.model.selected_ids,
-                getattr(self.parse_thread, "last_report_outcomes", ()),
-            )
+            result = getattr(worker, "last_parse_result", None)
+            execution_rows = self._submitted_execution_rows(worker)
             self._record_import_outcome(result)
             enrichment_result = getattr(self.parse_thread, "last_enrichment_result", None)
             enrichment_requested = self._embedded_enrichment_requested()
@@ -1563,6 +1574,17 @@ class _ReportOperations:
                 self.metadata_enrichment_requested.emit(self.db_file)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _submitted_execution_rows(self, worker):
+        """Join receipts to the operation actually submitted, never mutable UI approval."""
+        operation = getattr(self, "import_operation", None)
+        plan = getattr(worker, "import_plan", None)
+        if operation is None or operation.worker is not worker or not isinstance(plan, ImportPlan):
+            return ()
+        return build_execution_rows(
+            plan.preflight_result, (identity.occurrence_id for identity in plan.selected_reports),
+            getattr(worker, "last_report_outcomes", ()),
+        )
 
     def _record_import_outcome(self, result):
         operation = getattr(self, "import_operation", None)

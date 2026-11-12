@@ -195,3 +195,125 @@ def test_worker_receipts_keep_same_filenames_in_separate_directories(app, dialog
     owner._on_parse_inputs_changed()
     assert owner.report_planner.model.execution_rows == ()
     assert not owner.import_succeeded and not owner.parse_button.isEnabled()
+
+
+@pytest.mark.parametrize("change", ["uncheck_one", "clear_all", "check_extra"])
+def test_queued_import_result_uses_submitted_selection(app, dialog, monkeypatch, change):
+    from contextlib import closing
+    import sqlite3
+    from threading import Event
+    from metroliza.ui.metadata_review_worker import MetadataReviewThread
+
+    owner, _source, database = dialog
+    entered, release = Event(), Event()
+    run = MetadataReviewThread.run
+
+    def held_metadata(worker):
+        entered.set()
+        assert release.wait(10)
+        run(worker)
+
+    monkeypatch.setattr(MetadataReviewThread, "run", held_metadata)
+    owner.scan_button.click()
+    try:
+        wait_until(app, lambda: entered.is_set() and owner.preflight_thread is None)
+        model = owner.report_planner.model
+        if change == "check_extra":
+            model.clear_selection()
+            for row in (0, 1):
+                model.setData(model.index(row, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+        submitted = frozenset(model.selected_ids)
+        owner.parse_button.click()
+        operation = owner.import_operation
+        assert owner._start_pending and operation.worker is None and owner.parse_thread is None
+        if change == "clear_all":
+            owner.report_planner.clear.click()
+        else:
+            row = 2 if change == "check_extra" else 1
+            table = owner.report_planner.table
+            table.setCurrentIndex(owner.report_planner.proxy.mapFromSource(model.index(row, 0)))
+            table.setFocus()
+            from PyQt6.QtTest import QTest
+            QTest.keyClick(table, Qt.Key.Key_Space)
+        assert frozenset(model.selected_ids) != submitted
+    finally:
+        release.set()
+    wait_until(app, lambda: operation.worker is not None)
+    worker = operation.worker
+    wait_until(app, lambda: owner.parse_thread is None, parse_dialog=owner)
+    assert {identity.occurrence_id for identity in worker.import_plan.selected_reports} == submitted
+    with closing(sqlite3.connect(database)) as connection:
+        assert {row[0] for row in connection.execute("SELECT file_name FROM source_file_locations")} == submitted
+    rows = owner.report_planner.model.execution_rows
+    assert len(rows) == 5
+    assert {row.stable_occurrence_id for row in rows if row.status is ExecutionStatus.SAVED} == submitted
+    assert owner.report_planner.model.execution_counts == {"saved": len(submitted), **(
+        {"skipped": 5 - len(submitted)} if len(submitted) < 5 else {}
+    )}
+    assert owner.import_succeeded and not owner.parse_button.isEnabled()
+
+
+@pytest.mark.parametrize("change", ["registry_invalidation", "foreign_finish", "unbound_operation"])
+def test_running_import_results_remain_bound_to_actual_operation(app, dialog, monkeypatch, change):
+    from threading import Event
+    from metroliza.parsing import report_parser_factory
+
+    owner, _source, _database = dialog
+    owner.scan_button.click()
+    wait_until(app, lambda: owner.preflight_thread is None and owner.metadata_thread is None)
+    review = owner._preflight_result
+    entered, release = Event(), Event()
+    run = backend.ParseReportsThread.run
+
+    def held_import(worker):
+        entered.set()
+        assert release.wait(10)
+        run(worker)
+
+    monkeypatch.setattr(backend.ParseReportsThread, "run", held_import)
+    owner.parse_button.click()
+    worker = owner.parse_thread
+    assert worker is not None
+    foreign = backend.ParseReportsThread(worker.import_plan)
+    try:
+        wait_until(app, entered.is_set)
+        if change == "registry_invalidation":
+            snapshot = report_parser_factory.get_registry_snapshot()
+            with monkeypatch.context() as context:
+                context.setattr(report_parser_factory, "get_registry_snapshot",
+                                lambda **_kwargs: replace(snapshot, generation_id=snapshot.generation_id + 1))
+                owner._sync_readiness_state()
+            assert owner._preflight_result is None and owner.report_planner.model.rowCount() == 0
+        else:
+            if change == "foreign_finish":
+                foreign.finished.connect(owner.on_parse_finished)
+                foreign.finished.emit()
+            else:
+                owner.import_operation.worker = foreign
+                try:
+                    owner.on_parse_finished()
+                finally:
+                    owner.import_operation.worker = worker
+            assert owner._preflight_result is review
+            assert owner.report_planner.model.execution_rows == ()
+            assert owner.report_planner.model.valid
+    finally:
+        release.set()
+        foreign.deleteLater()
+    wait_until(app, lambda: owner.parse_thread is None, parse_dialog=owner)
+    assert owner.report_planner.model.execution_counts == {"saved": 5}
+    assert owner.import_succeeded and owner._preflight_result is None
+    assert not owner.report_planner.model.valid and not owner.parse_button.isEnabled()
+
+
+@pytest.mark.parametrize("state,detail", [
+    ("saved", "Saved to the selected database."),
+    ("already_present", "Report already present in the selected database."),
+    ("failed", "Report processing failed."),
+])
+def test_execution_details_describe_user_result(state, detail):
+    review = _review()
+    identity = review.files[0].stable_occurrence_id
+    row = build_execution_rows(review, (identity,), (backend.ReportImportReceipt(identity, state),))[0]
+    assert row.detail == detail
+    assert "checkpoint" not in row.detail.lower()
