@@ -270,3 +270,6 @@ when the main workspace changes; its database path remains authoritative and the
 workspace shows a notice. Browse DB switches only after the normal workspace guards
 accept the new database. An active CSV operation keeps its existing database.
 A visible matching session blocks report review/import against that same database.
+
+See the [keyboard command matrix](keyboard_shortcuts.md) for primary keys, active-window
+behavior and secondary shortcuts.
