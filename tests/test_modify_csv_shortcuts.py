@@ -63,8 +63,29 @@ def _search_pairs(dialog):
 def test_ctrl_f_selects_search_on_each_modify_tab(window):
     kind, dialog, app = window
     if kind != "modify":
-        assert not any(a.shortcut() == QKeySequence("Ctrl+F") for a in dialog.actions())
-        return  # The CSV launcher has no search field.
+        # CSV's visible Search command opens metric choice through its real button.
+        button = dialog.choose_metrics_button
+        assert "Ctrl+F" in button.text()
+        button.clicked.disconnect()
+        hits = []
+        button.clicked.connect(lambda: hits.append(True))
+        button.setEnabled(False)
+        _press(dialog, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+        assert not hits
+        button.setEnabled(True)
+        _press(dialog, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+        assert hits == [True]
+        child = QDialog(dialog)
+        child.setModal(True)
+        child.show()
+        child.activateWindow()
+        app.processEvents()
+        try:
+            _press(child, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+            assert hits == [True]
+        finally:
+            child.close()
+        return
     for index, (field, table) in enumerate(_search_pairs(dialog)):
         dialog.tab_widget.setCurrentIndex(0 if index < 3 else index - 2)
         if index < 3:
@@ -126,7 +147,19 @@ def test_primary_mnemonics_unique_accessible_and_no_reserved_shortcuts(window):
         button = getattr(dialog, name)
         assert not button.shortcut().isEmpty(), name
         assert button.accessibleName() and "&" not in button.accessibleName()
-        assert button.shortcut().toString() in button.toolTip()
+        if kind == "csv_summary" and name == "start_button":
+            assert "Ctrl+S" in button.text() and "Ctrl+S" in button.toolTip()
+            button.clicked.disconnect()
+            hits = []
+            button.clicked.connect(lambda: hits.append(True))
+            button.setEnabled(False)
+            _press(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+            assert not hits
+            button.setEnabled(True)
+            _press(dialog, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
+            assert hits == [True]
+        else:
+            assert button.shortcut().toString() in button.toolTip()
     sequences = []
     for action in dialog.findChildren(QAction):
         sequences.extend(s.toString() for s in action.shortcuts())
@@ -208,9 +241,11 @@ def test_hidden_button_mnemonic_is_inert(window):
     button = dialog.apply_button if kind == "modify" else dialog.workbook_button
     button.clicked.disconnect()
     button.setEnabled(True)
-    if kind == "modify":
-        button.hide()
-    # The workbook browse button belongs to the collapsed Advanced section.
+    if kind == "csv_summary":
+        # Workbook is a primary output destination, outside collapsed Advanced.
+        assert not dialog.advanced_toggle_button.isChecked()
+        assert button.isVisibleTo(dialog)
+    button.hide()
     assert not button.isVisibleTo(dialog)
     assert not button.shortcut().isEmpty()
     hits = []

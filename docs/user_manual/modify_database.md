@@ -4,8 +4,9 @@
 
 **Ctrl+F** focuses and selects the search field on the current tab, including
 each Normalize values subtab, Report records, and Measurement rows.
-**F1** opens this manual. **Alt+B** selects a database, **Alt+A** applies changes,
-and **Alt+C** cancels. Disabled buttons do nothing. Button tooltips show their
+**Ctrl+S** opens the confirmation for Apply. **Ctrl+W** or **Esc** closes with
+the same unapplied-change guard. **F1** opens this manual. **Alt+B**, **Alt+A**
+and **Alt+C** remain secondary alternatives for database selection, Apply and Close. Disabled buttons do nothing. Button tooltips show their
 Alt shortcuts; an open modal dialog owns its own keyboard commands.
 
 ## What this tool changes
@@ -258,3 +259,16 @@ Use [Characteristic Name Matching](characteristic_name_matching.md) when you wan
 ### Do not rely on hidden controls
 
 The dialog contains an internal **Undo** button in code, but it is not part of the active visible layout. Treat **Apply changes** and **Cancel** as the real user actions available in this tool.
+
+## Pending edits
+
+Bold cells and their before/after tooltips mark unapplied changes. The footer counts
+record cells and normalization values separately: one normalization value can affect
+all its listed occurrences. Searches can hide pending edits without removing them.
+The database path above the tabs identifies the database owned by this editor.
+
+Apply validates every changed record field, then shows up to 12 changes with bounded
+values and record IDs or normalization occurrence counts. Apply includes every pending
+change, including entries outside that sample. Friendly headers keep the technical
+field name in their tooltip. A successful Apply saves and closes; a failed transaction
+keeps the edits. Close offers Discard or Cancel while edits remain.

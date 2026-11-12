@@ -29,6 +29,7 @@ from metroliza.reports.report_edit_service import (
     LEGACY_REPORT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_REPORT_FIELDS,
     ReportEditService,
 )
+from metroliza.ui.curation_presentation import bind_button, short_value
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
 from metroliza.ui.modify_db_records import (
@@ -149,12 +150,13 @@ class ModifyDB(QDialog):
         self.setWindowTitle("Modify database")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
-        configure_window_size(self, minimum=(860, 540), initial=(1100, 650))
+        configure_window_size(self, minimum=(680, 480), initial=(1100, 650))
         self.setModal(modal)
 
         self.db_file = db_file
         self.database_change_allowed = None
         self.undo_data = {}
+        self._dirty_normalize_rows = {}
         self._last_clicked_row_by_table = {}
         self._record_slots = []
         self._storage_flavor = "current"
@@ -190,7 +192,10 @@ class ModifyDB(QDialog):
             self.create_widgets()
             self.arrange_layout()
             self.connect_signals()
+            self._refresh_pending_status()
             apply_dialog_mnemonics(self, "modify")
+            self.apply_action = bind_button(self, self.apply_button, "Ctrl+S")
+            self.close_action = bind_button(self, self.cancel_button, "Ctrl+W")
             self.search_action = bind_search_shortcut(self, [
                 (self.reference_filter_edit, self.reference_table),
                 (self.part_number_filter_edit, self.part_number_table),
@@ -207,15 +212,15 @@ class ModifyDB(QDialog):
     def create_widgets(self):
         try:
             self.reference_filter_edit = QtWidgets.QLineEdit()
-            self.reference_filter_edit.setPlaceholderText("Search references")
+            self.reference_filter_edit.setPlaceholderText("Search references [Ctrl+F]")
             self.reference_table = self._create_normalize_table()
 
             self.part_number_filter_edit = QtWidgets.QLineEdit()
-            self.part_number_filter_edit.setPlaceholderText("Search sample numbers")
+            self.part_number_filter_edit.setPlaceholderText("Search sample numbers [Ctrl+F]")
             self.part_number_table = self._create_normalize_table()
 
             self.header_filter_edit = QtWidgets.QLineEdit()
-            self.header_filter_edit.setPlaceholderText("Search headers")
+            self.header_filter_edit.setPlaceholderText("Search headers [Ctrl+F]")
             self.header_table = self._create_normalize_table()
 
             self.tab_widget = QtWidgets.QTabWidget()
@@ -225,12 +230,12 @@ class ModifyDB(QDialog):
             self.measurement_rows_tab = QtWidgets.QWidget()
 
             self.report_filter_edit = QtWidgets.QLineEdit()
-            self.report_filter_edit.setPlaceholderText("Filter report records")
+            self.report_filter_edit.setPlaceholderText("Filter report records [Ctrl+F]")
             self.report_records_table = self._create_record_table()
             self.report_busy_banner = RecordBusyBanner("Loading report records...")
 
             self.measurement_filter_edit = QtWidgets.QLineEdit()
-            self.measurement_filter_edit.setPlaceholderText("Filter measurement rows")
+            self.measurement_filter_edit.setPlaceholderText("Filter measurement rows [Ctrl+F]")
             self.measurement_records_table = self._create_record_table()
             self.measurement_busy_banner = RecordBusyBanner("Loading measurement rows...")
             self._record_slots = [
@@ -250,7 +255,12 @@ class ModifyDB(QDialog):
             if not self.db_file:
                 self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
-            self.cancel_button = QPushButton("Cancel")
+            self.cancel_button = QPushButton("Close")
+            self.pending_label = QtWidgets.QLabel("Draft: no pending changes. Apply saves; Close asks before discarding.")
+            self.pending_label.setWordWrap(True)
+            self.context_label = QtWidgets.QLineEdit()
+            self.context_label.setReadOnly(True)
+            self.context_label.setAccessibleName("Editing database")
             configure_dialog_button_roles(
                 primary=self.apply_button,
                 secondary=(self.select_db_button,),
@@ -310,9 +320,9 @@ class ModifyDB(QDialog):
 
             normalize_layout = QtWidgets.QVBoxLayout(self.normalize_tab)
             normalize_layout.addWidget(self.normalize_tab_widget)
-            self._add_normalize_field_tab("REFERENCE", self.reference_filter_edit, self.reference_table)
-            self._add_normalize_field_tab("SAMPLE NUMBER", self.part_number_filter_edit, self.part_number_table)
-            self._add_normalize_field_tab("HEADER", self.header_filter_edit, self.header_table)
+            self._add_normalize_field_tab("Reference", self.reference_filter_edit, self.reference_table)
+            self._add_normalize_field_tab("Sample number", self.part_number_filter_edit, self.part_number_table)
+            self._add_normalize_field_tab("Header", self.header_filter_edit, self.header_table)
 
             report_layout = QtWidgets.QVBoxLayout(self.report_records_tab)
             report_layout.addWidget(self.report_filter_edit)
@@ -328,7 +338,10 @@ class ModifyDB(QDialog):
             self.tab_widget.addTab(self.report_records_tab, "Report records")
             self.tab_widget.addTab(self.measurement_rows_tab, "Measurement rows")
 
-            layout.addWidget(self.tab_widget, 0, 0, 1, 3)
+            layout.addWidget(self.context_label, 0, 0, 1, 3)
+            layout.addWidget(self.tab_widget, 1, 0, 1, 3)
+            layout.setRowStretch(1, 1)
+            layout.addWidget(self.pending_label, 2, 0, 1, 3)
 
             footer_layout = QHBoxLayout()
             if hasattr(footer_layout, "setSpacing"):
@@ -340,7 +353,7 @@ class ModifyDB(QDialog):
             footer_layout.addWidget(self.apply_button)
             # Undo remains non-primary until editing behavior is revisited.
             # footer_layout.addWidget(self.undo_button)
-            layout.addLayout(footer_layout, 1, 0, 1, 3)
+            layout.addLayout(footer_layout, 3, 0, 1, 3)
 
             self.show()
         except Exception as e:
@@ -361,6 +374,8 @@ class ModifyDB(QDialog):
             self.undo_button.clicked.connect(self.undo_last_change)
             self.cancel_button.clicked.connect(self.cancel_changes)
 
+            for table in (self.reference_table, self.part_number_table, self.header_table):
+                table.itemChanged.connect(lambda item, table=table: self._normalization_item_changed(table, item))
             self._connect_shift_range_for_table(self.reference_table)
             self._connect_shift_range_for_table(self.part_number_table)
             self._connect_shift_range_for_table(self.header_table)
@@ -536,6 +551,8 @@ class ModifyDB(QDialog):
             self._pending_normalize_sources = {}
             self._reset_record_tables()
             self.undo_data.clear()
+            self._dirty_normalize_rows.clear()
+            self._refresh_pending_status()
             self._changes_committed = False
             self._discard_confirmed = False
             self._prepare_database_for_loading()
@@ -626,6 +643,8 @@ class ModifyDB(QDialog):
         return rows
 
     def populate_table(self, table, values):
+        previous_blocked = table.blockSignals(True)
+        self._dirty_normalize_rows[table] = set()
         table.setRowCount(len(values))
         self.undo_data[table] = {}
         for i, value in enumerate(values):
@@ -641,6 +660,50 @@ class ModifyDB(QDialog):
             self.undo_data[table][i] = original_value
 
         self._configure_normalize_table(table)
+        table.blockSignals(previous_blocked)
+        self._refresh_pending_status()
+
+    def _normalization_item_changed(self, table, item):
+        if item.column() != 1:
+            return
+        dirty = item.data(Qt.ItemDataRole.UserRole) != item.text()
+        rows = self._dirty_normalize_rows.setdefault(table, set())
+        rows.add(item.row()) if dirty else rows.discard(item.row())
+        blocked = table.blockSignals(True)
+        font = item.font()
+        font.setBold(dirty)
+        item.setFont(font)
+        item.setToolTip(f"Pending: {short_value(item.data(Qt.ItemDataRole.UserRole))} → "
+                        f"{short_value(item.text())}" if dirty else "")
+        table.blockSignals(blocked)
+        self._refresh_pending_status()
+
+    def _refresh_pending_status(self):
+        normalization = sum(len(rows) for rows in self._dirty_normalize_rows.values())
+        records = sum(model.pending_cell_count for slot in self._record_slots
+                      if (model := self._record_model(slot.view)) is not None)
+        self.pending_label.setText(
+            f"Draft: {records} record cells · {normalization} normalization values pending. "
+            "Normalization affects all listed occurrences. Apply saves; Close asks before discarding.")
+        self.context_label.setText(f"Editing database: {self.db_file or 'None selected'}")
+
+    def pending_preview(self, limit=12):
+        lines = []
+        for table, label in ((self.reference_table, "Reference"),
+                             (self.part_number_table, "Sample number"), (self.header_table, "Header")):
+            for row in self._dirty_normalize_rows.get(table, ()):
+                item = table.item(row, 1)
+                lines.append(f"{label}: {short_value(item.data(Qt.ItemDataRole.UserRole))} → "
+                             f"{short_value(item.text())} ({table.item(row, 2).text()} occurrences)")
+                if len(lines) >= limit:
+                    return lines
+        for slot in self._record_slots:
+            model = self._record_model(slot.view)
+            if model is not None:
+                lines.extend(f"{slot.kind}: {line}" for line in model.pending_preview(limit - len(lines)))
+                if len(lines) >= limit:
+                    break
+        return lines
 
     def _plan_report_records(self):
         """Return ``(specs, query)`` for the report-level rows of the overview view."""
@@ -840,6 +903,7 @@ class ModifyDB(QDialog):
 
     def _install_record_rows(self, slot, specs, record_rows):
         model = RecordTableModel(specs, record_rows.rows, record_rows.haystack)
+        model.pendingChanged.connect(self._refresh_pending_status)
         model.set_filter_text(slot.filter_edit.text())
         slot.view.set_record_model(model)
         self._configure_record_table(slot.view, specs)
@@ -847,6 +911,7 @@ class ModifyDB(QDialog):
         slot.state = "loaded"
         slot.pending_specs = None
         slot.banner.setVisible(False)
+        self._refresh_pending_status()
 
     def _apply_record_filter(self, slot):
         try:
@@ -957,7 +1022,11 @@ class ModifyDB(QDialog):
     def confirm_and_apply_changes(self):
         """Show pending edits and apply them only after user confirmation."""
         try:
-            modifications_text = self.collect_modifications()
+            # Validate all sparse record edits before presenting a bounded sample.
+            self.collect_report_record_updates()
+            self.collect_measurement_record_updates()
+            modifications_text = self.pending_label.text() + "\n\n" + "\n".join(self.pending_preview())
+            modifications_text += "\n\nShowing at most 12 changed cells/values; Apply includes all pending changes."
             confirmation_dialog = QMessageBox(self)
             confirmation_dialog.setIcon(QMessageBox.Icon.Question)
             confirmation_dialog.setText(
@@ -1056,9 +1125,10 @@ class ModifyDB(QDialog):
         specs = model.specs
         editable_fields = {spec["field"]: spec for spec in specs if spec.get("editable")}
         key_column = self._column_index_for_field(specs, key_field)
-        first_rows = model.first_rows_by_key(
-            key_column, {record_id for record_id, _fields in updates}, self._coerce_record_id
-        )
+        first_rows = {}
+        for source_row, _edits in model.edited_rows():
+            record_id = self._coerce_record_id(model.original_text(source_row, key_column))
+            first_rows.setdefault(record_id, source_row)
 
         lines = []
         for record_id, fields in updates:

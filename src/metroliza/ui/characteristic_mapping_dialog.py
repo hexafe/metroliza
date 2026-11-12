@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QHeaderView,
+    QScrollArea,
+    QWidget,
 )
 
 from metroliza.reports.characteristic_alias_service import (
@@ -51,10 +53,13 @@ from metroliza.reports.db import _is_transient_sqlite_error, connect_sqlite
 from metroliza.reports.import_persist_profile import close_persist_connection
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui import detached_threads
+from metroliza.ui.curation_presentation import bind_button
+from metroliza.ui.shortcuts import bind_search_shortcut
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_table,
+    configure_dialog_button_roles,
     configure_window_size,
     section_label,
     set_status_variant,
@@ -445,6 +450,8 @@ class CharacteristicAliasEditorDialog(QDialog):
         self.save_button.clicked.connect(self._validate_and_accept)
         self.clear_button.clicked.connect(self._clear_fields)
         self.cancel_button.clicked.connect(self.reject)
+        self.save_action = bind_button(self, self.save_button, 'Ctrl+S')
+        self.close_action = bind_button(self, self.cancel_button, 'Ctrl+W')
         self._sync_scope_value_state(self.apply_to_combo.currentText())
         self._refresh_impact_preview()
         apply_metroliza_theme(self)
@@ -546,15 +553,16 @@ class CharacteristicMappingDialog(QDialog):
 
     TABLE_HEADERS = ['Original export name', 'Use this common name', 'Apply to', 'Reference']
 
-    def __init__(self, parent=None, db_file=''):
+    def __init__(self, parent=None, db_file='', *, modal=True):
         super().__init__(parent)
         self.setWindowTitle('Characteristic Name Matching')
         if parent is not None and hasattr(parent, 'windowIcon'):
             self.setWindowIcon(parent.windowIcon())
-        self.setModal(True)
-        configure_window_size(self, minimum=(980, 620), initial=(1180, 740))
+        self.setModal(modal)
+        configure_window_size(self, minimum=(680, 480), initial=(1180, 740))
 
         self.db_file = db_file
+        self.database_change_allowed = None
         self.metric_options: list[dict[str, object]] = []
         self.reference_options: list[dict[str, object]] = []
         self._source_request_id = 0
@@ -634,14 +642,13 @@ class CharacteristicMappingDialog(QDialog):
         io_actions_row.addWidget(self.export_button)
         io_actions_row.addStretch()
 
-        close_row = QHBoxLayout()
-        close_row.addStretch()
-        close_row.addWidget(self.close_button)
-
-        footer_row = QHBoxLayout()
-        footer_row.addLayout(table_actions_row, 2)
-        footer_row.addLayout(io_actions_row, 2)
-        footer_row.addLayout(close_row, 1)
+        footer_row = QVBoxLayout()
+        footer_row.addLayout(table_actions_row)
+        io_actions_row.addWidget(self.close_button)
+        footer_row.addLayout(io_actions_row)
+        self.persistence_label = QLabel(
+            'Successful changes save immediately to the database shown above. Close does not undo saved matches.')
+        self.persistence_label.setWordWrap(True)
 
         db_row = QHBoxLayout()
         db_row.addWidget(self.db_label)
@@ -673,7 +680,14 @@ class CharacteristicMappingDialog(QDialog):
 
         content_row.addLayout(available_layout, 3)
         content_row.addLayout(saved_layout, 4)
-        layout.addLayout(content_row, 1)
+        body = QWidget()
+        body.setLayout(content_row)
+        self.content_scroll = QScrollArea()
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setWidget(body)
+        self.content_scroll.setMinimumSize(0, 0)
+        layout.addWidget(self.content_scroll, 1)
+        layout.addWidget(self.persistence_label)
         layout.addLayout(footer_row)
 
         self.metric_search_input.textChanged.connect(lambda _text: self._populate_metric_table())
@@ -685,6 +699,14 @@ class CharacteristicMappingDialog(QDialog):
         self.export_button.clicked.connect(self.export_mappings)
         self.close_button.clicked.connect(self.accept)
         self.select_db_button.clicked.connect(self.select_db_file)
+        configure_dialog_button_roles(quiet=(self.close_button,), secondary=(
+            self.add_from_selected_button, self.add_button, self.edit_button, self.delete_button,
+            self.import_button, self.export_button, self.select_db_button))
+        self.add_action = bind_button(self, self.add_button, 'Ctrl+E')
+        self.edit_action = bind_button(self, self.edit_button, 'Ctrl+Shift+E')
+        self.close_action = bind_button(self, self.close_button, 'Ctrl+W')
+        self.search_action = bind_search_shortcut(self, [(self.metric_search_input, self.metric_table)])
+        self.metric_search_input.setPlaceholderText('Search names or references [Ctrl+F]')
 
         configure_table(self.metric_table, stretch_column=0, resize_to_contents=(1, 2, 3), min_height=280)
         metric_header = self.metric_table.horizontalHeader()
@@ -773,20 +795,25 @@ class CharacteristicMappingDialog(QDialog):
 
         if _alias_csv_busy(self):
             return
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return
         filename, _ = QFileDialog.getOpenFileName(
             self,
             'Select a database file',
             str(self.db_file or ''),
             SQLITE_FILE_FILTER,
         )
-        if not filename:
+        if not filename or _alias_csv_busy(self):
             return
-
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return
         filename = sqlite_database_path(filename)
+        parent = self.parent()
+        if parent is not None and hasattr(parent, 'set_db_file'):
+            if parent.set_db_file(filename) is False:
+                return
         self.db_file = filename
         self.db_path_input.setText(filename)
-        if self.parent() is not None and hasattr(self.parent(), 'set_db_file'):
-            self.parent().set_db_file(filename)
         self.load_aliases()
         self.load_source_options()
 
