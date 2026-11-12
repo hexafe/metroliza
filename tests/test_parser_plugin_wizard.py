@@ -419,7 +419,7 @@ print("STARTED -> QUIT -> FINISHED; artifact identical", len(expected), len(beat
                 self.assertTrue(dialog.copy_path_button.isEnabled())
                 self.assertTrue(dialog.check_package_button.isEnabled())
                 self.assertTrue(dialog.validate_button.isEnabled())
-                self.assertTrue(dialog.repair_button.isEnabled())
+                self.assertFalse(dialog.repair_button.isEnabled())  # Contextual: no observed problem yet.
             finally:
                 dialog.close()
 

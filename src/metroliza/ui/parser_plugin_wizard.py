@@ -6,22 +6,27 @@ from pathlib import Path, PosixPath, WindowsPath
 from time import monotonic
 from types import MethodType
 
-from PyQt6.QtCore import QThread, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QThread, QUrl, Qt
+from PyQt6.QtGui import QAction, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLineEdit,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
+    QScrollArea,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
-from metroliza.parsing.declarative_parser_profiles import list_profiles
+from metroliza.parsing.declarative_parser_profiles import disable_profile, enable_profile, list_profiles
 from metroliza.parsing.parser_profile_handoff import (
     HandoffWorkspace,
     create_profile_handoff_workspace,
@@ -35,6 +40,7 @@ from metroliza.parsing.parser_profile_handoff import (
     write_profile_validation_artifact,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.shortcuts import bind_shortcut, visible_shortcut
 from metroliza.ui import detached_threads
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -42,7 +48,6 @@ from metroliza.ui.ui_foundation import (
     configure_window_size,
     secondary_label,
     section_label,
-    separator,
     set_status_variant,
     status_chip,
 )
@@ -105,7 +110,7 @@ class ParserPluginWizardDialog(QDialog):
         self._validation_progress = None
         self._validation_closed = False
         self.setWindowTitle("Parser Profiles")
-        configure_window_size(self, minimum=(520, 420), initial=(620, 520))
+        configure_window_size(self, minimum=(560, 480), initial=(760, 680))
 
         self.store_status_label = status_chip("", "neutral")
         self.store_path_label = secondary_label("")
@@ -129,6 +134,18 @@ class ParserPluginWizardDialog(QDialog):
         self.refresh_button = QPushButton("Refresh")
         self.close_button = QPushButton("Close")
         self.result_label = status_chip("No handoff folder created yet", "neutral")
+        self.result_label.setWordWrap(True)
+        self.stage_label = status_chip("1 · Prepare a new format", "info")
+        self.validation_status_label = status_chip("Last validation: not run", "neutral")
+        self.package_status_label = secondary_label("Last package check: not run")
+        self.next_action_label = secondary_label("Prepare local materials; a handoff folder is not approval.")
+        self.next_action_label.setWordWrap(True)
+        self.next_button = QPushButton("Next: Prepare folder")
+        self._next_control = self.create_button
+        self.enable_button = QPushButton("Enable selected")
+        self.disable_button = QPushButton("Disable selected")
+        self.manage_status_label = status_chip("Select an installed profile to manage its enabled state.", "neutral")
+        self.manage_status_label.setWordWrap(True)
         self._set_handoff_actions_enabled(False)
 
         self._build_layout()
@@ -137,48 +154,69 @@ class ParserPluginWizardDialog(QDialog):
 
     def _build_layout(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Parser profiles manual", "parser_profiles")])
+        self.task_tabs = QTabWidget()
+        manage = QWidget()
+        manage_layout = QVBoxLayout(manage)
+        manage_layout.addWidget(section_label("Manage installed profiles"))
+        manage_layout.addWidget(self.store_status_label)
+        self.store_path_label.setWordWrap(True)
+        manage_layout.addWidget(self.store_path_label)
+        manage_layout.addWidget(self.profile_list, 1)
+        manage_layout.addWidget(self.manage_status_label)
+        manage_actions = QGridLayout()
+        manage_actions.addWidget(self.enable_button, 0, 0)
+        manage_actions.addWidget(self.disable_button, 0, 1)
+        manage_actions.addWidget(self.refresh_button, 1, 0, 1, 2)
+        manage_layout.addLayout(manage_actions)
+        self.task_tabs.addTab(manage, "Manage installed profiles")
 
-        layout.addWidget(section_label("Profile store"))
-        layout.addWidget(self.store_status_label)
-        layout.addWidget(self.store_path_label)
-        layout.addWidget(self.profile_list)
-
-        layout.addWidget(separator())
-        layout.addWidget(section_label("New supplier template"))
-        layout.addWidget(
-            secondary_label(
-                "Create a local handoff folder for samples, checked values, and a data-only profile template."
-            )
+        add = QWidget()
+        add_layout = QVBoxLayout(add)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        body = QWidget()
+        form_layout = QVBoxLayout(body)
+        required = secondary_label(
+            "Required: sanitized samples in samples/, completed profile.yaml, checked rows in "
+            "expected_results.csv, and template notes (language, date/decimal formats, units). "
+            "Keep contract/manifest files intact. Share samples only with explicit authorization."
         )
-
+        required.setWordWrap(True)
+        form_layout.addWidget(section_label("Add a new format · Prepare → Check / Validate → Install / Enable"))
+        form_layout.addWidget(required)
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.addRow("Profile id", self.plugin_id_edit)
         form.addRow("Display name", self.display_name_edit)
         form.addRow("Source type", self.source_format_combo)
-        layout.addLayout(form)
-
-        button_row = QHBoxLayout()
-        button_row.addWidget(self.refresh_button)
-        button_row.addStretch(1)
-        button_row.addWidget(self.open_folder_button)
-        button_row.addWidget(self.copy_path_button)
-        button_row.addWidget(self.create_button)
-        button_row.addWidget(self.close_button)
-        layout.addLayout(button_row)
-
-        validation_row = QHBoxLayout()
-        validation_row.addStretch(1)
-        validation_row.addWidget(self.check_package_button)
-        validation_row.addWidget(self.validate_button)
-        validation_row.addWidget(self.diagnose_button)
-        validation_row.addWidget(self.repair_button)
-        validation_row.addWidget(self.install_button)
-        layout.addLayout(validation_row)
-        layout.addWidget(self.result_label)
+        form_layout.addLayout(form)
+        actions = QGridLayout()
+        for index, button in enumerate((self.create_button, self.open_folder_button, self.copy_path_button,
+                                        self.check_package_button, self.validate_button, self.install_button,
+                                        self.diagnose_button, self.repair_button)):
+            actions.addWidget(button, index // 2, index % 2)
+        form_layout.addLayout(actions)
+        form_layout.addStretch(1)
+        scroll.setWidget(body)
+        self.add_scroll_area = scroll
+        add_layout.addWidget(scroll, 1)
+        for label in (self.stage_label, self.package_status_label, self.validation_status_label,
+                      self.next_action_label, self.result_label):
+            add_layout.addWidget(label)
+        add_layout.addWidget(self.next_button)
+        self.task_tabs.addTab(add, "Add a new format")
+        layout.addWidget(self.task_tabs, 1)
+        footer = QHBoxLayout()
+        legend = secondary_label("Manage Ctrl+Shift+D · Add Ctrl+Shift+A · Next Ctrl+S")
+        legend.setWordWrap(True)
+        footer.addWidget(legend, 1)
+        footer.addStretch(1)
+        footer.addWidget(self.close_button)
+        layout.addLayout(footer)
 
         self.refresh_button.clicked.connect(self.refresh_status)
         self.create_button.clicked.connect(self.create_handoff_workspace)
@@ -189,19 +227,110 @@ class ParserPluginWizardDialog(QDialog):
         self.diagnose_button.clicked.connect(self.diagnose_handoff_profile)
         self.repair_button.clicked.connect(self.create_repair_prompt)
         self.install_button.clicked.connect(self.install_handoff_profile)
+        self.enable_button.clicked.connect(lambda: self._change_installed_state(True))
+        self.disable_button.clicked.connect(lambda: self._change_installed_state(False))
+        self.profile_list.currentItemChanged.connect(self._sync_manage_actions)
+        self.next_button.clicked.connect(lambda: self._next_control.click())
         self.close_button.clicked.connect(self.accept)
+        order = (self.profile_list, self.enable_button, self.disable_button, self.refresh_button,
+                 self.plugin_id_edit, self.display_name_edit, self.source_format_combo, self.create_button,
+                 self.open_folder_button, self.copy_path_button, self.check_package_button, self.validate_button,
+                 self.install_button, self.diagnose_button, self.repair_button, self.next_button, self.close_button)
+        for first, second in zip(order, order[1:]):
+            self.setTabOrder(first, second)
+        self._configure_commands()
+        self._configure_accessibility()
+        self._show_stage("1 · Prepare a new format", self.create_button,
+                         "Prepare local materials; a handoff folder is not approval.")
 
-        configure_accessibility(self.plugin_id_edit, name="Parser profile id")
-        configure_accessibility(self.display_name_edit, name="Parser profile display name")
-        configure_accessibility(self.source_format_combo, name="Parser profile source type")
-        configure_accessibility(self.create_button, name="Create parser profile handoff folder")
-        configure_accessibility(self.open_folder_button, name="Open parser profile handoff folder")
-        configure_accessibility(self.copy_path_button, name="Copy parser profile handoff folder path")
-        configure_accessibility(self.check_package_button, name="Check parser profile handoff package")
-        configure_accessibility(self.validate_button, name="Validate parser profile handoff")
-        configure_accessibility(self.diagnose_button, name="Diagnose parser profile handoff")
-        configure_accessibility(self.repair_button, name="Create parser profile repair prompt")
-        configure_accessibility(self.install_button, name="Install approved parser profile")
+    def _configure_accessibility(self):
+        for widget, name in (
+            (self.plugin_id_edit, "Parser profile id"), (self.display_name_edit, "Parser profile display name"),
+            (self.source_format_combo, "Parser profile source type"), (self.profile_list, "Installed parser profiles"),
+            (self.stage_label, "Current new-format stage"), (self.validation_status_label, "Last observed profile validation"),
+            (self.next_button, "Next parser profile action"), (self.enable_button, "Enable selected installed profile"),
+            (self.disable_button, "Disable selected installed profile"),
+        ):
+            configure_accessibility(widget, name=name)
+        for button in (self.create_button, self.open_folder_button, self.copy_path_button, self.check_package_button,
+                       self.validate_button, self.diagnose_button, self.repair_button, self.install_button):
+            configure_accessibility(button, name=button.text().split(" [")[0])
+        self.install_button.setToolTip("Install explicitly revalidates current samples and checked results. Earlier PASS is not approval.")
+
+    def _configure_commands(self):
+        commands = (
+            ("Ctrl+D", self.create_button), ("Ctrl+R", self.check_package_button),
+            ("Ctrl+Shift+R", self.validate_button), ("Ctrl+Shift+F", self.open_folder_button),
+            ("Ctrl+Shift+C", self.copy_path_button), ("Ctrl+Shift+S", self.repair_button),
+            ("Ctrl+Shift+E", self.disable_button), ("Ctrl+Shift+Q", self.diagnose_button),
+        )
+        for sequence, button in commands:
+            self._bind_command(sequence, lambda _checked=False, control=button: self._click_visible(control))
+            visible_shortcut(button, sequence)
+        self._bind_command("Ctrl+E", self._install_or_enable)
+        visible_shortcut(self.install_button, "Ctrl+E")
+        visible_shortcut(self.enable_button, "Ctrl+E")
+        self._bind_command("Ctrl+S", self._run_next_action)
+        self._bind_command("Ctrl+W", self.accept)
+        visible_shortcut(self.close_button, "Ctrl+W / Esc")
+        self._bind_command("Ctrl+Shift+D", lambda: self.task_tabs.setCurrentIndex(0))
+        self._bind_command("Ctrl+Shift+A", lambda: self.task_tabs.setCurrentIndex(1))
+        visible_shortcut(self.refresh_button, "Ctrl+S")
+
+    def _bind_command(self, sequence, callback):
+        action = QAction(self)
+        bind_shortcut(action, sequence)
+        action.setAutoRepeat(False)
+        action.triggered.connect(callback)
+        self.addAction(action)
+
+    def _click_visible(self, button):
+        if button.isVisibleTo(self):
+            button.click()
+
+    def _install_or_enable(self):
+        self._click_visible(self.enable_button if self.task_tabs.currentIndex() == 0 else self.install_button)
+
+    def _run_next_action(self):
+        self._click_visible(self.refresh_button if self.task_tabs.currentIndex() == 0 else self.next_button)
+
+    def _show_stage(self, title, next_control, instruction, *, problem=False):
+        self.stage_label.setText(title)
+        self.next_action_label.setText(instruction)
+        self._next_control = next_control
+        name = next_control.text().split(" [")[0]
+        self.next_button.setText(f"Next: {name} [Ctrl+S]")
+        self.next_button.setEnabled(next_control.isEnabled())
+        ready = self.last_handoff_workspace is not None
+        self.diagnose_button.setEnabled(ready and problem)
+        self.repair_button.setEnabled(ready and problem)
+
+    def _sync_manage_actions(self, *_args):
+        item = self.profile_list.currentItem()
+        profile = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        self.enable_button.setEnabled(bool(profile and not profile.enabled and profile.approved))
+        self.disable_button.setEnabled(bool(profile and profile.enabled))
+        if profile is not None:
+            self.manage_status_label.setText(
+                f"{profile.plugin_id}: {'enabled' if profile.enabled else 'disabled'}; "
+                + ("integrity/approval valid" if profile.approved else f"needs review: {profile.detail}")
+            )
+        else:
+            self.manage_status_label.setText("Select an installed profile; enable requires valid approval/integrity.")
+
+    def _change_installed_state(self, enabled):
+        item = self.profile_list.currentItem()
+        profile = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        button = self.enable_button if enabled else self.disable_button
+        if profile is None or not button.isEnabled():
+            return
+        try:
+            (enable_profile if enabled else disable_profile)(profile.plugin_id, home=self.home)
+        except (OSError, ValueError) as exc:
+            self.manage_status_label.setText(str(exc))
+            set_status_variant(self.manage_status_label, "warning")
+            return
+        self.refresh_status()
 
     def _set_handoff_actions_enabled(self, enabled: bool):
         for button in (
@@ -226,12 +355,16 @@ class ParserPluginWizardDialog(QDialog):
         profiles = list_profiles(home=self.home)
         if not profiles:
             self.profile_list.addItem("No approved parser profiles yet")
+            self._sync_manage_actions()
             return
         for profile in profiles:
             state = "enabled" if profile.enabled else "disabled"
             approval = "approved" if profile.approved else "needs approval"
             detail = f" - {profile.detail}" if profile.detail and profile.detail != approval else ""
-            self.profile_list.addItem(f"{profile.plugin_id}: {state}, {approval}{detail}")
+            item = QListWidgetItem(f"{profile.plugin_id}: {state}, {approval}{detail}")
+            item.setData(Qt.ItemDataRole.UserRole, profile)
+            self.profile_list.addItem(item)
+        self._sync_manage_actions()
 
     def create_handoff_workspace(self):
         plugin_id = safe_profile_id(self.plugin_id_edit.text())
@@ -247,6 +380,10 @@ class ParserPluginWizardDialog(QDialog):
         self.result_label.setText(f"Handoff folder ready. Add reports to samples/: {workspace.root}")
         set_status_variant(self.result_label, "success")
         self.refresh_status()
+        self.package_status_label.setText("Last package check: not run for this folder")
+        self.validation_status_label.setText("Last validation: not run for this folder")
+        self._show_stage("1 · Prepare contents", self.check_package_button,
+                         "Add sanitized samples, checked expected rows and the completed profile. Check Package verifies structure, not approval.")
 
     def open_handoff_folder(self):
         if self.last_handoff_workspace is None:
@@ -278,6 +415,11 @@ class ParserPluginWizardDialog(QDialog):
         output = workspace.root / "artifacts" / "handoff_integrity.txt"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(format_handoff_integrity_report(report) + "\n", encoding="utf-8")
+        self.package_status_label.setText(f"Last package check: {'PASS' if report.passed else 'FAIL'}")
+        self._show_stage("2 · Check / validate", self.validate_button if report.passed else self.open_folder_button,
+                         "Validate the current profile and expected rows; package PASS is not profile approval."
+                         if report.passed else "Open the folder and restore the missing package materials; then Check Package again.",
+                         problem=not report.passed)
         if report.passed:
             self.result_label.setText(f"Package check passed. Evidence: {output}")
             set_status_variant(self.result_label, "success")
@@ -321,6 +463,7 @@ class ParserPluginWizardDialog(QDialog):
         if workspace is None:
             return
         writer = write_profile_validation_artifact
+        self.validation_status_label.setText("Last validation: running")
         snapshot = ParserPluginWizardDialog._validation_snapshot(self, workspace, getter, writer)
         if snapshot is not None:
             ParserPluginWizardDialog._start_validation(self, snapshot, workspace, writer, action_started_at)
@@ -329,6 +472,12 @@ class ParserPluginWizardDialog(QDialog):
         ParserPluginWizardDialog._apply_validation_result(self, output, passed)
 
     def _apply_validation_result(self, output, passed):
+        self.validation_status_label.setText(f"Last validation: {'PASS' if passed else 'FAIL'} (observed result)")
+        self._show_stage("3 · Install / enable" if passed else "2 · Correct validation problems",
+                         self.install_button if passed else self.open_folder_button,
+                         "Review the evidence, then install. Installation rechecks current samples/expected rows; earlier PASS is not approval."
+                         if passed else "Open the folder to correct materials. Diagnose / Repair Prompt are available for this problem; validate again.",
+                         problem=not passed)
         if passed:
             self.result_label.setText(f"Validation passed. Evidence: {output}")
             set_status_variant(self.result_label, "success")
@@ -348,7 +497,7 @@ class ParserPluginWizardDialog(QDialog):
         self._validation_closed = False
         self._validation_controls = tuple((widget, widget.isEnabled()) for widget in (
             self.create_button, self.check_package_button, self.validate_button,
-            self.diagnose_button, self.repair_button, self.install_button,
+            self.diagnose_button, self.repair_button, self.install_button, self.next_button,
         ))
         for widget, _enabled in self._validation_controls:
             widget.setEnabled(False)
@@ -377,18 +526,29 @@ class ParserPluginWizardDialog(QDialog):
         if self._validation_closed or self.last_handoff_workspace is not thread.source_workspace:
             return
         if thread.error is not None:
+            self.validation_status_label.setText("Last validation: error (no passing result)")
+            self._show_stage("2 · Correct validation problems", self.open_folder_button,
+                             "Inspect the error and materials, then validate again.", problem=True)
             self.result_label.setText(str(thread.error))
             set_status_variant(self.result_label, "warning")
         else:
             ParserPluginWizardDialog._apply_validation_result(self, *thread.result)
 
+    def _mark_validation_closed(self):
+        if self._validation_thread is not None:
+            self.validation_status_label.setText("Validation result is not adopted after closing; validate again when idle.")
+            self._show_stage("2 · Validation result not adopted", self.validate_button,
+                             "The existing validation worker retains its cleanup ownership after close.")
+
     def done(self, result):
+        self._mark_validation_closed()
         self._validation_closed = True
         dismiss_worker_progress_dialog(self._validation_progress)
         self._validation_progress = None
         super().done(result)
 
     def closeEvent(self, event):
+        self._mark_validation_closed()
         self._validation_closed = True
         dismiss_worker_progress_dialog(self._validation_progress)
         self._validation_progress = None
@@ -422,9 +582,14 @@ class ParserPluginWizardDialog(QDialog):
         try:
             result = install_profile_handoff(workspace, approved_by="wizard", home=self.home)
         except ValueError as exc:
+            self._show_stage("3 · Installation blocked", self.open_folder_button,
+                             "Open the folder and correct current samples/checked results. Diagnose or repair this problem, then validate again.", problem=True)
             self.result_label.setText(str(exc))
             set_status_variant(self.result_label, "warning")
             return
+        self._show_stage("3 · Installed / enabled", self.refresh_button,
+                         "Manage installed profiles shows the observed enabled and integrity state.")
         self.result_label.setText(f"Installed profile: {result.plugin_id}")
         set_status_variant(self.result_label, "success")
         self.refresh_status()
+        self.task_tabs.setCurrentIndex(0)
