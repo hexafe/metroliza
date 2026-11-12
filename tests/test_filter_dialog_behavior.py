@@ -71,10 +71,10 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
     try:
         assert dialog.isModal()
         assert dialog.filter_tabs.count() == 3
-        assert plain_text(dialog.apply_button.text()) == "Apply Filters"
+        assert plain_text(dialog.apply_button.text()) == "Apply Filters [Ctrl+S]"
         assert dialog.apply_button.isDefault()
-        assert plain_text(dialog.reset_button.text()) == "Reset draft"
-        assert plain_text(dialog.cancel_button.text()) == "Cancel"
+        assert plain_text(dialog.reset_button.text()) == "Reset draft [Ctrl+Shift+R]"
+        assert plain_text(dialog.cancel_button.text()) == "Cancel [Ctrl+W]"
         assert dialog.has_nok_button.isCheckable()
         assert not dialog.has_nok_button.isChecked()
         assert dialog.filter_summary_label.text() == "No active filters | All dates"

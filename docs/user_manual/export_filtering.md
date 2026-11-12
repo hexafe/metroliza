@@ -293,3 +293,19 @@ It mirrors what you selected in **HEADER**.
 Use **Clear filters** next to **Edit...** in the Export dialog.
 
 This clears the stored filter query and changes the summary back to **Not applied**.
+
+
+## Draft, applied scope and keyboard actions
+
+Each value list shows **All** or **Selected (n)**, the matching/listed choice count,
+and hidden selected values. These counts describe choices, not a count of database rows.
+Search hides choices only; hidden selections remain part of the filter.
+The applied-scope line stays separate from edits until **Apply Filters [Ctrl+S]** succeeds.
+Dates and expression errors remain visible before Apply; invalid input cannot be applied.
+
+**Clear searches** changes visibility only. **Clear value selections (All)** broadens all
+value lists while preserving dates, NOK and the expression. **Clear expression** removes
+only that expression. **Reset draft [Ctrl+Shift+R]** resets all draft conditions after its
+confirmation; the applied filter remains unchanged until Apply.
+**Cancel [Ctrl+W]** or Esc uses the existing discard confirmation. **Ctrl+F** focuses the
+search belonging to the active list. Existing Alt mnemonics remain secondary alternatives.

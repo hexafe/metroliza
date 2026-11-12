@@ -30,7 +30,7 @@ F1 opens this CSV Summary manual from either dialog.
 | Dialog | Shortcut | Action |
 |---|---|---|
 | Filter rows | Alt+D / Alt+M / Alt+L | Add column / Remove selected column / Clear columns |
-| Filter rows | Alt+V / Alt+R | Clear values / Reset filter |
+| Filter rows | Alt+V / Alt+R | Clear current values and dates / Reset draft |
 | Filter rows | Alt+A / Alt+C | Apply filter / Cancel |
 | Edit groups | Alt+F / Alt+A | Assign all filtered rows / Assign selected row values |
 | Edit groups | Alt+R / Alt+D | Rename group / Delete group |
@@ -142,6 +142,25 @@ before creating analytics.
 ### 2. Filter Rows
 
 Click **Filter rows** when you want the summary to use only part of the selected file.
+
+The editor distinguishes **Values: All** from **Selected (n)** and reports matching
+choices plus hidden selections. Search changes the choice list, never the data predicate;
+SQLite value search still requires Enter. Clearing a search preserves hidden selections.
+The draft/applied summary retains the last applied columns, dates and expression until Apply.
+
+- **Clear searches** resets list visibility only.
+- **Clear selection (All values)** removes value choices from the current column, preserving its dates.
+- **Clear condition (values + dates)** removes both conditions from that column.
+- **Clear expression** removes only the advanced expression.
+- **Reset draft [Ctrl+Shift+R]** resets all draft conditions after confirmation.
+
+Use **Ctrl+E / Ctrl+Shift+E** to add/remove the current column. E/R are quick alternatives
+only while the corresponding column list has focus; typing and AltGr remain text input.
+**Ctrl+S** applies, **Ctrl+W / Esc** cancels through the discard guard, and **Ctrl+F** searches.
+Invalid expressions or reversed dates block Apply. Applying an unchanged predicate keeps
+groups; a real narrowing still warns before dropping assignments. The body scrolls on short
+screens while Apply/Cancel remain visible. Existing Alt mnemonics are secondary alternatives.
+
 The filter dialog lets you add source columns, search column names, and select matching
 value combinations such as `TraceCode | Batch`. Filtering is applied before grouping,
 aggregation, charts, groupstats, dashboard output, and workbook output.
