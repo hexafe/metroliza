@@ -221,6 +221,7 @@ class MainWindow(QMainWindow):
         self.parsing_dialog = None
         self.csv_summary_dialog = None
         self.modifydb_dialog = None
+        self.characteristic_mapping_dialog = None
         self.export_dialog = None
         self.metadata_enrichment_thread = None
         self.metadata_enrichment_error_message = None
@@ -252,6 +253,7 @@ class MainWindow(QMainWindow):
         self._coordinated_window_attributes = {
             "csv_summary": "csv_summary_dialog",
             "modify_database": "modifydb_dialog",
+            "characteristic_mapping": "characteristic_mapping_dialog",
             "export": "export_dialog",
             "industrial_data": "industrial_data_dialog",
             "realtime_monitor": "realtime_monitoring_dialog",
@@ -2054,8 +2056,13 @@ class MainWindow(QMainWindow):
         try:
             from metroliza.ui.characteristic_mapping_dialog import CharacteristicMappingDialog
 
-            characteristic_mapping_dialog = CharacteristicMappingDialog(self, self.db_file)
-            characteristic_mapping_dialog.exec()
+            self.characteristic_mapping_dialog = self._open_coordinated_window(
+                "characteristic_mapping",
+                lambda snapshot: CharacteristicMappingDialog(self, snapshot.database_file, modal=False),
+                context_policy=WindowContextPolicy.KEEP,
+                context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
+            )
+            self.characteristic_mapping_dialog.database_change_allowed = self._report_context_change_allowed
         except Exception as e:
             self.log_and_exit(e)
 
@@ -2129,6 +2136,7 @@ class MainWindow(QMainWindow):
         for label, dialog in (
             ("Export", self.export_dialog),
             ("Database editor", self.modifydb_dialog),
+            ("Name matching", getattr(self, "characteristic_mapping_dialog", None)),
         ):
             if dialog is None:
                 continue
@@ -2223,6 +2231,7 @@ class MainWindow(QMainWindow):
         blockers = []
         for label, dialog in (
             ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
+            ("Name matching", getattr(self, "characteristic_mapping_dialog", None)),
             ("Industrial Data", self.industrial_data_dialog),
             ("Realtime Monitor", self.realtime_monitoring_dialog),
         ):

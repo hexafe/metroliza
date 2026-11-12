@@ -256,3 +256,17 @@ Create a match:
 If characteristic names need normalization, it is usually best to set up **Characteristic Name Matching** before running [Export overview](export_overview.md).
 
 That helps the **Group Analysis worksheet** combine and label metrics using the common names you intended, while the raw stored report values remain unchanged.
+
+## Saving, closing and keyboard commands
+
+Successful add, edit, delete and CSV import operations save immediately to the database
+shown in this window. Close does not undo saved matches. The editor inside Add/Edit
+uses **Ctrl+S** for Save match; the outer matching window has no separate Apply stage.
+Use **Ctrl+E** for Add manually, **Ctrl+Shift+E** for Edit selected, **Ctrl+F** for
+search and **Ctrl+W** or **Esc** for Close. Disabled actions stay disabled by keyboard.
+
+The main window resumes one matching session. It can stay on its earlier database
+when the main workspace changes; its database path remains authoritative and the
+workspace shows a notice. Browse DB switches only after the normal workspace guards
+accept the new database. An active CSV operation keeps its existing database.
+A visible matching session blocks report review/import against that same database.

@@ -56,7 +56,8 @@ def test_model_shows_stored_values_and_keeps_originals_in_user_role():
     assert [_display(model, 1, column) for column in range(3)] == ["2", "Ref-B", ""]
     assert model.index(0, 2).data(Qt.ItemDataRole.UserRole) == 10.0
     assert model.index(1, 2).data(Qt.ItemDataRole.UserRole) is None
-    assert [model.headerData(c, Qt.Orientation.Horizontal) for c in range(3)] == ["ID", "REFERENCE", "NOM"]
+    assert [model.headerData(c, Qt.Orientation.Horizontal) for c in range(3)] == ["Report ID", "Reference", "Nominal"]
+    assert model.headerData(1, Qt.Orientation.Horizontal, Qt.ItemDataRole.ToolTipRole) == "REFERENCE"
 
 
 def test_model_flags_follow_editable_specs_and_readonly_edits_are_rejected():
