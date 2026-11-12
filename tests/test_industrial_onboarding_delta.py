@@ -187,7 +187,7 @@ def test_access_only_and_active_check_exceptions_never_probe_cache(ui, tmp_path,
                                            report_db_file=None, config_path=config)
         if not access_only:
             dialog._active_operation = sync._OznakOperation(profile=dialog.current_profile(),
-                username='synthetic_operator', password='synthetic_session', fetch_state=None,
+                username='synthetic_operator', password='example-password', fetch_state=None,
                 test_only=True, access_only=False, pending_credential_save=None)
         monkeypatch.setattr(dialog, '_cache_has_rows', lambda: pytest.fail('access checks must not probe the cache'))
         try:

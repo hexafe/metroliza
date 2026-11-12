@@ -346,12 +346,17 @@ def test_reports_reset_refreshes_hidden_choice_labels_without_applying(scoped_he
     assert 'Selected (1)' in label.text() and '1 hidden selected' in label.text()
 
 
-def test_reports_scope_labels_fit_initial_short_viewport(scoped_header_dialog, app):
+def test_reports_scope_labels_fit_initial_short_viewport(scoped_header_dialog, app, monkeypatch):
     from PyQt6.QtCore import QPoint, QRect, QSize
     from PyQt6.QtWidgets import QScrollArea
     import os
+    from metroliza.ui import ui_foundation
 
     editor = scoped_header_dialog
+    # The layout target is deterministic on ordinary CI as well as explicitly
+    # declared native/offscreen screens; do not make a host resolution a fixture.
+    monkeypatch.setattr(ui_foundation, "_available_window_size", lambda *_args: (760, 560))
+    editor._apply_window_size_constraints()
     editor.reference_list.findItems('REF-NOK', Qt.MatchFlag.MatchExactly)[0].setSelected(True)
     wait_for_choices(editor)
     editor.reference_search_input.setText('REF-OK')
@@ -361,8 +366,12 @@ def test_reports_scope_labels_fit_initial_short_viewport(scoped_header_dialog, a
     assert editor.size() == QSize(760, 560)
     screen = app.primaryScreen()
     print(f'filter-scope-screen={screen.geometry().width()}x{screen.geometry().height()} DPR={screen.devicePixelRatio()}')
-    assert screen.devicePixelRatio() == float(os.environ.get('METROLIZA_FILTER_SCOPE_DPR', '1'))
-    assert screen.geometry().size() == QSize(1280, 800)
+    declared_screen = os.environ.get('METROLIZA_FILTER_SCOPE_SCREEN')
+    if declared_screen:
+        assert screen.geometry().size() == QSize(*map(int, declared_screen.split('x')))
+        assert screen.devicePixelRatio() == float(os.environ['METROLIZA_FILTER_SCOPE_DPR'])
+    else:
+        assert screen.devicePixelRatio() > 0
     for tab_index, (_title, fields) in enumerate(editor.FILTER_SECTIONS):
         editor.filter_tabs.setCurrentIndex(tab_index)
         scroll = editor.filter_tabs.currentWidget().findChild(QScrollArea)
