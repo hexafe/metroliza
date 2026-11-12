@@ -8,8 +8,10 @@ atomic import candidate there, but it is not selectable in this review UI.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from enum import Enum
 
+from collections import Counter
 from collections.abc import Iterable
 import re
 
@@ -103,6 +105,69 @@ _STATUS_LABELS = {
 }
 
 
+
+class ExecutionStatus(str, Enum):
+    SAVED = "saved"
+    ALREADY_PRESENT = "already_present"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+_EXECUTION_LABELS = {
+    ExecutionStatus.SAVED: "Saved",
+    ExecutionStatus.ALREADY_PRESENT: "Already present",
+    ExecutionStatus.SKIPPED: "Skipped",
+    ExecutionStatus.FAILED: "Failed",
+    ExecutionStatus.UNKNOWN: "Unknown",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReportExecutionRow:
+    """Display facts only: never a fingerprint, source handle or approved plan."""
+
+    stable_occurrence_id: str
+    display_name: str
+    parser_id: str
+    status: ExecutionStatus
+    detail: str
+    needs_attention: bool
+
+
+def build_execution_rows(review, selected_ids, receipts):
+    """Join only exact, unambiguous occurrence receipts; totals prove no row state."""
+    if review is None:
+        return ()
+    selected = frozenset(selected_ids)
+    evidence = {}
+    for receipt in receipts:
+        occurrence = getattr(receipt, "occurrence_id", None)
+        if type(occurrence) is str:
+            evidence.setdefault(occurrence, []).append(getattr(receipt, "state", None))
+    occurrences = {}
+    for item in review.files:
+        occurrences[item.stable_occurrence_id] = occurrences.get(item.stable_occurrence_id, 0) + 1
+    rows = []
+    for item in review.files:
+        identity = item.stable_occurrence_id
+        states = evidence.get(identity, ())
+        status = ExecutionStatus.UNKNOWN
+        detail = "No per-report completion evidence. Review the destination before retrying."
+        attention = True
+        if identity not in selected:
+            status = ExecutionStatus.SKIPPED
+            detail = "Not selected for this import." if item.status is ParsePreflightStatus.READY else (
+                "Excluded during review: " + _STATUS_LABELS[item.status] + ". Not submitted for import."
+            )
+            attention = item.status not in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
+        elif occurrences[identity] == 1 and len(states) == 1 and type(states[0]) is str and states[0] in {"saved", "already_present", "failed"}:
+            status = ExecutionStatus(states[0])
+            detail = "Persistence checkpoint confirmed." if status is not ExecutionStatus.FAILED else "Report processing failed."
+            attention = status is ExecutionStatus.FAILED
+        rows.append(ReportExecutionRow(identity, str(item.display_name), safe_parser_id(item.parser_id), status, detail, attention))
+    return tuple(rows)
+
 def safe_parser_id(value: object) -> str:
     """Return a registered-format parser or template identifier."""
 
@@ -112,6 +177,8 @@ def safe_parser_id(value: object) -> str:
 def safe_review_detail(item: ParseFilePreflight) -> str:
     """Render allowlisted reason identifiers without exposing diagnostics."""
 
+    if isinstance(item, ReportExecutionRow):
+        return item.detail
     return ", ".join(_safe_reason_codes(item.reason_codes))
 
 
@@ -145,6 +212,8 @@ def _short_digest(value: object) -> str:
 
 
 def _needs_attention(item: ParseFilePreflight) -> bool:
+    if isinstance(item, ReportExecutionRow):
+        return item.needs_attention
     return item.status is not ParsePreflightStatus.READY or any(
         candidate.warnings for candidate in item.candidates
     )
@@ -206,6 +275,8 @@ class ReportPlannerModel(QAbstractTableModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._review: ParsePreflightResult | None = None
+        self.execution_rows: tuple[ReportExecutionRow, ...] = ()
+        self.execution_counts: dict[str, int] = {}
         self._selected_occurrence_ids: set[str] = set()
         self._selectable_occurrence_ids: frozenset[str] = frozenset()
         self._ready_count = 0
@@ -259,9 +330,12 @@ class ReportPlannerModel(QAbstractTableModel):
     def parser_ids(self) -> tuple[str, ...]:
         """Safe parser identifiers available for presentation filters."""
 
-        if not self.valid:
-            return ()
-        return tuple(sorted({safe_parser_id(item.parser_id) for item in self._review.files} - {""}))
+        items = self.execution_rows or (self._review.files if self.valid else ())
+        return tuple(sorted({safe_parser_id(item.parser_id) for item in items} - {""}))
+
+    @property
+    def status_labels(self):
+        return _EXECUTION_LABELS if self.execution_rows else _STATUS_LABELS
 
     @property
     def counts(self) -> dict[str, int]:
@@ -508,6 +582,8 @@ class ReportPlannerModel(QAbstractTableModel):
         self.beginResetModel()
         self._copy_undo = None
         self._review = result
+        self.execution_rows = ()
+        self.execution_counts = {}
         # QString's default case-sensitive ordering compares UTF-16 code units.
         # The location is immutable for this review; avoid thousands of Python/Qt
         # data()/QVariant round trips during the proxy's initial sort.
@@ -531,10 +607,12 @@ class ReportPlannerModel(QAbstractTableModel):
 
         self._copy_undo = None
         had_selection = bool(self._selected_occurrence_ids)
-        had_review = self._review is not None
+        had_review = self._review is not None or bool(self.execution_rows)
         if had_review:
             self.beginResetModel()
         self._review = None
+        self.execution_rows = ()
+        self.execution_counts = {}
         self._location_sort_keys = ()
         self._location_indexes = ()
         self._valid = False
@@ -555,6 +633,18 @@ class ReportPlannerModel(QAbstractTableModel):
         if had_review:
             self.metadata_changed.emit()
 
+    def set_execution_rows(self, rows):
+        """Replace a cleared review with immutable, nonselectable execution facts."""
+        self.invalidate()
+        self.beginResetModel()
+        self.execution_rows = tuple(rows)
+        self.execution_counts = dict(Counter(row.status.value for row in self.execution_rows))
+        self._total_count = len(self.execution_rows)
+        self._attention_count = sum(row.needs_attention for row in self.execution_rows)
+        self._location_sort_keys = tuple(row.display_name.encode("utf-16-be", errors="surrogatepass") for row in self.execution_rows)
+        self._location_indexes = tuple(self.createIndex(row, self.LOCATION_COLUMN) for row in range(self._total_count))
+        self.endResetModel()
+
     def select_all_ready(self) -> None:
         """Select every READY occurrence, regardless of the active proxy filter."""
 
@@ -570,9 +660,8 @@ class ReportPlannerModel(QAbstractTableModel):
     def item_at(self, row: int) -> ParseFilePreflight | None:
         """Return the preflight item at a source-model row, if present."""
 
-        if not self.valid or row < 0 or row >= len(self._review.files):
-            return None
-        return self._review.files[row]
+        items = self.execution_rows or (self._review.files if self.valid else ())
+        return items[row] if 0 <= row < len(items) else None
 
     def details_text(self, row: int) -> str:
         """Return sanitized detail text for the host-owned details pane."""
@@ -580,6 +669,8 @@ class ReportPlannerModel(QAbstractTableModel):
         item = self.item_at(row)
         if item is None:
             return ""
+        if isinstance(item, ReportExecutionRow):
+            return f"Location: {item.display_name}\nStatus: {_EXECUTION_LABELS[item.status]}\n{item.detail}"
         summary = (
             ("Location", self._display_value(item, self.LOCATION_COLUMN)),
             ("Status", self._display_value(item, self.STATUS_COLUMN)),
@@ -624,9 +715,9 @@ class ReportPlannerModel(QAbstractTableModel):
         return "\n".join(lines)[:12288]
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
-        if parent.isValid() or not self.valid:
+        if parent.isValid():
             return 0
-        return len(self._review.files)
+        return len(self.execution_rows) if self.execution_rows else (len(self._review.files) if self.valid else 0)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else self.COLUMN_COUNT
@@ -635,8 +726,8 @@ class ReportPlannerModel(QAbstractTableModel):
         # QAbstractTableModel.index() dispatches through rowCount/columnCount for
         # every comparison in the proxy sort. Validate the same flat-table bounds
         # directly, avoiding two extra C++/Python round trips per index.
-        if (parent.isValid() or not self.valid or row < 0 or column < 0
-                or row >= len(self._review.files) or column >= self.COLUMN_COUNT):
+        if (parent.isValid() or (not self.valid and not self.execution_rows) or row < 0 or column < 0
+                or row >= self._total_count or column >= self.COLUMN_COUNT):
             return QModelIndex()
         if column == self.LOCATION_COLUMN:
             return self._location_indexes[row]
@@ -658,6 +749,11 @@ class ReportPlannerModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.UserRole:
             return item.stable_occurrence_id
+        if isinstance(item, ReportExecutionRow):
+            value = self._execution_value(item, index.column())
+            return value if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole,
+                                     Qt.ItemDataRole.AccessibleTextRole, Qt.ItemDataRole.AccessibleDescriptionRole,
+                                     self.SORT_ROLE) else None
         if role == Qt.ItemDataRole.CheckStateRole and index.column() == self.CHECKBOX_COLUMN:
             return (
                 Qt.CheckState.Checked
@@ -681,6 +777,8 @@ class ReportPlannerModel(QAbstractTableModel):
         item = self.item_at(index.row()) if index.isValid() else None
         if item is None:
             return Qt.ItemFlag.NoItemFlags
+        if isinstance(item, ReportExecutionRow):
+            return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if (
             index.column() == self.CHECKBOX_COLUMN
@@ -695,7 +793,7 @@ class ReportPlannerModel(QAbstractTableModel):
 
     def setData(self, index: QModelIndex, value, role=Qt.ItemDataRole.EditRole):  # noqa: N802
         item = self.item_at(index.row()) if index.isValid() else None
-        if item is None:
+        if item is None or isinstance(item, ReportExecutionRow):
             return False
         field_name = self.field_for_column(index.column())
         if field_name is not None and role == Qt.ItemDataRole.EditRole:
@@ -820,6 +918,12 @@ class ReportPlannerModel(QAbstractTableModel):
                 self.index(last_row, self.CHECKBOX_COLUMN),
                 [Qt.ItemDataRole.CheckStateRole],
             )
+
+    def _execution_value(self, item, column):
+        return {
+            self.LOCATION_COLUMN: item.display_name, self.STATUS_COLUMN: _EXECUTION_LABELS[item.status],
+            self.PARSER_COLUMN: item.parser_id, self.DETAIL_COLUMN: item.detail,
+        }.get(column, "")
 
     def _display_value(self, item: ParseFilePreflight, column: int) -> str:
         if column == ReportPlannerModel.LOCATION_COLUMN:
