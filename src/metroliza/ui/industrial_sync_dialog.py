@@ -1600,7 +1600,10 @@ class IndustrialSyncDialog(QDialog):
             self.sql_editor_window.set_preview_records(records)
 
     def on_oznak_error(self, message: str) -> None:
-        self._present_fetch_outcome("Operation failed. Review the error and source settings.", variant="warning")
+        if self.access_only or (self._active_operation is not None and self._active_operation.test_only):
+            self._present_result_stage({"status": "failed", "test_only": True})
+        else:
+            self._present_fetch_outcome("Operation failed. Review the error and source settings.", variant="warning")
         self.status_label.setText(f"Operation failed: {redact_sensitive_text(message)}")
         set_status_variant(self.status_label, "danger")
         self._pending_credential_save = None

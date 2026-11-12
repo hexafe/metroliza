@@ -172,3 +172,29 @@ def test_unavailable_read_and_error_keep_unknown_not_empty(ui, tmp_path, monkeyp
     dialog.on_oznak_error('Synthetic unavailable cache')
     assert calls == [{'uri': True, 'timeout': 0.1}]
     assert 'could not be confirmed' in dialog.stage_label.text() and 'cache is empty' not in dialog.stage_label.text()
+
+
+def test_access_only_and_active_check_exceptions_never_probe_cache(ui, tmp_path, monkeypatch):  # noqa: F811
+    config = tmp_path / 'access-sources.yaml'
+    upsert_source_profile_in_config(config, build_source_profile(profile_key='uiux_check',
+        profile_name='Synthetic access check', source_db_alias='uiux_check', database_type='mssql',
+        host='synthetic.invalid', port=1433, database_name='synthetic', source_object_name='events',
+        allowed_columns=('id',)))
+    path = str(tmp_path / 'check-cache.db')
+    profile(IndustrialDataRepository(path), 'uiux_check', 'Cached check source')
+    for access_only in (True, False):
+        dialog = sync.IndustrialSyncDialog(db_file=None if access_only else path, access_only=access_only,
+                                           report_db_file=None, config_path=config)
+        if not access_only:
+            dialog._active_operation = sync._OznakOperation(profile=dialog.current_profile(),
+                username='synthetic_operator', password='synthetic_session', fetch_state=None,
+                test_only=True, access_only=False, pending_credential_save=None)
+        monkeypatch.setattr(dialog, '_cache_has_rows', lambda: pytest.fail('access checks must not probe the cache'))
+        try:
+            dialog.on_oznak_error('Synthetic access failure')
+            assert 'Check credentials' in dialog.stage_label.text() and 'Check access' in dialog.stage_label.text()
+            assert 'Cache readiness' not in dialog.stage_label.text()
+            assert dialog.test_connection_button.isEnabled()
+            assert dialog.test_connection_button.property('buttonRole') == 'primary'
+        finally:
+            assert dialog.close()
