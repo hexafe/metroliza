@@ -442,6 +442,18 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.selected_columns_list, name="Selected CSV grouping columns")
         columns_grid.addWidget(self.available_columns_list, 2, 0)
         columns_grid.addWidget(self.selected_columns_list, 2, 1)
+        self.add_column_button = QPushButton("Add column (Alt+W)")
+        self.remove_column_button = QPushButton("Remove column (Alt+E)")
+        for button, sequence in (
+            (self.add_column_button, "Alt+W"), (self.remove_column_button, "Alt+E"),
+        ):
+            button.setShortcut(QKeySequence(sequence))
+            button.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            button.setAutoDefault(False)
+        configure_accessibility(self.add_column_button, name="Add current available grouping column")
+        configure_accessibility(self.remove_column_button, name="Remove current selected grouping column")
+        columns_grid.addWidget(self.add_column_button, 3, 0)
+        columns_grid.addWidget(self.remove_column_button, 3, 1)
         columns_grid.setColumnStretch(0, 1)
         columns_grid.setColumnStretch(1, 1)
         layout.addWidget(column_area, 1)
@@ -604,6 +616,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.column_search.returnPressed.connect(self._apply_column_search)
         self.selected_column_search.returnPressed.connect(self._apply_selected_column_search)
         self.available_columns_list.itemDoubleClicked.connect(lambda _item: self.add_selector_column())
+        self.add_column_button.clicked.connect(self.add_selector_column)
+        self.remove_column_button.clicked.connect(lambda: self.remove_selected_selector_column())
+        self.available_columns_list.currentItemChanged.connect(self._sync_column_actions)
+        self.selected_columns_list.currentItemChanged.connect(self._sync_column_actions)
         self.selected_columns_list.itemDoubleClicked.connect(self.remove_selected_selector_column)
         self.selected_columns_list.itemSelectionChanged.connect(
             lambda: self._sync_status(recompute_counts=False, recompute_scope=False)
@@ -637,6 +653,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             primary=self.use_grouping_button,
             secondary=(self.cancel_button,),
             quiet=(
+                self.add_column_button,
+                self.remove_column_button,
                 self.dont_use_grouping_button,
                 self.assign_filtered_rows_button,
                 self.create_group_button,
@@ -1316,6 +1334,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._applied_column_search_text = str(self.column_search.text() or "").strip()
         self._refresh_available_columns()
         self._sync_search_scope_state()
+        self._sync_column_actions()
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
@@ -1574,9 +1593,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return RowTable(rows=(), columns=tuple(self.sqlite_store.columns))
         return self._current_selector_index().filter_rows(self.selected_selector_keys)
 
+    def _sync_column_actions(self, *_args) -> None:
+        available = self.available_columns_list.currentItem()
+        selected = self.selected_columns_list.currentItem()
+        self.add_column_button.setEnabled(bool(
+            available is not None and not available.isHidden()
+            and available.data(Qt.ItemDataRole.UserRole) not in self.selector_columns
+        ))
+        self.remove_column_button.setEnabled(bool(
+            selected is not None and not selected.isHidden()
+            and selected.data(Qt.ItemDataRole.UserRole) in self.selector_columns
+        ))
+
     def add_selector_column(self) -> None:
         item = self.available_columns_list.currentItem()
-        if item is None:
+        if item is None or item.isHidden():
             return
         column = item.data(Qt.ItemDataRole.UserRole)
         if not column or column in self.selector_columns:
@@ -1817,7 +1848,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def remove_selected_selector_column(self, item: QListWidgetItem | None = None) -> None:
         item = item or self.selected_columns_list.currentItem()
-        if item is None:
+        if item is None or item.isHidden():
             return
         column = item.data(Qt.ItemDataRole.UserRole)
         if column not in self.selector_columns:
@@ -2355,6 +2386,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.delete_group_button.setEnabled(bool(selected_group and selected_group != self.default_group))
         self.clear_selection_button.setEnabled(bool(self.selected_selector_keys))
         self._sync_member_action()
+        self._sync_column_actions()
         self.use_grouping_button.setEnabled(filter_state.mode != "invalid")
 
     def _refresh_selectors(self) -> None:
@@ -2470,6 +2502,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         ).strip()
         self._refresh_selected_columns()
         self._sync_search_scope_state()
+        self._sync_column_actions()
 
     def _refresh_groups(self, preferred_group: str | None = None) -> None:
         self.groups_list.blockSignals(True)

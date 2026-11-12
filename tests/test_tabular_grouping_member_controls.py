@@ -59,3 +59,39 @@ def test_remove_member_shortcut_and_reset_keep_draft_boundary(dialog, qapplicati
     dialog._request_reset_grouping()
     assert set(dialog._temp_assignments()) == {11, 27}
     assert not dialog._is_grouping_dirty()
+
+
+def test_column_controls_respect_visible_search_and_preserve_groups(dialog):
+    assert "Alt+W" in dialog.add_column_button.text()
+    assert "Alt+E" in dialog.remove_column_button.text()
+    dialog.add_column_button.click()
+    assert dialog.selector_columns == ["part"]
+    assert set(dialog._temp_assignments()) == {11, 27}
+    dialog.selected_column_search.setText("absent")
+    dialog._apply_selected_column_search()
+    assert dialog.selected_columns_list.currentItem() is None
+    assert not dialog.remove_column_button.isEnabled()
+    dialog.remove_selected_selector_column()
+    assert dialog.selector_columns == ["part"]
+    dialog.selected_column_search.clear()
+    dialog._apply_selected_column_search()
+    dialog.remove_column_button.click()
+    assert dialog.selector_columns == []
+    assert set(dialog._temp_assignments()) == {11, 27}
+    dialog.column_search.setText("absent")
+    dialog._apply_column_search()
+    assert not dialog.add_column_button.isEnabled()
+
+
+def test_column_shortcuts_work_from_search_without_stealing_text_editing(dialog, qapplication_session):
+    dialog.show()
+    dialog.activateWindow()
+    dialog.column_search.setFocus()
+    qapplication_session.processEvents()
+    QTest.keyClick(dialog.column_search, Qt.Key.Key_W, Qt.KeyboardModifier.AltModifier)
+    assert dialog.selector_columns == ["part"]
+    QTest.keyClicks(dialog.column_search, "part")
+    QTest.keyClick(dialog.column_search, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    assert dialog.column_search.selectedText() == "part"
+    QTest.keyClick(dialog.column_search, Qt.Key.Key_E, Qt.KeyboardModifier.AltModifier)
+    assert dialog.selector_columns == []
