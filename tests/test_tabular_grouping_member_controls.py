@@ -104,6 +104,12 @@ def test_grouping_inputs_keep_real_return_signal_local(dialog, qapplication_sess
 
     dialog.show()
     editor = getattr(dialog, field)
+    if field == "page_jump_input":
+        dialog.add_column_button.click()
+        assert dialog.selector_columns == ["part"]
+        assert dialog.selector_list.count() == dialog._selector_total_rows == 2
+        assert dialog.selector_page_label.text() == "Page 1 of 1"
+        assert editor.isEnabled()
     editor.setText("1" if field == "page_jump_input" else "part")
     returned = QSignalSpy(editor.returnPressed)
     accepted = QSignalSpy(dialog.accepted)
@@ -121,6 +127,11 @@ def test_invalid_page_return_keeps_validator_and_does_not_save(dialog, qapplicat
 
     dialog.show()
     editor = dialog.page_jump_input
+    dialog.add_column_button.click()
+    assert dialog.selector_columns == ["part"]
+    assert dialog.selector_list.count() == dialog._selector_total_rows == 2
+    assert dialog.selector_page_label.text() == "Page 1 of 1"
+    assert editor.isEnabled()
     editor.setText("0")
     assert not editor.hasAcceptableInput()
     returned = QSignalSpy(editor.returnPressed)
