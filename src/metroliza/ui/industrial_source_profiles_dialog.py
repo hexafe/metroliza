@@ -36,6 +36,7 @@ from metroliza.industrial.industrial_source_config import (
     upsert_source_profile_in_config,
     upsert_source_profile_to_repository,
 )
+from metroliza.ui.shortcuts import install_button_commands
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -157,6 +158,7 @@ class IndustrialSourceProfilesDialog(QDialog):
         )
 
         self._build_layout()
+        install_button_commands(self, "industrial_sources")
         self.reload_profiles()
         apply_metroliza_theme(self)
         self.status_label.setMinimumHeight(self.status_label.sizeHint().height())
