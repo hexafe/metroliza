@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import dataclass, replace
 import sqlite3
-from urllib.parse import quote
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +70,7 @@ from metroliza.industrial.industrial_workers import (
     IndustrialOznakAccessCheckThread,
     IndustrialOznakSyncThread,
 )
-from metroliza.reports.db import sqlite_connection_scope
+from metroliza.reports.db import sqlite_connection_scope, sqlite_readonly_connection_scope
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -579,8 +578,7 @@ class IndustrialSyncDialog(QDialog):
         if not self.db_file:
             return None
         try:
-            filename = quote(str(Path(self.db_file).resolve(strict=False)), safe="")
-            with closing(sqlite3.connect(f"file:{filename}?mode=ro", uri=True, timeout=0.1)) as connection:
+            with sqlite_readonly_connection_scope(self.db_file, timeout_s=0.1) as connection:
                 with closing(connection.execute("SELECT 1 FROM industrial_records LIMIT 1")) as cursor:
                     return cursor.fetchone() is not None
         except (sqlite3.Error, OSError, ValueError):

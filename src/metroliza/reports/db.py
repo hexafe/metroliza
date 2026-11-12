@@ -263,9 +263,9 @@ def checkpoint_pending_import_commits(connection):
 
 @contextmanager
 def sqlite_readonly_connection_scope(
-    db_path: str, *, immutable: bool = False
+    db_path: str, *, immutable: bool = False, timeout_s: float = 5.0
 ) -> Iterator[sqlite3.Connection]:
-    """Yield a managed read-only connection without changing database PRAGMAs.
+    """Yield a managed read-only connection with a timeout and unchanged PRAGMAs.
 
     Use ``immutable`` only for a closed snapshot whose bytes cannot be modified
     by another connection for the entire scope. It disables SQLite locking and
@@ -276,7 +276,7 @@ def sqlite_readonly_connection_scope(
     database_uri = f"file:{quote(str(resolved_path))}?mode=ro"
     if immutable:
         database_uri += "&immutable=1"
-    with closing(sqlite3.connect(database_uri, uri=True, **persist_sqlite_options())) as connection:
+    with closing(sqlite3.connect(database_uri, uri=True, timeout=timeout_s, **persist_sqlite_options())) as connection:
         yield connection
 
 

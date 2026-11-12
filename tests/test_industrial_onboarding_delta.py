@@ -1,5 +1,7 @@
 """FULL1 regressions: active config ownership and truthful cache outcome guidance."""
+from contextlib import closing
 import sqlite3
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 from PyQt6.QtCore import QTimer
@@ -7,6 +9,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.industrial_source_config import build_source_profile, upsert_source_profile_in_config
+from metroliza.reports import db as report_db
 from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result
 from metroliza.ui import industrial_data_dialog as data, industrial_sync_dialog as sync
 from metroliza.ui import industrial_source_profiles_dialog as sources
@@ -132,24 +135,42 @@ def test_zero_row_single_and_batch_guidance_uses_actual_whole_cache(ui, tmp_path
 
 
 def test_outcome_read_is_bounded_readonly_closed_and_missing_stays_unknown(ui, tmp_path, monkeypatch):  # noqa: F811
-    path = tmp_path / 'read # próba.db'
+    path = tmp_path / 'read # próba %25.db'
     repository = IndustrialDataRepository(str(path))
     profile(repository, 'uiux_current', 'Current')
     dialog = ui('sync', str(path), report_db_file=None)
     original_connect = sqlite3.connect
-    connections, statements, parameters = [], [], []
+    connections, statements, parameters, closed = [], [], [], []
+    before = path.read_bytes()
+
+    class ObservedCursor(sqlite3.Cursor):
+        def close(self):
+            closed.append('cursor')
+            super().close()
+
+    class ObservedConnection(sqlite3.Connection):
+        def execute(self, *args, **kwargs):
+            return self.cursor(factory=ObservedCursor).execute(*args, **kwargs)
+
+        def close(self):
+            closed.append('connection')
+            super().close()
 
     def connect(filename, **kwargs):
         parameters.append((filename, kwargs))
-        connection = original_connect(filename, **kwargs)
+        connection = original_connect(filename, factory=ObservedConnection, **kwargs)
         connection.set_trace_callback(statements.append)
         connections.append(connection)
         return connection
 
-    monkeypatch.setattr(sync.sqlite3, 'connect', connect)
+    monkeypatch.setattr(report_db.sqlite3, 'connect', connect)
     assert dialog._cache_has_rows() is False
     assert len(connections) == 1 and statements == ['SELECT 1 FROM industrial_records LIMIT 1']
-    assert parameters[0][0].endswith('?mode=ro') and parameters[0][1] == {'uri': True, 'timeout': 0.1}
+    uri = urlsplit(parameters[0][0])
+    assert unquote(uri.path) == path.resolve().as_posix()
+    assert parse_qs(uri.query) == {'mode': ['ro']}  # A live cache must not use immutable=1.
+    assert parameters[0][1] == {'uri': True, 'timeout': 0.1}
+    assert closed == ['cursor', 'connection'] and path.read_bytes() == before
     with pytest.raises(sqlite3.ProgrammingError, match='closed'):
         connections[0].execute('SELECT 1')
     path.unlink()
@@ -162,13 +183,22 @@ def test_outcome_read_is_bounded_readonly_closed_and_missing_stays_unknown(ui, t
 
 def test_unavailable_read_and_error_keep_unknown_not_empty(ui, tmp_path, monkeypatch):  # noqa: F811
     dialog = ui('sync', str(tmp_path / 'unavailable.db'), report_db_file=None)
+    with closing(sqlite3.connect(dialog.db_file)) as blocker:
+        # WAL permits readers during EXCLUSIVE; use a private rollback-journal fixture.
+        with closing(blocker.execute('PRAGMA journal_mode=DELETE')) as mode:
+            assert mode.fetchone() == ('delete',)
+        with closing(blocker.execute('BEGIN EXCLUSIVE')):
+            try:
+                assert dialog._cache_has_rows() is None
+            finally:
+                blocker.rollback()
     calls = []
 
     def locked(_uri, **kwargs):
         calls.append(kwargs)
         raise sqlite3.OperationalError('synthetic locked cache')
 
-    monkeypatch.setattr(sync.sqlite3, 'connect', locked)
+    monkeypatch.setattr(report_db.sqlite3, 'connect', locked)
     dialog.on_oznak_error('Synthetic unavailable cache')
     assert calls == [{'uri': True, 'timeout': 0.1}]
     assert 'could not be confirmed' in dialog.stage_label.text() and 'cache is empty' not in dialog.stage_label.text()
