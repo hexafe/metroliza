@@ -822,6 +822,74 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
     monkeypatch.setattr(api, "advapi", FixedControl())
     owned = []
     evidences = []
+    identity_diagnostics = []
+    if mode == "late_ver":
+        original_observe_member = api._observe_job_process
+        attempts = 0
+
+        def observe_member_with_prior_state(handle, process_id, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            entry = {"attempt": attempts, "mode": mode}
+            identity_diagnostics.append(entry)
+            del identity_diagnostics[:-16]
+            process = owned[0] if len(owned) == 1 else None
+            root = tmp_path / "0"
+            try:
+                entry["markers_before"] = {
+                    name: (root / name).is_file()
+                    for name in ("control-ready", "control-done", "control-finish")
+                }
+                entry["owned_primary"] = kwargs["owned_primary"]
+                entry["prior_process_observation"] = (
+                    process is not None and process_id in process._observations
+                )
+                records = () if process is None else tuple(
+                    record for (pid, _), record in process.runtime_evidence.probe.records.items()
+                    if pid == process_id
+                )
+                entry["prior_probe_record_count"] = len(records)
+                entry["prior_roles"] = [
+                    record["role"] if record["role"] in {
+                        "package_launcher", "package_application", "system_cmd", "system_conhost",
+                    } else "unknown" for record in records
+                ]
+                entry["prior_phases"] = [
+                    record["last_phase"] if record["last_phase"] in {
+                        "startup", "running", "suspended", "window_wait", "window_close", "drain",
+                    } else "unknown" for record in records
+                ]
+            except Exception as error:
+                entry["prior_snapshot_error"] = type(error).__name__
+            try:
+                return original_observe_member(handle, process_id, **kwargs)
+            except qualification.QualificationFailure as error:
+                # Still inside the original query-handle lifetime, before the
+                # outer rejected() callback can add a new probe identity.
+                detail = error.native_observation
+                entry["original_native"] = detail.receipt() if detail is not None else None
+                try:
+                    entry["markers_at_failure"] = {
+                        name: (root / name).is_file()
+                        for name in ("control-ready", "control-done", "control-finish")
+                    }
+                    code = api.wintypes.DWORD()
+                    ctypes.set_last_error(0)
+                    succeeded = bool(api.kernel.GetExitCodeProcess(handle, ctypes.byref(code)))
+                    entry["same_handle_exit_query"] = {
+                        "success": succeeded,
+                        "code": int(code.value) if succeeded else None,
+                        "winerror": None if succeeded else ctypes.get_last_error(),
+                    }
+                    entry["pid_still_in_job"] = (
+                        process_id in api._job_process_ids(process._job)
+                        if process is not None else "owner_unavailable"
+                    )
+                except Exception as diagnostic_error:
+                    entry["failure_snapshot_error"] = type(diagnostic_error).__name__
+                raise  # The identical native failure remains authoritative.
+
+        monkeypatch.setattr(api, "_observe_job_process", observe_member_with_prior_state)
     complete = False
     failure = None
     proofs = []
@@ -976,12 +1044,15 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
     if failure is not None:
         if isinstance(failure, qualification.QualificationFailure):
             native = failure.native_observation
-            raise AssertionError(json.dumps({
+            projection = {
                 "failure_id": failure.failure_id,
                 "reason": failure.qualification_reason,
                 "cleanup": failure.qualification_cleanup,
                 "native": native.receipt() if native is not None else None,
-            }, sort_keys=True)) from failure
+            }
+            if mode == "late_ver":
+                projection["fixture_identity_diagnostics"] = identity_diagnostics
+            raise AssertionError(json.dumps(projection, sort_keys=True)) from failure
         raise failure
     assert all(not evidence.root.exists() for evidence in evidences)
 

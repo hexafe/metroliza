@@ -292,6 +292,19 @@ def _run_csv_scope_query(parent, operation, stage):
         thread.deleteLater()
 
 
+class _GroupingInputLineEdit(QLineEdit):
+    """Keep a field's Return local even when its callback changes modal focus."""
+
+    def keyPressEvent(self, event) -> None:
+        local_return = event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        # Preserve QLineEdit's real returnPressed signal and validator behavior.
+        super().keyPressEvent(event)
+        if local_return:
+            # A scope query can temporarily disable the dialog and drop focus.
+            # This same Return must not then propagate to its default save button.
+            event.accept()
+
+
 class TabularAnalyticsGroupingDialog(QDialog):
     """Create manual row groups from user-selected CSV/Excel selector columns."""
 
@@ -440,9 +453,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         columns_grid.addWidget(QLabel("Available columns"), 0, 0)
         columns_grid.addWidget(QLabel("Selected columns"), 0, 1)
 
-        self.column_search = QLineEdit()
+        self.column_search = _GroupingInputLineEdit()
         self.column_search.setPlaceholderText("Search columns")
-        self.selected_column_search = QLineEdit()
+        self.selected_column_search = _GroupingInputLineEdit()
         self.selected_column_search.setPlaceholderText("Search selected columns")
         columns_grid.addWidget(self.column_search, 1, 0)
         columns_grid.addWidget(self.selected_column_search, 1, 1)
@@ -487,7 +500,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selector_column.setContentsMargins(0, 0, 0, 0)
         selector_column.setSpacing(6)
         selector_column.addWidget(QLabel("Matching rows: search or advanced expression"))
-        self.selector_search = QLineEdit()
+        self.selector_search = _GroupingInputLineEdit()
         self.selector_search.setPlaceholderText(
             "Search values, or enter an advanced expression such as Supplier=SUPPLIER AND Value > 1"
         )
@@ -515,7 +528,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.previous_page_button = QPushButton("Previous")
         self.next_page_button = QPushButton("Next")
         self.last_page_button = QPushButton("Last")
-        self.page_jump_input = QLineEdit()
+        self.page_jump_input = _GroupingInputLineEdit()
         self.page_jump_input.setPlaceholderText("Page")
         self.page_jump_input.setFixedWidth(64)
         self.page_jump_input.setValidator(QIntValidator(1, 999_999, self))
@@ -562,6 +575,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         members_column.addWidget(QLabel("Rows in selected group"))
         self.group_members_list = QListWidget()
         self.group_members_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.group_members_list.setWordWrap(True)
+        self.group_members_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.group_members_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         apply_list_selection_style(self.group_members_list)
         self.group_members_list.setMinimumHeight(120)
         self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)

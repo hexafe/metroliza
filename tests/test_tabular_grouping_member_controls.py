@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 from PyQt6.QtCore import Qt
-from PyQt6.QtTest import QTest
+from PyQt6.QtTest import QSignalSpy, QTest
 from PyQt6.QtWidgets import QMessageBox
 
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
@@ -95,6 +95,216 @@ def test_column_shortcuts_work_from_search_without_stealing_text_editing(dialog,
     assert dialog.column_search.selectedText() == "part"
     QTest.keyClick(dialog.column_search, Qt.Key.Key_E, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
     assert dialog.selector_columns == []
+
+
+@pytest.mark.parametrize("field", ["column_search", "selected_column_search", "selector_search", "page_jump_input"])
+@pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Enter], ids=["Return", "Enter"])
+def test_grouping_inputs_keep_real_return_signal_local(dialog, qapplication_session, field, key):
+    from tests.qt_key_input import activate_for_key
+
+    dialog.show()
+    editor = getattr(dialog, field)
+    if field == "page_jump_input":
+        dialog.add_column_button.click()
+        assert dialog.selector_columns == ["part"]
+        assert dialog.selector_list.count() == dialog._selector_total_rows == 2
+        assert dialog.selector_page_label.text() == "Page 1 of 1"
+        assert editor.isEnabled()
+    editor.setText("1" if field == "page_jump_input" else "part")
+    returned = QSignalSpy(editor.returnPressed)
+    accepted = QSignalSpy(dialog.accepted)
+    saved = QSignalSpy(dialog.use_grouping_button.clicked)
+    activate_for_key(qapplication_session, editor)
+    QTest.keyClick(editor, key)
+    qapplication_session.processEvents()
+    assert len(returned) == 1
+    assert dialog.isVisible()
+    assert len(accepted) == len(saved) == 0
+
+
+def test_invalid_page_return_keeps_validator_and_does_not_save(dialog, qapplication_session):
+    from tests.qt_key_input import press_key
+
+    dialog.show()
+    editor = dialog.page_jump_input
+    dialog.add_column_button.click()
+    assert dialog.selector_columns == ["part"]
+    assert dialog.selector_list.count() == dialog._selector_total_rows == 2
+    assert dialog.selector_page_label.text() == "Page 1 of 1"
+    assert editor.isEnabled()
+    editor.setText("0")
+    assert not editor.hasAcceptableInput()
+    returned = QSignalSpy(editor.returnPressed)
+    accepted = QSignalSpy(dialog.accepted)
+    saved = QSignalSpy(dialog.use_grouping_button.clicked)
+    press_key(qapplication_session, editor, "Return")
+    assert len(returned) == len(accepted) == len(saved) == 0
+    assert dialog.isVisible()
+
+
+def _assert_full_member_labels_visible(window, artifact_dir, key):
+    """Check actual row/text layout, and retain the real 980px rendering when requested."""
+    import json
+    from math import ceil
+    from pathlib import Path
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QTextLayout, QTextOption
+
+    listing = window.group_members_list
+    scroll = window.grouping_body_scroll
+    assert window.width() == 980
+    observations = []
+    for index, row_id in enumerate((1, 13, 25)):
+        item = listing.item(index)
+        assert item.data(Qt.ItemDataRole.UserRole) == row_id
+        label = item.text()
+        assert label.endswith(f"[Row {row_id}]")
+        if row_id == 25:
+            assert "Operator lot code: Missing identifier" in label
+        else:
+            assert "Operator lot code: DUP-1212" in label
+        expected_date = "Missing date" if row_id == 13 else f"2026-01-{1 if row_id == 1 else 3:02d}"
+        assert f"Captured at: {expected_date}" in label
+        rect = listing.visualItemRect(item)
+        assert listing.viewport().rect().contains(rect)
+        # The list itself can extend past the outer body viewport; the visible rows cannot.
+        body_rect = rect.translated(listing.viewport().mapTo(scroll.viewport(), QPoint()))
+        assert scroll.viewport().rect().contains(body_rect)
+        layout = QTextLayout(label, listing.font())
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapMode.WordWrap)
+        layout.setTextOption(option)
+        layout.beginLayout()
+        height = 0.0
+        fragments = []
+        while True:
+            line = layout.createLine()
+            if not line.isValid():
+                break
+            line.setLineWidth(rect.width() - 4)  # Standard item text inset; no icon/check box.
+            line.setPosition(QPointF(0, height))
+            height += line.height()
+            assert line.naturalTextWidth() <= rect.width() - 4
+            fragments.append(label[line.textStart():line.textStart() + line.textLength()])
+        layout.endLayout()
+        assert "".join(fragments) == label
+        assert len(fragments) > 1
+        assert rect.height() >= ceil(height), (label, rect, height)
+        observations.append({"id": row_id, "label": label, "lines": fragments,
+                             "rect": [rect.x(), rect.y(), rect.width(), rect.height()],
+                             "required_text_height": height})
+    assert listing.horizontalScrollBar().maximum() == 0
+    if artifact_dir:
+        target = Path(artifact_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        stem = f"grouping-member-labels-980-{key}"
+        assert window.grab().save(str(target / (stem + ".png")))
+        (target / (stem + ".json")).write_text(json.dumps({
+            "window": [window.width(), window.height()], "dpr": window.devicePixelRatioF(),
+            "viewport": [listing.viewport().width(), listing.viewport().height()],
+            "font": listing.font().toString(), "rows": observations,
+        }, indent=2))
+
+
+@pytest.mark.parametrize("key", ["Return", "Enter"])
+def test_sqlite_search_return_stays_open_without_committing_parent(
+    qapplication_session, tmp_path, key,
+):
+    import os
+    from pathlib import Path
+    import time
+    import traceback
+    from PyQt6.QtCore import QTimer
+    from metroliza.tabular.tabular_analytics_service import load_tabular_analytics_file
+    from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
+    from tests.qt_key_input import activate_for_key, press_key
+
+    source = tmp_path / "sqlite-search.csv"
+    identities = [f"P-{i:06d}" for i in range(3000)]
+    identities[0] = identities[12] = "DUP-1212"
+    identities[24] = ""
+    dates = ["2026-01-01"] * 3000
+    dates[12], dates[24] = "", "2026-01-03"
+    pd.DataFrame({"Operator lot code": identities, "Captured at": dates, "Value": range(3000)}).to_csv(source, index=False)
+    loaded = load_tabular_analytics_file(source, force_sqlite=True,
+                                        reference_column="operator_lot_code", timestamp_column="captured_at")
+    assert loaded.sqlite_store is not None
+    store_path = Path(loaded.sqlite_store.path)
+    parent = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, tabular_load_result=loaded, input_file=source)
+    groups = pd.DataFrame({"REPORT_ID": range(1, 3001),
+                           "GROUP": [f"G-{i % 12:03d}" for i in range(3000)], "GROUP_COLOR": ["#4488cc"] * 3000})
+    parent.set_df_for_grouping(groups)
+    parent.set_grouping_applied(True)
+    saved = parent.df_for_grouping
+    baseline = saved.copy(deep=True)
+    failures, children = [], []
+
+    def drive():
+        child = None
+        try:
+            child = qapplication_session.activeModalWidget()
+            assert isinstance(child, TabularAnalyticsGroupingDialog)
+            children.append(child)
+            accepted = QSignalSpy(child.accepted)
+            committed = QSignalSpy(child.use_grouping_button.clicked)
+            _choose_group(child, "G-000")
+            child.resize(980, 700)
+            qapplication_session.processEvents()
+            child.column_search.setText("Operator lot code")
+            press_key(qapplication_session, child.column_search, key)
+            item = next(child.available_columns_list.item(i) for i in range(child.available_columns_list.count())
+                        if child.available_columns_list.item(i).data(Qt.ItemDataRole.UserRole) == "operator_lot_code")
+            child.available_columns_list.setCurrentItem(item)
+            child.add_column_button.click()
+            assert child.selector_columns == ["operator_lot_code"]
+            child.selector_search.setText("DUP-1212")
+            returned = QSignalSpy(child.selector_search.returnPressed)
+            # The real scope query disables/re-enables this owner. No focus repair after Return.
+            press_key(qapplication_session, child.selector_search, key)
+            assert len(returned) == 1
+            assert child.isVisible()
+            assert len(accepted) == len(committed) == 0
+            assert child._applied_selector_filter_text == "DUP-1212"
+            assert child._applied_scope_count == 2
+            assert child.selector_list.count() == 1
+            assert child.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("DUP-1212",)
+            assert parent.df_for_grouping is saved
+            pd.testing.assert_frame_equal(parent.df_for_grouping, baseline)
+            _assert_full_member_labels_visible(child, os.environ.get("METROLIZA_GROUPING_MEMBER_ARTIFACT_DIR"), key)
+        except BaseException:
+            # Assertions/diagnostics must never escape a Qt timer callback.
+            failures.append(traceback.format_exc())
+        finally:
+            try:
+                if isinstance(child, TabularAnalyticsGroupingDialog) and child.isVisible():
+                    child.cancel_button.click()  # No grouping mutation: real Cancel has no discard prompt.
+            except BaseException:
+                failures.append(traceback.format_exc())
+
+    timer = QTimer(parent)
+    timer.setSingleShot(True)
+    timer.timeout.connect(drive)
+    try:
+        parent.show()
+        activate_for_key(qapplication_session, parent.edit_groups_button)
+        timer.start(0)
+        parent.edit_groups_button.click()  # Real launcher/constructor/exec; no timer-stealing key pump.
+        assert len(children) == 1
+        assert not failures, "\n".join(failures)
+        assert parent.df_for_grouping is saved
+        pd.testing.assert_frame_equal(parent.df_for_grouping, baseline)
+        assert loaded.sqlite_store.count_rows() == 3000
+        assert parent.analytics_thread is None and parent.tabular_load_thread is None
+    finally:
+        timer.stop()
+        timer.deleteLater()
+        deadline = time.monotonic() + 20
+        while any(t.isRunning() for child in children for t in child._selector_preview_threads) and time.monotonic() < deadline:
+            qapplication_session.processEvents()
+            QTest.qWait(5)
+        parent.close()
+        qapplication_session.processEvents()
+    assert not store_path.exists()
 
 
 @pytest.mark.parametrize("timestamp", ["when_measured", None])

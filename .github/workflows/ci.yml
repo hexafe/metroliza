@@ -1671,6 +1671,7 @@ jobs:
             requirements-dev.txt
 
       - name: Install dependencies
+        id: windows-core-dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
@@ -1749,6 +1750,7 @@ jobs:
           python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py tests/test_report_execution_results.py
 
       - name: Run native Windows report workspace tests
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
@@ -1761,6 +1763,7 @@ jobs:
           python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py tests/test_command_matrix.py
 
       - name: Run native Windows specialist geometry tests
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
@@ -1788,6 +1791,7 @@ jobs:
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
       - name: Run native Windows grouping-preview lifecycle tests
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
