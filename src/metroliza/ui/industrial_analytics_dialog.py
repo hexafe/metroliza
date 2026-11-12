@@ -2074,6 +2074,8 @@ class IndustrialAnalyticsDialog(QDialog):
                 self,
                 dataframe=self.tabular_load_result.dataframe,
                 column_mapping=self.tabular_load_result.column_mapping,
+                identity_column=self._selected_tabular_column(self.reference_column_combo),
+                datetime_column=self._selected_tabular_column(self.timestamp_column_combo),
                 grouping_dataframe=self.df_for_grouping if self.grouping_applied else None,
                 sqlite_store=self.tabular_load_result.sqlite_store,
                 filter_columns=self.tabular_filter_columns,
@@ -2088,6 +2090,8 @@ class IndustrialAnalyticsDialog(QDialog):
             self,
             dataframe=self._filtered_tabular_dataframe(),
             column_mapping=self.tabular_load_result.column_mapping,
+            identity_column=self._selected_tabular_column(self.reference_column_combo),
+            datetime_column=self._selected_tabular_column(self.timestamp_column_combo),
             grouping_dataframe=self.df_for_grouping if self.grouping_applied else None,
         )
         dialog.exec()

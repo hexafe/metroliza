@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QDeadlineTimer, QEventLoop, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QBrush, QColor, QIntValidator, QKeySequence
+from PyQt6.QtCore import QDeadlineTimer, QEvent, QEventLoop, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QBrush, QColor, QIntValidator, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
@@ -299,6 +299,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         *,
         dataframe: pd.DataFrame | None = None,
         column_mapping: dict[str, str] | None = None,
+        identity_column: str | None = None,
+        datetime_column: str | None = None,
         grouping_dataframe: pd.DataFrame | None = None,
         sqlite_store=None,
         filter_columns: tuple[str, ...] | list[str] | None = None,
@@ -338,6 +340,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             for original, normalized in (column_mapping or {}).items()
             if isinstance(normalized, str) and isinstance(original, str)
         }
+        self.identity_column = identity_column
+        self.datetime_column = datetime_column
         self.selector_columns: list[str] = []
         self.selected_selector_keys: set[tuple[str, ...]] = set()
         self._selector_index: CsvGroupingIndex | None = None
@@ -371,6 +375,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._scoped_source_dataframe_cache: tuple[tuple[object, ...], pd.DataFrame] | None = None
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
+        self._control_shortcuts: list[QShortcut] = []
         self.default_group = TABULAR_DEFAULT_GROUP
         self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
@@ -442,18 +447,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.selected_columns_list, name="Selected CSV grouping columns")
         columns_grid.addWidget(self.available_columns_list, 2, 0)
         columns_grid.addWidget(self.selected_columns_list, 2, 1)
-        self.add_column_button = QPushButton("Add column (Alt+W)")
-        self.remove_column_button = QPushButton("Remove column (Alt+E)")
+        self.add_column_button = QPushButton("Add column (Ctrl+E)")
+        self.remove_column_button = QPushButton("Remove column (Ctrl+Shift+E)")
         for button, sequence in (
-            (self.add_column_button, "Alt+W"), (self.remove_column_button, "Alt+E"),
+            (self.add_column_button, "Ctrl+E"), (self.remove_column_button, "Ctrl+Shift+E"),
         ):
-            button.setShortcut(QKeySequence(sequence))
-            button.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            self._bind_control_shortcut(button, sequence)
             button.setAutoDefault(False)
         configure_accessibility(self.add_column_button, name="Add current available grouping column")
         configure_accessibility(self.remove_column_button, name="Remove current selected grouping column")
         columns_grid.addWidget(self.add_column_button, 3, 0)
         columns_grid.addWidget(self.remove_column_button, 3, 1)
+        columns_grid.addWidget(QLabel("List focus: E adds the current column"), 4, 0)
+        columns_grid.addWidget(QLabel("List focus: R removes the current column"), 4, 1)
         columns_grid.setColumnStretch(0, 1)
         columns_grid.setColumnStretch(1, 1)
         layout.addWidget(column_area, 1)
@@ -547,16 +553,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.group_members_list, name="Rows in selected CSV group")
         members_column.addWidget(self.group_members_list, 1)
-        self.remove_from_group_button = QPushButton("Remove from group (Alt+X)")
-        self.remove_from_group_button.setShortcut(QKeySequence("Alt+X"))
-        self.remove_from_group_button.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.remove_from_group_button = QPushButton("Remove from group (Ctrl+D)")
+        self._bind_control_shortcut(self.remove_from_group_button, "Ctrl+D")
         self.remove_from_group_button.setAutoDefault(False)
         configure_accessibility(
             self.remove_from_group_button,
             name="Remove selected members from group",
-            description="Return selected members to the default group; source rows are kept. Alt+X.",
+            description="Return selected members to the default group; source rows are kept. Ctrl+D; R when the member list has focus.",
         )
         members_column.addWidget(self.remove_from_group_button)
+        members_column.addWidget(QLabel("List focus: R removes selected members"))
         list_splitter.addWidget(members_widget)
         list_splitter.setStretchFactor(0, 2)
         list_splitter.setStretchFactor(1, 1)
@@ -690,6 +696,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
             ),
             qt_namespace=Qt,
         )
+        for command_list in (
+            self.available_columns_list, self.selected_columns_list, self.group_members_list,
+        ):
+            command_list.installEventFilter(self)
         self._refresh_all()
         self._capture_committed_grouping_state()
         self._initializing_scope = False
@@ -699,6 +709,29 @@ class TabularAnalyticsGroupingDialog(QDialog):
             (self.selected_column_search, self.selected_columns_list),
             (self.selector_search, self.selector_list),
         ))
+
+    def _bind_control_shortcut(self, button, sequence: str) -> None:
+        shortcut = QShortcut(QKeySequence(sequence), self)
+        shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        shortcut.setAutoRepeat(False)
+        shortcut.activated.connect(button.click)
+        self._control_shortcuts.append(shortcut)
+
+    def eventFilter(self, watched, event) -> bool:
+        # These noneditable command lists replace E/R type-ahead only while directly focused.
+        if (event.type() == QEvent.Type.KeyPress and watched.hasFocus()
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier
+                and not event.isAutoRepeat()):
+            commands = {
+                (self.available_columns_list, Qt.Key.Key_E): self.add_column_button,
+                (self.selected_columns_list, Qt.Key.Key_R): self.remove_column_button,
+                (self.group_members_list, Qt.Key.Key_R): self.remove_from_group_button,
+            }
+            button = commands.get((watched, event.key()))
+            if button is not None:
+                button.click()
+                return True
+        return super().eventFilter(watched, event)
 
     def _is_sqlite_backed(self) -> bool:
         return vars(self).get("sqlite_store") is not None
@@ -2598,6 +2631,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 if group_name == selected_group
             ]
             total_rows = len(row_ids)
+        row_ids = row_ids[:_GROUP_MEMBER_PREVIEW_LIMIT]
+        member_labels = self._group_member_labels(row_ids)
         rows = self._group_member_rows(row_ids, selected_group)
         preview = (
             rows.iloc[:_GROUP_MEMBER_PREVIEW_LIMIT]
@@ -2618,14 +2653,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             else preview.itertuples(index=False, name=None)
         )
         for values in preview_values:
-            label = str(
-                _row_value(values, "REFERENCE")
-                or _row_value(values, "PART_NAME")
-                or _row_value(values, "SAMPLE_NUMBER")
-                or ""
-            )
-            if not label:
-                label = f"Row {_row_value(values, 'REPORT_ID')}"
+            row_id = _row_value(values, "REPORT_ID")
+            label = member_labels.get(int(row_id), f"Missing identifier [Row {row_id}]")
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, _row_value(values, "REPORT_ID"))
             color = _row_value(values, self.group_color_column)
@@ -2642,26 +2671,64 @@ class TabularAnalyticsGroupingDialog(QDialog):
             item = QListWidgetItem(
                 f"Showing first {_GROUP_MEMBER_PREVIEW_LIMIT} of {total_rows} row(s)."
             )
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             self.group_members_list.addItem(item)
         self._sync_status(
             recompute_counts=recompute_status_counts,
             recompute_scope=recompute_status_counts,
         )
 
-    def _group_member_rows(self, row_ids: list[int], group_name: str) -> pd.DataFrame:
-        if not row_ids:
-            return self._empty_grouping_dataframe()
-        color = self._group_color_for_group(group_name)
+    def _group_member_source_records(self, row_ids, display_columns):
         if self._is_sqlite_backed():
-            return self._sqlite_assignment_dataframe(row_ids, group_name, color)
-        frame = self._base_grouping_dataframe()
-        if frame.empty or "REPORT_ID" not in frame.columns:
-            return self._empty_grouping_dataframe()
-        report_ids = pd.to_numeric(frame["REPORT_ID"], errors="coerce")
-        rows = frame.loc[report_ids.isin(row_ids)].copy()
-        rows["GROUP"] = group_name
-        rows[self.group_color_column] = color
-        return rows
+            rows = self.sqlite_store.read_row_table(
+                filter_columns=("source_row_number",),
+                selected_filter_keys=tuple((str(row_id),) for row_id in row_ids),
+                columns=("source_row_number", *display_columns),
+                limit=_GROUP_MEMBER_PREVIEW_LIMIT,
+            )
+            return rows.iter_rows(as_dict=True)
+        source = self.source_dataframe
+        # Match build_tabular_grouping_dataframe's fallback, including non-default indexes.
+        ids = pd.Series(range(1, len(source.index) + 1), index=source.index)
+        if "source_row_number" in source.columns:
+            ids = pd.to_numeric(source["source_row_number"], errors="coerce").fillna(ids).astype(int)
+        mask = ids.isin(row_ids)
+        selected = source.loc[mask, list(display_columns)].head(_GROUP_MEMBER_PREVIEW_LIMIT)
+        values = selected.itertuples(index=False, name=None) if display_columns else (() for _ in selected.index)
+        return (
+            dict(zip(display_columns, row_values, strict=True), source_row_number=int(row_id))
+            for row_id, row_values in zip(ids.loc[mask], values, strict=False)
+        )
+
+    def _group_member_labels(self, row_ids: list[int]) -> dict[int, str]:
+        """Read only bounded preview IDs; selectors never replace source identity."""
+        if not row_ids:
+            return {}
+        columns = tuple(self.source_dataframe.columns)
+        identity = self.identity_column
+        timestamp = self.datetime_column
+        display_columns = tuple(dict.fromkeys(
+            column for column in (identity, timestamp) if column in columns
+        ))
+        return {
+            int(row["source_row_number"]): self._group_member_label(row, identity, timestamp)
+            for row in self._group_member_source_records(row_ids, display_columns)
+        }
+
+    def _group_member_label(self, row, identity, timestamp) -> str:
+        value = row.get(identity)
+        label = "Missing identifier" if _is_missing_scalar(value) or not str(value).strip() else str(value)
+        if identity:
+            label = f"{self._column_label(identity)}: {label}"
+        if timestamp:
+            value = row.get(timestamp)
+            date_text = "Missing date" if _is_missing_scalar(value) or not str(value).strip() else str(value)
+            label += f" | {self._column_label(timestamp)}: {date_text}"
+        return f"{label} [Row {row['source_row_number']}]"
+
+    def _group_member_rows(self, row_ids: list[int], group_name: str) -> pd.DataFrame:
+        # Preview decoration needs only the bounded IDs and group color, never a full source frame.
+        return self._sqlite_assignment_dataframe(row_ids, group_name, self._group_color_for_group(group_name))
 
     def _refresh_all(self, preferred_group: str | None = None) -> None:
         self._refresh_available_columns()
