@@ -122,6 +122,12 @@ _EXECUTION_LABELS = {
     ExecutionStatus.UNKNOWN: "Unknown",
 }
 
+_EXECUTION_DETAILS = {
+    ExecutionStatus.SAVED: "Saved to the selected database.",
+    ExecutionStatus.ALREADY_PRESENT: "Report already present in the selected database.",
+    ExecutionStatus.FAILED: "Report processing failed.",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ReportExecutionRow:
@@ -163,7 +169,7 @@ def build_execution_rows(review, selected_ids, receipts):
             attention = item.status not in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
         elif occurrences[identity] == 1 and len(states) == 1 and type(states[0]) is str and states[0] in {"saved", "already_present", "failed"}:
             status = ExecutionStatus(states[0])
-            detail = "Persistence checkpoint confirmed." if status is not ExecutionStatus.FAILED else "Report processing failed."
+            detail = _EXECUTION_DETAILS[status]
             attention = status is ExecutionStatus.FAILED
         rows.append(ReportExecutionRow(identity, str(item.display_name), safe_parser_id(item.parser_id), status, detail, attention))
     return tuple(rows)
