@@ -10,6 +10,8 @@ Metroliza has several separate workflows. You do not need every tool every time.
 
 In the app itself, the main database workflow starts from the main window buttons, utility actions live under **Tools**, and manuals/support items live under **Help**.
 
+Use [Keyboard shortcuts](keyboard_shortcuts.md) for the current commands and their focus, state, and modal-dialog rules.
+
 This manual set helps you:
 
 - learn the normal app workflow in a simple order,
@@ -61,9 +63,11 @@ These pages follow the main app workflows.
 - [Parsing](parsing.md)
 - [Modify Database](modify_database.md)
 - [Export overview](export_overview.md)
+- [Output choices](output_choices.md)
 - [Export filtering](export_filtering.md)
 - [Export grouping](export_grouping.md)
 - [CSV Summary](csv_summary.md)
+- [CSV grouping controls](csv_grouping_controls.md)
 - [Industrial Data](industrial_data.md)
 - [Realtime Industrial Monitoring](realtime_industrial_monitoring.md)
 - [Parser Profiles](parser_profiles.md)
@@ -73,6 +77,7 @@ These pages follow the main app workflows.
 These pages support the main workflows.
 
 - [Characteristic Name Matching](characteristic_name_matching.md)
+- [Keyboard shortcuts](keyboard_shortcuts.md)
 - [Dashboard Visuals](dashboard_visuals.md)
 - [Help, startup, and license](help_startup_and_license.md)
 
