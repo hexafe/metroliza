@@ -44,7 +44,7 @@ _CHILD_FAILURE_STAGES = frozenset({
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
     "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
     "closeout_lifecycle_seed", "closeout_lifecycle_export",
-    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "complete",
+    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "uiux", "complete",
 })
 _REOPEN_FAILURE_STAGES = frozenset({
     "input", "host_ready", "reopen", "database_preservation",
@@ -60,8 +60,9 @@ REQUIRED_CHECKS = (
     "private_dashboard_generation", "offline_html_source",
     "declared_ocr_model_assets", "image_only_header_provenance",
     "rapidocr_header_inference", "parser_metadata_selection",
+    "uiux_reports", "uiux_tabular", "uiux_controls", "uiux_captures",
 )
-ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference")
+ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference", "uiux_evidence")
 CORE_OBSERVATIONS = {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"}
 NATIVE_BINDINGS = (
     "cmm.parse_blocks", "cmm.normalize_measurement_rows", "cmm.persist_measurement_rows",
@@ -92,7 +93,7 @@ _PRIVATE_CORE_STAGES = frozenset({
     "package_relocation", "fixtures", "owned_launch", "runtime_observation",
     "runtime_receipt", "owned_topology", "fresh_reopen", "fresh_reopen_prepare",
     "fresh_reopen_input", "fresh_reopen_copy", "fresh_reopen_oracle", "package_integrity",
-    "retained_artifacts", "evidence_receipts", "cleanup",
+    "retained_artifacts", "uiux_retention", "evidence_receipts", "cleanup",
 })
 _CLOSED_CHILD_FAILURES = frozenset({
     "completed_import_reopen_failed", "database_observation_sidecars_present",
@@ -113,6 +114,7 @@ _CLOSED_CHILD_FAILURES = frozenset({
     "tabular_public_store_missing", "ui_checks_failed", "workbook_incomplete",
     "workspace_context_rejected", "zero_selection_guard_failed",
     "closeout_privacy_failed", "closeout_shell_failed", "closeout_lifecycle_failed",
+    "uiux_checks_failed", "uiux_observation_size", "uiux_data_failed",
     "TypeError", "ValueError", "KeyError", "OSError", "RuntimeError",
     "AssertionError", "OperationalError", "FileNotFoundError", "PermissionError",
 })
@@ -418,6 +420,8 @@ def _validate_core_result(payload: object) -> dict:
     ):
         raise CandidateFailure("required_core_check_incomplete")
     _validate_core_artifacts(payload.get("artifacts"))
+    if payload["artifacts"]["uiux_evidence"]["path"] != "uiux-observation.json":
+        raise CandidateFailure("invalid_uiux_artifact_name")
     _validate_import_guard_evidence(payload.get("import_guard_evidence"))
     _validate_ui_observation(payload.get("ui_observation"))
     _validate_ocr_observation(payload.get("ocr_observation"))
@@ -677,6 +681,121 @@ def _stage_known_fixtures(fixtures: Path, private: Path) -> Path:
         if _hash(target) != digest:
             raise CandidateFailure("prepared_fixture_copy_mismatch")
     return output
+
+
+def _uiux_verifier():
+    return _adjacent_module("verify_windows_candidate_uiux.py", "_metroliza_uiux_verifier")
+
+
+def _stage_uiux_fixtures(checkout: Path, staged: Path) -> None:
+    """Separate fixed subtree; never relax the old W13 five-PDF/two-CSV set."""
+    verifier = _uiux_verifier()
+    source = checkout / "tests" / "fixtures" / "windows_uiux"
+    try:
+        verifier.load_inputs(source)
+        destination = staged / "uiux"
+        destination.mkdir(mode=0o700)
+        for leaf in ("reports", "tabular"):
+            (destination / leaf).mkdir(mode=0o700)
+        for name, expected in verifier.FIXTURES.items():
+            original, copied = source / name, destination / name
+            with original.open("rb") as reader, copied.open("xb") as writer:
+                shutil.copyfileobj(reader, writer, length=65536)
+            if verifier.sha(copied) != expected:
+                raise CandidateFailure("prepared_uiux_fixture_copy_mismatch")
+        verifier.load_inputs(destination)
+    except CandidateFailure:
+        raise
+    except Exception:
+        raise CandidateFailure("prepared_uiux_fixture_invalid") from None
+
+
+def _uiux_host_identity():
+    return {"uiux_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_uiux.py")),
+            **_uiux_verifier().input_identity()}
+
+
+def _uiux_checked(root, args, *, failed=False):
+    verifier = _uiux_verifier()
+    value = verifier.load_json(root / 'uiux-observation.json')
+    oracle, _ = verifier.load_inputs(args.source_checkout / 'tests/fixtures/windows_uiux')
+    options = dict(source=args.expected_source_sha, packaged=True, dpr=float(args.dpi_scale), qpa='windows')
+    operation = verifier.diagnostic if failed and value.get('status') != 'passed' else verifier.validate
+    evidence = operation(value, oracle, **options)
+    return verifier, value, oracle, evidence
+
+
+def _retain_uiux_results(child, output, args):
+    try:
+        verifier, value, oracle, evidence = _uiux_checked(child, args)
+        sidecars = {name: _inert_import_guard_sidecars(child / relative, 'uiux_database_active')
+                    for name, relative in verifier.DATA.items() if name.startswith('reports_')}
+        verifier.verify_assets(child, evidence, oracle, dpr=float(args.dpi_scale), inert=True)
+        snapshot = verifier.snapshot_assets(child, evidence['captures']['metadata'], evidence['data'], dpr=float(args.dpi_scale))
+        for name, records in sidecars.items():
+            _assert_import_guard_unchanged(child / verifier.DATA[name], evidence['data'][name]['sha256'], records, 'uiux_database_changed')
+        _write_uiux_snapshot(output, snapshot)
+        verifier.verify(output, value, oracle, source=args.expected_source_sha, packaged=True, dpr=float(args.dpi_scale), qpa='windows')
+    except CandidateFailure:
+        raise
+    except Exception:
+        raise CandidateFailure('independent_uiux_verification_failed') from None
+
+
+def _write_uiux_snapshot(output, snapshot):
+    verifier = _uiux_verifier()
+    allowed = {*verifier.DATA.values(), *(f'uiux-{name}.png' for name in verifier.CAPTURES), 'uiux-observation.json'}
+    if (set(snapshot) - allowed or sum(len(value) for value in snapshot.values()) > verifier.MAX_TOTAL + verifier.MAX_JSON):
+        raise CandidateFailure('uiux_retention_invalid')
+    for relative, content in snapshot.items():
+        if type(content) is not bytes or len(content) > (verifier.MAX_JSON if relative.endswith('observation.json') else verifier.MAX_ASSET):
+            raise CandidateFailure('uiux_retention_invalid')
+        destination = output / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open('xb') as stream:
+            stream.write(content)
+
+
+def _snapshot_failed_uiux(work, args, observation):
+    """Only after joined cleanup; unknown bytes never enter the retained directory."""
+    observation['uiux_snapshot'] = None
+    if observation.get('owned_cleanup') != 'complete':
+        return
+    try:
+        from itertools import islice
+        children = list(islice(work.iterdir(), 18))
+        if len(children) > 17:
+            return
+        children = [p for p in children if re.fullmatch('core-[0-9a-f]{32}', p.name)]
+        if len(children) != 1:
+            return
+        child = children[0]
+        _directory(child)
+        verifier, value, _oracle, evidence = _uiux_checked(child, args, failed=True)
+        snapshot = verifier.snapshot_assets(child, evidence['captures']['metadata'], evidence['data'],
+                                           dpr=float(args.dpi_scale), diagnostic=True)
+        path = child / 'uiux-observation.json'
+        content = path.read_bytes()
+        if len(content) > verifier.MAX_JSON or verifier.load_json(path) != value:
+            return
+        snapshot['uiux-observation.json'] = content
+        observation['uiux_snapshot'] = snapshot
+    except Exception:
+        # Retention is supplementary: the unchanged closed core failure remains authoritative.
+        observation['uiux_snapshot'] = None
+        print('uiux_retention=invalid_or_unavailable')
+
+
+def _restore_failed_uiux(output, snapshot):
+    if snapshot is None:
+        return
+    try:
+        _write_uiux_snapshot(output, snapshot)
+    except Exception:
+        # Keep the original core failure record; remove any incomplete synthetic additions.
+        payload = _json(output / FAILED_DIAGNOSTIC_FILE, MAX_FAILED_DIAGNOSTIC_BYTES)
+        _retain_failed_diagnostic(output, payload)
+        print('uiux_retention=restore_failed')
 
 
 def _stage_ocr_fixture(checkout: Path, private: Path) -> Path:
@@ -1270,6 +1389,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
     relocated = diag._relocate_package(artifact, private, deadline)
     stage["name"] = "fixtures"
     staged_fixtures = _stage_known_fixtures(fixtures, private)
+    _stage_uiux_fixtures(args.source_checkout, staged_fixtures)
     staged_ocr = _stage_ocr_fixture(args.source_checkout, private)
     work = private / "core scenario"
     launch_cwd = private / "launcher work"
@@ -1363,6 +1483,8 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         payload["artifacts"]["database"]["sha256"] = _hash(work / payload["relative_artifact_dir"] / "reports.sqlite")
         artifacts = _copy_verified_results(work, payload, output, args.oracle)
         artifacts.update(fresh_reopen)
+        stage["name"] = "uiux_retention"
+        _retain_uiux_results(work / payload["relative_artifact_dir"], output, args)
         stage["name"] = "evidence_receipts"
         process_result = output / "process-topology.json"
         with process_result.open("x", encoding="ascii") as stream:
@@ -1386,6 +1508,8 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         if not exit_collected:
             _close_with_exit_evidence(diag, owned, terminate=terminate, stage=stage,
                                       observation=failure_observation, root=probe_root, scenario="core")
+        if terminate and failure_observation.get("owned_cleanup") == "complete":
+            _snapshot_failed_uiux(work, args, failure_observation)
 
 
 def qualify(args) -> dict:
@@ -1472,6 +1596,7 @@ def qualify(args) -> dict:
             "literal_xlsx_verifier_sha256": _hash(Path(__file__).with_name("windows_candidate_xlsx.py")),
             "inference_oracle_sha256": _hash(Path(__file__).with_name("synthetic-inference-oracle.json")),
             "inference_verifier_sha256": _hash(Path(__file__).with_name("verify_group_inference.py")),
+            **_uiux_host_identity(),
             "limits": list(RESULT_LIMITS),
         }
         with (output / "core-driver-receipt.json").open("x", encoding="ascii") as stream:
@@ -1481,6 +1606,7 @@ def qualify(args) -> dict:
     except CandidateFailure as error:
         payload = _failed_diagnostic_payload(failure_observation, private_stage, error, args.expected_source_sha)
         _retain_failed_diagnostic(output, payload)
+        _restore_failed_uiux(output, failure_observation.get("uiux_snapshot"))
         raise
     except BaseException:
         _remove_partial_output(output)

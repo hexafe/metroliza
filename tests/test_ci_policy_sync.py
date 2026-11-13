@@ -61,7 +61,9 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate()
     receipts = next(step for step in uploads if step["with"]["name"] == "windows-candidate-acceptance-receipts")
     receipt_root = "${{ runner.temp }}/metroliza-candidate-acceptance/**/*"
     assert set(receipts["with"]["path"].splitlines()) == {
-        f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")
+        *(f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")),
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png",
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js",
     }
     package = next(step for step in uploads if step["with"]["path"].endswith(".zip"))
     assert receipts["if"] == "always()" and package["if"] == "success()"
@@ -149,9 +151,12 @@ def test_candidate_required_native_contracts_include_actual_closeout_owners():
     assert step["env"]["QT_QPA_PLATFORM"] == "windows"
     assert step["env"]["METROLIZA_EXPECT_QT_PLATFORM"] == "windows"
     assert "Set-DisplayResolution -Width 1920 -Height 1080 -Force" in step["run"]
-    for name in ("shell_checks", "lifecycle_checks", "privacy_checks", "closeout", "final_receipts", "launch_ownership"):
+    for name in ("shell_checks", "lifecycle_checks", "privacy_checks", "closeout", "final_receipts", "launch_ownership", "uiux_reports", "uiux_tabular", "uiux_controls", "uiux"):
         assert f"tests/test_windows_candidate_{name}.py" in step["run"]
     assert "if" not in step and "continue-on-error" not in step and " -k " not in step["run"]
+    geometry = next(item for item in workflow["jobs"]["windows-core-smoke"]["steps"]
+                    if "tests/test_industrial_native_geometry.py" in item.get("run", ""))
+    assert "tests/test_csv_progress_nonmodal.py" in geometry["run"]
 
 
 def test_native_windows_report_planner_step_preserves_real_platform_and_scope() -> None:

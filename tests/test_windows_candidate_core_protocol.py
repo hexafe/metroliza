@@ -418,6 +418,8 @@ def test_nonzero_launcher_observation_keeps_role_exit_stage_receipt_and_cleanup(
             return process
 
     monkeypatch.setattr(driver, "_stage_known_fixtures", lambda *_: tmp_path)
+    stage_uiux = driver._stage_uiux_fixtures
+    monkeypatch.setattr(driver, "_stage_uiux_fixtures", lambda _checkout, staged: stage_uiux(Path(__file__).resolve().parents[1], staged))
     monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda *_: tmp_path)
     diag = SimpleNamespace(
         QualificationFailure=diagnostics.QualificationFailure,
@@ -524,6 +526,8 @@ def test_fresh_reopen_launch_failure_does_not_acquire_core_phases(tmp_path, monk
             return owned[-1]
 
     monkeypatch.setattr(driver, "_stage_known_fixtures", lambda *_: tmp_path)
+    stage_uiux = driver._stage_uiux_fixtures
+    monkeypatch.setattr(driver, "_stage_uiux_fixtures", lambda _checkout, staged: stage_uiux(Path(__file__).resolve().parents[1], staged))
     monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda *_: tmp_path)
     monkeypatch.setattr(driver, "_wait_for_launcher_exit", lambda *_a, **_kw: (0, True))
     monkeypatch.setattr(driver, "_validated_core_payload", lambda *_: prior)
@@ -762,8 +766,8 @@ def payload():
         "native_observation": native_observation(),
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
-            key: {"path": key + extension, "sha256": "2" * 64}
-            for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json"), strict=True)
+            key: {"path": ("uiux-observation.json" if key == "uiux_evidence" else key + extension), "sha256": "2" * 64}
+            for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json", ".json"), strict=True)
         },
     }
 
@@ -1039,6 +1043,7 @@ def _complete_synthetic_artifacts(tmp_path):
     retained = PROTOCOL_FIXTURES / "literal-measurement-labels.xlsx"
     shutil.copyfile(retained, child / "literal_workbook.xlsx")
     create_inference_case(child / "inference_database.sqlite", child / "group_inference.json")
+    (child / "uiux-observation.json").write_text("{}")
     for record in sample["artifacts"].values():
         record["sha256"] = driver._hash(child / record["path"])
     import hashlib
@@ -1074,7 +1079,7 @@ def test_verified_preserved_copy_remains_readable_and_matches_oracle(tmp_path):
             "path": "dashboard.html", "sha256": sample["ui_observation"]["evidence"]["dashboard_sha256"],
         },
     }
-    assert len(list(output.iterdir())) == 9
+    assert len(list(output.iterdir())) == 10
 
 
 @pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])

@@ -518,6 +518,8 @@ jobs:
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.sqlite
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.xlsx
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.html
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js
           if-no-files-found: warn
 
       - name: Retain accepted engineering package for orchestrator review
@@ -1730,7 +1732,7 @@ jobs:
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_fresh_reopen.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_windows_candidate_exit_evidence.py tests/test_frozen_ocr_worker.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py
+          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_fresh_reopen.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_windows_candidate_exit_evidence.py tests/test_frozen_ocr_worker.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py tests/test_windows_candidate_uiux_reports.py tests/test_windows_candidate_uiux_tabular.py tests/test_windows_candidate_uiux_controls.py tests/test_windows_candidate_uiux.py
 
       - name: Run native Windows Qt lifecycle tests
         env:
@@ -1774,7 +1776,7 @@ jobs:
           METROLIZA_FILTER_SCOPE_DPR: '1'
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -vv -s tests/test_industrial_native_geometry.py tests/test_output_request_presentation.py tests/test_filter_presentation.py tests/test_curation_presentation.py tests/test_parser_profile_onboarding.py tests/test_industrial_onboarding_presentation.py tests/test_industrial_onboarding_delta.py tests/test_pyqt_ui_geometry_audit.py::test_tabular_filter_dialog_geometry_handles_multi_column_filters
+          python -m pytest -vv -s tests/test_industrial_native_geometry.py tests/test_output_request_presentation.py tests/test_filter_presentation.py tests/test_curation_presentation.py tests/test_parser_profile_onboarding.py tests/test_industrial_onboarding_presentation.py tests/test_industrial_onboarding_delta.py tests/test_pyqt_ui_geometry_audit.py::test_tabular_filter_dialog_geometry_handles_multi_column_filters tests/test_csv_progress_nonmodal.py
 
       - name: Run native Windows realtime dashboard scheduling tests
         env:

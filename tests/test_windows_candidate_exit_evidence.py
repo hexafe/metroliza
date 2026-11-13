@@ -499,6 +499,8 @@ def test_g_successful_core_collects_once_before_fresh_reopen(tmp_path, monkeypat
                            _WindowsApi=Api, _wait_for_job_exit=lambda *_a: True,
                            _close_owned_processes=lambda owned, **kwargs: [p.close(**kwargs) for p in owned])
     monkeypatch.setattr(driver, "_stage_known_fixtures", lambda *_a: tmp_path)
+    stage_uiux = driver._stage_uiux_fixtures
+    monkeypatch.setattr(driver, "_stage_uiux_fixtures", lambda _checkout, staged: stage_uiux(Path(__file__).resolve().parents[1], staged))
     monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda *_a: tmp_path)
     monkeypatch.setattr(driver, "_wait_for_launcher_exit", lambda *_a, **_kw: (0, True))
     monkeypatch.setattr(driver, "_validated_core_payload", lambda *_a: {})

@@ -97,6 +97,8 @@ def test_core_launch_transfer_interrupt_closes_registered_process_and_preserves_
     assert closed == []
 
     monkeypatch.setattr(driver, "_stage_known_fixtures", lambda _fixtures, private: private)
+    stage_uiux = driver._stage_uiux_fixtures
+    monkeypatch.setattr(driver, "_stage_uiux_fixtures", lambda _checkout, staged: stage_uiux(Path(__file__).resolve().parents[1], staged))
     monkeypatch.setattr(driver, "_stage_ocr_fixture", lambda _checkout, private: private / "ocr.pdf")
     monkeypatch.setattr(
         owned_probe, "OwnedProcessProbe",
